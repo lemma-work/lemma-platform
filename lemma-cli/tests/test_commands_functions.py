@@ -212,3 +212,106 @@ def test_functions_run_uses_low_latency_poll_default(monkeypatch):
     assert captured["run_function"] == "adder"
     assert captured["wait"] is True
     assert captured["poll_interval"] == 0.5
+
+
+# ---------------------------------------------------------------------------
+# Inline permissions on create/update
+# ---------------------------------------------------------------------------
+def _client_with_permissions():
+    """Fake whose function resource records both the create body and the
+    follow-up permissions replace."""
+    captured: dict = {}
+
+    class FakeFunctions:
+        def create(self, request):
+            captured["create"] = request.to_dict()
+            return {"id": "fn-1", "name": captured["create"]["name"]}
+
+        def update(self, name, request):
+            captured["update"] = (name, request.to_dict())
+            return {"id": "fn-1", "name": name}
+
+        def replace_permissions(self, name, request):
+            captured["permissions"] = (name, request.to_dict())
+            return {"function_name": name, **request.to_dict()}
+
+    class FakePod:
+        def __init__(self):
+            self.functions = FakeFunctions()
+
+    class FakeClient:
+        def pod(self, pod_id):
+            return FakePod()
+
+    return FakeClient(), captured
+
+
+_GRANTS = [
+    {
+        "resource_type": "datastore_table",
+        "resource_name": "lesson_response",
+        "permission_ids": ["datastore.table.read"],
+    }
+]
+
+
+def test_functions_create_applies_inline_permissions(monkeypatch):
+    """The reported bug: `lemma functions create` advertised `permissions.grants`
+    in its own help, and the generated request model dropped the key without a
+    word — the function was created with zero access and a clean exit code."""
+    client, captured = _client_with_permissions()
+    _patch(monkeypatch, client)
+
+    payload = json.dumps(
+        {
+            "name": "maybe_rewrite_lesson",
+            "code": "def maybe_rewrite_lesson(i): return i",
+            "permissions": {"grants": _GRANTS},
+        }
+    )
+    result = runner.invoke(app, ["functions", "create", "--data", payload, "--pod", "pod-1"])
+
+    assert result.exit_code == 0, result.stdout
+    # The create body carries no `permissions` (the endpoint has no such field)...
+    assert "permissions" not in captured["create"]
+    # ...and the grants land through the permissions endpoint instead.
+    assert captured["permissions"] == ("maybe_rewrite_lesson", {"grants": _GRANTS})
+    assert "1 grant" in result.stdout
+
+
+def test_functions_update_applies_inline_permissions(monkeypatch):
+    client, captured = _client_with_permissions()
+    _patch(monkeypatch, client)
+
+    payload = json.dumps({"description": "Updated", "permissions": {"grants": _GRANTS}})
+    result = runner.invoke(
+        app, ["functions", "update", "maybe_rewrite_lesson", "--data", payload, "--pod", "pod-1"]
+    )
+
+    assert result.exit_code == 0, result.stdout
+    assert captured["update"] == ("maybe_rewrite_lesson", {"description": "Updated"})
+    assert captured["permissions"] == ("maybe_rewrite_lesson", {"grants": _GRANTS})
+
+
+def test_functions_create_without_permissions_leaves_grants_alone(monkeypatch):
+    """No `permissions` key means "say nothing about grants" — so no permissions
+    call is made at all."""
+    client, captured = _client_with_permissions()
+    _patch(monkeypatch, client)
+
+    payload = json.dumps({"name": "plain", "code": "def plain(i): return i"})
+    result = runner.invoke(app, ["functions", "create", "--data", payload, "--pod", "pod-1"])
+
+    assert result.exit_code == 0, result.stdout
+    assert "permissions" not in captured
+
+
+def test_functions_create_warns_on_an_unrecognized_field(monkeypatch):
+    client, _captured = _client_with_permissions()
+    _patch(monkeypatch, client)
+
+    payload = json.dumps({"name": "plain", "code": "x", "descriptoin": "typo"})
+    result = runner.invoke(app, ["functions", "create", "--data", payload, "--pod", "pod-1"])
+
+    assert result.exit_code == 0, result.stdout
+    assert "descriptoin" in result.stdout

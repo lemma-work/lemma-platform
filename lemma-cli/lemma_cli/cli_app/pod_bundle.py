@@ -67,6 +67,7 @@ from lemma_pod_bundle.normalize import (
     _normalize_surface_payload,
     _normalize_table_payload,
     _normalize_workflow_payload,
+    _sanitize_app_payload_for_import,
     _sanitize_function_payload_for_import,
     _sanitize_table_payload_for_import,
     _split_resource_permissions_payload,
@@ -83,6 +84,7 @@ from lemma_pod_bundle.portability import (
     _slug_var_name,
     _strip_unresolved_placeholders,
     _tokenize_ref_fields,
+    GRANT_METADATA_KEYS,
     require_account_variable_metadata,
 )
 from lemma_pod_bundle.apply_fields import SCHEDULE_APPLY_FIELDS, SURFACE_APPLY_FIELDS
@@ -398,6 +400,45 @@ def _resolve_account_connector_info(client: Lemma, account_id: str) -> tuple[str
     return str(connector_id), str(kind)
 
 
+def _stamp_account_grant_metadata(
+    client: Lemma, permissions: dict[str, Any]
+) -> dict[str, Any]:
+    """Attach ``connector_id``/``connector_kind`` to every ``connector_account``
+    grant, resolved from the account itself.
+
+    A pinned-account grant names the account by its raw id (the backend has no
+    other identifier for one), which is meaningless in any other org. The
+    portable-variable pass turns that id into a ``${var}`` — but only if the
+    grant carries the connector metadata the variable must record, and grants
+    come back from the permissions API without it. Stamping it here is the
+    exact mirror of what the exporter already does beside a surface's or
+    schedule's ``account_id``.
+    """
+    grants = permissions.get("grants")
+    if not isinstance(grants, list):
+        return permissions
+    stamped: list[Any] = []
+    for grant in grants:
+        if (
+            not isinstance(grant, dict)
+            or str(grant.get("resource_type") or "") != "connector_account"
+            or not grant.get("resource_name")
+        ):
+            stamped.append(grant)
+            continue
+        connector_id, connector_kind = _resolve_account_connector_info(
+            client, str(grant["resource_name"])
+        )
+        stamped.append(
+            {
+                **grant,
+                "connector_id": connector_id,
+                "connector_kind": connector_kind,
+            }
+        )
+    return {**permissions, "grants": stamped}
+
+
 def _stamp_cli_account_defaults(bundle_root: Path, variables: dict[str, Any]) -> None:
     """CLI-only convenience: record each account variable's source account id
     as its ``default``, so re-importing into the same org (a common local dev
@@ -498,7 +539,19 @@ def _build_variable_applier(
             account_default_cache[name] = resolved
         return account_default_cache[name]
 
-    def apply(payload: dict[str, Any]) -> dict[str, Any]:
+    def apply(
+        payload: dict[str, Any], *, strip_unresolved: bool = True
+    ) -> dict[str, Any]:
+        """Substitute every resolvable placeholder.
+
+        ``strip_unresolved`` drops the fields still holding a ``${...}`` token so
+        a literal placeholder never reaches the API — right for a resource body,
+        wrong for a grant, where dropping the ``resource_name`` key would turn an
+        unresolved account into a confusing "grants must reference resources by
+        resource_name" failure instead of a skipped grant. Grants therefore ask
+        for the un-stripped form and decide for themselves (see
+        ``_resolve_grant_permissions``).
+        """
         serialized = json.dumps(payload)
         replacements: dict[str, str] = {}
         if POD_MEMBER_TOKEN in serialized:
@@ -518,9 +571,55 @@ def _build_variable_applier(
                     replacements[token] = default_value
         if replacements:
             payload = substitute_placeholders(payload, replacements)
-        return _strip_unresolved_placeholders(payload)
+        return _strip_unresolved_placeholders(payload) if strip_unresolved else payload
 
     return apply
+
+
+def _resolve_grant_permissions(
+    apply_variables: Any,
+    permissions_payload: dict[str, Any] | None,
+    *,
+    kind: str,
+    name: str,
+) -> dict[str, Any] | None:
+    """Resolve a resource's grants for the target pod.
+
+    Three things happen here, all of which used to be missing:
+
+    * ``${var}`` placeholders resolve (grants never saw the variable applier at
+      all, because it was built after the agent/function loops).
+    * A ``connector_account`` grant whose account variable stayed unresolved is
+      DROPPED with a warning. Sending it would 400 the whole permissions pass —
+      at the very end of an import that has already written everything else,
+      leaving a half-wired pod. A missing pinned account is a
+      reconnect-after-import chore, not a reason to fail.
+    * Export-only connector metadata is stripped back off.
+    """
+    if permissions_payload is None:
+        return None
+    resolved = apply_variables(permissions_payload, strip_unresolved=False)
+    kept: list[Any] = []
+    dropped: list[str] = []
+    for grant in resolved.get("grants") or []:
+        if not isinstance(grant, dict):
+            kept.append(grant)
+            continue
+        resource_name = grant.get("resource_name")
+        if isinstance(resource_name, str) and _PLACEHOLDER_RE.fullmatch(resource_name):
+            dropped.append(
+                f"{grant.get('resource_type')} {resource_name}"
+            )
+            continue
+        kept.append(_strip_keys(grant, set(GRANT_METADATA_KEYS)))
+    if dropped:
+        console.print(
+            f"[yellow]warning[/yellow] {kind} '{name}': dropped "
+            f"{len(dropped)} grant(s) whose account variable was not supplied "
+            f"({', '.join(dropped)}). Connect the account in this pod, then run "
+            f"`lemma {kind}s permissions add {name} account:<id>:use`."
+        )
+    return {"grants": kept}
 
 
 def _extract_large_text(
@@ -809,7 +908,9 @@ def export_pod_bundle(
             resource_dir = bundle_root / "functions" / function_name
             resource_dir.mkdir(parents=True, exist_ok=True)
             full_function = to_plain(pod_sdk.functions.get(function_name))
-            function_permissions = to_plain(pod_sdk.functions.permissions(function_name))
+            function_permissions = _stamp_account_grant_metadata(
+                client, to_plain(pod_sdk.functions.permissions(function_name))
+            )
             function_payload = _extract_large_text(
                 _attach_permissions_payload(
                     _normalize_function_payload(full_function),
@@ -833,7 +934,9 @@ def export_pod_bundle(
             resource_dir = bundle_root / "agents" / agent_name
             resource_dir.mkdir(parents=True, exist_ok=True)
             full_agent = to_plain(pod_sdk.agents.get(agent_name))
-            agent_permissions = to_plain(pod_sdk.agents.permissions(agent_name))
+            agent_permissions = _stamp_account_grant_metadata(
+                client, to_plain(pod_sdk.agents.permissions(agent_name))
+            )
             agent_payload = _extract_large_text(
                 _attach_permissions_payload(
                     _normalize_agent_payload(full_agent),
@@ -1264,37 +1367,107 @@ def _build_import_plan(
     _validate_grant_references(
         source_dir,
         issues,
-        valid_tables=set(existing_tables)
-        | {d.name for d in _resource_dirs(source_dir, "tables")},
-        valid_functions=set(existing_functions)
-        | {d.name for d in _resource_dirs(source_dir, "functions")},
-        valid_agents=set(existing_agents)
-        | {d.name for d in _resource_dirs(source_dir, "agents")},
+        client=client,
+        pod_sdk=pod_sdk,
+        # Names already listed while building the plan; anything else the
+        # validator needs is fetched lazily, only if a grant names that type.
+        known={
+            "datastore_table": set(existing_tables),
+            "function": set(existing_functions),
+            "agent": set(existing_agents),
+        },
         valid_folder_keys=set(existing_folder_map)
         | _bundle_folder_keys(files_root),
     )
 
-    return summary, issues, _collect_grant_advisories(source_dir)
+    # Which workloads this import will CREATE (as opposed to upsert) — a new
+    # workload with no grants is inert, while an existing one keeps whatever it
+    # already holds, so only the former is worth warning about.
+    created_names = {
+        kind: {
+            entry.split(":", 1)[1]
+            for entry in summary.get(kind, [])
+            if entry.startswith("created:")
+        }
+        for kind in ("agents", "functions")
+    }
+    return summary, issues, _collect_grant_advisories(
+        source_dir, created_names=created_names
+    )
 
 
 def _validate_grant_references(
     source_dir: Path,
     issues: list[BundleValidationIssue],
     *,
-    valid_tables: set[str],
-    valid_functions: set[str],
-    valid_agents: set[str],
+    client: Lemma,
+    pod_sdk: Any,
+    known: dict[str, set[str]],
     valid_folder_keys: set[str],
 ) -> None:
     """Fail the import plan up front if any agent/function grant references a
     resource that neither the bundle creates nor the pod already has — so a
     dangling grant never leaves a half-imported pod (grants apply last).
-    Connector-connector grants are environment-specific and skipped here."""
-    targets_by_type: dict[str, set[str]] = {
-        "datastore_table": valid_tables,
-        "function": valid_functions,
-        "agent": valid_agents,
+
+    A ``connector_account`` grant names a raw account id, so it can only be
+    checked against the live API; an id the session can't reach is an error
+    here rather than a 400 from the final permissions pass, after every other
+    resource has already been written. A grant still holding a ``${var}``
+    placeholder is left alone — the apply step resolves or drops it.
+    ``connector`` grants name an org-global connector and are not pod-scoped, so
+    they stay advisory."""
+    # resource_type -> (bundle dir, how to list the pod's existing names). The
+    # listing is deferred: a bundle whose grants never mention workflows must
+    # not pay for a workflows.list, and the plan builder only fetched the ones
+    # it needed for its own diff.
+    _LISTERS = {
+        "datastore_table": ("tables", lambda: pod_sdk.tables.list(limit=1000)),
+        "function": ("functions", lambda: pod_sdk.functions.list(limit=1000)),
+        "agent": ("agents", lambda: pod_sdk.agents.list(limit=1000)),
+        "workflow": ("workflows", lambda: pod_sdk.workflows.list(limit=1000)),
+        "schedule": ("schedules", lambda: pod_sdk.schedules.list(limit=1000)),
+        "app": ("apps", lambda: pod_sdk.apps.list(limit=1000)),
     }
+    resolved_targets: dict[str, set[str]] = {}
+
+    def targets_for(rtype: str) -> set[str]:
+        """Every name of this type the pod will have after the import: what it
+        already holds, plus what this bundle creates."""
+        if rtype not in resolved_targets:
+            bundle_dir, lister = _LISTERS[rtype]
+            names = set(known.get(rtype) or set())
+            if rtype not in known:
+                names |= {
+                    str(item.get("name"))
+                    for item in list_items(lister())
+                    if isinstance(item, dict) and item.get("name")
+                }
+            resolved_targets[rtype] = names | {
+                d.name for d in _resource_dirs(source_dir, bundle_dir)
+            }
+        return resolved_targets[rtype]
+
+    account_cache: dict[str, bool] = {}
+
+    def account_reachable(account_id: str) -> bool:
+        if account_id not in account_cache:
+            try:
+                client.connectors.accounts.get(account_id)
+            except LemmaAPIError as exc:
+                # 403/404 means "not ours / not here" — a real plan error. A 429
+                # or 5xx is transient; don't fail the plan on infrastructure.
+                account_cache[account_id] = (
+                    getattr(exc, "status_code", None) not in (403, 404)
+                )
+            except Exception:  # noqa: BLE001 — a check we can't run isn't a finding
+                # No accounts API on this client, or the lookup itself broke.
+                # Treat as reachable: the apply step still surfaces a real
+                # failure, and a validator that can't validate must not block.
+                account_cache[account_id] = True
+            else:
+                account_cache[account_id] = True
+        return account_cache[account_id]
+
     for kind in ("agents", "functions"):
         for resource_dir in _resource_dirs(source_dir, kind):
             try:
@@ -1308,30 +1481,46 @@ def _validate_grant_references(
                     continue
                 rtype = str(grant.get("resource_type") or "")
                 rname = str(grant.get("resource_name") or "")
-                if not rname:
+                if not rname or _PLACEHOLDER_RE.fullmatch(rname):
                     continue
                 if rtype in ("folder", "document"):
                     found = _file_path_key(
                         [part for part in rname.split("/") if part]
                     ) in valid_folder_keys
-                elif rtype in targets_by_type:
-                    found = rname in targets_by_type[rtype]
+                    detail = (
+                        "Add the folder to the bundle (export it with --with-files) "
+                        "or drop the grant."
+                    )
+                elif rtype == "connector_account":
+                    found = account_reachable(rname)
+                    detail = (
+                        "A pinned-account grant names a connector account id, which "
+                        "is specific to the org that exported it. Connect an account "
+                        "in this org and pass its id via --var, or drop the grant to "
+                        "use the invoking user's own account."
+                    )
+                elif rtype in _LISTERS:
+                    found = rname in targets_for(rtype)
+                    detail = "Add the resource to the bundle or drop the grant."
                 else:
-                    continue  # e.g. connector — not validatable locally
+                    continue  # e.g. connector — org-global, not validatable here
                 if not found:
                     issues.append(
                         BundleValidationIssue(
                             path=str(resource_dir / f"{resource_dir.name}.json"),
                             message=(
                                 f"Grant references unknown {rtype} '{rname}' — not "
-                                "created by this bundle or present in the pod. Add the "
-                                "resource (e.g. export it --with-files) or drop the grant."
+                                f"created by this bundle or present in the pod. {detail}"
                             ),
                         )
                     )
 
 
-def _collect_grant_advisories(source_dir: Path) -> list[str]:
+def _collect_grant_advisories(
+    source_dir: Path,
+    *,
+    created_names: dict[str, set[str]] | None = None,
+) -> list[str]:
     """Non-fatal findings about the bundle's grants — printed, never blocking.
 
     The hard-fail pass (`_validate_grant_references`) catches dangling
@@ -1339,6 +1528,7 @@ def _collect_grant_advisories(source_dir: Path) -> list[str]:
     silent runtime 403s or surprises after import.
     """
     advisories: list[str] = []
+    created = created_names or {}
     for kind in ("agents", "functions"):
         for resource_dir in _resource_dirs(source_dir, kind):
             name = resource_dir.name
@@ -1353,6 +1543,25 @@ def _collect_grant_advisories(source_dir: Path) -> list[str]:
                 for grant in (permissions or {}).get("grants", [])
                 if isinstance(grant, dict)
             ]
+            # A workload starts with ZERO access, so one created without grants
+            # imports clean and then 403s the first time it touches anything.
+            # That failure used to surface only at runtime, as
+            # MISSING_WORKLOAD_RESOURCE_GRANT from inside an agent run. Say it
+            # here, while the author is still looking at the bundle.
+            if not grants and name in created.get(kind, set()):
+                singular = kind[:-1]
+                reason = (
+                    "declares no 'permissions' block"
+                    if permissions is None
+                    else "declares an empty grants list"
+                )
+                advisories.append(
+                    f"{singular} '{name}' {reason}, so it will be created with NO "
+                    "access — it cannot read any table, folder, or connector and "
+                    "will fail with MISSING_WORKLOAD_RESOURCE_GRANT at runtime. "
+                    f"Add permissions.grants, or run `lemma {kind} grant {name} "
+                    "<resource>:<perms>`."
+                )
             connector_targets = sorted(
                 {
                     str(grant.get("resource_name") or "?")
@@ -1571,13 +1780,16 @@ def _create_or_update_app(
         pod_sdk.apps.update(
             app_name,
             build_request(
-                UpdateAppRequest, _strip_keys(payload, {"name"}), context=f"app {app_name}"
+                UpdateAppRequest,
+                _strip_keys(payload, {"name"}),
+                context=f"app {app_name}",
+                strict=True,
             ),
         )
         return "updated"
 
     try:
-        pod_sdk.apps.create(build_request(CreateAppRequest, payload, context=f"app {app_name}"))
+        pod_sdk.apps.create(build_request(CreateAppRequest, payload, context=f"app {app_name}", strict=True))
         return "created"
     except LemmaAPIError as exc:
         if exc.code != "APP_CONFLICT":
@@ -1594,6 +1806,7 @@ def _create_or_update_app(
                     app_name=app_name,
                 ),
                 context=f"app {app_name}",
+                strict=True,
             )
         )
         return "created"
@@ -1610,7 +1823,7 @@ def _update_app_with_conflict_retry(
     update_payload = _strip_keys(payload, {"name"})
     try:
         pod_sdk.apps.update(
-            app_name, build_request(UpdateAppRequest, update_payload, context=f"app {app_name}")
+            app_name, build_request(UpdateAppRequest, update_payload, context=f"app {app_name}", strict=True)
         )
     except LemmaAPIError as exc:
         if exc.code != "APP_CONFLICT":
@@ -1628,6 +1841,7 @@ def _update_app_with_conflict_retry(
                     app_name=app_name,
                 ),
                 context=f"app {app_name}",
+                strict=True,
             ),
         )
 
@@ -1675,6 +1889,7 @@ def _create_schedule_from_payload(
                 CreateScheduleRequest,
                 create_fields,
                 context=f"schedule {create_fields.get('name')}",
+                strict=True,
             )
         )
     )
@@ -1823,6 +2038,7 @@ def import_pod_bundle(
                         "columns": payload.get("columns") or [],
                     },
                     context=f"table {table_name}",
+                    strict=True,
                 )
             )
             summary["tables"].append(f"created:{table_name}")
@@ -1861,12 +2077,25 @@ def import_pod_bundle(
         for column in diff.to_add:
             pod_sdk.tables.add_column(
                 table_name,
-                build_request(AddColumnRequest, {"column": column}, context=f"table {table_name} column"),
+                build_request(AddColumnRequest, {"column": column}, context=f"table {table_name} column", strict=True),
             )
         for column_name in diff.to_remove:
             pod_sdk.tables.remove_column(table_name, column_name)
         summary["tables"].append(f"updated:{table_name}")
         _progress_done("table", table_name, "updated")
+
+    # Resolve ${name} variables (and the legacy $POD_MEMBER token) lazily and
+    # once: member resolution costs a members.list call we skip for bundles that
+    # carry no placeholders. Built HERE, before the first resource that can hold
+    # a placeholder — agents and functions used to import ahead of this and so
+    # never had theirs resolved, sending a literal "${gmail_account}" to the API.
+    apply_variables = _build_variable_applier(
+        client,
+        pod_sdk,
+        source_dir=source_dir,
+        var_overrides=variables,
+        member_override=pod_member_id,
+    )
 
     # Grants reference resources by name, and may point at workflows, apps,
     # schedules, or folders that import later than agents/functions. Collect
@@ -1879,7 +2108,10 @@ def import_pod_bundle(
         payload, permissions_payload = _split_resource_permissions_payload(
             load_resource_payload(resource_dir, function_name)
         )
-        payload = _sanitize_function_payload_for_import(payload)
+        payload = _sanitize_function_payload_for_import(apply_variables(payload))
+        permissions_payload = _resolve_grant_permissions(
+            apply_variables, permissions_payload, kind="function", name=function_name
+        )
         if function_name in existing_functions:
             if not upsert:
                 raise ValueError(f"Function already exists and --no-upsert was requested: {function_name}")
@@ -1891,14 +2123,14 @@ def import_pod_bundle(
             if update_payload:
                 pod_sdk.functions.update(
                     function_name,
-                    build_request(UpdateFunctionRequest, update_payload, context=f"function {function_name}"),
+                    build_request(UpdateFunctionRequest, update_payload, context=f"function {function_name}", strict=True),
                 )
             summary["functions"].append(f"updated:{function_name}")
             _progress_done("function", function_name, "updated")
         else:
             _progress_start("function", function_name, "creating")
             pod_sdk.functions.create(
-                build_request(CreateFunctionRequest, payload, context=f"function {function_name}")
+                build_request(CreateFunctionRequest, payload, context=f"function {function_name}", strict=True)
             )
             summary["functions"].append(f"created:{function_name}")
             _progress_done("function", function_name, "created")
@@ -1911,6 +2143,10 @@ def import_pod_bundle(
         payload, permissions_payload = _split_resource_permissions_payload(
             load_resource_payload(resource_dir, agent_name)
         )
+        payload = apply_variables(payload)
+        permissions_payload = _resolve_grant_permissions(
+            apply_variables, permissions_payload, kind="agent", name=agent_name
+        )
         if agent_name in existing_agents:
             if not upsert:
                 raise ValueError(f"Agent already exists and --no-upsert was requested: {agent_name}")
@@ -1920,14 +2156,14 @@ def import_pod_bundle(
             if update_payload:
                 pod_sdk.agents.update(
                     agent_name,
-                    build_request(UpdateAgentRequest, update_payload, context=f"agent {agent_name}"),
+                    build_request(UpdateAgentRequest, update_payload, context=f"agent {agent_name}", strict=True),
                 )
             summary["agents"].append(f"updated:{agent_name}")
             _progress_done("agent", agent_name, "updated")
         else:
             _progress_start("agent", agent_name, "creating")
             pod_sdk.agents.create(
-                build_request(CreateAgentRequest, payload, context=f"agent {agent_name}")
+                build_request(CreateAgentRequest, payload, context=f"agent {agent_name}", strict=True)
             )
             summary["agents"].append(f"created:{agent_name}")
             _progress_done("agent", agent_name, "created")
@@ -1937,8 +2173,10 @@ def import_pod_bundle(
     apps = _build_existing_map(list_items(pod_sdk.apps.list(limit=1000)))
     for resource_dir in _resource_dirs(source_dir, "apps"):
         app_name = resource_dir.name
-        payload = load_resource_payload(
-            resource_dir, app_name, resource_type="apps"
+        payload = _sanitize_app_payload_for_import(
+            apply_variables(
+                load_resource_payload(resource_dir, app_name, resource_type="apps")
+            )
         )
         app_exists = app_name in apps
         if app_exists:
@@ -1996,17 +2234,6 @@ def import_pod_bundle(
         if workflow_dirs
         else {}
     )
-    # Resolve ${name} variables (and the legacy $POD_MEMBER token) lazily and
-    # once: member resolution costs a members.list call we skip for bundles that
-    # carry no placeholders.
-    apply_variables = _build_variable_applier(
-        client,
-        pod_sdk,
-        source_dir=source_dir,
-        var_overrides=variables,
-        member_override=pod_member_id,
-    )
-
     for resource_dir in workflow_dirs:
         workflow_name = resource_dir.name
         payload = apply_variables(load_resource_payload(resource_dir, workflow_name))
@@ -2019,14 +2246,14 @@ def import_pod_bundle(
             _progress_start("workflow", workflow_name, "updating")
             pod_sdk.workflows.update(
                 workflow_name,
-                build_request(WorkflowUpdateRequest, metadata_payload, context=f"workflow {workflow_name}"),
+                build_request(WorkflowUpdateRequest, metadata_payload, context=f"workflow {workflow_name}", strict=True),
             )
             action = "updated"
         else:
             create_payload = {"name": workflow_name, **metadata_payload}
             _progress_start("workflow", workflow_name, "creating")
             pod_sdk.workflows.create(
-                build_request(WorkflowCreateRequest, create_payload, context=f"workflow {workflow_name}")
+                build_request(WorkflowCreateRequest, create_payload, context=f"workflow {workflow_name}", strict=True)
             )
             action = "created"
 
@@ -2062,6 +2289,7 @@ def import_pod_bundle(
                     UpdateScheduleRequest,
                     _schedule_update_fields(payload),
                     context=f"schedule {schedule_name}",
+                    strict=True,
                 ),
             )
             summary["schedules"].append(f"updated:{schedule_name}")
@@ -2125,6 +2353,7 @@ def import_pod_bundle(
                     FunctionPermissionsReplaceRequest,
                     permissions_payload,
                     context=f"function {resource_name} permissions",
+                    strict=True,
                 ),
             )
         else:
@@ -2134,6 +2363,7 @@ def import_pod_bundle(
                     AgentPermissionsReplaceRequest,
                     permissions_payload,
                     context=f"agent {resource_name} permissions",
+                    strict=True,
                 ),
             )
         summary[f"{kind}s"].append(f"permissions:{resource_name}:{len(grants)}")

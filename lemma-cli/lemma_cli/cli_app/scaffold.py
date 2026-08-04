@@ -507,33 +507,78 @@ def resource_example(resource_type: str, name: str = "example") -> str:
 # --------------------------------------------------------------------------- #
 # grants (X7/G1)
 # --------------------------------------------------------------------------- #
+# Friendly verb -> permission ids, per grantable resource type. Every id here is
+# POD-scoped and listed under its resource type in the backend's RESOURCE_ACTIONS
+# (app/core/authorization/resource_actions.py) — the server rejects any pairing
+# that isn't, so this table must stay a subset of that one.
 PERMISSION_PRESETS: dict[str, dict[str, list[str]]] = {
     "datastore_table": {
         "read": ["datastore.table.read", "datastore.record.read"],
         # record deletion rides on datastore.record.write; there is no
         # datastore.record.delete permission in the backend registry.
         "write": ["datastore.record.write"],
+        "alter": ["datastore.table.update"],
         # Structural table deletion — a DESTRUCTIVE action: granting it gives
         # the workload standing authority (no runtime approval prompt).
         "delete": ["datastore.table.delete"],
     },
+    # Files live under the folder permission family. A folder grant cascades to
+    # everything beneath it; `document` targets a single file by path.
     "folder": {
         "read": ["folder.read"],
         "write": ["folder.write"],
+        "delete": ["folder.delete"],
     },
+    "document": {
+        "read": ["folder.read"],
+        "write": ["folder.write"],
+        "delete": ["folder.delete"],
+    },
+    # A connector grant with no account grant is USER-RESOLVED mode: the call
+    # runs against whichever account the *invoking* user connected.
     "connector": {
         "use": ["connector.use"],
     },
+    # FIXED-ACCOUNT (pinned) mode: `connector_account.use` on one account id, in
+    # addition to `connector.use` on the connector, makes every invoker share
+    # that one account. `manage` is destructive.
+    "connector_account": {
+        "use": ["connector_account.use"],
+        "manage": ["connector_account.manage"],
+    },
     # Compose functions/agents as tools on an agent/function. Execute is
     # self-sufficient — granting it lets the parent both load and run the tool
-    # (the backend no longer also requires function.read). One token per verb:
-    # `execute` here (apps use `use`, matching connector.use).
+    # (the backend no longer also requires function.read).
     "function": {
         "execute": ["function.execute"],
         "read": ["function.read"],
+        "write": ["function.update"],
+        "delete": ["function.delete"],
     },
     "agent": {
         "execute": ["agent.execute"],
+        "read": ["agent.read"],
+        "write": ["agent.update"],
+        "delete": ["agent.delete"],
+    },
+    "workflow": {
+        "execute": ["workflow.execute"],
+        "read": ["workflow.read"],
+        "write": ["workflow.update"],
+        "delete": ["workflow.delete"],
+    },
+    "schedule": {
+        "read": ["schedule.read"],
+        "write": ["schedule.update"],
+        "delete": ["schedule.delete"],
+    },
+    # A Lemma app in this pod — NOT a connector. `app:` used to alias to
+    # connector back when connectors were called apps; see parse_grant_spec.
+    "app": {
+        "read": ["app.read"],
+        "write": ["app.update"],
+        "publish": ["app.publish"],
+        "delete": ["app.delete"],
     },
 }
 _GRANT_TYPE_ALIASES = {
@@ -541,38 +586,79 @@ _GRANT_TYPE_ALIASES = {
     "datastore_table": "datastore_table",
     "folder": "folder",
     "file": "folder",
-    "app": "connector",
+    "document": "document",
+    "doc": "document",
     "connector": "connector",
+    "connector_account": "connector_account",
+    "account": "connector_account",
+    "app": "app",
     "function": "function",
     "agent": "agent",
+    "workflow": "workflow",
+    "schedule": "schedule",
 }
+GRANT_TYPE_TOKENS = tuple(sorted(_GRANT_TYPE_ALIASES))
+
+
+def _resolve_grant_type(type_token: str, perms: str) -> tuple[str, str | None]:
+    """Map a spec's type token to a resource type, plus an optional deprecation
+    note to print.
+
+    `app:` is the one ambiguous token. It used to mean "connector" (connectors
+    were called apps), and that spelling is all over the existing skills and
+    bundles — but `app` is now a real grantable ResourceType of its own (a Lemma
+    app in the pod). Disambiguate on the verb: `use` is a connector verb and no
+    app accepts it, so `app:gmail:use` still resolves to a connector grant, with
+    a note naming the current spelling. Every other app verb means the app."""
+    token = type_token.strip().lower()
+    rtype = _GRANT_TYPE_ALIASES.get(token)
+    if not rtype:
+        raise ScaffoldError(
+            f"Unknown grant type {type_token!r}. Use one of: "
+            f"{', '.join(GRANT_TYPE_TOKENS)}."
+        )
+    if rtype == "app":
+        verbs = {part.strip().lower() for part in perms.split(",") if part.strip()}
+        if verbs and verbs <= {"use", "connector.use"}:
+            return "connector", (
+                "`app:<name>:use` now means a connector grant only for backward "
+                "compatibility — write `connector:<name>:use`. `app:` on its own "
+                "targets a Lemma app in this pod (read/write/publish/delete)."
+            )
+    return rtype, None
 
 
 def parse_grant_spec(spec: str) -> dict:
     """Parse `name:perms` or `type:name:perms` into a grant dict.
 
     `name:perms`  — type inferred (a leading `/` means a folder, else a table).
-    `type:name:perms` — explicit type (table | folder | app).
-    `perms` is comma-separated friendly tokens (read/write/delete/use) or raw
-    permission ids (e.g. `datastore.record.write`)."""
+    `type:name:perms` — explicit type; see GRANT_TYPE_TOKENS.
+    `perms` is comma-separated friendly verbs (read/write/execute/use/delete/…)
+    or raw permission ids (e.g. `datastore.record.write`).
+
+    A `connector_account` name is the account's **id**, not a human name — the
+    backend has no other identifier for it (see resource_names.py). That makes
+    the grant environment-specific; export tokenizes it into a `${var}`."""
+    note: str | None = None
     parts = spec.split(":")
     if len(parts) == 3:
         type_token, name, perms = parts
-        rtype = _GRANT_TYPE_ALIASES.get(type_token.strip().lower())
-        if not rtype:
-            raise ScaffoldError(
-                f"Unknown grant type {type_token!r}. "
-                "Use table, folder, app, function, or agent."
-            )
+        rtype, note = _resolve_grant_type(type_token, perms)
     elif len(parts) == 2:
         name, perms = parts
         rtype = "folder" if name.startswith("/") else "datastore_table"
     else:
         raise ScaffoldError(
             f"Bad grant {spec!r}. Use name:perms (e.g. tickets:read,write) "
-            "or type:name:perms (e.g. app:gmail:use)."
+            "or type:name:perms (e.g. connector:gmail:use)."
         )
+    if note:
+        from ..cli_core.state import console
+
+        console.print(f"[yellow]note[/yellow] {note}")
     name = name.strip()
+    if not name:
+        raise ScaffoldError(f"Bad grant {spec!r}: no resource name.")
     presets = PERMISSION_PRESETS[rtype]
     perm_ids: list[str] = []
     for token in perms.split(","):
@@ -587,6 +673,8 @@ def parse_grant_spec(spec: str) -> dict:
             raise ScaffoldError(
                 f"Unknown permission {token!r} for {rtype}. Try: {', '.join(presets)}."
             )
+    if not perm_ids:
+        raise ScaffoldError(f"Bad grant {spec!r}: no permissions given.")
     deduped: list[str] = []
     for pid in perm_ids:
         if pid not in deduped:
@@ -611,6 +699,28 @@ def merge_grants(existing: list[dict], new: list[dict]) -> list[dict]:
             if pid not in merged[key]["permission_ids"]:
                 merged[key]["permission_ids"].append(pid)
     return [merged[key] for key in order]
+
+
+def subtract_grants(existing: list[dict], removed: list[dict]) -> list[dict]:
+    """Inverse of `merge_grants`: drop the named permission ids from matching
+    (resource_type, resource_name) grants, and drop a grant entirely once it has
+    no permissions left. Grants the caller didn't name are untouched."""
+    drop: dict[tuple[str, str], set[str]] = {}
+    for grant in removed:
+        key = (grant.get("resource_type"), grant.get("resource_name"))
+        drop.setdefault(key, set()).update(grant.get("permission_ids") or [])
+    result: list[dict] = []
+    for grant in existing:
+        key = (grant.get("resource_type"), grant.get("resource_name"))
+        if key not in drop:
+            result.append(grant)
+            continue
+        remaining = [
+            pid for pid in (grant.get("permission_ids") or []) if pid not in drop[key]
+        ]
+        if remaining:
+            result.append({**grant, "permission_ids": remaining})
+    return result
 
 
 # The `start` namespace only ever exposes these sub-keys (see the backend's

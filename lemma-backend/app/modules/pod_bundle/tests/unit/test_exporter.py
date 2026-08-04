@@ -614,7 +614,15 @@ async def test_resource_grants_payload_serializes_grants_by_name(monkeypatch):
     }
 
 
-async def test_resource_grants_payload_none_when_no_grants(monkeypatch):
+async def test_resource_grants_payload_is_empty_list_when_no_grants(monkeypatch):
+    """A grantee that holds nothing exports an EMPTY grant list, not None.
+
+    The bundle format distinguishes the two: omitting `permissions` means "leave
+    the target's grants alone", while `{"grants": []}` means "this workload holds
+    nothing". Returning None here collapsed them, so the same pod produced
+    different bundles from the backend exporter and the CLI one — and importing
+    the backend's silently kept grants the source had removed."""
+
     async def _fake_list(session, *, pod_id, grantee_type, grantee_id):
         return {}
 
@@ -627,7 +635,7 @@ async def test_resource_grants_payload_none_when_no_grants(monkeypatch):
         grantee_type="FUNCTION",
         grantee_id=uuid4(),
     )
-    assert out is None
+    assert out == {"grants": []}
 
 
 async def test_resource_grants_payload_is_best_effort_on_error(monkeypatch):

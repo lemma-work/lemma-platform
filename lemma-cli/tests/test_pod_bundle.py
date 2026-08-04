@@ -2298,13 +2298,15 @@ def test_validate_grant_references_flags_dangling_grants(tmp_path: Path):
         encoding="utf-8",
     )
 
+    known = {"datastore_table": {"issues"}, "function": set(), "agent": set()}
+
     issues: list = []
     _validate_grant_references(
         tmp_path,
         issues,
-        valid_tables={"issues"},
-        valid_functions=set(),
-        valid_agents=set(),
+        client=SimpleNamespace(),
+        pod_sdk=SimpleNamespace(),
+        known=known,
         valid_folder_keys=set(),
     )
     msgs = [i.message for i in issues]
@@ -2317,9 +2319,9 @@ def test_validate_grant_references_flags_dangling_grants(tmp_path: Path):
     _validate_grant_references(
         tmp_path,
         ok,
-        valid_tables={"issues"},
-        valid_functions=set(),
-        valid_agents=set(),
+        client=SimpleNamespace(),
+        pod_sdk=SimpleNamespace(),
+        known=known,
         valid_folder_keys={"docs/missing"},
     )
     assert ok == []
@@ -2422,3 +2424,392 @@ def test_export_table_data_skips_when_over_byte_budget(tmp_path: Path):
     )
     assert not (resource_dir / "data.csv").exists()
     assert any("tables/big/data.csv" in w and "per-item limit" in w for w in warnings)
+
+
+# --------------------------------------------------------------------------- #
+# grants: zero-access advisory + pinned-account portability
+# --------------------------------------------------------------------------- #
+def _write_function(root: Path, name: str, payload: dict) -> None:
+    resource_dir = root / "functions" / name
+    resource_dir.mkdir(parents=True)
+    (resource_dir / f"{name}.json").write_text(json.dumps(payload), encoding="utf-8")
+
+
+def test_zero_grant_advisory_fires_for_a_newly_created_workload(tmp_path: Path):
+    """The failure that started this: a function imports clean with no grants and
+    only fails later, at runtime, with MISSING_WORKLOAD_RESOURCE_GRANT."""
+    _write_function(tmp_path, "maybe_rewrite_lesson", {"name": "maybe_rewrite_lesson"})
+    _write_function(
+        tmp_path,
+        "request_lesson",
+        {"name": "request_lesson", "permissions": {"grants": []}},
+    )
+
+    advisories = _collect_grant_advisories(
+        tmp_path,
+        created_names={"functions": {"maybe_rewrite_lesson", "request_lesson"}, "agents": set()},
+    )
+
+    joined = "\n".join(advisories)
+    # No permissions block at all...
+    assert "maybe_rewrite_lesson" in joined
+    assert "declares no 'permissions' block" in joined
+    # ...and an explicitly empty one both land, with different wording.
+    assert "declares an empty grants list" in joined
+    assert "MISSING_WORKLOAD_RESOURCE_GRANT" in joined
+
+
+def test_zero_grant_advisory_is_quiet_for_an_existing_workload(tmp_path: Path):
+    """Upserting a workload whose bundle omits `permissions` leaves its grants
+    alone, so there is nothing to warn about."""
+    _write_function(tmp_path, "request_lesson", {"name": "request_lesson"})
+
+    assert (
+        _collect_grant_advisories(
+            tmp_path, created_names={"functions": set(), "agents": set()}
+        )
+        == []
+    )
+
+
+def test_zero_grant_advisory_is_quiet_when_grants_are_declared(tmp_path: Path):
+    _write_function(
+        tmp_path,
+        "maybe_rewrite_lesson",
+        {
+            "name": "maybe_rewrite_lesson",
+            "permissions": {
+                "grants": [
+                    {
+                        "resource_type": "datastore_table",
+                        "resource_name": "lesson_response",
+                        "permission_ids": ["datastore.table.read"],
+                    }
+                ]
+            },
+        },
+    )
+
+    assert (
+        _collect_grant_advisories(
+            tmp_path, created_names={"functions": {"maybe_rewrite_lesson"}, "agents": set()}
+        )
+        == []
+    )
+
+
+def test_export_tokenizes_pinned_account_grants(tmp_path: Path):
+    """A `connector_account` grant names the account by its raw id, which is
+    meaningless in any other org. Export must turn it into a ${var} like every
+    other account reference — it used to ship the source-org id verbatim."""
+    account_id = "11111111-2222-4333-8444-555555555555"
+    agent = {
+        "name": "mailer",
+        "instruction": "Send mail.",
+        "toolsets": ["POD"],
+    }
+    permissions = {
+        "grants": [
+            {
+                "resource_type": "connector",
+                "resource_name": "gmail",
+                "permission_ids": ["connector.use"],
+            },
+            {
+                "resource_type": "connector_account",
+                "resource_name": account_id,
+                "permission_ids": ["connector_account.use"],
+            },
+        ]
+    }
+    client = FakeClient(
+        pods=SimpleNamespace(get=lambda pod_id: {"id": pod_id, "name": "mailpod"}),
+        tables=SimpleNamespace(list=lambda pod_id, limit=1000: {"items": []}),
+        functions=SimpleNamespace(list=lambda pod_id, limit=1000: {"items": []}),
+        agents=SimpleNamespace(
+            list=lambda pod_id, limit=1000: {"items": [{"name": "mailer"}]},
+            get=lambda pod_id, name: agent,
+            get_permissions=lambda pod_id, name: permissions,
+        ),
+        workflows=SimpleNamespace(list=lambda pod_id, limit=1000: {"items": []}),
+        schedules=SimpleNamespace(list=lambda pod_id, limit=1000: {"items": []}),
+        surfaces=SimpleNamespace(list=lambda pod_id, limit=100: {"items": []}),
+        apps=SimpleNamespace(list=lambda pod_id, limit=1000: {"items": []}),
+        connectors=SimpleNamespace(
+            accounts=SimpleNamespace(
+                get=lambda aid: {
+                    "id": aid,
+                    "connector_id": "gmail",
+                    "kind": "LEMMA",
+                }
+            )
+        ),
+        files=SimpleNamespace(
+            tree=lambda pod_id, root_path="/", files_per_directory=20: {
+                "tree": {"path": "/", "name": "/", "kind": "FOLDER", "children": []}
+            }
+        ),
+    )
+
+    result = export_pod_bundle(client, pod_id="pod_1", output_dir=tmp_path)
+
+    bundle = Path(result["path"])
+    payload = json.loads((bundle / "agents" / "mailer" / "mailer.json").read_text())
+    grants = payload["permissions"]["grants"]
+    account_grant = next(
+        g for g in grants if g["resource_type"] == "connector_account"
+    )
+    # The raw id is gone, replaced by a variable...
+    assert account_grant["resource_name"].startswith("${")
+    assert account_id not in json.dumps(payload)
+    # ...and the variable records which connector to reconnect.
+    variables = json.loads((bundle / "pod.json").read_text())["variables"]
+    var_name = account_grant["resource_name"][2:-1]
+    assert variables[var_name]["type"] == "account"
+    assert variables[var_name]["connector"] == "gmail"
+    assert variables[var_name]["connector_kind"] == "LEMMA"
+    # The plain connector grant is untouched — it is portable by name.
+    assert {"resource_type": "connector", "resource_name": "gmail",
+            "permission_ids": ["connector.use"]} in grants
+
+
+def test_import_drops_an_unresolved_pinned_account_grant(tmp_path: Path, capsys):
+    """An account variable nobody supplied must not reach the API: the whole
+    permissions pass would 400, at the very end of an import that has already
+    written everything else."""
+    (tmp_path / "pod.json").write_text(
+        json.dumps(
+            {
+                "name": "mailpod",
+                "variables": {
+                    "mailer_account": {
+                        "type": "account",
+                        "source_value": "11111111-2222-4333-8444-555555555555",
+                        "connector": "gmail",
+                        "connector_kind": "LEMMA",
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    _write_agent(
+        tmp_path,
+        "mailer",
+        {
+            "name": "mailer",
+            "instruction": "Send mail.",
+            "permissions": {
+                "grants": [
+                    {
+                        "resource_type": "connector",
+                        "resource_name": "gmail",
+                        "permission_ids": ["connector.use"],
+                    },
+                    {
+                        "resource_type": "connector_account",
+                        "resource_name": "${mailer_account}",
+                        "permission_ids": ["connector_account.use"],
+                        "connector_id": "gmail",
+                        "connector_kind": "LEMMA",
+                    },
+                ]
+            },
+        },
+    )
+
+    permission_payloads: list = []
+    client = FakeClient(
+        tables=SimpleNamespace(list=lambda pod_id, limit=1000: {"items": []}),
+        functions=SimpleNamespace(list=lambda pod_id, limit=1000: {"items": []}),
+        agents=SimpleNamespace(
+            list=lambda pod_id, limit=1000: {"items": []},
+            create=lambda pod_id, payload: {"name": _plain(payload)["name"]},
+            replace_permissions=lambda pod_id, name, payload: permission_payloads.append(
+                _plain(payload)
+            )
+            or {"agent_name": name},
+        ),
+        workflows=SimpleNamespace(list=lambda pod_id, limit=1000: {"items": []}),
+        apps=SimpleNamespace(list=lambda pod_id, limit=1000: {"items": []}),
+        connectors=SimpleNamespace(
+            accounts=SimpleNamespace(
+                get=lambda aid: (_ for _ in ()).throw(
+                    LemmaAPIError(status_code=404, message="gone")
+                )
+            )
+        ),
+        files=SimpleNamespace(
+            tree=lambda pod_id, root_path="/", files_per_directory=20: {
+                "tree": {"path": "/", "name": "/", "kind": "FOLDER", "children": []}
+            }
+        ),
+    )
+
+    result = import_pod_bundle(client, pod_id="pod_1", source_dir=tmp_path)
+
+    assert result["ok"] is True
+    # Only the portable connector grant is sent; the pinned account is dropped,
+    # and the export-only metadata never reaches the API.
+    assert permission_payloads == [
+        {
+            "grants": [
+                {
+                    "resource_type": "connector",
+                    "resource_name": "gmail",
+                    "permission_ids": ["connector.use"],
+                }
+            ]
+        }
+    ]
+    assert "dropped 1 grant" in capsys.readouterr().out
+
+
+def _bare_pod_client():
+    """A pod with nothing in it — enough to plan an import against."""
+    return FakeClient(
+        tables=SimpleNamespace(list=lambda pod_id, limit=1000: {"items": []}),
+        functions=SimpleNamespace(list=lambda pod_id, limit=1000: {"items": []}),
+        agents=SimpleNamespace(list=lambda pod_id, limit=1000: {"items": []}),
+        workflows=SimpleNamespace(list=lambda pod_id, limit=1000: {"items": []}),
+        schedules=SimpleNamespace(list=lambda pod_id, limit=1000: {"items": []}),
+        surfaces=SimpleNamespace(list=lambda pod_id, limit=100: {"items": []}),
+        apps=SimpleNamespace(list=lambda pod_id, limit=1000: {"items": []}),
+        files=SimpleNamespace(
+            tree=lambda pod_id, root_path="/", files_per_directory=20: {
+                "tree": {"path": "/", "name": "/", "kind": "FOLDER", "children": []}
+            }
+        ),
+    )
+
+
+def test_scaffolded_pod_dry_run_imports_clean(tmp_path: Path):
+    """Everything `lemma pod init` / `lemma <resource> init` writes must survive the
+    import's strict unknown-field check — a scaffold that can't import is worse
+    than no scaffold."""
+    from lemma_cli.cli_app.scaffold import init_pod, init_resource
+
+    init_pod(tmp_path, "demo")
+    init_resource("table", "tickets", root=tmp_path)
+    init_resource("function", "score_ticket", root=tmp_path)
+    init_resource("agent", "triage", root=tmp_path)
+    init_resource("workflow", "intake", root=tmp_path)
+
+    result = import_pod_bundle(
+        _bare_pod_client(), pod_id="pod_1", source_dir=tmp_path, dry_run=True
+    )
+
+    assert result["errors"] == []
+    assert result["ok"] is True
+
+
+def test_dry_run_surfaces_the_zero_grant_advisory(tmp_path: Path):
+    """End to end: a scaffolded function ships an empty grants list, and the plan
+    says so before anything is written."""
+    from lemma_cli.cli_app.scaffold import init_pod, init_resource
+
+    init_pod(tmp_path, "demo", with_starter=False)
+    init_resource("function", "score_ticket", root=tmp_path)
+
+    result = import_pod_bundle(
+        _bare_pod_client(), pod_id="pod_1", source_dir=tmp_path, dry_run=True
+    )
+
+    advisories = "\n".join(result["advisories"])
+    assert "score_ticket" in advisories
+    assert "NO access" in advisories
+
+
+def test_import_rejects_an_unrecognized_field_in_a_bundle(tmp_path: Path):
+    """In a bundle, an unknown key is always an authoring mistake and nobody is
+    watching the output — so it fails the import instead of vanishing."""
+    _write_function(
+        tmp_path,
+        "score_ticket",
+        {
+            "name": "score_ticket",
+            "code": (
+                "#input_type_name: In\n"
+                "#output_type_name: Out\n"
+                "#function_name: score_ticket\n"
+            ),
+            "descriptoin": "typo",
+        },
+    )
+
+    client = _bare_pod_client()
+    client.functions = SimpleNamespace(
+        list=lambda pod_id, limit=1000: {"items": []},
+        create=lambda pod_id, payload: pytest.fail(
+            "create must not be reached: the unknown field should fail the import first"
+        ),
+    )
+
+    with pytest.raises(ValueError, match="descriptoin"):
+        import_pod_bundle(client, pod_id="pod_1", source_dir=tmp_path)
+
+
+def test_plan_flags_an_unreachable_pinned_account_grant(tmp_path: Path):
+    """A pinned account the target org can't reach must fail the PLAN. Left to the
+    apply step it 400s on the final permissions pass, after every other resource
+    has already been written."""
+    _write_agent(
+        tmp_path,
+        "mailer",
+        {
+            "name": "mailer",
+            "instruction": "Send mail.",
+            "permissions": {
+                "grants": [
+                    {
+                        "resource_type": "connector_account",
+                        "resource_name": "11111111-2222-4333-8444-555555555555",
+                        "permission_ids": ["connector_account.use"],
+                    }
+                ]
+            },
+        },
+    )
+    client = _bare_pod_client()
+    client.connectors = SimpleNamespace(
+        accounts=SimpleNamespace(
+            get=lambda aid: (_ for _ in ()).throw(LemmaAPIError(status_code=404, message="gone"))
+        )
+    )
+
+    result = import_pod_bundle(
+        client, pod_id="pod_1", source_dir=tmp_path, dry_run=True
+    )
+
+    assert result["ok"] is False
+    assert any(
+        "connector_account" in error["message"] for error in result["errors"]
+    )
+
+
+def test_plan_does_not_block_when_the_account_check_cannot_run(tmp_path: Path):
+    """A validator that can't validate must not invent a finding — an older
+    client with no accounts API still plans."""
+    _write_agent(
+        tmp_path,
+        "mailer",
+        {
+            "name": "mailer",
+            "instruction": "Send mail.",
+            "permissions": {
+                "grants": [
+                    {
+                        "resource_type": "connector_account",
+                        "resource_name": "11111111-2222-4333-8444-555555555555",
+                        "permission_ids": ["connector_account.use"],
+                    }
+                ]
+            },
+        },
+    )
+
+    result = import_pod_bundle(
+        _bare_pod_client(), pod_id="pod_1", source_dir=tmp_path, dry_run=True
+    )
+
+    assert result["errors"] == []

@@ -283,3 +283,79 @@ def test_require_account_variable_metadata_accepts_a_legacy_provider():
     require_account_variable_metadata(
         {"acct": {"type": "account", "connector": "slack", "provider": "COMPOSIO"}}
     )
+
+
+def test_connector_account_grants_are_tokenized(tmp_path):
+    """A pinned-account grant carries the account id in `resource_name`, a key
+    that means something else everywhere else — so the generic `account_id` pass
+    never saw it and every export leaked a source-org id."""
+    (tmp_path / "pod.json").write_text(
+        json.dumps({"name": "mailpod"}) + "\n", encoding="utf-8"
+    )
+    agent_dir = tmp_path / "agents" / "mailer"
+    agent_dir.mkdir(parents=True)
+    account_id = "11111111-2222-4333-8444-555555555555"
+    (agent_dir / "mailer.json").write_text(
+        json.dumps(
+            {
+                "name": "mailer",
+                "permissions": {
+                    "grants": [
+                        {
+                            "resource_type": "connector_account",
+                            "resource_name": account_id,
+                            "permission_ids": ["connector_account.use"],
+                            "connector_id": "gmail",
+                            "connector_kind": "LEMMA",
+                        }
+                    ]
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    variables = _extract_portable_variables(tmp_path)
+
+    payload = json.loads((agent_dir / "mailer.json").read_text(encoding="utf-8"))
+    grant = payload["permissions"]["grants"][0]
+    assert grant["resource_name"] == "${mailer_account}"
+    assert variables["mailer_account"] == {
+        "type": "account",
+        "source_value": account_id,
+        "description": "Connector account for agents 'mailer'",
+        "connector": "gmail",
+        "connector_kind": "LEMMA",
+    }
+
+
+def test_account_grant_without_connector_metadata_fails_the_export(tmp_path):
+    """Without connector/kind the recorded variable can't tell the importer what
+    to reconnect, so refuse rather than emit an unusable one."""
+    (tmp_path / "pod.json").write_text(
+        json.dumps({"name": "mailpod"}) + "\n", encoding="utf-8"
+    )
+    agent_dir = tmp_path / "agents" / "mailer"
+    agent_dir.mkdir(parents=True)
+    (agent_dir / "mailer.json").write_text(
+        json.dumps(
+            {
+                "name": "mailer",
+                "permissions": {
+                    "grants": [
+                        {
+                            "resource_type": "connector_account",
+                            "resource_name": "11111111-2222-4333-8444-555555555555",
+                            "permission_ids": ["connector_account.use"],
+                        }
+                    ]
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="connector_account grant"):
+        _extract_portable_variables(tmp_path)

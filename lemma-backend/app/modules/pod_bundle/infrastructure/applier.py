@@ -13,9 +13,8 @@ from __future__ import annotations
 
 import csv
 import io
-from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 from uuid import UUID
 
 from lemma_pod_bundle import load_resource_payload
@@ -26,9 +25,11 @@ from app.core.concurrency.offload import run_blocking
 from app.core.log.log import get_logger
 from app.modules.pod_bundle.domain.errors import PodBundleDomainError
 from app.modules.pod_bundle.domain.state import PlanStep, StepKind
-
-if TYPE_CHECKING:
-    from app.core.authorization.context import ResourceType
+from app.modules.pod_bundle.infrastructure.grants import (
+    GrantInput as _GrantInput,
+    apply_grants,
+    grants_from_payload as _grants_from_payload,
+)
 
 logger = get_logger(__name__)
 
@@ -65,6 +66,7 @@ class BundleApplier:
             StepKind.TABLE_DATA: self._apply_table_data,
             StepKind.AGENT: self._apply_agent,
             StepKind.AGENT_GRANTS: self._apply_agent_grants,
+            StepKind.FUNCTION_GRANTS: self._apply_function_grants,
             StepKind.SCHEDULE: self._apply_schedule,
             StepKind.WORKFLOW: self._apply_workflow,
             StepKind.SURFACE: self._apply_surface,
@@ -249,6 +251,44 @@ class BundleApplier:
                 ctx=self._ctx,
             )
 
+    async def _apply_function_grants(self, step: PlanStep) -> None:
+        """Deferred grant step: replace a function's resource permission grants
+        once every resource it references has been applied.
+
+        Functions used to have their grants written inline by the FUNCTION step's
+        own runner, which runs before agents, apps, and files. A function granted
+        `/knowledge` or `function:write_lesson:execute` therefore tried to
+        resolve a name that did not exist yet and lost the grant. Agents were
+        always deferred; this makes the two behave the same."""
+        from app.composition.pod_bundle_resources import build_function_service
+
+        payload = self._load("functions", step.name)
+        grants = _grants_from_payload(payload)
+        if not grants:
+            return
+        service = build_function_service(self._uow)
+        function = await _get_function(
+            service, self._pod_id, step.name, self._user_id, self._ctx
+        )
+        if function is None or function.id is None:
+            raise PodBundleDomainError(
+                f"Function '{step.name}' must exist before applying its grants.",
+                code="POD_BUNDLE_STEP_ORDER",
+            )
+        await self._apply_grants(
+            grantee_type="FUNCTION", grantee_id=function.id, grants=grants
+        )
+        # A function's grants feed the env its workspace tools run with, so the
+        # cached env must be dropped whenever they change — same as the
+        # permissions-replace controller does.
+        from app.composition.pod_bundle_apps import (
+            invalidate_function_workspace_env_cache,
+        )
+
+        await invalidate_function_workspace_env_cache(
+            pod_id=self._pod_id, function_id=function.id
+        )
+
     async def _apply_agent_grants(self, step: PlanStep) -> None:
         """Deferred grant step: replace an agent's resource permission grants once
         every resource it references (tables, functions) has been applied."""
@@ -274,28 +314,14 @@ class BundleApplier:
     async def _apply_grants(
         self, *, grantee_type: str, grantee_id: UUID, grants: list[_GrantInput]
     ) -> None:
-        """Validate + normalize (resource_name -> id) + replace the grantee's
-        resource grants, on the step's own short UoW session. Mirrors the
-        function/agent controllers' inline-grants path so imported workloads get
-        the same executable permissions a hand-authored one would."""
-        if not grants:
-            return
-        from app.core.authorization.grants import (
-            normalize_pod_resource_grants,
-            replace_grantee_resource_grants,
-            validate_pod_resource_grant_permissions,
-        )
-
-        validate_pod_resource_grant_permissions(grants)
-        normalized = await normalize_pod_resource_grants(
-            self._uow.session, pod_id=self._pod_id, grants=grants
-        )
-        await replace_grantee_resource_grants(
+        """Replace the grantee's resource grants on the step's own short UoW
+        session (see infrastructure/grants.py)."""
+        await apply_grants(
             self._uow.session,
             pod_id=self._pod_id,
             grantee_type=grantee_type,
             grantee_id=grantee_id,
-            grants=normalized,
+            grants=grants,
             created_by_user_id=self._user_id,
         )
 
@@ -605,52 +631,6 @@ class BundleApplier:
 # --- module helpers ----------------------------------------------------------
 
 
-@dataclass(frozen=True)
-class _GrantInput:
-    """Adapts a bundle manifest grant entry to the ``ResourceGrantInputProtocol``
-    the shared authorization layer expects (``resource_type`` / ``resource_name``
-    / ``permission_ids``). ``resource_type`` holds a ``ResourceType`` enum — the
-    annotation stays a string thanks to ``from __future__ import annotations`` so
-    the module import stays lazy/cycle-free."""
-
-    resource_type: ResourceType
-    resource_name: str
-    permission_ids: list[str]
-
-
-def _grants_from_payload(payload: dict[str, Any]) -> list[_GrantInput]:
-    """Read ``permissions.grants`` (or a bare top-level ``grants`` list) off a
-    resource manifest into typed grant inputs. Entries whose ``resource_type`` is
-    not a known :class:`ResourceType` or that omit a ``resource_name`` are
-    skipped with a warning rather than failing the whole import."""
-    from app.core.authorization.context import ResourceType
-
-    perms = payload.get("permissions")
-    raw = perms.get("grants") if isinstance(perms, dict) else payload.get("grants")
-    grants: list[_GrantInput] = []
-    for entry in raw or []:
-        if not isinstance(entry, dict):
-            continue
-        raw_type = entry.get("resource_type")
-        try:
-            resource_type = ResourceType(str(raw_type))
-        except ValueError:
-            logger.debug('pod_bundle.applier.skipping_grant_unknown_resource_type.diagnostic', raw_type=raw_type)
-            continue
-        resource_name = entry.get("resource_name")
-        if not resource_name:
-            logger.debug('pod_bundle.applier.skipping_grant_without_resource_name.diagnostic')
-            continue
-        grants.append(
-            _GrantInput(
-                resource_type=resource_type,
-                resource_name=str(resource_name),
-                permission_ids=[str(p) for p in entry.get("permission_ids") or []],
-            )
-        )
-    return grants
-
-
 def _is_system_column(column: dict[str, Any]) -> bool:
     from lemma_pod_bundle.diff import _is_system_table_column
 
@@ -726,6 +706,15 @@ async def _get_table(service, pod_id, name, ctx):
 async def _get_agent(service, pod_id, name, ctx):
     try:
         return await service.get_agent_by_name(pod_id=pod_id, name=name, ctx=ctx)
+    except Exception:
+        return None
+
+
+async def _get_function(service, pod_id, name, user_id, ctx):
+    try:
+        return await service.get_function_by_name(
+            pod_id, name, user_id, include_code=False, ctx=ctx
+        )
     except Exception:
         return None
 

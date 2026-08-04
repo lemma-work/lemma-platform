@@ -392,6 +392,18 @@ def doctor_pod(
         errors: list[str] = []
         warnings: list[str] = []
 
+        account_cache: dict[str, bool] = {}
+
+        def account_reachable(account_id: str) -> bool:
+            if account_id not in account_cache:
+                try:
+                    client.connectors.accounts.get(account_id)
+                except Exception:  # noqa: BLE001 — unreachable is the finding
+                    account_cache[account_id] = False
+                else:
+                    account_cache[account_id] = True
+            return account_cache[account_id]
+
         def check_grants(kind: str, name: str) -> list[dict]:
             try:
                 perms = to_plain(getattr(pod_sdk, kind).permissions(name))
@@ -399,6 +411,16 @@ def doctor_pod(
                 warnings.append(f"could not read permissions for {kind[:-1]} '{name}': {exc}")
                 return []
             grants = [g for g in (perms.get("grants") or []) if isinstance(g, dict)]
+            # A workload with no grants isn't "fine by default" — it has zero
+            # access and 403s the first time it touches anything. Say so here as
+            # well as at import time, since a pod can also reach this state by a
+            # create that dropped its permissions.
+            if not grants:
+                warnings.append(
+                    f"{kind[:-1]} '{name}' holds NO grants — it cannot read any "
+                    f"table, folder, or connector. Grant it with "
+                    f"`lemma {kind} permissions add {name} <resource>:<perms>`."
+                )
             for grant in grants:
                 rtype = grant.get("resource_type")
                 rname = str(grant.get("resource_name") or "")
@@ -408,6 +430,13 @@ def doctor_pod(
                     errors.append(f"{kind[:-1]} '{name}' is granted on agent '{rname}' which does not exist.")
                 elif rtype == "function" and rname not in functions:
                     errors.append(f"{kind[:-1]} '{name}' is granted on function '{rname}' which does not exist.")
+                elif rtype == "connector_account" and not account_reachable(rname):
+                    errors.append(
+                        f"{kind[:-1]} '{name}' pins connector account '{rname}', "
+                        "which this session cannot reach — the grant is dead. "
+                        "Reconnect the account, or drop the grant to fall back to "
+                        "the invoking user's own account."
+                    )
                 elif rtype == "folder":
                     warnings.append(f"{kind[:-1]} '{name}' grants folder '{rname}' — verify it exists / will be created.")
                 destructive = sorted(

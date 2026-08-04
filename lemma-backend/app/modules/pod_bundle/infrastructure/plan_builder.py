@@ -118,6 +118,16 @@ def _has_grants(payload: dict[str, Any]) -> bool:
     return bool(grants)
 
 
+def _names_with_grants(bundle_root: Path, resource_type: str) -> list[str]:
+    """Resources of this type whose manifest declares grants — the ones that
+    need a deferred grants step after every referenced resource exists."""
+    return [
+        d.name
+        for d in _resource_subdirs(bundle_root, resource_type)
+        if _has_grants(load_resource_payload(d, d.name, resource_type=resource_type))
+    ]
+
+
 class PlanBuilder:
     def __init__(self, existing: ExistingResources):
         self._existing = existing
@@ -171,8 +181,9 @@ class PlanBuilder:
             if (table_dir / TABLE_DATA_FILE).is_file():
                 data_steps.append((name, {}))
 
-        # --- functions -------------------------------------------------------
+        # --- functions (+ deferred grants) -----------------------------------
         existing_functions = await self._existing.function_names()
+        grant_functions = _names_with_grants(bundle_root, "functions")
         for d in _resource_subdirs(bundle_root, "functions"):
             steps.append(
                 self._simple_step(StepKind.FUNCTION, d.name, existing_functions)
@@ -180,12 +191,9 @@ class PlanBuilder:
 
         # --- agents (+ deferred grants) --------------------------------------
         existing_agents = await self._existing.agent_names()
-        grant_agents: list[str] = []
+        grant_agents = _names_with_grants(bundle_root, "agents")
         for d in _resource_subdirs(bundle_root, "agents"):
             steps.append(self._simple_step(StepKind.AGENT, d.name, existing_agents))
-            payload = load_resource_payload(d, d.name, resource_type="agents")
-            if _has_grants(payload):
-                grant_agents.append(d.name)
 
         # --- workflows -------------------------------------------------------
         existing_workflows = await self._existing.workflow_names()
@@ -227,7 +235,20 @@ class PlanBuilder:
         # --- files (folders parent-first, then file bytes) -------------------
         steps.extend(_file_steps(bundle_root))
 
-        # --- agent grants (after every referenced resource exists) -----------
+        # --- grants (after every referenced resource exists) ------------------
+        # Deferred for functions as well as agents: a function granted a folder,
+        # an app, or another function that the same bundle creates would
+        # otherwise be asked to resolve those names while its own FUNCTION step
+        # runs — before files, apps, and the later functions exist.
+        for name in grant_functions:
+            steps.append(
+                PlanStep(
+                    index=0,
+                    kind=StepKind.FUNCTION_GRANTS,
+                    name=name,
+                    action=StepAction.UPDATE,
+                )
+            )
         for name in grant_agents:
             steps.append(
                 PlanStep(

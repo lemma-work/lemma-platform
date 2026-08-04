@@ -181,3 +181,89 @@ def test_agents_permissions_get_dispatches_api(monkeypatch):
 
     assert result.exit_code == 0, result.stdout
     assert captured.get("permissions_agent") == "my-agent"
+
+
+def test_agents_create_applies_inline_permissions(monkeypatch):
+    """Agents take the same path functions do, even though their create endpoint
+    *does* accept inline permissions — one behavior, one report, for both."""
+    captured: dict = {}
+
+    class FakeAgents:
+        def create(self, request):
+            captured["create"] = request.to_dict()
+            return {"id": "ag-1", "name": captured["create"]["name"]}
+
+        def replace_permissions(self, name, request):
+            captured["permissions"] = (name, request.to_dict())
+            return {"agent_name": name, **request.to_dict()}
+
+    class FakePod:
+        def __init__(self):
+            self.agents = FakeAgents()
+
+    class FakeClient:
+        def pod(self, pod_id):
+            return FakePod()
+
+    state = SimpleNamespace(
+        config={"_runtime": {"pod": "pod-1"}, "defaults": {"org_id": "org-1"}},
+        output="pretty",
+        full=False,
+    )
+    monkeypatch.setattr(agents, "run_with_client", lambda ctx, fn: fn(FakeClient(), state))
+
+    grants = [
+        {
+            "resource_type": "connector",
+            "resource_name": "gmail",
+            "permission_ids": ["connector.use"],
+        }
+    ]
+    payload = json.dumps(
+        {"name": "mailer", "instruction": "Send mail.", "permissions": {"grants": grants}}
+    )
+    result = runner.invoke(app, ["agents", "create", "--data", payload, "--pod", "pod-1"])
+
+    assert result.exit_code == 0, result.stdout
+    assert "permissions" not in captured["create"]
+    assert captured["permissions"] == ("mailer", {"grants": grants})
+
+
+def test_agents_create_with_empty_grants_says_so(monkeypatch):
+    """An explicitly empty grant list is a real instruction (replace with
+    nothing), and leaves the agent unable to reach anything — so it is called
+    out rather than reported as a success."""
+    captured: dict = {}
+
+    class FakeAgents:
+        def create(self, request):
+            captured["create"] = request.to_dict()
+            return {"id": "ag-1", "name": "mailer"}
+
+        def replace_permissions(self, name, request):
+            captured["permissions"] = (name, request.to_dict())
+            return {"agent_name": name, **request.to_dict()}
+
+    class FakePod:
+        def __init__(self):
+            self.agents = FakeAgents()
+
+    class FakeClient:
+        def pod(self, pod_id):
+            return FakePod()
+
+    state = SimpleNamespace(
+        config={"_runtime": {"pod": "pod-1"}, "defaults": {"org_id": "org-1"}},
+        output="pretty",
+        full=False,
+    )
+    monkeypatch.setattr(agents, "run_with_client", lambda ctx, fn: fn(FakeClient(), state))
+
+    payload = json.dumps(
+        {"name": "mailer", "instruction": "Send mail.", "permissions": {"grants": []}}
+    )
+    result = runner.invoke(app, ["agents", "create", "--data", payload, "--pod", "pod-1"])
+
+    assert result.exit_code == 0, result.stdout
+    assert captured["permissions"] == ("mailer", {"grants": []})
+    assert "EMPTY" in result.stdout

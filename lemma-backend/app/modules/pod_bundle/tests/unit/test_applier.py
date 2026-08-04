@@ -361,6 +361,70 @@ async def test_agent_grants_step_applies_grants(tmp_path, monkeypatch):
     assert calls["replace"]["grants"] == ["NORMALIZED"]
 
 
+_FUNCTION_ID = uuid4()
+
+
+class FakeFunctionService:
+    class _Function:
+        id = _FUNCTION_ID
+
+    async def get_function_by_name(
+        self, pod_id, name, user_id, *, include_code=True, ctx=None, **kwargs
+    ):
+        return self._Function()
+
+
+async def test_function_grants_are_a_deferred_step(tmp_path, monkeypatch):
+    """Function grants apply from their own late step, like agent grants.
+
+    They used to be written inline by the FUNCTION step's runner, which runs
+    before agents, apps, and files — so a function granted a folder or another
+    function that the same bundle creates was resolving names that did not exist
+    yet, and lost the grant.
+    """
+    root = tmp_path / "bundle"
+    _write(
+        root / "functions" / "maybe_rewrite_lesson" / "maybe_rewrite_lesson.json",
+        {
+            "name": "maybe_rewrite_lesson",
+            "permissions": {
+                "grants": [
+                    {
+                        "resource_type": "function",
+                        "resource_name": "write_lesson",
+                        "permission_ids": ["function.execute"],
+                    }
+                ]
+            },
+        },
+    )
+    monkeypatch.setattr(
+        "app.modules.function.api.dependencies.build_function_service",
+        lambda uow: FakeFunctionService(),
+    )
+    invalidated: dict = {}
+
+    async def _invalidate(*, pod_id, function_id):
+        invalidated["function_id"] = function_id
+
+    monkeypatch.setattr(
+        "app.modules.workspace.services.workspace_tool_runtime."
+        "invalidate_function_workspace_env_cache",
+        _invalidate,
+    )
+    calls = _patch_grant_layer(monkeypatch)
+
+    await _grant_applier(root).apply_step(
+        _step(StepKind.FUNCTION_GRANTS, "maybe_rewrite_lesson", action=StepAction.UPDATE)
+    )
+
+    assert calls["replace"]["grantee_type"] == "FUNCTION"
+    assert calls["replace"]["grantee_id"] == _FUNCTION_ID
+    assert calls["replace"]["grants"] == ["NORMALIZED"]
+    # A grant change alters the env the function's workspace tools run with.
+    assert invalidated["function_id"] == _FUNCTION_ID
+
+
 # --- workflows + schedules ---------------------------------------------------
 
 

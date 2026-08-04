@@ -337,7 +337,9 @@ class BundleExporter:
                             grantee_type="FUNCTION",
                             grantee_id=grantee_id,
                         )
-                        if grants:
+                        # Attach even an EMPTY grant list — see
+                        # _resource_grants_payload for why None differs from [].
+                        if grants is not None:
                             payload = _attach_permissions_payload(payload, grants)
                     payload = _extract_large_text(payload, field_name="code", file_name="code.py", resource_dir=dir_)
                     _write_json(dir_ / f"{function_name}.json", payload)
@@ -369,7 +371,9 @@ class BundleExporter:
                             grantee_type="AGENT",
                             grantee_id=grantee_id,
                         )
-                        if grants:
+                        # Attach even an EMPTY grant list — see
+                        # _resource_grants_payload for why None differs from [].
+                        if grants is not None:
                             payload = _attach_permissions_payload(payload, grants)
                     payload = _extract_large_text(
                         payload,
@@ -792,10 +796,11 @@ async def _resource_grants_payload(
     but can't call the tables/functions it was granted. ``list_grantee_resource_grants``
     already drops grants whose resource no longer resolves to a name, and the applier
     skips any that don't resolve in the target pod, so this stays best-effort/portable.
-    Best-effort: a failure to read grants logs and returns ``None`` (the resource
-    still exports, just without its grants) rather than sinking the whole export,
-    matching the surfaces/files/apps best-effort policy. Returns ``None`` when the
-    grantee has no grants (so nothing is attached)."""
+    Best-effort: a failure to read grants logs and returns ``None`` — "grants
+    unknown, leave the target's alone" — rather than sinking the whole export. A
+    grantee that simply holds none returns ``{"grants": []}``, which imports as
+    "holds nothing". Collapsing those two is what let an export silently change an
+    imported workload's access."""
     from app.core.authorization.grants import list_grantee_resource_grants
 
     try:
@@ -807,8 +812,6 @@ async def _resource_grants_payload(
         )
     except Exception:  # noqa: BLE001 - grant export is best-effort
         logger.debug('pod_bundle.exporter.skipping_grant_export_s_s.diagnostic', grantee_type=grantee_type, grantee_id=grantee_id)
-        return None
-    if not grouped:
         return None
     return {
         "grants": [

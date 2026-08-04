@@ -24,36 +24,158 @@ operations_app = typer.Typer(
 triggers_app = typer.Typer(help="Connector trigger list and detail commands.")
 
 
-def _resolve_auth_config(client: Any, auth_config: str | None) -> str:
-    """Auto-discover auth config when not provided. Uses the sole config if only one exists."""
-    if auth_config is not None:
-        return auth_config
-    raw = client.connectors.auth_configs.list(limit=50)
-    data = to_plain(raw)
-    items: list[Any] = []
+# The installed auth configs, memoized per client for the life of one command.
+# Resolution consults them up to twice (once to classify a positional, once to
+# resolve it), and that should still cost one request, not two.
+_AUTH_CONFIG_CACHE: dict[int, list[dict]] = {}
+
+
+def _auth_config_items(client: Any) -> list[dict]:
+    """Installed auth configs, or an empty list when they can't be listed.
+
+    A client that predates the auth-configs resource (or a listing that errors)
+    is not fatal: resolution falls back to using the caller's selector verbatim,
+    which is exactly what the CLI did before it could resolve connector ids.
+    """
+    key = id(client)
+    if key in _AUTH_CONFIG_CACHE:
+        return _AUTH_CONFIG_CACHE[key]
+    try:
+        data = to_plain(client.connectors.auth_configs.list(limit=200))
+    except Exception:  # noqa: BLE001 — resolution degrades, never blocks
+        data = None
     if isinstance(data, list):
-        items = data
+        items = [item for item in data if isinstance(item, dict)]
     elif isinstance(data, dict):
-        items = data.get("items", [])
-    if len(items) == 1:
-        name = str(items[0].get("name") or items[0].get("id") or "")
-        typer.echo(f"Using auth config: {name}", err=True)
-        return name
+        items = [item for item in data.get("items", []) if isinstance(item, dict)]
+    else:
+        items = []
+    _AUTH_CONFIG_CACHE[key] = items
+    return items
+
+
+def _describe_auth_configs(items: list[dict]) -> str:
+    return ", ".join(
+        f"{item.get('name') or item.get('id')} (connector {item.get('connector_id') or '?'}"
+        f", kind {item.get('kind') or '?'})"
+        for item in items
+    )
+
+
+def _resolve_auth_config(client: Any, selector: str | None) -> str:
+    """Resolve an auth-config SELECTOR to the exact auth-config name every
+    operations/triggers endpoint is keyed by.
+
+    Accepts, in order of preference:
+
+    * an auth-config name — used as-is;
+    * a **connector id** (`gmail`, `slack`) — resolved to that connector's
+      install, preferring the one flagged default. This is the important one:
+      the connector id is what an agent already knows from the task ("read my
+      Gmail"), while the auth-config name is an org-local string it could only
+      learn by running `overview` first;
+    * nothing — the sole install, if there is exactly one.
+
+    A selector that matches nothing raises with the installs that *do* exist, so
+    the next command is obvious instead of requiring a separate discovery call.
+    """
+    items = _auth_config_items(client)
     if not items:
+        # Nothing to resolve against. An explicit selector is still the caller's
+        # best guess — pass it through rather than refusing on our own ignorance.
+        if selector is not None:
+            return selector
         raise typer.BadParameter(
-            "No auth configs found. See `lemma connectors overview` or install one "
-            "with `lemma connectors auth-configs create <app>`.",
+            "No connectors are installed in this organization. Install one with "
+            "`lemma connectors auth-configs create <connector>`, then connect an "
+            "account.",
             param_hint="AUTH_CONFIG",
         )
-    # Operations/triggers differ per kind, so the name (which encodes the kind
-    # choice) must be explicit. Show the kind to make the choice obvious.
-    names = ", ".join(
-        f"{i.get('name') or i.get('id')} ({i.get('kind') or '?'})" for i in items
-    )
+
+    if selector is None:
+        if len(items) == 1:
+            name = str(items[0].get("name") or items[0].get("id") or "")
+            typer.echo(f"Using auth config: {name}", err=True)
+            return name
+        raise typer.BadParameter(
+            "Several connectors are installed — name one (or pass its connector "
+            f"id): {_describe_auth_configs(items)}",
+            param_hint="AUTH_CONFIG",
+        )
+
+    needle = selector.strip().casefold()
+    for item in items:
+        if str(item.get("name") or "").casefold() == needle:
+            return str(item["name"])
+    for item in items:
+        if str(item.get("id") or "").casefold() == needle:
+            return str(item.get("name") or item["id"])
+
+    # Fall back to the connector id: pick the default install, else the only one.
+    by_connector = [
+        item
+        for item in items
+        if str(item.get("connector_id") or item.get("app_id") or "").casefold() == needle
+    ]
+    if by_connector:
+        preferred = next(
+            (item for item in by_connector if item.get("is_default")), by_connector[0]
+        )
+        name = str(preferred.get("name") or preferred.get("id") or "")
+        if len(by_connector) > 1:
+            typer.echo(
+                f"Connector '{selector}' has {len(by_connector)} installs; using "
+                f"'{name}'. Pass an auth-config name to choose another.",
+                err=True,
+            )
+        return name
+
     raise typer.BadParameter(
-        f"Multiple auth configs — specify one (see `lemma connectors overview`): {names}",
+        f"No connector install matches '{selector}'. Installed: "
+        f"{_describe_auth_configs(items)}. Pass an auth-config name or a connector id.",
         param_hint="AUTH_CONFIG",
     )
+
+
+def _looks_like_auth_config(client: Any, value: str) -> bool:
+    """True when `value` names an installed auth config or connector — used to
+    tell a leading auth-config positional apart from a query/operation that was
+    passed where the positional used to sit."""
+    items = _auth_config_items(client)
+    if not items:
+        # Can't tell — keep the historical reading (leading positional is the
+        # auth config) so nothing that worked before starts being misread.
+        return True
+    needle = value.strip().casefold()
+    for item in items:
+        if needle in {
+            str(item.get("name") or "").casefold(),
+            str(item.get("id") or "").casefold(),
+            str(item.get("connector_id") or item.get("app_id") or "").casefold(),
+        }:
+            return True
+    return False
+
+
+def _split_target_and_rest(
+    client: Any, first: str | None, second: str | None, *, option: str | None
+) -> tuple[str | None, str | None]:
+    """Disambiguate the legacy `<auth-config> <text>` positional pair.
+
+    `lemma connectors operations search "send email"` used to bind the query to
+    the auth-config positional and 404 — the auto-discovery the help advertised
+    could never fire, because the slot was full. Resolve it by meaning, not
+    position: a first positional that names a real install is the target, and
+    anything else is the query/operation.
+    """
+    if option is not None:
+        # An explicit --auth-config wins; both positionals are then content.
+        return option, first if second is None else second
+    if first is None:
+        return None, second
+    if second is not None:
+        return first, second
+    return (first, None) if _looks_like_auth_config(client, first) else (None, first)
 
 
 def _strip_body_fields(obj: Any) -> Any:
@@ -501,40 +623,110 @@ def create_connect_request(
         emit(state, result)
 
 
+def _search_operations(
+    client: Any, state: Any, auth_config: str, query: str | None, limit: int
+) -> Any:
+    if hasattr(client.connectors, "operations"):
+        return client.connectors.operations.search(auth_config, query=query, limit=limit)
+    return client.connectors.search_operations(
+        auth_config,
+        organization_id=org_for(client, state),
+        query=query,
+        limit=limit,
+    )
+
+
+def _operation_batch(client: Any, state: Any, auth_config: str, names: list[str]) -> Any:
+    if hasattr(client.connectors, "operations"):
+        return client.connectors.operations.batch(auth_config, names)
+    return client.connectors.get_operation_details_batch(
+        auth_config,
+        organization_id=org_for(client, state),
+        operation_names=names,
+    )
+
+
+def _with_input_schemas(client: Any, state: Any, auth_config: str, result: Any) -> Any:
+    """Fold each search hit's input schema into the search result.
+
+    Without this, every execution costs three round trips — search to learn the
+    id, `get` to learn the payload shape, then execute. The schemas come from one
+    extra batch call, so a short result list carries everything needed to run the
+    operation.
+    """
+    payload = to_plain(result)
+    items = payload.get("items") if isinstance(payload, dict) else None
+    if not items:
+        return result
+    names = [str(item.get("name")) for item in items if item.get("name")]
+    if not names:
+        return result
+    try:
+        details = to_plain(_operation_batch(client, state, auth_config, names))
+    except Exception:  # noqa: BLE001 — schemas are a bonus, never the point
+        return result
+    by_name = {
+        str(detail.get("name")): detail
+        for detail in (details.get("items") or [])
+        if isinstance(detail, dict)
+    }
+    enriched = [
+        {
+            **item,
+            **(
+                {"input_schema": by_name[str(item.get("name"))].get("input_schema")}
+                if str(item.get("name")) in by_name
+                else {}
+            ),
+        }
+        for item in items
+    ]
+    return {**payload, "items": enriched}
+
+
 @operations_app.command("search")
 def search_operations(
     ctx: typer.Context,
-    auth_config: Optional[str] = typer.Argument(
+    first: Optional[str] = typer.Argument(
         None,
-        help="Auth config name. Auto-discovered when only one exists.",
+        metavar="[AUTH_CONFIG] [QUERY]",
+        help="Auth config/connector, or the search text when only one is given.",
     ),
-    search_text: str | None = typer.Argument(
+    search_text: str | None = typer.Argument(None, hidden=True),
+    auth_config_opt: str | None = typer.Option(
         None,
-        help="Natural-language search text or operation id.",
+        "--auth-config",
+        "-c",
+        help="Auth config name or connector id. Auto-discovered when only one is installed.",
     ),
     query: str | None = typer.Option(None, "--query", "-q"),
     limit: int = typer.Option(10, "--limit"),
+    with_schema: bool | None = typer.Option(
+        None,
+        "--with-schema/--no-schema",
+        help="Include each hit's input schema (default: on for <= 5 results).",
+    ),
 ) -> None:
-    """Search operation names and descriptions."""
+    """Search operation names and descriptions by intent.
+
+    `lemma connectors operations search "send email"` works: a lone positional
+    that doesn't name an installed connector is treated as the query, not as the
+    auth config. Results carry their input schema by default when the list is
+    short, so the next step is `execute`, not another lookup.
+    """
 
     state = state_from_ctx(ctx)
-    result = run_with_client(
-        ctx,
-        lambda client, s: (
-            client.connectors.operations.search(
-                _resolve_auth_config(client, auth_config),
-                query=query or search_text,
-                limit=limit,
-            )
-            if hasattr(client.connectors, "operations")
-            else client.connectors.search_operations(
-                _resolve_auth_config(client, auth_config),
-                organization_id=org_for(client, s),
-                query=query or search_text,
-                limit=limit,
-            )
-        ),
-    )
+
+    def run(client, s):  # type: ignore[no-untyped-def]
+        target, text = _split_target_and_rest(
+            client, first, search_text, option=auth_config_opt
+        )
+        resolved = _resolve_auth_config(client, target)
+        result = _search_operations(client, s, resolved, query or text, limit)
+        include = with_schema if with_schema is not None else limit <= 5
+        return _with_input_schemas(client, s, resolved, result) if include else result
+
+    result = run_with_client(ctx, run)
     if result is not None:
         emit(state, result)
 
@@ -544,14 +736,25 @@ def list_operations(
     ctx: typer.Context,
     auth_config: Optional[str] = typer.Argument(
         None,
-        help="Auth config name. Auto-discovered when only one exists.",
+        help="Auth config name or connector id. Auto-discovered when only one is installed.",
+    ),
+    auth_config_opt: str | None = typer.Option(
+        None, "--auth-config", "-c", help="Same as the positional."
     ),
     query: str | None = typer.Option(None, "--query", "-q"),
     limit: int = typer.Option(100, "--limit"),
 ) -> None:
-    """List operation names and descriptions for an org auth config."""
+    """List operation names and descriptions for an installed connector."""
 
-    search_operations(ctx, auth_config=auth_config, search_text=None, query=query, limit=limit)
+    search_operations(
+        ctx,
+        first=auth_config,
+        search_text=None,
+        auth_config_opt=auth_config_opt,
+        query=query,
+        limit=limit,
+        with_schema=False,
+    )
 
 
 @operations_app.command("details")
@@ -559,30 +762,34 @@ def operation_details(
     ctx: typer.Context,
     auth_config: Optional[str] = typer.Argument(
         None,
-        help="Auth config name. Auto-discovered when only one exists.",
+        help="Auth config name or connector id. Auto-discovered when only one is installed.",
     ),
     operations: list[str] | None = typer.Argument(
         None,
         help="Operation names. Omit to fetch details for every operation.",
     ),
+    auth_config_opt: str | None = typer.Option(
+        None, "--auth-config", "-c", help="Same as the positional."
+    ),
 ) -> None:
-    """Show operation details for a connector."""
+    """Show operation details (input/output schemas) for one or more operations."""
     state = state_from_ctx(ctx)
-    result = run_with_client(
-        ctx,
-        lambda client, s: (
-            client.connectors.operations.batch(
-                _resolve_auth_config(client, auth_config),
-                operations or [],
-            )
-            if hasattr(client.connectors, "operations")
-            else client.connectors.get_operation_details_batch(
-                _resolve_auth_config(client, auth_config),
-                organization_id=org_for(client, s),
-                operation_names=operations or [],
-            )
-        ),
-    )
+
+    def run(client, s):  # type: ignore[no-untyped-def]
+        # A lone positional that isn't an install is an operation name, not the
+        # auth config — same rule as `search`.
+        names = list(operations or [])
+        target = auth_config_opt or auth_config
+        if (
+            auth_config_opt is None
+            and auth_config is not None
+            and not _looks_like_auth_config(client, auth_config)
+        ):
+            names.insert(0, auth_config)
+            target = None
+        return _operation_batch(client, s, _resolve_auth_config(client, target), names)
+
+    result = run_with_client(ctx, run)
     if result is not None:
         emit(state, result)
 
@@ -590,39 +797,101 @@ def operation_details(
 @operations_app.command("get")
 def get_operation(
     ctx: typer.Context,
-    auth_config: str = typer.Argument(
+    first: str = typer.Argument(
         ...,
-        help="Auth config name.",
+        metavar="[AUTH_CONFIG] OPERATION",
+        help="Auth config/connector, or the operation name when only one is given.",
     ),
-    operation: str = typer.Argument(..., help="Operation name."),
+    operation: Optional[str] = typer.Argument(None, hidden=True),
+    auth_config_opt: str | None = typer.Option(
+        None, "--auth-config", "-c", help="Auth config name or connector id."
+    ),
 ) -> None:
-    """Show one connector operation."""
+    """Show one connector operation, including its input schema.
+
+    The auth config is auto-discovered when only one connector is installed, the
+    same as its sibling commands — it used to be the one operations command that
+    demanded it explicitly.
+    """
     state = state_from_ctx(ctx)
-    result = run_with_client(
-        ctx,
-        lambda client, s: (
-            client.connectors.operations.get(auth_config, operation)
-            if hasattr(client.connectors, "operations")
-            else client.connectors.get_operation_details(
-                auth_config,
-                operation,
-                organization_id=org_for(client, s),
-            )
-        ),
-    )
+
+    def run(client, s):  # type: ignore[no-untyped-def]
+        target, name = _split_target_and_rest(
+            client, first, operation, option=auth_config_opt
+        )
+        if not name:
+            raise typer.BadParameter("Give an operation name.", param_hint="OPERATION")
+        resolved = _resolve_auth_config(client, target)
+        if hasattr(client.connectors, "operations"):
+            return client.connectors.operations.get(resolved, name)
+        return client.connectors.get_operation_details(
+            resolved, name, organization_id=org_for(client, s)
+        )
+
+    result = run_with_client(ctx, run)
     if result is not None:
         emit(state, result)
+
+
+def _resolve_account(client: Any, state: Any, account: str | None) -> str | None:
+    """Accept an account id OR the email it was connected with.
+
+    An agent reading `connectors overview` sees emails, not ids; making it map
+    one to the other by hand is a lookup call for no reason. Only a value that
+    looks like an email triggers the lookup — anything else is passed through as
+    an id, so this never intercepts an identifier scheme it doesn't recognize.
+    """
+    if not account or "@" not in account:
+        return account
+    needle = account.strip().casefold()
+    for item in list_items(_list_accounts(client, state, connector=None, limit=200)):
+        if str(item.get("email") or "").casefold() == needle:
+            return str(item.get("id"))
+    raise typer.BadParameter(
+        f"No connected account matches '{account}'. See `lemma connectors overview`.",
+        param_hint="--account",
+    )
+
+
+def _execute_operation(
+    client: Any,
+    state: Any,
+    *,
+    auth_config: str,
+    operation: str,
+    payload: dict,
+    account: str | None,
+) -> Any:
+    account_id = _resolve_account(client, state, account or payload.get("account_id"))
+    body = payload.get("payload", payload)
+    if hasattr(client.connectors, "execute"):
+        return client.connectors.execute(
+            auth_config, operation, payload=body, account_id=account_id
+        )
+    return client.connectors.execute_operation(
+        auth_config,
+        operation,
+        organization_id=org_for(client, state),
+        payload=body,
+        account_id=account_id,
+    )
 
 
 @operations_app.command("execute")
 def execute_operation(
     ctx: typer.Context,
-    auth_config: Optional[str] = typer.Argument(
-        None,
-        help="Auth config name. Auto-discovered when only one exists.",
+    first: str = typer.Argument(
+        ...,
+        metavar="[AUTH_CONFIG] OPERATION",
+        help="Auth config/connector, or the operation name when only one is given.",
     ),
-    operation: str = typer.Argument(...),
-    json_payload: str | None = typer.Option(None, "--data", "-d", help="Raw JSON payload."),
+    operation: Optional[str] = typer.Argument(None, hidden=True),
+    auth_config_opt: str | None = typer.Option(
+        None, "--auth-config", "-c", help="Auth config name or connector id."
+    ),
+    json_payload: str | None = typer.Option(
+        None, "--data", "-d", help="Raw JSON payload (`-` reads stdin)."
+    ),
     file: Path | None = typer.Option(
         None,
         "--file",
@@ -631,35 +900,41 @@ def execute_operation(
         dir_okay=False,
         readable=True,
     ),
-    account: str | None = typer.Option(None, "--account", "--account-id"),
+    account: str | None = typer.Option(
+        None, "--account", "--account-id", help="Account id or connected email."
+    ),
     metadata_only: bool = typer.Option(
         False,
         "--metadata-only",
         help="Strip large HTML body fields from the response.",
     ),
 ) -> None:
-    """Execute a connector operation."""
-    payload = read_json(json_payload, file, required=True)
+    """Execute a connector operation.
+
+    The payload goes under a top-level `payload` key, but a bare object is
+    accepted too. Operations that take no input need no `--data` at all.
+    """
+    # Not required: plenty of operations take no input, and demanding `-d '{}'`
+    # for those was pure ceremony.
+    payload = read_json(json_payload, file, required=False)
     state = state_from_ctx(ctx)
-    result = run_with_client(
-        ctx,
-        lambda client, s: (
-            client.connectors.execute(
-                _resolve_auth_config(client, auth_config),
-                operation,
-                payload=payload.get("payload", payload),
-                account_id=account or payload.get("account_id"),
-            )
-            if hasattr(client.connectors, "execute")
-            else client.connectors.execute_operation(
-                _resolve_auth_config(client, auth_config),
-                operation,
-                organization_id=org_for(client, s),
-                payload=payload.get("payload", payload),
-                account_id=account or payload.get("account_id"),
-            )
-        ),
-    )
+
+    def run(client, s):  # type: ignore[no-untyped-def]
+        target, name = _split_target_and_rest(
+            client, first, operation, option=auth_config_opt
+        )
+        if not name:
+            raise typer.BadParameter("Give an operation name.", param_hint="OPERATION")
+        return _execute_operation(
+            client,
+            s,
+            auth_config=_resolve_auth_config(client, target),
+            operation=name,
+            payload=payload,
+            account=account,
+        )
+
+    result = run_with_client(ctx, run)
     if result is not None:
         if metadata_only:
             result = _strip_body_fields(to_plain(result))
@@ -782,6 +1057,145 @@ def _render_overview(rows: list[dict]) -> None:
         "[dim]Pass the Auth Config name to operations/triggers, e.g. "
         "`lemma connectors operations search <auth-config> \"<query>\"`.[/dim]"
     )
+
+
+def _required_input_fields(input_schema: Any) -> list[str]:
+    if not isinstance(input_schema, dict):
+        return []
+    required = input_schema.get("required")
+    return [str(field) for field in required] if isinstance(required, list) else []
+
+
+def _resolve_operation(
+    client: Any, state: Any, auth_config: str, selector: str
+) -> dict[str, Any]:
+    """Turn an operation id OR a plain-English intent into one concrete operation.
+
+    Tries an exact (case-insensitive) id first, then falls back to ranked search.
+    Returns the operation's detail dict so the caller already holds the input
+    schema — the whole point is that discovering and running are one step.
+    """
+    try:
+        detail = to_plain(_operation_batch(client, state, auth_config, [selector]))
+        items = detail.get("items") or []
+        if items:
+            return dict(items[0])
+    except Exception:  # noqa: BLE001 — an unknown id just means "search instead"
+        pass
+
+    hits = to_plain(_search_operations(client, state, auth_config, selector, 5)).get(
+        "items"
+    ) or []
+    if not hits:
+        raise typer.BadParameter(
+            f"No operation on '{auth_config}' matches '{selector}'. Browse them "
+            f"with `lemma connectors operations list {auth_config}`.",
+            param_hint="OPERATION",
+        )
+    best = str(hits[0].get("name"))
+    others = ", ".join(str(hit.get("name")) for hit in hits[1:])
+    typer.echo(
+        f"Resolved operation: {selector!r} -> {best}"
+        + (f" (also matched: {others})" if others else ""),
+        err=True,
+    )
+    detail = to_plain(_operation_batch(client, state, auth_config, [best]))
+    items = detail.get("items") or []
+    return dict(items[0]) if items else {"name": best, "input_schema": {}}
+
+
+@app.command("run")
+def run_connector_operation(
+    ctx: typer.Context,
+    connector: str = typer.Argument(
+        ..., help="Connector id (gmail, slack) or an auth-config name."
+    ),
+    operation: str = typer.Argument(
+        ..., help="Operation id, or plain-English intent ('list recent emails')."
+    ),
+    json_payload: str | None = typer.Option(
+        None, "--data", "-d", help="Operation input as JSON (`-` reads stdin)."
+    ),
+    file: Path | None = typer.Option(
+        None, "--file", "-f", exists=True, dir_okay=False, readable=True
+    ),
+    account: str | None = typer.Option(
+        None, "--account", "--account-id", help="Account id or connected email."
+    ),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Resolve and print the operation + input schema without executing.",
+    ),
+    metadata_only: bool = typer.Option(
+        False,
+        "--metadata-only",
+        help="Strip large HTML body fields from the response.",
+    ),
+) -> None:
+    """Run a connector operation in ONE call: resolve, check, execute.
+
+    Doing anything through a connector used to take four commands — `overview`
+    to learn the auth-config name, `operations search` to learn the operation id,
+    `operations get` to learn the payload shape, then `execute`. This collapses
+    that into one, and never guesses silently: the resolved connector, operation,
+    and account are printed, so the next run can name them exactly.
+
+    Omit `--data` on an operation that needs input and it prints the input schema
+    instead of failing — the same thing `--dry-run` does on purpose.
+
+        lemma connectors run gmail "list recent emails" --dry-run
+        lemma connectors run gmail gmail_list_messages -d '{"max_results": 5}'
+    """
+    payload = read_json(json_payload, file, required=False)
+    state = state_from_ctx(ctx)
+    gave_payload = json_payload is not None or file is not None
+
+    def run(client, s):  # type: ignore[no-untyped-def]
+        auth_config = _resolve_auth_config(client, connector)
+        detail = _resolve_operation(client, s, auth_config, operation)
+        name = str(detail.get("name") or operation)
+        input_schema = detail.get("input_schema") or {}
+        required = _required_input_fields(input_schema)
+
+        if dry_run or (required and not gave_payload):
+            if required and not gave_payload and not dry_run:
+                typer.echo(
+                    f"{name} needs input: {', '.join(required)}", err=True
+                )
+            typer.echo(
+                f"next: lemma connectors run {connector} {name} -d '{{...}}'",
+                err=True,
+            )
+            return {
+                "auth_config": auth_config,
+                "operation": name,
+                "input_schema": input_schema,
+                "required": required,
+                "executed": False,
+            }
+
+        result = _execute_operation(
+            client,
+            s,
+            auth_config=auth_config,
+            operation=name,
+            payload=payload,
+            account=account,
+        )
+        typer.echo(
+            f"Ran {auth_config} / {name}"
+            + (f" (account {account})" if account else ""),
+            err=True,
+        )
+        return result
+
+    result = run_with_client(ctx, run)
+    if result is None:
+        return
+    if metadata_only:
+        result = _strip_body_fields(to_plain(result))
+    emit(state, result)
 
 
 @app.command("overview")
