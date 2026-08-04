@@ -3166,3 +3166,133 @@ def test_tables_drop_column_confirmation(monkeypatch):
     )
     assert confirmed.exit_code == 0, confirmed.stdout
     assert called["n"] == 1
+
+
+def _describe_with_tree(monkeypatch, tree, argv):
+    """Invoke `pods describe` against a canned file tree."""
+
+    class FakeResource:
+        def list(self, *, limit=50):
+            return {"items": []}
+
+    class FakeFiles:
+        def tree(self, path, files_per_directory=5):
+            return {"tree": tree}
+
+    class FakePod:
+        tables = FakeResource()
+        functions = FakeResource()
+        agents = FakeResource()
+        workflows = FakeResource()
+        schedules = FakeResource()
+        files = FakeFiles()
+
+    pod_uuid = "11111111-1111-1111-1111-111111111111"
+
+    class FakeClient:
+        pods = SimpleNamespace(get=lambda pod_id: {"id": pod_id, "name": "Ops"})
+
+        def pod(self, pod_id):
+            return FakePod()
+
+    monkeypatch.setattr(
+        pods,
+        "run_with_client",
+        lambda ctx, fn: fn(
+            FakeClient(), SimpleNamespace(config={"_runtime": {"pod": pod_uuid}})
+        ),
+    )
+    return runner.invoke(app, ["--pod", pod_uuid, "pods", "describe", *argv])
+
+
+def _folder(name, *children):
+    return {
+        "name": name,
+        "path": f"/{name}",
+        "kind": "FOLDER",
+        "children": list(children),
+    }
+
+
+NESTED_TREE = {
+    "children": [
+        {
+            "name": "knowledge",
+            "path": "/knowledge",
+            "kind": "FOLDER",
+            "children": [
+                {
+                    "name": "policies",
+                    "path": "/knowledge/policies",
+                    "kind": "FOLDER",
+                    "children": [
+                        {
+                            "name": "refunds.md",
+                            "path": "/knowledge/policies/refunds.md",
+                            "kind": "FILE",
+                        }
+                    ],
+                }
+            ],
+        },
+        _folder("skills", {"name": "deep.md", "path": "/skills/deep.md", "kind": "FILE"}),
+    ]
+}
+NESTED_TREE["children"][1]["path"] = "/skills"
+
+
+def test_pods_describe_bounds_the_file_tree_depth(monkeypatch):
+    """The API returns the whole tree with no depth knob, so `describe` bounds it
+    itself — otherwise a deep pod buries its own resource tables."""
+    result = _describe_with_tree(monkeypatch, NESTED_TREE, [])
+
+    assert result.exit_code == 0, result.stdout
+    assert "knowledge" in result.stdout
+    assert "policies" in result.stdout
+    # Third level is past the default depth of 2.
+    assert "refunds.md" not in result.stdout
+    # The elision is stated, not silent.
+    assert "1 more" in result.stdout
+
+
+def test_pods_describe_hides_the_synthetic_skills_overlay(monkeypatch):
+    """/skills is read-only system files spliced in at the root, identical in
+    every pod — not this pod's data."""
+    result = _describe_with_tree(monkeypatch, NESTED_TREE, [])
+
+    assert result.exit_code == 0, result.stdout
+    assert "skills" not in result.stdout
+
+
+def test_pods_describe_skills_flag_opts_the_overlay_back_in(monkeypatch):
+    result = _describe_with_tree(monkeypatch, NESTED_TREE, ["--skills"])
+
+    assert result.exit_code == 0, result.stdout
+    assert "skills" in result.stdout
+
+
+def test_pods_describe_depth_flag_widens_the_tree(monkeypatch):
+    result = _describe_with_tree(monkeypatch, NESTED_TREE, ["--depth", "3"])
+
+    assert result.exit_code == 0, result.stdout
+    assert "refunds.md" in result.stdout
+
+
+def test_pods_describe_full_shows_everything(monkeypatch):
+    """--full already means 'expand what was folded'; it covers the tree too."""
+    result = _describe_with_tree(monkeypatch, NESTED_TREE, [])
+    assert "refunds.md" not in result.stdout
+
+    result = runner.invoke(
+        app,
+        [
+            "--pod",
+            "11111111-1111-1111-1111-111111111111",
+            "--full",
+            "pods",
+            "describe",
+        ],
+    )
+    assert result.exit_code == 0, result.stdout
+    assert "refunds.md" in result.stdout
+    assert "skills" in result.stdout

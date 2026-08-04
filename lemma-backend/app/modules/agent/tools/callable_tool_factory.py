@@ -77,6 +77,12 @@ def inline_tool_schema_refs(schema: dict[str, Any]) -> dict[str, Any]:
         return dict(schema)
 
 
+def _with_output_schema(prefix: str, output_schema: dict[str, Any] | None) -> str:
+    """Append the output schema to a dynamic tool's description, if it has one."""
+    preview = _schema_preview(output_schema)
+    return f"{prefix}\nOutput schema: {preview}" if preview else prefix
+
+
 # Plain agents (no input_schema) are exposed as a single-string-input tool.
 _SINGLE_INPUT_FIELD = "input"
 
@@ -96,8 +102,19 @@ def _single_string_input_schema() -> dict[str, Any]:
 
 
 def _schema_preview(schema: dict[str, Any] | None) -> str:
-    normalized = _normalize_json_schema(schema)
-    return json.dumps(normalized, ensure_ascii=True, separators=(",", ":"))
+    """Render a schema for a tool *description*, or "" when there is nothing to say.
+
+    Only the OUTPUT schema goes in a description. The input schema is already the
+    tool's ``parameters_json_schema``, so repeating it here billed every dynamic
+    function/agent tool for its input schema twice. An absent schema renders as
+    empty rather than as ``{"type":"object","properties":{},...}`` — 61 characters
+    of boilerplate that told the model nothing.
+    """
+    if not isinstance(schema, dict) or not schema:
+        return ""
+    return json.dumps(
+        _normalize_json_schema(schema), ensure_ascii=False, separators=(",", ":")
+    )
 
 
 class AgentCallableToolFactory:
@@ -379,19 +396,11 @@ class AgentCallableToolFactory:
 
     def _build_function_description(self, function: FunctionEntity) -> str:
         prefix = function.description or f"Execute function `{function.name}`."
-        return (
-            f"{prefix}\n"
-            f"Input schema: {_schema_preview(function.input_schema)}\n"
-            f"Output schema: {_schema_preview(function.output_schema)}"
-        )
+        return _with_output_schema(prefix, function.output_schema)
 
     def _build_agent_description(self, agent: Agent) -> str:
         prefix = agent.description or f"Execute agent `{agent.name}`."
-        return (
-            f"{prefix}\n"
-            f"Input schema: {_schema_preview(agent.input_schema)}\n"
-            f"Output schema: {_schema_preview(agent.output_schema)}"
-        )
+        return _with_output_schema(prefix, agent.output_schema)
 
     def _build_dynamic_function_schema(
         self,

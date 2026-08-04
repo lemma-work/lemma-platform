@@ -122,7 +122,7 @@ Pod **members** (humans) hold one of four roles, assigned by an admin. This is s
 | `POD_EDITOR` | + create/update tables; write files |
 | `POD_ADMIN` | + delete tables/files; manage members and roles |
 
-Record writes require `POD_USER` or above on **both** RLS and shared tables — RLS changes *which rows* a member touches, not *whether* they can write. On an RLS table, `POD_ADMIN` is the only role that sees and manages every member's rows; everyone else is scoped to their own.
+Record writes require `POD_USER` or above on **both** RLS and shared tables — RLS changes *which rows* a member touches, not *whether* they can write. On an RLS table **everyone is scoped to their own rows, pod admins included**; reading across all members takes an explicit `mode=admin` request and table-admin permission (see `tables.md`).
 
 ## Worked Example: Support Triage Pod
 

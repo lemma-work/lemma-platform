@@ -1494,16 +1494,19 @@ def test_conversation_instructions_are_appended_to_agent_prompt():
     )
 
     # Base prompt skill guidance is present...
-    assert "Do not load a skill for ordinary CLI usage" in prompt
+    assert "Don't load a skill for ordinary CLI use" in prompt
     # ...and the conversation instructions are appended under their own section.
     assert "# Conversation Instructions" in prompt
     assert "Use the task board screen as the current UI context." in prompt
     # Skill catalog guidance for the builder/user skills is present.
     assert "lemma-builder" in prompt
     assert "lemma-user" in prompt
-    assert "private code sandbox" in prompt
-    assert "/me/<descriptive-folder>/" in prompt
-    assert "lemma files cat /pod/knowledge/policy.pdf --pages 3-7" in prompt
+    assert "private to this conversation" in prompt
+    assert "/me/<topic>/" in prompt
+    assert "lemma files cat /knowledge/policy.pdf --pages 3-7" in prompt
+    # Shared folders are top-level. The prompt used to teach a `/pod` prefix that
+    # does not exist, so guard the whole composed prompt against it coming back.
+    assert "/pod/" not in prompt
     assert 'lit parse input.pdf --target-pages "1-5,10"' in prompt
     assert "# Agent Instructions\nAnswer briefly." in prompt
     assert (

@@ -2,23 +2,23 @@
   {
     "tool_name": "ask_user",
     "toolset": "USER_INTERACTION",
-    "description": "Ask the user one or more multiple-choice questions and wait for their answers.\n\nUse this to get a decision or clarification you genuinely cannot infer \u2014 for\nexample which of several approaches to take, or a missing preference. Present a\nshort series of questions, each with 2-4 concrete options, and mark the option\nyou recommend (`recommended: true`). The run pauses while the client renders\nthe questions; the user picks an option per question (or types their own answer\nvia an always-available \"Other\"), and the chosen answers come back in\n`answers`, keyed by each question's `header`.\n\nPrefer this over a prose question whenever the answer is a choice among known\noptions. For free-form input, ask clearly in prose and end your turn so the\nuser's next message can answer. Only ask when it changes what you do next \u2014\ndon't ask about things with an obvious default; just proceed.",
+    "description": "Ask the user one or more multiple-choice questions and wait for their answers.\n\nUse it for a decision you genuinely cannot infer. Each question carries 2-4\nconcrete options; mark the one you recommend. The run pauses, and answers come\nback in `answers` keyed by each question's `header`.\n\nPrefer this over a prose question whenever the answer is a choice among known\noptions. For free-form input, ask in prose and end your turn. Only ask when it\nchanges what you do next \u2014 otherwise take the obvious default and proceed.",
     "input_schema": {
       "$defs": {
         "AskUserOption": {
           "properties": {
             "label": {
-              "description": "The choice shown to the user \u2014 concise (1-5 words).",
+              "description": "The choice shown to the user (1-5 words).",
               "type": "string"
             },
             "description": {
               "default": "",
-              "description": "Optional one-line explanation of what this option means.",
+              "description": "One-line explanation.",
               "type": "string"
             },
             "recommended": {
               "default": false,
-              "description": "Set on the option you recommend; the client highlights it.",
+              "description": "Highlight this as your recommendation.",
               "type": "boolean"
             }
           },
@@ -31,15 +31,15 @@
         "AskUserQuestion": {
           "properties": {
             "question": {
-              "description": "The full question to ask the user.",
+              "description": "The full question.",
               "type": "string"
             },
             "header": {
-              "description": "Very short label for this question (a few words), shown as a chip and used as the key for this question's answer.",
+              "description": "Few-word label, shown as a chip and used as the answer key.",
               "type": "string"
             },
             "options": {
-              "description": "2-4 distinct choices for the user to pick from.",
+              "description": "2-4 distinct choices.",
               "items": {
                 "$ref": "#/$defs/AskUserOption"
               },
@@ -47,7 +47,7 @@
             },
             "multi_select": {
               "default": false,
-              "description": "Allow the user to select multiple options instead of just one.",
+              "description": "Allow selecting more than one option.",
               "type": "boolean"
             }
           },
@@ -62,7 +62,7 @@
       },
       "properties": {
         "questions": {
-          "description": "One or more questions to ask the user at once. Each has a short header, the question text, and 2-4 options. The user can always also choose 'Other' and type a custom answer, so do NOT add an 'Other' option yourself.",
+          "description": "Questions to ask at once. An 'Other' free-text choice is always added for the user, so do not add one yourself.",
           "items": {
             "$ref": "#/$defs/AskUserQuestion"
           },
@@ -152,7 +152,7 @@
   {
     "tool_name": "display_resource",
     "toolset": "USER_INTERACTION",
-    "description": "Display a user-facing resource or richer interaction.\n\nPrefer this tool whenever the useful answer is more than short prose. Text is\nfor a single fact, a short explanation, or narration around a concrete surface:\n- asking a multiple-choice question: use the `ask_user` tool. For free-form\n  input, ask clearly in prose and continue from the user's next message.\n- showing several values, records, statuses, steps, comparisons, a timeline,\n  compact table, preview, or chart: render a WIDGET instead of describing the\n  structure in prose.\n- creating or updating pod resources: display the created or changed AGENT,\n  FUNCTION, WORKFLOW, APP, SCHEDULE, TABLE, or FILE instead of only saying\n  that it was created.\n- showing datastore records or resource lists: display the TABLE or resource\n  directly so the user can inspect it.\n\nUse this for every \"show this to the user\" action: pod files, datastore\ntables, agents, functions, workflows, apps, schedules, and widgets.",
+    "description": "Show a pod resource or a rendered view to the user.\n\nReach for this whenever the useful answer is more than short prose: several\nvalues, records, statuses, comparisons, a timeline, or a chart render as a\nWIDGET instead of being described. After creating or changing a pod resource,\ndisplay it rather than only saying it was created.\n\nSet `type` and, for most types, a `name` \u2014 omit `name` to show all resources\nof that type. FILE takes a pod `path`, so upload sandbox deliverables with\n`lemma files upload` first and never pass a workspace path. WIDGET takes\nexactly one of `content` or `public_url`; load the `lemma-widget` skill before\nyour first widget, and build an app instead when the UI needs React, routing,\nor real state.\n\nThis tool only displays. Use `ask_user` for choices and `request_approval` for\npermission.",
     "input_schema": {
       "$defs": {
         "DisplayResourceType": {
@@ -224,7 +224,7 @@
             }
           ],
           "default": null,
-          "description": "Unique pod resource name within the selected type. Omit name to display all resources of that type."
+          "description": "Pod resource name; omit to show all of that type."
         },
         "path": {
           "anyOf": [
@@ -236,7 +236,7 @@
             }
           ],
           "default": null,
-          "description": "Full pod-visible file path for FILE resources. Do not pass private workspace paths."
+          "description": "Pod file path, for FILE. Never a workspace path."
         },
         "public_url": {
           "anyOf": [
@@ -248,7 +248,7 @@
             }
           ],
           "default": null,
-          "description": "Public URL to embed or open for WIDGET resources."
+          "description": "URL to embed, for WIDGET."
         },
         "content": {
           "anyOf": [
@@ -260,10 +260,10 @@
             }
           ],
           "default": null,
-          "description": "Inline renderable content for WIDGET resources, such as raw SVG or HTML. Do not include DOCTYPE, <html>, <head>, or <body> tags."
+          "description": "Inline SVG or HTML, for WIDGET. No DOCTYPE/<html>/<head>/<body>."
         },
         "loading_messages": {
-          "description": "For WIDGET resources, optional loading messages shown while the visual renders.",
+          "description": "Messages shown while a WIDGET renders.",
           "items": {
             "type": "string"
           },
@@ -283,7 +283,7 @@
             }
           ],
           "default": null,
-          "description": "For TABLE resources, optional record filters using the datastore record API shape: {field, op, value}."
+          "description": "Record filters {field, op, value}, for TABLE."
         },
         "query": {
           "anyOf": [
@@ -296,7 +296,7 @@
             }
           ],
           "default": null,
-          "description": "For TABLE resources, optional read-only SQL query for RLS-disabled tables. Use filters for normal table-scoped record display."
+          "description": "Read-only SQL for TABLE on RLS-disabled tables; prefer `filters`."
         }
       },
       "required": [
@@ -381,11 +381,11 @@
   {
     "tool_name": "exec_command",
     "toolset": "WORKSPACE_CLI",
-    "description": "Run a shell command in the private conversation workspace.\n\nUse this for repo inspection, builds, tests, and file edits through standard CLI commands.\nThe workspace injects Lemma environment variables for the current user/pod, so\n`lemma ...` CLI commands may be used for pod operations when the task calls for\nthem. Do not use raw localhost probes to diagnose host Lemma API/Auth\navailability: the command runs inside an isolated workspace, so `localhost` is\nthe workspace container, not the host backend.\nThe workspace is a sandbox: files created here are not directly visible to the\nuser. Upload final deliverables to pod files under `/me/...` with `lemma files\nupload` before presenting or referencing them as user-accessible files.\n\nModes:\n- One-shot (`tty=false`, default): returns after a short initial wait. Quick commands complete normally;\n  long-running commands return `process_id` instead of blocking the agent.\n- Interactive (`tty=true`): starts a real TTY terminal process and returns `process_id` for follow-up input.\n- Commands run in the workspace container directly; no sandbox/escalation fields are used here.\n\nInteractive workflow (for commands like `npm run dev`):\n1) Start with `tty=true`:\n   `{\"cmd\":\"npm run dev\",\"tty\":true,\"yield_time_ms\":1000}`\n2) Continue with `manage_process` using the returned `process_id`:\n   - poll output: `{\"action\":\"input\",\"process_id\":\"...\",\"chars\":\"\",\"yield_time_ms\":1000}`\n   - send input: `{\"action\":\"input\",\"process_id\":\"...\",\"chars\":\"q\\n\"}`\n   - stop it: `{\"action\":\"kill\",\"process_id\":\"...\"}`\n\nUse `manage_process` with `{\"action\":\"list\"}` before starting another\nlong-running server or when you need to find a process started earlier.\n\nEditing files via CLI example:\n- Overwrite file:\n  `{\"cmd\":\"cat > src/config.json <<'EOF'\\n{\\\"mode\\\":\\\"dev\\\"}\\nEOF\"}`\n- Append line:\n  `{\"cmd\":\"echo 'export DEBUG=1' >> .env.local\"}`",
+    "description": "Run a shell command in the private conversation workspace.\n\nUse it for repo inspection, builds, tests, file edits, and `lemma` CLI calls\n(pod credentials are pre-injected). `localhost` is this container, not the\nLemma backend.\n\nDefault (`tty=false`) returns after a short wait; a command still running\nreturns a `process_id` instead of blocking. `tty=true` starts a real terminal\nfor interactive commands. Either way, drive the process afterwards with\n`manage_process` \u2014 poll or send input with `action=\"input\"`, stop it with\n`action=\"kill\"`, and use `action=\"list\"` to find processes started earlier.",
     "input_schema": {
       "properties": {
         "cmd": {
-          "description": "Exact shell command to execute. Include the full command string as you would run it in a terminal. This runs inside an isolated workspace; `localhost` is the workspace container, not the host Lemma app. Use the injected Lemma CLI environment for pod operations.",
+          "description": "Shell command to run, exactly as in a terminal.",
           "type": "string"
         },
         "comment": {
@@ -398,21 +398,21 @@
             }
           ],
           "default": null,
-          "description": "Short, one-line goal statement for this tool call to show users what is being worked on."
+          "description": "One-line statement of intent, shown to the user."
         },
         "max_output_tokens": {
           "default": 10000,
-          "description": "Maximum output tokens to return before truncating stdout/stderr for this call. Defaults to 10000.",
+          "description": "Truncate stdout/stderr past this many tokens.",
           "type": "integer"
         },
         "tty": {
           "default": false,
-          "description": "Set true to allocate an interactive terminal session. Required for commands that stay alive or wait for input (for example `npm run dev`, `python`, `bash`). An interactive process does not survive the sandbox being paused while you are idle, so treat it as belonging to the current stretch of work.",
+          "description": "Allocate an interactive terminal. Required for commands that stay alive or wait for input (`npm run dev`, `python`). Such a process does not survive an idle pause.",
           "type": "boolean"
         },
         "cols": {
           "default": 120,
-          "description": "Terminal width for `tty` commands. Widen it for programs that render tables or wide output.",
+          "description": "Terminal width for `tty` commands; widen for wide output.",
           "maximum": 500,
           "minimum": 20,
           "type": "integer"
@@ -434,7 +434,7 @@
             }
           ],
           "default": null,
-          "description": "Working directory for the command. Relative paths are resolved inside the workspace."
+          "description": "Working directory; relative paths resolve inside the workspace."
         },
         "yield_time_ms": {
           "anyOf": [
@@ -446,7 +446,7 @@
             }
           ],
           "default": null,
-          "description": "How long to wait for output before returning, in milliseconds. Lower values stream progress faster; higher values batch more output."
+          "description": "Milliseconds to wait for output before returning."
         },
         "timeout_seconds": {
           "anyOf": [
@@ -460,7 +460,7 @@
             }
           ],
           "default": null,
-          "description": "Set a blocking timeout in seconds instead of the default 30-second yield window. When set, the command blocks until completion or the timeout expires \u2014 `completed: true` is always returned (no `process_id`). Use for commands expected to take longer than 30 s, e.g. large data fetches. Omit to use the default 30-second yield behavior."
+          "description": "Block up to this many seconds instead of the default 30s yield window; always returns `completed: true` with no `process_id`."
         }
       },
       "required": [
@@ -561,7 +561,7 @@
   {
     "tool_name": "execute_python",
     "toolset": "WORKSPACE_CLI",
-    "description": "Execute Python code in the shared conversation-scoped IPython kernel.\n\nUse this for structured data analysis, transformations, parsing, and calculations\nthat are awkward in pure shell commands. Put the entire code snippet in\n`request.code`. The kernel state persists across calls in the same conversation session.\nVariables, imports, and in-memory objects from earlier executions remain available\nfor later executions, so use it for stepwise analysis when helpful.\nInclude a short `request.comment` to show the user-facing intent.",
+    "description": "Run Python in the conversation's shared IPython kernel.\n\nUse it for data analysis, transformations, and calculations that are awkward\nin shell. Kernel state \u2014 imports, variables, objects \u2014 persists across calls,\nso build up an analysis stepwise instead of repeating setup.",
     "input_schema": {
       "properties": {
         "comment": {
@@ -574,7 +574,7 @@
             }
           ],
           "default": null,
-          "description": "Short, one-line goal statement for this tool call to show users what is being worked on."
+          "description": "One-line statement of intent, shown to the user."
         },
         "code": {
           "description": "Python code to execute in the shared task kernel. The final expression value is returned separately when available.",
@@ -750,7 +750,7 @@
   {
     "tool_name": "list_skills",
     "toolset": "SKILLS",
-    "description": "List the skills currently available from the workspace `skills/` directory.\n\nCall this first when you need to discover which skills exist before loading one.\nThe request object is intentionally empty; pass `{}`.",
+    "description": "List the available skills. Pass `{}`; call before `load_skill`.",
     "input_schema": {
       "description": "Empty request model for listing workspace skills.",
       "properties": {},
@@ -838,7 +838,7 @@
   {
     "tool_name": "listen",
     "toolset": "SPEECH",
-    "description": "Transcribe a user's voice message or audio file to text (speech-to-text).\n\nUSE WHEN the user sends a voice note / audio file and you need its words.\nThe file_path may point at the pod datastore (e.g. an auto-ingested voice\nnote at /me/telegram/voice.ogg) or the workspace sandbox. Common formats\n(OGG/Opus, MP3, M4A/AAC, WAV, FLAC, WebM) are supported directly.\n\nReturns the transcript plus optional detected_language/duration. The\ntranscript is for YOUR understanding \u2014 treat it as if the user had typed\nthose words and act on the request directly. Do NOT paste, echo, or rewrite\nthe transcript back to the user as a message (\"You said: ...\").",
+    "description": "Transcribe a voice message or audio file to text.\n\n`file_path` may be a pod path (e.g. `/me/telegram/voice.ogg`) or a workspace\npath; common formats are supported directly.\n\nThe transcript is for YOUR understanding \u2014 act on it as if the user had typed\nit. Never echo it back (\"You said: ...\").",
     "input_schema": {
       "description": "Transcribe a pod/workspace audio file to text.",
       "properties": {
@@ -935,7 +935,7 @@
   {
     "tool_name": "load_skill",
     "toolset": "SKILLS",
-    "description": "Load a skill's `SKILL.md`, or a single resource file from inside the skill.\n\nCall this after `list_skills`. Two modes on one tool:\n- Omit `resource_path` \u2192 returns the full `SKILL.md` content **and** the list of\n  the skill's extra resource files (their relative `path`s under `resources`).\n- Pass a `resource_path` from that list \u2192 returns that resource's content.\n\nAlways pass the skill name in `request.name`.",
+    "description": "Load a skill's `SKILL.md`, or one resource file from inside it.\n\nOmit `resource_path` to get `SKILL.md` plus the list of the skill's resource\nfiles; pass a path from that list to read one.",
     "input_schema": {
       "properties": {
         "name": {
@@ -1073,12 +1073,12 @@
   {
     "tool_name": "manage_process",
     "toolset": "WORKSPACE_CLI",
-    "description": "Drive a process started by `exec_command` (interactive or long-running).\n\nOne tool, three actions:\n- `action=\"input\"` \u2014 send characters to (or just poll output from) a running\n  process. Needs `process_id`. Poll logs with `chars=\"\"`; respond to a prompt\n  with `chars=\"y\\n\"`; run another command in the same shell with\n  `chars=\"npm test\\n\"`.\n- `action=\"kill\"` \u2014 stop a process by `process_id` (servers, REPLs, watchers,\n  or anything started accidentally).\n- `action=\"list\"` \u2014 list tracked shell processes in this workspace (find dev\n  servers/REPLs before polling, stopping, or starting another).\n- `action=\"resize\"` \u2014 change an interactive terminal's `cols`/`rows` when\n  output is wrapping badly or a full-screen UI is clipped, then poll with\n  `action=\"input\"`, `chars=\"\"` to read the redrawn screen.",
+    "description": "Drive a process started by `exec_command`.\n\n`input` sends characters to a running process, or polls its output when\n`chars=\"\"`. `kill` stops it. `list` shows tracked processes in this\nworkspace. `resize` changes an interactive terminal's `cols`/`rows`. All but\n`list` need `process_id`.",
     "input_schema": {
       "description": "Drive a process started by `exec_command` (interactive or long-running).",
       "properties": {
         "action": {
-          "description": "'input' = send chars to (or poll output from) a running process; 'kill' = stop a process; 'list' = list tracked processes; 'resize' = change an interactive terminal's size.",
+          "description": "What to do with the process.",
           "enum": [
             "input",
             "kill",
@@ -1097,7 +1097,7 @@
             }
           ],
           "default": null,
-          "description": "Process ID from `exec_command`. Required for 'input', 'kill', and 'resize'."
+          "description": "From `exec_command`. Required for every action but 'list'."
         },
         "chars": {
           "anyOf": [
@@ -1109,25 +1109,25 @@
             }
           ],
           "default": null,
-          "description": "For action=\"input\": characters to send to stdin. Use `\"\"` to poll output without sending input. Include `\\n` to press Enter. Control keys are sent as characters: `\\u0003` interrupts (Ctrl-C) and `\\u0004` sends EOF (Ctrl-D) to leave a REPL."
+          "description": "Stdin for action=\"input\"; `\"\"` polls output without sending. Include `\\n` for Enter. `\\u0003` is Ctrl-C, `\\u0004` is Ctrl-D."
         },
         "cols": {
           "default": 120,
-          "description": "For action=\"resize\": new terminal width in columns.",
+          "description": "Width, for 'resize'.",
           "maximum": 500,
           "minimum": 20,
           "type": "integer"
         },
         "rows": {
           "default": 40,
-          "description": "For action=\"resize\": new terminal height in rows.",
+          "description": "Height, for 'resize'.",
           "maximum": 200,
           "minimum": 5,
           "type": "integer"
         },
         "max_output_tokens": {
           "default": 10000,
-          "description": "For action=\"input\": max output tokens to return. Defaults to 10000.",
+          "description": "Truncate returned output past this many tokens.",
           "type": "integer"
         },
         "yield_time_ms": {
@@ -1140,7 +1140,7 @@
             }
           ],
           "default": null,
-          "description": "For action=\"input\": how long to wait for new output, in ms."
+          "description": "Milliseconds to wait for new output."
         },
         "comment": {
           "anyOf": [
@@ -1152,7 +1152,7 @@
             }
           ],
           "default": null,
-          "description": "Short, one-line goal statement for this tool call to show users what is being worked on."
+          "description": "One-line statement of intent, shown to the user."
         }
       },
       "required": [
@@ -1166,7 +1166,7 @@
   {
     "tool_name": "pod_get_file_url",
     "toolset": "POD",
-    "description": "Get a URL for a pod file, to hand a user a link or embed an image.\n\n``url_type=\"app\"`` (default) returns an authenticated in-app link\n(``app_url``) for a signed-in pod member, plus a short-lived direct-download\n``url``. ``url_type=\"public\"`` mints a public, hit-capped ``signed_url``\nanyone can open without logging in (e.g. to email/message a file to someone\noutside the pod) \u2014 it expires and stops after ``max_hits`` downloads, so a\nleaked link can't run up egress.",
+    "description": "Get a URL for a pod file, to share a link or embed an image.\n\n``app`` (default) returns an in-app link for a signed-in member plus a\nshort-lived download url. ``public`` mints a signed link anyone can open \u2014\nit expires and dies after ``max_hits`` downloads.",
     "input_schema": {
       "properties": {
         "path": {
@@ -1175,7 +1175,7 @@
         },
         "url_type": {
           "default": "app",
-          "description": "'app' = authenticated in-app link for a signed-in pod member (returns app_url + a short-lived download url). 'public' = a public, hit-capped signed link anyone can open without logging in (returns signed_url) \u2014 use to email/message a file to someone outside the pod.",
+          "description": "'app' = in-app link for a signed-in pod member. 'public' = hit-capped signed link anyone can open \u2014 use to send a file outside the pod.",
           "enum": [
             "app",
             "public"
@@ -1194,7 +1194,7 @@
             }
           ],
           "default": null,
-          "description": "Link lifetime in seconds. 'app': lifetime of the download url (default ~1 hour). 'public': lifetime of the signed link (default 3 hours, max 24 hours)."
+          "description": "Link lifetime. Default ~1h for 'app', 3h for 'public' (max 24h)."
         },
         "max_hits": {
           "anyOf": [
@@ -1208,7 +1208,7 @@
             }
           ],
           "default": null,
-          "description": "'public' links only: maximum downloads before the link stops working (default 50, max 100). Bounds egress if the link leaks. Ignored for 'app'."
+          "description": "'public' only: downloads before the link dies (default 50)."
         }
       },
       "required": [
@@ -1364,12 +1364,12 @@
       "properties": {
         "path": {
           "default": "/",
-          "description": "Folder path, e.g. /pod or /me. An absolute path is used as-is; a relative path (e.g. '' or 'notes') is resolved against your default pod working directory (`/me/c/{date}/{slug}`).",
+          "description": "Folder path, e.g. `/me` or a shared folder like `/knowledge`. A relative path resolves against `/me/c/{date}/{slug}`.",
           "type": "string"
         },
         "recursive": {
           "default": false,
-          "description": "False (default) = immediate files/folders in `path`. True = a file tree rooted at `path` (folders + sample files per directory).",
+          "description": "True returns a tree rooted at `path` instead of its children.",
           "type": "boolean"
         },
         "limit": {
@@ -1420,16 +1420,16 @@
   {
     "tool_name": "pod_read_file",
     "toolset": "POD",
-    "description": "Read a pod file's content as text or as converted document markdown.\n\n- ``format=\"text\"`` (default) \u2014 the file's raw UTF-8 text, truncated to\n  ``max_chars``.\n- ``format=\"markdown\"`` \u2014 converted markdown for a document (PDF, DOCX, ...),\n  optionally a 1-based page range (``page_start``/``page_end``).\n\nDocuments are auto-converted to markdown at upload and cached, so reading is\ninstant \u2014 read them here directly; do not download and re-parse/OCR them.\n``pod_list_files`` reports ``has_markdown``/``page_count`` so you know what's\nready. To SEE pages visually (layout, tables, figures), use\n``pod_view_document_pages``.",
+    "description": "Read a pod file as text, or a document as converted markdown.\n\nDocuments are converted and cached at upload, so reading is instant \u2014 never\ndownload and re-parse one. Use ``pod_view_document_pages`` to see pages\nvisually instead.",
     "input_schema": {
       "properties": {
         "path": {
-          "description": "Pod file path to read. An absolute path (e.g. /pod/notes.txt) is used as-is; a relative path is resolved against your default pod working directory (`/me/c/{date}/{slug}`).",
+          "description": "Pod file path. Absolute paths (e.g. `/knowledge/notes.txt`) are used as-is; a relative path resolves against `/me/c/{date}/{slug}`.",
           "type": "string"
         },
         "format": {
           "default": "text",
-          "description": "'text' = raw file text. 'markdown' = converted document text (PDF, DOCX, ...); supports a page range. To SEE pages as images instead, use pod_view_document_pages.",
+          "description": "'markdown' returns converted document text (PDF, DOCX) and supports a page range; use `pod_view_document_pages` to see pages as images.",
           "enum": [
             "text",
             "markdown"
@@ -1447,7 +1447,7 @@
             }
           ],
           "default": null,
-          "description": "markdown only: first page (1-based). Omit for the whole document."
+          "description": "markdown only: first page (1-based)."
         },
         "page_end": {
           "anyOf": [
@@ -1460,7 +1460,7 @@
             }
           ],
           "default": null,
-          "description": "markdown only: last page (1-based, inclusive). Defaults to page_start."
+          "description": "markdown only: last page, inclusive. Defaults to page_start."
         },
         "max_chars": {
           "default": 50000,
@@ -2142,7 +2142,7 @@
     "input_schema": {
       "properties": {
         "path": {
-          "description": "Pod file path to write. An absolute path (e.g. /me/report.md) is used as-is; a relative path (e.g. report.md) is resolved against your default pod working directory (`/me/c/{date}/{slug}`) \u2014 write there when you don't need a specific shared location.",
+          "description": "Pod file path. A relative path resolves against `/me/c/{date}/{slug}` \u2014 write there unless a specific shared location is needed.",
           "type": "string"
         },
         "content": {
@@ -2151,7 +2151,7 @@
         },
         "overwrite": {
           "default": true,
-          "description": "If false and the file already exists, the write is rejected instead of replacing it.",
+          "description": "If false, reject the write when the file exists.",
           "type": "boolean"
         },
         "description": {
@@ -2223,7 +2223,7 @@
             }
           ],
           "default": null,
-          "description": "The row's column name -> value mapping. Pass EITHER a JSON object, e.g. {\"title\": \"Q3 report\", \"amount\": 42, \"tags\": [\"a\", \"b\"]}, OR a JSON-encoded string of that same object if you cannot emit a populated object directly, e.g. \"{\\\"title\\\": \\\"Q3 report\\\", \\\"amount\\\": 42}\". Values may be scalars, nested objects, or arrays. REQUIRED and must be non-empty for 'create' and 'update' \u2014 an empty object writes nothing and is rejected."
+          "description": "Column -> value mapping, e.g. {\"title\": \"Q3 report\", \"amount\": 42}, or a JSON-encoded string of it. Required and non-empty for 'create' and 'update'."
         }
       },
       "required": [
@@ -2310,18 +2310,21 @@
   {
     "tool_name": "request_approval",
     "toolset": "USER_INTERACTION",
-    "description": "Ask the user to approve running a tool you lack permission for, then run it.\n\nThis is a higher-order gate for sensitive or ungranted actions. When one of\nyour tool/CLI/python calls fails with a permission error (403), or you know\nan action needs the user's authority (deleting data, sending email, running\na privileged command), call this tool with the FULL action you want\nperformed. State everything needed to run it \u2014 do not rely on prior context.\n\nThe run pauses and the client renders an approval card. If the user approves,\nthe backend executes the named tool with the *user's* authority (for CLI and\npython, in a fresh workspace session minted with the user's token in the same\nworking directory; for other tools, under the user's permissions) and returns\nthe tool's result here. If the user denies, nothing runs.",
+    "description": "Ask the user to approve an action you lack permission for, then run it.\n\nCall this when a tool fails with a permission error (403) or the action needs\nthe user's authority \u2014 deleting data, sending email, a privileged command.\nDescribe the FULL action; do not rely on prior context. The run pauses for an\napproval card, and on approval the backend executes the tool with the *user's*\nauthority and returns its result here. On denial nothing runs.",
     "input_schema": {
       "additionalProperties": false,
       "properties": {
         "tool_name": {
+          "description": "Tool to run on approval, e.g. \"exec_command\". Must be one you have.",
           "type": "string"
         },
         "args": {
           "additionalProperties": true,
+          "description": "Complete arguments for that tool, e.g. {\"cmd\": \"lemma records delete orders --id 42\"}.",
           "type": "object"
         },
         "title": {
+          "description": "Short user-facing title for the approval card.",
           "type": "string"
         },
         "reason": {
@@ -2333,7 +2336,8 @@
               "type": "null"
             }
           ],
-          "default": null
+          "default": null,
+          "description": "Why this needs approval."
         },
         "payload": {
           "anyOf": [
@@ -2345,7 +2349,8 @@
               "type": "null"
             }
           ],
-          "default": null
+          "default": null,
+          "description": "Extra structured detail for rendering or audit."
         },
         "permission_ids": {
           "anyOf": [
@@ -2359,7 +2364,8 @@
               "type": "null"
             }
           ],
-          "default": null
+          "default": null,
+          "description": "Copy `approval.permission_ids` verbatim from the failed tool\nresult. Lets \"approve for session\" cover these actions for the rest of the\nconversation instead of re-prompting."
         }
       },
       "required": [
@@ -2508,7 +2514,7 @@
   {
     "tool_name": "say",
     "toolset": "SPEECH",
-    "description": "Speak a reply: synthesize audio from text and deliver it as a voice note.\n\nUSE WHEN the user wants a spoken reply \u2014 the default reply modality is text,\nso only call this when voice is genuinely wanted (e.g. they sent a voice note\nand want one back). On a chat surface this delivers a NATIVE voice note\nautomatically (Telegram voice bubble, WhatsApp audio, Slack audio player) and\nalso saves the audio to the pod datastore; on the web app it appears as an\naudio player. The user receives and can play this audio \u2014 it IS your reply.\n\nDo NOT call display_resource afterward \u2014 say already delivers. Do NOT also\nwrite the same words as a text message: the spoken audio is the reply, and\nrestating it as text duplicates it. Add a separate text line only if it says\nsomething different (a caption, a link). Returns the pod file path of the\ngenerated audio.",
+    "description": "Speak a reply: synthesize audio and deliver it as a voice note.\n\nText is the default modality, so call this only when voice is genuinely\nwanted. Delivery is automatic \u2014 a native voice note on chat surfaces, an\naudio player on web.\n\nThe audio IS your reply. Do not call `display_resource` afterward, and do not\nrestate the same words as text; add a text line only if it says something\ndifferent.",
     "input_schema": {
       "description": "Generate spoken audio (MP3) from text.",
       "properties": {
@@ -2635,15 +2641,15 @@
   {
     "tool_name": "snooze",
     "toolset": "SNOOZE",
-    "description": "Suspend this turn for a while and pick it up later, where you left off.\n\nUSE WHEN the work genuinely has a gap in the middle \u2014 you kicked off a build\nand want to check back in ten minutes, you asked someone for an approval and\nneed to look again later, something needs time to settle. You wake up in the\nsame conversation, with the same history, as though this tool call simply\ntook a long time to return.\n\nCHOOSE `seconds` FROM WHAT YOU ARE WAITING FOR, not out of habit. A job that\ntakes about eight minutes deserves one ~500s check, not eight 60s ones. Don't\nsnooze in a tight loop to poll something \u2014 each wake replays this entire\nconversation, so a poll loop costs far more than it saves. If you're unsure\nhow long something takes, prefer one longer sleep and check when you wake.\n\nYOUR SANDBOX DOES NOT SURVIVE. The workspace container is reclaimed while you\nsleep: files under /workspace, background processes, and your shell's working\ndirectory are all gone when you wake. Anything you need on the other side must\nbe written to the pod (a table or a pod file) BEFORE you call this.\n\nWAKING PROVES NOTHING HAPPENED. `woke_because` is `TIMER` \u2014 your time\nelapsed, and that is all it means. Check the thing you were waiting for\nbefore acting as though it is done.\n\nDo NOT use this to wait on a person \u2014 ask them and end your turn, and their\nreply starts a fresh run on its own. Do NOT use it to pad out a reply, or to\nwait for something you could just check right now.",
+    "description": "Suspend this turn and pick it up later, where you left off.\n\nUse it when the work has a real gap \u2014 a build to check back on, something\nthat needs time to settle. You wake in the same conversation with the same\nhistory.\n\nThree things that bite:\n- **Your sandbox does not survive.** `/workspace`, background processes, and\n  your shell cwd are gone on wake. Write anything you need to the pod first.\n- **Waking proves nothing happened.** `TIMER` means your time elapsed and\n  nothing more \u2014 check the thing you were waiting for.\n- **Every wake replays the whole conversation**, so one longer sleep beats a\n  poll loop.\n\nDon't use it to wait on a person \u2014 ask and end your turn; their reply starts\na fresh run.",
     "input_schema": {
       "properties": {
         "reason": {
-          "description": "One short line, shown to the user while you sleep. Say what you are waiting on, specifically: 'waiting for the nightly build' beats 'waiting'. They read this to understand what you're doing without having to ask.",
+          "description": "One line shown to the user while you sleep. Be specific: 'waiting for the nightly build' beats 'waiting'.",
           "type": "string"
         },
         "seconds": {
-          "description": "How long to sleep. Choose it from what you are actually waiting for, not out of habit \u2014 a build that takes about eight minutes deserves one ~500s check, not eight 60s ones. Under 30s is rejected, not clamped; over 86400s (24h) is clamped down.",
+          "description": "How long to sleep, chosen from what you are waiting for \u2014 an eight-minute build wants one ~500s check. Under 30s is rejected; over 24h is clamped.",
           "type": "integer"
         },
         "note_to_self": {
@@ -2802,7 +2808,7 @@
             }
           ],
           "default": null,
-          "description": "Path to an image file in the pod datastore, e.g. `/me/photo.jpg`. These are user-uploaded or ingested files; use `pod_list_files` or `pod_search_files` to discover exact paths. Set this OR `workspace_file_path`, not both."
+          "description": "Image in the pod datastore, e.g. `/me/photo.jpg`. Set this or `workspace_file_path`, not both."
         },
         "workspace_file_path": {
           "anyOf": [
@@ -2814,7 +2820,7 @@
             }
           ],
           "default": null,
-          "description": "Path to an image file in the conversation workspace sandbox \u2014 a relative path such as `images/output.png` or one under `/workspace/`. Use for artifacts the agent just produced (screenshots, charts). Set this OR `pod_file_path`, not both."
+          "description": "Image in the workspace sandbox, e.g. `images/output.png` \u2014 for artifacts you just produced. Set this or `pod_file_path`, not both."
         }
       },
       "title": "ViewImageRequest",
@@ -2825,7 +2831,7 @@
   {
     "tool_name": "web_search",
     "toolset": "WEB_SEARCH",
-    "description": "Performs web search and returns raw search results with snippets and URLs.\n\nUSAGE GUIDELINES:\n- Use for finding current information, news, and specific topics\n- Finding youtube videos, images or any assets online\n- Returns structured search results with titles, snippets, and URLs\n- Combine with save_url_as_file to archive interesting results\n- Use specific, targeted search queries for better results\n\nBEST PRACTICES:\n- Use specific keywords rather than questions\n- Include relevant terms like dates, locations, or technical terms\n\nEXAMPLES:\n- Technical search: \"Python async programming best practices 2025\"\n- News search: \"artificial intelligence regulations European Union\"\n- Research search: \"renewable energy storage solutions lithium alternatives\"",
+    "description": "Search the web; returns titles, snippets, and URLs.\n\nUse it for current information, news, and finding online assets. Query with\nspecific keywords rather than questions.",
     "input_schema": {
       "description": "Request model for standard web search",
       "properties": {
@@ -2935,7 +2941,7 @@
     "input_schema": {
       "properties": {
         "todos": {
-          "description": "One markdown checklist line per task. Use '[ ]' for a task still to do and '[x]' once it's done (e.g. '- [ ] Fetch the Q3 report'); a line with no checkbox is treated as not-done. Send the whole list, or just the single line you want to flip. Multiple lines replace the current list; a single line is matched by text and preserves the rest. The full, updated list is always returned.",
+          "description": "Markdown checklist lines, e.g. '- [ ] Fetch the Q3 report'; '[x]' means done. Several lines replace the list; one line is matched by text and flips just that task.",
           "items": {
             "type": "string"
           },

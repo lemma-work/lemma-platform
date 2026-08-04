@@ -34,12 +34,7 @@ not run raw localhost API/Auth probes from workspace exec: workspace
 async def list_skills(
     ctx: RunContext[BaseAgentContext], request: ListSkillsRequest
 ) -> SkillListResult:
-    """
-    List the skills currently available from the workspace `skills/` directory.
-
-    Call this first when you need to discover which skills exist before loading one.
-    The request object is intentionally empty; pass `{}`.
-    """
+    """List the available skills. Pass `{}`; call before `load_skill`."""
     del request
     try:
         return SkillListResult(
@@ -64,14 +59,10 @@ async def load_skill(
     ctx: RunContext[BaseAgentContext], request: SkillLookupRequest
 ) -> SkillContentResult:
     """
-    Load a skill's `SKILL.md`, or a single resource file from inside the skill.
+    Load a skill's `SKILL.md`, or one resource file from inside it.
 
-    Call this after `list_skills`. Two modes on one tool:
-    - Omit `resource_path` → returns the full `SKILL.md` content **and** the list of
-      the skill's extra resource files (their relative `path`s under `resources`).
-    - Pass a `resource_path` from that list → returns that resource's content.
-
-    Always pass the skill name in `request.name`.
+    Omit `resource_path` to get `SKILL.md` plus the list of the skill's resource
+    files; pass a path from that list to read one.
     """
     if request.resource_path:
         try:

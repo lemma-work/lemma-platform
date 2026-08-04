@@ -45,7 +45,7 @@ Declaring any of them is a hard error — e.g. `System-managed columns must not 
 
 RLS scopes *which rows* a caller touches; it does **not** change *what permission a write needs*. Any record write requires `DATASTORE_RECORD_WRITE` (POD_USER and above) on both RLS and shared tables — see the role ladder in `pod-design.md`.
 
-> Admin-only: a separate `mode=admin` query param on the query/record APIs returns **all** rows (skipping per-user scoping) — it's gated to the pod admin role and meant for admin/management features, not the default app flow; agents never use it.
+> Crossing the scope deliberately: a `mode=admin` query param on the query/record APIs returns **all** rows, skipping per-user scoping. It is gated on **table-admin permission** for every referenced table (not merely on holding the `POD_ADMIN` role), and a caller without it gets a `403` rather than a silently empty result. For admin/management features only; agents never use it.
 
 ## Data Types
 

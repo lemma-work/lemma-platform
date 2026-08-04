@@ -44,47 +44,35 @@ class DisplayResourceRequest(BaseModel):
     name: str | None = Field(
         default=None,
         min_length=1,
-        description=(
-            "Unique pod resource name within the selected type. Omit name to display "
-            "all resources of that type."
-        ),
+        description="Pod resource name; omit to show all of that type.",
     )
     path: str | None = Field(
         default=None,
-        description=(
-            "Full pod-visible file path for FILE resources. Do not pass private "
-            "workspace paths."
-        ),
+        description="Pod file path, for FILE. Never a workspace path.",
     )
     public_url: str | None = Field(
-        default=None,
-        description="Public URL to embed or open for WIDGET resources.",
+        default=None, description="URL to embed, for WIDGET."
     )
     content: str | None = Field(
         default=None,
         description=(
-            "Inline renderable content for WIDGET resources, such as raw SVG or HTML. "
-            "Do not include DOCTYPE, <html>, <head>, or <body> tags."
+            "Inline SVG or HTML, for WIDGET. No DOCTYPE/<html>/<head>/<body>."
         ),
     )
     loading_messages: list[str] = Field(
         default_factory=list,
         max_length=4,
-        description="For WIDGET resources, optional loading messages shown while the visual renders.",
+        description="Messages shown while a WIDGET renders.",
     )
     filters: list[RecordFilter] | None = Field(
         default=None,
-        description=(
-            "For TABLE resources, optional record filters using the datastore "
-            "record API shape: {field, op, value}."
-        ),
+        description="Record filters {field, op, value}, for TABLE.",
     )
     query: str | None = Field(
         default=None,
         min_length=1,
         description=(
-            "For TABLE resources, optional read-only SQL query for RLS-disabled "
-            "tables. Use filters for normal table-scoped record display."
+            "Read-only SQL for TABLE on RLS-disabled tables; prefer `filters`."
         ),
     )
 
@@ -220,43 +208,29 @@ class RequestApprovalResponse(BaseToolResponse):
 
 
 class AskUserOption(BaseModel):
-    label: str = Field(
-        description="The choice shown to the user — concise (1-5 words)."
-    )
-    description: str = Field(
-        default="",
-        description="Optional one-line explanation of what this option means.",
-    )
+    label: str = Field(description="The choice shown to the user (1-5 words).")
+    description: str = Field(default="", description="One-line explanation.")
     recommended: bool = Field(
-        default=False,
-        description="Set on the option you recommend; the client highlights it.",
+        default=False, description="Highlight this as your recommendation."
     )
 
 
 class AskUserQuestion(BaseModel):
-    question: str = Field(description="The full question to ask the user.")
+    question: str = Field(description="The full question.")
     header: str = Field(
-        description=(
-            "Very short label for this question (a few words), shown as a chip and "
-            "used as the key for this question's answer."
-        )
+        description="Few-word label, shown as a chip and used as the answer key."
     )
-    options: list[AskUserOption] = Field(
-        description="2-4 distinct choices for the user to pick from."
-    )
+    options: list[AskUserOption] = Field(description="2-4 distinct choices.")
     multi_select: bool = Field(
-        default=False,
-        description="Allow the user to select multiple options instead of just one.",
+        default=False, description="Allow selecting more than one option."
     )
 
 
 class AskUserRequest(BaseModel):
     questions: list[AskUserQuestion] = Field(
         description=(
-            "One or more questions to ask the user at once. Each has a short "
-            "header, the question text, and 2-4 options. The user can always also "
-            "choose 'Other' and type a custom answer, so do NOT add an 'Other' "
-            "option yourself."
+            "Questions to ask at once. An 'Other' free-text choice is always "
+            "added for the user, so do not add one yourself."
         )
     )
 

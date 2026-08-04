@@ -80,6 +80,10 @@ class ConversationMCPService:
             conversation=conversation,
             ctx=ctx,
             agent_run_id=agent_run_id,
+            # This route is reached only by the Agent Host MCP bridge, which is
+            # the harness that has no other way to return a structured result.
+            # The assembler applies the "does this run owe one?" gate.
+            include_final_answer=True,
         )
         return [
             Tool(
@@ -133,6 +137,9 @@ class ConversationMCPService:
                 name=tool_name,
                 arguments=arguments,
                 agent_run_id=agent_run_id,
+                # Must match list_tools, or we advertise a tool we then reject
+                # as unknown.
+                include_final_answer=True,
             )
         except Exception as exc:  # noqa: BLE001 - graceful tool-error boundary
             if is_control_flow_exception(exc):

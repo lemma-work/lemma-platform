@@ -79,7 +79,7 @@ BOOLEAN, JSON, DATE, DATETIME, UUID, USER, VECTOR, SERIAL, ENUM`.
 
 RLS is enforced everywhere — record APIs **and** the read-only query API — and it
 applies to **everyone, including pod admins**, by default. To deliberately read or
-write across all users' rows you pass **`mode=ADMIN`** on the request, which
+write across all users' rows you pass **`mode=admin`** on the request, which
 requires table-admin permission (otherwise `403`). Workloads are always
 user-scoped; they cannot silently see another user's rows.
 

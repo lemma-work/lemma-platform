@@ -21,6 +21,8 @@ def test_prompt_documents_in_place_pod_document_reading():
     assert "--pages" in prompt
     assert "files children" in prompt
     assert "files child" in prompt
+    # Shared folders are top-level; there is no `/pod` prefix (see files.md).
+    assert "/pod/" not in prompt
     # The agent should be told the conversion is already done at upload.
     assert "auto-converted" in prompt
     assert "has_markdown" in prompt

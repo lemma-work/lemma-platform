@@ -63,6 +63,7 @@ class AgentToolDispatcher:
         conversation: Conversation | None = None,
         toolsets: list[object] | None = None,
         agent_run_id: UUID | None = None,
+        include_final_answer: bool = False,
     ) -> list[ToolInfo]:
         async with AsyncExitStack() as exit_stack:
             prepared = await self._prepare(
@@ -72,6 +73,7 @@ class AgentToolDispatcher:
                 ctx=ctx,
                 agent_run_id=agent_run_id,
                 exit_stack=exit_stack,
+                include_final_answer=include_final_answer,
             )
             return [
                 ToolInfo(
@@ -94,6 +96,7 @@ class AgentToolDispatcher:
         conversation: Conversation | None = None,
         toolsets: list[object] | None = None,
         agent_run_id: UUID | None = None,
+        include_final_answer: bool = False,
     ) -> object:
         async with AsyncExitStack() as exit_stack:
             prepared = await self._prepare(
@@ -103,6 +106,7 @@ class AgentToolDispatcher:
                 ctx=ctx,
                 agent_run_id=agent_run_id,
                 exit_stack=exit_stack,
+                include_final_answer=include_final_answer,
             )
             tool = prepared.get(name)
             if tool is None:
@@ -129,11 +133,13 @@ class AgentToolDispatcher:
         agent_run_id: UUID | None,
         exit_stack: AsyncExitStack,
         toolsets: list[object] | None = None,
+        include_final_answer: bool = False,
     ) -> dict[str, PreparedTool]:
         if toolsets is None:
             toolsets = await self._assembler.assemble(
                 agent=agent,
                 conversation=conversation,
+                include_final_answer=include_final_answer,
             )
         run_ctx = self._run_context(ctx, agent_run_id)
         prepared: dict[str, PreparedTool] = {}

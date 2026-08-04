@@ -1,8 +1,8 @@
 from datetime import datetime, timedelta, timezone
 
 from app.modules.agent.domain.runtime_notes import (
-    append_runtime_notes,
     build_runtime_notes,
+    prepend_runtime_notes,
 )
 
 
@@ -24,12 +24,13 @@ def test_runtime_notes_render_current_time_in_utc():
     )
 
 
-def test_runtime_notes_are_appended_without_mutating_source_text():
+def test_runtime_notes_lead_the_prompt_without_mutating_source_text():
+    """The notes go ahead of the user's text, so the user's turn stays last."""
     source = "USER:\nPlease summarize this."
     fixed = datetime(2026, 7, 25, 13, 15, 12, tzinfo=timezone.utc)
 
-    rendered = append_runtime_notes(source, now=fixed)
+    rendered = prepend_runtime_notes(source, now=fixed)
 
     assert source == "USER:\nPlease summarize this."
-    assert rendered.startswith(source + "\n\n<notes>\n")
-    assert rendered.endswith("</notes>")
+    assert rendered.startswith("<notes>\n")
+    assert rendered.endswith("</notes>\n\n" + source)

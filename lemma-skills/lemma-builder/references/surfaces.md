@@ -163,7 +163,7 @@ Configured surfaces **round-trip in pod bundles** as
   "platform": "SLACK",
   "default_agent_name": "triage-agent",
   "credential_mode": "CUSTOM",
-  "account_id": "<connector-account-uuid>",
+  "account_id": "${slack_account}",
   "is_enabled": true,
   "config": {
     "dm_conversation_reset_after_hours": 24,
@@ -175,9 +175,11 @@ Configured surfaces **round-trip in pod bundles** as
 
 Import **upserts by platform** (one surface per platform per pod) and resolves the
 agent by name. What does **not** travel and must be reconnected/re-derived per
-environment: the **connector account** itself (the `account_id` must already exist
-in the target org), **webhook secrets**, **platform setup state**, and resolved
-identities. After importing into a fresh environment, run `lemma surfaces setup
+environment: the **connector account** itself (`account_id` exports as a
+`${variable}` you resolve at import with `--var`, or leave unresolved so the
+surface uses the invoking user's account — see `cli-and-bundles.md` →
+*Portability variables*), **webhook secrets**, **platform setup state**, and
+resolved identities. After importing into a fresh environment, run `lemma surfaces setup
 <platform>` to finish.
 
 ## Limits & gotchas

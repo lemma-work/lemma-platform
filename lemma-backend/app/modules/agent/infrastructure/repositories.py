@@ -648,6 +648,46 @@ class ConversationRepository:
         await self.session.execute(stmt)
         await self.session.flush()
 
+    async def set_agent_run_metadata_key(
+        self,
+        agent_run_id: UUID,
+        key: str,
+        value: JsonValue,
+    ) -> None:
+        """Write one ``run_metadata`` key without clobbering sibling keys.
+
+        Same ``jsonb_set`` reasoning as ``set_conversation_metadata_key``,
+        including binding ``value`` as ``JSONB`` directly so it is not
+        double-encoded into a JSON string scalar.
+        """
+        stmt = (
+            update(AgentRunModel)
+            .where(AgentRunModel.id == agent_run_id)
+            .values(
+                run_metadata=func.jsonb_set(
+                    func.coalesce(AgentRunModel.run_metadata, literal({}, JSONB)),
+                    array([key]),
+                    literal(value, JSONB),
+                    True,
+                )
+            )
+        )
+        await self.session.execute(stmt)
+        await self.session.flush()
+
+    async def get_agent_run_metadata_key(
+        self,
+        agent_run_id: UUID,
+        key: str,
+    ) -> JsonValue | None:
+        stmt = select(AgentRunModel.run_metadata).where(
+            AgentRunModel.id == agent_run_id
+        )
+        metadata = (await self.session.execute(stmt)).scalar_one_or_none()
+        if not isinstance(metadata, dict):
+            return None
+        return metadata.get(key)
+
     async def get_conversation(
         self,
         conversation_id: UUID,

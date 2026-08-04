@@ -10,6 +10,8 @@ single ordered lane, a chunk cannot arrive after the upsert that supersedes it.
 
 from __future__ import annotations
 
+import json
+import re
 from dataclasses import dataclass
 from uuid import UUID
 
@@ -28,7 +30,85 @@ from app.modules.agent.infrastructure.harnesses.streaming import TextStreamBuffe
 from app.modules.agent.infrastructure.harnesses.tool_returns import (
     missing_tool_return_events,
 )
+from app.modules.agent.tools.final_answer.final_answer_text import final_answer_text
+from app.modules.agent.tools.final_answer.final_answer_toolset import (
+    FINAL_ANSWER_MARKER,
+    FINAL_ANSWER_TOOL_NAME,
+)
 from app.modules.usage.contracts import AgentRunUsage
+
+_FINAL_ANSWER_STATUSES = frozenset({"COMPLETED", "FAILED", "WAITING"})
+
+# A fenced block that IS the whole message, e.g. ```json\n{...}\n```
+_FENCED_JSON = re.compile(r"\A```(?:json)?\s*(?P<body>.*?)\s*```\Z", re.DOTALL)
+
+
+def _final_answer_record(value: object) -> JsonObject | None:
+    """Recognise a final-answer payload by the marker the tool stamps on it.
+
+    ACP tool-call events carry no tool name, so the marker — present in both the
+    text block and structuredContent of the MCP result — is what identifies our
+    tool's result whichever half an adapter echoes back.
+    """
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except (TypeError, ValueError):
+            return None
+    if isinstance(value, dict) and value.get(FINAL_ANSWER_MARKER) is True:
+        return dict(value)
+    return None
+
+
+def _final_answer_metadata(record: JsonObject) -> JsonObject:
+    """The message metadata a final answer contributes.
+
+    Mirrors what the in-process harness stamps, so ``RunMessageWriter`` reads
+    both harnesses' terminal messages the same way.
+    """
+    metadata: JsonObject = {
+        "structured_output": record.get("output"),
+        "final_answer_tool_name": FINAL_ANSWER_TOOL_NAME,
+    }
+    status = record.get("status")
+    if isinstance(status, str) and status.upper() in _FINAL_ANSWER_STATUSES:
+        metadata["final_answer_status"] = status.upper()
+    if record.get("error"):
+        metadata["final_answer_error"] = record["error"]
+    if record.get("schema_violation"):
+        metadata["final_answer_schema_violation"] = record["schema_violation"]
+    if record.get("inferred"):
+        # Makes "the tool path is failing on adapter X" visible in the data.
+        metadata["final_answer_inferred"] = True
+    return metadata
+
+
+def _whole_message_json(message: str) -> JsonObject | None:
+    """Parse the message iff the entire message is one JSON object."""
+    text = message.strip()
+    fenced = _FENCED_JSON.match(text)
+    if fenced is not None:
+        text = fenced.group("body").strip()
+    if not text.startswith("{") or not text.endswith("}"):
+        return None
+    try:
+        parsed = json.loads(text)
+    except (TypeError, ValueError):
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _matches_schema(schema: JsonObject | None, output: object) -> bool:
+    """Does an inferred output satisfy the agent's schema? No schema = accept."""
+    if not schema:
+        return True
+    try:
+        from jsonschema import Draft202012Validator
+
+        Draft202012Validator(schema).validate(output)
+    except Exception:  # noqa: BLE001 - a bad schema must not reject a good answer
+        return False
+    return True
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,6 +162,8 @@ class AgentHostEventNormalizer:
         agent_run_id: UUID,
         model_name: str,
         harness_key: str = "unknown",
+        structured_expected: bool = False,
+        output_schema: JsonObject | None = None,
     ) -> None:
         self.agent_run_id = agent_run_id
         self.model_name = model_name
@@ -92,6 +174,27 @@ class AgentHostEventNormalizer:
         self._token_kind: str | None = None
         self.tool_calls: dict[str, str] = {}
         self.closed_tool_calls: set[str] = set()
+        # Whether this run owes a structured final answer, and against what.
+        # Gates the text fallback: scraping JSON out of an ordinary chat reply
+        # would invent structured results that were never claimed.
+        self.structured_expected = structured_expected
+        self.output_schema = output_schema
+        self._final_answer: JsonObject | None = None
+        self._final_answer_tool_call_id: str | None = None
+
+    def adopt_final_answer(
+        self, record: JsonObject | None, *, tool_call_id: str | None = None
+    ) -> None:
+        """Take the authoritative final answer recorded by the tool itself.
+
+        Overrides anything inferred from the event stream: ACP tool calls carry
+        no tool name, so stream recognition is a heuristic while this is the
+        tool's own record of what it returned.
+        """
+        if isinstance(record, dict) and record.get(FINAL_ANSWER_MARKER) is True:
+            self._final_answer = record
+            if tool_call_id is not None:
+                self._final_answer_tool_call_id = tool_call_id
 
     def normalize(
         self,
@@ -221,21 +324,66 @@ class AgentHostEventNormalizer:
                 )
             )
         message, message_id = self._message.take()
+        metadata: JsonObject = {
+            "agent_host_object_id": message_id,
+            "is_final_answer": final,
+        }
+        if final:
+            # Only the terminal flush consumes the record. A run that pauses for
+            # a permission prompt flushes with final=False and must not burn it.
+            record = self._final_answer or self._infer_final_answer(message)
+            if record is not None:
+                metadata.update(_final_answer_metadata(record))
+                if self._final_answer_tool_call_id is not None:
+                    metadata["tool_call_id"] = self._final_answer_tool_call_id
+                message = message or final_answer_text(
+                    record.get("output"), fallback=record.get("error")
+                )
         if message:
             events.append(
                 AgentEvent(
                     type=AgentEventType.MESSAGE,
                     data=MessageDraft.of_text(
                         message,
-                        metadata={
-                            "agent_host_object_id": message_id,
-                            "is_final_answer": final,
-                        },
+                        metadata=metadata,
                     ),
                     agent_run_id=self.agent_run_id,
                 )
             )
         return events
+
+    def _infer_final_answer(self, message: str) -> JsonObject | None:
+        """Last resort: read the answer out of the agent's own final text.
+
+        Only for a run that owed a structured answer, and only when the *whole*
+        message is one JSON object (or one fenced json block that is the whole
+        message). Deliberately not a brace-slice of the text: that is what turns
+        "here's an example: {...}" into a fabricated final answer.
+        """
+        if not self.structured_expected or not message:
+            return None
+        parsed = _whole_message_json(message)
+        if parsed is None:
+            return None
+
+        status = parsed.get("status")
+        if isinstance(status, str) and status.upper() in _FINAL_ANSWER_STATUSES:
+            output = parsed.get("output")
+            record: JsonObject = {
+                FINAL_ANSWER_MARKER: True,
+                "status": status.upper(),
+                "output": output,
+                "error": parsed.get("error"),
+            }
+        else:
+            # A bare object: treat it as the output, and invent no lifecycle
+            # status — let the terminal event decide whether the run succeeded.
+            record = {FINAL_ANSWER_MARKER: True, "output": parsed}
+
+        if not _matches_schema(self.output_schema, record.get("output")):
+            return None
+        record["inferred"] = True
+        return record
 
     # ------------------------------------------------------------- tool calls
 
@@ -281,7 +429,20 @@ class AgentHostEventNormalizer:
             return []
         tool_name = self.tool_calls.get(object_id, _tool_name(payload))
         self.closed_tool_calls.add(object_id)
-        result = _bounded_tool_value(_first_present(payload, "result", "rawOutput"))
+        raw_result = _first_present(payload, "result", "rawOutput")
+        if status == "COMPLETED":
+            # Read the RAW value, before bounding. `_bounded_tool_value` truncates
+            # long strings and replaces anything past `_MAX_TOOL_VALUE_DEPTH` with
+            # a placeholder — which would turn a valid structured answer into
+            # something that still looks structured but is not.
+            record = _final_answer_record(raw_result) or _final_answer_record(
+                _first_present(payload, "arguments", "args", "rawInput")
+            )
+            if record is None:
+                record = _final_answer_record(event_text(payload))
+            if record is not None:
+                self.adopt_final_answer(record, tool_call_id=object_id)
+        result = _bounded_tool_value(raw_result)
         if status != "COMPLETED":
             result = {
                 "success": False,

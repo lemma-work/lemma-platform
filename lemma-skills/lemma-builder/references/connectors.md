@@ -17,23 +17,29 @@ Four entities stack up — find the one you need and address it by **name**:
 1. **Connector** — a catalog entry: `gmail`, `slack`, `notion`, `googlecalendar`.
    Org-global, read-only. (`lemma connectors list` / `get`.)
 2. **Auth config** — the org's **credential setup** for one connector: which
-   provider, which OAuth app or API-key scheme. **One auth config per (org,
-   connector)**, identified by a name you choose (`workspace-gmail`). Every
-   operation/trigger command is scoped by **this name**, not the bare connector id.
+   kind, which OAuth app or API-key scheme. An org can hold **several per
+   connector** (two Slack apps, several MCP servers); exactly one is the
+   **default** that a bare connector id resolves to. Each is identified by a name
+   you choose (`workspace-gmail`), and every operation/trigger command is scoped
+   by **that name**, not the bare connector id.
 3. **Account** — a **per-user connected credential** under an auth config (one
    OAuth account, one bot token). Each pod member connects their own; a workload
    resolves *the invoking user's* account automatically.
 4. **Operation** / **Trigger** — what you can *do* (`gmail_send_email`,
    `chat_post_message`) and what can *wake* the pod (`new email received`). Both
-   are **provider-specific** — see below.
+   are **kind-specific** — see below.
 
-**Provider — LEMMA vs COMPOSIO.** Many connectors (gmail, slack, notion,
-googlecalendar, googledrive) ship through **two providers**: `LEMMA` (native) and
-`COMPOSIO`. The org picks one when it creates the auth config, and **that choice
-determines the operation and trigger set** — operation ids *and* payload shapes
-differ between providers. A payload that works on COMPOSIO will not work on LEMMA
-and vice versa. The auth-config *name* encodes the provider choice, which is why
-every command is keyed by it.
+**Kind — how a connector is implemented.** A connector advertises one or more
+**kinds**: `package` (native Lemma), `composio`, `http` (OpenAPI), `sql`, `mcp`.
+Several connectors (gmail, slack, googledrive, jira) ship as both `package` and
+`composio`. The org picks a kind with `--kind` when it creates the auth config,
+and **that choice determines the operation and trigger set** — operation ids *and*
+payload shapes differ between kinds. A payload that works on `composio` will not
+work on `package`. The auth-config *name* encodes the choice, which is why every
+command is keyed by it.
+
+> `provider` / `AuthProvider` is the retired name for this axis. If you see
+> `--provider` in older notes, the flag is `--kind`.
 
 **Delegated identity.** When a function or agent runs, it acts as the user who
 invoked it (`pod-model.md` → delegated identity). So a granted connector resolves
@@ -43,11 +49,11 @@ to *that user's* connected account. The workload only needs the
 ## Find the auth-config name first — `overview`
 
 Operations and triggers are addressed by **auth-config name** and differ per
-provider, so the one thing you must get right is that name. `overview` is the
+kind, so the one thing you must get right is that name. `overview` is the
 single place to find it:
 
 ```bash
-lemma connectors overview     # table: App | Auth Config | Provider | Status | Accounts
+lemma connectors overview     # table: App | Auth Config | Kind | Status | Accounts
 lemma connectors status       # same facts, your installed apps + your connected accounts
 ```
 
@@ -67,7 +73,7 @@ lemma connectors list
 lemma connectors get gmail
 
 # 2. Create the org auth config (required before any operation/trigger command)
-lemma connectors auth-configs create gmail --name workspace-gmail        # --provider LEMMA (default) | COMPOSIO
+lemma connectors auth-configs create gmail --name workspace-gmail --kind package   # composio | http | sql | mcp
 lemma connectors auth-configs list
 lemma connectors auth-configs get workspace-gmail
 
@@ -83,14 +89,17 @@ lemma connectors overview
 ```
 
 `auth-configs` and `accounts` both support `list` / `get` / `create` / `delete`.
+`auth-configs update` additionally carries `--default/--no-default` (which install a
+bare connector id resolves to) and `--status ACTIVE|DISABLED`; `auth-configs
+refresh-operations` re-syncs the operation catalog.
 
 ## Discover → execute (never guess)
 
 The discovery loop is non-negotiable: operation ids and payload keys are
-provider-specific, so **search by intent, read the schema, then execute**.
+kind-specific, so **search by intent, read the schema, then execute**.
 
 ```bash
-# 1. Search by intent — returns ranked matches for THIS auth config's provider
+# 1. Search by intent — returns ranked matches for THIS auth config's kind
 lemma connectors operations search workspace-gmail "send email" --limit 5
 
 # 2. Read the input schema (one or more ops; --details for the whole batch)
@@ -106,7 +115,7 @@ lemma connectors operations execute workspace-gmail gmail_send_email \
 ```
 
 - `operations search` scans names + descriptions and returns ranked hits **for the
-  auth config's provider only**. `operations list` is the same with no query.
+  auth config's kind only**. `operations list` is the same with no query.
 - `operations get` shows one operation's input schema; `operations details` takes
   several names (or none → every operation) and returns their schemas as a batch.
 - Operation names are **case-insensitive** for `get`/`details`/`execute`, but use
@@ -116,25 +125,21 @@ lemma connectors operations execute workspace-gmail gmail_send_email \
   `--account <id>` to pin a specific connected account, otherwise the invoking
   user's account is resolved.
 
-**Not sure which operation?** Ask the helper agent — it reads the catalog and
-returns a concrete plan with operation ids and payloads:
-
-```bash
-lemma tools connector-helper-agent "send tomorrow's calendar summary by email" \
-  --app googlecalendar --app gmail
-```
+**Not sure which operation?** Run `operations search` with the intent in plain
+words — it ranks over names *and* descriptions, so "send email" finds
+`gmail_send_email` without you knowing the id.
 
 ## Skill guide per connector
 
-Each connector ships a generated skill doc **per provider**. Fetch it before
-writing payloads — it auto-resolves the provider from your installed auth config:
+Each connector ships a generated skill doc **per kind**. Fetch it before
+writing payloads — it auto-resolves the kind from your installed auth config:
 
 ```bash
-lemma connectors describe gmail              # provider auto-detected from the auth config
-lemma connectors describe gmail --provider composio   # force a provider
+lemma connectors describe gmail              # kind auto-detected from the auth config
+lemma connectors describe gmail --kind composio   # force a kind
 ```
 
-(SDK: `pod.connectors.apps.skill("gmail", provider="lemma")`.)
+(SDK: `pod.connectors.apps.skill("gmail", kind="package")`.)
 
 ## From functions and agents
 
@@ -147,8 +152,9 @@ portable across pods:
   "permission_ids": ["connector.use"] }
 ```
 
-`lemma agents grant <agent> app:gmail:use` writes the same grant (the `app:`
-shorthand maps to `connector`). Then in code:
+`lemma agents grant <agent> connector:gmail:use` writes the same grant (`app:` is
+an accepted alias for `connector:`; prefer `connector:` so grants read the same
+everywhere). Then in code:
 
 ```python
 # Send an email as the invoking user
@@ -201,7 +207,7 @@ account:
 With both grants the pinned account works for every invoker (it is invoker-independent
 — the workload's grants are the authority, not the caller's identity). Note
 `connector_account.manage` is a **destructive** permission gated behind approval; plain
-`connector_account.use` is not. See `authorization-model.md` §7.
+`connector_account.use` is not. See `authorization-model.md` §8.
 
 (App side — calling a connector operation from a browser app, with discovery and a
 safe action button → `app-recipes/connector-action.md`.)
@@ -210,15 +216,15 @@ safe action button → `app-recipes/connector-action.md`.)
 
 A connector also exposes **triggers** — events that can wake a pod (`new email
 received`, `message posted`). Like operations, triggers are **scoped to an auth
-config** and returned for that config's provider only:
+config** and returned for that config's kind only:
 
 ```bash
-lemma connectors triggers list workspace-gmail              # provider-scoped
+lemma connectors triggers list workspace-gmail              # kind-scoped
 lemma connectors triggers list workspace-gmail -q "new email"
 lemma connectors triggers get workspace-gmail <trigger-id>  # full config + payload schema
 ```
 
-A trigger id is **provider-qualified**: `{app}:{provider}:{slug}` (e.g.
+A trigger id is **kind-qualified**: `{app}:{kind}:{slug}` (e.g.
 `gmail:composio:new_message`). Wire a trigger to an agent or workflow with a
 **WEBHOOK schedule** — see `schedules-and-triggers.md`. A trigger needs a
 **connected account** to deliver events.
@@ -239,10 +245,12 @@ A trigger id is **provider-qualified**: `{app}:{provider}:{slug}` (e.g.
 - **Not in bundles.** Auth configs, accounts, and connect state are org/pod runtime
   state — `pods import` won't recreate them. Script the setup in the README, or a
   connector-using bundle is incomplete.
-- **One auth config per (org, connector).** A second `auth-configs create` for the
-  same connector fails — reuse or `delete` first.
-- **Provider determines everything.** Re-check operation ids and payloads with
-  `operations details` whenever you switch providers; never reuse names across them.
+- **Several auth configs per connector are allowed**, with exactly one default that
+  a bare connector id resolves to. Use `auth-configs update --default` to move it,
+  and always address operations by auth-config *name* so you never depend on which
+  one is default.
+- **Kind determines everything.** Re-check operation ids and payloads with
+  `operations details` whenever you switch kinds; never reuse names across them.
 - **Wrong/foreign auth-config name.** `operations search` returning not-found
   usually means the name is wrong or the auth config belongs to another org. Run
   `lemma connectors overview` to read the exact name.

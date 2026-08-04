@@ -28,6 +28,7 @@ class RunToolAssembler:
         *,
         agent: Agent | None,
         conversation: Conversation | None,
+        include_final_answer: bool = False,
     ) -> list[object]:
         # The pod default assistant (no specific agent) gets the fixed default
         # toolset. User-created agents get their configured toolsets plus narrow
@@ -102,4 +103,23 @@ class RunToolAssembler:
             toolsets.extend(
                 await build_surface_toolsets(self.uow_factory, conversation)
             )
+        # Remote (Agent Host) runs only. The in-process LEMMA harness gets
+        # final_answer through pydantic-ai's output_type, so adding it here too
+        # would expose the same tool twice — hence opt-in rather than derived
+        # from the agent, which cannot tell the two harnesses apart.
+        if include_final_answer and conversation is not None:
+            from app.modules.agent.tools.final_answer.final_answer_toolset import (
+                build_final_answer_toolset,
+                final_answer_expected,
+            )
+
+            if final_answer_expected(agent=agent, conversation=conversation):
+                toolsets.append(
+                    build_final_answer_toolset(
+                        agent=agent,
+                        uow_factory=(
+                            self.uow_factory if callable(self.uow_factory) else None
+                        ),
+                    )
+                )
         return toolsets

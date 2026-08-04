@@ -7,6 +7,8 @@ an upsert re-emitting text the user had already seen.
 
 from __future__ import annotations
 
+import json
+
 from uuid import uuid7
 
 from app.modules.agent.domain.agent_host import AgentHostEventType, AgentHostRunState
@@ -300,3 +302,236 @@ class TestPermissionRequest:
         assert [s["status"] for s in statuses] == ["permission_request"]
         assert statuses[0]["kind"] == "request_approval"
         assert statuses[0]["tool_call_id"] == "agent-host-permission:perm-1"
+
+
+class TestStructuredFinalAnswer:
+    """How a structured result gets back out of an ACP run.
+
+    ACP tool-call events carry no tool *name* — `ToolCall` has a `title` the
+    agent wrote and a `toolCallId`, and nothing else — so the normalizer
+    recognises our final answer by the marker the tool stamps into its own
+    result, wherever the adapter happens to echo it.
+    """
+
+    SCHEMA = {
+        "type": "object",
+        "properties": {"label": {"type": "string"}},
+        "required": ["label"],
+    }
+
+    def _structured(self, **kwargs) -> AgentHostEventNormalizer:
+        return AgentHostEventNormalizer(
+            agent_run_id=uuid7(),
+            model_name="test-model",
+            harness_key="codex",
+            structured_expected=True,
+            **kwargs,
+        )
+
+    def _close_tool_call(self, payload: dict) -> list:
+        return [
+            _event(
+                1,
+                AgentHostEventType.TOOL_CALL_UPSERT,
+                {"toolCall": {"title": "Finish up"}},
+                object_id="call-1",
+            ),
+            _event(
+                2,
+                AgentHostEventType.TOOL_CALL_UPDATE,
+                {"status": "completed", **payload},
+                object_id="call-1",
+            ),
+        ]
+
+    def _final_metadata(self, out) -> dict:
+        finals = [
+            m.data.metadata
+            for m in _text_messages(out)
+            if m.data.metadata.get("is_final_answer")
+        ]
+        assert len(finals) == 1
+        return finals[0]
+
+    RECORD = {
+        "lemma_final_answer": True,
+        "status": "COMPLETED",
+        "output": {"label": "spam"},
+        "error": None,
+    }
+
+    def test_result_payload_becomes_structured_output(self) -> None:
+        n = self._structured()
+        out = _run(n, self._close_tool_call({"result": self.RECORD}))
+
+        metadata = self._final_metadata(out)
+        assert metadata["structured_output"] == {"label": "spam"}
+        assert metadata["final_answer_status"] == "COMPLETED"
+        assert metadata["tool_call_id"] == "call-1"
+
+    def test_arguments_are_read_when_the_adapter_reports_no_output(self) -> None:
+        """Some adapters echo rawInput but not rawOutput; the args are the answer."""
+        n = self._structured()
+        out = _run(n, self._close_tool_call({"rawInput": self.RECORD}))
+
+        assert self._final_metadata(out)["structured_output"] == {"label": "spam"}
+
+    def test_text_only_result_is_recognised(self) -> None:
+        """Others echo only the MCP text block, which carries the same marker."""
+        n = self._structured()
+        out = _run(n, self._close_tool_call({"text": json.dumps(self.RECORD)}))
+
+        assert self._final_metadata(out)["structured_output"] == {"label": "spam"}
+
+    def test_a_large_nested_output_is_not_mangled_by_bounding(self) -> None:
+        """The record is read raw. `_bounded_tool_value` replaces anything past
+        its depth limit with a placeholder, which would leave `output_data`
+        looking structured while being nothing of the sort."""
+        deep = {"a": {"b": {"c": {"d": {"e": "kept"}}}}}
+        n = self._structured()
+        out = _run(
+            n,
+            self._close_tool_call(
+                {"result": {**self.RECORD, "output": {"label": "x", "deep": deep}}}
+            ),
+        )
+
+        assert self._final_metadata(out)["structured_output"]["deep"] == deep
+
+    def test_the_last_call_wins(self) -> None:
+        n = self._structured()
+        events = [
+            *self._close_tool_call({"result": self.RECORD}),
+            _event(
+                3,
+                AgentHostEventType.TOOL_CALL_UPSERT,
+                {"toolCall": {"title": "Actually"}},
+                object_id="call-2",
+            ),
+            _event(
+                4,
+                AgentHostEventType.TOOL_CALL_UPDATE,
+                {
+                    "status": "completed",
+                    "result": {**self.RECORD, "output": {"label": "ham"}},
+                },
+                object_id="call-2",
+            ),
+        ]
+        out = _run(n, events)
+
+        assert self._final_metadata(out)["structured_output"] == {"label": "ham"}
+
+    def test_a_permission_pause_does_not_burn_the_answer(self) -> None:
+        """A mid-run pause flushes with final=False; the record must survive to
+        the terminal flush or a run that pauses loses its result."""
+        n = self._structured()
+        events = [
+            *self._close_tool_call({"result": self.RECORD}),
+            _event(
+                3,
+                AgentHostEventType.PERMISSION_REQUEST,
+                {"toolCall": {"toolCallId": "perm-1"}},
+                object_id="perm-1",
+            ),
+        ]
+        out = _run(n, events)
+
+        assert self._final_metadata(out)["structured_output"] == {"label": "spam"}
+
+    def test_a_recorded_answer_overrides_what_the_stream_inferred(self) -> None:
+        """The tool's own record is the authority; the stream is a heuristic."""
+        n = self._structured()
+        for event in self._close_tool_call({"result": self.RECORD}):
+            n.normalize(event)
+        n.adopt_final_answer({**self.RECORD, "output": {"label": "authoritative"}})
+        out = n.normalize(
+            _event(9, AgentHostEventType.TERMINAL, {"state": "SUCCEEDED"})
+        )
+
+        assert self._final_metadata(out)["structured_output"] == {
+            "label": "authoritative"
+        }
+
+
+class TestFinalAnswerTextFallback:
+    """Reading the answer out of the agent's own prose, when it never called the
+    tool. This is a guess, so it is fenced hard: the whole message must be the
+    JSON, and it must satisfy the agent's schema."""
+
+    SCHEMA = TestStructuredFinalAnswer.SCHEMA
+
+    def _normalizer(self, *, expected: bool = True, schema=None):
+        return AgentHostEventNormalizer(
+            agent_run_id=uuid7(),
+            model_name="test-model",
+            harness_key="codex",
+            structured_expected=expected,
+            output_schema=schema,
+        )
+
+    def _say(self, normalizer, text: str) -> list:
+        return _run(
+            normalizer,
+            [_event(1, AgentHostEventType.AGENT_MESSAGE_UPSERT, {"text": text})],
+        )
+
+    def _metadata(self, out) -> dict:
+        finals = [
+            m.data.metadata
+            for m in _text_messages(out)
+            if m.data.metadata.get("is_final_answer")
+        ]
+        return finals[0] if finals else {}
+
+    def test_a_whole_message_contract_object_is_accepted(self) -> None:
+        out = self._say(
+            self._normalizer(schema=self.SCHEMA),
+            json.dumps({"status": "COMPLETED", "output": {"label": "spam"}}),
+        )
+
+        metadata = self._metadata(out)
+        assert metadata["structured_output"] == {"label": "spam"}
+        assert metadata["final_answer_status"] == "COMPLETED"
+        # Flagged, so "the tool path is failing on adapter X" is visible in data.
+        assert metadata["final_answer_inferred"] is True
+
+    def test_a_fenced_block_that_is_the_whole_message_is_accepted(self) -> None:
+        out = self._say(
+            self._normalizer(schema=self.SCHEMA),
+            '```json\n{"status": "COMPLETED", "output": {"label": "spam"}}\n```',
+        )
+
+        assert self._metadata(out)["structured_output"] == {"label": "spam"}
+
+    def test_a_bare_object_becomes_the_output_with_no_invented_status(self) -> None:
+        """Never synthesize a lifecycle status from a guess — let the terminal
+        event decide whether the run succeeded."""
+        out = self._say(self._normalizer(schema=self.SCHEMA), '{"label": "spam"}')
+
+        metadata = self._metadata(out)
+        assert metadata["structured_output"] == {"label": "spam"}
+        assert "final_answer_status" not in metadata
+
+    def test_json_quoted_inside_prose_is_rejected(self) -> None:
+        """The false-positive that matters: an agent explaining a payload has not
+        produced a final answer. A brace-slice of the text would take it."""
+        out = self._say(
+            self._normalizer(schema=self.SCHEMA),
+            'Here is the shape I would return: {"label": "spam"} — sound right?',
+        )
+
+        assert "structured_output" not in self._metadata(out)
+
+    def test_output_violating_the_schema_is_rejected(self) -> None:
+        out = self._say(self._normalizer(schema=self.SCHEMA), '{"score": 1}')
+
+        assert "structured_output" not in self._metadata(out)
+
+    def test_an_ordinary_chat_run_is_never_scraped(self) -> None:
+        """No structured answer was owed, so JSON in a reply stays just text."""
+        out = self._say(
+            self._normalizer(expected=False, schema=None), '{"label": "spam"}'
+        )
+
+        assert "structured_output" not in self._metadata(out)

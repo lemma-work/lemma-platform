@@ -410,18 +410,11 @@ async def pod_read_file(
     ctx: RunContext[BaseAgentContext],
     request: PodReadFileRequest,
 ) -> JsonObject:
-    """Read a pod file's content as text or as converted document markdown.
+    """Read a pod file as text, or a document as converted markdown.
 
-    - ``format="text"`` (default) — the file's raw UTF-8 text, truncated to
-      ``max_chars``.
-    - ``format="markdown"`` — converted markdown for a document (PDF, DOCX, ...),
-      optionally a 1-based page range (``page_start``/``page_end``).
-
-    Documents are auto-converted to markdown at upload and cached, so reading is
-    instant — read them here directly; do not download and re-parse/OCR them.
-    ``pod_list_files`` reports ``has_markdown``/``page_count`` so you know what's
-    ready. To SEE pages visually (layout, tables, figures), use
-    ``pod_view_document_pages``.
+    Documents are converted and cached at upload, so reading is instant — never
+    download and re-parse one. Use ``pod_view_document_pages`` to see pages
+    visually instead.
     """
 
     async def op(services: PodServices) -> JsonObject:
@@ -532,14 +525,11 @@ async def pod_get_file_url(
     ctx: RunContext[BaseAgentContext],
     request: GetFileUrlRequest,
 ) -> JsonObject:
-    """Get a URL for a pod file, to hand a user a link or embed an image.
+    """Get a URL for a pod file, to share a link or embed an image.
 
-    ``url_type="app"`` (default) returns an authenticated in-app link
-    (``app_url``) for a signed-in pod member, plus a short-lived direct-download
-    ``url``. ``url_type="public"`` mints a public, hit-capped ``signed_url``
-    anyone can open without logging in (e.g. to email/message a file to someone
-    outside the pod) — it expires and stops after ``max_hits`` downloads, so a
-    leaked link can't run up egress."""
+    ``app`` (default) returns an in-app link for a signed-in member plus a
+    short-lived download url. ``public`` mints a signed link anyone can open —
+    it expires and dies after ``max_hits`` downloads."""
 
     async def op(services: PodServices) -> JsonObject:
         if request.url_type == "public":

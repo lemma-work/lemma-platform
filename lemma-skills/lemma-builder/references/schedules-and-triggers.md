@@ -20,7 +20,28 @@ event** (`WEBHOOK`):
 - **`DATASTORE`** — a row created/updated/deleted on a named table. The changed row
   starts the run. *"When a ticket is inserted, triage it."*
 - **`WEBHOOK`** — a connector event (new email, message posted). Needs a connected
-  account and a provider-qualified trigger id. *"When mail arrives, intake it."*
+  account and a kind-qualified trigger id. *"When mail arrives, intake it."*
+
+## Whose identity does a fired run use?
+
+This decides which rows the run can see, so it is the first thing to settle —
+and it is not always the schedule's creator:
+
+| Trigger | Runs as |
+| --- | --- |
+| `TIME` | the schedule's configured user |
+| `WEBHOOK` | the schedule's configured user |
+| `DATASTORE` on an **RLS** table | the **owner of the row that changed** |
+| `DATASTORE` on a **shared** table | the schedule's configured user |
+
+The RLS row-owner rule is the useful one: each member's write starts a run scoped
+to **that member**, over their own rows, with their `/me` and their connected
+accounts. That is what makes "write a row, get agentic work done as yourself" a
+one-line app feature — see `app-recipes/rls-table.md`. A datastore fire that
+carries no owner is treated as an error rather than quietly falling back.
+
+Creating a `DATASTORE` schedule needs **`datastore.table.update` on the watched
+table**, not just permission to write records to it.
 
 The triggering event becomes the run's **start payload**. Design the first workflow
 node (or the agent's instruction) around that exact shape — see *Event payloads*.
@@ -51,9 +72,15 @@ lemma schedules create --workflow intake --at "2026-06-14T09:00:00Z"
 lemma schedules create --workflow ticket-intake --datastore tickets --on insert --on update
 lemma schedules create --workflow ticket-intake --datastore tickets --on all   # insert+update+delete
 
-# WEBHOOK — connector trigger (find the id via `lemma connectors triggers list <auth-config>`)
-lemma schedules create --workflow ticket-intake \
+# WEBHOOK on an AGENT — carries the trigger id
+# (find it via `lemma connectors triggers list <auth-config>`)
+lemma schedules create --agent mail-triage \
   --webhook-source gmail --connector-trigger gmail:composio:new_message --account <account-id>
+
+# WEBHOOK on a WORKFLOW — the trigger comes from the workflow's EVENT start.
+# Passing --connector-trigger here is rejected.
+lemma schedules create --workflow ticket-intake \
+  --webhook-source gmail --account <account-id>
 ```
 
 Bundle JSON (`schedules/<name>/<name>.json`) — `name` is the stable upsert key:
@@ -76,10 +103,18 @@ Bundle JSON (`schedules/<name>/<name>.json`) — `name` is the stable upsert key
   `operations` is **required and explicit** — each must be `INSERT`, `UPDATE`, or
   `DELETE` (`--on all` expands to all three). A datastore schedule without
   operations is rejected.
-- `WEBHOOK` — `{"source": "<app>"}` plus `connector_trigger_id` and `account_id`
-  fields. The trigger id is **provider-qualified** (`{app}:{provider}:{slug}`, e.g.
-  `gmail:composio:new_message`); get it from `lemma connectors triggers list
-  <auth-config>` (see `connectors.md`).
+- `WEBHOOK` — `{"source": "<app>"}` plus `account_id`. The trigger id is
+  **kind-qualified** (`{app}:{kind}:{slug}`, e.g. `gmail:composio:new_message`);
+  get it from `lemma connectors triggers list <auth-config>` (see
+  `connectors.md`).
+
+  **Where the trigger id goes depends on the target**, and getting it wrong is a
+  hard error, not a warning:
+  - **Agent** webhook schedules carry `connector_trigger_id` themselves.
+  - **Workflow** webhook schedules **derive** it from the workflow's `EVENT`
+    start and **reject** a `connector_trigger_id` on the schedule. The workflow
+    must have an `EVENT` start with a trigger id, or creation fails with
+    *"Webhook workflow schedules require an EVENT workflow start"*.
 
 Scaffold with `lemma schedules init <name>` (writes a commented TIME schedule, set
 to `is_active: false` so it won't fire before its target exists).
@@ -120,13 +155,16 @@ that fail it are dropped (status `FILTERED`, not `TRIGGERED`). Add an optional
   "name": "important-mail",
   "schedule_type": "WEBHOOK",
   "config": { "source": "gmail" },
-  "connector_trigger_id": "gmail:composio:new_message",
-  "account_id": "<account-id>",
+  "account_id": "${gmail_account}",
   "workflow_name": "ticket-intake",
   "filter_instruction": "Only process emails from external customers describing a problem or request. Ignore newsletters, receipts, and internal mail.",
   "is_active": true
 }
 ```
+
+No `connector_trigger_id` here: this targets a **workflow**, so the id comes from
+`ticket-intake`'s `EVENT` start. On an **agent** webhook schedule you would add
+`"connector_trigger_id": "gmail:composio:new_message"` instead.
 
 On the CLI: `--filter "<predicate>"`.
 
