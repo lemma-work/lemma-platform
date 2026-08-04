@@ -2813,3 +2813,132 @@ def test_plan_does_not_block_when_the_account_check_cannot_run(tmp_path: Path):
     )
 
     assert result["errors"] == []
+
+
+# --------------------------------------------------------------------------- #
+# dry-run must catch what the real import rejects
+# --------------------------------------------------------------------------- #
+def test_dry_run_flags_an_unrecognized_field(tmp_path: Path):
+    """The apply step already refuses these — but mid-write. A real import created
+    eleven resources before dying on the twelfth, and there are no transactions,
+    so dry-run is the only safety net there is."""
+    _write_agent(tmp_path, "triage", {"name": "triage", "toolsetz": ["POD"]})
+
+    result = import_pod_bundle(
+        _bare_pod_client(), pod_id="pod_1", source_dir=tmp_path, dry_run=True
+    )
+
+    assert result["ok"] is False
+    assert any("toolsetz" in error["message"] for error in result["errors"])
+
+
+def test_dry_run_accepts_server_owned_fields_from_an_older_export(tmp_path: Path):
+    """`input_schema` and friends are stripped by the apply step, not authoring
+    mistakes — flagging them would fail every bundle exported by an older CLI."""
+    _write_function(
+        tmp_path,
+        "score_ticket",
+        {
+            "name": "score_ticket",
+            "code": (
+                "#input_type_name: In\n"
+                "#output_type_name: Out\n"
+                "#function_name: score_ticket\n"
+            ),
+            "input_schema": {"type": "object"},
+            "output_schema": {"type": "object"},
+            "revision_hash": "abc123",
+            "status": "READY",
+        },
+    )
+
+    result = import_pod_bundle(
+        _bare_pod_client(), pod_id="pod_1", source_dir=tmp_path, dry_run=True
+    )
+
+    assert result["errors"] == []
+
+
+def test_dry_run_flags_a_datastore_schedule_missing_table_name(tmp_path: Path):
+    """`schedules init` scaffolds `{"datastore": "<table>"}`; the server wants
+    `table_name` and 422s. Dry-run printed a clean plan and the real import died
+    on the last of twelve resources."""
+    resource_dir = tmp_path / "schedules" / "on-new-ticket"
+    resource_dir.mkdir(parents=True)
+    (resource_dir / "on-new-ticket.json").write_text(
+        json.dumps(
+            {
+                "name": "on-new-ticket",
+                "schedule_type": "DATASTORE",
+                "config": {"datastore": "tickets", "operations": ["INSERT"]},
+                "workflow_name": "ticket-intake",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = import_pod_bundle(
+        _bare_pod_client(), pod_id="pod_1", source_dir=tmp_path, dry_run=True
+    )
+
+    assert result["ok"] is False
+    messages = " ".join(error["message"] for error in result["errors"])
+    assert "table_name" in messages
+    # The offending file is named, so you don't infer it from a progress line.
+    assert any("on-new-ticket.json" in error["path"] for error in result["errors"])
+
+
+def test_dry_run_accepts_a_well_formed_datastore_schedule(tmp_path: Path):
+    resource_dir = tmp_path / "schedules" / "on-new-ticket"
+    resource_dir.mkdir(parents=True)
+    (resource_dir / "on-new-ticket.json").write_text(
+        json.dumps(
+            {
+                "name": "on-new-ticket",
+                "schedule_type": "DATASTORE",
+                "config": {"table_name": "tickets", "operations": ["INSERT"]},
+                "workflow_name": "ticket-intake",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = import_pod_bundle(
+        _bare_pod_client(), pod_id="pod_1", source_dir=tmp_path, dry_run=True
+    )
+
+    assert result["errors"] == []
+
+
+def test_import_warns_when_an_empty_grant_list_revokes_live_access(tmp_path: Path, capsys):
+    """`<resource> init` scaffolds an empty grants list, which means "revoke
+    everything". Harmless on create; on an upsert it silently disables a working
+    workload."""
+    _write_agent(
+        tmp_path,
+        "triage",
+        {"name": "triage", "instruction": "Triage.", "permissions": {"grants": []}},
+    )
+    client = _bare_pod_client()
+    client.agents = SimpleNamespace(
+        list=lambda pod_id, limit=1000: {"items": [{"name": "triage"}]},
+        get=lambda pod_id, name: {"name": name},
+        update_graph=lambda pod_id, name, **payload: {"name": name},
+        get_permissions=lambda pod_id, name: {
+            "grants": [
+                {
+                    "resource_type": "datastore_table",
+                    "resource_name": "tickets",
+                    "permission_ids": ["datastore.table.read"],
+                }
+            ]
+        },
+        replace_permissions=lambda pod_id, name, payload: {"agent_name": name},
+    )
+
+    import_pod_bundle(client, pod_id="pod_1", source_dir=tmp_path)
+
+    # Rich wraps console output, so compare on collapsed whitespace.
+    out = " ".join(capsys.readouterr().out.split())
+    assert "revoking all 1 existing grant(s)" in out
+    assert "Remove the `permissions` key to leave them alone" in out

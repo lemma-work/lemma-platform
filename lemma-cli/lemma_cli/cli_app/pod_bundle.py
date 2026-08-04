@@ -1217,10 +1217,27 @@ def _build_import_plan(
                             ),
                         )
                     )
+            manifest_path = str(resource_dir / f"{resource_name}.json")
+            # The same unknown-field check the apply step enforces, run here so a
+            # typo fails the plan instead of aborting a half-written import.
+            # `permissions` is split out before any request is built, so it is
+            # excluded from the comparison rather than reported.
+            issues.extend(
+                _validate_payload_fields(
+                    resource_type,
+                    resource_name,
+                    _strip_keys(payload, {"permissions"}),
+                    manifest_path,
+                )
+            )
             if resource_type == "functions":
                 issues.extend(_validate_function_payload(resource_dir, resource_name, payload))
-            if resource_type == "schedules" and not payload.get("name"):
-                payload["name"] = resource_name
+            if resource_type == "schedules":
+                if not payload.get("name"):
+                    payload["name"] = resource_name
+                issues.extend(
+                    _validate_schedule_config(payload, resource_name, manifest_path)
+                )
             if resource_type == "surfaces":
                 platform = _surface_platform_from_payload(payload, resource_name)
                 if platform not in SURFACE_PLATFORMS:
@@ -1394,6 +1411,133 @@ def _build_import_plan(
     return summary, issues, _collect_grant_advisories(
         source_dir, created_names=created_names
     )
+
+
+# Every key a resource type can legitimately carry, unioned across its create and
+# update requests plus the fields the importer applies itself (a schedule's
+# `is_active` rides a follow-up update; `permissions` is split out before the
+# request is built). A key in neither is an authoring mistake whichever branch
+# the import ends up taking, so the plan can say so without knowing yet.
+def _accepted_bundle_fields(resource_type: str) -> frozenset[str] | None:
+    from ..cli_core.payload import accepted_field_names
+
+    models: dict[str, tuple[Any, ...]] = {
+        "tables": (CreateTableRequest, UpdateTableRequest),
+        "functions": (CreateFunctionRequest, UpdateFunctionRequest),
+        "agents": (CreateAgentRequest, UpdateAgentRequest),
+        "workflows": (WorkflowCreateRequest, WorkflowUpdateRequest),
+        "schedules": (CreateScheduleRequest, UpdateScheduleRequest),
+        "apps": (CreateAppRequest, UpdateAppRequest),
+    }
+    if resource_type not in models:
+        return None
+    accepted: set[str] = {"permissions"}
+    for model in models[resource_type]:
+        accepted |= accepted_field_names(model) or set()
+    if resource_type == "workflows":
+        accepted |= {"nodes", "edges"}  # applied via update_graph, not the request
+    if resource_type == "schedules":
+        accepted |= {"is_active", "connector_id", "connector_kind"}
+    if resource_type == "apps":
+        accepted |= {"html", "source"}
+    return frozenset(accepted)
+
+
+# Required `config` keys per schedule_type, from the backend's domain models
+# (schedule/domain/schedule.py). The importer filters `config` through as an
+# opaque blob, so a wrong key only surfaces as a 422 from the server — after the
+# rest of the bundle has already been written.
+_SCHEDULE_CONFIG_RULES: dict[str, tuple[str, ...]] = {
+    "DATASTORE": ("table_name", "operations"),
+    "WEBHOOK": ("source",),
+}
+
+
+def _validate_schedule_config(
+    payload: dict[str, Any], resource_name: str, path: str
+) -> list[BundleValidationIssue]:
+    schedule_type = str(payload.get("schedule_type") or "").upper()
+    config = payload.get("config")
+    required = _SCHEDULE_CONFIG_RULES.get(schedule_type)
+    issues: list[BundleValidationIssue] = []
+    if schedule_type == "TIME":
+        if isinstance(config, dict) and not (
+            config.get("cron") or config.get("scheduled_at")
+        ):
+            issues.append(
+                BundleValidationIssue(
+                    path=path,
+                    message=(
+                        f"Schedule '{resource_name}' is TIME but its config sets "
+                        "neither `cron` nor `scheduled_at`."
+                    ),
+                )
+            )
+        return issues
+    if required is None:
+        return issues
+    if not isinstance(config, dict):
+        return [
+            BundleValidationIssue(
+                path=path,
+                message=(
+                    f"Schedule '{resource_name}' is {schedule_type} but has no "
+                    f"config. Required: {', '.join(required)}."
+                ),
+            )
+        ]
+    for field in required:
+        if not config.get(field):
+            issues.append(
+                BundleValidationIssue(
+                    path=path,
+                    message=(
+                        f"Schedule '{resource_name}' ({schedule_type}) is missing "
+                        f"required config field `{field}`. The server rejects this "
+                        f"with a 422 — required: {', '.join(required)}."
+                    ),
+                )
+            )
+    return issues
+
+
+def _validate_payload_fields(
+    resource_type: str, resource_name: str, payload: dict[str, Any], path: str
+) -> list[BundleValidationIssue]:
+    """Flag keys the API has no field for, at PLAN time.
+
+    The apply step already refuses them, but it refuses mid-write: an import with
+    no transactions had created eleven resources before dying on the twelfth.
+    Dry-run is the only safety net there is, so it has to run the same check."""
+    accepted = _accepted_bundle_fields(resource_type)
+    if accepted is None:
+        return []
+    # Compare against what the import will actually send: a bundle exported by an
+    # older CLI legitimately carries server-owned fields (`input_schema`,
+    # `revision_hash`, an app's `url`) that the apply step strips. Those are not
+    # authoring mistakes and must not be reported as such.
+    sanitizers = {
+        "functions": _sanitize_function_payload_for_import,
+        "apps": _sanitize_app_payload_for_import,
+    }
+    sanitize = sanitizers.get(resource_type)
+    if sanitize is not None:
+        payload = sanitize(payload)
+    unknown = sorted(key for key in payload if key not in accepted)
+    if not unknown:
+        return []
+    singular = resource_type.rstrip("s")
+    return [
+        BundleValidationIssue(
+            path=path,
+            message=(
+                f"Unrecognized field(s) on {singular} '{resource_name}': "
+                f"{', '.join(unknown)}. The API has no such field, so they would "
+                f"be dropped silently. Run `lemma {singular} schema` for the "
+                "accepted shape."
+            ),
+        )
+    ]
 
 
 def _validate_grant_references(
@@ -2339,6 +2483,23 @@ def import_pod_bundle(
             for grant in (permissions_payload or {}).get("grants", [])
             if isinstance(grant, dict)
         ]
+        # An empty grants list is a deliberate "revoke everything". That is fine
+        # for a resource this bundle just created (it had nothing), but on an
+        # upsert it strips a live workload's access — and `<resource> init`
+        # scaffolds exactly that shape, so re-authoring an existing workload from
+        # a fresh scaffold would silently disable it. Say so before doing it.
+        if not grants:
+            api = pod_sdk.agents if kind == "agent" else pod_sdk.functions
+            try:
+                had = len(to_plain(api.permissions(resource_name)).get("grants") or [])
+            except Exception:  # noqa: BLE001 — advisory only, never block the import
+                had = 0
+            if had:
+                console.print(
+                    f"[yellow]warning[/yellow] {kind} '{resource_name}': the bundle "
+                    f"declares an EMPTY grants list, revoking all {had} existing "
+                    "grant(s). Remove the `permissions` key to leave them alone."
+                )
         targets = ", ".join(
             f"{grant.get('resource_type')}:{grant.get('resource_name')}"
             for grant in grants

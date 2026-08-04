@@ -107,8 +107,11 @@ FUNCTION_JSON = _fill_enums("""{
   "type": "API",         // API = sync request/response; JOB = async background run
   "visibility": "POD",   // __VISIBILITY__
   "code": { "$file": "code.py" },
+  // Zero access by default. This EMPTY list means "holds nothing" — on import it
+  // REPLACES the function's grants, so delete the whole "permissions" key if you
+  // are re-authoring a function whose live grants you want left alone.
+  // Add grants here or with: lemma functions grant __NAME__ __TABLE__:read,write
   "permissions": { "grants": [
-    // Zero access by default — grant every table/folder/app this function touches.
     // { "resource_type": "datastore_table", "resource_name": "__TABLE__",
     //   "permission_ids": ["datastore.table.read", "datastore.record.write"] }
   ] }
@@ -146,8 +149,11 @@ AGENT_JSON = _fill_enums("""{
   "toolsets": ["POD"],
   "visibility": "POD",   // __VISIBILITY__
   // agent_runtime omitted -> the system runtime profile (system:lemma). Add it to pin a specific model.
+  // Zero access by default. This EMPTY list means "holds nothing" — on import it
+  // REPLACES the agent's grants, so delete the whole "permissions" key if you are
+  // re-authoring an agent whose live grants you want left alone.
+  // Add grants here or with: lemma agents grant __NAME__ __TABLE__:read
   "permissions": { "grants": [
-    // Zero access by default — grant every table/folder/app this agent touches.
     // { "resource_type": "datastore_table", "resource_name": "__TABLE__",
     //   "permission_ids": ["datastore.table.read", "datastore.record.read"] }
   ] }

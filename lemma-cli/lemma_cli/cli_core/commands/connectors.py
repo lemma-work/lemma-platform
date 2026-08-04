@@ -684,6 +684,41 @@ def _with_input_schemas(client: Any, state: Any, auth_config: str, result: Any) 
     return {**payload, "items": enriched}
 
 
+def _search_every_install(
+    client: Any, state: Any, query: str | None, limit: int
+) -> dict[str, Any]:
+    """Search operations across EVERY installed connector, best matches first.
+
+    Naming a connector is an extra round trip the caller often can't make: "which
+    operation sends an email?" is answerable without knowing that the install is
+    called `workspace-gmail`. Each hit is labelled with the `auth_config` to pass
+    to `execute`/`run`, so the answer is directly actionable.
+
+    Costs one request per install, so it is the fallback, not the default path —
+    naming a connector (or having only one) still takes exactly one.
+    """
+    hits: list[dict[str, Any]] = []
+    for item in _auth_config_items(client):
+        name = str(item.get("name") or item.get("id") or "")
+        if not name:
+            continue
+        try:
+            payload = to_plain(_search_operations(client, state, name, query, limit))
+        except Exception:  # noqa: BLE001 — one broken install must not sink the search
+            continue
+        for hit in payload.get("items") or []:
+            if isinstance(hit, dict):
+                hits.append(
+                    {
+                        **hit,
+                        "auth_config": name,
+                        "connector_id": item.get("connector_id") or payload.get("connector_id"),
+                    }
+                )
+    hits.sort(key=lambda hit: float(hit.get("relevance_score") or 0.0), reverse=True)
+    return {"items": hits[:limit], "returned_count": min(len(hits), limit)}
+
+
 @operations_app.command("search")
 def search_operations(
     ctx: typer.Context,
@@ -697,7 +732,7 @@ def search_operations(
         None,
         "--auth-config",
         "-c",
-        help="Auth config name or connector id. Auto-discovered when only one is installed.",
+        help="Auth config name or connector id. Omit to search every installed connector.",
     ),
     query: str | None = typer.Option(None, "--query", "-q"),
     limit: int = typer.Option(10, "--limit"),
@@ -709,10 +744,12 @@ def search_operations(
 ) -> None:
     """Search operation names and descriptions by intent.
 
-    `lemma connectors operations search "send email"` works: a lone positional
-    that doesn't name an installed connector is treated as the query, not as the
-    auth config. Results carry their input schema by default when the list is
-    short, so the next step is `execute`, not another lookup.
+    `lemma connectors operations search "send email"` searches EVERY installed
+    connector and labels each hit with the `auth_config` to pass on — you don't
+    have to know which connector provides what before you can look. Name a
+    connector to scope it (and to make it a single request). Results carry their
+    input schema by default when the list is short, so the next step is
+    `execute`, not another lookup.
     """
 
     state = state_from_ctx(ctx)
@@ -721,9 +758,16 @@ def search_operations(
         target, text = _split_target_and_rest(
             client, first, search_text, option=auth_config_opt
         )
-        resolved = _resolve_auth_config(client, target)
-        result = _search_operations(client, s, resolved, query or text, limit)
+        text = query or text
         include = with_schema if with_schema is not None else limit <= 5
+        if target is None and len(_auth_config_items(client)) > 1:
+            # No connector named and several installed: search them all rather
+            # than refusing. Schemas are skipped here — they are per-install and
+            # the hits span installs; `operations get <auth-config> <op>` or
+            # `connectors run` fetches the one you settle on.
+            return _search_every_install(client, s, text, limit)
+        resolved = _resolve_auth_config(client, target)
+        result = _search_operations(client, s, resolved, text, limit)
         return _with_input_schemas(client, s, resolved, result) if include else result
 
     result = run_with_client(ctx, run)
@@ -1059,6 +1103,41 @@ def _render_overview(rows: list[dict]) -> None:
     )
 
 
+# Verbs that make an operation change something on the other side. Ranked search
+# is lexical, so "list recent emails" happily matches ADD_LABEL_TO_EMAIL — and
+# picking that silently is the difference between reading a mailbox and editing
+# it. Used to bias resolution and to gate execution of an inferred write.
+_MUTATING_OP_TOKENS = frozenset(
+    {
+        "add", "append", "archive", "assign", "cancel", "create", "delete",
+        "disable", "draft", "enable", "forward", "insert", "invite", "label",
+        "modify", "move", "patch", "post", "publish", "put", "remove", "rename",
+        "reply", "send", "set", "share", "star", "trash", "unarchive", "update",
+        "upload", "upsert", "write",
+    }
+)
+_READ_INTENT_TOKENS = frozenset(
+    {
+        "browse", "check", "download", "fetch", "find", "get", "inspect", "list",
+        "load", "look", "read", "recent", "retrieve", "review", "search", "see",
+        "show", "summarize", "summarise", "view",
+    }
+)
+
+
+def _op_tokens(name: str) -> set[str]:
+    return {part for part in name.lower().replace("-", "_").split("_") if part}
+
+
+def _is_mutating_operation(name: str) -> bool:
+    return bool(_op_tokens(name) & _MUTATING_OP_TOKENS)
+
+
+def _is_read_intent(text: str) -> bool:
+    words = {word.strip(".,!?\"'").lower() for word in text.split()}
+    return bool(words & _READ_INTENT_TOKENS) and not (words & _MUTATING_OP_TOKENS)
+
+
 def _required_input_fields(input_schema: Any) -> list[str]:
     if not isinstance(input_schema, dict):
         return []
@@ -1068,18 +1147,24 @@ def _required_input_fields(input_schema: Any) -> list[str]:
 
 def _resolve_operation(
     client: Any, state: Any, auth_config: str, selector: str
-) -> dict[str, Any]:
+) -> tuple[dict[str, Any], bool]:
     """Turn an operation id OR a plain-English intent into one concrete operation.
 
     Tries an exact (case-insensitive) id first, then falls back to ranked search.
-    Returns the operation's detail dict so the caller already holds the input
-    schema — the whole point is that discovering and running are one step.
+    Returns ``(detail, inferred)`` — the operation's detail dict, so the caller
+    already holds the input schema, plus whether the name was *guessed* from
+    natural language rather than given.
+
+    Ranked search is lexical, so a read intent can match a write operation:
+    "list recent emails" ranked ADD_LABEL_TO_EMAIL above FETCH_EMAILS. A read
+    intent therefore prefers the best NON-mutating hit, and anything inferred
+    stays flagged so the caller can refuse to run a write nobody asked for.
     """
     try:
         detail = to_plain(_operation_batch(client, state, auth_config, [selector]))
         items = detail.get("items") or []
         if items:
-            return dict(items[0])
+            return dict(items[0]), False
     except Exception:  # noqa: BLE001 — an unknown id just means "search instead"
         pass
 
@@ -1092,8 +1177,20 @@ def _resolve_operation(
             f"with `lemma connectors operations list {auth_config}`.",
             param_hint="OPERATION",
         )
-    best = str(hits[0].get("name"))
-    others = ", ".join(str(hit.get("name")) for hit in hits[1:])
+    chosen = hits[0]
+    if _is_read_intent(selector):
+        chosen = next(
+            (
+                hit
+                for hit in hits
+                if not _is_mutating_operation(str(hit.get("name") or ""))
+            ),
+            hits[0],
+        )
+    best = str(chosen.get("name"))
+    others = ", ".join(
+        str(hit.get("name")) for hit in hits if str(hit.get("name")) != best
+    )
     typer.echo(
         f"Resolved operation: {selector!r} -> {best}"
         + (f" (also matched: {others})" if others else ""),
@@ -1101,7 +1198,7 @@ def _resolve_operation(
     )
     detail = to_plain(_operation_batch(client, state, auth_config, [best]))
     items = detail.get("items") or []
-    return dict(items[0]) if items else {"name": best, "input_schema": {}}
+    return (dict(items[0]) if items else {"name": best, "input_schema": {}}), True
 
 
 @app.command("run")
@@ -1126,6 +1223,12 @@ def run_connector_operation(
         False,
         "--dry-run",
         help="Resolve and print the operation + input schema without executing.",
+    ),
+    yes: bool = typer.Option(
+        False,
+        "--yes",
+        "-y",
+        help="Run even when the operation was INFERRED from text and mutates data.",
     ),
     metadata_only: bool = typer.Option(
         False,
@@ -1153,12 +1256,30 @@ def run_connector_operation(
 
     def run(client, s):  # type: ignore[no-untyped-def]
         auth_config = _resolve_auth_config(client, connector)
-        detail = _resolve_operation(client, s, auth_config, operation)
+        detail, inferred = _resolve_operation(client, s, auth_config, operation)
         name = str(detail.get("name") or operation)
         input_schema = detail.get("input_schema") or {}
         required = _required_input_fields(input_schema)
 
+        # Never run a data-changing operation nobody actually named. Ranked
+        # search matched a write op for a read intent in real use, and the only
+        # thing that stopped it was a required field it happened to have.
+        if inferred and not dry_run and _is_mutating_operation(name) and not yes:
+            raise typer.BadParameter(
+                f"'{operation}' resolved to {name}, which CHANGES data. Refusing "
+                "to run an operation inferred from text. Name it explicitly "
+                f"(`lemma connectors run {connector} {name} ...`), inspect it "
+                "first with --dry-run, or pass --yes.",
+                param_hint="OPERATION",
+            )
+
         if dry_run or (required and not gave_payload):
+            if inferred and _is_mutating_operation(name):
+                typer.echo(
+                    f"WARNING: {name} changes data — it was inferred from "
+                    f"{operation!r}, not named.",
+                    err=True,
+                )
             if required and not gave_payload and not dry_run:
                 typer.echo(
                     f"{name} needs input: {', '.join(required)}", err=True

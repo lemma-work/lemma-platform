@@ -39,6 +39,17 @@ _INSTALLS = [
 ]
 
 _OPERATIONS = {
+    # Ranked first for "list recent emails" on the live catalog — a lexical match
+    # on "email" that mutates. This ordering is the bug, reproduced.
+    "gmail_add_label_to_email": {
+        "name": "gmail_add_label_to_email",
+        "description": "Add a label to an email in the list of recent emails.",
+        "input_schema": {
+            "type": "object",
+            "properties": {"message_id": {"type": "string"}},
+            "required": ["message_id"],
+        },
+    },
     "gmail_list_messages": {
         "name": "gmail_list_messages",
         "description": "List recent emails in the mailbox.",
@@ -209,20 +220,49 @@ def test_run_reports_an_unknown_connector_with_what_is_installed(monkeypatch):
     assert "workspace-gmail" in result.output
 
 
-def test_search_treats_a_lone_non_install_positional_as_the_query(monkeypatch):
-    """`operations search "send email"` used to bind the query to the auth-config
-    slot and 404, so the auto-discovery its help advertised could never fire."""
+def test_search_with_no_connector_searches_every_install(monkeypatch):
+    """`operations search "send email"` must answer without being told which
+    connector to look in.
+
+    It used to bind the query to the auth-config slot and 404. Classifying the
+    positional correctly wasn't enough either — auto-discovery then refused
+    whenever more than one connector was installed, which is every real org, so
+    the documented one-positional form still hard-errored.
+    """
     captured: dict = {}
     _patch(monkeypatch, _fake_client(captured))
 
     result = runner.invoke(
-        app, ["connectors", "operations", "search", "send email", "--limit", "5"]
+        app,
+        ["--json", "connectors", "operations", "search", "send email", "--limit", "5"],
     )
 
-    assert result.exit_code != 0  # two installs -> must disambiguate...
-    # ...but the failure is about the ambiguous connector, NOT a bogus lookup of
-    # "send email" as an auth config.
-    assert "Several connectors are installed" in result.output
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.stdout)
+    names = [item["name"] for item in payload["items"]]
+    assert "gmail_send_email" in names
+    # Every hit says which install to pass on, so the result is directly usable.
+    assert all(item["auth_config"] for item in payload["items"])
+    # It really did fan out across the installs rather than picking one.
+    assert {call[0] for call in captured["searches"]} == {
+        "workspace-gmail",
+        "legacy-gmail",
+        "team-slack",
+    }
+
+
+def test_search_with_a_named_connector_stays_one_request(monkeypatch):
+    """Fanning out is the fallback, not the default — naming a connector must not
+    start paying per-install."""
+    captured: dict = {}
+    _patch(monkeypatch, _fake_client(captured))
+
+    result = runner.invoke(
+        app, ["connectors", "operations", "search", "gmail", "send email"]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert {call[0] for call in captured["searches"]} == {"workspace-gmail"}
 
 
 def test_search_folds_input_schemas_into_short_result_lists(monkeypatch):
@@ -279,3 +319,84 @@ def test_resolution_lists_installs_once_per_command(monkeypatch):
 
     assert result.exit_code == 0, result.stdout
     assert captured["auth_config_lists"] == 1
+
+
+def test_read_intent_skips_a_higher_ranked_write_operation(monkeypatch):
+    """Ranked search is lexical, so "list recent emails" matched ADD_LABEL_TO_EMAIL
+    above FETCH_EMAILS on the live catalog. A read intent must prefer the best
+    NON-mutating hit — silently editing a mailbox someone asked to read is the
+    worst failure this command can have."""
+    captured: dict = {}
+    _patch(monkeypatch, _fake_client(captured))
+
+    result = runner.invoke(
+        app, ["connectors", "run", "gmail", "list recent emails", "--dry-run"]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "gmail_list_messages" in result.output
+    assert "-> gmail_add_label_to_email" not in result.output
+
+
+def test_inferred_write_operation_refuses_to_run_without_confirmation(monkeypatch):
+    """An operation nobody named, that changes data, must not just run."""
+    captured: dict = {}
+    _patch(monkeypatch, _fake_client(captured))
+
+    result = runner.invoke(
+        app,
+        [
+            "connectors",
+            "run",
+            "gmail",
+            "label that message",
+            "-d",
+            json.dumps({"message_id": "m1"}),
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "execute" not in captured
+    assert "CHANGES data" in result.output
+
+
+def test_inferred_write_runs_with_explicit_confirmation(monkeypatch):
+    captured: dict = {}
+    _patch(monkeypatch, _fake_client(captured))
+
+    result = runner.invoke(
+        app,
+        [
+            "connectors",
+            "run",
+            "gmail",
+            "label that message",
+            "-d",
+            json.dumps({"message_id": "m1"}),
+            "--yes",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured["execute"]["operation"] == "gmail_add_label_to_email"
+
+
+def test_naming_a_write_operation_explicitly_is_not_gated(monkeypatch):
+    """The gate is about INFERENCE, not about writes. Naming the op is consent."""
+    captured: dict = {}
+    _patch(monkeypatch, _fake_client(captured))
+
+    result = runner.invoke(
+        app,
+        [
+            "connectors",
+            "run",
+            "gmail",
+            "gmail_add_label_to_email",
+            "-d",
+            json.dumps({"message_id": "m1"}),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured["execute"]["operation"] == "gmail_add_label_to_email"
