@@ -29,7 +29,7 @@ jobs:
         working-directory: agentbox
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
           cache-dependency-glob: agentbox/uv.lock
@@ -72,7 +72,7 @@ jobs:
           --junitxml=agentbox-e2b-e2e.xml
       - name: Upload results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: agentbox-e2b-e2e
           path: agentbox/agentbox-e2b-e2e.xml

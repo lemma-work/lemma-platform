@@ -142,7 +142,7 @@ jobs:
           targets: ${{ matrix.target }}
 
       - name: Cache cargo
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -164,7 +164,7 @@ jobs:
           "agent-host/target/${{ matrix.target }}/release/lemma-agent-host${{ matrix.ext }}" --version
 
       - name: Upload build artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: agent-host-${{ matrix.target }}
           path: agent-host/target/${{ matrix.target }}/release/lemma-agent-host${{ matrix.ext }}
@@ -218,7 +218,7 @@ jobs:
           targets: ${{ matrix.target }}
 
       - name: Cache cargo
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -264,7 +264,7 @@ jobs:
           objdump -p "${binary}" | grep -q 'NEEDED.*libssl\.so\.3'
 
       - name: Upload build artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: agent-host-${{ matrix.target }}
           path: agent-host/target/${{ matrix.target }}/release/lemma-agent-host
@@ -384,7 +384,7 @@ jobs:
         if: >-
           steps.release.outputs.exists == 'true' &&
           (github.event_name == 'release' || inputs.attach_to_release)
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ needs.resolve.outputs.tag }}
           files: |
@@ -394,7 +394,7 @@ jobs:
           generate_release_notes: false
 
       - name: Upload the combined asset set
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           # Deliberately outside the `agent-host-*` pattern the download step
           # above globs, so a re-run of this job cannot ingest its own output.

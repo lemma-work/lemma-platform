@@ -39,7 +39,7 @@ jobs:
         working-directory: lemma-backend
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
       - name: Install locked backend dependencies
@@ -60,7 +60,7 @@ jobs:
         run: make benchmark-functions-docker
       - name: Publish Docker benchmark evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: agentbox-function-docker-${{ github.sha }}
           path: .benchmark-results/function-execution/docker/*.json
@@ -81,7 +81,7 @@ jobs:
         working-directory: lemma-backend
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
       - name: Install locked backend dependencies
@@ -129,7 +129,7 @@ jobs:
         run: make benchmark-functions-e2b
       - name: Publish E2B benchmark evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: agentbox-function-e2b-${{ github.sha }}
           path: .benchmark-results/function-execution/e2b/*.json
