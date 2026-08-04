@@ -218,6 +218,12 @@ jobs:
           codesign --verify --strict --verbose=2 "${runtime_bridge}"
           codesign --verify --strict --verbose=2 "${vz}"
           codesign -dvvv "${app}" 2>&1 | grep -F "Authority=Developer ID Application:"
+          # The daemon's keychain access is keyed to this identifier, and Tauri
+          # re-signs sidecars without one of its own -- so this asserts the
+          # embedded Info.plist survived bundling. If it ever does not, the app
+          # still ships and still works, and every user is asked to re-authorise
+          # access to their own secrets on the first launch of each release.
+          codesign -dvvv "${locald}" 2>&1 | grep -Fx "Identifier=work.lemma.locald"
           codesign -d --entitlements :- "${vz}" 2>/dev/null | grep -F "com.apple.security.virtualization"
           xcrun stapler validate "${app}"
           xcrun stapler validate \

@@ -24,9 +24,9 @@
   "host_packs": {
     "aarch64-apple-darwin": {
       "url": null,
-      "sha256": "899ab6e39dcdb81f4121fb62d806be169637502ad612c7349759f24efe666aa0",
-      "size": 378275709,
-      "expanded_size": 1197488229,
+      "sha256": "56938b7dc50e7e2b59d9fc3ed04ac07e663f4debd2dd8c04093e6b74b2ff4e64",
+      "size": 293115395,
+      "expanded_size": 900287229,
       "format": "zip",
       "platform": "macos",
       "architecture": "aarch64",
@@ -37,9 +37,9 @@
   "guest_runtimes": {
     "macos-aarch64": {
       "url": null,
-      "sha256": "3ce18b0c02825b3836875a9b1e7e59d2b3d60d35eb51fb4bf83c4b2a4ea49a70",
-      "size": 222661052,
-      "expanded_size": 989226999,
+      "sha256": "d29934c88981b0008a609c701f76c865a9141700fec46a774988f274f2367007",
+      "size": 222621097,
+      "expanded_size": 989186093,
       "format": "zip",
       "platform": "linux",
       "architecture": "aarch64",

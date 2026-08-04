@@ -1,14 +1,29 @@
 'use client';
 
 import Image from 'next/image';
+import Link from 'next/link';
 import { useCallback, useState } from 'react';
 import { RuntimeProfileKind, RuntimeProfileScope } from 'lemma-sdk';
 import type { AgentRuntimeProfileResponse } from 'lemma-sdk';
-import { Copy, KeyRound, Pencil, Plus, RefreshCw, RotateCcw, Sparkles, TerminalSquare, Trash2 } from '@/components/ui/icons';
+import { Copy, Cpu, Download, KeyRound, Pencil, Plus, RefreshCw, RotateCcw, Sparkles, TerminalSquare, Trash2 } from '@/components/ui/icons';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
-import { DropdownMenuItem } from '@/components/ui/dropdown-menu';
+import {
+    Dialog,
+    DialogContent,
+    DialogDescription,
+    DialogFooter,
+    DialogHeader,
+    DialogTitle,
+} from '@/components/ui/dialog';
+import {
+    DropdownMenu,
+    DropdownMenuContent,
+    DropdownMenuItem,
+    DropdownMenuSeparator,
+    DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Switch, SwitchThumb, SwitchTrack } from '@/components/ui/switch';
@@ -16,8 +31,10 @@ import { DestructiveConfirmationDialog } from '@/components/shared/destructive-c
 import { DestructiveResourceActionItem, ResourceActionsMenu } from '@/components/shared/resource-actions-menu';
 import { SettingsList, SettingsPanel, SettingsRow, SettingsStack } from '@/components/settings/settings-kit';
 import { declineAutoConnect } from '@/lib/desktop/auto-connect';
+import { useIsDesktopShell } from '@/lib/desktop/agent-host-bridge';
 import {
     useAgentHostHarnesses,
+    useAgentHostHarnessOwners,
     useAgentHosts,
     useArchiveAgentRuntime,
     useCreateAgentHostPairing,
@@ -46,10 +63,16 @@ import {
     type CustomProviderKind,
 } from './agent-runtime-helpers';
 
+/**
+ * Ownership, but only when it is the exception.
+ *
+ * Workspace scope is the default every profile lands in, so labelling it put a
+ * "Workspace" chip on every row — a column of identical badges that said
+ * nothing and crowded out the one badge that does say something. Only a profile
+ * that is *not* shared earns a mark.
+ */
 function scopeBadge(scope: RuntimeProfileScope): { label: string; tone: 'ok' | 'muted' } | null {
-    if (scope === RuntimeProfileScope.SYSTEM) return null;
-    if (scope === RuntimeProfileScope.PERSONAL) return { label: 'Personal', tone: 'muted' };
-    return { label: 'Workspace', tone: 'muted' };
+    return scope === RuntimeProfileScope.PERSONAL ? { label: 'Personal', tone: 'muted' } : null;
 }
 
 // Quick-start presets for popular providers and routers. Clicking one prefills
@@ -81,15 +104,19 @@ export function ModelsSettings({
     // which must never reach the composer's model picker.
     const managed = useManagedAgentRuntimes(organizationId, { includeArchived: showArchived });
     const profiles = managed.data?.items ?? [];
-    const isRefreshing = managed.isFetching;
+    const hosts = useAgentHosts();
+    // A revoked host stays readable through the API for audit, but it can never
+    // take work again, so it has no place in a "what can I use" list.
+    const activeHosts = (hosts.data?.items ?? []).filter((host) => host.status !== 'REVOKED');
+    const harnessOwners = useAgentHostHarnessOwners(activeHosts);
+    const isRefreshing = managed.isFetching || hosts.isFetching;
 
     const providers = profiles.filter((profile) => profile.kind === RuntimeProfileKind.MODEL_PROVIDER);
-    // Exactly what the old `isLocalAgentKind` filter used to hide: a saved coding
-    // agent was represented nowhere as a profile, only as a badge on a harness row.
     const codingAgents = profiles.filter((profile) => profile.kind === RuntimeProfileKind.HARNESS);
 
     const refreshAll = () => {
         void managed.refetch();
+        void hosts.refetch();
         void onRefresh?.();
     };
 
@@ -97,9 +124,7 @@ export function ModelsSettings({
         <SettingsStack>
             <div className="flex items-start justify-between gap-4">
                 <p className="max-w-3xl text-sm leading-6 text-[var(--text-secondary)]">
-                    Connect the models and local agents this workspace can use. Providers you connect here are shared
-                    with everyone in the workspace; a paired computer runs its coding agents for the workspace without
-                    its credentials ever leaving that machine.
+                    What this workspace can pick in a chat, and where it runs.
                 </p>
                 <div className="flex shrink-0 items-center gap-3">
                     <label className="flex cursor-pointer items-center gap-2 text-sm text-[var(--text-tertiary)]">
@@ -117,24 +142,282 @@ export function ModelsSettings({
                 </div>
             </div>
 
-            <ProvidersSection
+            <ModelsSection
                 organizationId={organizationId}
                 providers={providers}
+                codingAgents={codingAgents}
+                harnessOwners={harnessOwners}
                 onRefresh={refreshAll}
             />
 
-            <CodingAgentsSection
+            <ComputersSection
                 organizationId={organizationId}
-                profiles={codingAgents}
-                onRefresh={refreshAll}
-            />
-
-            <AgentHostsSection
-                organizationId={organizationId}
+                hosts={activeHosts}
+                loadingHosts={hosts.isLoading}
                 savedProfiles={codingAgents}
                 onRefresh={refreshAll}
             />
         </SettingsStack>
+    );
+}
+
+/**
+ * Everything the model picker can offer, in one list.
+ *
+ * A key and a laptop are different things to *operate*, which is why the
+ * computers have their own section below — but they are the same thing to
+ * *choose*, and splitting the choice across two lists meant a fresh workspace
+ * opened on a section whose entire content was "None yet, add one from a paired
+ * computer below". A section that exists to point at another section is a
+ * section the reader has to assemble themselves.
+ */
+function ModelsSection({
+    organizationId,
+    providers,
+    codingAgents,
+    harnessOwners,
+    onRefresh,
+}: {
+    organizationId: string;
+    providers: AgentRuntimeProfileResponse[];
+    codingAgents: AgentRuntimeProfileResponse[];
+    harnessOwners: Map<string, string>;
+    onRefresh?: () => void;
+}) {
+    const [providerDialog, setProviderDialog] = useState<ProviderDialogTarget | null>(null);
+    const [harnessDialog, setHarnessDialog] = useState<HarnessDialogTarget | null>(null);
+
+    return (
+        <SettingsPanel
+            title="Models"
+            description="Providers are shared with everyone here. Coding agents run on the computer they came from."
+        >
+            <div className="flex flex-col gap-3">
+                <SettingsList>
+                    {providers.map((profile) => (
+                        <ProviderRow
+                            key={profile.id}
+                            profile={profile}
+                            organizationId={organizationId}
+                            onEdit={() => setProviderDialog({ mode: 'edit', profile })}
+                            onRefresh={onRefresh}
+                        />
+                    ))}
+                    {codingAgents.map((profile) => (
+                        <CodingAgentRow
+                            key={profile.id}
+                            profile={profile}
+                            organizationId={organizationId}
+                            computer={
+                                profile.harness_id ? harnessOwners.get(profile.harness_id) ?? null : null
+                            }
+                            onEdit={() => setHarnessDialog({ mode: 'edit', profile })}
+                            onRefresh={onRefresh}
+                        />
+                    ))}
+                </SettingsList>
+
+                <div>
+                    <ConnectProviderMenu onPick={setProviderDialog} />
+                </div>
+            </div>
+
+            <ProviderProfileDialog
+                target={providerDialog}
+                organizationId={organizationId}
+                onClose={() => setProviderDialog(null)}
+                onSaved={onRefresh}
+            />
+            <HarnessProfileDialog
+                target={harnessDialog}
+                organizationId={organizationId}
+                onClose={() => setHarnessDialog(null)}
+                onSaved={onRefresh}
+            />
+        </SettingsPanel>
+    );
+}
+
+// One button instead of eleven chips. The chips were a wall of equal-weight
+// names that made choosing a provider look like the main thing this page is
+// for, when for most workspaces the built-in models already answer it.
+function ConnectProviderMenu({ onPick }: { onPick: (target: ProviderDialogTarget) => void }) {
+    return (
+        <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+                <Button type="button" variant="secondary" size="sm" className="gap-1.5">
+                    <Plus className="size-3.5" />
+                    Connect a provider
+                </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="w-56">
+                {PROVIDER_PRESETS.map((preset) => (
+                    <DropdownMenuItem
+                        key={preset.id}
+                        onSelect={() =>
+                            onPick({
+                                mode: 'connect',
+                                kind: preset.kind,
+                                name: preset.name,
+                                baseUrl: preset.baseUrl,
+                            })
+                        }
+                    >
+                        {preset.name}
+                    </DropdownMenuItem>
+                ))}
+                <DropdownMenuSeparator />
+                {CUSTOM_PROVIDER_OPTIONS.map((option) => (
+                    <DropdownMenuItem
+                        key={option.kind}
+                        onSelect={() =>
+                            onPick({
+                                mode: 'connect',
+                                kind: option.kind,
+                                name: '',
+                                baseUrl: option.defaultBaseUrl,
+                            })
+                        }
+                    >
+                        {option.kind === 'openai' ? 'Anything OpenAI-compatible' : 'Anything Anthropic-compatible'}
+                    </DropdownMenuItem>
+                ))}
+            </DropdownMenuContent>
+        </DropdownMenu>
+    );
+}
+
+/**
+ * One badge per row, answering one question: can I use this right now?
+ *
+ * The rows used to carry up to four — archived, scope, availability, built-in —
+ * which mixed what a thing *is* with who *owns* it and whether it *works*, so
+ * none of them read as status. Ownership only appears when it is the exception
+ * (a personal profile in a shared workspace); everything else is folded into
+ * this one label.
+ */
+function modelStatus(profile: AgentRuntimeProfileResponse): { label: string; tone: 'ok' | 'muted' } {
+    if (isArchivedProfile(profile)) return { label: 'Archived', tone: 'muted' };
+    if (profile.scope === RuntimeProfileScope.SYSTEM) return { label: 'Built in', tone: 'ok' };
+    const availability = runtimeAvailabilityLabel(profile);
+    if (availability) return { label: availability, tone: 'muted' };
+    return { label: 'Ready', tone: 'ok' };
+}
+
+function ModelRow({
+    icon,
+    name,
+    detail,
+    profile,
+    organizationId,
+    onEdit,
+    onRefresh,
+}: {
+    icon: React.ReactNode;
+    name: string;
+    detail: string;
+    profile: AgentRuntimeProfileResponse;
+    organizationId: string;
+    onEdit: () => void;
+    onRefresh?: () => void;
+}) {
+    const status = modelStatus(profile);
+    const scope = scopeBadge(profile.scope);
+
+    return (
+        <SettingsRow>
+            <div className="flex min-w-0 items-center gap-3">
+                <span className="flex size-9 shrink-0 items-center justify-center rounded-md bg-[var(--surface-1)] text-[var(--text-secondary)]">
+                    {icon}
+                </span>
+                <div className="min-w-0">
+                    <div className="truncate text-sm font-medium text-[var(--text-primary)]">{name}</div>
+                    <div className="truncate text-xs text-[var(--text-tertiary)]">{detail}</div>
+                </div>
+            </div>
+            <div className="flex shrink-0 items-center gap-2">
+                {scope ? <StatusBadge label={scope.label} tone={scope.tone} /> : null}
+                <StatusBadge label={status.label} tone={status.tone} />
+                <ProfileRowActions
+                    profile={profile}
+                    organizationId={organizationId}
+                    onEdit={onEdit}
+                    onRefresh={onRefresh}
+                />
+            </div>
+        </SettingsRow>
+    );
+}
+
+function ProviderRow({
+    profile,
+    organizationId,
+    onEdit,
+    onRefresh,
+}: {
+    profile: AgentRuntimeProfileResponse;
+    organizationId: string;
+    onEdit: () => void;
+    onRefresh?: () => void;
+}) {
+    const isSystem = profile.scope === RuntimeProfileScope.SYSTEM;
+    const modelCount = profile.model_catalog?.length ?? 0;
+
+    return (
+        <ModelRow
+            icon={
+                isSystem ? (
+                    <Sparkles className="size-4 text-[var(--delight)]" />
+                ) : (
+                    <KeyRound className="size-4" />
+                )
+            }
+            name={profile.name}
+            detail={`${isSystem ? 'Built in' : 'Your key'}${
+                modelCount ? ` · ${modelCount} model${modelCount === 1 ? '' : 's'}` : ''
+            }`}
+            profile={profile}
+            organizationId={organizationId}
+            onEdit={onEdit}
+            onRefresh={onRefresh}
+        />
+    );
+}
+
+function CodingAgentRow({
+    profile,
+    organizationId,
+    computer,
+    onEdit,
+    onRefresh,
+}: {
+    profile: AgentRuntimeProfileResponse;
+    organizationId: string;
+    /** Null while the owning computer's harness list is still loading. */
+    computer: string | null;
+    onEdit: () => void;
+    onRefresh?: () => void;
+}) {
+    const logo = harnessLogo(profileHarnessKey(profile));
+
+    return (
+        <ModelRow
+            icon={
+                logo ? (
+                    <Image src={logo} alt="" width={18} height={18} className="size-4.5 object-contain" />
+                ) : (
+                    <TerminalSquare className="size-4" />
+                )
+            }
+            name={profile.name}
+            detail={`${computer ? `On ${computer}` : 'On a connected computer'} · ${
+                profile.default_model_name ?? 'agent picks the model'
+            }`}
+            profile={profile}
+            organizationId={organizationId}
+            onEdit={onEdit}
+            onRefresh={onRefresh}
+        />
     );
 }
 
@@ -231,246 +514,63 @@ function ProfileRowActions({
     );
 }
 
-function providerStatusLabel(profile: AgentRuntimeProfileResponse): { label: string; tone: 'ok' | 'muted' } {
-    if (profile.scope === RuntimeProfileScope.SYSTEM) return { label: 'Built in', tone: 'ok' };
-    const availability = runtimeAvailabilityLabel(profile);
-    if (availability) return { label: availability, tone: 'muted' };
-    return { label: 'Active', tone: 'ok' };
-}
 
-function ProvidersSection({
+/**
+ * The machines that run this workspace's coding agents.
+ *
+ * Not a peer of Models — it is where the coding agents in that list come from.
+ * A computer holds a scoped, separately revocable secret and reaches Lemma over
+ * outbound HTTPS, so nothing here needs an inbound port or the user's own
+ * session on that machine.
+ */
+function ComputersSection({
     organizationId,
-    providers,
-    onRefresh,
-}: {
-    organizationId: string;
-    providers: AgentRuntimeProfileResponse[];
-    onRefresh?: () => void;
-}) {
-    const [dialog, setDialog] = useState<ProviderDialogTarget | null>(null);
-
-    return (
-        <SettingsPanel
-            title="Providers"
-            description="Lemma's built-in models, or connect your own OpenAI- or Anthropic-compatible key."
-        >
-            <div className="flex flex-col gap-2">
-                <SettingsList>
-                    {providers.map((profile) => {
-                        const status = providerStatusLabel(profile);
-                        const modelCount = profile.model_catalog?.length ?? 0;
-                        const isSystem = profile.scope === RuntimeProfileScope.SYSTEM;
-                        const scope = scopeBadge(profile.scope);
-                        return (
-                            <SettingsRow key={profile.id}>
-                                <div className="flex min-w-0 items-center gap-3">
-                                    <span className="flex size-9 shrink-0 items-center justify-center rounded-md bg-[var(--surface-1)] text-[var(--text-secondary)]">
-                                        {isSystem ? <Sparkles className="size-4 text-[var(--delight)]" /> : <KeyRound className="size-4" />}
-                                    </span>
-                                    <div className="min-w-0">
-                                        <div className="truncate text-sm font-medium text-[var(--text-primary)]">{profile.name}</div>
-                                        <div className="text-xs text-[var(--text-tertiary)]">
-                                            {isSystem ? 'Built in' : 'Your key'}
-                                            {modelCount ? ` · ${modelCount} model${modelCount === 1 ? '' : 's'}` : ''}
-                                        </div>
-                                    </div>
-                                </div>
-                                <div className="flex shrink-0 items-center gap-2">
-                                    {isArchivedProfile(profile) ? <StatusBadge label="Archived" tone="muted" /> : null}
-                                    {scope ? <StatusBadge label={scope.label} tone={scope.tone} /> : null}
-                                    <StatusBadge label={status.label} tone={status.tone} />
-                                    <ProfileRowActions
-                                        profile={profile}
-                                        organizationId={organizationId}
-                                        onEdit={() => setDialog({ mode: 'edit', profile })}
-                                        onRefresh={onRefresh}
-                                    />
-                                </div>
-                            </SettingsRow>
-                        );
-                    })}
-                </SettingsList>
-
-                <div className="mt-1">
-                    <p className="mb-2 text-xs font-medium uppercase tracking-wide text-[var(--text-tertiary)]">Connect a provider</p>
-                    <div className="flex flex-wrap gap-2">
-                        {PROVIDER_PRESETS.map((preset) => (
-                            <button
-                                key={preset.id}
-                                type="button"
-                                onClick={() => setDialog({ mode: 'connect', kind: preset.kind, name: preset.name, baseUrl: preset.baseUrl })}
-                                className="models-settings-provider-button rounded-md border border-[var(--border-subtle)] px-3 py-1.5 text-sm text-[var(--text-secondary)] transition-colors hover:border-[var(--field-border-hover)] hover:text-[var(--text-primary)]"
-                            >
-                                {preset.name}
-                            </button>
-                        ))}
-                        {CUSTOM_PROVIDER_OPTIONS.map((option) => (
-                            <button
-                                key={option.kind}
-                                type="button"
-                                onClick={() => setDialog({ mode: 'connect', kind: option.kind, name: '', baseUrl: option.defaultBaseUrl })}
-                                className="models-settings-provider-button flex items-center gap-1.5 rounded-md border border-dashed border-[var(--border-strong)] px-3 py-1.5 text-sm text-[var(--text-secondary)] transition-colors hover:border-[var(--field-border-hover)] hover:text-[var(--text-primary)]"
-                            >
-                                <Plus className="size-3.5" />
-                                {option.kind === 'openai' ? 'Custom (OpenAI)' : 'Custom (Anthropic)'}
-                            </button>
-                        ))}
-                    </div>
-                </div>
-            </div>
-
-            <ProviderProfileDialog
-                target={dialog}
-                organizationId={organizationId}
-                onClose={() => setDialog(null)}
-                onSaved={onRefresh}
-            />
-        </SettingsPanel>
-    );
-}
-
-// Saved coding agents, which are runtime profiles like any other — they just run
-// on a paired computer instead of behind an API key. Keeping them out of
-// Providers is deliberate: a laptop and an API key do not belong in one list.
-function CodingAgentsSection({
-    organizationId,
-    profiles,
-    onRefresh,
-}: {
-    organizationId: string;
-    profiles: AgentRuntimeProfileResponse[];
-    onRefresh?: () => void;
-}) {
-    const [dialog, setDialog] = useState<HarnessDialogTarget | null>(null);
-
-    return (
-        <SettingsPanel
-            title="Coding agents"
-            description="Agents you've added to the model picker. Each one runs on the computer it was added from."
-        >
-            <div className="flex flex-col gap-2">
-                {profiles.length === 0 ? (
-                    <p className="text-sm text-[var(--text-tertiary)]">
-                        None yet. Add one from a paired computer below.
-                    </p>
-                ) : null}
-                <SettingsList>
-                    {profiles.map((profile) => {
-                        const logo = harnessLogo(profileHarnessKey(profile));
-                        const modelCount = profile.model_catalog?.length ?? 0;
-                        const scope = scopeBadge(profile.scope);
-                        const availability = runtimeAvailabilityLabel(profile);
-                        return (
-                            <SettingsRow key={profile.id}>
-                                <div className="flex min-w-0 items-center gap-3">
-                                    <span className="flex size-9 shrink-0 items-center justify-center rounded-md bg-[var(--surface-1)]">
-                                        {logo ? (
-                                            <Image src={logo} alt="" width={18} height={18} className="size-4.5 object-contain" />
-                                        ) : (
-                                            <TerminalSquare className="size-4 text-[var(--text-secondary)]" />
-                                        )}
-                                    </span>
-                                    <div className="min-w-0">
-                                        <div className="truncate text-sm font-medium text-[var(--text-primary)]">{profile.name}</div>
-                                        <div className="text-xs text-[var(--text-tertiary)]">
-                                            {profile.default_model_name ?? 'Agent picks the model'}
-                                            {modelCount ? ` · ${modelCount} model${modelCount === 1 ? '' : 's'}` : ''}
-                                        </div>
-                                    </div>
-                                </div>
-                                <div className="flex shrink-0 items-center gap-2">
-                                    {isArchivedProfile(profile) ? <StatusBadge label="Archived" tone="muted" /> : null}
-                                    {scope ? <StatusBadge label={scope.label} tone={scope.tone} /> : null}
-                                    <StatusBadge
-                                        label={availability ?? 'Active'}
-                                        tone={availability ? 'muted' : 'ok'}
-                                    />
-                                    <ProfileRowActions
-                                        profile={profile}
-                                        organizationId={organizationId}
-                                        onEdit={() => setDialog({ mode: 'edit', profile })}
-                                        onRefresh={onRefresh}
-                                    />
-                                </div>
-                            </SettingsRow>
-                        );
-                    })}
-                </SettingsList>
-            </div>
-
-            <HarnessProfileDialog
-                target={dialog}
-                organizationId={organizationId}
-                onClose={() => setDialog(null)}
-                onSaved={onRefresh}
-            />
-        </SettingsPanel>
-    );
-}
-
-// A paired computer runs the local coding agents. The machine holds a scoped,
-// separately revocable secret and reaches Lemma over outbound HTTPS, so nothing
-// here needs an inbound port or the user's own session on that computer.
-function AgentHostsSection({
-    organizationId,
+    hosts,
+    loadingHosts,
     savedProfiles,
     onRefresh,
 }: {
     organizationId: string;
+    hosts: AgentHost[];
+    loadingHosts: boolean;
     savedProfiles: AgentRuntimeProfileResponse[];
     onRefresh?: () => void;
 }) {
-    const hosts = useAgentHosts();
-    const createPairing = useCreateAgentHostPairing();
-    const [pairing, setPairing] = useState<(AgentHostPairing & { display_name: string }) | null>(null);
-    const [displayName, setDisplayName] = useState('My computer');
+    const isDesktop = useIsDesktopShell();
+    const [connecting, setConnecting] = useState(false);
     // Which paired computer is the one the user is sitting at. Only the desktop
     // app can answer that; in a browser it stays null and the list is unchanged.
     const [thisHostId, setThisHostId] = useState<string | null>(null);
     const onHostIdChange = useCallback((hostId: string | null) => setThisHostId(hostId), []);
 
-    // Harnesses that are already saved as runtime profiles, so a row can say
-    // "already added" instead of leaving the user guessing whether picking this
-    // agent in a chat is possible yet. Built from the management listing rather
-    // than the catalog: an archived profile is absent from the catalog, so the
-    // row would offer "Add to chat models" again and then 409 on the unique-name
-    // index.
+    // Harnesses already saved as runtime profiles, so a row can say "added"
+    // instead of leaving the user guessing whether picking this agent in a chat
+    // is possible yet. Built from the management listing rather than the
+    // catalog: an archived profile is absent from the catalog, so the row would
+    // offer "Add to models" again and then 409 on the unique-name index.
     const savedProfileByHarnessId = new Map<string, AgentRuntimeProfileResponse>();
     for (const profile of savedProfiles) {
         if (profile.harness_id) savedProfileByHarnessId.set(profile.harness_id, profile);
     }
 
-    // A revoked host stays readable through the API for audit, but it can never
-    // take work again, so it has no place in a "what can I use" list.
-    const activeHosts = (hosts.data?.items ?? []).filter((host) => host.status !== 'REVOKED');
-
-    const pair = async () => {
-        const name = displayName.trim();
-        if (!name) return toast.error('Name this computer');
-        try {
-            const created = await createPairing.mutateAsync({ displayName: name });
-            setPairing({ ...created, display_name: name });
-        } catch (error) {
-            toast.error(`Couldn't create a pairing code: ${error instanceof Error ? error.message : 'Unknown error'}`);
-        }
-    };
+    // In a browser there is no "this computer" to offer, so an empty section
+    // would just be a heading. The app is the thing that makes this work, so
+    // that is what the empty state asks for.
+    const showGetTheApp = !isDesktop && !loadingHosts && hosts.length === 0;
 
     return (
         <SettingsPanel
-            title="Paired computers"
-            description="Pair a computer once and its Agent Host runs Codex, Claude Code, and OpenCode for this workspace. Credentials never leave that machine."
+            title="Computers"
+            description="Each one runs Claude Code, Codex and OpenCode for this workspace. Their credentials stay on the machine."
         >
             <div className="flex flex-col gap-3">
-                <ThisComputerCard
-                    onHostIdChange={onHostIdChange}
-                    onPaired={() => void hosts.refetch()}
-                />
+                <ThisComputerCard onHostIdChange={onHostIdChange} onPaired={onRefresh} />
 
-                {hosts.isLoading ? (
-                    <p className="text-sm text-[var(--text-tertiary)]">Loading paired computers…</p>
+                {loadingHosts ? (
+                    <p className="text-sm text-[var(--text-tertiary)]">Loading computers…</p>
                 ) : null}
 
-                {activeHosts.map((host) => (
+                {hosts.map((host) => (
                     <AgentHostCard
                         key={host.id}
                         host={host}
@@ -481,58 +581,203 @@ function AgentHostsSection({
                     />
                 ))}
 
-                {pairing ? (
-                    <PairingInstructions
-                        pairing={pairing}
-                        onDone={() => {
-                            setPairing(null);
-                            void hosts.refetch();
-                        }}
-                    />
-                ) : (
-                    <div className="flex flex-col gap-3 rounded-md border border-dashed border-[var(--border-strong)] p-4">
-                        <div>
-                            <div className="text-sm font-medium text-[var(--text-primary)]">
-                                {activeHosts.length ? 'Pair another computer' : 'Pair a computer'}
-                            </div>
-                            <p className="mt-1 text-sm text-[var(--text-tertiary)]">
-                                You&apos;ll get a one-time code to run on that machine.
-                            </p>
-                        </div>
-                        <div className="flex flex-wrap items-end gap-3">
-                            <Field label="Computer name">
-                                <Input
-                                    value={displayName}
-                                    onChange={(event) => setDisplayName(event.target.value)}
-                                    className="w-64"
-                                />
-                            </Field>
-                            <Button variant="primary"
-                                type="button"
-                                size="sm"
-                                onClick={() => void pair()}
-                                loading={createPairing.isPending}
-                                loadingLabel="Creating code"
-                            >
-                                Create pairing code
-                            </Button>
-                        </div>
-                    </div>
-                )}
+                {showGetTheApp ? <GetTheAppCard /> : null}
+
+                <div>
+                    <Button
+                        type="button"
+                        variant="quiet"
+                        size="sm"
+                        className="gap-1.5"
+                        onClick={() => setConnecting(true)}
+                    >
+                        <Plus className="size-3.5" />
+                        {hosts.length ? 'Connect another computer' : 'Connect a computer'}
+                    </Button>
+                </div>
             </div>
+
+            <ConnectComputerDialog
+                open={connecting}
+                onClose={() => setConnecting(false)}
+                onConnected={onRefresh}
+            />
         </SettingsPanel>
     );
 }
 
-function PairingInstructions({
-    pairing,
-    onDone,
+/** The empty state in a plain browser: the app is what makes this work. */
+function GetTheAppCard() {
+    return (
+        <div className="flex flex-wrap items-start gap-3 rounded-md border border-dashed border-[var(--border-strong)] p-4">
+            <span className="flex size-9 shrink-0 items-center justify-center rounded-md bg-[var(--surface-1)]">
+                <Cpu className="size-4 text-[var(--text-secondary)]" />
+            </span>
+            <div className="min-w-0 flex-1">
+                <div className="text-sm font-medium text-[var(--text-primary)]">
+                    Run agents on your own computer
+                </div>
+                <p className="mt-1 text-sm text-[var(--text-tertiary)]">
+                    Claude Code, Codex and OpenCode already live on your machine. Install the Lemma app
+                    there, sign in, and connect it in one click.
+                </p>
+            </div>
+            <Button asChild variant="primary" size="sm" className="gap-1.5">
+                <Link href="/download">
+                    <Download className="size-3.5" />
+                    Get the Lemma app
+                </Link>
+            </Button>
+        </div>
+    );
+}
+
+/**
+ * Pairing a machine that is not this one.
+ *
+ * This used to be the page's opening move: a code box expanded before anything
+ * was paired, three raw commands and a live single-use credential taking up
+ * most of the viewport, while the one-click path in the app appeared nowhere.
+ * It is the fallback, so it lives behind a button and says so — install the app
+ * over there and it is one click; run these if that machine has no screen.
+ */
+function ConnectComputerDialog({
+    open,
+    onClose,
+    onConnected,
 }: {
-    pairing: AgentHostPairing & { display_name: string };
-    onDone: () => void;
+    open: boolean;
+    onClose: () => void;
+    onConnected?: () => void;
 }) {
+    const createPairing = useCreateAgentHostPairing();
+    const [headless, setHeadless] = useState(false);
+    const [displayName, setDisplayName] = useState('My computer');
+    const [pairing, setPairing] = useState<(AgentHostPairing & { display_name: string }) | null>(null);
+
+    const close = () => {
+        setHeadless(false);
+        setPairing(null);
+        onClose();
+    };
+
+    const create = async () => {
+        const name = displayName.trim();
+        if (!name) return toast.error('Name this computer');
+        try {
+            const created = await createPairing.mutateAsync({ displayName: name });
+            setPairing({ ...created, display_name: name });
+        } catch (error) {
+            toast.error(
+                `Couldn't create a pairing code: ${error instanceof Error ? error.message : 'Unknown error'}`,
+            );
+        }
+    };
+
+    return (
+        <Dialog
+            open={open}
+            onOpenChange={(next) => {
+                if (!next && !createPairing.isPending) close();
+            }}
+        >
+            <DialogContent className="gap-5">
+                <DialogHeader>
+                    <DialogTitle>Connect a computer</DialogTitle>
+                    <DialogDescription>
+                        {headless
+                            ? 'A machine with no screen cannot sign in, so it needs a code carried to it. The code stands in for your session and is single-use.'
+                            : 'The app signs in as you and connects itself. There is no code to carry and nothing to copy.'}
+                    </DialogDescription>
+                </DialogHeader>
+
+                {headless ? (
+                    pairing ? (
+                        <PairingCommands pairing={pairing} />
+                    ) : (
+                        <Field label="Computer name">
+                            <Input
+                                value={displayName}
+                                onChange={(event) => setDisplayName(event.target.value)}
+                            />
+                        </Field>
+                    )
+                ) : (
+                    <ol className="flex flex-col gap-3">
+                        {[
+                            'Install the Lemma app on that computer.',
+                            'Open it and sign in to this workspace.',
+                            'Models → Computers → Connect this computer.',
+                        ].map((step, index) => (
+                            <li key={step} className="flex items-baseline gap-3">
+                                <span className="min-w-5 font-mono text-xs text-[var(--text-tertiary)]">
+                                    {(index + 1).toString().padStart(2, '0')}
+                                </span>
+                                <span className="text-sm text-[var(--text-secondary)]">{step}</span>
+                            </li>
+                        ))}
+                    </ol>
+                )}
+
+                <DialogFooter className="sm:justify-between">
+                    {/*
+                     * The two paths are mutually exclusive, so only one of them
+                     * may mint anything. Offering a download link beside a live
+                     * pairing code meant every person who took the easy path
+                     * burned a single-use credential on the way past it — and
+                     * left wondering what the code had been for.
+                     */}
+                    <Button
+                        type="button"
+                        variant="quiet"
+                        size="sm"
+                        onClick={() => {
+                            setPairing(null);
+                            setHeadless(!headless);
+                        }}
+                    >
+                        {headless ? 'That computer has a screen' : 'That computer has no screen'}
+                    </Button>
+
+                    {!headless ? (
+                        <Button asChild variant="primary" className="gap-1.5">
+                            <Link href="/download">
+                                <Download className="size-3.5" />
+                                Get the Lemma app
+                            </Link>
+                        </Button>
+                    ) : pairing ? (
+                        <Button
+                            type="button"
+                            variant="secondary"
+                            onClick={() => {
+                                onConnected?.();
+                                close();
+                            }}
+                        >
+                            Done
+                        </Button>
+                    ) : (
+                        <Button
+                            type="button"
+                            variant="primary"
+                            onClick={() => void create()}
+                            loading={createPairing.isPending}
+                            loadingLabel="Creating code"
+                        >
+                            Create pairing code
+                        </Button>
+                    )}
+                </DialogFooter>
+            </DialogContent>
+        </Dialog>
+    );
+}
+
+function PairingCommands({ pairing }: { pairing: AgentHostPairing & { display_name: string } }) {
     const commands = pairingCommands(pairing, getLemmaApiBaseUrl());
     const expiresAt = new Date(pairing.expires_at);
+
     const copy = async () => {
         try {
             await navigator.clipboard.writeText(commands.join('\n'));
@@ -543,34 +788,29 @@ function PairingInstructions({
     };
 
     return (
-        <div className="rounded-md border border-[var(--border-subtle)] bg-[var(--surface-1)] p-4">
-            <div className="flex items-start justify-between gap-3">
-                <div className="text-sm font-medium text-[var(--text-primary)]">Run these on that computer</div>
+        <div className="flex flex-col gap-2">
+            <div className="flex items-center justify-between gap-3">
+                <span className="text-sm font-medium text-[var(--text-primary)]">
+                    Run these on {pairing.display_name}
+                </span>
                 <Button type="button" variant="quiet" size="sm" onClick={() => void copy()} className="gap-1.5">
                     <Copy className="size-3.5" />
                     Copy
                 </Button>
             </div>
-            <div className="mt-2 flex flex-col gap-1.5">
-                {commands.map((command) => (
-                    <code
-                        key={command}
-                        className="overflow-x-auto rounded bg-[var(--surface-2)] px-3 py-2 font-mono text-xs whitespace-pre text-[var(--text-secondary)]"
-                    >
-                        {command}
-                    </code>
-                ))}
-            </div>
-            <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
-                <p className="text-xs text-[var(--text-tertiary)]">
-                    Skip the first line if that computer already has the Lemma CLI. This code works
-                    once, and expires{' '}
-                    {Number.isNaN(expiresAt.valueOf()) ? 'shortly' : expiresAt.toLocaleTimeString()}.
-                </p>
-                <Button variant="secondary" type="button" size="sm" onClick={onDone}>
-                    I ran them
-                </Button>
-            </div>
+            {commands.map((command) => (
+                <code
+                    key={command}
+                    className="overflow-x-auto rounded bg-[var(--surface-1)] px-3 py-2 font-mono text-xs whitespace-pre text-[var(--text-secondary)]"
+                >
+                    {command}
+                </code>
+            ))}
+            <p className="text-xs text-[var(--text-tertiary)]">
+                Skip the first line if that computer already has the Lemma CLI. This code works once,
+                and expires{' '}
+                {Number.isNaN(expiresAt.valueOf()) ? 'shortly' : expiresAt.toLocaleTimeString()}.
+            </p>
         </div>
     );
 }
@@ -775,7 +1015,7 @@ function AgentHostHarnessRow({
                         onClick={() => setDialog({ mode: 'create', harness })}
                     >
                         <Plus className="size-3.5" />
-                        Add to chat models
+                        Add to models
                     </Button>
                 </div>
             ) : null}

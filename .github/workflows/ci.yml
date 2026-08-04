@@ -727,6 +727,11 @@ jobs:
           codesign --verify --strict --verbose=2 "${vz}"
           codesign -d --entitlements :- "${vz}" 2>/dev/null \
             | grep -F "com.apple.security.virtualization"
+          # The daemon's keychain access is keyed to this identifier, and Tauri
+          # re-signs sidecars without one of its own -- so this asserts the
+          # embedded Info.plist survived bundling. Ad-hoc builds re-prompt either
+          # way, but a drop here would reach release signing unnoticed.
+          codesign -dvvv "${locald}" 2>&1 | grep -Fx "Identifier=work.lemma.locald"
 
           signature_info="$(codesign -dvvv "${app}" 2>&1)"
           printf '%s\n' "${signature_info}"

@@ -25,6 +25,7 @@ use tauri::{
     AppHandle, Emitter, Manager, PhysicalPosition, State, Webview, WebviewUrl, WebviewWindowBuilder,
 };
 use tauri_plugin_autostart::ManagerExt as _;
+use tauri_plugin_dialog::{DialogExt as _, MessageDialogButtons, MessageDialogKind};
 
 mod artifact_install;
 
@@ -138,6 +139,16 @@ struct Shell {
     // calls a command and expects a value back. The latest status is kept here
     // so a caller gets an answer immediately and the next poll sees the update.
     agent_host_status: Mutex<Option<Value>>,
+    /// The sharing mode locald last reported, so Quit can name what it is about
+    /// to take away. Read on the quit path, which must not wait on the daemon:
+    /// asking for a fresh snapshot there would mean a round trip in front of a
+    /// keystroke, and a stack too sick to answer is exactly when someone quits.
+    sharing_mode: Mutex<Option<String>>,
+    /// Set once the user has answered the quit prompt, so the exit that follows
+    /// is not asked about again. Every route out funnels through
+    /// `ExitRequested`, including the `app.exit` the confirmed path issues
+    /// itself; without this the prompt would re-arm and the app could not leave.
+    quit_confirmed: AtomicBool,
 }
 
 struct LocaldConnection {
@@ -164,6 +175,8 @@ impl Shell {
             tray_agent_host: Mutex::new(None),
             tray_status: Mutex::new(None),
             agent_host_status: Mutex::new(None),
+            sharing_mode: Mutex::new(None),
+            quit_confirmed: AtomicBool::new(false),
         }
     }
 }
@@ -1658,6 +1671,15 @@ fn handle_locald_event(app: &AppHandle, event: &Value) {
     if let Some(status) = event.get("agent_host").filter(|value| value.is_object()) {
         *shell.agent_host_status.lock().unwrap() = Some(status.clone());
         refresh_agent_host_tray(app, status);
+    }
+    // Same reason, for sharing: several events carry it, and Quit needs the last
+    // known answer without asking.
+    if let Some(mode) = event
+        .get("sharing")
+        .and_then(|sharing| sharing.get("mode"))
+        .and_then(Value::as_str)
+    {
+        *shell.sharing_mode.lock().unwrap() = Some(mode.to_owned());
     }
 
     let mut start_after_prepare = false;
@@ -3640,19 +3662,7 @@ fn handle_menu_action(app: &AppHandle, id: &str) {
             }
         }
         "quit" => {
-            app.exit(0);
-        }
-        "quit-and-stop" => {
-            if current_mode(&app) == "local" {
-                let shell: State<Shell> = app.state();
-                shell.quit_after_stop.store(true, Ordering::Release);
-                if stop_impl(app.clone(), Some(true)).is_err() {
-                    shell.quit_after_stop.store(false, Ordering::Release);
-                }
-            } else {
-                disconnect_locald(&app);
-                app.exit(0);
-            }
+            request_quit(&app);
         }
         _ => {}
     }
@@ -3701,7 +3711,10 @@ fn build_app_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
 
     let mut lemma_items: Vec<&dyn tauri::menu::IsMenuItem<tauri::Wry>> = Vec::new();
     let lemma_separator = PredefinedMenuItem::separator(app)?;
-    let quit = PredefinedMenuItem::quit(app, Some("Quit Lemma"))?;
+    // Deliberately app-owned rather than AppKit's predefined quit, which is
+    // `terminate:` and cannot be intercepted. Quit stops the local server, and
+    // that is worth one sentence first, so the app has to own ⌘Q.
+    let quit = MenuItem::with_id(app, "quit", "Quit Lemma", true, Some("CmdOrCtrl+Q"))?;
     lemma_items.push(&about);
     lemma_items.push(&lemma_separator);
     lemma_items.push(&settings);
@@ -3849,14 +3862,6 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
             &MenuItem::with_id(app, "logs", "Open Logs", local, None::<&str>)?,
             &MenuItem::with_id(app, "agent-host-log", "Open Agent Host Log", true, None::<&str>)?,
             &PredefinedMenuItem::separator(app)?,
-            &MenuItem::with_id(
-                app,
-                "quit-and-stop",
-                "Stop the local server and quit",
-                local,
-                None::<&str>,
-            )?,
-            &PredefinedMenuItem::separator(app)?,
             &MenuItem::with_id(app, "reload", "Reload", true, None::<&str>)?,
             &MenuItem::with_id(app, "devtools", "Developer Tools", true, None::<&str>)?,
             &PredefinedMenuItem::separator(app)?,
@@ -3908,8 +3913,147 @@ fn disconnect_locald(app: &AppHandle) {
     *shell.locald_writer.lock().unwrap() = None;
 }
 
-// Full quit must close any LAN or public exposure. The daemon deliberately
-// outlives the app, so it cannot infer this from its own shutdown.
+/// What quitting takes away, in the user's terms, or nothing.
+///
+/// Quit stops the local server, and the local server is the only thing that
+/// runs this installation's schedules, answers for the agents on this computer,
+/// and serves any link the user has shared. None of that is on screen, so a
+/// silent quit is a silent loss. An empty list means there is genuinely nothing
+/// to lose and quitting needs no ceremony.
+///
+/// Everything here is read from state the shell already holds. The quit path is
+/// a keystroke, and a stack too sick to answer a snapshot is exactly the state
+/// someone quits from — so it must not depend on the daemon replying.
+fn quit_impact(app: &AppHandle) -> Vec<String> {
+    if current_mode(app) != "local" {
+        return Vec::new();
+    }
+    let shell: State<Shell> = app.state();
+    let stack_up = {
+        let ui = shell.ui.lock().unwrap();
+        ui.ready || ui.running
+    };
+    let agent_host = shell.agent_host_status.lock().unwrap().clone();
+    let sharing = shell.sharing_mode.lock().unwrap().clone();
+    quit_impact_lines(stack_up, agent_host.as_ref(), sharing.as_deref())
+}
+
+fn quit_impact_lines(
+    stack_up: bool,
+    agent_host: Option<&Value>,
+    sharing: Option<&str>,
+) -> Vec<String> {
+    let mut impact = Vec::new();
+    if stack_up {
+        impact.push("Schedules and background work stop running.".into());
+    }
+    if let Some(status) = agent_host {
+        if status["running"].as_bool() == Some(true) {
+            let paired = status["targets"]
+                .as_array()
+                .map(|targets| targets.len())
+                .unwrap_or(0);
+            impact.push(match paired {
+                0 => "The agents on this computer stop answering.".into(),
+                1 => "The agents on this computer stop answering (1 paired workspace).".into(),
+                many => format!(
+                    "The agents on this computer stop answering ({many} paired workspaces)."
+                ),
+            });
+        }
+    }
+    match sharing {
+        Some("local_network") => impact.push("Your local network link closes.".into()),
+        Some("public") => impact.push("Your public link closes.".into()),
+        _ => {}
+    }
+    impact
+}
+
+fn quit_prompt_body(impact: &[String]) -> String {
+    let mut body = String::from("Quitting stops Lemma's local server on this Mac.\n\n");
+    for line in impact {
+        body.push_str("•  ");
+        body.push_str(line);
+        body.push('\n');
+    }
+    // Both halves matter. The first is why this is safe to say yes to; the
+    // second is the answer for someone who pressed ⌘Q meaning "get out of my
+    // way", which closing the window already does without stopping anything.
+    body.push_str(
+        "\nPods, files, and data stay on this Mac and come back when you reopen Lemma.\n\
+         To leave Lemma running, close the window instead.",
+    );
+    body
+}
+
+/// Quit, having said what that costs.
+///
+/// One Quit. It used to mean "close the shell and leave the server running",
+/// which was both a third state — closing the window already does exactly that,
+/// and keeps the tray as a way back — and a quiet inversion: it stopped sharing
+/// and the Agent Host, the cheap visible things, while leaving the VM, Postgres
+/// and the backend running with no owner on screen at all.
+fn request_quit(app: &AppHandle) {
+    {
+        // A second ⌘Q while a confirmed stop is still running is someone saying
+        // "go away now". Honour it instead of asking again: the daemon is
+        // durable, so whatever has not finished stopping outlives the shell
+        // either way, and this is the escape hatch if a stop ever wedges.
+        let shell: State<Shell> = app.state();
+        if shell.quit_confirmed.load(Ordering::Acquire) {
+            finish_quit(app);
+            return;
+        }
+    }
+    let impact = quit_impact(app);
+    if impact.is_empty() {
+        finish_quit(app);
+        return;
+    }
+    let handle = app.clone();
+    app.dialog()
+        .message(quit_prompt_body(&impact))
+        .title("Stop Lemma and quit?")
+        .kind(MessageDialogKind::Warning)
+        .buttons(MessageDialogButtons::OkCancelCustom(
+            "Stop and Quit".into(),
+            "Cancel".into(),
+        ))
+        .show(move |confirmed| {
+            if confirmed {
+                stop_then_quit(&handle);
+            }
+        });
+}
+
+/// Stop everything this installation is running, then exit when it is down.
+///
+/// `stop_impl` shows the stop on the splash, so a stop that fails fails in
+/// front of the user rather than as an app that declines to quit. The exit
+/// itself is issued by the `stop`/`done` handler once the daemon confirms.
+fn stop_then_quit(app: &AppHandle) {
+    let shell: State<Shell> = app.state();
+    shell.quit_confirmed.store(true, Ordering::Release);
+    shell.quit_after_stop.store(true, Ordering::Release);
+    if stop_impl(app.clone(), Some(true)).is_err() {
+        shell.quit_after_stop.store(false, Ordering::Release);
+        shell.quit_confirmed.store(false, Ordering::Release);
+    }
+}
+
+/// Exit without stopping anything, for the cases where there is nothing to stop.
+fn finish_quit(app: &AppHandle) {
+    let shell: State<Shell> = app.state();
+    shell.quit_confirmed.store(true, Ordering::Release);
+    disconnect_locald(app);
+    app.exit(0);
+}
+
+// An exit that did not stop the stack must still close any LAN or public
+// exposure — `finish_quit`, and the second ⌘Q that leaves a wedged stop behind,
+// both reach here. The daemon deliberately outlives the app, so it cannot infer
+// this from its own shutdown.
 fn release_before_exit() -> Result<(), String> {
     let (sender, receiver) = std::sync::mpsc::sync_channel(1);
     std::thread::spawn(move || {
@@ -4059,6 +4203,7 @@ fn main() {
             None,
         ))
         .plugin(tauri_plugin_deep_link::init())
+        .plugin(tauri_plugin_dialog::init())
         .manage(Shell::new(mode.clone()))
         .invoke_handler(tauri::generate_handler![
             start,
@@ -4390,6 +4535,23 @@ fn main() {
                     let _ = window.set_focus();
                 }
             }
+            // Dock → Quit and any other OS-issued terminate arrive here without
+            // passing a menu, so the prompt is armed here rather than only on
+            // the items the app draws itself. Fail-safe by construction: an exit
+            // is only ever held once, and only when there is something running
+            // to say so about.
+            tauri::RunEvent::ExitRequested { api, .. } => {
+                let shell: State<Shell> = app.state();
+                if shell.quit_confirmed.load(Ordering::Acquire) {
+                    return;
+                }
+                if quit_impact(app).is_empty() {
+                    shell.quit_confirmed.store(true, Ordering::Release);
+                    return;
+                }
+                api.prevent_exit();
+                request_quit(app);
+            }
             tauri::RunEvent::Exit => {
                 // Read the route before anything is torn down or hidden.
                 remember_workspace_route(app);
@@ -4696,17 +4858,32 @@ mod tests {
         assert!(menus.contains("\"Settings…\", local, Some(\"CmdOrCtrl+,\")"));
         assert!(menus.contains("\"Connection…\""));
 
-        // Quit is one command. Stopping the local server is a different thing —
-        // it releases the VM's memory and ends schedules — so it lives in
-        // Troubleshoot rather than sitting next to Quit as a second way to
-        // leave, where it read as the obvious "quit properly" choice.
-        let lemma_menu = &menus[..menus.find("let edit_menu").expect("app menu order")];
+        // Quit is one command, and it is the one that stops the local server.
+        // There used to be two ways to leave — Quit, which left the VM and the
+        // whole stack running with no owner on screen, and a "Stop the local
+        // server and quit" buried in Troubleshoot that did what people mean by
+        // quitting. Closing the window already covers "go away and keep
+        // serving", and keeps the tray as a way back, so the middle state was
+        // strictly worse than both neighbours.
         assert!(
-            !lemma_menu.contains("quit-and-stop"),
-            "the application menu offers exactly one Quit",
+            !menus.contains("quit-and-stop") && !menus.contains("Stop the local server and quit"),
+            "there is exactly one Quit, and it stops the local server",
         );
         assert!(menus.contains("\"Stop the local server\""));
-        assert!(menus.contains("\"Stop the local server and quit\""));
+
+        // ⌘Q has to reach `request_quit`, which means owning the item. AppKit's
+        // predefined quit is `terminate:` and cannot be intercepted, so it would
+        // silently skip the prompt and take the stack down — or leave it up —
+        // without asking. Matched as a call, because this test reads its own
+        // source and the comment above the item names the thing it rules out.
+        assert!(
+            menus.contains("\"quit\", \"Quit Lemma\", true, Some(\"CmdOrCtrl+Q\")"),
+            "Quit is an app-owned item bound to CmdOrCtrl+Q",
+        );
+        assert!(
+            !menus.contains("PredefinedMenuItem::quit("),
+            "a predefined quit cannot be asked about first",
+        );
 
         // The operator vocabulary this replaced must not come back.
         for retired in ["Stop Services and Infra", "Switch Connection Mode", "Start Services"] {
@@ -4727,6 +4904,64 @@ mod tests {
             RELEASE_ON_EXIT_TIMEOUT <= Duration::from_secs(5),
             "a quit may not block the main thread for {RELEASE_ON_EXIT_TIMEOUT:?}"
         );
+    }
+
+    #[test]
+    fn quitting_names_the_work_it_is_about_to_stop() {
+        // The whole point of the prompt is that none of this is on screen. A
+        // warning that says "are you sure?" and nothing else would be worse than
+        // no warning, because it teaches people to dismiss it.
+        let running_host = json!({"running": true, "targets": [{"name": "work"}, {"name": "home"}]});
+        let lines = quit_impact_lines(true, Some(&running_host), Some("public"));
+        assert_eq!(
+            lines,
+            vec![
+                "Schedules and background work stop running.",
+                "The agents on this computer stop answering (2 paired workspaces).",
+                "Your public link closes.",
+            ]
+        );
+
+        // Singular reads as English, and an enabled-but-unpaired host still
+        // stops answering, so it is still worth one line.
+        let unpaired = json!({"running": true, "targets": []});
+        assert_eq!(
+            quit_impact_lines(false, Some(&unpaired), None),
+            vec!["The agents on this computer stop answering."]
+        );
+        let one = json!({"running": true, "targets": [{"name": "work"}]});
+        assert!(quit_impact_lines(false, Some(&one), None)[0].ends_with("(1 paired workspace)."));
+
+        assert_eq!(
+            quit_impact_lines(true, None, Some("local_network")),
+            vec![
+                "Schedules and background work stop running.",
+                "Your local network link closes.",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_quit_with_nothing_running_asks_nothing() {
+        // Every dialog on the way out has to earn itself. A stopped stack with
+        // no Agent Host and no shared link costs the user nothing to quit, and
+        // being asked anyway is how a prompt becomes noise.
+        let idle_host = json!({"running": false, "targets": []});
+        assert!(quit_impact_lines(false, Some(&idle_host), Some("this_computer")).is_empty());
+        assert!(quit_impact_lines(false, None, None).is_empty());
+    }
+
+    #[test]
+    fn the_quit_prompt_offers_the_alternative_it_is_replacing() {
+        // Someone pressing ⌘Q may mean "get out of my way", which is what
+        // closing the window does — and unlike this, it keeps everything
+        // serving. The prompt has to say so, or the only discoverable way to
+        // keep schedules running is to already know about it.
+        let body = quit_prompt_body(&["Schedules and background work stop running.".into()]);
+        assert!(body.contains("Schedules and background work stop running."));
+        assert!(body.contains("close the window"));
+        // And it has to say what is not lost, or "stop" reads as "delete".
+        assert!(body.contains("stay on this Mac"));
     }
 
     #[test]
