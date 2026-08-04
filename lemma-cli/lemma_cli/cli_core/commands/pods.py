@@ -23,6 +23,7 @@ from ..io import emit, format_columns, list_items, to_plain
 from ..payload import build_request
 from ..sdk import pod_client
 from ..select import select_from_items
+from .schedules import schedule_target
 from ..state import console, err_console, fail, run_with_client, state_from_ctx
 
 app = typer.Typer(
@@ -930,14 +931,6 @@ def _render_table(title: str, rows: list[dict[str, Any]], columns: list[tuple[st
     console.print(view)
 
 
-def _schedule_target(schedule: dict[str, Any]) -> str:
-    if schedule.get("agent_name"):
-        return f"agent:{schedule['agent_name']}"
-    if schedule.get("workflow_name"):
-        return f"workflow:{schedule['workflow_name']}"
-    return ""
-
-
 def _workflow_node_count(workflow: dict[str, Any]) -> str:
     return _count(workflow.get("nodes"))
 
@@ -996,7 +989,7 @@ def _render_pod_description(
         [("Name", "name"), ("Nodes", "node_count"), ("Description", "description")],
     )
     schedules = [
-        {**item, "target": _schedule_target(item)}
+        {**item, "target": schedule_target(item)}
         for item in data.get("schedules", [])
         if isinstance(item, dict)
     ]

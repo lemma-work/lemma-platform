@@ -94,3 +94,29 @@ def test_profile_update_via_data(monkeypatch):
     sent = captured["update"]
     assert sent["first_name"] == "Grace"
     assert sent["timezone"] == "UTC"
+
+
+def test_config_show_reports_the_resolved_context(monkeypatch, tmp_path):
+    """`config show` used to print the configured server names and `active
+    server: X` and nothing else — every other field it computed was folded away
+    by the generic renderer. It is the command you reach for when things fail
+    against the wrong server, which is exactly how a dogfood session lost six
+    commands to an unnoticed switch."""
+    from typer.testing import CliRunner
+
+    from lemma_cli.cli_core.app import app
+
+    monkeypatch.setenv("LEMMA_ORG_ID", "org-9")
+    monkeypatch.setenv("LEMMA_POD_ID", "pod-9")
+    monkeypatch.delenv("LEMMA_SERVER", raising=False)
+
+    result = CliRunner().invoke(
+        app, ["--config-file", str(tmp_path / "config.json"), "config", "show"]
+    )
+
+    assert result.exit_code == 0, result.output
+    out = result.stdout
+    assert "server" in out
+    assert "org" in out and "org-9" in out
+    assert "pod" in out and "pod-9" in out
+    assert "env file" in out

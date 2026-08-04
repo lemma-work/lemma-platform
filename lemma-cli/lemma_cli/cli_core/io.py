@@ -41,6 +41,10 @@ LIST_KEYS = (
     "state",
     "type",
     "kind",
+    # What a row points at, when a command computes one (a schedule's
+    # `agent:x` / `workflow:y`). Without it, `schedules list` showed an
+    # `Agent Id` column and nothing at all for a workflow-targeted schedule.
+    "target",
     "role",
     "roles",
     "email",
