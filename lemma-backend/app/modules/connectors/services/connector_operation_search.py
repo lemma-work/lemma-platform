@@ -73,7 +73,7 @@ async def search_across_auth_configs(
                 # ConnectorDomainError; anything else is a genuine bug and
                 # should surface rather than be swallowed.
                 logger.debug(
-                    "connectors.search.install_failed.diagnostic",
+                    "connectors.connector_operation_search.install_failed.diagnostic",
                     auth_config=config.name,
                 )
                 return config.name, None
