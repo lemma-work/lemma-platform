@@ -22,6 +22,7 @@ use serde_json::{json, Value};
 use tokio::sync::oneshot;
 
 use crate::host_process::{installation_identity, process_identity, terminate_verified_process};
+use crate::port_reservation::PortReservation;
 
 const SHARING_SCHEMA_VERSION: u64 = 2;
 const PROCESS_MARKER_SCHEMA_VERSION: u64 = 1;
@@ -642,7 +643,8 @@ impl SharingController {
             ));
         }
         let user_config = ngrok_config_path(&executable)?;
-        let inspection_port = reserve_loopback_port()?;
+        let inspection = PortReservation::ephemeral()?;
+        let inspection_port = inspection.port();
         let supplemental = self.root.join("ngrok-lemma.yml");
         let contents = format!("version: 3\nagent:\n  web_addr: 127.0.0.1:{inspection_port}\n");
         write_private(&supplemental, contents.as_bytes())?;
@@ -669,6 +671,13 @@ impl SharingController {
             .stdout(Stdio::from(log))
             .stderr(Stdio::from(error_log));
         prepare_owned_command(&mut command);
+        // ngrok binds the inspection port in its own process, so the claim has
+        // to end here — but not one step earlier. Everything above is a synced
+        // config write and a log open, and a bare port number left unguarded
+        // across those is long enough for something else to take it; ngrok
+        // would then fail to serve its agent API, or worse, a stranger would
+        // answer the tunnel-URL poll below on the port we told ngrok to use.
+        inspection.release();
         let mut child = command.spawn().map_err(|error| {
             io::Error::other(format!(
                 "could not start ngrok at {}: {error}",
@@ -1661,12 +1670,6 @@ fn bounded_log(path: &Path) -> io::Result<File> {
         options.append(true);
     }
     options.open(path)
-}
-
-fn reserve_loopback_port() -> io::Result<u16> {
-    TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?
-        .local_addr()
-        .map(|address| address.port())
 }
 
 fn render_qr(value: &str) -> Option<String> {
