@@ -962,6 +962,33 @@ class Authorizer:
     def __init__(self, session: AsyncSession):
         self.session = session
 
+    async def _describe_resource(self, resource: ResourceRef | None) -> str | None:
+        """Human name for a denied resource, or None when it can't be resolved.
+
+        Runs only on the denial path, so the extra lookup costs nothing in the
+        allow case. Folders and documents already carry their path; everything
+        else resolves id -> name through the same registry the grant APIs use.
+        """
+        if resource is None:
+            return None
+        if resource.path:
+            return resource.path
+        if resource.resource_id is None or resource.pod_id is None:
+            return None
+        try:
+            from app.core.authorization.resource_names import (
+                resolve_resource_names_by_ids,
+            )
+
+            resolved = await resolve_resource_names_by_ids(
+                self.session,
+                pod_id=resource.pod_id,
+                refs=[(resource.resource_type, resource.resource_id)],
+            )
+        except Exception:  # noqa: BLE001 — a nicer message is never worth an error
+            return None
+        return resolved.get((resource.resource_type, resource.resource_id))
+
     async def authorize(
         self,
         ctx: Context,
@@ -1225,6 +1252,7 @@ class Authorizer:
                 "MISSING_WORKLOAD_RESOURCE_GRANT",
                 permission_id,
                 resource,
+                resource_name=await self._describe_resource(resource),
             )
 
         if visibility == ResourceVisibility.PUBLIC:

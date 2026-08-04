@@ -174,11 +174,12 @@ lemma pods export ./bundles --exclude apps
 
 - **Matching is by `name`** (schedules also match by id; surfaces by platform; files by path). Renaming a resource in the bundle creates a new one — it does not rename.
 - **Upsert behavior per resource:** tables → add/remove columns + update config; functions → update description/type/code **+ permissions replaced**; agents → full update except name **+ permissions replaced**; workflows → graph fully replaced; schedules → config/target update; surfaces → upserted by platform (one per platform); apps → metadata update + rebuild/redeploy if `source/` present; files → folders, then file bytes when `--with-files` was used; table rows last, when `--with-data` was used.
-- **Permissions travel with the bundle.** Export embeds each function's and agent's `permissions.grants`; import applies them with replace semantics on every upsert — the bundle is the source of truth for what a workload may access.
-- **Import order is dependency order:** tables → functions → agents → workflows → schedules → surfaces → apps → file folders → file bytes → agent grants → table rows. Agent grants are deliberately deferred to the end, after every resource a grant could name exists; function grants are applied inline with each function.
-- **Validation on import:** folder/JSON name match; Python syntax parse; required function headers (`#input_type_name`, `#output_type_name`, `#function_name`, plus `#config_type_name` when a config schema exists); surface platform must be one of SLACK/TEAMS/TELEGRAM/WHATSAPP/GMAIL/OUTLOOK; a Vite app `source/` must build (`npm install && npm run build` → `dist/index.html`), while an HTML app (`source/index.html` with no `package.json`, or a single `html.html`) is uploaded as-is with no build. A grant that references a **table/function/agent/folder** the bundle neither creates nor finds in the pod is a **hard failure** (the import aborts before any writes).
-- **Advisories (`[yellow]advisory[/yellow]`, non-fatal):** import and `--dry-run` warn — without blocking — about grants that commonly bite: **connector/connector-account grants** are environment-specific (verify a connected account exists in the target pod), **destructive grants** (e.g. `datastore.table.delete`) give the workload standing authority with no runtime approval prompt, and a `SUBAGENTS` agent with no `agent` grants can only spawn copies of itself. `lemma pods doctor` re-checks these against the live pod.
-- After import, verify grants landed with `lemma functions permissions get <name>` / `lemma agents permissions get <name>`.
+- **Permissions travel with the bundle.** Export always embeds each function's and agent's `permissions.grants`; import applies them with replace semantics on every upsert — the bundle is the source of truth for what a workload may access. **Present vs absent matters:** a `permissions` block (even `{"grants": []}`) replaces the grants with exactly that list, while omitting the key leaves the workload's existing grants alone. Grants apply in a deferred pass after every resource exists, so cross-references resolve.
+- **Import order is dependency order:** tables → functions → agents → workflows → schedules → surfaces → apps → file folders → file bytes → agent grants → table rows. Agent AND function grants are deliberately deferred to the end, after every resource a grant could name exists.
+- **Validation on import:** folder/JSON name match; Python syntax parse; required function headers (`#input_type_name`, `#output_type_name`, `#function_name`, plus `#config_type_name` when a config schema exists); surface platform must be one of SLACK/TEAMS/TELEGRAM/WHATSAPP/GMAIL/OUTLOOK; a Vite app `source/` must build (`npm install && npm run build` → `dist/index.html`), while an HTML app (`source/index.html` with no `package.json`, or a single `html.html`) is uploaded as-is with no build. A grant that references a **table/function/agent/workflow/schedule/app/folder** the bundle neither creates nor finds in the pod is a **hard failure** (the import aborts before any writes), as is a `connector_account` grant naming an account this org can't reach.
+- **Advisories (`[yellow]advisory[/yellow]`, non-fatal):** import and `--dry-run` warn — without blocking — about grants that commonly bite: an agent/function **created with NO grants** (it has zero access and will 403 at runtime — the most common way a fresh pod arrives broken), **connector grants** being environment-specific (verify a connected account exists in the target pod), **destructive grants** (e.g. `datastore.table.delete`) giving standing authority with no runtime approval prompt, and a `SUBAGENTS` agent with no `agent` grants being able to spawn only copies of itself. `lemma pods doctor` re-checks all of these against the live pod.
+- After import, verify grants landed with `lemma functions permissions get <name>` / `lemma agents permissions get <name>`, or `lemma pods doctor` for the whole pod at once.
+- **Unrecognized fields fail the import.** A key the API has no slot for (a typo, or a field that resource type doesn't accept) aborts with the offending name instead of being dropped silently. Outside a bundle the same check warns — `lemma <resource> schema` prints the accepted shape.
 
 ## Portability variables
 
@@ -219,7 +220,7 @@ So a surface bundle looks like this, not like a literal uuid:
 - **Function schemas follow the code** — `input_schema`/`output_schema`/`config_schema` are re-extracted from the Pydantic models on every code-bearing create *or* update, import included. Edit the models and re-import.
 - **File bytes and table rows travel only on request.** `pods export --with-files --with-data` (or `--data-table <t>` for specific tables) writes them into the bundle; `pods import --with-files --with-data` applies them. Without those flags you get structure only, and you upload bytes with `lemma files upload` after import.
 - **Connectors are not bundle resources.** Auth configs, accounts, and connect state are org runtime state — script their setup (`lemma connectors ...`) in the pod README.
-- **Grants are name-based and portable.** `resource_name` is the table name (`tickets`), the stored folder path (a shared `/knowledge` or personal `/me/...` — there is **no** `/pod` prefix), or the connector id (`gmail`). Importing into a different pod resolves names against the target pod, so grants port cleanly as long as the named resources exist there (they do, when they're part of the same bundle).
+- **Grants are name-based and portable.** `resource_name` is the table name (`tickets`), the stored folder path (a shared `/knowledge` or personal `/me/...` — there is **no** `/pod` prefix), or the connector id (`gmail`). Importing into a different pod resolves names against the target pod, so grants port cleanly as long as the named resources exist there (they do, when they're part of the same bundle). The **one exception is a pinned `connector_account` grant**, whose `resource_name` is an account id: export turns it into a `${…}` variable, and an import that doesn't supply it drops the grant with a warning (the workload falls back to the invoking user's own account). See `authorization-model.md` §4b.
 - **Surface bundles carry config, not credentials or platform state.** `account_id` is exported as a `${variable}`, not a literal id (see *Portability variables*); webhook secrets, identities, and setup status are server-managed and re-derived. Modes/event modes use platform defaults on create.
 - **No transactions.** Import fails fast on the first error and leaves prior resources applied. Always `--dry-run` first.
 - App `public_slug` conflicts are auto-resolved by suffixing a pod-id fragment. The slug is also a portability variable, so you can pin it at import with `--var`.
@@ -259,15 +260,20 @@ lemma files share /knowledge/policy.pdf --ttl 3h --max-hits 50   # public, expir
 
 # functions / agents
 lemma functions list|get|create|update|run|delete|init|grant
-lemma functions grant score_ticket tickets:read,write       # edit permissions.grants in the bundle
+lemma functions grant score_ticket tickets:read,write       # edit permissions.grants in the BUNDLE
 lemma functions run score_ticket --data '{"title":"x"}'
-lemma functions permissions get|replace <name> [--file grants.json]
 lemma agents list|get|create|update|delete|chat|run|init|grant
 lemma agents init triage [--runtime <profile-id>]     # scaffold; pin a runtime profile
-lemma agents grant triage tickets:read /knowledge:read connector:gmail:use   # name:perms | /path:perms | connector:name:use
+lemma agents grant triage tickets:read /knowledge:read connector:gmail:use   # name:perms | /path:perms | type:name:perms
 lemma agents chat triage-agent "Classify this"        # interactive/one-shot chat
 lemma agents run triage-agent "Classify this"         # waits + streams result (--no-wait to detach)
-lemma agents permissions get|replace <name>
+
+# grants on a LIVE pod (same spec grammar; the API only replaces, so add/remove read-merge-write)
+lemma agents permissions get <name>
+lemma agents permissions add triage tickets:read,write connector:gmail:use
+lemma agents permissions remove triage tickets:write
+lemma functions permissions add score_ticket function:write_lesson:execute
+lemma functions permissions replace <name> --from-bundle ./my-pod   # push what the bundle declares
 lemma conversations list|get|messages|send|stream|stop   # each agent run is a conversation
 
 # workflows / schedules
@@ -279,12 +285,14 @@ lemma schedules list|get|create|update|pause|resume|delete|init
 lemma schedules create --datastore tickets --on all --workflow intake   # --on all = insert+update+delete
 
 # connectors / surfaces / tools
+lemma connectors run gmail "list recent emails" --dry-run    # resolve connector -> op -> input schema
+lemma connectors run gmail gmail_list_messages -d '{"max_results":5}'   # ...then run it
 lemma connectors list|get|describe|overview|status            # overview = the table of installed auth-configs + accounts
 lemma connectors auth-configs list|create|get|delete
 lemma connectors accounts list|get|create|delete
 lemma connectors connect-requests create <connector> --auth-config-id <id>
-lemma connectors operations search|list|get|details|execute <auth-config> [...]
-lemma connectors triggers list|get <auth-config> [...]
+lemma connectors operations search|list|get|details|execute [<auth-config-or-connector>] [...]
+lemma connectors triggers list|get [<auth-config-or-connector>] [...]
 lemma surfaces list|get|upsert|enable|disable|setup|channels|available-channels|delete   # keyed by PLATFORM (slack, gmail, …)
 lemma tools list|web-search|report-feedback
 

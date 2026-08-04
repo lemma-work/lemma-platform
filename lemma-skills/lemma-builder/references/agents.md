@@ -191,6 +191,9 @@ Or manage them directly:
 ```bash
 lemma agents grant triage-agent tickets:read,write /knowledge:read connector:gmail:use
 lemma agents permissions replace triage-agent --file payloads/triage-agent.permissions.json
+# ...or, without writing a payload file at all:
+lemma agents permissions add triage-agent tickets:read,write connector:gmail:use
+lemma agents permissions remove triage-agent tickets:write
 lemma agents permissions get triage-agent
 ```
 
@@ -238,7 +241,7 @@ In a bundle these are ordinary name-based grants on the **parent** agent:
 }
 ```
 
-Or directly: `lemma agents permissions replace coordinator --file payloads/coordinator.permissions.json`.
+Or directly: `lemma agents permissions add coordinator agent:researcher:execute` (merges into what the agent already holds; `permissions replace` overwrites the whole list).
 
 > **Function tool = one grant.** Exposing a function as an agent tool needs exactly
 > **`function.execute`** on the parent (`function.execute` implies `function.read`, so

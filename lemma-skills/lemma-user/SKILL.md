@@ -256,29 +256,41 @@ lemma tools web-search "latest API docs" --limit 5
 lemma tools report-feedback "..."                    # the tool set is: web-search, report-feedback
 ```
 
-Third-party connector operations — always check what's connected, then
-**overview → search → details → execute**. Never guess operation names or
-payloads:
+Third-party connector operations — **`run` does the whole thing in one call**:
+it resolves the connector, picks the operation, and executes. Still never guess a
+payload; let `--dry-run` hand you the schema.
 
 ```bash
-lemma connectors overview                            # every configured app: auth-config NAME, kind, connected accounts
-lemma connectors status                              # installed apps + your connected accounts
-lemma connectors describe gmail                      # per-app usage guide (kind-aware)
-lemma connectors operations search workspace-gmail "send email" --limit 5
-lemma connectors operations details workspace-gmail gmail_send_email
-lemma connectors operations execute workspace-gmail gmail_send_email \
-  --data '{"payload": {"recipient_email": "a@b.com", "subject": "Hi", "body": "..."}}'
+lemma connectors run gmail "list recent emails" --dry-run    # resolves + prints the input schema
+lemma connectors run gmail gmail_list_messages -d '{"max_results": 5}'
+lemma connectors run gmail gmail_send_email \
+  -d '{"recipient_email": "a@b.com", "subject": "Hi", "body": "..."}'
 ```
 
-Operations are addressed by the **auth-config name** (the first column of
-`connectors overview` / `auth-configs list`), not the app id — and names differ per
-**kind** (`package`, `composio`, `http`, `sql`, `mcp`), so `overview` is the one
-place to find the exact one to pass. Workloads execute operations via the invoking user's connected account
+The first argument is the **connector id** you already know from the task
+(`gmail`, `slack`); it resolves to that connector's install. The second is an
+operation id, or plain English — the resolved id is printed so you can name it
+exactly next time. `--dry-run`, or simply omitting `--data` on an operation that
+needs input, prints the input schema instead of failing. `--account` accepts an
+account id or the connected email. An operation that CHANGES data and was
+inferred from text rather than named is refused without `--yes` — matching is
+lexical, so a read intent can land on a write.
+
+When you want the wider picture rather than one call:
+
+```bash
+lemma connectors overview             # installed connectors: auth-config name, kind, connected accounts
+lemma connectors status               # installed apps + your connected accounts
+lemma connectors describe gmail       # per-connector usage guide, per kind
+                                      # (kinds: package, composio, http, sql, mcp)
+lemma connectors operations search "send email"                    # searches EVERY installed connector
+lemma connectors operations search gmail "send email" --limit 5    # scoped; hits include their input schema
+```
+
+Workloads execute operations via the invoking user's connected account
 (delegated) — they never touch raw credentials. If no account is connected, create
 a connect request and hand the link to the user:
-`lemma connectors connect-requests create gmail --auth-config-id <id>`. If the goal
-is clear but the operation isn't, search by intent — `operations search` ranks over
-descriptions as well as names.
+`lemma connectors connect-requests create gmail --auth-config-id <id>`.
 
 ## Workspace execution notes
 
@@ -304,7 +316,9 @@ descriptions as well as names.
   runs agents/functions/workflows; `POD_EDITOR` also creates/updates tables and
   writes files; `POD_ADMIN` also deletes and manages members. As an agent,
   `MISSING_WORKLOAD_RESOURCE_GRANT` names a missing **workload grant** — a builder
-  must add it (it never silently grants itself).
+  must add it (it never silently grants itself). `lemma pods doctor` lists every
+  workload in the pod holding no grants at all, which is the usual cause; the fix
+  is `lemma agents permissions add <name> <resource>:<perms>`.
 - **Resource not found.** Confirm the active pod (`lemma pods list`) and exact
   names (`lemma pods describe`; `lemma apps list` for apps).
 - **ENUM rejected on a record write.** Read `lemma tables get <table>` and use one

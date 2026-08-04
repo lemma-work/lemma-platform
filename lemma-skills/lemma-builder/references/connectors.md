@@ -46,11 +46,34 @@ invoked it (`pod-model.md` → delegated identity). So a granted connector resol
 to *that user's* connected account. The workload only needs the
 `connector.use` grant; it never sees, stores, or passes the credential.
 
-## Find the auth-config name first — `overview`
+## Do it in one call — `connectors run`
 
-Operations and triggers are addressed by **auth-config name** and differ per
-kind, so the one thing you must get right is that name. `overview` is the
-single place to find it:
+`run` resolves the whole chain (connector → install → operation → input schema)
+and executes, so the common case is one command instead of four:
+
+```bash
+lemma connectors run gmail "list recent emails" --dry-run   # resolve + print the input schema
+lemma connectors run gmail GMAIL_FETCH_EMAILS -d '{"max_results": 5}'
+```
+
+- The first argument is a **connector id** or an install name; a bare connector id
+  resolves to its default (or only) install.
+- The second is an **operation id** or a plain-English intent. The resolved id is
+  always printed, so the next run can name it exactly.
+- `--dry-run` stops after resolving and prints the input schema. Omitting `--data`
+  on an operation that requires input does the same rather than failing.
+- **An inferred write is refused.** Intent matching is lexical, so "list recent
+  emails" can rank a label-editing operation above a fetch. A read-shaped intent
+  prefers a non-mutating match, and an operation that changes data *and* was
+  inferred rather than named will not run without `--yes`. Name the operation id
+  for anything you intend to repeat.
+- `--account` takes an account id **or** the email it was connected with.
+
+## The wider picture — `overview`
+
+Operations and triggers are addressed by **auth-config name** and differ per kind.
+Every command also accepts the bare connector id, so `overview` is where you go to
+see everything rather than a mandatory first step:
 
 ```bash
 lemma connectors overview     # table: App | Auth Config | Kind | Status | Accounts
@@ -116,6 +139,13 @@ lemma connectors operations execute workspace-gmail gmail_send_email \
 
 - `operations search` scans names + descriptions and returns ranked hits **for the
   auth config's kind only**. `operations list` is the same with no query.
+- **The install argument is optional.** `operations search "send email"` with no
+  connector searches **every installed connector** and labels each hit with the
+  `auth_config` to pass on — you don't need to know which connector provides what.
+  Naming one scopes the search and costs a single request.
+- Search results include `input_schema` by default when `--limit` is 5 or fewer
+  (`--with-schema` / `--no-schema` to force either way), so a short result list
+  usually needs no follow-up `get`.
 - `operations get` shows one operation's input schema; `operations details` takes
   several names (or none → every operation) and returns their schemas as a batch.
 - Operation names are **case-insensitive** for `get`/`details`/`execute`, but use
@@ -127,7 +157,9 @@ lemma connectors operations execute workspace-gmail gmail_send_email \
 
 **Not sure which operation?** Run `operations search` with the intent in plain
 words — it ranks over names *and* descriptions, so "send email" finds
-`gmail_send_email` without you knowing the id.
+`gmail_send_email` without you knowing the id. Ranking is lexical, though, so
+**check what it picked before you act on it**: a read intent can match a
+mutating operation.
 
 ## Skill guide per connector
 

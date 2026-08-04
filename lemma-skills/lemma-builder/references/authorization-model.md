@@ -89,6 +89,70 @@ Deny codes come back verbatim in the error `code`. Map each to the fix:
 Allow reasons you may see in logs: `POD_VISIBLE` / `WORKLOAD_RESOURCE_GRANT` (grant
 matched), `SESSION_APPROVAL` (an approve-for-session decision covered it).
 
+## §4b Authoring grants — the full vocabulary
+
+Two commands write grants, sharing one spec grammar:
+
+```bash
+lemma agents grant <name> <spec>...             # edits the BUNDLE file (permissions.grants)
+lemma agents permissions add|remove <name> <spec>...   # edits a LIVE pod (read → merge → replace)
+```
+
+Same for `lemma functions …`. A spec is `name:perms` (type inferred: a leading
+`/` means a folder, else a table) or `type:name:perms`. `perms` is comma-separated
+friendly verbs, or raw permission ids when you need one the presets don't cover.
+
+| Spec | Grant it produces | Use it for |
+| --- | --- | --- |
+| `tickets:read` | `datastore_table` → `datastore.table.read`, `datastore.record.read` | read a table |
+| `tickets:read,write` | + `datastore.record.write` | read + write rows (row *delete* rides on write) |
+| `tickets:alter` / `tickets:delete` | `datastore.table.update` / `.delete` | change or drop the table itself (**delete is destructive**) |
+| `/knowledge:read` | `folder` → `folder.read` | a shared folder **and everything beneath it** |
+| `/me/drafts:write` | `folder` → `folder.write` | the invoking user's private area |
+| `doc:/contracts/msa.pdf:read` | `document` → `folder.read` | one specific file |
+| `connector:gmail:use` | `connector` → `connector.use` | a connector, **user-resolved** (see below) |
+| `account:<account-id>:use` | `connector_account` → `connector_account.use` | a connector account, **pinned/fixed** (see below) |
+| `function:score_ticket:execute` | `function` → `function.execute` | expose a function as a tool (§6) |
+| `agent:researcher:execute` | `agent` → `agent.execute` | dispatch another agent (§7) |
+| `workflow:intake:execute` | `workflow` → `workflow.execute` | start a workflow |
+| `schedule:nightly:read` / `:write` | `schedule` → `schedule.read` / `.update` | inspect or retarget a schedule |
+| `app:dashboard:read` / `:write` / `:publish` | `app` → `app.*` | a Lemma **app** in this pod |
+
+> `app:<name>:use` is the pre-rename spelling of a **connector** grant and still
+> works, with a note. Write `connector:<name>:use`. Bare `app:` now means a Lemma app.
+
+### Connector accounts: user-resolved vs fixed
+
+This is the distinction §8 names, in grant form:
+
+**User-resolved (the default, and what you want most of the time).** One grant.
+Each invoker's own connected account is used, so the same agent reads *your*
+mail for you and *mine* for me.
+
+```json
+{ "resource_type": "connector", "resource_name": "gmail",
+  "permission_ids": ["connector.use"] }
+```
+
+**Fixed account (a pinned shared identity).** Two grants — the connector *and*
+the specific account. Every invoker now acts through that one account, which is
+how a "support@" sender or a headless schedule works with no human present.
+
+```json
+{ "resource_type": "connector", "resource_name": "gmail",
+  "permission_ids": ["connector.use"] },
+{ "resource_type": "connector_account", "resource_name": "<account-id>",
+  "permission_ids": ["connector_account.use"] }
+```
+
+An account has no human-facing name, so the grant carries its **id** — which is
+specific to the org that issued it. Export therefore replaces it with a
+`${…}` variable recorded in `pod.json` (with the connector and kind to reconnect),
+and import resolves it from `--var`. Unsupplied, the grant is **dropped with a
+warning** and the workload falls back to user-resolved mode; wire it up after
+import with `lemma agents permissions add <name> account:<id>:use`. Get the id
+from `lemma connectors overview`.
+
 ## §5 Permission implications
 
 Some permissions imply weaker ones, so you don't list both:
@@ -140,13 +204,29 @@ See `connectors.md` for the payload.
 
 ## §9 Import / export grant semantics
 
-- Grants **travel with the bundle**: export embeds each workload's
-  `permissions.grants`; import **replaces** them on every upsert (the bundle is the
-  source of truth for what a workload may access).
+- Grants **travel with the bundle**: export always embeds each workload's
+  `permissions.grants`, and import **replaces** them on every upsert (the bundle is
+  the source of truth for what a workload may access).
+- **`permissions` present vs absent is a real distinction.** A block — even
+  `{"grants": []}` — replaces the workload's grants with exactly that list. Omitting
+  the key entirely leaves the existing grants alone. So a partial, hand-written
+  bundle can't silently strip access, and a full export stays declarative.
+- **Creating a workload with no grants is advised, loudly.** It imports fine and then
+  403s the first time it touches anything, which is the single most common way a new
+  pod arrives broken. `import`, `import --dry-run`, and `lemma pods doctor` all say so.
 - The **deferred permissions pass** applies all grants *after* every resource exists,
-  so agent/function/table cross-references resolve.
-- A grant that references a table/function/agent/folder the bundle neither creates nor
-  finds in the pod is a **hard failure** (import aborts before writing).
-- **Connector grants are environment-specific** — the account lives in the target env,
-  not the bundle; import surfaces them as advisories. Wire the account up after import.
+  so agent/function/table/folder/app cross-references resolve. Both importers (the CLI
+  and the backend's async job) defer both agents and functions.
+- A grant referencing a table/function/agent/workflow/schedule/app/folder the bundle
+  neither creates nor finds in the pod is a **hard failure** (import aborts before
+  writing). A `connector_account` grant naming an unreachable account is too.
+- **Plain `connector` grants are environment-specific** — the connected account lives
+  in the target org, not the bundle; import surfaces them as advisories.
 - **Destructive grants** import fine but are advised (standing authority, no prompt).
+
+Verify after import — this is one command, not a guess:
+
+```bash
+lemma functions permissions get <name>
+lemma pods doctor              # zero-grant workloads, dangling + dead-account grants
+```

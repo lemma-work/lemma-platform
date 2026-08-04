@@ -1123,7 +1123,9 @@ def test_chat_creates_agent_conversation_and_streams_message(monkeypatch):
     assert "Lemma chat" in result.stdout
     assert "You" in result.stdout
     assert "hello back" in result.stdout
-    assert "completed" in result.stdout
+    # A bare "completed" is dropped in the default (answer-only) mode — it adds
+    # nothing beside the answer. `--verbose` still prints it.
+    assert "completed" not in result.stdout
 
 
 def test_chat_can_use_default_pod_agent_with_message_option(monkeypatch):
@@ -2876,7 +2878,8 @@ def test_coerce_csv_value(raw, expected):
     assert coerce_csv_value(raw) == expected
 
 
-def _doctor_client(*, tables, agents, agent_perms, surfaces=None, workflows=None, schedules=None):
+def _doctor_client(*, tables, agents, agent_perms, surfaces=None, workflows=None,
+                   schedules=None, files_tree=None, file_meta=None):
     # doctor resolves the pod via pod_client(), which returns client.pod(pod_id)
     # for a catalog-capable client — so resources use hierarchical method names
     # (matching the real SDK and the `describe` test).
@@ -2915,6 +2918,22 @@ def _doctor_client(*, tables, agents, agent_perms, surfaces=None, workflows=None
         def list(self, *, limit=1000):
             return {"items": schedules or []}
 
+    class FakeFiles:
+        """doctor reads the file tree once to check folder grants for real
+        (existence + whether the documents under them are indexed) instead of
+        emitting an unconditional "verify it exists" warning."""
+
+        def __init__(self):
+            self.tree_payload = files_tree or {
+                "tree": {"path": "/", "name": "/", "kind": "FOLDER", "children": []}
+            }
+
+        def tree(self, root_path="/", files_per_directory=20):
+            return self.tree_payload
+
+        def get(self, path):
+            return (file_meta or {}).get(path, {"path": path, "search_enabled": True})
+
     class FakeSurfaces:
         def list(self, *, limit=1000):
             return {"items": surfaces or []}
@@ -2926,6 +2945,7 @@ def _doctor_client(*, tables, agents, agent_perms, surfaces=None, workflows=None
         workflows=FakeWorkflows(),
         schedules=FakeSchedules(),
         surfaces=FakeSurfaces(),
+        files=FakeFiles(),
     )
     # `.pod(pod_id)` so pod_client() returns this hierarchical proxy directly.
     return SimpleNamespace(pod=lambda pod_id: pod_sdk)
@@ -3081,7 +3101,8 @@ def test_pod_create_with_starter_happy(monkeypatch, tmp_path):
     assert result.exit_code == 0, result.stdout
     assert (target / "pod.json").exists()
     assert (target / "agents" / "hello" / "hello.json").exists()
-    assert "imported into pod pod_x" in result.stdout
+    # Scaffolding narration is a diagnostic (stderr); the pod payload owns stdout.
+    assert "imported into pod pod_x" in result.output
 
 
 def test_normalize_datastore_operations_all():
@@ -3296,3 +3317,88 @@ def test_pods_describe_full_shows_everything(monkeypatch):
     assert result.exit_code == 0, result.stdout
     assert "refunds.md" in result.stdout
     assert "skills" in result.stdout
+
+
+_KNOWLEDGE_TREE = {
+    "tree": {
+        "path": "/",
+        "name": "/",
+        "kind": "FOLDER",
+        "children": [
+            {
+                "path": "/knowledge",
+                "name": "knowledge",
+                "kind": "FOLDER",
+                "children": [
+                    {
+                        "path": "/knowledge/policy.md",
+                        "name": "policy.md",
+                        "kind": "FILE",
+                        "children": [],
+                    }
+                ],
+            }
+        ],
+    }
+}
+
+_FOLDER_GRANT = {
+    "triage": [
+        {
+            "resource_type": "folder",
+            "resource_name": "/knowledge",
+            "permission_ids": ["folder.read"],
+        }
+    ]
+}
+
+
+def test_doctor_is_quiet_for_a_folder_grant_that_resolves(monkeypatch):
+    """The old check warned "verify it exists / will be created" for every folder
+    grant, whether or not it existed. Two of four warnings on a healthy pod were
+    noise, which is how a linter teaches you to stop reading it."""
+    client = _doctor_client(
+        tables=[],
+        agents=[{"name": "triage", "agent_runtime": {"profile_id": "p1"}}],
+        agent_perms=_FOLDER_GRANT,
+        files_tree=_KNOWLEDGE_TREE,
+    )
+    _patch_run(monkeypatch, pods, client)
+    result = runner.invoke(app, ["--pod", "pod-1", "pods", "doctor"])
+    assert result.exit_code == 0, result.stdout
+    assert "verify it exists" not in result.stdout
+    assert "/knowledge" not in result.stdout
+
+
+def test_doctor_errors_on_a_folder_grant_that_does_not_resolve(monkeypatch):
+    client = _doctor_client(
+        tables=[],
+        agents=[{"name": "triage", "agent_runtime": {"profile_id": "p1"}}],
+        agent_perms=_FOLDER_GRANT,
+        files_tree={
+            "tree": {"path": "/", "name": "/", "kind": "FOLDER", "children": []}
+        },
+    )
+    _patch_run(monkeypatch, pods, client)
+    result = runner.invoke(app, ["--pod", "pod-1", "pods", "doctor"])
+    assert result.exit_code == 1
+    assert "does not exist" in result.stdout
+
+
+def test_doctor_flags_a_granted_folder_whose_documents_are_unindexed(monkeypatch):
+    """The failure export/import used to produce: the folder is there, the files
+    are there, and every search returns nothing. Doctor said `ok no errors`."""
+    client = _doctor_client(
+        tables=[],
+        agents=[{"name": "triage", "agent_runtime": {"profile_id": "p1"}}],
+        agent_perms=_FOLDER_GRANT,
+        files_tree=_KNOWLEDGE_TREE,
+        file_meta={"/knowledge/policy.md": {"search_enabled": False}},
+    )
+    _patch_run(monkeypatch, pods, client)
+    result = runner.invoke(app, ["--pod", "pod-1", "pods", "doctor"])
+    assert result.exit_code == 0, result.stdout
+    # Rich wraps console output, so compare on collapsed whitespace.
+    out = " ".join(result.stdout.split())
+    assert "are indexed" in out
+    assert "searches there return nothing" in out

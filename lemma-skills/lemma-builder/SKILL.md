@@ -62,7 +62,9 @@ lemma schedules init nightly           # schedules/nightly/nightly.json
 lemma surfaces init slack              # surfaces/slack/slack.json
 
 lemma agents grant triage tickets:read,write /knowledge:read connector:gmail:use agent:helper:execute function:score_ticket:execute
-#   ^ merges into permissions.grants in place (keeps your JSONC comments): name:perms (table) | /path:perms (folder) | connector:name:use | agent:name:execute | function:name:execute
+#   ^ merges into permissions.grants in place (keeps your JSONC comments): name:perms (table) | /path:perms (folder) | type:name:perms
+#     types: table folder document connector account app function agent workflow schedule — see references/authorization-model.md §4b
+lemma agents permissions add triage tickets:read     # the same grammar against a LIVE pod (read -> merge -> replace)
 lemma agents schema                    # or `lemma schema agent` — print the example/shape for a resource type
 
 lemma pods create my-pod --with-starter   # create the pod AND scaffold+import a starter in one shot
@@ -113,7 +115,7 @@ Build order follows dependencies: **tables → files → functions → agents �
 
 Three rules that bite everyone:
 
-1. **Zero access by default, and no destructive power without a grant or approval.** Agents and functions are created with NO access to anything — not tables, not files/folders, not connectors. Every resource they touch must be granted explicitly, either via `permissions.grants` in their bundle JSON (exported automatically, replaced on import) or `lemma functions|agents permissions replace <name> --file grants.json`. A named workload's grant is standalone authority (grant-first). `MISSING_WORKLOAD_RESOURCE_GRANT` at runtime means a grant is missing; `DESTRUCTIVE_ACTION_REQUIRES_APPROVAL` means a delete/manage action needs either an explicit destructive grant or a user's session approval. Full 403 decoder + the complete model in `references/authorization-model.md`.
+1. **Zero access by default, and no destructive power without a grant or approval.** Agents and functions are created with NO access to anything — not tables, not files/folders, not connectors. Every resource they touch must be granted explicitly, either via `permissions.grants` in their bundle JSON (exported automatically, replaced on import) or, against a live pod, `lemma functions|agents permissions add <name> <resource>:<perms>`. Import and `lemma pods doctor` both flag a workload that ends up with **no grants at all** — the usual reason a fresh pod 403s. A named workload's grant is standalone authority (grant-first). `MISSING_WORKLOAD_RESOURCE_GRANT` at runtime means a grant is missing; `DESTRUCTIVE_ACTION_REQUIRES_APPROVAL` means a delete/manage action needs either an explicit destructive grant or a user's session approval. Full 403 decoder + the complete model in `references/authorization-model.md`.
 2. **Not everything bundles.** Connectors (auth configs, accounts) are org/pod runtime state and never round-trip — set those up with CLI commands and record the steps in the pod's README. Surfaces and workload permissions do round-trip. File bytes and table rows round-trip only when you ask: `--with-files` / `--with-data` on both export and import.
 3. **Leave a runbook.** Every production-quality bundle should include a README with: purpose, required CLI context, non-bundled setup steps, required uploaded files, connector auth configs/accounts, verification payloads, and the final end-to-end smoke test.
 

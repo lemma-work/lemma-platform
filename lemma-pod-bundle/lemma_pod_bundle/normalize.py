@@ -125,43 +125,36 @@ def _declared_reserved_columns(payload: dict[str, Any]) -> list[str]:
     return declared
 
 
+# Server-owned fields on a function response that the create/update request does
+# not accept. They must be stripped on BOTH sides: on export so a fresh bundle is
+# clean, and again on import so a bundle written by an older exporter (which left
+# them in) still applies. `revision_hash` is the one that used to slip through —
+# the request model dropped it silently, which is exactly the class of quiet loss
+# the importer now refuses.
+_FUNCTION_SERVER_FIELDS = frozenset(
+    {
+        "id",
+        "pod_id",
+        "user_id",
+        "created_at",
+        "updated_at",
+        "status",
+        "code_path",
+        "revision_hash",
+        "input_schema",
+        "output_schema",
+        "config_schema",
+        "allowed_actions",
+    }
+)
+
+
 def _normalize_function_payload(function: dict[str, Any]) -> dict[str, Any]:
-    payload = _strip_keys(
-        function,
-        {
-            "id",
-            "pod_id",
-            "user_id",
-            "created_at",
-            "updated_at",
-            "status",
-            "code_path",
-            "input_schema",
-            "output_schema",
-            "config_schema",
-            "allowed_actions",
-        },
-    )
-    return payload
+    return _strip_keys(function, set(_FUNCTION_SERVER_FIELDS))
 
 
 def _sanitize_function_payload_for_import(payload: dict[str, Any]) -> dict[str, Any]:
-    return _strip_keys(
-        payload,
-        {
-            "id",
-            "pod_id",
-            "user_id",
-            "created_at",
-            "updated_at",
-            "status",
-            "code_path",
-            "input_schema",
-            "output_schema",
-            "config_schema",
-            "allowed_actions",
-        },
-    )
+    return _strip_keys(payload, set(_FUNCTION_SERVER_FIELDS))
 
 
 def _normalize_agent_payload(agent: dict[str, Any]) -> dict[str, Any]:
@@ -267,21 +260,31 @@ def _surface_platform_from_payload(payload: dict[str, Any], resource_name: str) 
     return str(payload.get("platform") or resource_name).upper()
 
 
+# Server-owned app fields, stripped on export and again on import (see
+# _FUNCTION_SERVER_FIELDS for why both). `url` is derived from the deployment and
+# is not a create/update field.
+_APP_SERVER_FIELDS = frozenset(
+    {
+        "id",
+        "pod_id",
+        "user_id",
+        "created_at",
+        "updated_at",
+        "status",
+        "url",
+        "current_release_id",
+        "source_archive_path",
+        "allowed_actions",
+    }
+)
+
+
 def _normalize_app_payload(app: dict[str, Any]) -> dict[str, Any]:
-    return _strip_keys(
-        app,
-        {
-            "id",
-            "pod_id",
-            "user_id",
-            "created_at",
-            "updated_at",
-            "status",
-            "current_release_id",
-            "source_archive_path",
-            "allowed_actions",
-        },
-    )
+    return _strip_keys(app, set(_APP_SERVER_FIELDS))
+
+
+def _sanitize_app_payload_for_import(payload: dict[str, Any]) -> dict[str, Any]:
+    return _strip_keys(payload, set(_APP_SERVER_FIELDS))
 
 
 def _validate_function_payload(

@@ -6,9 +6,6 @@ from typing import Any
 
 import typer
 from lemma_sdk.openapi_client.models.create_function_request import CreateFunctionRequest
-from lemma_sdk.openapi_client.models.function_permissions_replace_request import (
-    FunctionPermissionsReplaceRequest,
-)
 from lemma_sdk.openapi_client.models.update_function_request import UpdateFunctionRequest
 
 from ..confirm import confirm_destructive
@@ -16,6 +13,15 @@ from ..io import emit, to_plain
 from ..payload import build_request, read_json
 from ..sdk import pod_client
 from ..state import run_with_client, state_from_ctx
+from ._grants import (
+    apply_inline_permissions,
+    change_live_grants,
+    emit_grants,
+    grants_from_options,
+    replace_grants,
+    report_inline_permissions,
+    split_inline_permissions,
+)
 
 app = typer.Typer(help="Function commands.")
 permissions_app = typer.Typer(help="Function resource permission commands.")
@@ -91,15 +97,27 @@ def create_function(
     Required: name (+ code with #function_name/#input_type_name/#output_type_name
     headers). Optional: type (API|JOB), visibility, permissions.grants. Prefer
     `lemma function init <name>`; run `lemma function schema` for the full shape.
+
+    A function starts with ZERO access. `permissions.grants` is applied right
+    after the create (the function create endpoint takes no inline permissions,
+    unlike agents) so the same payload shape works for both resource types and
+    for `lemma pods import`.
     """
     payload = read_json(json_payload, file, required=True)
     state = state_from_ctx(ctx)
-    result = run_with_client(
-        ctx,
-        lambda client, s: pod_client(client, s, pod).functions.create(
-            build_request(CreateFunctionRequest, payload, context="function")
-        ),
-    )
+    body, permissions = split_inline_permissions(payload)
+
+    def run(client, s):  # type: ignore[no-untyped-def]
+        pod_sdk = pod_client(client, s, pod)
+        created = pod_sdk.functions.create(
+            build_request(CreateFunctionRequest, body, context="function")
+        )
+        name = str(to_plain(created).get("name") or body.get("name") or "")
+        applied = apply_inline_permissions(pod_sdk, "function", name, permissions)
+        report_inline_permissions("function", name, applied, state=state)
+        return created
+
+    result = run_with_client(ctx, run)
     if result is not None:
         emit(state, result)
 
@@ -114,15 +132,28 @@ def update_function(
     ),
     pod: str | None = typer.Option(None, "--pod"),
 ) -> None:
-    """Update a function from a JSON payload."""
+    """Update a function from a JSON payload.
+
+    A `permissions.grants` block REPLACES the function's grants; omitting the
+    key leaves them alone.
+    """
     payload = read_json(json_payload, file, required=True)
     state = state_from_ctx(ctx)
-    result = run_with_client(
-        ctx,
-        lambda client, s: pod_client(client, s, pod).functions.update(
-            function, UpdateFunctionRequest.from_dict(payload)
-        ),
-    )
+    body, permissions = split_inline_permissions(payload)
+
+    def run(client, s):  # type: ignore[no-untyped-def]
+        pod_sdk = pod_client(client, s, pod)
+        updated = pod_sdk.functions.update(
+            function,
+            build_request(
+                UpdateFunctionRequest, body, context=f"function {function}"
+            ),
+        )
+        applied = apply_inline_permissions(pod_sdk, "function", function, permissions)
+        report_inline_permissions("function", function, applied, state=state)
+        return updated
+
+    result = run_with_client(ctx, run)
     if result is not None:
         emit(state, result)
 
@@ -133,37 +164,97 @@ def get_function_permissions(
     function: str = typer.Argument(...),
     pod: str | None = typer.Option(None, "--pod"),
 ) -> None:
-    """Show resource permissions for a function."""
+    """Show a function's resource grants, with their permission ids."""
     state = state_from_ctx(ctx)
     result = run_with_client(
         ctx,
         lambda client, s: pod_client(client, s, pod).functions.permissions(function),
     )
     if result is not None:
-        emit(state, result)
+        emit_grants(state, "function", function, result)
 
 
 @permissions_app.command("replace")
 def replace_function_permissions(
     ctx: typer.Context,
     function: str = typer.Argument(...),
-    json_payload: str | None = typer.Option(None, "--data", "-d", help="Raw JSON payload."),
+    json_payload: str | None = typer.Option(
+        None, "--data", "-d", help="Raw JSON payload (`-` reads stdin)."
+    ),
     file: Path | None = typer.Option(
         None, "--file", "-f", exists=True, dir_okay=False, readable=True
     ),
+    from_bundle: Path | None = typer.Option(
+        None,
+        "--from-bundle",
+        exists=True,
+        file_okay=False,
+        readable=True,
+        help="Bundle root or resource dir to lift permissions.grants from.",
+    ),
     pod: str | None = typer.Option(None, "--pod"),
 ) -> None:
-    """Replace resource permissions for a function."""
-    payload = read_json(json_payload, file, required=True)
+    """Replace resource permissions for a function (the whole list, not a merge).
+
+    Use `permissions add`/`remove` to change one grant. `--from-bundle <dir>`
+    pushes the grants a bundle already declares for this function, so you never
+    have to copy them out of the JSON by hand.
+    """
+    grants = grants_from_options(
+        "function", function, json_payload, file, from_bundle
+    )
     state = state_from_ctx(ctx)
     result = run_with_client(
         ctx,
-        lambda client, s: pod_client(client, s, pod).functions.replace_permissions(
-            function, FunctionPermissionsReplaceRequest.from_dict(payload)
+        lambda client, s: replace_grants(
+            pod_client(client, s, pod), "function", function, grants
         ),
     )
     if result is not None:
         emit(state, result)
+
+
+@permissions_app.command("add")
+def add_function_permissions(
+    ctx: typer.Context,
+    function: str = typer.Argument(...),
+    specs: list[str] = typer.Argument(
+        ...,
+        metavar="GRANT...",
+        help="name:perms or type:name:perms, e.g. tickets:read,write /knowledge:read connector:gmail:use",
+    ),
+    pod: str | None = typer.Option(None, "--pod"),
+    show: bool = typer.Option(
+        False, "--print", help="Print the merged grant list instead of applying it."
+    ),
+) -> None:
+    """Add grants to a LIVE function, merging with the ones it already holds.
+
+    The API only replaces the whole list, so this reads, merges, and writes back
+    — no hand-editing JSON. Same spec grammar as `lemma functions grant`, which
+    edits a bundle file instead.
+    """
+    change_live_grants(
+        ctx, kind="function", name=function, specs=specs, pod=pod, show=show, remove=False
+    )
+
+
+@permissions_app.command("remove")
+def remove_function_permissions(
+    ctx: typer.Context,
+    function: str = typer.Argument(...),
+    specs: list[str] = typer.Argument(
+        ..., metavar="GRANT...", help="Grants to drop, same syntax as `add`."
+    ),
+    pod: str | None = typer.Option(None, "--pod"),
+    show: bool = typer.Option(
+        False, "--print", help="Print the resulting grant list instead of applying it."
+    ),
+) -> None:
+    """Remove grants from a LIVE function (a grant with no permissions left is dropped)."""
+    change_live_grants(
+        ctx, kind="function", name=function, specs=specs, pod=pod, show=show, remove=True
+    )
 
 
 @app.command("grant")

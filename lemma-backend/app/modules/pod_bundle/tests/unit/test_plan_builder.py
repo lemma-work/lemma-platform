@@ -254,3 +254,37 @@ async def test_agent_grants_step_deferred_after_resources(tmp):
     assert kinds.index(StepKind.AGENT) < kinds.index(StepKind.AGENT_GRANTS)
     assert kinds.index(StepKind.WORKFLOW) < kinds.index(StepKind.AGENT_GRANTS)
     assert kinds.index(StepKind.FILE) < kinds.index(StepKind.AGENT_GRANTS)
+
+
+async def test_function_grants_step_deferred_after_resources(tmp):
+    """Function grants get their own late step, like agent grants.
+
+    Applied inline at FUNCTION time (as they were), a grant naming a folder or
+    another function this same bundle creates would resolve against a pod where
+    neither existed yet.
+    """
+    root = _build_bundle(tmp)
+    _write(root / "files" / "knowledge" / ".folder.json", {"visibility": "POD"})
+    _write(
+        root / "functions" / "rewriter" / "rewriter.json",
+        {
+            "name": "rewriter",
+            "permissions": {
+                "grants": [
+                    {"resource_type": "folder", "resource_name": "/knowledge"}
+                ]
+            },
+        },
+    )
+    plan = await PlanBuilder(FakeExisting()).build_plan(bundle_root=root)
+    kinds = [s.kind for s in plan.steps]
+    assert StepKind.FUNCTION in kinds and StepKind.FUNCTION_GRANTS in kinds
+    assert kinds.index(StepKind.FUNCTION) < kinds.index(StepKind.FUNCTION_GRANTS)
+    assert kinds.index(StepKind.FILE) < kinds.index(StepKind.FUNCTION_GRANTS)
+
+
+async def test_function_without_grants_gets_no_grants_step(tmp):
+    root = _build_bundle(tmp)
+    _write(root / "functions" / "plain" / "plain.json", {"name": "plain"})
+    plan = await PlanBuilder(FakeExisting()).build_plan(bundle_root=root)
+    assert StepKind.FUNCTION_GRANTS not in [s.kind for s in plan.steps]

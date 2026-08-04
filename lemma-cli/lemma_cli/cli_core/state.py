@@ -39,6 +39,11 @@ from lemma_sdk.config import (
 )
 
 console = Console()
+# Diagnostics — progress lines, warnings, advisories, resolution notes — go to
+# STDERR. stdout carries the command's result and nothing else, so
+# `--output json` is pipeable: any advisory used to land in the same stream ahead
+# of the JSON and break every `| jq` and `json.load` on it.
+err_console = Console(stderr=True)
 
 
 @dataclass

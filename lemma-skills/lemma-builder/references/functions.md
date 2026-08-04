@@ -407,6 +407,9 @@ manage grants directly:
 ```bash
 lemma functions grant save_expense expenses:read,write /reports:read,write connector:gmail:use
 lemma functions permissions replace save_expense --file payloads/save_expense.permissions.json
+# ...or, without writing a payload file at all:
+lemma functions permissions add save_expense expenses:read,write /receipts:read
+lemma functions permissions replace save_expense --from-bundle ./my-pod   # push what the bundle declares
 lemma functions permissions get save_expense
 ```
 

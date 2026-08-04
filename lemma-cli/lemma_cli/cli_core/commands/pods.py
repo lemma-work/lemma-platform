@@ -23,7 +23,7 @@ from ..io import emit, format_columns, list_items, to_plain
 from ..payload import build_request
 from ..sdk import pod_client
 from ..select import select_from_items
-from ..state import console, fail, run_with_client, state_from_ctx
+from ..state import console, err_console, fail, run_with_client, state_from_ctx
 
 app = typer.Typer(
     help="Pod commands.",
@@ -261,7 +261,7 @@ def create_pod(
             scaffold = init_pod(target, name)
         except ScaffoldError as exc:
             raise typer.BadParameter(str(exc)) from exc
-        console.print(f"[green]starter[/green] scaffolded {len(scaffold.files)} files -> {target}")
+        err_console.print(f"[green]starter[/green] scaffolded {len(scaffold.files)} files -> {target}")
 
     result = run_with_client(
         ctx,
@@ -279,12 +279,22 @@ def create_pod(
     if result is None:
         return
     emit(state, result)
+    pod_id = str(to_plain(result).get("id") or "")
+
+    # A created pod is NOT the active pod, and `pods select` only affects the
+    # current shell — which for anything scripted (every bash call a fresh
+    # shell) means it does nothing at all. Without this, the next command writes
+    # into whatever pod was previously active, possibly someone else's.
+    if pod_id:
+        err_console.print(
+            f"[dim]this pod is not active yet — use[/dim] --pod {pod_id} "
+            f"[dim]on later commands, or[/dim] export LEMMA_POD_ID={pod_id}"
+        )
 
     if not want_starter or target is None:
         return
     from ...cli_app.pod_bundle import import_pod_bundle
 
-    pod_id = str(to_plain(result).get("id") or "")
     # Bind the scaffolded bundle to the new pod on the active server so later
     # `lemma` commands from that folder target it. Skipped under the env server.
     if pod_id and not state.server_read_only:
@@ -296,7 +306,7 @@ def create_pod(
             values["LEMMA_ORG_ID"] = org_id
         try:
             binding = write_server_env(target, state.server, values)
-            console.print(
+            err_console.print(
                 f"[green]bound[/green] {target} -> pod on server "
                 f"'{state.server}' ([dim]{binding}[/dim])"
             )
@@ -308,7 +318,7 @@ def create_pod(
             client, pod_id=pod_id, source_dir=target, upsert=True
         ),
     )
-    console.print(f"[green]starter[/green] imported into pod {pod_id}")
+    err_console.print(f"[green]starter[/green] imported into pod {pod_id}")
 
 
 @app.command("get")
@@ -392,6 +402,90 @@ def doctor_pod(
         errors: list[str] = []
         warnings: list[str] = []
 
+        # Pod file tree, fetched once and shared by every folder-grant check.
+        def _norm(path: Any) -> str:
+            return "/" + "/".join(part for part in str(path or "").split("/") if part)
+
+        folders: set[str] = set()
+        documents: set[str] = set()
+
+        def walk_tree(node: dict) -> None:
+            for child in node.get("children") or []:
+                if not isinstance(child, dict):
+                    continue
+                path = _norm(child.get("path"))
+                if path == "/":
+                    continue
+                if str(child.get("kind") or "").upper() == "FOLDER":
+                    folders.add(path)
+                    walk_tree(child)
+                else:
+                    documents.add(path)
+
+        try:
+            tree = to_plain(pod_sdk.files.tree("/")).get("tree")
+            if isinstance(tree, dict):
+                walk_tree(tree)
+        except Exception as exc:  # noqa: BLE001 — surface, don't hide, a failed check
+            warnings.append(f"could not read the pod file tree: {exc}")
+
+        indexing_cache: dict[str, bool | None] = {}
+
+        def documents_under(prefix: str) -> list[str]:
+            root = _norm(prefix).rstrip("/") + "/"
+            return sorted(path for path in documents if path.startswith(root))
+
+        def is_indexed(path: str) -> bool | None:
+            """True/False, or None when the file's status can't be read."""
+            if path not in indexing_cache:
+                try:
+                    meta = to_plain(pod_sdk.files.get(path))
+                except Exception:  # noqa: BLE001 — unknown, not a finding
+                    indexing_cache[path] = None
+                else:
+                    indexing_cache[path] = bool(meta.get("search_enabled"))
+            return indexing_cache[path]
+
+        def check_folder_grant(kind: str, name: str, path: str) -> None:
+            """A folder grant used to produce an unconditional "verify it exists"
+            warning, which is noise the moment the folder does exist — and taught
+            people to stop reading doctor. Actually look."""
+            singular = kind[:-1]
+            target = _norm(path)
+            if target != "/" and target not in folders and not documents_under(target):
+                errors.append(
+                    f"{singular} '{name}' is granted on folder '{path}' which does "
+                    "not exist in this pod."
+                )
+                return
+            found = documents_under(target)
+            if not found:
+                return
+            # A granted knowledge folder whose documents are all unindexed answers
+            # every question with nothing. Export/import used to produce exactly
+            # this, and it is invisible without asking.
+            statuses = [is_indexed(doc) for doc in found[:25]]
+            known = [status for status in statuses if status is not None]
+            if known and not any(known):
+                warnings.append(
+                    f"{singular} '{name}' is granted on folder '{path}', but none "
+                    f"of its {len(known)} checked document(s) are indexed — "
+                    "searches there return nothing. Re-upload them, or check "
+                    "`lemma files stat <path>`."
+                )
+
+        account_cache: dict[str, bool] = {}
+
+        def account_reachable(account_id: str) -> bool:
+            if account_id not in account_cache:
+                try:
+                    client.connectors.accounts.get(account_id)
+                except Exception:  # noqa: BLE001 — unreachable is the finding
+                    account_cache[account_id] = False
+                else:
+                    account_cache[account_id] = True
+            return account_cache[account_id]
+
         def check_grants(kind: str, name: str) -> list[dict]:
             try:
                 perms = to_plain(getattr(pod_sdk, kind).permissions(name))
@@ -399,6 +493,16 @@ def doctor_pod(
                 warnings.append(f"could not read permissions for {kind[:-1]} '{name}': {exc}")
                 return []
             grants = [g for g in (perms.get("grants") or []) if isinstance(g, dict)]
+            # A workload with no grants isn't "fine by default" — it has zero
+            # access and 403s the first time it touches anything. Say so here as
+            # well as at import time, since a pod can also reach this state by a
+            # create that dropped its permissions.
+            if not grants:
+                warnings.append(
+                    f"{kind[:-1]} '{name}' holds NO grants — it cannot read any "
+                    f"table, folder, or connector. Grant it with "
+                    f"`lemma {kind} permissions add {name} <resource>:<perms>`."
+                )
             for grant in grants:
                 rtype = grant.get("resource_type")
                 rname = str(grant.get("resource_name") or "")
@@ -408,8 +512,15 @@ def doctor_pod(
                     errors.append(f"{kind[:-1]} '{name}' is granted on agent '{rname}' which does not exist.")
                 elif rtype == "function" and rname not in functions:
                     errors.append(f"{kind[:-1]} '{name}' is granted on function '{rname}' which does not exist.")
-                elif rtype == "folder":
-                    warnings.append(f"{kind[:-1]} '{name}' grants folder '{rname}' — verify it exists / will be created.")
+                elif rtype == "connector_account" and not account_reachable(rname):
+                    errors.append(
+                        f"{kind[:-1]} '{name}' pins connector account '{rname}', "
+                        "which this session cannot reach — the grant is dead. "
+                        "Reconnect the account, or drop the grant to fall back to "
+                        "the invoking user's own account."
+                    )
+                elif rtype in ("folder", "document"):
+                    check_folder_grant(kind, name, rname)
                 destructive = sorted(
                     p for p in (grant.get("permission_ids") or []) if p in DESTRUCTIVE_PERMISSION_IDS
                 )
@@ -609,7 +720,7 @@ def export_pod(
         from ...cli_app.scaffold import templatize_bundle
 
         root, changed = templatize_bundle(output_dir)
-        console.print(
+        err_console.print(
             f"[green]template[/green] stripped instance data from {changed} file(s) in {root}"
         )
 

@@ -12,21 +12,12 @@ from uuid import UUID
 
 from lemma_pod_bundle import load_resource_payload
 
-from app.core.authorization.grants import (
-    normalize_pod_resource_grants,
-    replace_grantee_resource_grants,
-    validate_pod_resource_grant_permissions,
-)
-from app.core.authorization.scope import uow_scope
 from app.modules.function.domain.entities import (
     FunctionEntity,
     FunctionType,
     FunctionUpdateEntity,
 )
-from app.modules.pod_bundle.infrastructure.applier import (
-    _grants_from_payload,
-    _substitute,
-)
+from app.modules.pod_bundle.infrastructure.applier import _substitute
 
 
 class FunctionStepRunner:
@@ -81,37 +72,15 @@ class FunctionStepRunner:
             type=function_type,
             visibility=payload.get("visibility"),
         )
-        function = await self._use_cases.upsert_function_for_import(
+        await self._use_cases.upsert_function_for_import(
             entity=entity,
             update_entity=update,
             code=code,
             user_id=user_id,
         )
 
-        grants = _grants_from_payload(payload)
-        if grants and function.id is not None:
-            validate_pod_resource_grant_permissions(grants)
-            async with uow_scope(self._uow_factory) as uow:
-                normalized = await normalize_pod_resource_grants(
-                    uow.session,
-                    pod_id=pod_id,
-                    grants=grants,
-                )
-                await replace_grantee_resource_grants(
-                    uow.session,
-                    pod_id=pod_id,
-                    grantee_type="FUNCTION",
-                    grantee_id=function.id,
-                    grants=normalized,
-                    created_by_user_id=user_id,
-                )
-
-            # Cache invalidation is external I/O and therefore follows the UoW.
-            from app.composition.pod_bundle_apps import (
-                invalidate_function_workspace_env_cache,
-            )
-
-            await invalidate_function_workspace_env_cache(
-                pod_id=pod_id,
-                function_id=function.id,
-            )
+        # Grants are NOT applied here. They are a deferred FUNCTION_GRANTS plan
+        # step (see plan_builder / applier._apply_function_grants) so a function
+        # granted a folder, an app, or another function that this same bundle
+        # creates resolves those names after they exist — this step runs before
+        # agents, apps, and files.
