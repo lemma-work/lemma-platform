@@ -360,7 +360,13 @@ def list_waiting_runs(
     pod: str | None = typer.Option(None, "--pod"),
     limit: int = typer.Option(100, "--limit"),
 ) -> None:
-    """Your approval queue: form waits assigned to you."""
+    """Your approval queue: form waits assigned TO YOU.
+
+    A form with no assignee is submittable by any member with execute access,
+    but it is nobody's queue item and does not appear here — so an empty queue
+    does not mean no run is parked. Use `workflows runs get <run-id>` (its
+    `active_wait`) to see what a specific run is blocked on.
+    """
     state = state_from_ctx(ctx)
     result = run_with_client(
         ctx,
@@ -376,7 +382,16 @@ def list_waiting_runs(
         return
     items = payload.get("items") or []
     if not items:
-        console.print("[dim]Nothing is waiting on you.[/dim]")
+        # "Nothing is waiting on you" was read as "nothing is waiting" — a run
+        # parked on an UNASSIGNED form is submittable by any member with execute
+        # access but belongs to no one's queue, so it never shows here. The API
+        # only exposes assigned waits, so say what this list covers rather than
+        # paying for a scan of every workflow's runs.
+        console.print(
+            "[dim]No form waits are assigned to you. A run parked on an "
+            "unassigned form won't appear here — check a specific run with "
+            "`lemma workflows runs get <run-id>` (see its active_wait).[/dim]"
+        )
         return
     rows = []
     for item in items:

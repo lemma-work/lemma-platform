@@ -238,6 +238,7 @@ lemma agents list
 lemma agents chat triage-agent "Summarize today's urgent tickets"   # interactive or one-shot
 lemma agents run triage-agent "Classify this: ..."                  # waits + streams the result (--no-wait to detach)
 lemma conversations list --agent triage-agent                       # an agent's runs (each run is a conversation)
+lemma conversations list --parent-id <conversation-id>              # what a sub-agent was asked, and answered
 lemma conversations messages <conversation-id>
 lemma conversations send <conversation-id> "Continue with the next batch"
 ```

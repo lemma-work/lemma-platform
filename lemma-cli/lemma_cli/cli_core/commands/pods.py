@@ -385,14 +385,22 @@ def describe_pod(
 def doctor_pod(
     ctx: typer.Context,
     pod: str | None = typer.Argument(None),
+    pod_option: str | None = typer.Option(
+        None,
+        "--pod",
+        help="Pod id or name. Same as the positional; both skills present --pod "
+        "as universal, and this was the one command that rejected it.",
+    ),
 ) -> None:
     """Check a pod's wiring: grants pointing at missing tables, workflow/schedule
     targets that don't exist, and surfaces missing an agent or account."""
 
+    target = pod_option or pod
+
     def run(client, s):  # type: ignore[no-untyped-def]
         from ...cli_app.pod_bundle import DESTRUCTIVE_PERMISSION_IDS
 
-        pod_sdk = pod_client(client, s, pod)
+        pod_sdk = pod_client(client, s, target)
         tables = {str(t.get("name")) for t in to_plain(list_items(pod_sdk.tables.list(limit=1000)))}
         agent_items = to_plain(list_items(pod_sdk.agents.list(limit=1000)))
         agents = {str(a.get("name")) for a in agent_items}
