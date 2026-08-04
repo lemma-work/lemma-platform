@@ -14,6 +14,16 @@ class OperationSummary(BaseModel):
         le=1,
         description="Relative relevance for the discovery query, from 0 to 1.",
     )
+    # Set only by the org-wide search, where hits span installs and the caller
+    # has no other way to know which one to execute against.
+    auth_config: Optional[str] = Field(
+        default=None,
+        description="Install this operation belongs to (org-wide search only).",
+    )
+    connector_id: Optional[str] = Field(
+        default=None,
+        description="Connector this operation belongs to (org-wide search only).",
+    )
 
 
 class OperationDetail(BaseModel):

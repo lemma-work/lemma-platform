@@ -23,6 +23,45 @@ router = APIRouter(
     tags=["Connectors"],
 )
 
+# Org-wide search lives outside the per-install prefix: its whole point is not
+# needing an install name.
+org_router = APIRouter(
+    prefix="/organizations/{organization_id}/connector-operations",
+    tags=["Connectors"],
+)
+
+
+@org_router.get(
+    "",
+    response_model=OperationDiscoverResponse,
+    operation_id="connector.operation.search",
+    summary="Search Connector Operations Across Installs",
+    description=(
+        "Search operations across every connector installed in the org. Each hit "
+        "carries the `auth_config` to execute it against, so a caller that knows "
+        "what it wants to do — but not which connector provides it — needs one "
+        "request instead of one per install."
+    ),
+)
+async def search_operations(
+    organization_id: UUID,
+    user: CurrentUser,
+    service: ConnectorOperationServiceDep,
+    query: str | None = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=1000),
+) -> OperationDiscoverResponse:
+    from app.modules.connectors.services.connector_operation_search import (
+        search_across_auth_configs,
+    )
+
+    return await search_across_auth_configs(
+        service,
+        user_id=user.id,
+        organization_id=organization_id,
+        query=query,
+        limit=limit,
+    )
+
 
 @router.get(
     "",

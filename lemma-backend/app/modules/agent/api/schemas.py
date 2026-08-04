@@ -108,6 +108,16 @@ class AgentSummaryResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
     allowed_actions: list[str] = Field(default_factory=list)
+    # Populated only for `?include=permissions`. None means "not requested"; an
+    # empty list means "holds no grants" — anything checking pod health has to
+    # tell those apart. Requesting it costs ONE extra query for the whole page,
+    # not one per agent, which is what the per-agent permissions endpoint forced
+    # every caller into.
+    grants: list[AgentResourcePermissionResponse] | None = None
+    # Whether the agent pins a runtime profile. The full `agent_runtime` config
+    # stays on the detail response; a list caller only ever asks "is one pinned?"
+    # and had to fetch every agent to find out.
+    has_pinned_runtime: bool = False
 
     model_config = ConfigDict(from_attributes=True)
 

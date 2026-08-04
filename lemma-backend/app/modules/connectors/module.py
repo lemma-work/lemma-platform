@@ -10,6 +10,7 @@ def _routers():
         status_router,
     )
     from app.modules.connectors.api.connector_operation_controller import (
+        org_router as operation_search,
         router as operation,
     )
     from app.modules.connectors.api.connector_trigger_controller import (
@@ -26,6 +27,7 @@ def _routers():
         auth_config,
         status_router,
         operation,
+        operation_search,
         trigger,
         connect_request,
         org_router,

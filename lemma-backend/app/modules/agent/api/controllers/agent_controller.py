@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from typing import Any
 from uuid import UUID
 
 from fastapi import APIRouter, Query, status
@@ -52,10 +53,18 @@ async def _agent_action_response(agent: Agent) -> AgentActionResponse:
     )
 
 
-def _agent_summary_response(agent: Agent) -> AgentSummaryResponse:
+def _agent_summary_response(
+    agent: Agent,
+    grants: list[AgentResourcePermissionResponse] | None = None,
+) -> AgentSummaryResponse:
     # `allowed_actions`, `toolsets` and `metadata` all live on the entity, so
     # from_attributes validation picks them up directly.
-    return AgentSummaryResponse.model_validate(agent)
+    summary = AgentSummaryResponse.model_validate(agent)
+    summary.has_pinned_runtime = bool(
+        getattr(getattr(agent, "agent_runtime", None), "profile_id", None)
+    )
+    summary.grants = grants
+    return summary
 
 
 @router.post(
@@ -132,8 +141,18 @@ async def list_agents(
     user: CurrentUser,
     service: AgentServiceDep,
     ctx: PodContextDep,
+    uow: UoWDep,
     page_token: str | None = Query(default=None),
     limit: int = Query(default=100, ge=1, le=1000),
+    include: list[str] = Query(
+        default_factory=list,
+        description=(
+            "Extra data to embed. `permissions` attaches each agent's resource "
+            "grants, resolved for the whole page in one query — without it, a "
+            "caller that needs grants must call the per-agent permissions "
+            "endpoint once per row."
+        ),
+    ),
 ) -> AgentListResponse:
     agents, next_cursor = await service.list_agents(
         pod_id=pod_id,
@@ -142,11 +161,46 @@ async def list_agents(
         requester_user_id=user.id,
         ctx=ctx,
     )
+    grants_by_agent = await _grants_for_agents(uow, pod_id, agents, include)
     return AgentListResponse(
-        items=[_agent_summary_response(item) for item in agents],
+        items=[
+            _agent_summary_response(
+                item,
+                grants_by_agent.get(item.id) if grants_by_agent is not None else None,
+            )
+            for item in agents
+        ],
         limit=limit,
         next_page_token=str(next_cursor) if next_cursor else None,
     )
+
+
+async def _grants_for_agents(
+    uow: Any,
+    pod_id: UUID,
+    agents: list[Agent],
+    include: list[str],
+) -> dict[UUID, list[AgentResourcePermissionResponse]] | None:
+    """Grants for a whole page of agents, or None when not requested."""
+    if not any(part.strip().lower() == "permissions" for part in include):
+        return None
+    from app.core.authorization.grants import list_grants_for_grantees
+
+    ids = [agent.id for agent in agents if agent.id is not None]
+    grouped = await list_grants_for_grantees(
+        uow.session, pod_id=pod_id, grantee_type="AGENT", grantee_ids=ids
+    )
+    return {
+        agent_id: [
+            AgentResourcePermissionResponse(
+                resource_type=resource_type,
+                resource_name=resource_name,
+                permission_ids=sorted(set(permission_ids)),
+            )
+            for (resource_type, resource_name), permission_ids in grants.items()
+        ]
+        for agent_id, grants in grouped.items()
+    }
 
 
 @router.get(

@@ -1,7 +1,7 @@
 """Function API controller."""
 
 from uuid import UUID
-from typing import Optional
+from typing import Any, Optional
 from fastapi import APIRouter, Depends, Query, Request, status
 
 from app.core.api.dependencies import UoWDep, get_uow_factory
@@ -71,10 +71,15 @@ async def _function_action_response(
     )
 
 
-def _function_summary_response(function: FunctionEntity) -> FunctionSummaryResponse:
+def _function_summary_response(
+    function: FunctionEntity,
+    grants: list[FunctionResourcePermissionResponse] | None = None,
+) -> FunctionSummaryResponse:
     # `allowed_actions` lives on the entity; from_attributes picks up the rest and
     # drops the heavy input/output/config schemas + code.
-    return FunctionSummaryResponse.model_validate(function)
+    summary = FunctionSummaryResponse.model_validate(function)
+    summary.grants = grants
+    return summary
 
 
 @router.post(
@@ -127,8 +132,18 @@ async def list_functions(
     pod_id: UUID,
     function_service: FunctionServiceDep,
     ctx: PodContextDep,
+    uow: UoWDep,
     limit: int = Query(default=100, ge=1, le=1000),
     page_token: Optional[str] = Query(default=None),
+    include: list[str] = Query(
+        default_factory=list,
+        description=(
+            "Extra data to embed. `permissions` attaches each function's "
+            "resource grants, resolved for the whole page in one query — "
+            "without it, a caller that needs grants must call the per-function "
+            "permissions endpoint once per row."
+        ),
+    ),
 ) -> FunctionListResponse:
     """List all functions in a pod."""
     user: UserEntity = request.state.user
@@ -140,11 +155,48 @@ async def list_functions(
         pod_id, user_id, limit, page_token, ctx=ctx
     )
 
+    grants_by_function = await _grants_for_functions(uow, pod_id, functions, include)
     return FunctionListResponse(
-        items=[_function_summary_response(f) for f in functions],
+        items=[
+            _function_summary_response(
+                f,
+                grants_by_function.get(f.id)
+                if grants_by_function is not None
+                else None,
+            )
+            for f in functions
+        ],
         limit=limit,
         next_page_token=next_cursor,
     )
+
+
+async def _grants_for_functions(
+    uow: Any,
+    pod_id: UUID,
+    functions: list[Any],
+    include: list[str],
+) -> dict[UUID, list[FunctionResourcePermissionResponse]] | None:
+    """Grants for a whole page of functions, or None when not requested."""
+    if not any(part.strip().lower() == "permissions" for part in include):
+        return None
+    from app.core.authorization.grants import list_grants_for_grantees
+
+    ids = [f.id for f in functions if f.id is not None]
+    grouped = await list_grants_for_grantees(
+        uow.session, pod_id=pod_id, grantee_type="FUNCTION", grantee_ids=ids
+    )
+    return {
+        function_id: [
+            FunctionResourcePermissionResponse(
+                resource_type=resource_type,
+                resource_name=resource_name,
+                permission_ids=sorted(set(permission_ids)),
+            )
+            for (resource_type, resource_name), permission_ids in grants.items()
+        ]
+        for function_id, grants in grouped.items()
+    }
 
 
 @router.get(

@@ -30,7 +30,11 @@ from app.modules.agent.tools.pod.models import (
     SearchFilesRequest,
     ViewDocumentPagesRequest,
 )
-from app.modules.agent.tools.pod.pod_data_access import PodServices, pod_services
+from app.modules.agent.tools.pod.pod_data_access import (
+    PodServices,
+    empty_data_error,
+    pod_services,
+)
 from app.modules.agent.tools.tool_errors import approval_error_result
 from app.modules.datastore.contracts import (
     DatastoreConflictError,
@@ -211,30 +215,6 @@ async def pod_get_records(
     )
 
 
-# Columns the platform manages; naming them in a write hint would invite the
-# model to set them.
-_SYSTEM_COLUMN_NAMES = frozenset({"id", "created_at", "updated_at", "user_id"})
-
-
-async def _writable_column_names(services: PodServices, table_name: str) -> list[str]:
-    """Column names an agent may actually set, for use in an error hint.
-
-    Best-effort: a table that can't be read (deleted, or not granted) yields no
-    hint rather than turning a helpful message into a second failure.
-    """
-    try:
-        table = await services.table.get_table(
-            services.ctx.pod_id, table_name, services.ctx
-        )
-    except Exception:  # noqa: BLE001 — the hint is a bonus, never the point
-        return []
-    return [
-        str(column.name)
-        for column in (getattr(table, "columns", None) or [])
-        if str(getattr(column, "name", "")) not in _SYSTEM_COLUMN_NAMES
-    ]
-
-
 async def pod_write_record(
     ctx: RunContext[BaseAgentContext],
     request: PodWriteRecordRequest,
@@ -253,23 +233,13 @@ async def pod_write_record(
             # Guard against silent blank-row writes: an empty/all-null `data`
             # (a frequent failure on smaller models) used to pass the `is None`
             # check and create a row of only system columns. Reject it instead.
-            #
-            # Name the table's actual columns. A model that sent `{}` once tends
-            # to send it again — a dogfood run burned three identical retries on
-            # this — and "must be non-empty" doesn't tell it what to put there.
-            columns = await _writable_column_names(services, request.table_name)
-            hint = (
-                f' Columns on "{request.table_name}": {", ".join(columns)}.'
-                if columns
-                else ""
-            )
+            # Naming the table's real columns is what makes the retry land: a
+            # model that sent `{}` once tends to send it again (a dogfood run
+            # burned three identical retries), and "must be non-empty" doesn't
+            # say what to put there.
             return {
                 "success": False,
-                "error": (
-                    f"`data` must be a non-empty object of column->value for "
-                    f'action=\'{request.action}\', e.g. {{"title": "..."}}. The '
-                    f"payload was empty, so nothing was written.{hint}"
-                ),
+                "error": await empty_data_error(services, request),
             }
         if request.action in ("update", "delete") and not request.record_id:
             return {

@@ -369,6 +369,59 @@ def grant_resource_type_values(resource_type: ResourceType) -> tuple[str, ...]:
     return tuple(sorted(values))
 
 
+async def list_grants_for_grantees(
+    session: AsyncSession,
+    *,
+    pod_id: UUID,
+    grantee_type: str,
+    grantee_ids: Sequence[UUID],
+) -> dict[UUID, dict[tuple[ResourceType, str], list[str]]]:
+    """Grants for MANY grantees in one query, keyed by grantee id.
+
+    The per-grantee :func:`list_grantee_resource_grants` is the right shape for a
+    single resource, but a caller that wants grants for a whole list — an agent
+    listing, a pod health check — had to issue one query (and, over HTTP, one
+    request) per row. Name resolution is already batched, so the only thing
+    missing was fetching the rows together. Grantees with no grants are present
+    with an empty mapping, so a caller can tell "none" from "not asked about".
+    """
+    if not grantee_ids:
+        return {}
+    unique_ids = list(dict.fromkeys(grantee_ids))
+    stmt = (
+        select(ResourcePermissionGrantModel)
+        .where(
+            ResourcePermissionGrantModel.pod_id == pod_id,
+            ResourcePermissionGrantModel.grantee_type == grantee_type,
+            ResourcePermissionGrantModel.grantee_id.in_(unique_ids),
+        )
+        .order_by(
+            ResourcePermissionGrantModel.grantee_id,
+            ResourcePermissionGrantModel.resource_type,
+            ResourcePermissionGrantModel.resource_id,
+            ResourcePermissionGrantModel.permission_id,
+        )
+    )
+    rows = list((await session.execute(stmt)).scalars().all())
+    names = await resolve_resource_names_by_ids(
+        session,
+        pod_id=pod_id,
+        refs=[(ResourceType(row.resource_type), row.resource_id) for row in rows],
+    )
+    grouped: dict[UUID, dict[tuple[ResourceType, str], list[str]]] = {
+        grantee_id: {} for grantee_id in unique_ids
+    }
+    for row in rows:
+        resource_type = ResourceType(row.resource_type)
+        resource_name = names.get((resource_type, row.resource_id))
+        if resource_name is None:
+            continue
+        grouped[row.grantee_id].setdefault(
+            (resource_type, resource_name), []
+        ).append(row.permission_id)
+    return grouped
+
+
 async def list_grantee_resource_grants(
     session: AsyncSession,
     *,
