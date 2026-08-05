@@ -407,6 +407,16 @@ impl Daemon {
                 "daemon_version": DAEMON_VERSION,
                 "daemon_api_revision": DAEMON_API_REVISION,
                 "pid": std::process::id(),
+                // Which binary is actually serving this socket, resolved through
+                // the filesystem rather than argv. A replaced app bundle keeps
+                // running from wherever its executable went — ~/.Trash, in the
+                // case this was written for — and the shell has no other way to
+                // tell that the daemon answering it is not the one it ships.
+                // Same version, same API revision, different build.
+                "executable": std::env::current_exe()
+                    .and_then(|path| std::fs::canonicalize(&path).or(Ok(path)))
+                    .ok()
+                    .map(|path| path.to_string_lossy().into_owned()),
                 "compatibility_supervisor": self.managed_runtime.is_none(),
                 "mode": if self.managed_runtime.is_some() {
                     "managed-local"
