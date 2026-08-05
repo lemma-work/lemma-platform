@@ -93,7 +93,7 @@ export interface StarterTheme {
 
 export const RECIPE_CATEGORIES: RecipeCategoryMeta[] = [
     { id: 'app-shapes', label: 'Build an app', blurb: 'Start from a recognizable product shape, then make it yours.', accent: 'brand', order: 1 },
-    { id: 'agent-channels', label: 'Put an agent where work happens', blurb: 'Give this pod a useful presence in the channels people already use.', accent: 'collaboration', order: 2 },
+    { id: 'agent-channels', label: 'Put an agent where work happens', blurb: 'Give this pod a useful presence in the surfaces people already use.', accent: 'collaboration', order: 2 },
     { id: 'operating-loops', label: 'Automate a loop', blurb: 'Set up work that keeps watching, routing, reviewing, or following up.', accent: 'intelligence', order: 3 },
     { id: 'published', label: 'Published kits', blurb: 'Install a complete, source-backed setup into this pod.', accent: 'success', order: 4 },
 ];
@@ -332,7 +332,7 @@ const PROMPT_RECIPES: Recipe[] = [
         source: { kind: 'prompt', prompt: `Build a portal and intake app for this pod.\nCreate a polished submission experience, the table that stores requests, and a workflow that validates, enriches, and routes each one. Add an internal review view and use an agent only where drafting or classification genuinely helps.\n${SEED}\nDemonstrate one submission arriving and being routed.` },
     },
 
-    // ── Agents in the channels people already use ─────────────────
+    // ── Agents in the surfaces people already use ─────────────────
     {
         id: 'whatsapp-agent', name: 'Custom WhatsApp agent', kicker: 'Define the job; keep the conversation and handoff in one pod.',
         category: 'agent-channels', builds: 'surface', outputs: ['agent', 'surface', 'app', 'table'], preview: 'whatsapp', platforms: ['WHATSAPP'], featured: true,
@@ -547,7 +547,7 @@ export function getRecipeHighlights(recipe: Recipe): string[] {
             return [
                 'A bot people message — nothing new to open',
                 'An agent responds, stores, and acts; you approve anything outbound',
-                'You pick the channel and who’s involved — the assistant connects it',
+                'You pick the surface and who’s involved — the assistant connects it',
             ];
         case 'workflow':
             return [
@@ -633,7 +633,7 @@ export const FIRST_RUN_DELIGHT = [
     'This is the very first thing this person is building in Lemma — their first impression of the product. Make it feel like magic, not setup.',
     'Open with a warm, genuine one-line greeting that welcomes them to Lemma and makes them feel they picked something special — confident and personal, never corporate or gushing. Then get straight to building.',
     'Lead with momentum: build a working first version fast and seed it with believable sample data so it is alive the moment it opens. Do not make them configure things before they see something work.',
-    'Wire the surface or connector that makes it feel connected to their real life — a bot they message, an inbox, a channel — and offer to connect it for them.',
+    'Wire the surface or connector that makes it feel connected to their real life — a bot they message, an inbox, a shared surface — and offer to connect it for them.',
     'Ask at most one short question, and only if you genuinely cannot proceed without it. Never block the wow on setup.',
     'Narrate warmly and briefly as you go, and slip in one small delightful touch they did not ask for.',
     'Finish by showing the working result and one concrete thing they can try right now. Keep it calm and confident — no walls of text.',

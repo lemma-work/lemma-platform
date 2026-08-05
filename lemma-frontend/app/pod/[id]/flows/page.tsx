@@ -810,8 +810,8 @@ function WorkflowCard({
                 className="custom-focus-ring mt-3 block rounded-md"
             >
                 <div className="min-w-0">
-                    <p className="truncate font-display text-base font-semibold text-[var(--text-primary)]">{flow.name}</p>
-                    <p className="mt-1 line-clamp-2 min-h-10 text-xs leading-5 text-[var(--text-secondary)]">
+                    <p className="resource-index-card-title truncate font-display text-base font-medium text-[var(--text-primary)]">{flow.name}</p>
+                    <p className="resource-index-card-summary mt-1 line-clamp-2 min-h-10 text-[var(--text-secondary)]">
                         {flow.description || 'Repeatable work for humans and AI.'}
                     </p>
                 </div>

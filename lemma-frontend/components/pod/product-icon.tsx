@@ -1,22 +1,22 @@
 'use client';
 
 import {
-    Chat,
-    ChatCircle,
+    AppWindow,
+    ChatTeardrop,
     Clock,
     Code,
-    Database,
+    Cube,
     File,
-    FileText,
+    Files,
+    FlowArrow,
     FolderOpen,
-    Gear,
-    GitMerge,
-    Plugs,
-    Rss,
-    ShieldCheck,
-    Sparkle,
-    SquaresFour,
+    FolderSimple,
+    MagicWand,
+    Plug,
+    Shield,
+    SlidersHorizontal,
     Table,
+    Tray,
 } from '@/components/ui/icons';
 
 export type ProductIconKind =
@@ -33,56 +33,57 @@ export type ProductIconKind =
     | 'folders'
     | 'functions'
     | 'surfaces'
-    | 'channels'
     | 'settings'
     | 'auth-rbac'
     | 'conversation';
 
 const iconByKind: Record<ProductIconKind, typeof FolderOpen> = {
-    pods: FolderOpen,
-    connectors: Plugs,
-    apps: SquaresFour,
-    agents: Sparkle,
-    workflows: GitMerge,
+    // A pod is a self-contained unit of data, agents and apps, not a directory —
+    // and it cannot share `folders`' glyph, which is what it did before.
+    pods: Cube,
+    connectors: Plug,
+    apps: AppWindow,
+    agents: MagicWand,
+    workflows: FlowArrow,
     schedules: Clock,
-    data: Database,
+    // `data` is the section and `tables` the resource inside it, so they share a
+    // glyph on purpose — the Data page is tables. `docs` and `files` stay apart:
+    // a doc is a stack you browse, a file is the single thing you opened.
+    data: Table,
     tables: Table,
-    docs: FileText,
+    docs: Files,
     files: File,
-    folders: FolderOpen,
+    folders: FolderSimple,
     functions: Code,
-    surfaces: ChatCircle,
-    channels: Rss,
-    settings: Gear,
-    'auth-rbac': ShieldCheck,
-    conversation: Chat,
+    // Surfaces are where work arrives — Slack, Gmail, WhatsApp — so the glyph is
+    // an inbox, not a speech bubble. Two bubbles for `surfaces` and
+    // `conversation` were indistinguishable at 14px, and they are different
+    // things: one is the pipe, the other is the thread that came down it.
+    surfaces: Tray,
+    settings: SlidersHorizontal,
+    'auth-rbac': Shield,
+    conversation: ChatTeardrop,
 };
 
 /**
- * Weight is the expressive axis: `regular` at rest, `bold` under the pointer,
- * `fill` once selected. Phosphor swaps path data per weight rather than
- * scaling a stroke, so the pointer step cannot be a CSS property — it is a
- * second glyph stacked on the first and crossfaded by the row that owns the
- * hover. A selected icon is already the loudest thing in its row, so it opts
- * out of the pointer layer and stays a single glyph.
- *
- * `interactive` is opt-in: identity icons that merely label a page header stay
- * inert and render one glyph, the same as before.
+ * Every product glyph is a `regular` outline in every state — at rest, under
+ * the pointer, and while selected. Weight and fill are deliberately not
+ * expressive axes here: a column of these icons is read by silhouette, and a
+ * glyph that thickens or fills on interaction changes how much ink one row
+ * carries relative to its neighbours, which is exactly what makes a nav look
+ * unsettled. Selection is carried by colour and the row's accent bar; the
+ * pointer is answered by a small scale in CSS.
  */
 export function ProductIcon({
     kind,
     size = 'md',
     state = 'default',
-    interactive = false,
 }: {
     kind: ProductIconKind;
     size?: 'xs' | 'sm' | 'md' | 'lg' | 'xl';
     state?: 'default' | 'selected';
-    interactive?: boolean;
 }) {
     const Icon = iconByKind[kind] || FolderOpen;
-    const selected = state === 'selected';
-    const respondsToPointer = interactive && !selected;
 
     return (
         <span
@@ -90,16 +91,8 @@ export function ProductIcon({
             data-size={size}
             data-kind={kind}
             data-state={state}
-            data-interactive={respondsToPointer ? 'true' : undefined}
         >
-            <Icon
-                weight={selected ? 'fill' : 'regular'}
-                className="lemma-product-icon-glyph"
-                data-layer="rest"
-            />
-            {respondsToPointer ? (
-                <Icon weight="bold" className="lemma-product-icon-glyph" data-layer="pointer" />
-            ) : null}
+            <Icon weight="regular" className="lemma-product-icon-glyph" />
         </span>
     );
 }

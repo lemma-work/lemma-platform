@@ -987,9 +987,15 @@ export function DocumentSpace({ podId }: { podId: string }) {
                                 </Tooltip>
                                 {/* A bare folder under `/skills` is not a skill —
                                     it is a row that will only ever say it won't
-                                    load. "New skill" is the way in there. */}
+                                    load. "New skill" is the way in there.
+
+                                    Quiet, not primary: a folder organises what
+                                    is already here, so it sits below "New page"
+                                    — which is the create this header is for —
+                                    and matches the data hub's own folder
+                                    action. */}
                                 {isSkillsFolder ? null : (
-                                    <Button variant="primary"
+                                    <Button variant="quiet"
                                         type="button"
                                         size="sm"
                                         className="docs-topbar-action gap-2 px-2 sm:px-3"

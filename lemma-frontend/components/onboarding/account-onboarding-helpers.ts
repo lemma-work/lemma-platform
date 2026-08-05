@@ -5,7 +5,7 @@ import {
   Code2,
   Lightbulb,
   Layers3,
-  Settings,
+  Cog,
   Sparkles,
   UserRound,
   UserPlus,
@@ -284,7 +284,7 @@ export const TEAM_OPTIONS: Array<{
     id: "operations",
     title: "Operations",
     description: "Approvals, queues, recurring work, and internal requests.",
-    icon: Settings,
+    icon: Cog,
   },
   {
     id: "recruiting",

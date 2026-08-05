@@ -14,7 +14,7 @@ import {
   Circle,
   Code2,
   Copy,
-  Database,
+  Table,
   FileAudio,
   FileCode2,
   FileSearch,
@@ -721,7 +721,7 @@ function PodDataTableDetails({
   const title = isQuery ? "Query result" : (table || "Records");
 
   return (
-    <ToolBlock icon={<Database className="size-3.5" />} title={title} status={toolStatusLabel(state, result)}>
+    <ToolBlock icon={<Table className="size-3.5" />} title={title} status={toolStatusLabel(state, result)}>
       <MetaRow
         entries={[
           { label: "Table", value: !isQuery ? table : undefined },
@@ -893,7 +893,7 @@ function PodWriteRecordDetails({ args, state, result }: { args: ToolCardArgs; st
   const dataEntries = summarizeToolPayload(data).map((entry) => ({ label: humanizeKey(entry.key), value: entry.value }));
 
   return (
-    <ToolBlock icon={<Database className="size-3.5" />} title={`${humanizeKey(action)} record`} status={toolStatusLabel(state, result)}>
+    <ToolBlock icon={<Table className="size-3.5" />} title={`${humanizeKey(action)} record`} status={toolStatusLabel(state, result)}>
       <div className="flex flex-wrap items-center gap-2">
         <span className={cn("rounded-full border border-current px-2 py-0.5 text-xs leading-4", tone)}>{action}</span>
         {table ? <span className="text-xs text-[var(--text-secondary)]">{table}</span> : null}

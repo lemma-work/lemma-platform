@@ -8,7 +8,7 @@
 import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { dedupToolInvocations, isFinalAnswerMessage } from "lemma-sdk";
-import { Database } from "@/components/ui/icons";
+import { Table } from "@/components/ui/icons";
 import { cn } from "@/lib/utils";
 import { InlineLoader } from "@/components/brand/loader";
 import {
@@ -443,7 +443,7 @@ export function DisplayResourceQueryPreview({
       <div className="flex items-center justify-between gap-3 border-b border-[color:color-mix(in_srgb,var(--row-border)_35%,transparent)] px-3 py-2">
         <div className="flex min-w-0 items-center gap-2">
           <span className="flex size-6 shrink-0 items-center justify-center rounded-md bg-[var(--surface-2)] text-[var(--text-tertiary)]">
-            <Database className="size-3.5" />
+            <Table className="size-3.5" />
           </span>
           <span className="truncate text-xs font-medium text-[var(--text-primary)]">
             Query result

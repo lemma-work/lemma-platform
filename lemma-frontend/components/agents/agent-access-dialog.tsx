@@ -7,13 +7,12 @@ import {
     Bot,
     Check,
     Code,
-    Database,
     FolderOpen,
     Globe2,
     Image as ImageIcon,
     ListTodo,
     MessageCircle,
-    Plugs,
+    Plug,
     Search,
     Sparkles,
     SquareTerminal,
@@ -70,7 +69,7 @@ type AccessCategory = {
 
 const CATEGORIES: AccessCategory[] = [
     { id: 'tools', label: 'Tools', icon: Wrench, blurb: 'Built-in abilities every conversation can draw on.' },
-    { id: 'connectors', label: 'Connectors', icon: Plugs, blurb: 'Outside apps this agent can act in, and whose account it uses.' },
+    { id: 'connectors', label: 'Connectors', icon: Plug, blurb: 'Outside apps this agent can act in, and whose account it uses.' },
     { id: 'tables', label: 'Tables', icon: TableIcon, blurb: 'Pod data it can read, and what it may change.' },
     { id: 'folders', label: 'Folders', icon: FolderOpen, blurb: 'Documents it can search, read, and cite.' },
     { id: 'functions', label: 'Functions', icon: Code, blurb: 'Deterministic code it can run instead of guessing.' },
@@ -90,7 +89,7 @@ const TOOL_COPY: Record<string, { label: string; description: string; icon: Lemm
     POD: {
         label: 'Pod data',
         description: 'Read and write this pod’s tables and files directly.',
-        icon: Database,
+        icon: TableIcon,
     },
     WEB_SEARCH: {
         label: 'Web search',
@@ -137,7 +136,7 @@ const TOOL_COPY: Record<string, { label: string; description: string; icon: Lemm
         // Connectors category, and both are required to act in one.
         label: 'Connected apps',
         description: 'Call connected apps directly, without a sandbox. Pick which ones under Connectors.',
-        icon: Plugs,
+        icon: Plug,
     },
 };
 
@@ -544,7 +543,7 @@ export function AgentAccessDialog({
                                         <OrphanRows
                                             names={orphanConnectors}
                                             note="Not connected in this organization."
-                                            icon={<Plugs className="h-4 w-4" />}
+                                            icon={<Plug className="h-4 w-4" />}
                                             onRemove={toggleConnector}
                                         />
                                         {availableConnectors
@@ -571,7 +570,7 @@ export function AgentAccessDialog({
                                                                 unoptimized
                                                                 className="h-4 w-4 object-contain"
                                                             />
-                                                        ) : <Plugs className="h-4 w-4" />}
+                                                        ) : <Plug className="h-4 w-4" />}
                                                         title={connector.title || connector.name || connector.id}
                                                         description={connector.description}
                                                         onToggle={() => toggleConnector(connector.id)}

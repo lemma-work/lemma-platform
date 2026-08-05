@@ -44,7 +44,7 @@ const SCENES: Partial<Record<ConceptId, React.ReactNode>> = {
             <line className="edu-stroke" x1="46" y1="98" x2="166" y2="64" strokeDasharray="3 4" />
             <rect className="edu-fill-soft edu-surface-pod" x="170" y="38" width="52" height="44" rx="9" />
             <text className="edu-label" x="196" y="64" textAnchor="middle">pod</text>
-            <text className="edu-label" x="14" y="63" textAnchor="middle" transform="rotate(-90 14 63)">channels</text>
+            <text className="edu-label" x="14" y="63" textAnchor="middle" transform="rotate(-90 14 63)">surfaces</text>
             <circle className="edu-dot edu-surface-dot--1" cx="48" cy="22" r="3.5" />
             <circle className="edu-dot edu-surface-dot--2" cx="48" cy="60" r="3.5" />
             <circle className="edu-dot edu-surface-dot--3" cx="48" cy="98" r="3.5" />

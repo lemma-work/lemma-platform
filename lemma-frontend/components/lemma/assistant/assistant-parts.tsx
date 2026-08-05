@@ -7,7 +7,7 @@ import {
   BarChart3,
   CheckSquare,
   ChevronDown,
-  Database,
+  Table,
   FileOutput,
   FileText,
   Mail,
@@ -309,7 +309,7 @@ export function displayResourceIcon(request: DisplayResourceRequest): ReactNode 
     case "FILE":
       return <FileText className={className} />;
     case "TABLE":
-      return <Database className={className} />;
+      return <Table className={className} />;
     case "AGENT":
       return <Users className={className} />;
     case "FUNCTION":

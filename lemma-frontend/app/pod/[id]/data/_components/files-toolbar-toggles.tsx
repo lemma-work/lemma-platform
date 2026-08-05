@@ -1,6 +1,6 @@
 'use client';
 
-import { Database, LayoutGrid, List as ListIcon, UserRound } from '@/components/ui/icons';
+import { Table, LayoutGrid, List as ListIcon, UserRound } from '@/components/ui/icons';
 
 import type { FileNamespaceMode } from '../_lib/file-helpers';
 
@@ -14,7 +14,7 @@ export function FileNamespaceToggle({ activeFileNamespace, onNamespaceChange }: 
         <div className="segmented-control">
             {(['PERSONAL', 'POD'] as const).map((namespace) => {
                 const active = activeFileNamespace === namespace;
-                const Icon = namespace === 'PERSONAL' ? UserRound : Database;
+                const Icon = namespace === 'PERSONAL' ? UserRound : Table;
                 return (
                     <button
                         key={namespace}

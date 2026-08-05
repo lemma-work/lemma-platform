@@ -111,6 +111,10 @@ export {
     CaretLeft as ChevronLeft,
     CaretRight as ChevronRight,
     CaretUp as ChevronUp,
+    // Switching between peers, not opening a menu. A lone down-caret says "there
+    // is more below this"; the pair says "there are others, and you can move to
+    // one" — which is the whole promise a pod switcher makes.
+    CaretUpDown as ChevronsUpDown,
     Question as CircleHelp,
     ClipboardText as ClipboardList,
     Clock as Clock3,
@@ -176,7 +180,13 @@ export {
     Scales as Scale,
     MagnifyingGlass as Search,
     PaperPlaneTilt as Send,
-    Gear as Settings,
+    // Settings is sliders, not a gear — the same glyph the ProductIcon registry
+    // resolves `settings` to. Aliasing it here rather than at each call site is
+    // what makes that true everywhere: pod settings in the account menu, org
+    // settings, a flow step's config, and Local settings all read from this one
+    // line. `Cog` keeps the gear for the places that mean machinery — a system
+    // actor, an operations category — which is a different idea from settings.
+    SlidersHorizontal as Settings,
     SlidersHorizontal as Settings2,
     ShareNetwork as Share2,
     ShieldWarning as ShieldAlert,
@@ -210,13 +220,17 @@ export {
 } from '@phosphor-icons/react/ssr';
 
 // Product/resource identity glyphs used by the semantic ProductIcon registry.
+// These are chosen to sit at one optical weight: a nav that stacks them in a
+// column shows up any glyph carrying more ink than its neighbours, so the
+// lightest member of each concept family wins over the most literal one.
 export {
-    Chat,
-    ChatCircle,
-    Gear,
-    GitMerge,
-    Plugs,
-    Rss,
-    Sparkle,
-    SquaresFour,
+    AppWindow,
+    ChatTeardrop,
+    Cube,
+    FlowArrow,
+    FolderSimple,
+    MagicWand,
+    Shield,
+    SlidersHorizontal,
+    Tray,
 } from '@phosphor-icons/react/ssr';

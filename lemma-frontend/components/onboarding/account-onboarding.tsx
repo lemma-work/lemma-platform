@@ -570,8 +570,8 @@ function SetupAssistant({
           name: podName,
           description:
             audienceForPod === "personal"
-              ? "A private workspace for apps, channel agents, knowledge, and operating loops."
-              : `${teamName || "Team"}'s shared workspace for apps, channel agents, knowledge, and operating loops.`,
+              ? "A private workspace for apps, surface agents, knowledge, and operating loops."
+              : `${teamName || "Team"}'s shared workspace for apps, surface agents, knowledge, and operating loops.`,
           organization_id: organization.id,
         });
         setBasePod(pod);

@@ -8,7 +8,7 @@ import {
     ArrowRight,
     Bot,
     CheckCircle2,
-    Database,
+    Table,
     FileArchive,
     Files,
     Github,
@@ -111,7 +111,7 @@ const RESOURCE_GROUPS: Array<{
         id: 'data',
         title: 'Data & knowledge',
         kinds: ['table', 'datastore', 'file', 'document'],
-        icon: Database,
+        icon: Table,
     },
     {
         id: 'connections',
@@ -1045,7 +1045,7 @@ export function ImportDialog({
                                     </span>
                                     <ArrowRight className="h-4 w-4" />
                                     <span>
-                                        <Database className="h-4 w-4" />
+                                        <Table className="h-4 w-4" />
                                         {targetLabel}
                                     </span>
                                 </div>

@@ -366,9 +366,13 @@ export function DatastoreTableView({
                         >
                             <Trash2 className="w-3.5 h-3.5" />
                         </Button> : null}
-                        {canWriteRecords ? <Button variant="primary" size="sm" onClick={() => setShowRecordEditor(true)} className="h-8 text-xs">
+                        {/* design.md §8: a toolbar create is not the primary —
+                            the records are what the user came for. The violet
+                            fill belongs to the empty state, where creating one
+                            really is the only thing to do. */}
+                        {canWriteRecords ? <Button variant="secondary" size="sm" onClick={() => setShowRecordEditor(true)} className="h-8 text-xs">
                             <Plus className="w-3.5 h-3.5" />
-                            New Record
+                            New record
                         </Button> : null}
                     </div>
                 </div>
@@ -519,7 +523,7 @@ export function DatastoreTableView({
                                                     </Button>
                                                 ) : canWriteRecords ? (
                                                     <Button
-                                                        variant="secondary"
+                                                        variant="primary"
                                                         size="sm"
                                                         className="mt-4 gap-1.5"
                                                         onClick={() => setShowRecordEditor(true)}

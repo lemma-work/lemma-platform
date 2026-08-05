@@ -1,11 +1,11 @@
 'use client';
 
-import { Database, Sparkles, UserRound } from '@/components/ui/icons';
+import { Table, Sparkles, UserRound } from '@/components/ui/icons';
 
 import { DOC_SECTIONS, type DocSectionId } from '@/lib/files/doc-sections';
 
 const SECTION_ICONS = {
-    POD: Database,
+    POD: Table,
     SKILLS: Sparkles,
     PERSONAL: UserRound,
 } as const;
