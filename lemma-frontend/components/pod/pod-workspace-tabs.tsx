@@ -36,7 +36,6 @@ function RouteTabIcon({ routeKey, active }: { routeKey: string; active: boolean 
             kind={routeTabKinds[routeKey] || 'pods'}
             size="xs"
             state={active ? 'selected' : 'default'}
-            interactive
         />
     );
 }
@@ -89,10 +88,17 @@ export function PodWorkspaceTabs({
                         data-state={active ? 'active' : undefined}
                         data-kind={tab.kind}
                         className={cn(
-                            'group relative inline-flex h-8 shrink-0 items-center overflow-hidden rounded-md border border-transparent text-[var(--text-secondary)] transition-colors',
+                            'pod-workspace-tab group relative inline-flex h-7 shrink-0 items-center overflow-hidden rounded-md border border-transparent text-[var(--text-secondary)] transition-colors',
                             'hover:bg-[color:color-mix(in_srgb,var(--surface-2)_62%,transparent)] hover:text-[var(--text-primary)]',
-                            'data-[state=active]:border-[var(--border-subtle)] data-[state=active]:bg-[var(--surface-1)] data-[state=active]:font-medium data-[state=active]:text-[var(--text-primary)]',
-                            tab.kind === 'home' ? 'min-w-[6.25rem]' : 'min-w-[7.5rem] max-w-[12rem]',
+                            // Active is carried by fill and colour alone. Weight
+                            // is not a state here: bolding the current tab
+                            // reflows every tab beside it and makes the strip
+                            // twitch as you move through it.
+                            'data-[state=active]:border-[var(--border-subtle)] data-[state=active]:bg-[var(--surface-1)] data-[state=active]:text-[var(--text-primary)]',
+                            // A floor wide enough that a closing tab does not
+                            // collapse to nothing, but not so wide that "hey"
+                            // reserves the same room as "Roundtable Hq".
+                            tab.kind === 'home' ? 'min-w-0' : 'min-w-[4.5rem] max-w-[11rem]',
                         )}
                     >
                         <Link
@@ -100,25 +106,27 @@ export function PodWorkspaceTabs({
                             aria-current={active ? 'page' : undefined}
                             title={tab.title}
                             className={cn(
-                                'custom-focus-ring inline-flex h-full min-w-0 flex-1 items-center gap-1.5 rounded-md pl-2.5 text-sm',
-                                closable || (tab.kind === 'app' && active && tab.url) ? 'pr-1' : 'pr-3',
+                                'custom-focus-ring inline-flex h-full min-w-0 flex-1 items-center gap-2 rounded-md pl-2.5',
+                                closable || (tab.kind === 'app' && active && tab.url) ? 'pr-1' : 'pr-2.5',
                             )}
                         >
+                            {/* Every glyph here stays a `regular` outline, active
+                                or not — same rule as the product icons. */}
                             {tab.kind === 'home' ? (
-                                <Home className="h-3.5 w-3.5 shrink-0" weight={active ? 'fill' : 'regular'} />
+                                <Home className="h-3.5 w-3.5 shrink-0" weight="regular" />
                             ) : tab.kind === 'new' ? (
-                                <Sparkles className="h-3.5 w-3.5 shrink-0" weight={active ? 'fill' : 'regular'} />
+                                <Sparkles className="h-3.5 w-3.5 shrink-0" weight="regular" />
                             ) : tab.kind === 'app' ? (
                                 <span
                                     data-accent={accent}
-                                    className="app-tile app-icon flex h-5 w-5 shrink-0 items-center justify-center rounded-md text-xs font-medium leading-none"
+                                    className="app-tile app-icon flex h-4 w-4 shrink-0 items-center justify-center rounded font-medium leading-none"
                                 >
                                     {tab.icon || tab.title.charAt(0)}
                                 </span>
                             ) : tab.kind === 'route' ? (
                                 <RouteTabIcon routeKey={tab.resourceId} active={active} />
                             ) : (
-                                <MessageCircle className="h-3.5 w-3.5 shrink-0" weight={active ? 'fill' : 'regular'} />
+                                <MessageCircle className="h-3.5 w-3.5 shrink-0" weight="regular" />
                             )}
                             <span className="min-w-0 flex-1 truncate">{tab.title}</span>
                             {tab.kind === 'conversation' ? <ConversationActivity tab={tab} /> : null}
@@ -131,9 +139,9 @@ export function PodWorkspaceTabs({
                                 rel="noreferrer"
                                 aria-label={`Open ${tab.title} in a new tab`}
                                 title="Open in new tab"
-                                className="custom-focus-ring mr-1 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-[var(--text-tertiary)] transition-colors hover:bg-[var(--surface-3)] hover:text-[var(--text-primary)]"
+                                className="custom-focus-ring mr-1 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-md text-[var(--text-tertiary)] transition-colors hover:bg-[var(--surface-3)] hover:text-[var(--text-primary)]"
                             >
-                                <ExternalLink className="h-3.5 w-3.5" strokeWidth={1.8} />
+                                <ExternalLink className="h-3 w-3" strokeWidth={1.8} />
                             </a>
                         ) : null}
 
@@ -144,13 +152,13 @@ export function PodWorkspaceTabs({
                                 size="icon"
                                 onClick={() => onClose(tab.id)}
                                 className={cn(
-                                    'custom-focus-ring mr-1 flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-[var(--text-tertiary)] transition-colors hover:bg-[var(--surface-3)] hover:text-[var(--text-primary)]',
+                                    'custom-focus-ring mr-1 flex h-5 w-5 shrink-0 items-center justify-center rounded text-[var(--text-tertiary)] transition-colors hover:bg-[var(--surface-3)] hover:text-[var(--text-primary)]',
                                     active ? 'opacity-100' : 'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100',
                                 )}
                                 aria-label={`Close ${tab.title}`}
                                 title={`Close ${tab.title}`}
                             >
-                                <X className="h-3.5 w-3.5" strokeWidth={1.8} />
+                                <X className="h-3 w-3" strokeWidth={1.8} />
                             </Button>
                         ) : null}
                     </div>

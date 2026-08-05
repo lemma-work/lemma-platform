@@ -657,21 +657,6 @@
    assistant docks (narrow surface), 2 then 3 columns as room opens up. Driven
    by the surface container, not the viewport, so a docked assistant gives
    stacked full-width cards instead of a crushed grid. */
-/* Launcher grid: many small, square-ish tiles. auto-fill (not auto-fit) keeps
-   tiles compact even when there are only one or two apps, instead of stretching
-   a lone tile across the whole row. */
-.apps-grid {
-  display: grid;
-  gap: var(--space-3);
-  grid-template-columns: repeat(auto-fill, minmax(260px, 320px));
-}
-
-@container pod-surface (max-width: 620px) {
-  .apps-grid {
-    grid-template-columns: minmax(0, 1fr);
-  }
-}
-
 .docs-list-toolbar {
   container-type: inline-size;
 }
@@ -748,18 +733,7 @@
 .lemma-product-icon-glyph {
   height: 100%;
   width: 100%;
-}
-
-/* The pointer weight sits exactly on the resting one, so thickening reads as
-   the same glyph gaining weight rather than two icons trading places. */
-.lemma-product-icon-glyph[data-layer="pointer"] {
-  position: absolute;
-  inset: 0;
-  opacity: 0;
-}
-
-.lemma-product-icon[data-interactive="true"] .lemma-product-icon-glyph {
-  transition: opacity var(--dur-hover) var(--ease-out);
+  transition: transform var(--dur-hover) var(--ease-out);
 }
 
 .lemma-product-icon[data-size="sm"] {
@@ -803,23 +777,37 @@
   color: inherit;
 }
 
-/* Any control that opts an icon into the pointer layer gets the weight swap —
-   anchored on the control rather than a row class so new call sites need no
-   CSS. `data-interactive` keeps the reach narrow. */
-a:hover .lemma-product-icon[data-interactive="true"] .lemma-product-icon-glyph[data-layer="rest"],
-a:focus-visible .lemma-product-icon[data-interactive="true"] .lemma-product-icon-glyph[data-layer="rest"],
-button:hover .lemma-product-icon[data-interactive="true"] .lemma-product-icon-glyph[data-layer="rest"],
-button:focus-visible .lemma-product-icon[data-interactive="true"] .lemma-product-icon-glyph[data-layer="rest"] {
-  opacity: 0;
+/* Pointer feedback is motion, never weight or fill: every product glyph stays a
+   `regular` outline in every state, so a row can answer the cursor without the
+   icon changing how much ink it carries. Anchored on the control rather than a
+   row class so new call sites need no CSS. */
+a:hover .lemma-product-icon-glyph,
+a:focus-visible .lemma-product-icon-glyph,
+button:hover .lemma-product-icon-glyph,
+button:focus-visible .lemma-product-icon-glyph {
+  transform: scale(1.16);
 }
 
-a:hover .lemma-product-icon[data-interactive="true"] .lemma-product-icon-glyph[data-layer="pointer"],
-a:focus-visible .lemma-product-icon[data-interactive="true"] .lemma-product-icon-glyph[data-layer="pointer"],
-button:hover .lemma-product-icon[data-interactive="true"] .lemma-product-icon-glyph[data-layer="pointer"],
-button:focus-visible .lemma-product-icon[data-interactive="true"] .lemma-product-icon-glyph[data-layer="pointer"] {
-  opacity: 1;
+@media (prefers-reduced-motion: reduce) {
+  .lemma-product-icon-glyph {
+    transition: none;
+  }
+
+  a:hover .lemma-product-icon-glyph,
+  a:focus-visible .lemma-product-icon-glyph,
+  button:hover .lemma-product-icon-glyph,
+  button:focus-visible .lemma-product-icon-glyph {
+    transform: none;
+  }
 }
 
+/* Rows rest at `--text-secondary`, not `--text-primary`. Resting them at the
+   hover colour reads as more legible one row at a time, but it flattens the
+   column: with every row already at full strength there is nothing left for
+   hover and active to move to, and the panel becomes a wall of black with no
+   focus in it. The pointer is answered by the icon instead — it lifts from
+   `--text-tertiary` and scales, which is a change you notice on the row you
+   are on without the other rows having to shout alongside it. */
 .lemma-sidebar-row {
   display: flex;
   width: 100%;
@@ -839,10 +827,12 @@ button:focus-visible .lemma-product-icon[data-interactive="true"] .lemma-product
   color: var(--text-primary);
 }
 
+/* Fill plus accent bar, and nothing else. This carried a full 1px ring as well,
+   which made a short label like "Apps" read as a big outlined box with a lot of
+   nothing in it — the ring draws the empty width, the fill alone does not. */
 .lemma-sidebar-row[data-active="true"] {
   background: var(--sidebar-active-bg);
   color: var(--text-primary);
-  box-shadow: inset 0 0 0 1px var(--border-subtle);
 }
 
 .lemma-sidebar-row-sm {
@@ -912,11 +902,13 @@ button:focus-visible .lemma-product-icon[data-interactive="true"] .lemma-product
   white-space: nowrap;
 }
 
+/* Matches `.workspace-sidebar-conversation-row` on type size, gutter and gap:
+   the places and the history are one column, so they take one measure. */
 .lemma-sidebar-row-base {
-  height: 1.75rem;
-  gap: var(--space-3);
+  height: 1.625rem;
+  gap: var(--space-2-5);
   padding-inline: 0.625rem;
-  font-size: var(--text-sm);
+  font-size: 0.8125rem;
 }
 
 .lemma-sidebar-row-comfy {
@@ -965,6 +957,34 @@ button:focus-visible .lemma-product-icon[data-interactive="true"] .lemma-product
 
 .workspace-sidebar-primary-action {
   cursor: pointer;
+  /* The sidebar's chrome measure, shared with `.lemma-sidebar-row-base` and
+     `.workspace-sidebar-conversation-row` — the action sits at the top of the
+     same column and has to be set in the same size. */
+  font-size: 0.8125rem;
+}
+
+/* The glyph answers the pointer, the same way the product icons in the nav do.
+   These are raw Phosphor icons rather than `ProductIcon`, so they need the
+   transform wired up here — the border deliberately does not move, because a
+   control that grows an edge on hover reads as a different control. */
+.workspace-sidebar-primary-action svg {
+  transition: transform var(--dur-hover) var(--ease-out);
+}
+
+.workspace-sidebar-primary-action:hover svg,
+.workspace-sidebar-primary-action:focus-visible svg {
+  transform: scale(1.16);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .workspace-sidebar-primary-action svg {
+    transition: none;
+  }
+
+  .workspace-sidebar-primary-action:hover svg,
+  .workspace-sidebar-primary-action:focus-visible svg {
+    transform: none;
+  }
 }
 
 /* One scannable line per conversation: a status dot in a fixed gutter, then the
@@ -974,9 +994,10 @@ button:focus-visible .lemma-product-icon[data-interactive="true"] .lemma-product
   cursor: pointer;
   height: 2rem;
   /* Gutter + gap are sized so the title's left edge lands on the same x as the
-     place labels below, which sit behind a product icon. The two lists read as
-     one column, not two indents. */
-  gap: var(--space-3);
+     place labels above, which sit behind a product icon. The two lists read as
+     one column, not two indents — change this gap and `.lemma-sidebar-row-base`
+     together or the column splits. */
+  gap: var(--space-2-5);
   padding-inline: 0.625rem;
   font-size: 0.8125rem;
   line-height: 1.25rem;
@@ -987,12 +1008,47 @@ button:focus-visible .lemma-product-icon[data-interactive="true"] .lemma-product
   transition: color var(--dur-base) var(--ease-out);
 }
 
-/* The one hard rule in the sidebar: above it is this pod's history, below it is
-   where things live. Full-strength, unlike the washed-out hairlines elsewhere in
-   the shell, because it is separating two kinds of thing rather than two
-   groups of the same thing. */
+/* The tab strip runs directly above the sidebar's history, so it takes the same
+   measure the sidebar column does. The app initial inside a tab is a glyph in a
+   1rem box, not text, and is sized to fit the box. */
+.pod-workspace-tab {
+  font-size: 0.8125rem;
+}
+
+.pod-workspace-tab .app-icon {
+  font-size: 0.625rem;
+}
+
+/* A hairline between tabs, so a dense strip reads as separate cards without
+   giving every tab a border of its own. It sits on the left edge of each tab
+   after the first, and retracts around the active tab and under the pointer —
+   next to a filled or hovered tab the divider is one line too many, and the
+   fill already does the separating. */
+.pod-workspace-tab + .pod-workspace-tab::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0.375rem;
+  bottom: 0.375rem;
+  width: 1px;
+  background: var(--border-subtle);
+  transition: opacity var(--dur-hover) var(--ease-out);
+}
+
+.pod-workspace-tab[data-state="active"]::before,
+.pod-workspace-tab[data-state="active"] + .pod-workspace-tab::before,
+.pod-workspace-tab:hover::before,
+.pod-workspace-tab:hover + .pod-workspace-tab::before {
+  opacity: 0;
+}
+
+/* The one rule in the sidebar: above it is where things live, below it is this
+   pod's history. It only has to mark the seam between two kinds of thing — the
+   change in rhythm either side already does most of that work, so the line can
+   sit well below the strength of the shell's own hairlines. */
 .workspace-sidebar-places {
-  border-top: 1px solid var(--border-subtle);
+  border-bottom: 1px solid
+    color-mix(in srgb, var(--border-subtle) 40%, transparent);
 }
 
 .workspace-sidebar-filter {
@@ -1005,6 +1061,14 @@ button:focus-visible .lemma-product-icon[data-interactive="true"] .lemma-product
 
 .workspace-sidebar-filter:hover {
   border-color: var(--border-strong);
+}
+
+/* The mark and the name in the sidebar header — the one place on screen that
+   says which pod you are in. Keyed on the pod id, so this plays on a switch and
+   only on a switch. Everything around it survives the navigation intact, and a
+   workspace that changed under you should be seen to change. */
+.workspace-sidebar-identity {
+  animation: pod-topbar-content-enter var(--dur-route) var(--ease-standard) both;
 }
 
 .flow-execution-row-button,
@@ -1077,6 +1141,22 @@ button:focus-visible .lemma-product-icon[data-interactive="true"] .lemma-product
 
 .lemma-menu-row-between {
   justify-content: space-between;
+}
+
+/* The pod you are standing in, in the switcher. Selected states read from the
+   accent channel (design.md §2), but at a tint rather than a fill — the row is
+   still one of a list and has to stay as readable as the rest; the check at
+   full accent is what confirms it. Hover stays live, because the row is still a
+   link and a row that stops answering the pointer reads as disabled. */
+.lemma-pod-switcher-row[data-current="true"] {
+  background: rgb(var(--accent-rgb) / 0.1);
+  color: var(--text-primary);
+}
+
+.lemma-pod-switcher-row[data-current="true"]:hover,
+.lemma-pod-switcher-row[data-current="true"]:focus-visible,
+.lemma-pod-switcher-row[data-current="true"][data-highlighted] {
+  background: rgb(var(--accent-rgb) / 0.16);
 }
 
 .lemma-sidebar-rail-icon {

@@ -110,6 +110,177 @@
   }
 }
 
+/* ────────────────────────────────────────────
+   HERO COMPOSER
+   The one loud thing on pod home. Everything else on the page is quiet by
+   design, so this reads as the place you act from rather than as a search box
+   pinned to the top of a list.
+   ──────────────────────────────────────────── */
+.pod-home-composer {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2-5);
+  min-height: 3.875rem;
+  padding: 0 0.75rem 0 0.875rem;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-xl);
+  background: var(--surface-1);
+  box-shadow: var(--shadow-sm);
+  transition:
+    border-color var(--dur-fast) var(--ease-standard),
+    box-shadow var(--dur-fast) var(--ease-standard);
+}
+
+.pod-home-composer:hover {
+  border-color: var(--border-strong);
+}
+
+.pod-home-composer:focus-within {
+  border-color: color-mix(in srgb, rgb(var(--accent-rgb)) 55%, transparent);
+  box-shadow:
+    var(--shadow-sm),
+    0 0 0 3px color-mix(in srgb, rgb(var(--accent-rgb)) 12%, transparent);
+}
+
+.pod-home-composer-input {
+  font-size: var(--text-base);
+}
+
+.pod-home-eyebrow {
+  font-family: var(--font-mono-family);
+  font-size: var(--text-2xs);
+  font-weight: 500;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+  text-align: center;
+}
+
+/* ────────────────────────────────────────────
+   THE ROOM
+   Who is inside this pod — people and agents in one row of faces, because a
+   pod is the boundary they share and both are the same kind of fact about it.
+   Sits directly under the composer and is the second thing on the page, so it
+   is sized to be read rather than skimmed past.
+   ──────────────────────────────────────────── */
+.pod-home-presence {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2) var(--space-3);
+  font-size: var(--text-sm);
+  line-height: 1.5rem;
+  color: var(--text-secondary);
+}
+
+.pod-home-presence-copy {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+}
+
+.pod-home-presence-link {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  text-decoration: none;
+  transition: color var(--dur-fast) var(--ease-standard);
+}
+
+.pod-home-presence-link:hover,
+.pod-home-presence-link:focus-visible {
+  color: var(--text-primary);
+}
+
+.pod-home-presence-duty {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1-5);
+}
+
+/* The agent's name is the one proper noun in this row, so it carries the
+   weight. Everything around it stays secondary. */
+.pod-home-presence-duty b {
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.pod-home-presence-sep {
+  width: 1px;
+  height: 0.875rem;
+  background: var(--border-subtle);
+}
+
+.pod-home-presence-faces,
+.pod-home-presence-surfaces {
+  display: inline-flex;
+  align-items: center;
+}
+
+.pod-home-presence-avatar {
+  display: inline-flex;
+  overflow: hidden;
+  width: 1.625rem;
+  height: 1.625rem;
+  align-items: center;
+  justify-content: center;
+  margin-left: -0.375rem;
+  border: 2px solid var(--pod-main-bg);
+  color: #ffffff;
+  font-size: var(--text-2xs);
+  font-weight: 600;
+  line-height: 1;
+}
+
+.pod-home-presence-avatar:first-child {
+  margin-left: 0;
+}
+
+/* People are round, agents are square. One row, two kinds of member, told
+   apart by shape rather than by a second list. */
+.pod-home-presence-avatar-person {
+  border-radius: var(--radius-full);
+}
+
+.pod-home-presence-avatar-agent {
+  border-radius: var(--radius-sm);
+}
+
+/* Four fixed tints rather than a generated hue: a hash straight to hsl() drifts
+   into the state colours and starts implying an agent is failing. */
+.pod-home-presence-avatar-t0 { background: rgb(var(--accent-rgb)); }
+.pod-home-presence-avatar-t1 { background: var(--state-success); }
+.pod-home-presence-avatar-t2 { background: var(--state-warning); }
+.pod-home-presence-avatar-t3 { background: var(--text-secondary); }
+
+.pod-home-presence-live {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-full);
+  background: var(--state-success);
+}
+
+.pod-home-presence-surface {
+  display: inline-flex;
+  width: 1.1875rem;
+  height: 1.1875rem;
+  align-items: center;
+  justify-content: center;
+  margin-left: -0.25rem;
+  border-radius: var(--radius-xs);
+  font-size: 0.625rem;
+  color: var(--text-secondary);
+}
+
+.pod-home-presence-surface:first-child {
+  margin-left: 0;
+}
+
 .pod-home-work-section {
   padding-top: var(--space-4);
   border-top: 0 !important;

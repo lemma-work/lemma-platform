@@ -72,7 +72,7 @@ function SidebarContent({
                         data-active={pathname === '/' ? 'true' : undefined}
                         className="lemma-sidebar-row lemma-sidebar-row-comfy"
                     >
-                        <ProductIcon kind="pods" size="sm" state={pathname === '/' ? 'selected' : 'default'} interactive />
+                        <ProductIcon kind="pods" size="sm" state={pathname === '/' ? 'selected' : 'default'} />
                         Pods
                     </Link>
                     <Link
@@ -186,7 +186,7 @@ function RailIconLink({
                     data-active={isActive ? 'true' : undefined}
                     className="lemma-sidebar-rail-icon"
                 >
-                    <ProductIcon kind={kind} size="sm" state={isActive ? 'selected' : 'default'} interactive />
+                    <ProductIcon kind={kind} size="sm" state={isActive ? 'selected' : 'default'} />
                 </Link>
             </TooltipTrigger>
             <TooltipContent side="right">{label}</TooltipContent>

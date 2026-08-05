@@ -2,11 +2,12 @@
 
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import {
     Check,
     ChevronDown,
+    ChevronsUpDown,
     Home,
     PanelLeftClose,
     Plus,
@@ -44,16 +45,22 @@ import {
     tablesQueryOptions,
 } from '@/lib/hooks/use-datastores';
 import { flowsQueryOptions } from '@/lib/hooks/use-flows';
-import { useAccessiblePods, type AccessiblePodGroup } from '@/lib/hooks/use-pods';
+import { useAccessiblePods, type AccessiblePod, type AccessiblePodGroup } from '@/lib/hooks/use-pods';
 import { useScopedConversations } from '@/lib/hooks/use-assistants';
 import {
     filterSidebarConversations,
     mergeSidebarConversations,
     SIDEBAR_CONVERSATION_LIMIT,
 } from '@/lib/assistant/sidebar-conversations';
+import {
+    filterSwitcherPodGroups,
+    filterSwitcherPods,
+    shouldShowPodFilter,
+    toPodDisplayLabel,
+} from '@/lib/pods/pod-switcher';
 import { getAppRecipeExamples } from '@/lib/recipes/recipes';
 import type { Conversation } from '@/lib/types';
-import { getConversationStatusView } from '@/lib/utils/conversations';
+import { getConversationSignal } from '@/lib/utils/conversations';
 import { Skeleton } from '@/components/shared/loading';
 
 interface WorkspaceSidebarProps {
@@ -69,6 +76,58 @@ interface WorkspaceSidebarProps {
 }
 
 const DATASTORE_NAME = 'default';
+
+/**
+ * Whether the setup places are disclosed. Kept per-user rather than per-pod:
+ * whether you are someone who builds workflows is a fact about you, not about
+ * which pod you happen to have open.
+ *
+ * A module store rather than component state because the shell mounts this
+ * sidebar twice — once inline, once inside the mobile drawer. Two copies of the
+ * same preference would drift the moment the viewport crossed `md`.
+ */
+const SIDEBAR_MORE_STORAGE_KEY = 'lemma:sidebar-more-open';
+
+const moreDisclosureListeners = new Set<() => void>();
+let moreDisclosureCache: boolean | null = null;
+
+function subscribeToMoreDisclosed(listener: () => void) {
+    moreDisclosureListeners.add(listener);
+    return () => {
+        moreDisclosureListeners.delete(listener);
+    };
+}
+
+function getMoreDisclosed() {
+    if (moreDisclosureCache !== null) return moreDisclosureCache;
+
+    try {
+        moreDisclosureCache = window.localStorage.getItem(SIDEBAR_MORE_STORAGE_KEY) === '1';
+    } catch {
+        // localStorage can be unavailable in private or restricted browser contexts.
+        moreDisclosureCache = false;
+    }
+
+    return moreDisclosureCache;
+}
+
+// Closed on the server and through hydration, so the first client render agrees
+// with the markup it is adopting; the stored answer lands on the pass after.
+function getMoreDisclosedOnServer() {
+    return false;
+}
+
+function setMoreDisclosed(open: boolean) {
+    moreDisclosureCache = open;
+
+    try {
+        window.localStorage.setItem(SIDEBAR_MORE_STORAGE_KEY, open ? '1' : '0');
+    } catch {
+        // localStorage can be unavailable in private or restricted browser contexts.
+    }
+
+    moreDisclosureListeners.forEach((listener) => listener());
+}
 
 type AssistantCreationKind = 'agent' | 'app' | 'workflow' | 'table';
 
@@ -152,25 +211,12 @@ function getAssistantCreationInstructions(kind: AssistantCreationKind): string {
     ].join('\n');
 }
 
-function toDisplayLabel(value: string | null | undefined) {
-    const cleaned = (value || '')
-        .replace(/[_-]+/g, ' ')
-        .replace(/\s+/g, ' ')
-        .trim();
-
-    if (!cleaned) return 'Untitled';
-
-    return cleaned
-        .split(' ')
-        .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-        .join(' ');
-}
-
 /**
- * The sidebar is the pod's activity spine: identity, one way to act, the
- * conversation history, and a fixed set of places. Its shape never changes with
- * the route — resource lists belong to the page that owns them, not to a second
- * copy in the nav.
+ * The sidebar is the pod's activity spine: identity, one way to act, a fixed
+ * set of places, and then the conversation history. Its shape never changes
+ * with the route — resource lists belong to the page that owns them, not to a
+ * second copy in the nav. The places sit above the history because they are the
+ * part that must hold still; the history is the only thing here that stretches.
  */
 export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: WorkspaceSidebarProps) {
     const pathname = usePathname();
@@ -183,6 +229,11 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
     const [podSwitcherOpen, setPodSwitcherOpen] = useState(false);
     const [conversationFilter, setConversationFilter] = useState('');
     const [filterOpen, setFilterOpen] = useState(false);
+    const moreDisclosed = useSyncExternalStore(
+        subscribeToMoreDisclosed,
+        getMoreDisclosed,
+        getMoreDisclosedOnServer,
+    );
     const { data: podsData, isLoading: isLoadingPods } = useAccessiblePods({
         enabled: podSwitcherOpen,
     });
@@ -195,6 +246,7 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
     const canUseData = podAccess.canAccessRoute('data');
     const canUseDocs = podAccess.canAccessRoute('files');
     const canUseApps = podAccess.canAccessRoute('apps');
+    const canUsePodSettings = podAccess.canAccessRoute('settings');
     const canCreateAgents = podAccess.can('agent.create');
     const canCreateApps = podAccess.can('app.create');
     const canCreateWorkflows = podAccess.can('workflow.create');
@@ -210,10 +262,29 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
     const {
         data: conversationHistory,
         isLoading: isLoadingConversationHistory,
+        refetch: refetchConversationHistory,
     } = useScopedConversations(
         { podId },
         { limit: SIDEBAR_CONVERSATION_LIMIT, enabled: canUseConversations },
     );
+
+    // Leaving a conversation is the moment the live copy of it stops being
+    // live, and the moment the merge above stops trusting it. Nothing else
+    // refreshes this list — it is not polled and does not refetch on focus — so
+    // without this the row you just left would keep whatever it was doing when
+    // you looked away. One list request per switch buys every row a truthful
+    // resting state.
+    const previouslyOpenedConversationIdRef = useRef<string | null | undefined>(undefined);
+    useEffect(() => {
+        const previous = previouslyOpenedConversationIdRef.current;
+        previouslyOpenedConversationIdRef.current = openedConversationId;
+
+        // `undefined` is the first pass, where the query is already in flight.
+        if (previous === undefined || previous === openedConversationId) return;
+        if (!canUseConversations) return;
+
+        void refetchConversationHistory();
+    }, [canUseConversations, openedConversationId, refetchConversationHistory]);
     // The controller can hold conversations the capped query missed, so trim
     // after merging — otherwise a brand new conversation could push the list
     // past the limit it is meant to hold.
@@ -221,8 +292,9 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
         () => mergeSidebarConversations(
             conversationHistory?.items || [],
             controllerConversations,
+            openedConversationId,
         ).slice(0, SIDEBAR_CONVERSATION_LIMIT),
-        [controllerConversations, conversationHistory?.items],
+        [controllerConversations, conversationHistory?.items, openedConversationId],
     );
 
     const visibleConversations = useMemo(
@@ -272,9 +344,9 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
     }, [basePath, podId, queryClient, router]);
 
     // The places are fixed and ordered the same on every route, so their
-    // positions can be learned. Settings is reachable from the topbar and the
-    // account menu, so it does not take a slot here.
-    const places = [
+    // positions can be learned. These four are where a day is spent, so they
+    // hold permanent slots.
+    const primaryPlaces = [
         {
             href: `${basePath}/app/pages`,
             label: 'Apps',
@@ -291,14 +363,6 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
             onIntent: prefetchAgents,
         },
         {
-            href: `${basePath}/flows`,
-            label: 'Workflows',
-            kind: 'workflows' as const,
-            active: isActive(`${basePath}/flows`),
-            visible: canUseWorkflows,
-            onIntent: prefetchWorkflows,
-        },
-        {
             href: `${basePath}/data`,
             label: 'Data',
             kind: 'data' as const,
@@ -313,6 +377,20 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
             active: isActive(`${basePath}/files`),
             visible: canUseDocs,
         },
+    ].filter((place) => place.visible);
+
+    // Setup surfaces: you author a workflow, wire a connector, or change a pod
+    // setting when something changes, not on the way through. One disclosure
+    // costs a slot; three permanent rows cost three.
+    const morePlaces = [
+        {
+            href: `${basePath}/flows`,
+            label: 'Workflows',
+            kind: 'workflows' as const,
+            active: isActive(`${basePath}/flows`),
+            visible: canUseWorkflows,
+            onIntent: prefetchWorkflows,
+        },
         {
             href: `${basePath}/connectors`,
             label: 'Connectors',
@@ -320,7 +398,22 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
             active: isActive(`${basePath}/connectors`),
             visible: canUseConnectors,
         },
+        {
+            href: `${basePath}/settings`,
+            label: 'Pod settings',
+            kind: 'settings' as const,
+            active: isActive(`${basePath}/settings`),
+            visible: canUsePodSettings,
+        },
     ].filter((place) => place.visible);
+
+    // A collapsed group holding the page you are on is a nav that cannot show
+    // you where you are, so standing inside More forces it open. That is not a
+    // preference being overridden — it is the one moment there is nothing to
+    // prefer, so the row drops its toggle instead of offering a dead one. The
+    // stored answer is untouched and takes over again when you navigate away.
+    const moreHoldsActivePlace = morePlaces.some((place) => place.active);
+    const moreExpanded = moreDisclosed || moreHoldsActivePlace;
 
     const openConversation = (conversationId: string) => {
         router.push(`${basePath}/conversations/${encodeURIComponent(conversationId)}`);
@@ -388,29 +481,38 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
                         <DropdownMenu.Trigger asChild>
                             <button
                                 type="button"
-                                className="workspace-sidebar-trigger-button custom-focus-ring flex w-full min-w-0 items-center gap-2 rounded-md border border-transparent bg-transparent px-1.5 py-1 text-left text-[var(--text-primary)] transition-colors hover:border-[var(--border-subtle)] hover:bg-[var(--surface-2)] data-[state=open]:border-[var(--border-subtle)] data-[state=open]:bg-[var(--surface-2)]"
+                                /* A hairline at rest, strengthening to the full
+                                   edge and fill on hover. Transparent until
+                                   hovered, this read as a label with a glyph
+                                   after it — the pod's name is the one thing in
+                                   the shell people never think to press, so it
+                                   has to carry an edge before the pointer
+                                   arrives. An edge and not a fill: the filled
+                                   control directly below it is the action, and
+                                   two fills stacked make identity compete with
+                                   it. */
+                                className="workspace-sidebar-trigger-button custom-focus-ring flex w-full min-w-0 items-center gap-2 rounded-md border border-[color:color-mix(in_srgb,var(--border-subtle)_52%,transparent)] bg-transparent px-1.5 py-1 text-left text-[var(--text-primary)] transition-colors hover:border-[var(--border-subtle)] hover:bg-[var(--surface-2)] data-[state=open]:border-[var(--border-subtle)] data-[state=open]:bg-[var(--surface-2)]"
                                 aria-label={`Switch pod. Current pod: ${podName || 'Current pod'}`}
+                                title="Switch pod"
                             >
-                                <ResourceIcon
-                                    iconUrl={podIconUrl}
-                                    alt={`${podName || 'Current pod'} icon`}
-                                    label={podName || 'Current pod'}
-                                    className="h-6 w-6 shrink-0 rounded-md border-[color:color-mix(in_srgb,var(--border-subtle)_58%,transparent)] bg-transparent text-[var(--text-tertiary)]"
-                                    fallback={
-                                        <span className="lemma-pod-badge">
-                                            {(podName || 'Pod')
-                                                .trim()
-                                                .split(/\s+/)
-                                                .slice(0, 2)
-                                                .map((part) => part.charAt(0).toUpperCase())
-                                                .join('') || 'P'}
-                                        </span>
-                                    }
-                                />
-                                <span className="block min-w-0 flex-1 truncate text-sm font-medium leading-5 text-[var(--text-primary)]">
-                                    {podName || 'Current pod'}
+                                {/* Keyed on the pod so the mark and the name are
+                                    replaced, not relabelled, when you switch. The
+                                    shell around them survives a switch intact, so
+                                    without this the only evidence that anything
+                                    happened is a word quietly changing. */}
+                                <span key={podId} className="workspace-sidebar-identity flex min-w-0 flex-1 items-center gap-2">
+                                    <ResourceIcon
+                                        iconUrl={podIconUrl}
+                                        alt={`${podName || 'Current pod'} icon`}
+                                        label={podName || 'Current pod'}
+                                        className="h-6 w-6 shrink-0 rounded-md border-[color:color-mix(in_srgb,var(--border-subtle)_58%,transparent)] bg-transparent text-[var(--text-tertiary)]"
+                                        fallback={<PodMark name={podName} />}
+                                    />
+                                    <span className="block min-w-0 flex-1 truncate text-sm font-medium leading-5 text-[var(--text-primary)]">
+                                        {podName || 'Current pod'}
+                                    </span>
                                 </span>
-                                <ChevronDown className="h-4 w-4 shrink-0 text-[var(--text-tertiary)]" />
+                                <ChevronsUpDown className="h-4 w-4 shrink-0 text-[var(--text-tertiary)]" />
                             </button>
                         </DropdownMenu.Trigger>
                         <PodSwitcherMenu
@@ -457,7 +559,10 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
                         <button
                             type="button"
                             onClick={startConversation}
-                            className="workspace-sidebar-primary-action custom-focus-ring flex h-8 min-w-0 flex-1 items-center gap-2 rounded-md border border-[var(--border-subtle)] bg-[var(--surface-1)] px-2.5 text-sm font-medium text-[var(--text-primary)] transition-colors hover:border-[var(--border-strong)] hover:bg-[var(--surface-2)]"
+                            /* Rests at the fill it used to take on hover, so the
+                               control is visible without being bolded or given
+                               the brightest surface in the panel. */
+                            className="workspace-sidebar-primary-action custom-focus-ring flex h-8 min-w-0 flex-1 items-center gap-2.5 rounded-md border border-[var(--border-subtle)] bg-[var(--surface-2)] px-2.5 text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-3)] hover:text-[var(--text-primary)]"
                         >
                             <Plus className="h-3.5 w-3.5 shrink-0" />
                             <span className="min-w-0 flex-1 truncate text-left">New conversation</span>
@@ -469,8 +574,8 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
                                 <button
                                     type="button"
                                     className={cn(
-                                        'workspace-sidebar-primary-action custom-focus-ring flex h-8 shrink-0 items-center justify-center rounded-md border border-[var(--border-subtle)] bg-[var(--surface-1)] text-[var(--text-tertiary)] transition-colors hover:border-[var(--border-strong)] hover:bg-[var(--surface-2)] hover:text-[var(--text-primary)] data-[state=open]:bg-[var(--surface-2)]',
-                                        canWriteConversations ? 'w-8' : 'min-w-0 flex-1 gap-2 px-2.5 text-sm',
+                                        'workspace-sidebar-primary-action custom-focus-ring flex h-8 shrink-0 items-center justify-center rounded-md border border-[var(--border-subtle)] bg-[var(--surface-2)] text-[var(--text-tertiary)] transition-colors hover:bg-[var(--surface-3)] hover:text-[var(--text-primary)] data-[state=open]:bg-[var(--surface-3)]',
+                                        canWriteConversations ? 'w-8' : 'min-w-0 flex-1 gap-2.5 px-2.5',
                                     )}
                                     aria-label="Create something else"
                                     title="Create something else"
@@ -550,6 +655,32 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
                         </DropdownMenu.Root>
                     ) : null}
                 </div>
+            ) : null}
+
+            {primaryPlaces.length || morePlaces.length ? (
+                <nav
+                    aria-label="Pod places"
+                    className="workspace-sidebar-places shrink-0 space-y-0.5 px-3 pb-2 pt-2"
+                >
+                    {primaryPlaces.map((place) => (
+                        <PlaceLink key={place.href} {...place} />
+                    ))}
+                    {morePlaces.length ? (
+                        <>
+                            <MoreDisclosureRow
+                                expanded={moreExpanded}
+                                onToggle={moreHoldsActivePlace
+                                    ? undefined
+                                    : () => setMoreDisclosed(!moreDisclosed)}
+                            />
+                            {moreExpanded
+                                ? morePlaces.map((place) => (
+                                    <PlaceLink key={place.href} {...place} />
+                                ))
+                                : null}
+                        </>
+                    ) : null}
+                </nav>
             ) : null}
 
             <Dialog open={assistantCreationKind !== null} onOpenChange={(open) => {
@@ -740,25 +871,22 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
                 <div className="min-h-0 flex-1" />
             )}
 
-            <div className="workspace-sidebar-places shrink-0 px-3 pb-3 pt-3">
-                <LocalSettingsButton className="mb-1" />
-                <div className="space-y-0.5">
-                    {places.map((place) => (
-                        <PlaceLink key={place.href} {...place} />
-                    ))}
+            {/* Local settings is the desktop shell's own control centre, not a
+                pod place, so it stays down here with the account rather than
+                joining the nav above. */}
+            <div className="shrink-0 border-t border-[color:color-mix(in_srgb,var(--border-subtle)_62%,transparent)] px-3 pb-3 pt-2">
+                <LocalSettingsButton className="mb-1.5" />
+                <div className="flex items-center gap-1.5">
+                    <Link
+                        href="/home"
+                        aria-label="Go to Lemma home"
+                        title="Lemma home"
+                        className="workspace-sidebar-trigger-button custom-focus-ring flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-2)]"
+                    >
+                        <Logo size="xs" variant="mark-only" />
+                    </Link>
+                    <AccountMenu podId={podId} />
                 </div>
-            </div>
-
-            <div className="flex shrink-0 items-center gap-1.5 border-t border-[color:color-mix(in_srgb,var(--border-subtle)_62%,transparent)] px-3 pb-3 pt-2">
-                <Link
-                    href="/home"
-                    aria-label="Go to Lemma home"
-                    title="Lemma home"
-                    className="workspace-sidebar-trigger-button custom-focus-ring flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-2)]"
-                >
-                    <Logo size="xs" variant="mark-only" />
-                </Link>
-                <AccountMenu podId={podId} />
             </div>
         </aside>
     );
@@ -769,6 +897,11 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
  * rather than by a second line of text — a title plus metadata per row turns a
  * list you scan into a list you read, and the whole point of this column is
  * that you can scan it.
+ *
+ * The mark is quiet by default. It only takes a colour when the conversation is
+ * doing something now or wants something from you now, because a column where
+ * most dots are lit is a column that cannot point at anything. What each state
+ * is worth is decided in `getConversationSignal`, not here.
  */
 /** Conversation titles vary in length, so the placeholders do too. */
 const CONVERSATION_ROW_SKELETON_WIDTHS = ['w-3/5', 'w-5/12', 'w-2/3', 'w-1/2', 'w-7/12', 'w-1/2'];
@@ -782,8 +915,7 @@ function ConversationRow({
     active: boolean;
     onOpen: () => void;
 }) {
-    const statusView = getConversationStatusView(conversation.status);
-    const filled = statusView.isActive || statusView.isAwaiting || statusView.state === 'failed';
+    const signal = getConversationSignal(conversation);
 
     return (
         <button
@@ -797,23 +929,67 @@ function ConversationRow({
                 <span
                     className={cn(
                         'block h-1.5 w-1.5 rounded-full',
-                        filled ? 'bg-current' : 'border border-current opacity-45',
-                        statusView.tone === 'live' && 'text-[var(--delight)]',
-                        statusView.tone === 'warning' && 'text-[var(--state-warning)]',
-                        statusView.tone === 'danger' && 'text-[var(--state-error)]',
-                        statusView.isActive && 'lemma-live-pulse',
+                        signal.filled ? 'bg-current' : 'border opacity-45',
+                        // A resting dot takes a fixed border colour rather than
+                        // `currentColor`: the row's text brightens on hover and
+                        // when active, and a mark that brightens with the
+                        // pointer reads as a status that changed.
+                        signal.tone === 'none' && 'border-[var(--text-tertiary)]',
+                        signal.tone === 'live' && 'text-[var(--delight)]',
+                        signal.tone === 'warning' && 'text-[var(--state-warning)]',
+                        signal.tone === 'danger' && 'text-[var(--state-error)]',
+                        signal.pulse && 'lemma-live-pulse',
                     )}
                 />
             </span>
             <span className="min-w-0 flex-1 truncate">
                 {conversation.title || 'Untitled conversation'}
             </span>
-            {filled ? <span className="sr-only">{statusView.label}</span> : null}
+            {signal.label ? <span className="sr-only">{signal.label}</span> : null}
         </button>
     );
 }
 
-function PodSwitcherMenu({
+/**
+ * The fallback mark for a pod with no uploaded icon: its initials on the brand
+ * fill, the same mark the sidebar header wears. Small, but it is what makes a
+ * row in the switcher a place you can go rather than a line of text.
+ */
+function PodMark({ name }: { name?: string | null }) {
+    const initials = (name || 'Pod')
+        .trim()
+        .split(/\s+/)
+        .slice(0, 2)
+        .map((part) => part.charAt(0).toUpperCase())
+        .join('') || 'P';
+
+    return <span className="lemma-pod-badge">{initials}</span>;
+}
+
+type PodSwitcherMenuProps = {
+    pods: AccessiblePod[];
+    podGroups: AccessiblePodGroup[];
+    isLoading: boolean;
+    showOrganizationLabels?: boolean;
+    podId: string;
+    router: ReturnType<typeof useRouter>;
+    side: 'top' | 'bottom';
+    onShare: () => void;
+};
+
+function PodSwitcherMenu(props: PodSwitcherMenuProps) {
+    return (
+        <DropdownMenu.Portal>
+            {/* The query lives inside the portal, which is torn down on close,
+                so it never survives into the next time the menu is opened — a
+                list still silently narrowed by something you typed a day ago is
+                a list that looks like it lost most of its rows. */}
+            <PodSwitcherPanel {...props} />
+        </DropdownMenu.Portal>
+    );
+}
+
+function PodSwitcherPanel({
     pods,
     podGroups,
     isLoading,
@@ -822,77 +998,150 @@ function PodSwitcherMenu({
     router,
     side,
     onShare,
-}: {
-    pods: Array<{ id: string; name: string }>;
-    podGroups: AccessiblePodGroup[];
-    isLoading: boolean;
-    showOrganizationLabels?: boolean;
-    podId: string;
-    router: ReturnType<typeof useRouter>;
-    side: 'top' | 'bottom';
-    onShare: () => void;
-}) {
+}: PodSwitcherMenuProps) {
+    const [podFilter, setPodFilter] = useState('');
+    const contentRef = useRef<HTMLDivElement>(null);
+    const filterInputRef = useRef<HTMLInputElement>(null);
+
+    const showFilter = shouldShowPodFilter(pods.length);
+
+    const visiblePods = useMemo(
+        () => filterSwitcherPods(pods, podFilter),
+        [podFilter, pods],
+    );
+    const visibleGroups = useMemo(
+        () => filterSwitcherPodGroups(podGroups, podFilter),
+        [podFilter, podGroups],
+    );
+
+    const firstPodRow = () => contentRef.current?.querySelector<HTMLElement>('[data-pod-row]') ?? null;
+
     return (
-        <DropdownMenu.Portal>
-            <DropdownMenu.Content
-                align="start"
-                side={side}
-                sideOffset={8}
-                className="surface-panel z-50 flex w-72 flex-col p-1 shadow-[var(--shadow-lg)]"
+        <DropdownMenu.Content
+            ref={contentRef}
+            align="start"
+            side={side}
+            sideOffset={8}
+            className="surface-panel z-50 flex w-72 flex-col p-1 shadow-[var(--shadow-lg)]"
+            onKeyDownCapture={(event) => {
+                // With a field on screen a typed letter belongs to it. Radix
+                // answers the same keystroke with its own invisible
+                // typeahead — focus jumps down the list while the field
+                // stays empty — so the key is claimed before that runs.
+                if (!showFilter) return;
+                const input = filterInputRef.current;
+                if (!input || event.target === input) return;
+                if (event.metaKey || event.ctrlKey || event.altKey) return;
+                if (event.key.length !== 1) return;
+
+                event.preventDefault();
+                event.stopPropagation();
+                input.focus();
+                setPodFilter((current) => current + event.key);
+            }}
+        >
+            <DropdownMenu.Item
+                onSelect={onShare}
+                className="lemma-menu-row shrink-0"
             >
-                <DropdownMenu.Item
-                    onSelect={onShare}
+                <Share2 className="h-3.5 w-3.5" />
+                Share this pod
+            </DropdownMenu.Item>
+            <DropdownMenu.Separator className="my-1 h-px shrink-0 bg-[var(--border-subtle)]" />
+            <div className="shrink-0 px-2 py-1.5 type-eyebrow">
+                Switch pod
+            </div>
+            {showFilter ? (
+                <div className="shrink-0 px-1 pb-1">
+                    <div className="workspace-sidebar-filter custom-focus-ring-within flex h-7 items-center gap-1.5 rounded-md px-2">
+                        <Search className="h-3.5 w-3.5 shrink-0 text-[var(--text-tertiary)]" strokeWidth={1.8} />
+                        <input
+                            ref={filterInputRef}
+                            type="text"
+                            value={podFilter}
+                            onChange={(event) => setPodFilter(event.target.value)}
+                            onKeyDown={(event) => {
+                                // Tab and Escape belong to the menu around the
+                                // field. Escape especially: the dismiss layer
+                                // takes it off the document in the capture
+                                // phase, so no amount of stopping it here would
+                                // keep the menu open — and it need not, since
+                                // the query dies with the panel anyway.
+                                if (event.key === 'Tab' || event.key === 'Escape') return;
+
+                                if (event.key === 'ArrowDown') {
+                                    event.preventDefault();
+                                    firstPodRow()?.focus();
+                                } else if (event.key === 'Enter' && podFilter.trim()) {
+                                    // Only once something has been typed: with
+                                    // an empty field the top row is whichever
+                                    // pod happens to sort first, and switching
+                                    // workspaces is not a thing to do by
+                                    // accident. Clicking the row rather than
+                                    // routing by hand keeps one way into a pod —
+                                    // the menu closes and the link is followed
+                                    // exactly as if it had been picked by
+                                    // pointer.
+                                    event.preventDefault();
+                                    firstPodRow()?.click();
+                                }
+
+                                event.stopPropagation();
+                            }}
+                            placeholder="Find a pod"
+                            aria-label="Find a pod"
+                            className="min-w-0 flex-1 border-0 bg-transparent p-0 text-sm text-[var(--text-primary)] outline-none placeholder:text-[var(--text-tertiary)]"
+                        />
+                    </div>
+                </div>
+            ) : null}
+            <div className="min-h-0 max-h-96 overflow-y-auto">
+                {isLoading ? (
+                    <div className="px-2 py-2 text-sm text-[var(--text-tertiary)]">Loading pods…</div>
+                ) : pods.length === 0 ? (
+                    <div className="px-2 py-2 text-sm text-[var(--text-tertiary)]">No pods yet.</div>
+                ) : visiblePods.length === 0 ? (
+                    <div className="px-2 py-2 text-sm text-[var(--text-tertiary)]">No pods match that.</div>
+                ) : null}
+                {showOrganizationLabels ? (
+                    visibleGroups.map((group) => (
+                        <div key={group.organization.id}>
+                            <div className="truncate px-2 pt-2 pb-1 text-xs font-medium uppercase tracking-normal text-[var(--text-tertiary)]">
+                                {group.organization.name}
+                            </div>
+                            {group.pods.map((pod) => (
+                                <PodSwitcherMenuItem key={pod.id} pod={pod} podId={podId} />
+                            ))}
+                        </div>
+                    ))
+                ) : (
+                    visiblePods.map((pod) => (
+                        <PodSwitcherMenuItem key={pod.id} pod={pod} podId={podId} />
+                    ))
+                )}
+            </div>
+            <DropdownMenu.Separator className="my-1 h-px shrink-0 bg-[var(--border-subtle)]" />
+            <DropdownMenu.Item asChild>
+                <Link
+                    href="/home"
                     className="lemma-menu-row shrink-0"
                 >
-                    <Share2 className="h-3.5 w-3.5" />
-                    Share this pod
-                </DropdownMenu.Item>
-                <DropdownMenu.Separator className="my-1 h-px shrink-0 bg-[var(--border-subtle)]" />
-                <div className="shrink-0 px-2 py-1.5 type-eyebrow">
-                    Switch pod
-                </div>
-                <div className="min-h-0 max-h-96 overflow-y-auto">
-                    {isLoading ? (
-                        <div className="px-2 py-2 text-sm text-[var(--text-tertiary)]">Loading pods…</div>
-                    ) : pods.length === 0 ? (
-                        <div className="px-2 py-2 text-sm text-[var(--text-tertiary)]">No pods yet.</div>
-                    ) : null}
-                    {showOrganizationLabels ? (
-                        podGroups.map((group) => group.pods.length > 0 ? (
-                            <div key={group.organization.id}>
-                                <div className="px-2 pt-2 pb-1 text-xs font-medium uppercase tracking-normal text-[var(--text-tertiary)]">
-                                    {group.organization.name}
-                                </div>
-                                {group.pods.map((pod) => (
-                                    <PodSwitcherMenuItem key={pod.id} pod={pod} podId={podId} />
-                                ))}
-                            </div>
-                        ) : null)
-                    ) : (
-                        pods.map((pod) => (
-                            <PodSwitcherMenuItem key={pod.id} pod={pod} podId={podId} />
-                        ))
-                    )}
-                </div>
-                <DropdownMenu.Separator className="my-1 h-px shrink-0 bg-[var(--border-subtle)]" />
-                <DropdownMenu.Item asChild>
-                    <Link
-                        href="/home"
-                        className="lemma-menu-row shrink-0"
-                    >
-                        <Home className="h-3.5 w-3.5" />
-                        Manage pods
-                    </Link>
-                </DropdownMenu.Item>
-                <DropdownMenu.Item
-                    onSelect={() => router.push('/create-pod')}
-                    className="flex shrink-0 cursor-pointer items-center gap-2 rounded-lg px-2 py-2 text-sm font-medium text-[var(--delight)] outline-none transition-colors hover:bg-[var(--delight-soft)]"
-                >
-                    <Plus className="h-3.5 w-3.5" />
-                    New pod
-                </DropdownMenu.Item>
-            </DropdownMenu.Content>
-        </DropdownMenu.Portal>
+                    <Home className="h-3.5 w-3.5" />
+                    Manage pods
+                </Link>
+            </DropdownMenu.Item>
+            {/* A menu row, skinned like every other menu row. Painted gold
+                it read as a warning sitting next to "Manage pods" — and
+                gold is delight, not action (design.md §1). The row is the
+                target; it does not need a colour to say so. */}
+            <DropdownMenu.Item
+                onSelect={() => router.push('/create-pod')}
+                className="lemma-menu-row shrink-0"
+            >
+                <Plus className="h-3.5 w-3.5" />
+                New pod
+            </DropdownMenu.Item>
+        </DropdownMenu.Content>
     );
 }
 
@@ -900,24 +1149,94 @@ function PodSwitcherMenuItem({
     pod,
     podId,
 }: {
-    pod: { id: string; name: string };
+    pod: AccessiblePod;
     podId: string;
 }) {
+    const isCurrent = pod.id === podId;
+    const label = toPodDisplayLabel(pod.name);
+
     return (
         <DropdownMenu.Item asChild>
             <Link
                 href={`/pod/${pod.id}`}
-                className="lemma-menu-row lemma-menu-row-between"
+                data-pod-row=""
+                data-current={isCurrent ? 'true' : undefined}
+                aria-current={isCurrent ? 'page' : undefined}
+                /* Every row wears the pod's own mark, and the pod you are
+                   standing in is filled rather than annotated at the far end of
+                   the row. That is what makes this a picker of places instead
+                   of a column of words: you can see which one you are in, and
+                   picking another moves a fill you were already watching. */
+                className="lemma-menu-row lemma-pod-switcher-row lemma-menu-row-between"
             >
-                <span className="truncate">{toDisplayLabel(pod.name)}</span>
-                {pod.id === podId ? (
+                <span className="flex min-w-0 flex-1 items-center gap-2">
+                    <ResourceIcon
+                        iconUrl={pod.icon_url}
+                        alt=""
+                        label={label}
+                        className="h-6 w-6 shrink-0 rounded-md border-[color:color-mix(in_srgb,var(--border-subtle)_58%,transparent)] bg-transparent text-[var(--text-tertiary)]"
+                        fallback={<PodMark name={pod.name} />}
+                    />
+                    <span className="truncate">{label}</span>
+                </span>
+                {isCurrent ? (
                     <span className="flex shrink-0 items-center gap-1.5 text-xs text-[var(--text-tertiary)]">
-                        <Check className="h-3.5 w-3.5 text-[var(--delight)]" />
+                        {/* "You are here" is a selected state, and selected
+                            states read from the accent channel (design.md §2). */}
+                        <Check className="h-3.5 w-3.5 text-[var(--action-primary)]" />
                         Current
                     </span>
                 ) : null}
             </Link>
         </DropdownMenu.Item>
+    );
+}
+
+/**
+ * The lid on the setup places. Without `onToggle` it renders as a plain group
+ * label — the group is already open around the page you are on, so there is
+ * nothing to press.
+ */
+function MoreDisclosureRow({
+    expanded,
+    onToggle,
+}: {
+    expanded: boolean;
+    onToggle?: () => void;
+}) {
+    const body = (
+        <span className="flex min-w-0 items-center gap-2.5">
+            {/* Exactly the `xs` product-icon box, so every label in the nav —
+                grouped or not — starts on the same x. */}
+            <span className="flex h-3.5 w-3.5 shrink-0 items-center justify-center">
+                <ChevronDown
+                    className={cn(
+                        'h-3 w-3 transition-transform duration-150',
+                        expanded ? 'rotate-0' : '-rotate-90',
+                    )}
+                />
+            </span>
+            <span className="truncate">More</span>
+        </span>
+    );
+
+    if (!onToggle) {
+        return (
+            <div className="lemma-sidebar-row lemma-sidebar-row-base font-normal text-[var(--text-tertiary)]">
+                {body}
+            </div>
+        );
+    }
+
+    return (
+        <button
+            type="button"
+            onClick={onToggle}
+            aria-expanded={expanded}
+            className="lemma-sidebar-row lemma-sidebar-row-base custom-focus-ring font-normal text-[var(--text-tertiary)] transition-colors hover:text-[var(--text-primary)]"
+        >
+            {body}
+        </button>
     );
 }
 
@@ -939,8 +1258,8 @@ function PlaceLink(props: {
             data-active={active ? 'true' : undefined}
             className="lemma-product-nav-item lemma-sidebar-row lemma-sidebar-row-base custom-focus-ring group font-normal"
         >
-            <span className="flex min-w-0 items-center gap-3">
-                <ProductIcon kind={kind} size="xs" state={active ? 'selected' : 'default'} interactive />
+            <span className="flex min-w-0 items-center gap-2.5">
+                <ProductIcon kind={kind} size="xs" state={active ? 'selected' : 'default'} />
                 <span className="truncate">{label}</span>
             </span>
         </Link>
