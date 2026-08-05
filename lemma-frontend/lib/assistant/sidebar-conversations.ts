@@ -15,17 +15,43 @@ function conversationTime(conversation: Conversation): number {
 /**
  * The workspace sidebar has a lightweight pod-wide history query so it can
  * render on a cold resource route. When the assistant controller is active it
- * may also contain fresher local state. Merge both without selecting anything;
- * controller records win for status/model changes, then the list is recency
- * ordered for stable sidebar placement.
+ * may also contain fresher local state. Merge both without selecting anything,
+ * then recency order for stable sidebar placement.
+ *
+ * The controller is live for exactly one conversation — the one it is driving —
+ * and for conversations it has just created, which the server list has not seen
+ * yet. Everywhere else it holds whatever it last observed before you navigated
+ * away, which is a snapshot with no clock on it: a run it watched start but not
+ * finish stays `running` in that copy for the rest of the session. Letting those
+ * records outrank the server made one stale row unfixable by any refetch, so
+ * they lose to history and only their recency survives.
  */
 export function mergeSidebarConversations(
     history: Conversation[],
     controller: Conversation[],
+    liveConversationId?: string | null,
 ): Conversation[] {
     const conversationsById = new Map<string, Conversation>();
     history.forEach((conversation) => conversationsById.set(conversation.id, conversation));
-    controller.forEach((conversation) => conversationsById.set(conversation.id, conversation));
+
+    controller.forEach((conversation) => {
+        const known = conversationsById.get(conversation.id);
+
+        if (!known || conversation.id === liveConversationId) {
+            conversationsById.set(conversation.id, conversation);
+            return;
+        }
+
+        // History is the truth for this row, but the controller can have moved
+        // it since that fetch. Keeping the later timestamp stops a row from
+        // visibly dropping down the list and climbing back on the next refetch.
+        if (conversationTime(conversation) > conversationTime(known)) {
+            conversationsById.set(conversation.id, {
+                ...known,
+                updated_at: conversation.updated_at,
+            });
+        }
+    });
 
     return Array.from(conversationsById.values())
         .sort((left, right) => conversationTime(right) - conversationTime(left));

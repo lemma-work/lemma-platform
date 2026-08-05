@@ -179,7 +179,7 @@ export default function AgentsPage({
                 label="Loading agents"
                 skeleton={(
                     <section className="resource-index-grid resource-index-grid-md-2 resource-index-grid-xl-3 sm:grid-cols-2 xl:grid-cols-3">
-                        {canUseSurfaces ? <PodAssistantCard podId={podId} channelCount={defaultSurfaceCount} /> : null}
+                        {canUseSurfaces ? <PodAssistantCard podId={podId} surfaceCount={defaultSurfaceCount} /> : null}
                         <ResourceCardSkeleton />
                         <ResourceCardSkeleton />
                         {canUseSurfaces ? null : <ResourceCardSkeleton />}
@@ -187,7 +187,7 @@ export default function AgentsPage({
                 )}
                 empty={(
                     <section className="resource-index-grid resource-index-grid-md-2 resource-index-grid-xl-3 sm:grid-cols-2 xl:grid-cols-3">
-                        {canUseSurfaces ? <PodAssistantCard podId={podId} channelCount={defaultSurfaceCount} /> : null}
+                        {canUseSurfaces ? <PodAssistantCard podId={podId} surfaceCount={defaultSurfaceCount} /> : null}
                         <EmptyState
                             variant="region"
                             className="col-span-full"
@@ -210,7 +210,7 @@ export default function AgentsPage({
             >
                 <section className="resource-index-grid resource-index-grid-md-2 resource-index-grid-xl-3 sm:grid-cols-2 xl:grid-cols-3">
                     {canUseSurfaces && agentFilter === 'all' ? (
-                        <PodAssistantCard podId={podId} channelCount={defaultSurfaceCount} />
+                        <PodAssistantCard podId={podId} surfaceCount={defaultSurfaceCount} />
                     ) : null}
                     {filteredAgents.map((agent) => (
                         <AgentProfileCard
@@ -308,8 +308,8 @@ function AgentStat({ icon: Icon, value, label }: { icon: LemmaIcon; value: numbe
 }
 
 // The pod's default responder, rendered as a first-class card even though it
-// has no agent row. Its "channels" are the surfaces not assigned to any agent.
-function PodAssistantCard({ podId, channelCount }: { podId: string; channelCount: number }) {
+// has no agent row. Its surfaces are the ones not assigned to any agent.
+function PodAssistantCard({ podId, surfaceCount }: { podId: string; surfaceCount: number }) {
     return (
         <Link
             href={`/pod/${podId}/ai/assistant`}
@@ -323,17 +323,17 @@ function PodAssistantCard({ podId, channelCount }: { podId: string; channelCount
             </div>
 
             <div className="mt-3 min-w-0">
-                <h2 className="truncate text-base font-semibold tracking-normal text-[var(--text-primary)]">Pod Assistant</h2>
-                <p className="mt-1 line-clamp-2 min-h-10 text-sm leading-6 text-[var(--text-secondary)]">
+                <h2 className="resource-index-card-title truncate text-base font-medium text-[var(--text-primary)]">Pod Assistant</h2>
+                <p className="resource-index-card-summary mt-1 line-clamp-2 min-h-10 text-[var(--text-secondary)]">
                     This pod&apos;s most capable agent — adds tables, builds workflows, spins up agents, and edits data directly.
                 </p>
             </div>
 
             <div className="mt-3 flex items-center justify-between gap-2 text-xs text-[var(--text-tertiary)]">
-                {channelCount > 0 ? (
-                    <span className="inline-flex items-center gap-1" title={`${channelCount} unassigned channel${channelCount === 1 ? '' : 's'}`}>
+                {surfaceCount > 0 ? (
+                    <span className="inline-flex items-center gap-1" title={`${surfaceCount} unassigned surface${surfaceCount === 1 ? '' : 's'}`}>
                         <MessageCircle className="h-3.5 w-3.5" aria-hidden />
-                        {channelCount} channel{channelCount === 1 ? '' : 's'}
+                        {surfaceCount} surface{surfaceCount === 1 ? '' : 's'}
                     </span>
                 ) : null}
                 <span className="inline-flex items-center gap-1 font-medium text-[var(--text-secondary)] transition-gentle group-hover:translate-x-0.5">
@@ -399,8 +399,8 @@ function AgentProfileCard({
 
             <Link href={`/pod/${podId}/agents/${encodeURIComponent(agent.name)}`} className="block">
                 <div className="mt-3 min-w-0">
-                    <h2 className="truncate text-base font-semibold tracking-normal text-[var(--text-primary)]">{formatAgentName(agent.name)}</h2>
-                    <p className="mt-1 line-clamp-2 min-h-10 text-sm leading-6 text-[var(--text-secondary)]">
+                    <h2 className="resource-index-card-title truncate text-base font-medium text-[var(--text-primary)]">{formatAgentName(agent.name)}</h2>
+                    <p className="resource-index-card-summary mt-1 line-clamp-2 min-h-10 text-[var(--text-secondary)]">
                         {summary || 'Ready for instructions, tools, and pod context.'}
                     </p>
                 </div>

@@ -109,7 +109,7 @@ export const CONCEPTS: Record<ConceptId, ConceptEntry> = {
         id: 'surface',
         term: 'Surface',
         oneLiner:
-            'A channel where work reaches the pod: Slack, Gmail, WhatsApp, Telegram, Teams, Outlook.',
+            'A place where work reaches the pod: Slack, Gmail, WhatsApp, Telegram, Teams, Outlook.',
         explainer: [
             'Without a surface, work only enters Lemma when someone types here. Connect Slack or Gmail and the pod’s agents can pick up messages, triage them, and reply — in the place your team already works.',
             'Each surface is wired to a specific agent, so you control exactly what handles inbound work.',

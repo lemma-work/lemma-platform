@@ -10,7 +10,7 @@ import {
     Braces,
     CheckCircle2,
     ClipboardList,
-    Database,
+    Table,
     FileOutput,
     Folder,
     Image as ImageIcon,
@@ -461,7 +461,7 @@ export default function NewAgentPage({
                                 </div>
 
                                 <div className="agent-builder-access-grid">
-                                    <AccessBlock icon={<Database className="h-4 w-4" />} title="Tables">
+                                    <AccessBlock icon={<Table className="h-4 w-4" />} title="Tables">
                                         <DatastoresSelector
                                             podId={podId}
                                             selected={(draftAgent.accessible_tables || []).map((entry) => entry.table_name)}

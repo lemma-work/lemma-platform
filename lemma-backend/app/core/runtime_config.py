@@ -158,9 +158,12 @@ def _public_app_branding_script(branding: dict[str, str] | None) -> str:
         "backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);"
         "transition:transform 140ms ease,background 140ms ease,box-shadow 140ms ease}"
         "a:hover{background:#111;transform:translateY(-1px);box-shadow:0 10px 32px rgba(0,0,0,.28)}"
-        "a:focus-visible{outline:2px solid #d99a32;outline-offset:3px}"
+        # The badge always renders on its own near-black pill, so the mark and
+        # the focus ring take the dark-stock violet (#8b7af5) rather than the
+        # light one — same rule the app's .dark theme follows.
+        "a:focus-visible{outline:2px solid #8b7af5;outline-offset:3px}"
         ".mark{display:inline-flex;height:16px;align-items:flex-end;gap:2px}"
-        ".mark i{display:block;width:3px;border-radius:2px;background:#d99a32}"
+        ".mark i{display:block;width:3px;border-radius:2px;background:#8b7af5}"
         ".mark i:nth-child(1){height:7px}.mark i:nth-child(2){height:11px}"
         ".mark i:nth-child(3){height:16px}"
         "@media(max-width:380px){:host{right:max(8px,env(safe-area-inset-right));"

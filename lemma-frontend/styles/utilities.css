@@ -2340,10 +2340,16 @@
     gap: 6px;
   }
 
+  /* The mark is violet, everywhere, in both appearances. It had drifted into
+     four colours across the product — gold here, near-black on the landing
+     header, violet in the auth portal, dark green in the favicon — so the
+     logo was the one element that never told you which product you were in.
+     Reads the accent channel rather than a fixed hex so it lifts to #8b7af5
+     on dark stock along with everything else that carries identity. */
   .lemma-mark-bar {
     display: block;
     border-radius: 2px;
-    background: var(--delight);
+    background: rgb(var(--accent-rgb));
   }
 
   .lemma-mark-xs .lemma-mark-bar {

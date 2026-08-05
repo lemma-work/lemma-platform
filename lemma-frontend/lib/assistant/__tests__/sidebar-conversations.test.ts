@@ -31,14 +31,55 @@ describe('mergeSidebarConversations', () => {
         expect(result.map((item) => item.id)).toEqual(['newer', 'older']);
     });
 
-    it('keeps the controller copy when it has fresher local status', () => {
+    it('keeps the controller copy for the conversation it is driving', () => {
         const result = mergeSidebarConversations(
             [conversation('shared', '2026-07-17T10:00:00.000Z', { status: 'completed' })],
             [conversation('shared', '2026-07-17T10:00:00.000Z', { status: 'running' })],
+            'shared',
         );
 
         expect(result).toHaveLength(1);
         expect(result[0]?.status).toBe('running');
+    });
+
+    it('drops a controller status for a conversation it is no longer driving', () => {
+        // The controller watched this run start and never saw it end, so its
+        // copy says running forever. History is the only party with a clock.
+        const result = mergeSidebarConversations(
+            [conversation('left', '2026-07-17T10:00:00.000Z', { status: 'completed' })],
+            [conversation('left', '2026-07-17T10:00:00.000Z', { status: 'running' })],
+            'somewhere-else',
+        );
+
+        expect(result).toHaveLength(1);
+        expect(result[0]?.status).toBe('completed');
+    });
+
+    it('keeps a conversation history has not seen yet, whoever is being driven', () => {
+        const result = mergeSidebarConversations(
+            [],
+            [conversation('just-created', '2026-07-17T10:00:00.000Z', { status: 'running' })],
+            null,
+        );
+
+        expect(result.map((item) => item.id)).toEqual(['just-created']);
+        expect(result[0]?.status).toBe('running');
+    });
+
+    it('takes the later timestamp from a controller copy it otherwise discards', () => {
+        // Otherwise a row the controller moved would drop back down the list
+        // until the next refetch, then climb again.
+        const result = mergeSidebarConversations(
+            [
+                conversation('moved', '2026-07-17T10:00:00.000Z', { status: 'completed' }),
+                conversation('other', '2026-07-18T10:00:00.000Z'),
+            ],
+            [conversation('moved', '2026-07-19T10:00:00.000Z', { status: 'running' })],
+            null,
+        );
+
+        expect(result.map((item) => item.id)).toEqual(['moved', 'other']);
+        expect(result[0]?.status).toBe('completed');
     });
 });
 

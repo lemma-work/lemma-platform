@@ -76,6 +76,8 @@ function appPageRefsFromIndex(items: AppIndexItem[]): AppPageRef[] {
                 path: `pages/${slug}.json`,
                 visibility: typeof item.visibility === 'string' ? item.visibility : null,
                 allowed_actions: normalizeAllowedActions(item.allowed_actions),
+                status: toOptionalString(item.status) ?? null,
+                updatedAt: toOptionalString(item.updated_at) ?? null,
             } as AppPageRef;
         })
         .filter((item): item is AppPageRef => item !== null);

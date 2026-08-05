@@ -2,7 +2,7 @@ import {
   Bot,
   Boxes,
   Code2,
-  Database,
+  Table,
   GitBranch,
   KeyRound,
   LayoutDashboard,
@@ -347,7 +347,7 @@ lemma pod describe <pod-id>`,
     title: 'Resources',
     eyebrow: 'Platform',
     group: 'Platform',
-    icon: Database,
+    icon: Table,
     description:
       'The resource map for tables, files, functions, agents, workflows, conversations, connectors, and apps.',
     blocks: [
@@ -380,7 +380,7 @@ lemma pod describe <pod-id>`,
     title: 'Data Modeling',
     eyebrow: 'Platform',
     group: 'Platform',
-    icon: Database,
+    icon: Table,
     description:
       'How to choose tables versus files, collaborative versus personal state, and record APIs versus SQL.',
     blocks: [
@@ -646,7 +646,7 @@ await conversation.sendMessage("Please triage ticket_123.", {
     title: 'Data and Files',
     eyebrow: 'SDK',
     group: 'SDK',
-    icon: Database,
+    icon: Table,
     description:
       'Build custom records, forms, relational views, search, and document workspaces from headless hooks.',
     blocks: [
@@ -866,7 +866,7 @@ lemma ls`,
     title: 'Pods, Data, and Files',
     eyebrow: 'CLI',
     group: 'CLI',
-    icon: Database,
+    icon: Table,
     description:
       'Create pods, inspect resources, manage tables and records, and work with pod files.',
     blocks: [

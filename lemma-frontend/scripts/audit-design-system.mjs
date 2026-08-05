@@ -1016,6 +1016,42 @@ const informationalChecks = [
       }));
     },
   },
+  {
+    id: 'headerSlotPrimaryButtons',
+    // design.md §8: a page header's create button is not primary. The content is
+    // what the user came for, and a solid CTA in the header competes with it and
+    // wins. `multiplePrimaryButtons` is blind to this: a header create is
+    // normally the *only* primary in its file, which is exactly how the docs
+    // "New folder" shipped violet while its own "New page" sat secondary
+    // beside it.
+    label: 'primary create Buttons in a header actions slot (design.md §8), header creates are secondary',
+    allowed(path) {
+      // A landing page is allowed a loud header — it is selling, not holding
+      // content the CTA could shout over. A `/new/` route is a create form, so
+      // its header action is that form's submit, not a create competing with
+      // content the user came to read.
+      return path.includes('/landing') || /\/new\//.test(path);
+    },
+    find(source) {
+      const found = [];
+
+      for (const slot of jsxPropRegions(source, 'actions')) {
+        const buttons = slot.value.matchAll(/<Button\b((?:[^>"']|"[^"]*"|'[^']*')*?)>([\s\S]*?)<\/Button>/g);
+
+        for (const match of buttons) {
+          const [, attrs, children] = match;
+          if (!/variant=\{?["']primary["']/.test(attrs)) continue;
+          if (!isCreateAction(attrs, children)) continue;
+          found.push({
+            value: `<Button${attrs.replace(/\s+/g, ' ').trimEnd()}>`,
+            line: lineNumberAt(source, slot.start + (match.index ?? 0)),
+          });
+        }
+      }
+
+      return found;
+    },
+  },
 ];
 
 const protectedAssistantChecks = [...checks, ...advisoryChecks, ...informationalChecks];
@@ -1227,6 +1263,48 @@ function rankFiles(byFile) {
     })
     .sort((a, b) => b.total - a.total || a.file.localeCompare(b.file))
     .slice(0, 20);
+}
+
+// Makes a new thing, rather than committing what the view already holds. The
+// distinction is the whole rule: a header "Save changes" IS the action its view
+// exists to perform and stays primary, while a header "New app" is a create
+// shouting over the apps the user came to look at.
+function isCreateAction(attrs, children) {
+  const label = [
+    ...[...attrs.matchAll(/\b(?:aria-label|title)=["']([^"']*)["']/g)].map((match) => match[1]),
+    // Tags and `{expressions}` out, so a `<Plus />` icon or a loading ternary
+    // cannot spell a word the label never says.
+    children.replace(/<[^>]*>/g, ' ').replace(/\{[^{}]*\}/g, ' '),
+  ].join(' ');
+
+  return /\b(?:new|create|add)\b/i.test(label);
+}
+
+// The JSX slot a component hands to a caller — `actions={...}` on
+// ResourceHeader and its neighbours. Brace-matched rather than matched with a
+// regex: the slot holds arbitrary JSX, so a lazy `[\s\S]*?\}` stops at the
+// first nested brace it meets, which is usually a className two lines in.
+// An unbalanced region (a stray brace inside a string) is dropped rather than
+// run to the end of the file.
+function jsxPropRegions(source, prop) {
+  const regions = [];
+
+  for (const match of source.matchAll(new RegExp(`\\b${prop}=\\{`, 'g'))) {
+    const start = (match.index ?? 0) + match[0].length;
+    let depth = 1;
+    let cursor = start;
+
+    while (cursor < source.length && depth > 0) {
+      const char = source[cursor];
+      if (char === '{') depth += 1;
+      else if (char === '}') depth -= 1;
+      cursor += 1;
+    }
+
+    if (depth === 0) regions.push({ start, value: source.slice(start, cursor - 1) });
+  }
+
+  return regions;
 }
 
 function lineNumberAt(source, index) {

@@ -22,7 +22,7 @@ import { usePodAutomation } from '@/lib/hooks/use-pod-automation';
 
 // The "Pod Assistant" is a virtual, frontend-only agent: it has no row of its
 // own. It stands in for the pod's default responder — the agent that answers on
-// any surface not assigned to a specific agent. Its channels are exactly the
+// any surface not assigned to a specific agent. Its surfaces are exactly the
 // surfaces with no explicit responder (`uses_default_agent`).
 //
 // It is built from the same parts as an agent's page and should keep matching

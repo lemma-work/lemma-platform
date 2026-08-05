@@ -318,10 +318,10 @@
      the token set. Same ink-on-paper mapping as :root — first-run is the
      first thing anyone sees, and it should already be in the voice. */
   --bg-canvas: #f2efe7;
-  --bg-surface: #ffffff;
+  --bg-surface: #fdfcf8;
   --bg-subtle: #f7f5ef;
   --bg-muted: #edeae1;
-  --surface-1: #ffffff;
+  --surface-1: #fdfcf8;
   --surface-2: #f7f5ef;
   --surface-3: #edeae1;
   --surface-overlay: color-mix(in srgb, var(--surface-1) 96%, transparent);
@@ -329,13 +329,13 @@
   --brand-primary: rgb(var(--accent-rgb));
   --brand-secondary: #62666b;
   --brand-accent: #8a6400;
-  --brand-warm: #c0801f;
+  --brand-warm: #b0842f;
   --brand-coral: #c22f15;
   --brand-sky: #d97757;
   --brand-lilac: rgb(var(--accent-rgb));
   --brand-blue: rgb(var(--accent-rgb));
   --brand-blue-soft: #f2ebe6;
-  --brand-yellow-soft: #fff3c4;
+  --brand-yellow-soft: #f7edd4;
   --brand-green: #11743c;
   --brand-green-soft: #d9f5e3;
   --brand-cyan: #11743c;
@@ -347,10 +347,10 @@
   --cta-fg: rgb(var(--accent-fg-rgb));
   --interactive-primary: rgb(var(--accent-rgb));
 
-  --text-primary: #17181a;
-  --text-secondary: #62666b;
-  --text-tertiary: #888b90;
-  --text-soft: #a8abaf;
+  --text-primary: #2b2924;
+  --text-secondary: #63605a;
+  --text-tertiary: #8b877e;
+  --text-soft: #aaa69c;
   --text-inverse: #ffffff;
   --text-on-brand: rgb(var(--accent-fg-rgb));
 
@@ -2142,19 +2142,26 @@
   --accent-fg-rgb: 255 255 255;
 
   /* Surfaces — paper stock. Canvas is warm and slightly deeper than the
-     sheets on it, so a card lifts without needing a shadow to say so. */
+     sheets on it, so a card lifts without needing a shadow to say so.
+
+     The sheet is stock, not light. It was #ffffff, which made the single most
+     repeated surface in the product — every card, table, sheet and popover —
+     the only thing in the palette with no warmth at all (chroma 0.000 against
+     a canvas at 0.011), so a card read as a hole punched through to a lightbox
+     rather than as paper on a desk. #fdfcf8 still clears the canvas by ~3.8
+     L*, which is all a sheet needs when a hairline is drawing its edge. */
   --bg-canvas: #f2efe7;
-  --bg-surface: #ffffff;
+  --bg-surface: #fdfcf8;
   --bg-subtle: #f7f5ef;
   --bg-muted: #edeae1;
-  --surface-1: #ffffff;
+  --surface-1: #fdfcf8;
   --surface-2: #f7f5ef;
   --surface-3: #edeae1;
   --surface-overlay: color-mix(in srgb, var(--surface-1) 96%, transparent);
   /* Sidebar sits behind vibrancy in the desktop shell; this is the opaque
      fallback the web build and reduced-transparency users get. */
   --pod-shell-bg: #eae7dd;
-  --pod-main-bg: #ffffff;
+  --pod-main-bg: #fdfcf8;
 
   /* Identity. Violet carries action; the other three are the landing's
      badge tones, each already picked to be legible as text on its own fill.
@@ -2163,7 +2170,14 @@
   --brand-primary: rgb(var(--accent-rgb));
   --brand-secondary: #62666b;
   --brand-accent: #8a6400;
-  --brand-warm: #c0801f;
+  /* Warm and yellow-soft were the landing's, and the landing uses them on four
+     elements at a time. Tiled across a workspace they read as a gold cast over
+     the whole product rather than as an accent: yellow-soft was #fff3c4, six
+     times the chroma of the paper it sits on, so even a 12% mix came through
+     as highlighter. Both are pulled toward the paper's own saturation; the
+     hue and lightness are unchanged, so every downstream color-mix still
+     lands where its author put it. */
+  --brand-warm: #b0842f;
   --brand-coral: #c22f15;
   /* Terracotta is the assistant's colour on the landing, and stays the
      assistant's colour here. */
@@ -2171,7 +2185,7 @@
   --brand-lilac: rgb(var(--accent-rgb));
   --brand-blue: rgb(var(--accent-rgb));
   --brand-blue-soft: #f2ebe6;
-  --brand-yellow-soft: #fff3c4;
+  --brand-yellow-soft: #f7edd4;
   --brand-green: #11743c;
   --brand-green-soft: #d9f5e3;
   --brand-cyan: #11743c;
@@ -2183,12 +2197,23 @@
   --cta-fg: rgb(var(--accent-fg-rgb));
   --interactive-primary: rgb(var(--accent-rgb));
 
-  /* Ink. Near-black, never pure black — #17181a is the landing's ink and
-     reads as printed rather than as a screen default. */
-  --text-primary: #17181a;
-  --text-secondary: #62666b;
-  --text-tertiary: #888b90;
-  --text-soft: #a8abaf;
+  /* Ink. Warm near-black, never pure black — and warm is the load-bearing
+     word. The ramp used to be the landing's, which is a cool blue-black
+     (hue 264°) on warm paper (hue 90°); dark mode had already been drawn
+     properly, with warm ink on warm stock, and the light side never got the
+     same pass. A cool black on cream is what a screen default looks like,
+     which is the opposite of what the comment here used to claim.
+
+     Primary also came down from 17.8:1 to 14.2:1 against the sheet. 21:1 is
+     black on white and printed stock measures about 12:1; the landing can
+     spend 17.8 on one headline, but the product spends it on every cell of
+     every table for hours. Every other step keeps its lightness exactly and
+     only rotates warm, so the hierarchy between them is untouched. */
+  --text-primary: #2b2924;
+  --text-secondary: #63605a;
+  --text-tertiary: #8b877e;
+  --text-soft: #aaa69c;
+  /* Stays pure white: this is text on a saturated fill, not paper. */
   --text-inverse: #ffffff;
   --text-on-brand: rgb(var(--accent-fg-rgb));
 

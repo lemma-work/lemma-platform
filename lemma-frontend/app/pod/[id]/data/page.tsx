@@ -4,7 +4,7 @@ import { use, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useQueryClient } from '@tanstack/react-query';
-import { Database, Plus } from '@/components/ui/icons';
+import { Table, Plus } from '@/components/ui/icons';
 import { toast } from 'sonner';
 
 import { DatastoreTableView } from '@/components/data/datastore-table-view';
@@ -1297,7 +1297,7 @@ export default function DataHubPage({
                 ) : (
                     <EmptyState
                         variant="region"
-                        icon={<Database className="h-5 w-5" />}
+                        icon={<Table className="h-5 w-5" />}
                         title="No tables yet"
                         description={canCreateTable
                             ? "Create a table when this pod needs structured records."

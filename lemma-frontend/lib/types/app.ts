@@ -21,6 +21,8 @@ export interface AppPageRef {
     path: string;
     visibility?: string | null;
     allowed_actions?: string[] | null;
+    status?: string | null;
+    updatedAt?: string | null;
 }
 
 export interface AppPage {

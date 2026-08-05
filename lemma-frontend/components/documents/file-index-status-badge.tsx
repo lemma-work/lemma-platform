@@ -1,6 +1,6 @@
 'use client';
 
-import { AlertTriangle, Database, Loader2, Sparkles } from '@/components/ui/icons';
+import { AlertTriangle, Table, Loader2, Sparkles } from '@/components/ui/icons';
 import { cn } from '@/lib/utils';
 import type { DatastoreFile } from '@/lib/types';
 
@@ -49,7 +49,7 @@ const STATE_CONFIG: Record<
     },
     stored: {
         label: 'Stored (not searchable)',
-        icon: Database,
+        icon: Table,
         className: 'chip-muted text-[var(--text-tertiary)]',
         defaultTitle: 'Stored file. Data and binary files are kept but not indexed for search.',
     },

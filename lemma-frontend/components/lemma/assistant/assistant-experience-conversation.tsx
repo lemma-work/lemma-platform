@@ -2,7 +2,8 @@
 
 import type { ReactNode, RefObject } from "react";
 import { cn } from "@/lib/utils";
-import { TranscriptSkeleton } from "@/components/shared/loading";
+import { useLoadingGate } from "@/components/shared/loading";
+import { InlineLoader } from "@/components/brand/loader";
 import { Button } from "@/components/ui/button";
 import { ArrowDown, RotateCcw } from "@/components/ui/icons";
 import {
@@ -25,6 +26,9 @@ import { ThinkingIndicator } from "./assistant-parts";
 type CompletedRunTraceGroups = ReturnType<typeof collectCompletedRunTraceGroups>;
 type InlineStatus = { label?: string; shimmer?: boolean } | null | undefined;
 type DisplayResourceCardsByRow = ReturnType<typeof collectDisplayResourceCardsByRow>;
+
+/** How long a transcript stays silently empty before it admits it is fetching. */
+const TRANSCRIPT_WAIT_DELAY_MS = 600;
 
 export interface AssistantDisplayRowProps {
   row: DisplayMessageRow;
@@ -185,6 +189,19 @@ export function AssistantExperienceConversation({
   // stranding the empty state at one end of a tall blank page.
   const shrinkToContent = fillEmptyState && showEmptyState;
 
+  // Far longer than the 120ms a skeleton waits, because the two are answering
+  // different questions. A skeleton appears once a wait is long enough to be
+  // perceived at all; this appears only once a wait is long enough that silence
+  // would be *misread* — an empty transcript is a real settled state here, so
+  // saying nothing is right until the reader might conclude there is nothing to
+  // say. No minimum visible time: arriving messages are their own resolution,
+  // and a line reading "loading" underneath a transcript that has already landed
+  // would describe a wait that is over.
+  const showTranscriptWait = useLoadingGate(isInitialMessageLoading, {
+    delayMs: TRANSCRIPT_WAIT_DELAY_MS,
+    minVisibleMs: 0,
+  });
+
   return (
     <AssistantMessageViewport
       ref={messagesContainerRef}
@@ -199,12 +216,22 @@ export function AssistantExperienceConversation({
       >
       {showEmptyState ? emptyState : null}
 
-      {/* Message-shaped, not a centred caption. A caption at `py-10` is a box of
-          a completely different height from the transcript that replaces it, and
-          in a bottom-anchored scroller that swap reads as the conversation
-          lurching into place. These turns are roughly the size of the real ones,
-          so the first message lands where the placeholder already was. */}
-      {isInitialMessageLoading ? <TranscriptSkeleton turns={2} /> : null}
+      {/* Nothing for the first 600ms, and then one quiet line — never
+          message-shaped placeholders. We do not know how many
+          turns are coming or how tall they are, so any shape drawn here is a
+          guess the real transcript re-flows the moment it lands. Blank is the
+          honest fill, and it costs nothing: an empty transcript above a composer
+          is a state this surface has to be able to draw anyway.
+
+          The line sits at the end of the column, where the newest message will
+          appear, so the arriving transcript pushes it out from the same edge
+          rather than replacing a block somewhere above. It exists only so a slow
+          fetch does not read as an empty conversation. */}
+      {showTranscriptWait ? (
+        <div className="flex w-full justify-start py-1">
+          <InlineLoader size="xs" label="Loading conversation" className="text-xs text-[var(--text-tertiary)]" />
+        </div>
+      ) : null}
 
       {((hasOlderMessages || isLoadingOlderMessages) && hasMessages) ? (
         <div className="flex items-center justify-center py-1">

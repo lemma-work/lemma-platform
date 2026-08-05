@@ -2,7 +2,7 @@ import {
     Bot,
     Calendar,
     Code2,
-    Database,
+    Table,
     Flag,
     GitBranch,
     Play,
@@ -51,7 +51,7 @@ export const START_TYPE_ICONS: Record<FlowStartType, React.ComponentType<{ class
     MANUAL: Play,
     SCHEDULED: Calendar,
     EVENT: Webhook,
-    DATASTORE_EVENT: Database,
+    DATASTORE_EVENT: Table,
 };
 
 export const START_TYPE_LABELS: Record<FlowStartType, string> = {

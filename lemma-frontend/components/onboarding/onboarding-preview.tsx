@@ -3,7 +3,7 @@ import {
   BookOpen,
   Boxes,
   Bug,
-  Database,
+  Table,
   FolderOpen,
   Handshake,
   KeyRound,
@@ -38,7 +38,7 @@ const PREVIEW_NAV_ITEMS: Array<{ label: string; icon: LemmaIcon }> = [
   { label: "Apps", icon: PanelsTopLeft },
   { label: "Agents", icon: Bot },
   { label: "Workflows", icon: Workflow },
-  { label: "Data", icon: Database },
+  { label: "Data", icon: Table },
   { label: "Docs", icon: FolderOpen },
   { label: "Connectors", icon: Plug },
 ];

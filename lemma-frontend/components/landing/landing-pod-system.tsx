@@ -4,11 +4,11 @@ import Image from "next/image";
 import { useEffect, useRef, useState } from "react";
 import type { LemmaIcon } from "@/components/ui/icons";
 import {
+  AppWindow,
   Code,
-  Database,
+  Table,
   GitBranch,
   ShieldCheck,
-  SquaresFour,
 } from "@/components/ui/icons";
 
 /**
@@ -41,10 +41,10 @@ type LayerKey = (typeof LAYERS)[number]["key"];
 
 /** A large, faint glyph so a plane reads as its layer at a glance. */
 const PLANE_MARK: Record<LayerKey, LemmaIcon> = {
-  data: Database,
+  data: Table,
   functions: Code,
   agents: GitBranch,
-  apps: SquaresFour,
+  apps: AppWindow,
   base: ShieldCheck,
 };
 

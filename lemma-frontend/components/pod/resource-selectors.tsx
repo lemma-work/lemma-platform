@@ -24,7 +24,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Button } from '@/components/ui/button';
 import { QuietEmptyState } from '@/components/shared/empty-state';
 import { cn } from '@/lib/utils';
-import { Puzzle, Database, Plus, AlertCircle, Folder, Bot, Code2, X } from '@/components/ui/icons';
+// `Table` is already the datastore type in this module, so the glyph takes the
+// suffixed name rather than shadowing it.
+import { Puzzle, Table as TableIcon, Plus, AlertCircle, Folder, Bot, Code2, X } from '@/components/ui/icons';
 
 export function formatAccessLabel(value: string) {
     return value.toLowerCase().replace(/[_-]+/g, ' ').replace(/\b\w/g, (char) => char.toUpperCase());
@@ -329,7 +331,7 @@ export function DatastoresSelector({
     };
 
     return (
-        <PropertyRow label="Tables" icon={Database} className={className} showLabel={showLabel}>
+        <PropertyRow label="Tables" icon={TableIcon} className={className} showLabel={showLabel}>
             <div className="resource-stack">
                 {selectedTables.length > 0 ? (
                     <div className="space-y-1.5">

@@ -6,9 +6,9 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { useAIAssistant } from '@/components/ai/ai-assistant-context';
 import { PodAssistantEmbedded } from '@/components/ai/pod-assistant';
 import { resolveDefaultAgentRuntime } from '@/components/agents/agent-runtime-helpers';
-import { Skeleton, TranscriptSkeleton } from '@/components/shared/loading';
 import { ConversationComposerContext } from '@/components/conversations/conversation-composer-context';
 import { PodNewWorkspace } from '@/components/pod/pod-new-workspace';
+import { PodConversationSkeleton } from '@/components/pod/route-skeletons';
 import { ConversationPresentationStage } from '@/components/pod/conversation-presentation-stage';
 import {
     buildScopedConversationHref,
@@ -310,15 +310,14 @@ export default function PodConversationPage({
                         className="h-full rounded-none border-0 bg-transparent shadow-none"
                     />
                 ) : (
-                    /* The transcript is what we are waiting for — the header band
-                       and the composer rail below it are the same whatever the
-                       conversation turns out to be. Showing one centred loader for
-                       the whole pane meant the header, transcript, and composer all
-                       appeared at once, on top of a screen that had been blank. */
-                    <div className="mx-auto flex h-full min-h-0 w-full max-w-4xl flex-col justify-end gap-6 px-6 pb-6">
-                        <TranscriptSkeleton turns={2} />
-                        <Skeleton shape="block" className="h-24 w-full rounded-2xl" />
-                    </div>
+                    /* The gate is about *which* conversation's messages, not
+                       whether any are coming: until `openConversation` lands, the
+                       controller still holds the previous conversation's
+                       transcript, and showing that would be worse than showing
+                       nothing. It is the same component the route boundary just
+                       rendered — a sequence of waits is still one load to the
+                       reader, so the handover must not be a second screen. */
+                    <PodConversationSkeleton />
                 )}
             </section>
         </div>

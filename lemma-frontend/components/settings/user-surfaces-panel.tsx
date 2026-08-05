@@ -61,7 +61,7 @@ export function UserSurfacesPanel() {
     if (!groups.length) {
         return (
             <p className="text-sm leading-6 text-[var(--text-secondary)]">
-                No surfaces reach you yet. Once a pod answers you in Slack, email, or another channel, it shows up here.
+                No surfaces reach you yet. Once a pod answers you in Slack, email, or another surface, it shows up here.
             </p>
         );
     }

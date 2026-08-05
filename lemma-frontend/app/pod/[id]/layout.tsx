@@ -20,8 +20,8 @@ import { LocalSettingsButton } from "@/components/desktop/local-settings-button"
 import { PodLayoutProvider, usePodLayout } from "@/components/pod/pod-layout-context";
 import { WorkspaceSidebar } from "@/components/pod/workspace-sidebar";
 import { Button } from "@/components/ui/button";
-import { ArrowLeft, PanelLeftOpen, Settings, X } from "@/components/ui/icons";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { ArrowLeft, PanelLeftOpen, X } from "@/components/ui/icons";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { getLemmaClient } from "@/lib/sdk/lemma-client";
 import { usePod } from "@/lib/hooks/use-pods";
 import { usePodContext } from "@/lib/hooks/use-pod-context";
@@ -380,7 +380,6 @@ function PodShell({
     const showMobileNavTrigger = isCompact && !isPresentedInteractionRoute;
     const routePolicyKey = getPodRoutePolicyKey(pod.id, pathname);
     const canUseCurrentRoute = !routePolicyKey || podAccess.canAccessRoute(routePolicyKey);
-    const canUseSettings = podAccess.canAccessRoute("settings");
     const topbarContextValue = useMemo(() => ({
         setTopbar,
         setHeroTitleVisible,
@@ -669,22 +668,12 @@ function PodShell({
                             />
                         </div>
                         <div className="pod-shell-topbar-actions flex h-7 shrink-0 items-center gap-1.5">
+                            {/* Pod settings lives in the sidebar's More group and
+                                the account menu. A third door here would sit in
+                                the tab strip, where a gear reads as acting on
+                                the open tab rather than on the pod. */}
                             <TooltipProvider>
                                 <HelpMenu />
-                                {canUseSettings ? (
-                                    <Tooltip>
-                                        <TooltipTrigger asChild>
-                                            <Link
-                                                href={`/pod/${pod.id}/settings`}
-                                                className="lemma-shell-icon-button custom-focus-ring"
-                                                aria-label="Pod settings"
-                                            >
-                                                <Settings className="h-4 w-4" strokeWidth={1.8} />
-                                            </Link>
-                                        </TooltipTrigger>
-                                        <TooltipContent>Pod settings</TooltipContent>
-                                    </Tooltip>
-                                ) : null}
                             </TooltipProvider>
                         </div>
                 </header>

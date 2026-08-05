@@ -115,7 +115,8 @@ const CommandItem = React.forwardRef<
   <CommandPrimitive.Item
     ref={ref}
     className={cn(
-      "relative flex cursor-default gap-2 select-none items-center rounded-sm px-2 py-1.5 text-sm text-[var(--text-secondary)] outline-none transition-gentle data-[disabled=true]:pointer-events-none data-[selected=true]:bg-[var(--surface-2)] data-[selected=true]:text-[var(--delight)] data-[disabled=true]:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0",
+      // See select.tsx: selected reads from the accent channel, not `--delight`.
+      "relative flex cursor-default gap-2 select-none items-center rounded-sm px-2 py-1.5 text-sm text-[var(--text-secondary)] outline-none transition-gentle data-[disabled=true]:pointer-events-none data-[selected=true]:bg-[var(--surface-2)] data-[selected=true]:text-[var(--action-primary)] data-[disabled=true]:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0",
       className
     )}
     {...props}

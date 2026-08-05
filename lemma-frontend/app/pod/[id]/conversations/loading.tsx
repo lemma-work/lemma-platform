@@ -1,6 +1,6 @@
-import { PodConversationSkeleton } from '@/components/pod/route-skeletons';
+import { PodConversationIndexSkeleton } from '@/components/pod/route-skeletons';
 
-/** A transcript with the composer already in place. */
+/** The index is a header over a list — not the transcript it is an index of. */
 export default function ConversationsLoading() {
-    return <PodConversationSkeleton />;
+    return <PodConversationIndexSkeleton />;
 }

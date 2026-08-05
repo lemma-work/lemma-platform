@@ -7,7 +7,7 @@ import {
     ArrowRight,
     BarChart3,
     Bot,
-    Database,
+    Table,
     FileSpreadsheet,
     FileText,
     Image as ImageIcon,
@@ -355,7 +355,7 @@ export function PodNewWorkspace({
             title: action.label,
             hint: action.id.startsWith('workflow:') ? 'Workflow' : 'Table',
             accent: (action.id.startsWith('workflow:') ? 'success' : 'info') as RecipeAccent,
-            icon: action.id.startsWith('workflow:') ? Workflow : Database,
+            icon: action.id.startsWith('workflow:') ? Workflow : Table,
         }));
         const agentTiles = agents.map((agent) => ({
             id: `agent:${agent.name}`,

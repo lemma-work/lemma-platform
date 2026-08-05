@@ -4,7 +4,7 @@ import {
   CalendarClock,
   Code2,
   Cpu,
-  Database,
+  Table,
   FileText,
   FolderOpen,
   GitBranch,
@@ -27,7 +27,7 @@ const CONCEPT_ICONS: Record<ConceptId, LemmaIcon> = {
   pod: FolderOpen,
   agent: Bot,
   flow: GitBranch,
-  table: Database,
+  table: Table,
   file: FileText,
   surface: MessageCircle,
   app: PanelsTopLeft,
@@ -145,19 +145,19 @@ const CONCEPT_DOCS_EXTRA: Record<ConceptId, ConceptDocsExtra> = {
     useWhen: [
       'Work arrives in Slack, email, WhatsApp, or Teams and someone copy-pastes it in.',
       'Customers or teammates should reach the pod without learning a new tool.',
-      'Approvals should be one click in the channel people already watch.',
+      'Approvals should be one click in the surface people already watch.',
       'You want the pod to reply where the conversation started.',
     ],
     getStarted: {
       title: 'Open the front door',
       items: [
-        'Open Surfaces and pick the channel where work already arrives.',
+        'Open Surfaces and pick the surface where work already arrives.',
         'Connect the account and choose which agent handles inbound messages.',
-        'Set the routing rules — which channels, which mentions, which inbox labels.',
-        'Send a test message from the channel and watch it appear in Conversations.',
+        'Set the routing rules — which Slack channels, which mentions, which inbox labels.',
+        'Send a test message from the surface and watch it appear in Conversations.',
       ],
     },
-    whereItLives: 'Surfaces in the left sidebar. Each card shows a channel, its status, and its routing.',
+    whereItLives: 'Surfaces in the left sidebar. Each card shows a surface, its status, and its routing.',
   },
   app: {
     useWhen: [

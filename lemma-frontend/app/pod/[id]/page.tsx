@@ -27,6 +27,7 @@ import { usePodAccess } from '@/lib/hooks/use-pod-access';
 import { usePodJoinRequests } from '@/lib/hooks/use-pod-join-requests';
 import { usePodSurfaces } from '@/lib/hooks/use-pod-surfaces';
 import { useSchedules } from '@/lib/hooks/use-schedules';
+import { PodHomePresence } from '@/components/pod/pod-home-presence';
 import { cn } from '@/lib/utils';
 import { formatAgentName } from '@/lib/utils/agents';
 import { isConversationRunningStatus, normalizeConversationStatus } from '@/lib/utils/conversations';
@@ -46,6 +47,20 @@ const RECENT_CONVERSATION_STATUSES = new Set(['completed', 'complete', 'success'
 const COMPOSER_LAUNCH_DURATION_MS = 560;
 const HOME_PANELS_DEFER_MS = 600;
 const POD_HOME_STARTER_DISMISS_KEY = 'lemma:pod-home:starter-nudge';
+/** How far back an outcome may be and still count as news on home. Without a
+ *  cutoff the panel kept printing failures from a month and a half ago as if
+ *  they had just happened. */
+const RECENT_OUTCOME_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000;
+/** A conversation started from a prompt has no title but its own first message,
+ *  so the row was printing a whole build instruction. Clip it to a phrase. */
+const OUTCOME_TITLE_MAX_LENGTH = 58;
+/**
+ * One conversation read for the whole page. Home used to make two — one at
+ * `limit: 1` purely to answer "is this pod fresh?", and the activity region's at
+ * `limit: 20` — which are the same list at two sizes, so they missed each
+ * other's cache and cost two round trips.
+ */
+const POD_HOME_CONVERSATION_LIMIT = 100;
 
 interface ComposerLaunchAnimation {
     id: number;
@@ -79,8 +94,9 @@ function PodBlankChatHome({ podId }: { podId: string }) {
     const { data: homeSurfaces = [], isLoading: isLoadingHomeSurfaces } = usePodSurfaces(canReadSurfaces ? podId : undefined);
     const { data: homeConversationsData, isLoading: isLoadingHomeConversations } = useScopedConversations(
         { podId },
-        { limit: 1, enabled: canReadConversations },
+        { limit: POD_HOME_CONVERSATION_LIMIT, enabled: canReadConversations },
     );
+    const homeConversations = useMemo(() => homeConversationsData?.items || [], [homeConversationsData?.items]);
     const [draft, setDraft] = useState('');
     const [isSending, setIsSending] = useState(false);
     const [launchAnimation, setLaunchAnimation] = useState<ComposerLaunchAnimation | null>(null);
@@ -115,9 +131,9 @@ function PodBlankChatHome({ podId }: { podId: string }) {
         surfaceCount: homeSurfaces.length,
         activeSurfaceCount: homeSurfaces.filter((surface) => String(surface.status || '').toUpperCase() === 'ACTIVE').length,
         scheduleCount: 0,
-        conversationCount: homeConversationsData?.items?.length || 0,
+        conversationCount: homeConversations.length,
         hasUsedWorkflow: false,
-    }), [homeAgentsData?.items?.length, homeAppPages.length, homeConversationsData?.items?.length, homeFlows.length, homeSurfaces]);
+    }), [homeAgentsData?.items?.length, homeAppPages.length, homeConversations.length, homeFlows.length, homeSurfaces]);
     const starterMode = resolvePodHomeStarterMode(podHomeResourceSignals);
     const showStarterHome = podAccess.isBuilder && !isLoadingHomeState && starterMode === 'fresh';
 
@@ -253,7 +269,11 @@ function PodBlankChatHome({ podId }: { podId: string }) {
             <main
                 aria-hidden={isBlankingHome}
                 className={cn(
-                    "mx-auto flex min-h-full w-full max-w-6xl flex-1 flex-col items-center px-5 pb-10 pt-8 sm:px-6 md:pt-12",
+                    // Extra headroom when the composer is the hero: landing it a
+                    // little above the optical centre reads as composed, where
+                    // pinning it to the top read as a search bar.
+                    "mx-auto flex min-h-full w-full max-w-6xl flex-1 flex-col items-center px-5 pb-10 sm:px-6",
+                    showStarterHome ? "pt-8 md:pt-12" : "pt-12 md:pt-20",
                     isBlankingHome && "pointer-events-none opacity-0",
                 )}
             >
@@ -291,7 +311,10 @@ function PodBlankChatHome({ podId }: { podId: string }) {
                         </div>
                     </section>
                 ) : null}
-                <div className="w-full max-w-4xl">
+                <div className="w-full max-w-3xl">
+                    {showStarterHome ? null : (
+                        <p className="pod-home-eyebrow mb-3.5">{pod?.name || 'This pod'}</p>
+                    )}
                     {assistant.pendingFiles.length > 0 ? (
                         <div className="mb-3 flex flex-wrap justify-center gap-2">
                             {assistant.pendingFiles.map((file) => (
@@ -319,7 +342,7 @@ function PodBlankChatHome({ podId }: { podId: string }) {
                         }}
                         ref={composerFormRef}
                         className={cn(
-                            "form-field-control flex min-h-16 items-center gap-2 px-3 transition-opacity duration-150",
+                            "pod-home-composer transition-opacity duration-150",
                             launchAnimation && "opacity-0",
                         )}
                     >
@@ -382,6 +405,13 @@ function PodBlankChatHome({ podId }: { podId: string }) {
                             {isBusy ? <StepLoader size="sm" /> : <ArrowUp className="h-4 w-4" />}
                         </button>
                     </form>
+                    {/* The room, directly under the box you type into: who is here,
+                        human and agent, and what is already on duty. */}
+                    {isLoadingHomeState || showStarterHome ? null : (
+                        <div className="mt-6">
+                            <PodHomePresence podId={podId} conversations={homeConversations} />
+                        </div>
+                    )}
                 </div>
                 {/* Nothing until we know which home this is. A fresh pod shows the
                     starter section above and no activity region at all, so drawing
@@ -389,11 +419,13 @@ function PodBlankChatHome({ podId }: { podId: string }) {
                     and then took it away again. Once `isLoadingHomeState` settles
                     the region either exists or it does not, and from there it only
                     ever goes skeleton → content. */}
-                {isLoadingHomeState || showStarterHome
-                    ? null
-                    : showHomePanels
-                        ? <PodAgentWorkflowKanban podId={podId} baseResourceSignals={podHomeResourceSignals} />
-                        : <PodHomePanelsSkeleton />}
+                {isLoadingHomeState || showStarterHome ? null : (
+                    <div className="mt-10 w-full max-w-3xl">
+                        {showHomePanels
+                            ? <PodAgentWorkflowKanban podId={podId} baseResourceSignals={podHomeResourceSignals} conversations={homeConversations} />
+                            : <PodHomePanelsSkeleton />}
+                    </div>
+                )}
             </main>
             {launchAnimation && launchAnimationStyle ? (
                 <div
@@ -523,24 +555,25 @@ type KanbanItem = {
 function PodAgentWorkflowKanban({
     podId,
     baseResourceSignals,
+    conversations,
 }: {
     podId: string;
     baseResourceSignals: PodHomeResourceSignals;
+    /** Read once by the page and handed down, so this panel and the band and
+     *  the presence line all describe the same list. */
+    conversations: Conversation[];
 }) {
     const podAccess = usePodAccess(podId);
     const canReadAgents = podAccess.can('agent.read');
     const canReadWorkflows = podAccess.can('workflow.read');
     const canReadSchedules = podAccess.can('schedule.read');
-    const canReadConversations = podAccess.can('conversation.read');
     const { data: agentsData, isLoading: loadingAgents } = useAgents(canReadAgents ? podId : undefined);
     const { data: workflowsData = [], isLoading: loadingWorkflows } = useFlows(canReadWorkflows ? podId : undefined);
     const { data: schedulesData, isLoading: loadingSchedules } = useSchedules(canReadSchedules ? podId : undefined, { isActive: true, limit: 12 });
-    const { data: conversationsData, isLoading: loadingConversations } = useScopedConversations({ podId }, { limit: 20, enabled: canReadConversations });
 
     const agents = useMemo(() => agentsData?.items || [], [agentsData?.items]);
     const workflows = useMemo(() => workflowsData || [], [workflowsData]);
     const schedules = useMemo(() => schedulesData?.items || [], [schedulesData?.items]);
-    const conversations = useMemo(() => conversationsData?.items || [], [conversationsData?.items]);
     const sampledWorkflows = useMemo(() => workflows.slice(0, 8).map((workflow) => workflow.name), [workflows]);
     const { data: runSnapshots = [], isLoading: loadingRuns } = useWorkflowRunSnapshots(podId, sampledWorkflows, 3, { pollWhenLive: true, enabled: canReadWorkflows });
 
@@ -614,7 +647,8 @@ function PodAgentWorkflowKanban({
         const workflowOutcomes = runSnapshots.flatMap((snapshot) => {
             const outcomeRun = snapshot.runs.find((run) => {
                 const status = normalizeWorkflowRunStatus(run.status);
-                return FAILED_RUN_STATUSES.has(status) || COMPLETED_RUN_STATUSES.has(status);
+                if (!FAILED_RUN_STATUSES.has(status) && !COMPLETED_RUN_STATUSES.has(status)) return false;
+                return isRecentOutcome(run.completed_at || run.updated_at || run.created_at);
             });
             if (!outcomeRun) return [];
 
@@ -633,6 +667,7 @@ function PodAgentWorkflowKanban({
 
         const agentOutcomes = conversations
             .filter((conversation) => RECENT_CONVERSATION_STATUSES.has(normalizeConversationStatus(conversation.status)))
+            .filter((conversation) => isRecentOutcome(conversation.updated_at || conversation.created_at))
             .slice(0, Math.max(0, 5 - workflowOutcomes.length))
             .map((conversation) => {
                 const status = normalizeConversationStatus(conversation.status);
@@ -643,7 +678,7 @@ function PodAgentWorkflowKanban({
         return [...workflowOutcomes, ...agentOutcomes].slice(0, 5);
     }, [agentsByNameOrId, conversations, podId, runSnapshots]);
 
-    const isLoading = loadingAgents || loadingWorkflows || loadingSchedules || loadingRuns || loadingConversations;
+    const isLoading = loadingAgents || loadingWorkflows || loadingSchedules || loadingRuns;
     const hasKanbanItems = upcomingItems.length + movingItems.length + recentOutcomeItems.length > 0;
     const hasUsedWorkflow = runSnapshots.some((snapshot) => snapshot.runs.some((run) => {
         const status = normalizeWorkflowRunStatus(run.status);
@@ -762,7 +797,7 @@ function PodRecipesHomeNudge({ podId }: { podId: string }) {
                 </span>
                 <div className="min-w-0 flex-1">
                     <h2 className="text-sm font-medium text-[var(--text-primary)]">Add another capability</h2>
-                    <p className="mt-0.5 truncate text-xs text-[var(--text-tertiary)]">Dashboards, channel agents, knowledge, intake, and automations.</p>
+                    <p className="mt-0.5 truncate text-xs text-[var(--text-tertiary)]">Dashboards, surface agents, knowledge, intake, and automations.</p>
                 </div>
                 <div className="flex shrink-0 items-center gap-1">
                     <Button
@@ -852,11 +887,17 @@ function conversationToAgentItem(
     return {
         id: `agent-conversation-${conversation.id}`,
         kind: 'agent',
-        title: formatDisplayName(agent?.name || agentKey || conversation.title || 'Agent run'),
+        // The agent's name first. A conversation started from the composer has
+        // no title but its own opening message, so falling straight through to
+        // `conversation.title` printed a whole build instruction as the row
+        // title — clipped, mid-word, six weeks after anyone cared.
+        title: agent?.name || agentKey
+            ? formatDisplayName(agent?.name || agentKey)
+            : clipOutcomeTitle(conversation.title) || 'Agent run',
         detail: failed
             ? `Failed ${formatRelativeTime(conversation.updated_at || conversation.created_at)}.`
             : tone === 'live'
-                ? conversation.title || 'Conversation is running.'
+                ? clipOutcomeTitle(conversation.title) || 'Conversation is running.'
                 : `Completed ${formatRelativeTime(conversation.updated_at || conversation.created_at)}.`,
         href: `/pod/${podId}/conversations/${encodeURIComponent(conversation.id)}`,
         status: failed ? 'Failed' : tone === 'live' ? 'Running' : 'Completed',
@@ -870,6 +911,26 @@ function getScheduleHref(podId: string, schedule: { workflow_name?: string | nul
     if (workflowName || schedule.workflow_name) return `/pod/${podId}/flows/${encodeURIComponent(workflowName || schedule.workflow_name || '')}`;
     // A trigger with no resolvable target only exists on the pod-wide ledger.
     return `/pod/${podId}/settings/automation`;
+}
+
+/** Whether an outcome is still news. Old enough and it belongs on the resource's
+ *  own page, not on home. */
+function isRecentOutcome(value: string | null | undefined) {
+    const timestamp = value ? Date.parse(value) : NaN;
+    // An undated row is kept: dropping it would hide a real outcome over a
+    // missing field, and the relative-time formatter already says "recently".
+    if (!Number.isFinite(timestamp)) return true;
+    return Date.now() - timestamp <= RECENT_OUTCOME_MAX_AGE_MS;
+}
+
+/** A title that is really a prompt, cut to a phrase at a word boundary. */
+function clipOutcomeTitle(value: string | null | undefined) {
+    const cleaned = (value || '').replace(/\s+/g, ' ').trim();
+    if (!cleaned) return '';
+    if (cleaned.length <= OUTCOME_TITLE_MAX_LENGTH) return cleaned;
+    const head = cleaned.slice(0, OUTCOME_TITLE_MAX_LENGTH);
+    const lastSpace = head.lastIndexOf(' ');
+    return `${(lastSpace > 24 ? head.slice(0, lastSpace) : head).replace(/[,.;:]$/, '')}…`;
 }
 
 function formatRelativeTime(value: string | null | undefined) {

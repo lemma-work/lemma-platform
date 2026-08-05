@@ -3,7 +3,7 @@
 import { use, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { ArrowUpRight, ExternalLink, PanelsTopLeft, Plus, Share2 } from '@/components/ui/icons';
+import { ArrowRight, ArrowUpRight, ExternalLink, PanelsTopLeft, Plus, Share2 } from '@/components/ui/icons';
 import { toast } from 'sonner';
 
 import { useAIAssistant } from '@/components/ai/ai-assistant-context';
@@ -15,7 +15,8 @@ import { DestructiveConfirmationDialog } from '@/components/shared/destructive-c
 import { EmptyState } from '@/components/shared/empty-state';
 import { DestructiveResourceActionItem, ResourceActionsMenu } from '@/components/shared/resource-actions-menu';
 import { ResourceShareButton, ResourceVisibilityBadge, type ResourceVisibilityValue } from '@/components/shared/resource-visibility';
-import { APP_ACCENTS } from '@/lib/app/app-accent';
+import { getAppAccent } from '@/lib/app/app-accent';
+import { formatRelativeTime } from '@/components/pod/recent-conversations';
 import { Button } from '@/components/ui/button';
 import { DropdownMenuItem } from '@/components/ui/dropdown-menu';
 import { resourceAllows } from '@/lib/authz/resource-actions';
@@ -30,15 +31,6 @@ function formatDisplayName(value: string | null | undefined) {
     const cleaned = (value || '').replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim();
     if (!cleaned) return 'Untitled';
     return cleaned.split(' ').map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join(' ');
-}
-
-function formatAppHost(value: string | null | undefined) {
-    if (!value) return 'Ready';
-    try {
-        return new URL(value).hostname.replace(/^www\./, '') || 'Live app';
-    } catch {
-        return 'Live app';
-    }
 }
 
 function buildAppViewHref(podId: string, page: string, searchParams: { toString(): string }) {
@@ -123,7 +115,10 @@ export default function AppPagesRoute({ params }: { params: Promise<{ id: string
                 meta={<ConceptHint concept="app" />}
                 actions={(
                     canCreateApp ? (
-                        <Button variant="primary"
+                        // design.md §8: the apps are what this page is for. The
+                        // header create stays secondary; the empty state below
+                        // is where making one is the only thing to do.
+                        <Button variant="secondary"
                             type="button"
                             onClick={() => {
                                 void createAppWithAssistant();
@@ -178,7 +173,7 @@ export default function AppPagesRoute({ params }: { params: Promise<{ id: string
                             href={`/pod/${podId}/recipes`}
                             className="custom-focus-ring inline-flex w-fit items-center gap-1.5 text-sm font-medium text-[var(--text-secondary)] transition-colors hover:text-[var(--text-primary)]"
                         >
-                            Add a channel agent or automate a loop
+                            Add a surface agent or automate a loop
                             <ArrowUpRight className="h-4 w-4" />
                         </Link>
                     </div>
@@ -191,17 +186,20 @@ export default function AppPagesRoute({ params }: { params: Promise<{ id: string
                     />
                 )
             ) : (
-                <section className="apps-grid">
-                    {pages.map((page, index) => {
+                <section className="resource-index-grid resource-index-grid-md-2 resource-index-grid-xl-3 sm:grid-cols-2 xl:grid-cols-3">
+                    {pages.map((page) => {
                         const title = formatDisplayName(page.title || page.slug);
                         const viewHref = buildAppViewHref(podId, page.slug, searchParams);
                         const canShareApp = resourceAllows(page, 'app.update', canUpdateApp);
                         const canDeleteThisApp = resourceAllows(page, 'app.delete', canDeleteApp);
-                        // The gallery order is stable, so cycling the semantic palette here
-                        // guarantees neighbouring cards remain visually distinct.
-                        const accent = APP_ACCENTS[index % APP_ACCENTS.length];
+                        // Hash the slug rather than cycle by index: an app keeps its colour
+                        // when a neighbour is added or deleted. Cycling by position also
+                        // could not separate neighbours — brand, collaboration and info all
+                        // resolve to the same accent.
+                        const accent = getAppAccent(page.slug);
                         const appName = page.appName || page.title;
-                        const appHost = formatAppHost(page.url);
+                        const isReady = (page.status || '').toUpperCase() === 'READY';
+                        const updatedLabel = formatRelativeTime(page.updatedAt);
                         const appShareUrl = typeof window === 'undefined'
                             ? undefined
                             : `${window.location.origin}${viewHref}`;
@@ -211,32 +209,60 @@ export default function AppPagesRoute({ params }: { params: Promise<{ id: string
                             <article
                                 key={page.slug}
                                 data-accent={accent}
-                                className="resource-index-card app-tile group relative flex min-h-28 flex-col p-4"
+                                className="resource-index-card app-tile group relative min-h-40 p-4"
                             >
-                                <div className="flex min-w-0 items-start gap-3">
-                                    <Link
-                                        href={viewHref}
-                                        aria-label={`Open ${title}`}
-                                        className="custom-focus-ring flex min-w-0 flex-1 items-start gap-3 rounded-lg"
-                                    >
-                                        <span className="app-icon flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-base font-medium">
-                                            {page.icon || title.charAt(0)}
+                                {/* Mouse affordance only: the whole card is clickable, but
+                                    keyboard and screen readers get the labelled controls in
+                                    the footer instead of a second link to the same href. */}
+                                <Link href={viewHref} aria-hidden tabIndex={-1} className="app-tile-hit" />
+
+                                <div className="flex items-start justify-between gap-3">
+                                    <span className="app-icon flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-base font-medium">
+                                        {page.icon || title.charAt(0)}
+                                    </span>
+                                    {/* An app is READY from its first bundle upload onward, so
+                                        "live" is true of nearly every card and says nothing.
+                                        Only the exception — not yet deployed — is worth a badge. */}
+                                    {!isReady ? (
+                                        <span className="inline-flex shrink-0 items-center gap-1.5 text-xs font-medium text-[var(--text-tertiary)]">
+                                            <span className="h-1.5 w-1.5 rounded-full bg-current" aria-hidden />
+                                            Draft
                                         </span>
-                                        <span className="min-w-0 flex-1 pt-0.5">
-                                            <span className="block truncate text-base font-semibold text-[var(--text-primary)]">
-                                                {title}
-                                            </span>
-                                            {page.description ? (
-                                                <span className="mt-1 line-clamp-2 text-xs leading-5 text-[var(--text-secondary)]">
-                                                    {page.description}
-                                                </span>
-                                            ) : null}
-                                        </span>
-                                    </Link>
+                                    ) : null}
+                                </div>
+
+                                <div className="mt-3 min-w-0">
+                                    <h2 className="resource-index-card-title truncate text-base font-medium text-[var(--text-primary)]">{title}</h2>
+                                    <p className="resource-index-card-summary mt-1 line-clamp-2 min-h-10 text-[var(--text-secondary)]">
+                                        {page.description}
+                                    </p>
+                                </div>
+
+                                <div className="mt-3 flex items-center justify-between gap-2 text-xs text-[var(--text-tertiary)]">
+                                    <div className="flex min-w-0 items-center gap-3">
+                                        <ResourceVisibilityBadge visibility={page.visibility} resourceLabel="apps" hideWhenDefault />
+                                        {updatedLabel ? <span className="truncate">Updated {updatedLabel}</span> : null}
+                                    </div>
+                                    <div className="flex shrink-0 items-center gap-1">
+                                        <Link href={viewHref} aria-label={`Open ${title}`} title="Open" className="app-tile-action app-tile-control">
+                                            <ArrowRight className="h-4 w-4" />
+                                        </Link>
+                                        {page.url ? (
+                                            <a
+                                                href={page.url}
+                                                target="_blank"
+                                                rel="noreferrer"
+                                                aria-label={`Open ${title} in a new tab`}
+                                                title="Open in new tab"
+                                                className="app-tile-action app-tile-control"
+                                            >
+                                                <ExternalLink className="h-4 w-4" />
+                                            </a>
+                                        ) : null}
                                     {hasMenuActions ? (
                                         <ResourceActionsMenu
                                             ariaLabel={`Open actions for ${title}`}
-                                            triggerClassName="h-7 w-7 -mr-1 -mt-1 opacity-60 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
+                                            triggerClassName="app-tile-control h-7 w-7 -mr-1 -mt-1 opacity-60 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
                                         >
                                             {canShareApp ? (
                                                 <ResourceShareButton
@@ -281,24 +307,8 @@ export default function AppPagesRoute({ params }: { params: Promise<{ id: string
                                             ) : null}
                                         </ResourceActionsMenu>
                                     ) : null}
+                                    </div>
                                 </div>
-
-                                <Link
-                                    href={viewHref}
-                                    className="custom-focus-ring mt-auto flex items-center justify-between gap-3 rounded-md pt-3 text-xs text-[var(--text-tertiary)]"
-                                >
-                                    <span className="flex min-w-0 items-center gap-2">
-                                        <span className="inline-flex min-w-0 items-center gap-1.5">
-                                            <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--state-success)]" aria-hidden />
-                                            <span className="truncate">{appHost}</span>
-                                        </span>
-                                        <ResourceVisibilityBadge visibility={page.visibility} resourceLabel="apps" hideWhenDefault />
-                                    </span>
-                                    <span className="ml-auto inline-flex shrink-0 items-center gap-1 font-medium text-[var(--text-secondary)] transition-gentle group-hover:translate-x-0.5">
-                                        Open
-                                        <ArrowUpRight className="h-3.5 w-3.5" />
-                                    </span>
-                                </Link>
                             </article>
                         );
                     })}

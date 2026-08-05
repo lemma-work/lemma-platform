@@ -1097,8 +1097,17 @@ export function useAssistantController({
     ]));
   }, [activeConversationId, sessionConversation]);
 
+  // `sessionStatus` describes whichever conversation the session is attached
+  // to, and on the render that switches conversations that is still the one we
+  // just left: the session resets its own status from an effect registered
+  // earlier in this component, so the reset is only queued, not applied. Writing
+  // it unguarded stamps the conversation you left onto the one you opened —
+  // and, because the reset arrives as `undefined`, the guard below would then
+  // skip the correction and leave the wrong status in place. Only write when
+  // the session is actually reporting on the conversation being written to.
   useEffect(() => {
     if (!activeConversationId) return;
+    if (sessionConversationId !== activeConversationId) return;
     if (!sessionStatus) return;
 
     touchConversation(activeConversationId, {
@@ -1111,7 +1120,7 @@ export function useAssistantController({
           }
         : {}),
     });
-  }, [activeConversationId, sessionStatus, touchConversation]);
+  }, [activeConversationId, sessionConversationId, sessionStatus, touchConversation]);
 
   useEffect(() => {
     if (!activeConversationId) return;
@@ -1235,7 +1244,10 @@ export function useAssistantController({
     const conversationIsRunning = isConversationRunning(activeConversation?.status);
     if (!hadActiveStream && !conversationIsRunning) return;
     const previousStatus = activeConversation?.status;
-    touchConversation(conversationId, { status: "waiting" as Conversation["status"] });
+    // The conversation is winding down, not waiting on the person who just
+    // asked it to stop. `WAITING` is the backend's word for "needs your input",
+    // so borrowing it here made Stop ask for a reply it does not want.
+    touchConversation(conversationId, { status: "stop_requested" as Conversation["status"] });
     void sessionStop(conversationId).catch((error) => {
       touchConversation(conversationId, { status: previousStatus });
       setLocalError((prev) => prev || (error instanceof Error ? error.message : "Failed to stop conversation"));

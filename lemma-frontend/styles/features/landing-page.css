@@ -78,8 +78,11 @@
     --text-primary: #17181a;
   }
 
+  /* Was an !important override to near-black. The mark carries the identity
+     and the identity is violet — the landing header is the first place anyone
+     sees it, so it is the last place it should differ. */
   .lp-brand-logo .lemma-mark-bar {
-    background: #0d0f12 !important;
+    background: rgb(var(--accent-rgb)) !important;
   }
 
   .lp-nav {

@@ -177,6 +177,25 @@
   box-shadow: none;
 }
 
+/* Index-card typography, shared by the agent, workflow and app cards so the
+   three ledgers stay one family.
+
+   The summary sits at 13/20, between --text-xs and --text-sm. At 14/24 a
+   two-line summary reads as body copy and competes with the title; at 12/20 it
+   stops being scannable. 20px leading also makes the reserved `min-h-10` come
+   out at exactly two lines, so cards align whether or not a summary wraps.
+
+   Titles take --tracking-snug, which is what design.md §3 specifies for h3-h6 —
+   these are card headings, not page headings. */
+.resource-index-card-title {
+  letter-spacing: var(--tracking-snug);
+}
+
+.resource-index-card-summary {
+  font-size: 0.8125rem;
+  line-height: 1.25rem;
+}
+
 .resource-index-grid {
   display: grid;
   gap: var(--space-3);
@@ -267,18 +286,54 @@
 .app-tile[data-accent="success"] { --app-accent: var(--state-success); }
 .app-tile[data-accent="delight"] { --app-accent: var(--delight); }
 
+/* The accent now lives in the tile's own surface rather than a 2px stripe, so
+   a card reads as tinted at a glance instead of carrying a clipped rule. */
 .resource-index-card.app-tile {
+  border-color: color-mix(in srgb, var(--app-accent) 9%, var(--border-subtle));
   background: color-mix(in srgb, var(--app-accent) 3%, var(--surface-1));
   overflow: hidden;
 }
 
-.resource-index-card.app-tile::before {
+.resource-index-grid > .resource-index-card.app-tile:hover,
+.resource-index-grid > .resource-index-card.app-tile:focus-within,
+.resource-index-card.app-tile:hover,
+.resource-index-card.app-tile:focus-within {
+  border-color: color-mix(in srgb, var(--app-accent) 20%, var(--border-subtle));
+  background: color-mix(in srgb, var(--app-accent) 5%, var(--surface-1));
+}
+
+/* Whole-card click target. Sits under the real controls, which lift above it. */
+.app-tile-hit {
   position: absolute;
-  inset: 0 0.75rem auto;
-  height: 2px;
-  border-radius: 0 0 var(--radius-sm) var(--radius-sm);
-  background: color-mix(in srgb, var(--app-accent) 48%, transparent);
-  content: "";
+  z-index: 0;
+  border-radius: inherit;
+  inset: 0;
+}
+
+.app-tile-control {
+  position: relative;
+  z-index: 1;
+}
+
+.app-tile-action {
+  display: inline-flex;
+  height: 1.75rem;
+  width: 1.75rem;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  color: var(--text-tertiary);
+  transition:
+    background-color var(--dur-control) var(--ease-standard),
+    border-color var(--dur-control) var(--ease-standard),
+    color var(--dur-control) var(--ease-standard);
+}
+
+.app-tile-action:hover {
+  border-color: color-mix(in srgb, var(--app-accent) 26%, transparent);
+  background: color-mix(in srgb, var(--app-accent) 14%, var(--surface-1));
+  color: color-mix(in srgb, var(--app-accent) 76%, var(--text-primary));
 }
 
 .app-icon {
