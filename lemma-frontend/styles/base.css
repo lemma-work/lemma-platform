@@ -55,9 +55,14 @@
     transition: background var(--dur-slow) var(--ease-out);
   }
 
+  /* Atmosphere is depth, not colour. The first stop used to be --brand-accent
+     at 7%, which tinted the entire viewport gold on every screen that opted
+     in — one declaration doing more to make the product read as a gold product
+     than all 100-odd deliberate accent usages combined. Both stops are now the
+     neutral, so the canvas gains an uneven light without gaining a hue. */
   body.lemma-atmosphere::before {
     background:
-      radial-gradient(ellipse at 16% 56%, color-mix(in srgb, var(--brand-accent) 7%, transparent), transparent 62%),
+      radial-gradient(ellipse at 16% 56%, color-mix(in srgb, var(--brand-secondary) 6%, transparent), transparent 62%),
       radial-gradient(ellipse at 78% 20%, color-mix(in srgb, var(--brand-secondary) 6%, transparent), transparent 66%);
     animation: ambient-drift 34s ease-in-out infinite alternate;
   }

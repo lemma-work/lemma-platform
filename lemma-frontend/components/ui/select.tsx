@@ -124,7 +124,10 @@ const SelectItem = React.forwardRef<
   <SelectPrimitive.Item
     ref={ref}
     className={cn(
-      "relative flex w-full cursor-default select-none items-center rounded-md py-2.5 pl-3 pr-9 text-sm text-[var(--text-secondary)] outline-none transition-gentle focus:bg-[var(--surface-2)] focus:text-[var(--delight)] data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
+      // Accent, not `--delight`: design.md §2 gives the accent channel every
+      // CTA, selected state, and focus ring, while gold means delight/warning.
+      // A highlighted option in a picker was reading as a caution.
+      "relative flex w-full cursor-default select-none items-center rounded-md py-2.5 pl-3 pr-9 text-sm text-[var(--text-secondary)] outline-none transition-gentle focus:bg-[var(--surface-2)] focus:text-[var(--action-primary)] data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
       className
     )}
     {...props}

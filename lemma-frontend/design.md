@@ -4,7 +4,14 @@ This digest documents the current product UI in this repository. It is based on 
 
 ## 1. Visual Theme & Atmosphere
 
-**Ink on paper.** The product speaks the landing page's language: near-black ink (`#17181a`) on warm paper (`--bg-canvas: #f2efe7`), alpha hairlines instead of grey borders, and four saturated jewel tones carrying meaning. Editorial, not chrome — the palette is supposed to have an opinion.
+**Ink on paper.** The product speaks the landing page's language: warm near-black ink (`#2b2924`) on warm paper (`--bg-canvas: #f2efe7`), alpha hairlines instead of grey borders, and four saturated jewel tones carrying meaning. Editorial, not chrome — the palette is supposed to have an opinion.
+
+**The landing's values, at the product's dosage.** The palette was first taken from the landing literally, and that is right for hue and wrong for intensity. A landing page is a poster: four elements, read once, scrolled past, where maximum contrast is a feature. The product is a workspace: forty elements, read for hours. Three things were toned down accordingly, and the reasoning belongs with the tokens rather than in a changelog:
+
+- **The ink was cool.** `#17181a` is hue 264° — a blue-black — on paper at hue 90°. Dark mode had already been drawn correctly (warm ink `#f2f0ea` on warm stock `#131311`); the light side never got the same pass, and a cool black on cream is precisely what a screen default looks like. The whole ramp now rotates warm at unchanged lightness.
+- **The ink was maximal.** 17.8:1 against the sheet, where black on white is 21:1 and printed stock measures about 12:1. Now 14.2:1 — still far above AAA, and it buys back the difference between "set" and "shouting".
+- **The sheet was pure white.** `#ffffff` made the most-repeated surface in the product the only thing in the palette with no warmth at all, so a card read as a hole punched through to a lightbox. `#fdfcf8` is stock, and still clears the canvas by ~3.8 L*.
+- **Gold was a cast, not an accent.** `--brand-yellow-soft` was six times the chroma of the paper it sits on, so even a 12% mix arrived as highlighter, and one ambient gradient in `base.css` tinted the entire viewport gold on every screen that opted in. Both are pulled toward the paper's own saturation; the ambient wash is now neutral.
 
 This is a deliberate reversal of an earlier pass that matched the macOS system appearance. That version was native and correct and completely inert: Apple's system palette is designed to be a neutral *host* for someone else's content, so adopting it literally produces a product with no point of view. What survived from it is the part that was actually about behaviour — appearance-following, materials, control geometry, alpha-based rules.
 
@@ -13,8 +20,10 @@ This is a deliberate reversal of an earlier pass that matched the macOS system a
 **Key Characteristics**
 
 - Warm paper canvas: `#f2efe7` light, `#131311` dark. Never a neutral grey — every neutral carries warmth.
-- Near-black ink, never pure black: `#17181a`.
+- Warm near-black ink, never pure black and never cool: `#2b2924`. The ink and the paper share a hue.
+- Sheets are stock, not light: `#fdfcf8`, never `#ffffff`. Pure white survives only as text on a saturated fill (`--text-inverse`) and behind third-party logo tiles.
 - Violet `#5a3fd4` carries action. Green confirms, amber delights, rust asks.
+- **The mark is violet, everywhere** — see §1 *The mark*.
 - Alpha hairline **rules**, not borders — they hold on white, on cream, and on a tinted row alike.
 - Inter everywhere, DM Mono for machine values. Hierarchy from weight and tracking, never a second face.
 - Real negative tracking: `-0.032em` display, `-0.016em` titles.
@@ -30,13 +39,35 @@ Each semantic role is a **landing badge pair** — a saturated foreground and th
 | --- | --- | --- | --- |
 | Action / collaboration | `--action-primary`, `--collaboration` | `#5a3fd4` | `#e6e0ff` |
 | Success | `--state-success` | `#11743c` | `#d9f5e3` |
-| Delight / warning | `--delight`, `--state-warning` | `#8a6400` | `#fff3c4` |
+| Delight / warning | `--delight`, `--state-warning` | `#8a6400` | `#f7edd4` |
 | Attention / error | `--attention`, `--state-error` | `#c22f15` | `#ffe1da` |
 | Intelligence | `--intelligence` | `#d97757` | `#f2ebe6` |
 
 Terracotta is the assistant's colour on the landing and stays the assistant's colour here.
 
 Every foreground was picked by the landing to be legible as text on its own fill, which is why they can serve both roles without an accessible-variant split.
+
+### The mark
+
+The three bars are violet. Not sometimes — everywhere, in every surface this repository ships.
+
+They had drifted into six colours: gold in the app chrome (`.lemma-mark-bar` read `--delight`), near-black behind an `!important` on the landing header, violet in the auth portal, dark green in the favicon, gold again in the PWA icon, and gold once more in the "made with Lemma" badge injected into published surfaces. The logo was the one element that never told you which product you were in.
+
+| Where | Token / value |
+| --- | --- |
+| App chrome — `.lemma-mark-bar` | `rgb(var(--accent-rgb))` |
+| Landing header — `.lp-brand-logo` | `rgb(var(--accent-rgb))` |
+| Auth portal — `.lemma-logo .lemma-mark` | `--lemma-primary` → `--action-primary` |
+| Favicon — `app/icon.svg` | `#5A3FD4` |
+| PWA / desktop — `public/lemma-icon-fullbleed.svg` | `#5A3FD4` |
+| Backend wordmark — `lemma-backend/public/icons/lemma.svg` | `#5a3fd4` |
+| Published-surface badge — `runtime_config.py` | `#8b7af5` — on its own near-black pill |
+
+In CSS the mark reads the accent *channel* rather than a fixed hex, so it lifts to `#8b7af5` on dark stock with everything else that carries identity. Static assets hardcode the appearance they actually render against.
+
+**The one exception**, and it is the same exception as `--text-inverse`: a mark sitting *on* an accent fill stays `currentColor`. The SDK's `AppGate` draws it inside the violet "Login with Lemma" button, where a violet mark would be invisible. On a fill, the mark is knocked out, not tinted.
+
+`AppGate`'s `--lap-accent` is deliberately *not* the source here — a consumer can theme it (`appearance.accent`), and the Lemma mark must not take on the host app's brand colour.
 
 ### Deliberate divergences
 
@@ -73,13 +104,13 @@ handing the product's one loud colour to a system preference is a plausible
 | Role | Token | Value | Use |
 | --- | --- | --- | --- |
 | Canvas | `--bg-canvas` | `#f2efe7` | Warm paper — deeper than the sheets on it |
-| Surface | `--bg-surface`, `--surface-1` | `#ffffff` | Cards, sheets, tables, popovers |
+| Surface | `--bg-surface`, `--surface-1` | `#fdfcf8` | Cards, sheets, tables, popovers — stock, not light |
 | Subtle Surface | `--bg-subtle`, `--surface-2` | `#f7f5ef` | Table hovers, inputs, secondary panels |
 | Muted Surface | `--bg-muted`, `--surface-3` | `#edeae1` | Secondary buttons, selected rails |
 | Brand Primary | `--brand-primary` | `#5a3fd4` | Selected states, strong identity |
 | Brand Secondary | `--brand-secondary` | `#62666b` | Supporting text, chart colour |
 | Brand Accent | `--brand-accent` | `#8a6400` | Delight, progress, active rails |
-| Brand Warm | `--brand-warm` | `#c0801f` | Atmospheric warmth |
+| Brand Warm | `--brand-warm` | `#b0842f` | Atmospheric warmth |
 | Brand Coral | `--brand-coral` | `#c22f15` | Attention, human-review emphasis |
 | Brand Sky | `--brand-sky` | `#d97757` | Terracotta — the assistant's colour |
 | Brand Tan | `--brand-tan` | `#f0ece1` | Badge fill |
@@ -88,16 +119,22 @@ handing the product's one loud colour to a system preference is a plausible
 
 ### Text Scale
 
-Ink, not grey. `#17181a` is the landing's ink and reads as printed rather than
-as a screen default — pure black is never used.
+Ink, not grey — and warm ink, not cool. Pure black is never used, and neither
+is a blue-black: the ramp sits at hue ~85–90°, the same hue as the paper, which
+is what makes it read as printed rather than as a screen default. The earlier
+ramp was the landing's, at hue ~255–264°, and the mismatch against cream did
+more damage than the contrast figure did.
 
-| Role | Token | Value | Use |
-| --- | --- | --- | --- |
-| Primary | `--text-primary` | `#17181a` | Headings, active nav, important cells |
-| Secondary | `--text-secondary` | `#62666b` | Body text, table content, nav labels |
-| Tertiary | `--text-tertiary` | `#888b90` | Metadata, labels, helper copy |
-| Soft | `--text-soft` | `#a8abaf` | Placeholders, muted unavailable values |
-| Inverse | `--text-inverse` | `#ffffff` | Text on dark fills |
+Steps 2–4 hold their previous lightness exactly and only rotate warm, so the
+hierarchy between them is unchanged. Only Primary also moved in lightness.
+
+| Role | Token | Value | Contrast on sheet | Use |
+| --- | --- | --- | --- | --- |
+| Primary | `--text-primary` | `#2b2924` | 14.2:1 | Headings, active nav, important cells |
+| Secondary | `--text-secondary` | `#63605a` | 6.1:1 | Body text, table content, nav labels |
+| Tertiary | `--text-tertiary` | `#8b877e` | 3.5:1 | Metadata, labels, helper copy |
+| Soft | `--text-soft` | `#aaa69c` | 2.3:1 | Placeholders, muted unavailable values |
+| Inverse | `--text-inverse` | `#ffffff` | — | Text on dark or saturated fills |
 | On Brand | `--text-on-brand` | `rgb(var(--accent-fg-rgb))` | Text on accent fills |
 
 ### Rules, not borders
@@ -483,6 +520,16 @@ finding, not a style preference: when everything is emphasised, nothing is.
 The content is what the user came for. A solid CTA in the header competes with
 it for attention and wins, which is backwards. Header creates are `secondary`;
 the empty state — where creating really is the only thing to do — gets `primary`.
+
+A **save** in a header is not a create — it is the action that view exists to
+perform, and it stays `primary`. The audit reads the label to tell them apart
+(`headerSlotPrimaryButtons`), and skips `/new/` routes, where the header action
+*is* the form's submit.
+
+The one-primary-per-view count could not see this: a header create is normally
+the only primary in its file, so it passed while being exactly backwards. The
+data table shipped a violet "New record" in its toolbar and a `secondary` one in
+its empty state — the rule inverted on both ends, in the same component.
 
 ### Rows don't carry buttons
 
