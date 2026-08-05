@@ -16,6 +16,10 @@ export default defineConfig({
         environment: 'node',
         include: [
             'components/agents/agent-runtime-helpers.{test,spec}.ts',
+            // What the Computers card says about this machine, extracted from the
+            // card for the same reason as the helpers above: the logic is pure,
+            // the component around it is not.
+            'components/agents/this-computer-status.{test,spec}.ts',
             'components/auth/portal/auth/**/*.{test,spec}.ts',
             // Step ordering for local onboarding. Named file by file, like the
             // agent-runtime helpers above, so this stays a list of pure-logic
