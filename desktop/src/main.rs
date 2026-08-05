@@ -593,12 +593,37 @@ fn hosted_url() -> String {
 /// The workspace origins `capabilities/workspace.json` already covers.
 const SHIPPED_WORKSPACE_ORIGINS: &[&str] = &["http://app.lemma.localhost:*", "https://lemma.work"];
 
-/// A capability granting the overridden workspace origin the same single
-/// command the shipped one gets, or `None` when nothing is overridden.
+/// The shipped workspace capability, read at compile time so the override below
+/// cannot drift from it.
 ///
-/// Only the origin varies. The permission list must stay identical to
-/// `capabilities/workspace.json`, so a dev build can never reach further into
-/// the shell than a packaged one.
+/// It did drift. The override was written when the shipped capability granted a
+/// single command; the Agent Host and provider commands were added to the file
+/// alone, and every non-shipped origin — a self-hosted workspace, a dev server —
+/// lost the Computers card and the provider steps to `Command
+/// agent_host_status not allowed by ACL`, with nothing the user could do about
+/// it. Reading the list is what keeps the two the same next time.
+const SHIPPED_WORKSPACE_CAPABILITY: &str = include_str!("../capabilities/workspace.json");
+
+/// The permissions the shipped workspace origins get.
+///
+/// Panics on a malformed capability, which is a build-time fact rather than a
+/// runtime one: the file is compiled in, so a bad edit fails the first test that
+/// touches this rather than reaching a user.
+fn shipped_workspace_permissions() -> Vec<Value> {
+    serde_json::from_str::<Value>(SHIPPED_WORKSPACE_CAPABILITY)
+        .expect("capabilities/workspace.json is valid JSON")["permissions"]
+        .as_array()
+        .expect("capabilities/workspace.json grants an array of permissions")
+        .clone()
+}
+
+/// A capability granting the overridden workspace origin the same commands the
+/// shipped one gets, or `None` when nothing is overridden.
+///
+/// Only the origin varies. The permission list is taken from
+/// `capabilities/workspace.json` itself, so a dev or self-hosted build can
+/// never reach further into the shell than a packaged one — nor, as it did,
+/// less far.
 fn overridden_workspace_capability() -> Option<String> {
     let configured = ["LEMMA_DESKTOP_HOSTED_URL", "LEMMA_DESKTOP_LOCAL_URL"]
         .into_iter()
@@ -632,11 +657,11 @@ fn workspace_capability_for(configured: impl Iterator<Item = String>) -> Option<
     Some(
         json!({
             "identifier": "workspace-override-capability",
-            "description": "Development or self-hosted workspace origin, granted the same single command as the shipped one.",
+            "description": "Development or self-hosted workspace origin, granted the same commands as the shipped one.",
             "local": false,
             "webviews": ["main"],
             "remote": {"urls": urls},
-            "permissions": ["allow-open-control-center"],
+            "permissions": shipped_workspace_permissions(),
         })
         .to_string(),
     )
@@ -2876,7 +2901,22 @@ fn toggle_agent_host_from_tray(app: &AppHandle) -> Result<(), String> {
 /// Reachability, not liveness. A running host that is unpaired or cannot reach
 /// its workspace takes no work, so reporting it as simply "on" would be a lie
 /// the user only discovers when a run never starts.
-fn agent_host_tray_label(available: bool, running: bool, paired: bool, connected: bool) -> String {
+///
+/// "Reconnecting" is a claim about a connection that is coming back, and it was
+/// made for every disconnected state — including a host paired to a workspace
+/// that is simply not there any more, which is what a local pairing becomes the
+/// moment the local stack stops. That host retries for days behind a word that
+/// promises the opposite, so a failed last attempt now says so. The journal
+/// carries the error of the latest attempt only, cleared on a connect, so this
+/// distinguishes "trying" from "tried and failed" rather than remembering an
+/// old failure forever.
+fn agent_host_tray_label(
+    available: bool,
+    running: bool,
+    paired: bool,
+    connected: bool,
+    unreachable: bool,
+) -> String {
     if !available {
         "Agent Host: not installed".into()
     } else if !running {
@@ -2885,6 +2925,8 @@ fn agent_host_tray_label(available: bool, running: bool, paired: bool, connected
         "Agent Host: not paired".into()
     } else if connected {
         "Agent Host: connected".into()
+    } else if unreachable {
+        "Agent Host: workspace unreachable".into()
     } else {
         "Agent Host: reconnecting…".into()
     }
@@ -2898,16 +2940,25 @@ fn refresh_agent_host_tray(app: &AppHandle, status: &Value) {
     let available = status.get("available").and_then(Value::as_bool) == Some(true);
     let running = status.get("running").and_then(Value::as_bool) == Some(true);
     let paired = status.get("paired").and_then(Value::as_bool) == Some(true);
-    let connected = status
-        .get("targets")
-        .and_then(Value::as_array)
-        .is_some_and(|targets| {
-            targets.iter().any(|target| {
-                target.get("connection_state").and_then(Value::as_str) == Some("ONLINE")
+    let targets = status.get("targets").and_then(Value::as_array);
+    let connected = targets.is_some_and(|targets| {
+        targets
+            .iter()
+            .any(|target| target.get("connection_state").and_then(Value::as_str) == Some("ONLINE"))
+    });
+    // Every paired workspace failed its last attempt: nothing here is on its way
+    // back, whatever the retry loop is still doing.
+    let unreachable = targets.is_some_and(|targets| {
+        !targets.is_empty()
+            && targets.iter().all(|target| {
+                target
+                    .get("last_error")
+                    .and_then(Value::as_str)
+                    .is_some_and(|error| !error.trim().is_empty())
             })
-        });
+    });
 
-    let state = agent_host_tray_label(available, running, paired, connected);
+    let state = agent_host_tray_label(available, running, paired, connected, unreachable);
 
     {
         let shell: State<Shell> = app.state();
@@ -4656,26 +4707,39 @@ mod tests {
         // Each of these is a live process that cannot take work, and the old
         // process-only status called them all "running".
         assert_eq!(
-            agent_host_tray_label(true, true, false, false),
+            agent_host_tray_label(true, true, false, false, false),
             "Agent Host: not paired",
         );
         assert_eq!(
-            agent_host_tray_label(true, true, true, false),
+            agent_host_tray_label(true, true, true, false, false),
             "Agent Host: reconnecting…",
         );
         assert_eq!(
-            agent_host_tray_label(true, true, true, true),
+            agent_host_tray_label(true, true, true, true, false),
             "Agent Host: connected",
         );
         assert_eq!(
-            agent_host_tray_label(true, false, true, false),
+            agent_host_tray_label(true, false, true, false, false),
             "Agent Host: off"
         );
         // A build without the sidecar cannot be switched on, so say so rather
         // than offering a toggle that always fails.
         assert_eq!(
-            agent_host_tray_label(false, false, false, false),
+            agent_host_tray_label(false, false, false, false, false),
             "Agent Host: not installed",
+        );
+        // The state this distinction was added for: a workspace that answered
+        // yesterday and is not there today. "Reconnecting" for a week is a
+        // promise the retry loop cannot keep.
+        assert_eq!(
+            agent_host_tray_label(true, true, true, false, true),
+            "Agent Host: workspace unreachable",
+        );
+        // Connected wins over a stale error on another target: one workspace
+        // failing does not stop this computer taking work from the other.
+        assert_eq!(
+            agent_host_tray_label(true, true, true, true, true),
+            "Agent Host: connected",
         );
     }
 
@@ -4774,7 +4838,7 @@ mod tests {
     }
 
     #[test]
-    fn an_overridden_workspace_origin_gets_the_same_single_command() {
+    fn an_overridden_workspace_origin_gets_the_same_commands() {
         let capability_for = |values: &[&str]| {
             workspace_capability_for(values.iter().map(|value| value.to_string()))
         };
@@ -4792,10 +4856,23 @@ mod tests {
             capability["remote"]["urls"],
             json!(["https://staging.lemma.work", "http://127.0.0.1:3711"]),
         );
+        // Read from the shipped file rather than restated here: a hardcoded copy
+        // is exactly what drifted, and an assertion that has to be remembered
+        // catches nothing.
+        let shipped: Value =
+            serde_json::from_str(SHIPPED_WORKSPACE_CAPABILITY).expect("valid shipped capability");
         assert_eq!(
-            capability["permissions"],
-            json!(["allow-open-control-center"]),
-            "an override must not reach further than the shipped capability",
+            capability["permissions"], shipped["permissions"],
+            "an override must reach neither further nor less far than the shipped capability",
+        );
+        // The one this drift actually cost, named so the regression reads as
+        // the symptom it produced.
+        assert!(
+            capability["permissions"]
+                .as_array()
+                .expect("permissions are an array")
+                .contains(&json!("allow-agent-host-status")),
+            "a self-hosted workspace must be able to ask this computer for its status",
         );
         assert_eq!(capability["local"], json!(false));
     }

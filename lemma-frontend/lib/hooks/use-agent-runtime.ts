@@ -42,6 +42,25 @@ export type AgentHostPairing = AgentHostPairingCreated;
 // while anything is still settling, then back off once every machine is online.
 const SETTLING_REFETCH_MS = 2000;
 const SETTLED_REFETCH_MS = 20000;
+// "Not online" was read as "settling", so a machine that is offline for a
+// reason that will not resolve on its own — a workspace it can no longer reach,
+// a computer that is switched off — kept the whole Models page fetching twice a
+// second for as long as it was open. Settling is a transition, and a transition
+// has a recent check-in behind it: a machine that has just paired has not been
+// seen at all yet, and one that is coming back was seen moments ago. Anything
+// quiet for longer than this is a state, not a transition.
+const ARRIVING_WINDOW_MS = 90_000;
+/** Empty-list polls at the fast interval before harness discovery is given up on. */
+const EMPTY_HARNESS_FAST_POLLS = ARRIVING_WINDOW_MS / SETTLING_REFETCH_MS;
+
+export const isArriving = (host: AgentHost): boolean => {
+    if (host.status === 'ONLINE') return false;
+    // A pairing that has never checked in is dated from its creation, so a
+    // machine still booting is watched closely and one paired last week is not.
+    const since = host.last_seen_at ?? host.created_at;
+    const at = Date.parse(since);
+    return Number.isNaN(at) ? false : Date.now() - at < ARRIVING_WINDOW_MS;
+};
 
 export const useAgentHosts = () => {
     return useQuery({
@@ -52,7 +71,11 @@ export const useAgentHosts = () => {
         refetchInterval: (query) => {
             const items = query.state.data?.items ?? [];
             const live = items.filter((host) => host.status !== 'REVOKED');
-            const settling = live.length === 0 || live.some((host) => host.status !== 'ONLINE');
+            // An empty list has nothing to date, and a machine paired from a
+            // terminal has to be able to appear on its own, so it keeps the
+            // fast interval: the poll is one small request and there are no
+            // per-host requests behind it.
+            const settling = live.length === 0 || live.some(isArriving);
             return settling ? SETTLING_REFETCH_MS : SETTLED_REFETCH_MS;
         },
     });
@@ -66,11 +89,22 @@ export const useAgentHostHarnesses = (hostId?: string | null) => {
         staleTime: 2000,
         refetchOnWindowFocus: true,
         // Discovery probes each installed agent, so the list arrives a little
-        // after the machine itself does. An empty list is "still looking".
-        refetchInterval: (query) =>
-            (query.state.data?.items?.length ?? 0) === 0
+        // after the machine itself does. An empty list is "still looking" —
+        // but only for as long as looking is plausible. An offline computer
+        // publishes nothing ever, and asking it every two seconds forever is
+        // how one unreachable machine became a request a second across the
+        // page's per-host queries.
+        //
+        // Counted in polls rather than elapsed time: `dataUpdatedAt` moves with
+        // every successful poll, so a clock reading here would always be two
+        // seconds old and the fast interval would never end.
+        refetchInterval: (query) => {
+            const items = query.state.data?.items ?? [];
+            if (items.length > 0) return SETTLED_REFETCH_MS;
+            return query.state.dataUpdateCount < EMPTY_HARNESS_FAST_POLLS
                 ? SETTLING_REFETCH_MS
-                : SETTLED_REFETCH_MS,
+                : SETTLED_REFETCH_MS;
+        },
     });
 };
 

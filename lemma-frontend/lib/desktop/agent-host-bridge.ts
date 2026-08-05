@@ -98,6 +98,9 @@ export const agentHostBridge = {
     openLog: () => call('agent_host_open_log'),
 };
 
+/** The longest a run of failing status calls backs off to. */
+const MAX_BACKOFF_INTERVAL_MS = 60_000;
+
 /**
  * Poll this computer's Agent Host while the page is visible.
  *
@@ -117,30 +120,47 @@ export function useThisComputer(intervalMs = 3000) {
     );
 
     const poll = useCallback(async () => {
-        if (!isDesktopAgentHostAvailable()) return;
+        if (!isDesktopAgentHostAvailable()) return true;
         try {
             const next = readStatus(await agentHostBridge.status());
             if (next) setStatus(next);
             setError(null);
+            return true;
         } catch (cause) {
             setError(cause instanceof Error ? cause.message : String(cause));
+            return false;
         }
     }, []);
 
     useEffect(() => {
         if (!isDesktop) return;
-        let timer: ReturnType<typeof setInterval> | null = null;
-        // Deferred rather than called inline: the first reading arrives through
-        // setState, and React forbids that synchronously inside an effect.
-        const first = setTimeout(() => void poll(), 0);
-        const start = () => {
-            if (timer === null) timer = setInterval(() => void poll(), intervalMs);
+        let timer: ReturnType<typeof setTimeout> | null = null;
+        let stopped = false;
+        // A failing call is not a slow one: an ACL rejection, a missing sidecar,
+        // or a daemon that will not start answers immediately and answers the
+        // same way every time. At a flat interval that is twenty forked sidecar
+        // reads a minute producing one unchanged error, for as long as the page
+        // is open, so each consecutive failure doubles the wait. One success
+        // puts it straight back on the interval it was asked for.
+        let failures = 0;
+        const delay = () =>
+            failures === 0
+                ? intervalMs
+                : Math.min(intervalMs * 2 ** failures, MAX_BACKOFF_INTERVAL_MS);
+        const tick = async () => {
+            const ok = await poll();
+            if (stopped) return;
+            failures = ok ? 0 : failures + 1;
+            timer = setTimeout(() => void tick(), delay());
         };
         const stop = () => {
             if (timer !== null) {
-                clearInterval(timer);
+                clearTimeout(timer);
                 timer = null;
             }
+        };
+        const start = () => {
+            if (timer === null && !stopped) timer = setTimeout(() => void tick(), 0);
         };
         // A background tab has nobody watching, and each poll forks the sidecar
         // to read its journal.
@@ -149,13 +169,16 @@ export function useThisComputer(intervalMs = 3000) {
                 stop();
                 return;
             }
-            void poll();
+            // Coming back is a reason to try again now: whatever was failing may
+            // have been fixed in the meantime, and the person is looking at it.
+            failures = 0;
+            stop();
             start();
         };
         document.addEventListener('visibilitychange', onVisibility);
         if (!document.hidden) start();
         return () => {
-            clearTimeout(first);
+            stopped = true;
             document.removeEventListener('visibilitychange', onVisibility);
             stop();
         };
