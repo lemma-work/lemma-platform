@@ -17,6 +17,7 @@ import {
     X,
 } from '@/components/ui/icons';
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
+import { POD_DEFAULT_AGENT_SELECTOR } from 'lemma-sdk';
 
 import { useAIAssistant } from '@/components/ai/ai-assistant-context';
 import { Logo } from '@/components/brand/logo';
@@ -229,6 +230,7 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
     const [podSwitcherOpen, setPodSwitcherOpen] = useState(false);
     const [conversationFilter, setConversationFilter] = useState('');
     const [filterOpen, setFilterOpen] = useState(false);
+    const [conversationScope, setConversationScope] = useState<'assistant' | 'all'>('assistant');
     const moreDisclosed = useSyncExternalStore(
         subscribeToMoreDisclosed,
         getMoreDisclosed,
@@ -264,7 +266,7 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
         isLoading: isLoadingConversationHistory,
         refetch: refetchConversationHistory,
     } = useScopedConversations(
-        { podId },
+        { podId, agentName: conversationScope === 'assistant' ? POD_DEFAULT_AGENT_SELECTOR : undefined },
         { limit: SIDEBAR_CONVERSATION_LIMIT, enabled: canUseConversations },
     );
 
@@ -288,13 +290,19 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
     // The controller can hold conversations the capped query missed, so trim
     // after merging — otherwise a brand new conversation could push the list
     // past the limit it is meant to hold.
+    const scopedControllerConversations = useMemo(
+        () => conversationScope === 'assistant'
+            ? controllerConversations.filter((conversation) => !conversation.agent_id)
+            : controllerConversations,
+        [controllerConversations, conversationScope],
+    );
     const conversations = useMemo(
         () => mergeSidebarConversations(
             conversationHistory?.items || [],
-            controllerConversations,
+            scopedControllerConversations,
             openedConversationId,
         ).slice(0, SIDEBAR_CONVERSATION_LIMIT),
-        [controllerConversations, conversationHistory?.items, openedConversationId],
+        [conversationHistory?.items, openedConversationId, scopedControllerConversations],
     );
 
     const visibleConversations = useMemo(
@@ -810,16 +818,52 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
                         </div>
                     ) : null}
 
-                    <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-3 pt-2">
+                    <div className="shrink-0 flex items-center justify-between px-2 pt-2">
+                        <span className="text-xs leading-5 text-[var(--text-tertiary)]">Recents</span>
+                        <div
+                            className="flex items-center gap-1 text-xs leading-5"
+                            role="group"
+                            aria-label="Conversation scope"
+                        >
+                            <button
+                                type="button"
+                                onClick={() => setConversationScope('assistant')}
+                                className={cn(
+                                    'custom-focus-ring rounded px-1 transition-colors',
+                                    conversationScope === 'assistant'
+                                        ? 'text-[var(--text-secondary)]'
+                                        : 'text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]',
+                                )}
+                                aria-pressed={conversationScope === 'assistant'}
+                                title="Pod assistant conversations"
+                            >
+                                Assistant
+                            </button>
+                            <span className="text-[var(--text-tertiary)]" aria-hidden="true">·</span>
+                            <button
+                                type="button"
+                                onClick={() => setConversationScope('all')}
+                                className={cn(
+                                    'custom-focus-ring rounded px-1 transition-colors',
+                                    conversationScope === 'all'
+                                        ? 'text-[var(--text-secondary)]'
+                                        : 'text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]',
+                                )}
+                                aria-pressed={conversationScope === 'all'}
+                                title="All conversations"
+                            >
+                                All
+                            </button>
+                        </div>
+                    </div>
+
+                    <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-3 pt-1.5">
                         {isLoadingConversationHistory && !hasVisibleConversations ? (
                             /* Rows at the row's own height, dot gutter included —
                                a one-line caption is a different box from the list
                                it becomes, and this rail is narrow enough that the
                                swap reads as the whole nav resettling. */
                             <div role="status" aria-label="Loading conversations">
-                                <div className="px-2 pb-1 text-xs leading-5 text-[var(--text-tertiary)]">
-                                    Recents
-                                </div>
                                 {CONVERSATION_ROW_SKELETON_WIDTHS.map((width, index) => (
                                     <div
                                         key={index}
@@ -841,9 +885,6 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
                             </div>
                         ) : (
                             <>
-                                <div className="px-2 pb-1 text-xs leading-5 text-[var(--text-tertiary)]">
-                                    Recents
-                                </div>
                                 {visibleConversations.map((conversation) => (
                                     <ConversationRow
                                         key={conversation.id}
