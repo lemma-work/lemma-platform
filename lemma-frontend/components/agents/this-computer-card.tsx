@@ -16,7 +16,7 @@ import { getLemmaApiBaseUrl } from '@/lib/sdk/lemma-client';
 import { useCreateAgentHostPairing } from '@/lib/hooks/use-agent-runtime';
 import { allowAutoConnect, declineAutoConnect } from '@/lib/desktop/auto-connect';
 import { cn } from '@/lib/utils';
-import { describeThisComputer, type Tone } from './this-computer-status';
+import { describeThisComputer, selectWorkspaceTarget, type Tone } from './this-computer-status';
 
 export type ThisComputerState = {
     /** The paired-computer id the backend knows this machine by, if any. */
@@ -57,7 +57,12 @@ export function ThisComputerCard({
     const [busy, setBusy] = useState<string | null>(null);
     const [confirmDisconnect, setConfirmDisconnect] = useState(false);
 
-    const target: AgentHostTarget | undefined = status?.targets[0];
+    // This workspace's pairing, not whichever one happens to be first: a Mac
+    // paired to its own local stack and then opened against a hosted workspace
+    // has two, and only one of them is what this card is about.
+    const workspaceUrl = getLemmaApiBaseUrl();
+    const target: AgentHostTarget | null = selectWorkspaceTarget(status?.targets ?? [], workspaceUrl);
+    const pairedHere = Boolean(target);
     const hostId = target?.host_id ?? null;
     // Tell the paired-computer list which card is this machine, so it can label
     // that one instead of listing the same machine twice.
@@ -69,7 +74,7 @@ export function ThisComputerCard({
     // section falls back to the download card instead.
     if (!isDesktop) return null;
 
-    const state = describeThisComputer(status, error);
+    const state = describeThisComputer(status, error, workspaceUrl);
 
     const run = async (action: string, work: () => Promise<unknown>, success?: string) => {
         setBusy(action);
@@ -151,7 +156,7 @@ export function ThisComputerCard({
                     </Button>
                 ) : null}
 
-                {status?.available && status.paired ? (
+                {status?.available && pairedHere ? (
                     <Button
                         type="button"
                         variant={status.running ? 'quiet' : 'primary'}
@@ -171,7 +176,7 @@ export function ThisComputerCard({
                 ) : null}
             </div>
 
-            {status?.available && !status.paired ? (
+            {status?.available && !pairedHere ? (
                 <div className="mt-3 flex flex-wrap items-end gap-2">
                     <Input
                         value={displayName}
@@ -191,7 +196,7 @@ export function ThisComputerCard({
                 </div>
             ) : null}
 
-            {status?.paired ? (
+            {pairedHere ? (
                 <div className="mt-3 flex flex-wrap items-center gap-2">
                     <Button
                         type="button"
