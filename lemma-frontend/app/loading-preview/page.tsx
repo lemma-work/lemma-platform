@@ -6,7 +6,6 @@ import {
     ListSkeleton,
     ResourceCardGridSkeleton,
     Skeleton,
-    TranscriptSkeleton,
 } from "@/components/shared/loading";
 import { EmptyState } from "@/components/shared/empty-state";
 
@@ -102,9 +101,23 @@ export default function LoadingPreviewPage() {
                     </section>
                 </div>
 
+                {/* The counter-example, and the reason it is on this page at
+                    all: a region that gets no skeleton. Everything above
+                    predicts its content — a page of table rows, three cards, a
+                    list. A transcript predicts nothing, so its unsettled fill is
+                    the empty box, and the composer beneath it is drawn as the
+                    chrome it is. */}
                 <section className="surface-panel flex flex-col gap-4 p-5">
-                    <p className="type-eyebrow">Transcript</p>
-                    <TranscriptSkeleton turns={2} />
+                    <p className="type-eyebrow">Transcript — no skeleton</p>
+                    <div className="flex h-40 flex-col justify-end gap-2">
+                        <div className="min-h-0 flex-1" />
+                        <div className="lemma-assistant-composer-input-shell pod-assistant-inputbar min-h-24 border-0 rounded-2xl" />
+                    </div>
+                    <p className="text-xs leading-5 text-[var(--text-tertiary)]">
+                        A skeleton claims a known amount of content is coming. A transcript
+                        can be two hundred turns or none, so it claims nothing and waits in
+                        silence — one quiet line appears only past 600&thinsp;ms.
+                    </p>
                 </section>
 
                 <footer className="border-t border-[var(--border-subtle)] pt-5 text-xs leading-5 text-[var(--text-tertiary)]">

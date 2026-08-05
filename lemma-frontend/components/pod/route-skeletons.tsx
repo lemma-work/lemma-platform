@@ -3,7 +3,6 @@ import {
     ResourceCardGridSkeleton,
     Skeleton,
     SkeletonText,
-    TranscriptSkeleton,
 } from '@/components/shared/loading';
 
 /**
@@ -204,37 +203,150 @@ export function PodSettingsLedgerSkeleton({ tabs = 4, rows = 6 }: { tabs?: numbe
 }
 
 /**
- * Conversation surfaces — bottom-anchored, with the composer already in place.
- * Anchoring matters: a transcript that fills from the top and then jumps to the
- * bottom is the load being visible twice.
+ * A conversation — an empty transcript above a real composer.
+ *
+ * There is no placeholder in the transcript, and that is the point. A skeleton
+ * claims that a known amount of content is on its way; a transcript can be two
+ * hundred turns, one turn, or — on `/conversations/new`, the commonest way into
+ * chat — none at all. `loading.tsx` takes no params, so this boundary cannot
+ * even tell which of those it is in front of. Two grey turns that resolve to an
+ * empty composer is a promise broken on the busiest path in the product, and in
+ * a bottom-anchored scroller a guessed height is one the real messages re-flow
+ * anyway — so the placeholder fails at the only job it has.
+ *
+ * What *is* drawn is the composer, because the composer is not content. It is
+ * chrome: it takes no data, it looks the same whatever the transcript turns out
+ * to hold, and it is still there afterwards. So it renders as itself, in the
+ * real classes, rather than as a grey block pretending to be itself. The
+ * distinction the doc draws for tables holds here too — the frame is drawn
+ * because it survives the load; the fill is not.
  */
 export function PodConversationSkeleton() {
     return (
-        <div className="flex h-full min-h-0 flex-col bg-[var(--pod-main-bg)]" role="status" aria-label="Loading conversation">
-            {/* Same `TranscriptSkeleton` and the same box the conversation page
-                itself uses while it selects the conversation, so the route
-                boundary handing over to the page is invisible rather than a
-                second screen. */}
-            <div className="mx-auto flex h-full min-h-0 w-full max-w-4xl flex-col justify-end gap-6 px-6 pb-6">
-                <TranscriptSkeleton turns={2} />
-                <Skeleton shape="block" className="h-24 w-full rounded-2xl" />
+        <div
+            className="flex h-full min-h-0 flex-col bg-[var(--pod-main-bg)]"
+            role="status"
+            aria-label="Loading conversation"
+            aria-busy="true"
+        >
+            {/* The transcript's box, held open and empty. Bottom-anchored, so
+                the first real message lands at the bottom edge either way. The
+                label above is what carries the wait now that nothing is drawn:
+                a reader who cannot see the blank region is still told. */}
+            <div className="min-h-0 flex-1" />
+            <ConversationComposerRail />
+        </div>
+    );
+}
+
+/**
+ * The composer rail, in the same class names `AssistantComposer` and
+ * `assistantComposerInputClassName` use at `density="spacious"`.
+ *
+ * Reusing the classes rather than measuring by eye is what makes the handover
+ * invisible: the box here is computed by the same CSS that computes the settled
+ * box, so the real composer replaces this one without moving a pixel. The
+ * helper is not imported — it lives beside `react-markdown`, and a route
+ * boundary must not pull the renderer in to draw an empty box.
+ */
+function ConversationComposerRail() {
+    return (
+        <div className="lemma-assistant-composer flex shrink-0 flex-col gap-2 border-t border-transparent bg-transparent px-4 pb-3 pt-2 sm:px-6">
+            <div className="min-h-0" />
+            <div className="mx-auto w-full min-w-0 max-w-4xl">
+                <div className="lemma-assistant-composer-input lemma-assistant-composer-input-shell pod-assistant-inputbar relative flex min-h-24 flex-col gap-2 border-0 px-5 py-4 rounded-2xl" />
             </div>
         </div>
     );
 }
 
 /**
- * The pod home — one composer in the middle of the page and nothing else until
- * we know whether this pod has an activity region. A card grid here was the
- * most wrong of all: the settled page has no cards at the top at all.
+ * The conversations index — a header over a ledger, not a transcript.
+ *
+ * This route used to inherit `PodConversationSkeleton`, so clicking
+ * **Conversations** drew a bottom-anchored transcript and a composer in front
+ * of a page that settles into a top-anchored `h-14` header and a list of rows.
+ * Same shape mismatch the per-route boundaries exist to prevent, on the one
+ * route named after the shape it was borrowing.
+ *
+ * The header and the strip's labels are known here without any query — the
+ * title is a literal — so they render for real, and only the counts and the
+ * rows wait. Counts print `—` rather than `0`: a number we have not fetched is
+ * a fact we are inventing.
+ */
+export function PodConversationIndexSkeleton({ rows = 5 }: { rows?: number }) {
+    return (
+        <div className="flex min-h-full flex-col bg-[var(--pod-main-bg)]">
+            <header className="pod-shell-topbar flex h-14 shrink-0 items-center px-4 sm:px-6 lg:px-8">
+                <div className="flex h-8 w-full items-center justify-between gap-3">
+                    <h1 className="min-w-0 truncate text-sm font-medium leading-none text-[var(--text-primary)]">
+                        Conversations
+                    </h1>
+                </div>
+            </header>
+            <div className="px-4 pb-8 pt-5 sm:px-6 lg:px-8" role="status" aria-label="Loading conversations">
+                <div className="space-y-4">
+                    {/* Real labels, `—` counts. `MetricStripPlaceholder` above
+                        shimmers its labels because those routes' tabs are
+                        data-dependent; these three are literals, so shimmering
+                        them would be waiting on something already known — and a
+                        bar that becomes the word "running" is a wider box than
+                        the word, so the row would resize on arrival. */}
+                    <div className="lemma-index-tabs flex-wrap">
+                        <div className="flex flex-wrap items-center gap-2 text-sm text-[var(--text-tertiary)]">
+                            {CONVERSATION_METRIC_LABELS.map((label, index) => (
+                                <span key={label} className="lemma-index-tab" data-active={index === 0 || undefined}>
+                                    <strong className="font-medium text-[var(--text-primary)]" aria-hidden="true">—</strong>
+                                    <span>{label}</span>
+                                </span>
+                            ))}
+                        </div>
+                    </div>
+                    {/* The same two-line row `PodConversationList` draws while it
+                        loads, at the same `min-h-12` — the list takes over from
+                        this without the rows changing height. */}
+                    <div className="lemma-index-list gap-1">
+                        {CONVERSATION_ROW_WIDTHS.slice(0, rows).map((width, index) => (
+                            <div key={index} className="px-1 py-1">
+                                <div className="flex min-h-12 flex-col justify-center gap-1.5 px-1.5">
+                                    <Skeleton className={`h-3 ${width}`} />
+                                    <Skeleton className="h-2.5 w-20" />
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
+}
+
+/** Mirrors `CONVERSATION_SKELETON_WIDTHS` in `PodConversationList`. */
+const CONVERSATION_ROW_WIDTHS = ['w-3/5', 'w-5/12', 'w-2/3', 'w-1/2', 'w-7/12'];
+
+/** Mirrors the strip `PodConversationList` renders at `variant="page"`. */
+const CONVERSATION_METRIC_LABELS = ['conversations', 'running', 'recent'];
+
+/**
+ * The pod home — the composer, and nothing above it.
+ *
+ * Two things were wrong with the version that shimmered a title bar over a
+ * shimmered composer. The composer is chrome: it is static markup that reads no
+ * data, so a grey block standing in for it is a placeholder for something we
+ * could simply draw. And the region above it is not one shape but two — a fresh
+ * pod opens with a left-aligned `text-4xl` starter hero and a theme picker, an
+ * established one opens with nothing there at all — decided by a query this
+ * boundary has not run. A centred `w-64` bar was neither.
+ *
+ * So: draw the composer, because we know it; draw nothing above it, because we
+ * do not know it yet. Only the thing that knows the shape may draw the shape.
  */
 export function PodHomeSkeleton() {
     return (
-        <div className="flex min-h-full flex-col bg-[var(--pod-main-bg)]" role="status" aria-label="Loading">
+        <div className="flex min-h-full flex-col bg-[var(--pod-main-bg)]" role="status" aria-label="Loading" aria-busy="true">
             <div className="mx-auto flex min-h-full w-full max-w-6xl flex-1 flex-col items-center px-5 pb-10 pt-8 sm:px-6 md:pt-12">
-                <div className="w-full max-w-4xl space-y-4">
-                    <Skeleton shape="block" className="mx-auto h-8 w-64" />
-                    <Skeleton shape="block" className="h-16 w-full rounded-2xl" />
+                <div className="w-full max-w-4xl">
+                    <div className="form-field-control flex min-h-16 items-center gap-2 px-3" />
                 </div>
             </div>
         </div>

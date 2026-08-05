@@ -168,42 +168,23 @@ export function TableRowsSkeleton({
     );
 }
 
-/**
- * A turn of conversation — one short line for the human, a longer block for the
- * reply. Bottom-anchored transcripts settle instead of jumping when the real
- * first message is roughly this tall.
+/*
+ * There is deliberately no transcript or message skeleton here.
+ *
+ * A skeleton is a *prediction* — "N units of roughly this size are coming" —
+ * and a transcript cannot make it. It may hold two hundred turns or zero; a new
+ * conversation settles into no messages at all, so the fill would resolve to
+ * nothing on the single most common path into chat. It is bottom-anchored, so a
+ * guessed height is one the real messages always re-flow, which means the
+ * placeholder cannot even do the one job a skeleton exists for. And chat's real
+ * wait is generation, not fetch, which already has its own honest idiom in
+ * `ThinkingIndicator` and streaming text.
+ *
+ * The transcript's unsettled state is therefore an *empty* region of the right
+ * size, above a composer drawn as the real chrome it is — see
+ * `PodConversationSkeleton`. Past a long threshold the transcript itself shows
+ * one quiet line where the newest message will land, and nothing before then.
  */
-export function MessageSkeleton({ role = 'assistant' }: { role?: 'user' | 'assistant' }) {
-    if (role === 'user') {
-        return (
-            <div className="flex w-full justify-end" aria-hidden="true">
-                <Skeleton shape="block" className="h-8 w-2/5 rounded-2xl" />
-            </div>
-        );
-    }
-
-    return (
-        <div className="flex w-full flex-col gap-2" aria-hidden="true">
-            <Skeleton className="h-3 w-full" />
-            <Skeleton className="h-3 w-11/12" />
-            <Skeleton className="h-3 w-2/3" />
-        </div>
-    );
-}
-
-/** The transcript's first-load fill: a couple of turns, in reading order. */
-export function TranscriptSkeleton({ turns = 2, className }: { turns?: number; className?: string }) {
-    return (
-        <div className={cn('flex w-full flex-col gap-5', className)}>
-            {Array.from({ length: turns }).map((_, index) => (
-                <div key={index} className="flex w-full flex-col gap-5">
-                    <MessageSkeleton role="user" />
-                    <MessageSkeleton role="assistant" />
-                </div>
-            ))}
-        </div>
-    );
-}
 
 /** A labelled form/detail row — label above, value below. */
 export function FieldRowsSkeleton({ rows = 4, className }: { rows?: number; className?: string }) {

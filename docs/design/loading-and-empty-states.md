@@ -193,6 +193,8 @@ and `QuietEmptyState` in one render.
 
 Corollaries:
 
+
+
 - A skeleton is derived from the component it replaces, not drawn by eye. The
   model already exists: [`DatastoreTableSkeleton`](../../lemma-frontend/components/data/datastore-table-skeleton.tsx)
   reuses `.data-table-workbench` so the frame is literally the same CSS.
@@ -204,6 +206,89 @@ Corollaries:
   keep the old content, dim it. Never a skeleton on top of data you already have.
 - Nothing appears for under 400 ms: 120 ms delay before a skeleton shows, 400 ms
   minimum once it does.
+
+## The second rule
+
+The rule above is about geometry. It answers *how big is the box*, and it never
+asks the question that comes before it — *do we know what is coming?* A screen
+that answers "no" and draws a skeleton anyway is still wrong, and it is wrong in
+a way "one shape, three fills" cannot catch, because the box was fine.
+
+> **A skeleton is a prediction. Only draw one when you would bet on it.**
+
+Three questions. A region needs all three to be yes:
+
+1. **Will there be content?** Not plausibly empty.
+2. **Do you know roughly how much?** A repeating unit with a defensible count.
+3. **Is the wait a fetch you own?** Not streaming, not generation.
+
+| Region | Content certain? | Count knowable? | Fill |
+| --- | --- | --- | --- |
+| Table rows, card index, list rows | yes | yes | **skeleton** |
+| Headers, tab strips, composers, counters | it is chrome | n/a | **the real thing, now** |
+| Document body, editor canvas | yes | no | **blank hold** inside real chrome |
+| Transcript | **no** | **no** | **blank hold**, and one quiet line past 600 ms |
+
+The third fill is the one this document did not have a name for, and its absence
+is why every screen reached for a shimmer by default: **a blank hold** — a
+correctly-sized box that stays empty until the content lands. It is the right
+answer wherever the content is singular, unpredictable in size, or plausibly
+absent.
+
+Two corollaries worth stating on their own:
+
+**Never shimmer chrome.** If it renders without data, render it. A grey block
+standing in for a composer is a placeholder for something we could simply draw,
+and it costs a second paint to say nothing.
+
+**Empty is a legitimate outcome, and a skeleton promises it away.** Where a
+region can settle into nothing, the placeholder is not merely inaccurate — it is
+a promise the screen then breaks. That is the whole of the chat case below.
+
+### Chat gets no skeleton
+
+Chat fails all three questions on every path, which is why it earned the rule.
+
+- **A new conversation settles into zero messages.** `/conversations/new` is the
+  commonest way into chat, and `loading.tsx` takes no params, so the boundary
+  cannot even tell it is in front of one. Two grey turns resolving to an empty
+  composer was a broken promise on the busiest path in the product.
+- **The count is unknowable and the height is a guess.** One turn or two hundred.
+  Bottom-anchored, so real messages re-flow the placeholder whatever it drew —
+  the skeleton cannot do the one job it exists for.
+- **The wait is generation, not fetch**, and that already has an honest idiom in
+  `ThinkingIndicator` and streaming text. A second "words are coming" animation
+  reads as a broken version of the real one.
+- **Blank costs nothing.** An empty transcript above a composer is a state the
+  surface has to be able to draw anyway.
+
+So the transcript holds its box empty, the composer renders as the chrome it is
+(same class names, so the settled composer replaces it without moving a pixel),
+and past 600 ms the transcript shows a single quiet line where the newest message
+will land — enough that a slow fetch does not read as an empty conversation, and
+nothing before then. There is deliberately no `TranscriptSkeleton` or
+`MessageSkeleton` in `components/shared/loading` any more; the file says why in
+place of them.
+
+The threshold is long on purpose. 120 ms is when a wait becomes *perceptible*;
+600 ms is when silence becomes *misleading*. A region whose empty state is real
+should wait for the second one.
+
+### The three routes this fixed
+
+| Route | Was | Is |
+| --- | --- | --- |
+| `/conversations` | `PodConversationSkeleton` — a bottom-anchored transcript and composer, in front of a page that settles into a `h-14` header over a list | `PodConversationIndexSkeleton` — the real header and the real strip labels with `—` counts, then the list's own row shape |
+| `/conversations/[id]`, `/conversations/new` | two grey turns, drawn three times over (route boundary → the page's own un-selected branch → the transcript's `isInitialMessageLoading`), each a fresh mount restarting the shimmer | one `PodConversationSkeleton` at the boundary and at the page's branch, and a gated quiet line in the transcript — one load, one component |
+| pod home | a centred `w-64` bar over a grey composer | the composer, drawn for real, and nothing above it |
+
+Pod home is worth the extra sentence, because it was wrong twice. The composer is
+static markup that reads no data, so shimmering it waits on nothing. And the
+region above it is not one shape but two — a fresh pod opens with a left-aligned
+`text-4xl` starter hero and a theme picker, an established one with nothing there
+at all — decided by a query the boundary has not run. A centred bar was neither.
+Only the thing that knows the shape may draw the shape; where nothing knows it
+yet, nothing is the correct drawing.
 
 ## Work
 
@@ -269,8 +354,9 @@ So every route declares its own, and what is shared is a vocabulary of page
 | `PodBuilderSkeleton` | new agent / workflow / function |
 | `PodEditorSkeleton` | flow editor, function editor |
 | `PodSettingsSkeleton` | settings, members, usage |
-| `PodConversationSkeleton` | conversations index and detail |
-| `PodHomeSkeleton` | pod home — a composer, and nothing else until we know if there is an activity region |
+| `PodConversationSkeleton` | a conversation — an empty transcript over a real composer, no message placeholders (see [The second rule](#the-second-rule)) |
+| `PodConversationIndexSkeleton` | the conversations index — a header over a ledger, which is a different shape from the thing it indexes |
+| `PodHomeSkeleton` | pod home — the composer, drawn for real, and nothing above it |
 | purpose-built | data (table workbench), files (list), agent detail, run detail |
 | deliberately empty | `app/view`, `widgets/view` — the live surface is owned by the shell's keep-alive host above the router, so a skeleton here would paint over something already running |
 
@@ -312,11 +398,14 @@ it cannot identify will always be wrong for most of them.
 
 - `ThinkingIndicator` reserves its line height from t=0 (invisible, not absent);
   the 350 ms reveal fades in without moving the transcript.
-- Initial load renders 2–3 message-shaped skeletons, bottom-anchored, so the
-  first real message replaces a same-height block.
+- ~~Initial load renders 2–3 message-shaped skeletons, bottom-anchored.~~
+  Superseded — see [The second rule](#the-second-rule). Shipping this was what
+  showed that a same-height block is not something a transcript *has*: the height
+  was a guess, and on `/conversations/new` the block stood in for nothing at all.
+  Initial load now holds the box empty and says nothing until 600 ms.
 - Move `animate-in` off the transcript container onto newly appended rows only.
 - Conversation route renders the assistant shell (header + composer) immediately
-  and skeletonizes only the transcript.
+  and leaves the transcript blank.
 - Conversation list: one dense skeleton line per row, matching the settled row.
 
 ### P2 — sweep
@@ -387,3 +476,5 @@ Two things the audit did not predict:
 - Cached navigation (`staleTime` hit) shows no skeleton at all.
 - One skeleton animation per load — no restarts from remounting.
 - Counters never display a number they have not fetched.
+- No placeholder ever resolves to an empty state. If a region can settle into
+  nothing, it did not promise something.

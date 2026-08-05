@@ -11,10 +11,8 @@ export {
     FieldRowsSkeleton,
     ListRowSkeleton,
     ListSkeleton,
-    MessageSkeleton,
     MetricStripSkeleton,
     ResourceCardGridSkeleton,
     ResourceCardSkeleton,
     TableRowsSkeleton,
-    TranscriptSkeleton,
 } from './skeletons';
