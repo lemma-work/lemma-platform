@@ -169,7 +169,9 @@ export function PodHomePresence({
                 {hasDuty && hasSurfaces ? <span className="pod-home-presence-sep" aria-hidden="true" /> : null}
 
                 {hasSurfaces ? (
-                    <Link href={`/pod/${podId}/agents`} className="pod-home-presence-link custom-focus-ring">
+                    // The agents index is `/ai`; `/agents` only holds `[agentId]`
+                    // and `new`, so a bare link there is a 404.
+                    <Link href={`/pod/${podId}/ai`} className="pod-home-presence-link custom-focus-ring">
                         <span className="pod-home-presence-surfaces">
                             {surfacePlatforms.map((platform) => (
                                 <span key={platform.key} className="pod-home-presence-surface surface-logo-chip" title={platform.label}>
