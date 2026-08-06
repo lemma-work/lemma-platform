@@ -24,7 +24,7 @@ from app.modules.workspace.services.interfaces import ISandbox
 from app.modules.workspace.services.local_sandbox_client import LocalSandboxClient
 from app.modules.workspace.services.sandbox_service import (
     SandboxService,
-    build_docker_provider,
+    build_provider,
 )
 
 _service: SandboxService | None = None
@@ -42,11 +42,11 @@ def get_sandbox_service() -> SandboxService:
     an httpx.AsyncClient, which is bound to the loop that created it.
     """
     global _service, _service_key
-    key = (id(asyncio.get_running_loop()), settings.agentbox_docker_socket_path)
+    key = (id(asyncio.get_running_loop()), settings.workspace_provider)
     if _service is not None and _service_key == key:
         return _service
     _service = SandboxService(
-        provider=build_docker_provider(),
+        provider=build_provider(),
         uow_factory=SessionUnitOfWorkFactory(async_session_maker),
     )
     _service_key = key

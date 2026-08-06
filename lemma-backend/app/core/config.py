@@ -874,6 +874,26 @@ class Settings(BaseSettings):
             "api_url; set when the proxy is reached on a different origin."
         ),
     )
+    # Which fabric sandboxes are rented from. Docker is the default because it
+    # needs no credentials and no network; e2b is the cloud path.
+    workspace_provider: Literal["docker", "e2b"] = Field(
+        default="docker",
+        description="Sandbox provider used by the workspace module",
+    )
+    e2b_api_key: Optional[SecretStr] = Field(
+        default=None, description="E2B API key"
+    )
+    e2b_workspace_template: str = Field(
+        default="lemma-workspace",
+        description="E2B template backing workspace sandboxes",
+    )
+    e2b_function_template: str = Field(
+        default="lemma-function",
+        description="E2B template backing function runtime sandboxes",
+    )
+    e2b_domain: Optional[str] = Field(
+        default=None, description="E2B API domain override"
+    )
     agentbox_docker_socket_path: str = Field(
         default="/var/run/docker.sock",
         description="Docker Engine unix socket used to provision sandboxes",

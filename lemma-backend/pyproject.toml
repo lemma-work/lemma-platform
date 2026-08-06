@@ -70,6 +70,12 @@ gcp-kms = [
     "google-cloud-kms>=3.0.0",
     "google-cloud-secret-manager>=2.20.0",
 ]
+# E2B cloud sandboxes. Optional and lazily imported, so a Docker-only or
+# Kubernetes deployment never loads the SDK. This is the only heavy dependency
+# in sandbox provisioning: Docker is spoken directly over its REST API.
+e2b = [
+    "e2b>=2.37.0",
+]
 # OS keychain backend for local dev (secret_key_provider=keychain).
 keychain = [
     "keyring>=25.0.0",
