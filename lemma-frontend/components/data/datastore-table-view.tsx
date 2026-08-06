@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, type ReactNode } from 'react';
+import { useCallback, useRef, useState, type ReactNode } from 'react';
 import dynamic from 'next/dynamic';
 import { useRouter } from 'next/navigation';
 import { ArrowDown, ArrowUp, Plus, Filter, Trash2, Edit, MoreVertical, Maximize2, Table as TableIcon } from '@/components/ui/icons';
@@ -18,6 +18,8 @@ import {
     DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { EditableCell } from '@/components/tables/cells/editable-cell';
+import { ColumnResizeHandle } from '@/components/tables/column-resize-handle';
+import { ColumnTypeIcon } from '@/components/tables/column-type-icon';
 import { ViewSwitcher, type ViewType } from '@/components/tables/view-switcher';
 import { ResourceShareButton, ResourceVisibilityBadge, type ResourceVisibilityValue } from '@/components/shared/resource-visibility';
 import { resourceAllows } from '@/lib/authz/resource-actions';
@@ -29,6 +31,12 @@ import {
     useDeleteRecord,
     useDeleteTable,
 } from '@/lib/hooks/use-datastores';
+import {
+    ACTIONS_COLUMN_WIDTH,
+    SELECT_COLUMN_WIDTH,
+    defaultColumnWidth,
+    useTableColumnWidths,
+} from '@/lib/hooks/use-table-column-widths';
 import { useTableShortcuts } from '@/lib/hooks/use-table-shortcuts';
 import { getLemmaClient } from '@/lib/sdk/lemma-client';
 import { buildResourceShareUrl } from '@/lib/assistant/conversation-presentation';
@@ -103,6 +111,12 @@ export function DatastoreTableView({
     const [queryPageTokens, setQueryPageTokens] = useState<Array<string | null>>([null]);
     const limit = 50;
     const usesStructuredQuery = filters.length > 0 || sortField !== null;
+
+    const tableRef = useRef<HTMLTableElement>(null);
+    const { widthFor, setColumnWidth, resetColumnWidth, clampWidth } = useTableColumnWidths(
+        podId,
+        tableName
+    );
 
     useTableShortcuts({
         onNewRecord: () => {
@@ -257,9 +271,74 @@ export function DatastoreTableView({
 
     const records = (recordsData?.items as TableRecord[] | undefined) || [];
     const orderedColumns = table ? getDisplayColumns(table.columns, table.primary_key_column) : [];
-    const gridColumnCount = orderedColumns.length + 1 + (canWriteRecords ? 1 : 0) + (canUpdateTable ? 1 : 0);
+    // Select column (when writable) + the data columns + the slack column + the
+    // trailing rail that holds "add column" in the head and "expand" in a row.
+    const gridColumnCount = orderedColumns.length + 2 + (canWriteRecords ? 1 : 0);
+    // A definite width is what makes `table-layout: fixed` mean anything: CSS
+    // hands the fixed algorithm only to tables that have one, so the old
+    // `min-w-full` (a *minimum*, leaving width auto) quietly bought the
+    // automatic algorithm instead — every column as wide as its longest cell.
+    const gridWidth =
+        (canWriteRecords ? SELECT_COLUMN_WIDTH : 0) +
+        orderedColumns.reduce((total, column) => total + widthFor(column), 0) +
+        ACTIONS_COLUMN_WIDTH;
     const getRecordId = (record: TableRecord): string =>
         String(record[table?.primary_key_column || 'id'] ?? '');
+
+    /**
+     * Drag feedback, written straight to the DOM. React owns the width once the
+     * reader lets go; while they are still dragging, a state update per pointer
+     * move would re-render every cell on the page to move one edge.
+     *
+     * The commit path writes here too, so the element and the state always agree
+     * on where the drag ended — React skips a DOM write when the width it
+     * renders matches the one it rendered last, which after a drag that returns
+     * to where it started is exactly the width the element must not keep.
+     */
+    const paintColumnWidth = useCallback(
+        (columnName: string, width: number) => {
+            const grid = tableRef.current;
+            if (!grid) return;
+
+            const columns = Array.from(grid.querySelectorAll<HTMLTableColElement>('col[data-column]'));
+            const target = columns.find((column) => column.dataset.column === columnName);
+            if (!target) return;
+
+            target.style.width = `${clampWidth(width)}px`;
+            grid.style.width = `${
+                (canWriteRecords ? SELECT_COLUMN_WIDTH : 0) +
+                ACTIONS_COLUMN_WIDTH +
+                columns.reduce((total, column) => total + (Number.parseFloat(column.style.width) || 0), 0)
+            }px`;
+        },
+        [canWriteRecords, clampWidth]
+    );
+
+    const previewColumnWidth = useCallback(
+        (columnName: string, width: number) => {
+            if (tableRef.current) tableRef.current.dataset.resizing = 'true';
+            paintColumnWidth(columnName, width);
+        },
+        [paintColumnWidth]
+    );
+
+    const commitColumnWidth = useCallback(
+        (columnName: string, width: number) => {
+            if (tableRef.current) delete tableRef.current.dataset.resizing;
+            paintColumnWidth(columnName, width);
+            setColumnWidth(columnName, width);
+        },
+        [paintColumnWidth, setColumnWidth]
+    );
+
+    const restoreColumnWidth = useCallback(
+        (column: Column) => {
+            if (tableRef.current) delete tableRef.current.dataset.resizing;
+            paintColumnWidth(column.name, defaultColumnWidth(column));
+            resetColumnWidth(column.name);
+        },
+        [paintColumnWidth, resetColumnWidth]
+    );
 
     const handleSort = (columnName: string) => {
         setPage(0);
@@ -414,12 +493,35 @@ export function DatastoreTableView({
 
             <div className={embedded ? 'data-table-viewport relative flex-1 overflow-hidden bg-[var(--row-bg)]' : 'relative flex-1 overflow-auto p-2'}>
                 {currentView === 'grid' ? (
-                    <div className={embedded ? 'data-table-grid-frame h-full' : 'min-w-full inline-block align-middle h-full'}>
+                    <div className={embedded ? 'data-table-grid-frame h-full' : 'h-full'}>
                         <div className="h-full overflow-auto bg-transparent">
-                            <table className="data-table-grid min-w-full table-fixed">
+                            {/* eslint-disable no-restricted-syntax -- A column width is
+                                the runtime geometry the rule allows for: it is a number the
+                                reader chose by dragging, kept per table, and a stylesheet has
+                                no way to name it. */}
+                            <table ref={tableRef} className="data-table-grid" style={{ width: gridWidth }}>
+                                {/* Every column's width is declared once, here.
+                                    The unsized column near the end is slack: it
+                                    swallows whatever a narrow table leaves over,
+                                    so two columns stay two columns instead of
+                                    stretching to fill the pane, and the rows
+                                    still rule all the way to the frame. */}
+                                <colgroup>
+                                    {canWriteRecords ? <col style={{ width: SELECT_COLUMN_WIDTH }} /> : null}
+                                    {orderedColumns.map((column: Column) => (
+                                        <col
+                                            key={column.name}
+                                            data-column={column.name}
+                                            style={{ width: widthFor(column) }}
+                                        />
+                                    ))}
+                                    <col />
+                                    <col style={{ width: ACTIONS_COLUMN_WIDTH }} />
+                                </colgroup>
+                                {/* eslint-enable no-restricted-syntax */}
                                 <thead className="data-table-head sticky top-0 z-10 border-b border-[color:var(--row-border)] bg-[var(--card-bg)] backdrop-blur-md">
                                     <tr>
-                                        {canWriteRecords ? <th className="w-10 px-2.5 py-2 text-center">
+                                        {canWriteRecords ? <th className="px-2.5 py-2 text-center">
                                             <input
                                                 type="checkbox"
                                                 checked={selectedRows.size === records.length && records.length > 0}
@@ -428,26 +530,39 @@ export function DatastoreTableView({
                                             />
                                         </th> : null}
                                         {orderedColumns.map((column: Column) => (
-                                            <th key={column.name} className="group px-3 py-2 text-left text-xs font-normal tracking-wide text-[var(--text-tertiary)]">
-                                                <div className="flex items-center justify-between gap-2">
-                                                    <div className="flex items-center gap-1.5 cursor-pointer select-none" onClick={() => handleSort(column.name)}>
-                                                        <span className="text-[var(--text-secondary)]">{column.name}</span>
-                                                        <span className="rounded bg-[var(--bg-subtle)] px-1 py-0.5 text-xs font-normal lowercase text-[var(--text-tertiary)]">
-                                                            {column.type}
-                                                        </span>
+                                            <th
+                                                key={column.name}
+                                                scope="col"
+                                                className="group relative px-3 py-2 text-left text-xs font-normal tracking-wide text-[var(--text-tertiary)]"
+                                            >
+                                                <div className="flex items-center justify-between gap-1">
+                                                    {/* The name is what has to survive a narrow
+                                                        column, so it is the only part allowed to
+                                                        take the room: the type is a glyph, the
+                                                        sort a bare arrow, and the whole label
+                                                        clips rather than pushing the column wider. */}
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => handleSort(column.name)}
+                                                        title={`${column.name} · ${String(column.type).toLowerCase()}`}
+                                                        className="flex min-w-0 flex-1 select-none items-center gap-1.5 text-left"
+                                                    >
+                                                        <ColumnTypeIcon type={column.type} />
+                                                        <span className="truncate text-[var(--text-secondary)]">{column.name}</span>
                                                         {sortField === column.name && (
-                                                            <span className="rounded bg-[var(--action-primary-soft)] px-1 py-0.5 text-xs font-bold text-[var(--action-primary)]">
-                                                                {sortOrder === 'asc'
-                                                                    ? <ArrowUp className="size-3" aria-hidden="true" />
-                                                                    : <ArrowDown className="size-3" aria-hidden="true" />}
-                                                            </span>
+                                                            sortOrder === 'asc'
+                                                                ? <ArrowUp className="size-3 shrink-0 text-[var(--action-primary)]" aria-hidden="true" />
+                                                                : <ArrowDown className="size-3 shrink-0 text-[var(--action-primary)]" aria-hidden="true" />
                                                         )}
-                                                    </div>
+                                                    </button>
 
                                                     {canUpdateTable && column.name !== table.primary_key_column && (
                                                         <DropdownMenu>
                                                             <DropdownMenuTrigger asChild>
-                                                                <Button variant="quiet" size="icon" className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity -mr-2">
+                                                                {/* No negative margin: it used to hang into the
+                                                                    cell's right padding, which is now where the
+                                                                    resize grip lives. */}
+                                                                <Button variant="quiet" size="icon" className="h-6 w-6 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
                                                                     <MoreVertical className="h-3 w-3 text-[var(--text-tertiary)]" />
                                                                 </Button>
                                                             </DropdownMenuTrigger>
@@ -463,19 +578,30 @@ export function DatastoreTableView({
                                                         </DropdownMenu>
                                                     )}
                                                 </div>
+
+                                                <ColumnResizeHandle
+                                                    columnName={column.name}
+                                                    width={widthFor(column)}
+                                                    onPreview={previewColumnWidth}
+                                                    onCommit={commitColumnWidth}
+                                                    onReset={() => restoreColumnWidth(column)}
+                                                />
                                             </th>
                                         ))}
-                                        {canUpdateTable ? <th className="w-10 px-2.5 py-2">
-                                            <Button
-                                                variant="quiet"
-                                                size="sm"
-                                                onClick={() => setShowAddColumnDialog(true)}
-                                                className="h-7 w-7 rounded-md bg-[var(--bg-subtle)] p-0 text-[var(--text-secondary)] hover:bg-[var(--bg-muted)] hover:text-[var(--text-primary)]"
-                                                title="Add Column"
-                                            >
-                                                <Plus className="w-4 h-4" />
-                                            </Button>
-                                        </th> : null}
+                                        <th aria-hidden="true" />
+                                        <th className="px-2.5 py-2">
+                                            {canUpdateTable ? (
+                                                <Button
+                                                    variant="quiet"
+                                                    size="sm"
+                                                    onClick={() => setShowAddColumnDialog(true)}
+                                                    className="h-7 w-7 rounded-md bg-[var(--bg-subtle)] p-0 text-[var(--text-secondary)] hover:bg-[var(--bg-muted)] hover:text-[var(--text-primary)]"
+                                                    title="Add Column"
+                                                >
+                                                    <Plus className="w-4 h-4" />
+                                                </Button>
+                                            ) : null}
+                                        </th>
                                     </tr>
                                 </thead>
                                 {/* Paging and filtering keep the rows they already
@@ -571,6 +697,7 @@ export function DatastoreTableView({
                                                             )}
                                                         </td>
                                                     ))}
+                                                    <td aria-hidden="true" />
                                                     <td className="px-2.5 py-1">
                                                         <button
                                                             type="button"
