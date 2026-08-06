@@ -186,7 +186,6 @@ class RecordService:
                 self.events.required_for_record,
                 ctx=ctx,
                 operation=DatastoreRecordOperation.INSERT,
-                payload=sanitized_data,
                 user_id=user_id,
             )
         else:
@@ -341,7 +340,6 @@ class RecordService:
                 self.events.required_for_record,
                 ctx=ctx,
                 operation=DatastoreRecordOperation.UPDATE,
-                payload=sanitized_data,
                 user_id=user_id,
             )
         else:
@@ -378,7 +376,6 @@ class RecordService:
                 self.events.required_for_record,
                 ctx=ctx,
                 operation=DatastoreRecordOperation.DELETE,
-                payload={},
                 user_id=user_id,
             )
 

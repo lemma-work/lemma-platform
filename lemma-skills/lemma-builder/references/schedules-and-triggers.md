@@ -102,7 +102,8 @@ Bundle JSON (`schedules/<name>/<name>.json`) — `name` is the stable upsert key
 - `DATASTORE` — `{"table_name": "tickets", "operations": ["INSERT", "UPDATE"]}`.
   `operations` is **required and explicit** — each must be `INSERT`, `UPDATE`, or
   `DELETE` (`--on all` expands to all three). A datastore schedule without
-  operations is rejected.
+  operations is rejected. Add an optional `when` block to match on column values
+  (see *Match conditions*).
 - `WEBHOOK` — `{"source": "<app>"}` plus `account_id`. The trigger id is
   **kind-qualified** (`{app}:{kind}:{slug}`, e.g. `gmail:composio:new_message`);
   get it from `lemma connectors triggers list <auth-config>` (see
@@ -125,13 +126,25 @@ The trigger populates the **`start`** namespace of a workflow run (manual runs h
 no `start`). JMESPath expressions in workflow nodes reference it:
 
 - `start.payload.*` — the event body.
-  - **DATASTORE**: the affected row's fields.
+  - **DATASTORE**: the **whole row** as it stands after the write — including
+    columns this write never touched and defaults the database filled in. On a
+    `DELETE` it is the row as it stood before removal.
   - **WEBHOOK**: the connector event payload (check the trigger's `payload_schema`
     via `lemma connectors triggers get`).
 - `start.metadata.*` — event metadata. For DATASTORE this is **`table_name`,
-  `record_id`, `operation`, `event_occurred_at`**. ⚠️ The new row's
-  **`record_id` is at `start.metadata.record_id`, NOT `start.payload`** — a common
-  mistake. Bind your first node's input to `start.metadata.record_id`.
+  `record_id`, `operation`, `event_occurred_at`**, plus what the write did:
+  - `changed` — the column names this `UPDATE` wrote (empty for INSERT/DELETE).
+  - `previous` — those columns' prior values, and only those. Absent columns
+    were not touched; an empty object means there was no prior row.
+
+  ⚠️ The new row's **`record_id` is at `start.metadata.record_id`, NOT
+  `start.payload`** — a common mistake. Bind your first node's input to
+  `start.metadata.record_id`.
+
+  ⚠️ **Bulk writes are the exception**: `bulk_create_records` /
+  `bulk_upsert_records` emit a payload of only the submitted columns, not the
+  stored row, so a condition on a database-defaulted column will not match rows
+  inserted that way.
 - `start.llm_output.*` — the structured output of the LLM filter, if you set one
   (below).
 
@@ -142,6 +155,67 @@ Debugging "it didn't fire": read telemetry before logs. `lemma schedules get <id
 shows `last_fired_at`, `last_run_id`, `last_fire_status` (`TRIGGERED` / `FILTERED` /
 `ERROR`), and `last_error`.
 
+## Match conditions — the deterministic filter (DATASTORE only)
+
+A `when` block on a `DATASTORE` config decides whether to fire **from the event
+alone**: no database read, no model call, no cost. Reach for it first, and keep
+`filter_instruction` for judgement a comparison cannot express.
+
+```json
+{
+  "name": "on-approval",
+  "schedule_type": "DATASTORE",
+  "config": {
+    "table_name": "tickets",
+    "operations": ["UPDATE"],
+    "when": { "status": { "to": "approved" }, "priority": "high" }
+  },
+  "workflow_name": "fulfil-ticket",
+  "is_active": true
+}
+```
+
+Keys are column names. A bare value is shorthand for `equals`, so
+`{"priority": "high"}` and `{"priority": {"equals": "high"}}` are the same.
+**Every condition must hold** — conditions AND together, and so do operators
+within one column. There is no OR and no nesting; that is what the LLM filter is
+for.
+
+| Operator | Holds when | Needs |
+| --- | --- | --- |
+| `equals` / `not_equals` | the value after the write | any |
+| `in` / `not_in` | value is (not) in the list | any |
+| `to` | the value **became** this — it is this now and was not before | INSERT or UPDATE |
+| `from` | the value **was** this before the write | UPDATE |
+| `changed` | the value differs from before | UPDATE |
+| `written` | the write set this column, even to the same value | UPDATE |
+
+The distinction that matters: **`{"status": "approved"}` fires on every write
+that leaves the row approved. `{"status": {"to": "approved"}}` fires only on the
+write that made it approved.** Reaching for the first when you meant the second
+is how a trigger ends up running on every subsequent edit.
+
+Two rules follow from what each operation carries:
+- An **INSERT** has nothing to have moved away from, so `changed`, `written` and
+  `from` never hold. `to` does — a row created already approved *became*
+  approved, so you do not need a second trigger for it.
+- A **DELETE** carries the removed row but no prior image, so value operators
+  work and change operators never hold.
+
+A condition no declared operation could satisfy is **rejected at save time**
+rather than leaving you with a trigger that silently never fires — so
+`operations: ["INSERT"]` with `{"status": {"changed": true}}` is an error.
+
+Filtered events record `last_fire_status: FILTERED`, same as the LLM filter.
+
+On the CLI there is no dedicated flag — pass the block through `--data`, which
+merges into the config built from `--datastore` / `--on`:
+
+```bash
+lemma schedules create --workflow fulfil-ticket --datastore tickets --on update \
+  --data '{"config": {"when": {"status": {"to": "approved"}}}}'
+```
+
 ## LLM event filtering — drop the noise
 
 Chatty webhook/datastore sources fire constantly. A `filter_instruction` is a
@@ -149,6 +223,10 @@ Chatty webhook/datastore sources fire constantly. A `filter_instruction` is a
 that fail it are dropped (status `FILTERED`, not `TRIGGERED`). Add an optional
 `filter_output_schema` to capture structured output the run can read at
 `start.llm_output.*`.
+
+> On a `DATASTORE` trigger, prefer a `when` block for anything a comparison can
+> decide. The filter costs a model call **per event**; a `when` block costs
+> nothing and runs first, so events it rules out never reach the model.
 
 ```json
 {

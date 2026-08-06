@@ -490,6 +490,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'schedule.datastore_consumer.fired_s_datastore_schedules.observed': EventSpec('debug', frozenset({'count'})),
     'schedule.datastore_event_handler.datastore_event_s_s_record.diagnostic': EventSpec('debug', frozenset({'count', 'pod_id', 'record_id'})),
     'schedule.datastore_event_handler.fire_datastore_schedule_s_s.propagated': EventSpec('debug', frozenset({'record_id'})),
+    'schedule.datastore_event_handler.unparsable_config.diagnostic': EventSpec('debug', frozenset({'schedule_id'})),
     'schedule.agent_outcome.recorded': EventSpec('debug', frozenset({'conversation_id'})),
     'schedule.breaker.tripped': EventSpec('warning', frozenset({'consecutive_failures', 'schedule_id'})),
     'schedule.breakers.reconciled': EventSpec('warning', frozenset({'deactivated_count'})),
