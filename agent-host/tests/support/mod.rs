@@ -166,6 +166,7 @@ pub struct LemmaMcpEndpoint {
     requests: Arc<Mutex<Vec<McpRequestRecord>>>,
     deletes: Arc<Mutex<Vec<Option<String>>>>,
     transport: McpTransport,
+    accepted: Arc<Mutex<Vec<String>>>,
 }
 
 /// Which of the two wire shapes the bridge must cope with. Lemma mounts
@@ -184,6 +185,10 @@ struct McpState {
     requests: Arc<Mutex<Vec<McpRequestRecord>>>,
     deletes: Arc<Mutex<Vec<Option<String>>>>,
     transport: McpTransport,
+    /// Bearers this endpoint will serve. More than one because a run's
+    /// credential is rotated in flight, and a real Lemma accepts the
+    /// replacement it just issued alongside the one still in use.
+    accepted: Arc<Mutex<Vec<String>>>,
 }
 
 impl LemmaMcpEndpoint {
@@ -192,10 +197,12 @@ impl LemmaMcpEndpoint {
     pub async fn start(transport: McpTransport) -> Self {
         let requests = Arc::new(Mutex::new(Vec::new()));
         let deletes = Arc::new(Mutex::new(Vec::new()));
+        let accepted = Arc::new(Mutex::new(vec![format!("Bearer {MCP_BEARER}")]));
         let state = McpState {
             requests: Arc::clone(&requests),
             deletes: Arc::clone(&deletes),
             transport,
+            accepted: Arc::clone(&accepted),
         };
         let app = Router::new()
             .route(
@@ -215,7 +222,17 @@ impl LemmaMcpEndpoint {
             requests,
             deletes,
             transport,
+            accepted,
         }
+    }
+
+    /// Also serve `authorization`, as Lemma does for a credential it has just
+    /// re-issued for a run that is still in flight.
+    ///
+    /// # Panics
+    /// If the mutex is poisoned.
+    pub fn also_accept(&self, authorization: &str) {
+        self.accepted.lock().unwrap().push(authorization.to_owned());
     }
 
     /// The `mcp` object Lemma puts in the encrypted `START_RUN` payload.
@@ -283,7 +300,14 @@ async fn mcp_post(
         session_id: header(&headers, "mcp-session-id"),
         accept: header(&headers, "accept"),
     });
-    if header(&headers, "authorization").as_deref() != Some(&format!("Bearer {MCP_BEARER}")) {
+    let presented = header(&headers, "authorization");
+    if !state
+        .accepted
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|allowed| Some(allowed.as_str()) == presented.as_deref())
+    {
         return (StatusCode::UNAUTHORIZED, "bad token").into_response();
     }
     let Some(id) = request.get("id").cloned() else {
@@ -467,6 +491,16 @@ struct ControlState {
     permission_answer: PermissionAnswer,
     published: Arc<Mutex<Option<(Uuid, String)>>>,
     start_sent: Arc<AtomicBool>,
+    /// Streamed text that, once seen, makes the next poll cancel the run.
+    ///
+    /// Keyed on the agent's own output so the cancel lands mid-turn, while the
+    /// adapter is genuinely working, rather than racing the run's start.
+    cancel_after: Arc<Mutex<Option<String>>>,
+    cancel_sent: Arc<AtomicBool>,
+    /// Streamed text that, once seen, makes the next poll hand the run a
+    /// replacement Lemma MCP configuration.
+    refresh_after: Arc<Mutex<Option<(String, Value)>>>,
+    refresh_sent: Arc<AtomicBool>,
     /// Request ids already answered, so a decision is sent exactly once.
     answered: Arc<Mutex<std::collections::HashSet<String>>>,
     /// The run as it stood the instant each decision was sent.
@@ -499,6 +533,10 @@ impl ControlPlane {
             permission_answer,
             published: Arc::new(Mutex::new(None)),
             start_sent: Arc::new(AtomicBool::new(false)),
+            cancel_after: Arc::new(Mutex::new(None)),
+            cancel_sent: Arc::new(AtomicBool::new(false)),
+            refresh_after: Arc::new(Mutex::new(None)),
+            refresh_sent: Arc::new(AtomicBool::new(false)),
             answered: Arc::new(Mutex::new(std::collections::HashSet::new())),
             decisions: Arc::new(Mutex::new(Vec::new())),
             events: Arc::new(Mutex::new(Vec::new())),
@@ -522,6 +560,22 @@ impl ControlPlane {
             run_id: state.run_id,
             state,
         }
+    }
+
+    /// Cancel the run on the first poll after `marker` appears in its output.
+    ///
+    /// # Panics
+    /// If the mutex is poisoned.
+    pub fn cancel_when_text_contains(&self, marker: &str) {
+        *self.state.cancel_after.lock().unwrap() = Some(marker.to_owned());
+    }
+
+    /// Replace the run's Lemma MCP configuration once `marker` is streamed.
+    ///
+    /// # Panics
+    /// If the mutex is poisoned.
+    pub fn refresh_credential_when_text_contains(&self, marker: &str, mcp: Value) {
+        *self.state.refresh_after.lock().unwrap() = Some((marker.to_owned(), mcp));
     }
 
     /// # Panics
@@ -694,6 +748,36 @@ async fn poll(
             "lease_epoch": 1,
             "payload": payload,
         }));
+    }
+    let cancel_after = state.cancel_after.lock().unwrap().clone();
+    if let Some(marker) = cancel_after {
+        let seen = assistant_text_of(&state.events.lock().unwrap()).contains(&marker);
+        if seen && !state.cancel_sent.swap(true, Ordering::SeqCst) {
+            commands.push(json!({
+                "command_id": Uuid::new_v4(),
+                "kind": "CANCEL_RUN",
+                "created_at": Utc::now(),
+                "expires_at": Utc::now() + chrono::Duration::minutes(2),
+                "run_id": state.run_id,
+                "lease_epoch": 1,
+                "payload": {"agent_run_id": state.run_id},
+            }));
+        }
+    }
+    let refresh_after = state.refresh_after.lock().unwrap().clone();
+    if let Some((marker, mcp)) = refresh_after {
+        let seen = assistant_text_of(&state.events.lock().unwrap()).contains(&marker);
+        if seen && !state.refresh_sent.swap(true, Ordering::SeqCst) {
+            commands.push(json!({
+                "command_id": Uuid::new_v4(),
+                "kind": "REFRESH_CREDENTIAL",
+                "created_at": Utc::now(),
+                "expires_at": Utc::now() + chrono::Duration::minutes(2),
+                "run_id": state.run_id,
+                "lease_epoch": 1,
+                "payload": {"mcp": mcp},
+            }));
+        }
     }
     // Answer every parked request, not just the first: a real agent asks again
     // for each tool it wants, and a control plane that answered once would

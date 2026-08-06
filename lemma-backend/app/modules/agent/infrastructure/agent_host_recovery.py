@@ -157,6 +157,36 @@ async def reconcile_expired_run(
     return lease
 
 
+async def cancel_already_queued(
+    session: AsyncSession,
+    *,
+    run_id: UUID,
+    lease_epoch: int,
+) -> bool:
+    """Whether a CANCEL_RUN for this exact lease is already on its way.
+
+    Shared by the abandoned-run sweep and by ``enqueue_cancel`` so both answer
+    "is one already in flight" the same way. Fenced on ``lease_epoch``: a
+    cancel queued against a superseded epoch says nothing about the run the
+    host is executing now.
+    """
+    return bool(
+        await session.scalar(
+            select(
+                select(AgentHostCommandModel.id)
+                .where(
+                    AgentHostCommandModel.run_id == run_id,
+                    AgentHostCommandModel.kind
+                    == AgentHostCommandKind.CANCEL_RUN.value,
+                    AgentHostCommandModel.lease_epoch == lease_epoch,
+                    AgentHostCommandModel.state.in_(_LIVE_COMMAND_STATES),
+                )
+                .exists()
+            )
+        )
+    )
+
+
 async def cancel_abandoned_host_runs(
     session: AsyncSession,
     *,

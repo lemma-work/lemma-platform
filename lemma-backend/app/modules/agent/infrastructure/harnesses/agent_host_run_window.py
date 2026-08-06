@@ -55,6 +55,12 @@ CREDENTIAL_DEADLINE_MESSAGE = (
 )
 
 
+# Renew the run's Lemma credential this long before it expires. Comfortably
+# more than one lease-check cycle, so a refresh has several attempts before the
+# safety margin below turns a failure into an explained end of run.
+CREDENTIAL_REFRESH_MARGIN_SECONDS = 600.0
+
+
 @dataclass(frozen=True, slots=True)
 class DispatchedRun:
     """What dispatch settled on, which the consume loop then has to honour."""
@@ -62,6 +68,7 @@ class DispatchedRun:
     harness_key: str
     event_timeout_seconds: float
     credential_bounded: bool
+    credential_expires_at: datetime | None = None
 
     @property
     def deadline_message(self) -> str:
@@ -70,6 +77,38 @@ class DispatchedRun:
             if self.credential_bounded
             else DEADLINE_MESSAGE
         )
+
+
+def credential_refresh_due(
+    *,
+    expires_at: datetime | None,
+    now: datetime,
+) -> bool:
+    """Whether the run's Lemma credential is close enough to expiry to renew."""
+    if expires_at is None:
+        return False
+    return (
+        expires_at - now
+    ).total_seconds() <= CREDENTIAL_REFRESH_MARGIN_SECONDS
+
+
+def credential_exhausted(
+    *,
+    expires_at: datetime | None,
+    now: datetime,
+) -> bool:
+    """Whether the credential is too close to expiry for the run to continue.
+
+    The backstop for a refresh that never landed. Ending the run here turns
+    what would otherwise be every Lemma tool silently 401ing — which the agent
+    experiences as its tools vanishing mid-task — into an ordinary, explained
+    failure.
+    """
+    if expires_at is None:
+        return False
+    return (
+        expires_at - now
+    ).total_seconds() <= CREDENTIAL_SAFETY_MARGIN_SECONDS
 
 
 @dataclass(frozen=True, slots=True)
@@ -88,18 +127,16 @@ def credential_bounded_timeout(
     now: datetime,
     agent_run_id: UUID,
 ) -> tuple[float, bool]:
-    """Shorten the run so it cannot outlive the credential it was given.
+    """Bound the run by the credential it is being dispatched with.
 
-    The MCP token is minted once, encrypted into START_RUN once, and used
-    verbatim by the host's bridge for the run's whole life. Nothing refreshes
-    it, and the bridge has no retry: once it expires every ``lemma_*`` call
-    401s, the bridge exits, and the agent loses all Lemma tools without anything
-    being reported to anyone. Ending the run at the credential's expiry turns
-    that silent loss into an ordinary, explained failure.
+    A run is no longer stuck with that credential — the consume loop renews it
+    in flight (:func:`credential_refresh_due`) — so this is the conservative
+    starting bound rather than the run's real ceiling, and it normally does
+    nothing: a fresh token outlives the configured window.
 
-    Raises when there is not enough credential left to be worth dispatching, so
-    the turn fails at dispatch rather than a minute later for a reason nobody
-    can see.
+    What it still does is refuse to dispatch at all when there is not enough
+    credential left to be worth starting, so the turn fails immediately rather
+    than a minute later for a reason nobody can see.
     """
     if credential_expires_at is None:
         return configured_seconds, False

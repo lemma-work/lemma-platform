@@ -1,0 +1,92 @@
+{
+  "$comment": [
+    "The Agent Host wire contract, asserted from both sides.",
+    "",
+    "Two things here exist twice, once in Rust and once in Python, and nothing",
+    "used to check that the copies agree.",
+    "",
+    "`event_types` is `protocol::EventType` and `AgentHostEventType`. A value",
+    "one side emits and the other does not know is an event the backend drops",
+    "on the floor.",
+    "",
+    "`text_extraction` is `runtime::chunk_text` and `agent_host_events.",
+    "event_text`. These must agree exactly: the host accumulates streamed text",
+    "with one and the backend re-accumulates it with the other, and the two",
+    "buffers are reconciled at every segment boundary. A disagreement does not",
+    "raise anything -- it silently truncates a persisted message."
+  ],
+  "event_types": [
+    "run_state",
+    "user_message",
+    "agent_message_chunk",
+    "agent_message_upsert",
+    "agent_thought_chunk",
+    "agent_thought_upsert",
+    "plan_upsert",
+    "tool_call_upsert",
+    "tool_call_update",
+    "usage_update",
+    "config_update",
+    "permission_request",
+    "terminal"
+  ],
+  "text_extraction": [
+    {
+      "name": "a plain text field",
+      "payload": { "text": "hello" },
+      "text": "hello"
+    },
+    {
+      "name": "a delta field when there is no text",
+      "payload": { "delta": "hello" },
+      "text": "hello"
+    },
+    {
+      "name": "text wins over delta",
+      "payload": { "text": "kept", "delta": "ignored" },
+      "text": "kept"
+    },
+    {
+      "name": "content as a bare string",
+      "payload": { "content": "hello" },
+      "text": "hello"
+    },
+    {
+      "name": "content as a text block",
+      "payload": { "content": { "type": "text", "text": "hello" } },
+      "text": "hello"
+    },
+    {
+      "name": "an image block carries no text",
+      "payload": {
+        "content": { "type": "image", "data": "aGk=", "mimeType": "image/png" }
+      },
+      "text": ""
+    },
+    {
+      "name": "a content list is not walked",
+      "payload": { "content": [{ "type": "text", "text": "hello" }] },
+      "text": ""
+    },
+    {
+      "name": "a non-string text field is not text",
+      "payload": { "text": 5 },
+      "text": ""
+    },
+    {
+      "name": "a non-string text field still falls through to delta",
+      "payload": { "text": 5, "delta": "hello" },
+      "text": "hello"
+    },
+    {
+      "name": "an empty payload",
+      "payload": {},
+      "text": ""
+    },
+    {
+      "name": "an unrelated payload",
+      "payload": { "status": "COMPLETED", "toolCallId": "c1" },
+      "text": ""
+    }
+  ]
+}

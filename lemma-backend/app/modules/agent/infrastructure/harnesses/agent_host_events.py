@@ -58,7 +58,22 @@ class AgentHostEventEnvelope:
 
 @dataclass(slots=True)
 class _Segment:
-    """Accumulated text for one stream kind.
+    """Accumulated text for one stream kind, in the two halves the host has.
+
+    The host seals its live text into an upsert before *every* non-chunk event
+    and clears its buffer (``runtime.rs``, ``flush_stream_segment``). So an
+    upsert is not the message so far — it is the piece streamed since the last
+    upsert, and a message containing a tool call is delivered as several.
+
+    This used to treat each one as the authoritative whole and assign it over
+    everything accumulated, which is correct for exactly one upsert and lossy
+    for two: an agent that said something, called a tool, then said more
+    persisted only the part after the tool call. It was invisible because the
+    chunks had already streamed the full text to the screen and because the
+    ``startswith`` guard turned the overwrite into a silent no-delta.
+
+    ``sealed`` is what upserts have confirmed, ``pending`` is what chunks have
+    streamed since the last one, and the message is both.
 
     ``object_id`` is the host's identifier for the current segment, carried so
     the emitted message metadata refers to something real rather than to the
@@ -66,25 +81,37 @@ class _Segment:
     """
 
     kind: str
-    text: str = ""
+    sealed: str = ""
+    pending: str = ""
     object_id: str | None = None
 
     def append(self, chunk: str, object_id: str | None) -> None:
-        self.text += chunk
+        self.pending += chunk
         if object_id is not None:
             self.object_id = object_id
 
-    def replace(self, full_text: str, object_id: str | None) -> str:
-        """Apply an authoritative full-text upsert, returning the new tail."""
-        delta = full_text[len(self.text) :] if full_text.startswith(self.text) else ""
-        self.text = full_text
+    def seal(self, segment_text: str, object_id: str | None) -> str:
+        """Apply an upsert, returning whatever the chunks had not streamed.
+
+        Normally nothing: the chunks and the upsert carry the same text and the
+        user has already seen it. It is non-empty when the host sealed a segment
+        no chunk delivered, and the host's record wins over a disagreement,
+        because a token stream cannot retract what it already emitted.
+        """
+        delta = (
+            segment_text[len(self.pending) :]
+            if segment_text.startswith(self.pending)
+            else ""
+        )
+        self.sealed += segment_text
+        self.pending = ""
         if object_id is not None:
             self.object_id = object_id
         return delta
 
     def take(self) -> tuple[str, str | None]:
-        text, object_id = self.text, self.object_id
-        self.text, self.object_id = "", None
+        text, object_id = self.sealed + self.pending, self.object_id
+        self.sealed, self.pending, self.object_id = "", "", None
         return text, object_id
 
 
@@ -109,6 +136,11 @@ class AgentHostEventNormalizer:
         self._token_kind: str | None = None
         self.tool_calls: dict[str, str] = {}
         self.closed_tool_calls: set[str] = set()
+        # ACP's ToolCall has no required id field, so an adapter is free to
+        # report a call and its completion with nothing tying them together.
+        # See :meth:`_tool_object_id`.
+        self._anonymous_tool_calls = 0
+        self._open_anonymous_tool_call: str | None = None
         # Whether this run owes a structured final answer, and against what.
         # Gates the text fallback: scraping JSON out of an ordinary chat reply
         # would invent structured results that were never claimed.
@@ -155,9 +187,15 @@ class AgentHostEventNormalizer:
         if event_type is AgentHostEventType.AGENT_THOUGHT_UPSERT:
             return self._upsert(self._thought, row, payload)
         if event_type is AgentHostEventType.TOOL_CALL_UPSERT:
-            return self._tool_call_upsert(row, object_id, payload, metadata)
+            call_id = self._tool_object_id(row, opening=True)
+            return self._tool_call_upsert(
+                row, call_id, payload, {**metadata, "agent_host_object_id": call_id}
+            )
         if event_type is AgentHostEventType.TOOL_CALL_UPDATE:
-            return self._tool_call_update(row, object_id, payload, metadata)
+            call_id = self._tool_object_id(row, opening=False)
+            return self._tool_call_update(
+                row, call_id, payload, {**metadata, "agent_host_object_id": call_id}
+            )
         if event_type is AgentHostEventType.USAGE_UPDATE:
             return [*self._drain_tokens(), self._usage_update(row, payload, metadata)]
         if event_type in {
@@ -197,14 +235,13 @@ class AgentHostEventNormalizer:
         row: AgentHostEventEnvelope,
         payload: JsonObject,
     ) -> list[AgentEvent]:
-        """Apply a full-text upsert.
+        """Apply one sealed segment.
 
         The host sends these at every segment boundary so the durable lane
-        alone rebuilds the transcript. Because the lane is ordered, the upsert
-        can only ever extend what this normalizer already accumulated, so the
-        delta is the tail.
+        alone rebuilds the transcript, which means a message that contains a
+        tool call arrives as several. See :class:`_Segment`.
         """
-        delta = segment.replace(event_text(payload), row.object_id)
+        delta = segment.seal(event_text(payload), row.object_id)
         return self._stream_delta(delta, kind=segment.kind)
 
     def _stream_delta(self, text: str, *, kind: str) -> list[AgentEvent]:
@@ -299,6 +336,35 @@ class AgentHostEventNormalizer:
 
     # ------------------------------------------------------------- tool calls
 
+    def _tool_object_id(self, row: AgentHostEventEnvelope, *, opening: bool) -> str:
+        """The id a tool call and its later update must agree on.
+
+        ACP's ``ToolCall`` carries no required identifier, so an adapter can
+        report a call and its completion with nothing linking them. The old
+        fallback was the event sequence, which is different for the two events
+        by definition: the call was therefore never closed — it was swept at
+        the end as an abandoned call — and the update emitted a result for an
+        id nobody held.
+
+        With no id on the wire the only correlation available is order, so an
+        untagged update is attributed to the untagged call still open. That is
+        a heuristic, and it is exactly as good as the information the adapter
+        gave us; ``acp.rs`` reaches for the same one when a permission request
+        arrives without a tool-call id.
+        """
+        if row.object_id:
+            return row.object_id
+        if opening:
+            self._anonymous_tool_calls += 1
+            self._open_anonymous_tool_call = (
+                f"anonymous-tool-call-{self._anonymous_tool_calls}"
+            )
+            return self._open_anonymous_tool_call
+        return (
+            self._open_anonymous_tool_call
+            or f"anonymous-tool-call-{max(self._anonymous_tool_calls, 1)}"
+        )
+
     def _tool_call_upsert(
         self,
         row: AgentHostEventEnvelope,
@@ -341,6 +407,8 @@ class AgentHostEventNormalizer:
             return []
         tool_name = self.tool_calls.get(object_id, tool_name_from_payload(payload))
         self.closed_tool_calls.add(object_id)
+        if object_id == self._open_anonymous_tool_call:
+            self._open_anonymous_tool_call = None
         raw_result = first_present(payload, "result", "rawOutput")
         if status == "COMPLETED":
             # Read the RAW value, before bounding. `_bounded_tool_value` truncates

@@ -14,7 +14,7 @@ and recovery - on a slow cadence, because none of that arrives as an event.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
@@ -64,10 +64,13 @@ from app.modules.agent.infrastructure.harnesses.agent_host_events import (
     is_terminal_event,
 )
 from app.modules.agent.infrastructure.harnesses.agent_host_run_window import (
+    CREDENTIAL_DEADLINE_MESSAGE,
     DEFAULT_AGENT_HOST_EVENT_TIMEOUT_SECONDS,
     DispatchedRun,
     LeaseOutcome,
     credential_bounded_timeout,
+    credential_exhausted,
+    credential_refresh_due,
     expiry_message,
     failure_events,
     terminal_checkpoint_state,
@@ -153,6 +156,7 @@ class RemoteHarness:
         lease_check_seconds: float = DEFAULT_LEASE_CHECK_SECONDS,
         stream_block_ms: int = DEFAULT_STREAM_BLOCK_MS,
         terminal_event_grace_seconds: float = DEFAULT_TERMINAL_EVENT_GRACE_SECONDS,
+        clock: Callable[[], datetime] | None = None,
     ) -> None:
         self.uow_factory = uow_factory
         self.artifact_writer = artifact_writer
@@ -161,6 +165,10 @@ class RemoteHarness:
         self.lease_check_seconds = lease_check_seconds
         self.stream_block_ms = stream_block_ms
         self.terminal_event_grace_seconds = terminal_event_grace_seconds
+        # Only the credential window is measured against a wall clock, and it
+        # is an hour wide. Injecting it is what lets a test prove a run
+        # outliving its original token without waiting out the real hour.
+        self._now = clock or (lambda: datetime.now(timezone.utc))
 
     async def run(
         self,
@@ -246,6 +254,9 @@ class RemoteHarness:
         lease_check_due_at = loop.time()
         terminal_checkpoint_seen_at: float | None = None
         stop_sent = False
+        # Advances as refreshes land, so the run is bounded by the credential it
+        # currently holds rather than by the one it was dispatched with.
+        credential_expires_at = dispatch.credential_expires_at
         reader = StreamReader(
             stream=self.events,
             run_id=agent_run_id,
@@ -292,6 +303,32 @@ class RemoteHarness:
             if now < lease_check_due_at:
                 continue
             lease_check_due_at = now + self.lease_check_seconds
+
+            wall_clock = self._now()
+            if credential_refresh_due(
+                expires_at=credential_expires_at, now=wall_clock
+            ):
+                refreshed = await self._refresh_credential(
+                    agent_run_id=agent_run_id,
+                    ctx=ctx,
+                    options=options,
+                    agent=agent,
+                    conversation=conversation,
+                )
+                if refreshed is not None:
+                    credential_expires_at = refreshed
+            if credential_exhausted(
+                expires_at=credential_expires_at, now=wall_clock
+            ):
+                # Every refresh failed. Ending the run here is what keeps this
+                # from becoming a run whose tools silently 401 for the rest of
+                # its life without anything being reported to anyone.
+                await self._enqueue_host_cancel(agent_run_id)
+                for event in failure_events(
+                    normalizer, agent_run_id, CREDENTIAL_DEADLINE_MESSAGE
+                ):
+                    yield event
+                return
 
             stop_sent = await self._cancel_if_requested(
                 agent_run_id=agent_run_id,
@@ -413,6 +450,61 @@ class RemoteHarness:
         events.extend(normalizer.normalize(envelope, payload_override=payload_override))
         return events
 
+    async def _refresh_credential(
+        self,
+        *,
+        agent_run_id: UUID,
+        ctx: AgentContext,
+        options: HarnessOptions,
+        agent: Agent,
+        conversation: Conversation,
+    ) -> datetime | None:
+        """Mint a replacement Lemma credential and send it to the host.
+
+        The token dispatched with the run lasts an hour and nothing renewed it,
+        so a long turn either had to be cut short at that expiry or carry on
+        with every ``lemma_*`` call returning 401 — which the agent experiences
+        as its tools disappearing part-way through the task.
+
+        Returns the new expiry, or ``None`` if the refresh did not land, in
+        which case the caller keeps the old one and tries again next cycle.
+        """
+        try:
+            mcp = await mcp_payload(
+                agent_run_id=agent_run_id,
+                conversation_id=conversation.id,
+                ctx=ctx,
+                options=options,
+                extra_tool_names=(
+                    [exported_tool_name(FINAL_ANSWER_TOOL_NAME)]
+                    if final_answer_expected(agent=agent, conversation=conversation)
+                    else []
+                ),
+            )
+            encrypted = await get_secret_cipher().encrypt_json_async(mcp)
+            if encrypted is None:
+                raise RuntimeError("could not encrypt the refreshed MCP configuration")
+            async with self.uow_factory() as uow:
+                command = await AgentHostDispatchRepository(
+                    uow
+                ).enqueue_credential_refresh(
+                    run_id=agent_run_id,
+                    encrypted_mcp_payload=encrypted,
+                )
+                await uow.commit()
+        except (AgentHostRepositoryError, RuntimeError, ValueError, KeyError) as exc:
+            logger.warning(
+                "agent.harnesses.agent_host.credential_refresh_failed.degraded",
+                agent_run_id=str(agent_run_id),
+                error_type=type(exc).__name__,
+            )
+            return None
+        if command is None:
+            # The run ended while we were minting; nothing left to refresh.
+            return None
+        await poke_host(command.host_id)
+        return token_expires_at(mcp)
+
     async def _cancel_if_requested(
         self,
         *,
@@ -473,15 +565,34 @@ class RemoteHarness:
         agent_run_id: UUID,
         run_config: _AgentHostRunConfig,
     ) -> DispatchedRun:
+        # Resolved first, because it decides what the prompt has to contain: a
+        # run that will not even try to resume a session is talking to an agent
+        # with no history, so the prompt must carry it.
+        async with self.uow_factory() as uow:
+            harness = await AgentHostRepository(uow).get_harness(
+                harness_id=run_config.harness_id
+            )
+            if harness is None:
+                raise RuntimeError("Agent Host harness is unavailable")
+            resume_session_id = await agent_host_session_memory.resume_session_id(
+                uow,
+                conversation_id=conversation.id,
+                harness_id=run_config.harness_id,
+                capabilities=harness.capabilities,
+            )
+            harness_id = harness.id
+            host_id = harness.host_id
+            harness_key = harness.harness_key
+            config_revision = harness.config_revision
+
         payload = run_start_payload(
             agent=agent,
             conversation=conversation,
             messages=messages,
             ctx=ctx,
-            options=options,
             agent_run_id=agent_run_id,
-            harness_kind=self.kind,
             runtime_instructions=load_agent_host_runtime_prompt(),
+            carries_history=resume_session_id is None,
         )
         prompt = _json_object(payload.get("prompt"))
         mcp = await mcp_payload(
@@ -510,22 +621,11 @@ class RemoteHarness:
             agent_run_id=agent_run_id,
         )
         async with self.uow_factory() as uow:
-            harness = await AgentHostRepository(uow).get_harness(
-                harness_id=run_config.harness_id
-            )
-            if harness is None:
-                raise RuntimeError("Agent Host harness is unavailable")
-            resume_session_id = await agent_host_session_memory.resume_session_id(
-                uow,
-                conversation_id=conversation.id,
-                harness_id=run_config.harness_id,
-                capabilities=harness.capabilities,
-            )
             run_spec = AgentHostRunSpec(
                 agent_run_id=agent_run_id,
                 conversation_id=conversation.id,
-                harness_id=run_config.harness_id,
-                profile_revision=harness.config_revision,
+                harness_id=harness_id,
+                profile_revision=config_revision,
                 model_name=run_config.model_name,
                 config_selections=run_config.config_selections,
                 system_prompt=str(
@@ -544,21 +644,20 @@ class RemoteHarness:
                 run_deadline=dispatched_at + timedelta(seconds=timeout_seconds),
             )
             await AgentHostDispatchRepository(uow).enqueue_run(
-                host_id=harness.host_id,
+                host_id=host_id,
                 harness_id=run_config.harness_id,
                 runtime_profile_id=run_config.runtime_profile_id,
                 run_spec=run_spec,
                 encrypted_mcp_payload=encrypted_mcp,
                 command_ttl_seconds=run_config.wait_timeout_seconds,
             )
-            host_id = harness.host_id
-            harness_key = harness.harness_key
             await uow.commit()
         await poke_host(host_id)
         return DispatchedRun(
             harness_key=harness_key,
             event_timeout_seconds=timeout_seconds,
             credential_bounded=credential_bounded,
+            credential_expires_at=token_expires_at(mcp),
         )
 
 

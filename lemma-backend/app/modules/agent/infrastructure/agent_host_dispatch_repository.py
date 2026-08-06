@@ -30,7 +30,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import case, select
 
 from app.core.crypto import get_secret_cipher
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
@@ -74,6 +74,42 @@ from app.modules.agent.infrastructure.runtime_models import (
 
 
 logger = get_logger(__name__)
+
+
+# A START_RUN the host has no slot for is skipped but still consumes a row of
+# the poll's limit, so a queue with more starts than the limit could hide every
+# CANCEL_RUN and RESOLVE_PERMISSION behind it — and a saturated host is exactly
+# when cancelling matters. Control commands are always deliverable, so sorting
+# them first means the limit can never bury one.
+_CONTROL_COMMANDS_FIRST = case(
+    (AgentHostCommandModel.kind == AgentHostCommandKind.START_RUN.value, 1),
+    else_=0,
+)
+
+
+class PolledCommands(list[AgentHostCommand]):
+    """The commands one poll produced, plus whether anything actually changed.
+
+    ``progressed`` is false for a poll whose control updates were all no-ops.
+    That is the common case for a busy host: a non-terminal checkpoint *is* the
+    lease heartbeat, so the host resends it every poll, and re-applying an
+    unchanged state is not news anyone needs to come back promptly for. The
+    caller uses it to decide between a short backoff and an ordinary long poll.
+
+    A list subclass rather than a wrapper so callers keep iterating commands
+    directly, following ``StreamBatch`` in ``agent_host_event_stream``.
+    """
+
+    __slots__ = ("progressed",)
+
+    def __init__(
+        self,
+        commands: list[AgentHostCommand],
+        *,
+        progressed: bool,
+    ) -> None:
+        super().__init__(commands)
+        self.progressed = progressed
 
 
 def _log_unappliable_update(
@@ -140,14 +176,14 @@ class AgentHostDispatchRepository:
         available_run_slots: int,
         now: datetime | None = None,
         lease_seconds: int = DEFAULT_RUN_LEASE_SECONDS,
-    ) -> list[AgentHostCommand]:
+    ) -> PolledCommands:
         timestamp = now or utcnow()
-        await self._acknowledge_commands(
+        acknowledged = await self._acknowledge_commands(
             host_id=host_id,
             command_ids=acknowledged_command_ids,
             now=timestamp,
         )
-        await self._apply_control_updates(
+        applied = await self._apply_control_updates(
             host_id=host_id,
             checkpoints=checkpoints,
             rejections=rejections,
@@ -167,7 +203,10 @@ class AgentHostDispatchRepository:
                 ),
                 AgentHostCommandModel.expires_at >= timestamp,
             )
-            .order_by(AgentHostCommandModel.created_at.asc())
+            .order_by(
+                _CONTROL_COMMANDS_FIRST.asc(),
+                AgentHostCommandModel.created_at.asc(),
+            )
             .limit(limit)
             # Competitive handout: concurrent API replicas polling the same
             # host must never be given the same command.
@@ -207,7 +246,10 @@ class AgentHostDispatchRepository:
                 remaining_run_slots -= 1
             wire_commands.append(await self._wire_command(command))
         await self.session.flush()
-        return wire_commands
+        return PolledCommands(
+            wire_commands,
+            progressed=bool(acknowledged or applied),
+        )
 
     async def _apply_control_updates(
         self,
@@ -217,8 +259,12 @@ class AgentHostDispatchRepository:
         rejections: list[AgentHostCommandRejection],
         now: datetime,
         lease_seconds: int,
-    ) -> None:
+    ) -> int:
         """Apply the host's reported updates, isolating each one.
+
+        Returns how many of them actually changed something, so a poll carrying
+        nothing but repeated heartbeats can be told apart from one carrying
+        news.
 
         A failure here is one run's problem and must never become this host's:
         the poll that carries these updates is also the only way commands reach
@@ -230,17 +276,20 @@ class AgentHostDispatchRepository:
         carrying a state this build no longer parses would otherwise raise out
         of the enum conversion and wedge the host just as effectively.
         """
+        changed = 0
         for checkpoint in checkpoints:
             try:
-                await agent_host_session_memory.remember_provider_session(
+                if await agent_host_session_memory.remember_provider_session(
                     self.uow, checkpoint
-                )
-                await self.apply_checkpoint(
+                ):
+                    changed += 1
+                _, advanced = await self._apply_checkpoint(
                     host_id=host_id,
                     checkpoint=checkpoint,
                     now=now,
                     lease_seconds=lease_seconds,
                 )
+                changed += int(advanced)
             except (AgentHostRepositoryError, ValueError) as exc:
                 _log_unappliable_update(
                     kind="checkpoint",
@@ -250,10 +299,12 @@ class AgentHostDispatchRepository:
                 )
         for rejection in rejections:
             try:
-                await self.apply_rejection(
-                    host_id=host_id,
-                    rejection=rejection,
-                    now=now,
+                changed += int(
+                    await self.apply_rejection(
+                        host_id=host_id,
+                        rejection=rejection,
+                        now=now,
+                    )
                 )
             except (AgentHostRepositoryError, ValueError) as exc:
                 _log_unappliable_update(
@@ -262,6 +313,7 @@ class AgentHostDispatchRepository:
                     run_id=rejection.run_id,
                     exc=exc,
                 )
+        return changed
 
     async def apply_rejection(
         self,
@@ -269,12 +321,15 @@ class AgentHostDispatchRepository:
         host_id: UUID,
         rejection: AgentHostCommandRejection,
         now: datetime | None = None,
-    ) -> None:
+    ) -> bool:
         """Persist one fenced pre-dispatch rejection atomically.
 
         A receipt can requeue an unaccepted command or terminalize it, but it
         can never move an accepted lease backwards. Duplicate and stale
         receipts therefore become harmless no-ops.
+
+        Returns whether this receipt changed anything, so a resent one is not
+        mistaken for news.
         """
         timestamp = now or utcnow()
         command = await self.session.get(
@@ -304,13 +359,13 @@ class AgentHostDispatchRepository:
             or lease.host_id != host_id
             or lease.lease_epoch != rejection.lease_epoch
         ):
-            return
+            return False
         if (
             lease.accepted_at is not None
             or command.state == AgentHostCommandState.ACKNOWLEDGED.value
             or AgentHostRunState(lease.state) in TERMINAL_AGENT_HOST_RUN_STATES
         ):
-            return
+            return False
 
         command.rejection = {
             "code": rejection.code.value,
@@ -331,6 +386,7 @@ class AgentHostDispatchRepository:
             lease.error_detail = rejection.detail
         lease.updated_at = timestamp
         await self.session.flush()
+        return True
 
     async def _acknowledge_commands(
         self,
@@ -338,9 +394,10 @@ class AgentHostDispatchRepository:
         host_id: UUID,
         command_ids: list[UUID],
         now: datetime,
-    ) -> None:
+    ) -> int:
+        """Mark delivered commands done; returns how many actually changed."""
         if not command_ids:
-            return
+            return 0
         result = await self.session.execute(
             select(AgentHostCommandModel)
             .where(
@@ -350,6 +407,7 @@ class AgentHostDispatchRepository:
             .with_for_update()
         )
         found = {command.id: command for command in result.scalars()}
+        acknowledged = 0
         for command_id in command_ids:
             command = found.get(command_id)
             if command is None:
@@ -367,10 +425,13 @@ class AgentHostDispatchRepository:
             if command.state in {
                 AgentHostCommandState.CANCELLED.value,
                 AgentHostCommandState.EXPIRED.value,
+                AgentHostCommandState.ACKNOWLEDGED.value,
             }:
                 continue
             command.state = AgentHostCommandState.ACKNOWLEDGED.value
             command.acknowledged_at = now
+            acknowledged += 1
+        return acknowledged
 
     async def apply_checkpoint(
         self,
@@ -399,6 +460,30 @@ class AgentHostDispatchRepository:
         both terminal-violating and regressive, and it will resend it until we
         stop refusing it.
         """
+        lease, _ = await self._apply_checkpoint(
+            host_id=host_id,
+            checkpoint=checkpoint,
+            now=now,
+            lease_seconds=lease_seconds,
+        )
+        return lease
+
+    async def _apply_checkpoint(
+        self,
+        *,
+        host_id: UUID,
+        checkpoint: AgentHostRunCheckpoint,
+        now: datetime | None = None,
+        lease_seconds: int = DEFAULT_RUN_LEASE_SECONDS,
+    ) -> tuple[AgentHostRunLeaseModel | None, bool]:
+        """:meth:`apply_checkpoint`, also saying whether the state advanced.
+
+        The lease alone cannot answer that: a terminal run re-reporting the
+        terminal state it already holds returns its lease and changes nothing,
+        and a still-RUNNING run re-reporting RUNNING is the heartbeat rather
+        than news. Both extend the lease; neither is a reason to cut a long
+        poll short.
+        """
         timestamp = now or utcnow()
         lease = await self.session.get(
             AgentHostRunLeaseModel,
@@ -406,26 +491,29 @@ class AgentHostDispatchRepository:
             with_for_update=True,
         )
         if lease is None or lease.host_id != host_id:
-            return None
+            return None, False
         if lease.lease_epoch != checkpoint.lease_epoch:
-            return None
+            return None, False
         current_state = AgentHostRunState(lease.state)
         reported = checkpoint.state
         if current_state in TERMINAL_AGENT_HOST_RUN_STATES:
-            return lease if reported is current_state else None
+            return (lease, False) if reported is current_state else (None, False)
         if not run_state_progresses(current_state, reported):
-            return None
+            return None, False
+        advanced = reported is not current_state
         # accepted_at is the single fence between pre-dispatch (safe to retry
-        # or fall back) and accepted (never repeated).
+        # or fall back) and accepted (never repeated). Crossing it is news in
+        # its own right, whatever the state did.
         if lease.accepted_at is None:
             lease.accepted_at = timestamp
+            advanced = True
         if reported in TERMINAL_AGENT_HOST_RUN_STATES:
             lease.terminal_at = timestamp
         lease.state = reported.value
         lease.lease_expires_at = timestamp + timedelta(seconds=lease_seconds)
         lease.updated_at = timestamp
         await self.session.flush()
-        return lease
+        return lease, advanced
 
     # ------------------------------------------------------------------ events
 
@@ -458,6 +546,14 @@ class AgentHostDispatchRepository:
         run_id: UUID,
         now: datetime | None = None,
     ) -> AgentHostCommandModel | None:
+        """Queue one CANCEL_RUN for a live run, at most one at a time.
+
+        Every path that gives up on a run calls this — the deadline, a stop
+        request, a stream outage — so without the liveness check a run being
+        abandoned stacks a fresh command on each attempt. They all say the same
+        thing, they all occupy the poll's command limit, and the same guard
+        already protects the abandoned-run sweep.
+        """
         timestamp = now or utcnow()
         lease = await self.session.get(
             AgentHostRunLeaseModel,
@@ -467,6 +563,12 @@ class AgentHostDispatchRepository:
         if (
             lease is None
             or AgentHostRunState(lease.state) in TERMINAL_AGENT_HOST_RUN_STATES
+        ):
+            return None
+        if await agent_host_recovery.cancel_already_queued(
+            self.session,
+            run_id=run_id,
+            lease_epoch=lease.lease_epoch,
         ):
             return None
         command = AgentHostCommandModel(
@@ -519,6 +621,43 @@ class AgentHostDispatchRepository:
             state=AgentHostCommandState.QUEUED.value,
             expires_at=timestamp
             + timedelta(seconds=DEFAULT_PERMISSION_COMMAND_TTL_SECONDS),
+        )
+        self.session.add(command)
+        await self.session.flush()
+        return command
+
+    async def enqueue_credential_refresh(
+        self,
+        *,
+        run_id: UUID,
+        encrypted_mcp_payload: dict,
+        now: datetime | None = None,
+    ) -> AgentHostCommandModel | None:
+        """Hand a run still in flight a replacement Lemma MCP credential.
+
+        Returns None once the run is over, when there is nothing left to
+        refresh. Fenced on the current lease epoch so a credential minted for a
+        superseded dispatch cannot land on the run executing now.
+        """
+        timestamp = now or utcnow()
+        lease = await self.session.get(
+            AgentHostRunLeaseModel,
+            run_id,
+            with_for_update=True,
+        )
+        if (
+            lease is None
+            or AgentHostRunState(lease.state) in TERMINAL_AGENT_HOST_RUN_STATES
+        ):
+            return None
+        command = AgentHostCommandModel(
+            host_id=lease.host_id,
+            run_id=run_id,
+            kind=AgentHostCommandKind.REFRESH_CREDENTIAL.value,
+            lease_epoch=lease.lease_epoch,
+            payload={"encrypted_mcp": encrypted_mcp_payload},
+            state=AgentHostCommandState.QUEUED.value,
+            expires_at=timestamp + timedelta(seconds=DEFAULT_COMMAND_TTL_SECONDS),
         )
         self.session.add(command)
         await self.session.flush()
