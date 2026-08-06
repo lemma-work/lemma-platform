@@ -21,6 +21,9 @@ export default defineConfig({
             // the component around it is not.
             'components/agents/this-computer-status.{test,spec}.ts',
             'components/auth/portal/auth/**/*.{test,spec}.ts',
+            // Which kinds need an address typed in, and how an install reads
+            // back as a line of text. Pure predicates over the catalog.
+            'components/connectors/connector-utils.{test,spec}.ts',
             // Step ordering for local onboarding. Named file by file, like the
             // agent-runtime helpers above, so this stays a list of pure-logic
             // modules rather than becoming a glob over components.

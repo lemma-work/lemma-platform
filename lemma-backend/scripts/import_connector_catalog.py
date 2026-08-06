@@ -677,9 +677,14 @@ def _composio_provider_capability(
     )
 
 
-def _operation_id(connector_id: str, provider: AuthProvider, operation_name: str) -> str:
-    kind = provider_to_kind(provider).value
-    return f"{connector_id}:{kind}:{operation_name}"
+def _operation_id(
+    connector_id: str,
+    provider: AuthProvider,
+    operation_name: str,
+    kind: str | None = None,
+) -> str:
+    resolved = kind or provider_to_kind(provider).value
+    return f"{connector_id}:{resolved}:{operation_name}"
 
 
 def _trigger_id(
@@ -895,19 +900,34 @@ async def _upsert_operation(
     search_document: str | None,
     normalize_name: bool = True,
     execution: dict | None = None,
+    kind: str | None = None,
 ) -> None:
     operation_name = (
         _normalize_operation_name(public_name) if normalize_name else public_name.strip()
     )
+    resolved_kind = kind or provider_to_kind(provider).value
     existing = await operation_repository.get_by_connector_kind_and_name(
         connector_id,
-        provider_to_kind(provider).value,
+        resolved_kind,
         operation_name,
     )
+    if existing is None and resolved_kind != provider_to_kind(provider).value:
+        # This connector's operations were seeded before its kind was carried
+        # through, so they sit under `package`. Retag that row in place rather
+        # than writing a second one: the unique index is (connector, kind,
+        # name), so both would survive and the catalog would list each
+        # operation twice.
+        existing = await operation_repository.get_by_connector_kind_and_name(
+            connector_id,
+            provider_to_kind(provider).value,
+            operation_name,
+        )
     entity = ConnectorOperationEntity(
-        id=existing.id if existing else _operation_id(connector_id, provider, operation_name),
+        id=existing.id
+        if existing
+        else _operation_id(connector_id, provider, operation_name, resolved_kind),
         connector_id=connector_id,
-        provider=provider,
+        kind=resolved_kind,
         name=operation_name,
         provider_operation_name=provider_operation_name,
         display_name=display_name,
@@ -927,13 +947,16 @@ async def _sync_static_operations(
     operation_repository: ConnectorOperationRepository,
     connector_id: str,
     static_operations: list[dict],
+    *,
+    kind: str | None = None,
 ) -> int:
     """Seed operations declared inline in the catalog config.
 
     The SQL connector's query/list_tables/describe_table are the case: its
     operation set is fixed and known at import time, so there is nothing to
     discover per install. Each carries the execution descriptor its kind's
-    executor reads.
+    executor reads, and is tagged with the kind that reads it -- execution
+    looks an operation up by (connector, install kind, name).
     """
     count = 0
     for op in static_operations:
@@ -956,6 +979,7 @@ async def _sync_static_operations(
                 description=description,
             ),
             execution=op["execution"],
+            kind=kind,
         )
         count += 1
     return count
@@ -1132,6 +1156,12 @@ async def _sync_native_catalog(
         existing = await connector_repository.get(connector_id)
 
         auth_method = AuthMethod(app_config.get("auth_method", "OAUTH2"))
+        # The catalog entry's own kind. Absent, the connector is a vendored
+        # package, which is what every native entry was before sql/mcp/http
+        # existed. Present, it decides which executor, installer and discoverer
+        # an install gets -- so dropping it here silently turns the SQL
+        # connector into a package one that no executor can run.
+        native_kind = app_config.get("kind")
 
         entity = ConnectorEntity(
             id=connector_id,
@@ -1149,6 +1179,7 @@ async def _sync_native_catalog(
                     profile_operation_names=_profile_operation_names(
                         profile_operations, connector_id, AuthProvider.LEMMA
                     ),
+                    kind=native_kind,
                 ),
             ),
             agent_instruction=app_config.get("agent_instruction")
@@ -1163,10 +1194,13 @@ async def _sync_native_catalog(
         )
 
         # Operations declared inline in config (the SQL connector's fixed set).
+        # Tagged with the same kind as the spec above: execution resolves an
+        # operation by (connector, install kind, name), so a mismatch here is
+        # an OperationNotFoundError on every call.
         static_ops = app_config.get("static_operations")
         if static_ops:
             op_count = await _sync_static_operations(
-                operation_repository, connector_id, static_ops
+                operation_repository, connector_id, static_ops, kind=native_kind
             )
             total_operations += op_count
             logger.info(

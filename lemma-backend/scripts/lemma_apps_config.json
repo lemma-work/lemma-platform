@@ -852,20 +852,28 @@
       "properties": {
         "dialect": {
           "type": "string",
+          "title": "Dialect",
+          "description": "PostgreSQL is the only engine supported today.",
           "enum": [
             "postgresql"
           ],
           "default": "postgresql"
         },
         "host": {
-          "type": "string"
+          "type": "string",
+          "title": "Host",
+          "description": "Hostname of the database server, such as db.internal.example.com. It has to be reachable from Lemma: private, loopback and link-local addresses are refused."
         },
         "port": {
           "type": "integer",
+          "title": "Port",
+          "description": "Leave at 5432 unless the server listens elsewhere.",
           "default": 5432
         },
         "database": {
-          "type": "string"
+          "type": "string",
+          "title": "Database",
+          "description": "Which database on that server to query. Not the table and not the schema — the database name you would pass to psql."
         }
       },
       "additionalProperties": false
@@ -878,10 +886,14 @@
       ],
       "properties": {
         "username": {
-          "type": "string"
+          "type": "string",
+          "title": "Username",
+          "description": "A read-only role is enough. Lemma only ever issues SELECT statements against this connection."
         },
         "password": {
           "type": "string",
+          "title": "Password",
+          "description": "Stored encrypted, and never shown again after you save.",
           "format": "password"
         }
       },
@@ -1002,10 +1014,13 @@
       "properties": {
         "server_url": {
           "type": "string",
-          "description": "MCP server URL (streamable HTTP)."
+          "title": "Server URL",
+          "description": "The server's streamable-HTTP endpoint, such as https://mcp.example.com/mcp. Lemma asks it what tools it has and turns each one into an operation. Private, loopback and link-local addresses are refused."
         },
         "extra_headers": {
           "type": "object",
+          "title": "Extra headers",
+          "description": "Sent with every request to the server. Use this for anything the server needs beyond the token below.",
           "additionalProperties": {
             "type": "string"
           }
@@ -1019,7 +1034,8 @@
         "bearer_token": {
           "type": "string",
           "format": "password",
-          "description": "Optional bearer token for the MCP server."
+          "title": "Bearer token",
+          "description": "Optional. Sent as an Authorization header. Leave empty if the server needs no auth."
         }
       },
       "additionalProperties": false
@@ -1042,14 +1058,18 @@
       "properties": {
         "spec_url": {
           "type": "string",
-          "description": "URL of the OpenAPI JSON spec."
+          "title": "Spec URL",
+          "description": "URL of the API's OpenAPI JSON document, such as https://api.example.com/openapi.json. Lemma reads it and turns each endpoint into an operation. Private, loopback and link-local addresses are refused."
         },
         "server_url": {
           "type": "string",
-          "description": "Override base URL (else the spec's servers[0])."
+          "title": "Base URL",
+          "description": "Optional. Where requests actually go. Leave empty to use the first server listed in the spec, and set it when the spec names a base URL you cannot reach."
         },
         "default_headers": {
           "type": "object",
+          "title": "Default headers",
+          "description": "Sent with every request. Use this for anything the API needs beyond the credentials below.",
           "additionalProperties": {
             "type": "string"
           }
@@ -1063,12 +1083,14 @@
         "access_token": {
           "type": "string",
           "format": "password",
-          "description": "Optional bearer token."
+          "title": "Bearer token",
+          "description": "Optional. Sent as an Authorization header."
         },
         "api_key": {
           "type": "string",
           "format": "password",
-          "description": "Optional API key."
+          "title": "API key",
+          "description": "Optional. Sent the way the spec's security scheme says to."
         }
       },
       "additionalProperties": false

@@ -72,9 +72,15 @@ export function ConnectorRow({
                 </Button>
             ) : null}
 
+            {/* `quiet`, not `secondary`: the catalog is ~80 rows, and 80 outlined
+                buttons all reading "Connect" compete equally, so nothing recedes
+                and a list you scan for a name reads as a control panel. Quiet is
+                this codebase's role for exactly that — a row action, present but
+                not competing — and it keeps the label visible, which hiding it
+                until hover would not do on touch. */}
             <div className="flex w-[124px] shrink-0 justify-end">
                 <Button
-                    variant={isConnected ? 'quiet' : 'secondary'}
+                    variant="quiet"
                     size="sm"
                     className="h-8"
                     onClick={() => onConnect(app)}
@@ -104,17 +110,24 @@ export function ConnectorRow({
  */
 export function ConnectedAccountRow({
     account,
+    label,
     isBusy,
     onReconnect,
     onDisconnect,
 }: {
     account: Account;
+    /**
+     * Overrides the connector title. An account on a tenant-configured install
+     * needs its install's name: three databases all read "SQL Database"
+     * otherwise, and "SQL Database needs to reconnect" names none of them.
+     */
+    label?: string;
     isBusy: boolean;
     onReconnect: (account: Account) => void;
     onDisconnect: (account: Account) => void;
 }) {
     const status = getAccountStatusMeta(account.status);
-    const appName = account.connector?.title || account.connector?.name || 'Unknown app';
+    const appName = label || account.connector?.title || account.connector?.name || 'Unknown app';
     // Sitting under "Your accounts" already says connected — only the exceptions
     // earn a status badge, so a healthy account reads as a name and nothing else.
     const subtitle = account.display_name || account.email;

@@ -26,6 +26,24 @@ export interface UseConnectorsOptions {
     enabled?: boolean;
 }
 
+/**
+ * The install a bare connector_id resolves to on the backend.
+ *
+ * An org may hold many installs of one connector, and exactly one of them
+ * carries `is_default`. Anything scoped to "the connector" rather than to a
+ * chosen install has to ask for that one by name.
+ */
+export const findDefaultInstallName = (
+    authConfigs: AuthConfig[],
+    connectorId: string | undefined,
+): string | undefined => {
+    if (!connectorId) return undefined;
+    const active = authConfigs.filter(
+        (config) => config.connector_id === connectorId && config.status === 'ACTIVE',
+    );
+    return (active.find((config) => config.is_default) ?? active[0])?.name;
+};
+
 export const useConnectors = (options?: UseConnectorsOptions) => {
     return useQuery({
         queryKey: ['connectors', options?.limit, options?.pageToken],
@@ -71,19 +89,17 @@ export const useTriggers = (options?: UseConnectorsOptions) => {
     const connectorId = options?.connectorId;
     const triggersEnabled = options?.enabled ?? true;
 
-    // Triggers are scoped to an auth config (org + app + kind). An org holds
-    // at most one auth config per app, so resolve the app's auth config name here
-    // and list triggers for it — only the auth config's kind is returned.
+    // Triggers are scoped to an auth config (org + app + kind). An org may hold
+    // several installs of one connector — two Slack apps, several MCP servers —
+    // so this resolves the connector's *default* install, the one a bare
+    // connector_id answers to on the backend. Picking the first ACTIVE row
+    // instead made the answer depend on list order.
     const { data: authConfigs = [] } = useAuthConfigs({
         organizationId,
         limit: 100,
         enabled: Boolean(organizationId && connectorId) && triggersEnabled,
     });
-    const authConfigName = connectorId
-        ? authConfigs.find(
-              (config) => config.connector_id === connectorId && config.status === 'ACTIVE'
-          )?.name
-        : undefined;
+    const authConfigName = findDefaultInstallName(authConfigs, connectorId);
 
     return useQuery({
         queryKey: ['triggers', organizationId, authConfigName, options?.search, options?.limit],
@@ -118,11 +134,7 @@ export const useTrigger = (
         limit: 100,
         enabled: Boolean(organizationId && connectorId && triggerName) && enabled,
     });
-    const authConfigName = connectorId
-        ? authConfigs.find(
-              (config) => config.connector_id === connectorId && config.status === 'ACTIVE'
-          )?.name
-        : undefined;
+    const authConfigName = findDefaultInstallName(authConfigs, connectorId);
 
     return useQuery({
         queryKey: ['trigger', organizationId, authConfigName, triggerName],
@@ -173,6 +185,80 @@ export const useEnableConnector = (organizationId?: string) => {
         },
         onSuccess: () => {
             queryClient.invalidateQueries({ queryKey: ['auth-configs', organizationId] });
+        },
+    });
+};
+
+/**
+ * Edits an install in place — rotating an MCP server URL, renaming a database.
+ *
+ * Deliberately not delete-and-recreate: accounts cascade from an install, so
+ * recreating it disconnects everyone who had connected. The backend marks
+ * accounts whose credentials the change invalidated as REAUTH_REQUIRED and
+ * reports how many, which is what the caller shows.
+ */
+export const useUpdateAuthConfig = (organizationId?: string) => {
+    const queryClient = useQueryClient();
+
+    return useMutation({
+        mutationFn: async (data: {
+            authConfigName: string;
+            name?: string | null;
+            config?: Record<string, unknown> | null;
+            status?: string | null;
+            isDefault?: boolean | null;
+        }) => {
+            if (!organizationId) throw new Error('organizationId is required to update an install');
+            return getLemmaClient().connectors.authConfigs.update(organizationId, data.authConfigName, {
+                name: data.name,
+                config: data.config,
+                status: data.status,
+                is_default: data.isDefault,
+            });
+        },
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['auth-configs', organizationId] });
+            queryClient.invalidateQueries({ queryKey: ['accounts', organizationId] });
+            queryClient.invalidateQueries({ queryKey: ['connector-operations', organizationId] });
+        },
+    });
+};
+
+export const useDeleteAuthConfig = (organizationId?: string) => {
+    const queryClient = useQueryClient();
+
+    return useMutation({
+        mutationFn: async (authConfigName: string) => {
+            if (!organizationId) throw new Error('organizationId is required to delete an install');
+            return getLemmaClient().connectors.authConfigs.delete(organizationId, authConfigName);
+        },
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['auth-configs', organizationId] });
+            queryClient.invalidateQueries({ queryKey: ['accounts', organizationId] });
+        },
+    });
+};
+
+/**
+ * Re-asks an MCP or OpenAPI install what it can do.
+ *
+ * Discovery runs when the install is created and swallows its failures by
+ * design — a server that was down leaves a usable but empty install. This is
+ * the recovery path, and without it the only fix is deleting the install.
+ */
+export const useRefreshAuthConfigOperations = (organizationId?: string) => {
+    const queryClient = useQueryClient();
+
+    return useMutation({
+        mutationFn: async (authConfigName: string) => {
+            if (!organizationId) throw new Error('organizationId is required to refresh operations');
+            return getLemmaClient().connectors.authConfigs.refreshOperations(
+                organizationId,
+                authConfigName,
+            );
+        },
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['connector-operations', organizationId] });
         },
     });
 };
