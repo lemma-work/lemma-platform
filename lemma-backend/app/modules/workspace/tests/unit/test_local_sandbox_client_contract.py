@@ -57,6 +57,17 @@ def test_every_shared_method_takes_the_same_arguments() -> None:
     assert not differences, "\n".join(differences)
 
 
+def test_the_local_client_is_usable_wherever_the_agentbox_one_is() -> None:
+    """Callers use the client as an async context manager, and a missing
+    __aexit__ fails at the call site with a TypeError rather than anywhere
+    near this module. Dunders are part of the surface, not an afterthought."""
+    for dunder in ("__aenter__", "__aexit__"):
+        assert hasattr(AgentBoxClient, dunder)
+        assert hasattr(LocalSandboxClient, dunder), (
+            f"the local client must support {dunder}"
+        )
+
+
 def test_the_session_only_calls_methods_the_local_client_has() -> None:
     """A narrower check that fails loudly if the session grows a new call."""
     import re

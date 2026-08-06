@@ -910,6 +910,22 @@ class Settings(BaseSettings):
         default="/var/run/docker.sock",
         description="Docker Engine unix socket used to provision sandboxes",
     )
+    # Lets a sandbox reach the backend running on the host. Without it a
+    # function sandbox cannot fetch its artifact from the gateway and a
+    # workspace cannot call back, so provisioning succeeds and everything
+    # after it fails.
+    agentbox_add_host_gateway: bool = Field(
+        default=False,
+        description="Map the host gateway into sandboxes under agentbox_host_alias",
+    )
+    agentbox_host_alias: Optional[str] = Field(
+        default=None,
+        description="Hostname sandboxes use to reach the host running the backend",
+    )
+    agentbox_docker_private_network: Optional[str] = Field(
+        default=None,
+        description="Docker network to attach sandboxes to instead of publishing ports",
+    )
     agentbox_docker_allow_mutable_images: bool = Field(
         default=False,
         description=(

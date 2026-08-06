@@ -537,6 +537,12 @@ def _build_docker_provider():
         DockerEngineClient(socket_path=settings.agentbox_docker_socket_path),
         DockerProviderConfig(
             allow_mutable_images=settings.agentbox_docker_allow_mutable_images,
+            # Without the host gateway a sandbox cannot reach the backend, so
+            # a function never fetches its artifact and a workspace never
+            # calls back -- both fail well after provisioning looks healthy.
+            add_host_gateway=settings.agentbox_add_host_gateway,
+            host_alias=settings.agentbox_host_alias,
+            private_network=settings.agentbox_docker_private_network,
         ),
         RuntimeCredentialSigner(key=key.encode()),
     )

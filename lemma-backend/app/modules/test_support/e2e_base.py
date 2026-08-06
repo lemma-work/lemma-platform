@@ -79,18 +79,33 @@ def _cleanup_e2e_workspace_containers(*, sandboxes_only: bool = False) -> None:
     if not shutil.which("docker"):
         return
 
-    label_filters = ["--filter", "label=lemma.e2e=true"]
+    # Docker's filters are conjunctive, so each way of labelling a sandbox has
+    # to be swept separately. The workspace module labels its own containers
+    # `managed-by=lemma-workspace`; without that pass, every run that
+    # provisions through it leaves its sandboxes behind.
+    filter_sets = [["--filter", "label=lemma.e2e=true"]]
     if sandboxes_only:
-        label_filters += ["--filter", "label=app.kubernetes.io/name=agentbox-sandbox"]
-    ps = subprocess.run(
-        ["docker", "ps", "-aq", *label_filters],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    container_ids = [line.strip() for line in ps.stdout.splitlines() if line.strip()]
+        filter_sets = [
+            ["--filter", "label=lemma.e2e=true",
+             "--filter", "label=app.kubernetes.io/name=agentbox-sandbox"],
+            ["--filter", "label=managed-by=lemma-workspace"],
+        ]
+    else:
+        filter_sets.append(["--filter", "label=managed-by=lemma-workspace"])
+
+    container_ids: list[str] = []
+    for label_filters in filter_sets:
+        ps = subprocess.run(
+            ["docker", "ps", "-aq", *label_filters],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        container_ids += [
+            line.strip() for line in ps.stdout.splitlines() if line.strip()
+        ]
     if container_ids:
-        subprocess.run(["docker", "rm", "-f", *container_ids], check=False)
+        subprocess.run(["docker", "rm", "-f", *sorted(set(container_ids))], check=False)
 
     if sandboxes_only:
         return

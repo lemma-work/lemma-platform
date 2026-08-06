@@ -178,6 +178,17 @@ async def test_api_and_job_execute_through_one_per_pod_docker_sandbox(
             value=21,
         )
         def client_factory() -> AgentBoxClient:
+            # Follows the cutover flag, so this exercises whichever path is
+            # actually live. Without it the test would keep proving the
+            # AgentBox manager works no matter which provisioner production is
+            # configured to use.
+            from app.modules.workspace.services.sandbox_composition import (
+                build_local_client,
+                workspace_owns_sandboxes,
+            )
+
+            if workspace_owns_sandboxes():
+                return build_local_client()  # type: ignore[return-value]
             return AgentBoxClient(
                 base_url=local_agentbox_server["manager_base_url"],
                 api_key=local_agentbox_server["api_key"],

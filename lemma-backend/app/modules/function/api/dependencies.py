@@ -134,6 +134,22 @@ def build_function_definition_compiler(
 
 
 def _function_agentbox_client() -> AgentBoxClient:
+    """The client the function runtime is reached through.
+
+    Function sandboxes are provisioned by the same machinery as workspaces --
+    one per pod, a different image, a narrower capability set -- so this
+    honours the same cutover flag. Without it the flag would move workspaces
+    onto the new path and silently leave functions on the old one, which is
+    exactly the kind of half-migration that looks verified and is not.
+    """
+    from app.modules.workspace.services.sandbox_composition import (
+        build_local_client,
+        workspace_owns_sandboxes,
+    )
+
+    if workspace_owns_sandboxes():
+        return build_local_client()  # type: ignore[return-value]
+
     api_url = settings.agentbox_api_url
     api_key = settings.agentbox_api_key
     if not api_url or not api_key:

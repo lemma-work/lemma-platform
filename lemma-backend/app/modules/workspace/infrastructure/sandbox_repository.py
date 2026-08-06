@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from uuid import UUID, uuid7
 
 from sqlalchemy import select, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.workspace.domain.sandbox import (
@@ -114,24 +115,41 @@ class SandboxRepository:
         if existing is not None:
             return existing
 
-        row = SandboxModel(
-            id=sandbox_id,
-            kind=kind.value,
-            owner_kind=owner_kind.value,
-            owner_id=owner_id,
-            slug=slug,
-            display_name=display_name or slug.replace("-", " ").title(),
-            profile_name=profile_name,
-            profile_digest=profile_digest,
-            desired_state=SandboxDesiredState.PRESENT.value,
-            epoch=1,
-            storage_generation=1,
-            mounts=[],
-            last_used_at=utcnow(),
+        # Reading then inserting is a race, and a real one: concurrent function
+        # invocations for the same pod all find nothing and all insert. Letting
+        # the database arbitrate is the only version that is actually safe --
+        # the unique index decides a winner and the losers read its row, rather
+        # than one caller's request failing on a conflict it did not cause.
+        now = utcnow()
+        await self.session.execute(
+            pg_insert(SandboxModel)
+            .values(
+                id=sandbox_id,
+                kind=kind.value,
+                owner_kind=owner_kind.value,
+                owner_id=owner_id,
+                slug=slug,
+                display_name=display_name or slug.replace("-", " ").title(),
+                profile_name=profile_name,
+                profile_digest=profile_digest,
+                desired_state=SandboxDesiredState.PRESENT.value,
+                epoch=1,
+                storage_generation=1,
+                mounts=[],
+                last_used_at=now,
+                created_at=now,
+                updated_at=now,
+            )
+            .on_conflict_do_nothing()
         )
-        self.session.add(row)
         await self.session.flush()
-        return row.to_entity()
+
+        created = await self.find_by_slug(
+            kind=kind, owner_kind=owner_kind, owner_id=owner_id, slug=slug
+        )
+        if created is None:  # pragma: no cover - the insert just succeeded
+            raise RuntimeError(f"sandbox row for {owner_id}/{slug} vanished")
+        return created
 
     # ------------------------------------------------------------------
     # Lifecycle

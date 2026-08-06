@@ -43,7 +43,11 @@ from agentbox_client import (
 
 from app.core.config import settings
 from app.modules.workspace.domain.errors import SandboxUnavailable
-from app.modules.workspace.domain.sandbox import SandboxHandle
+from app.modules.workspace.domain.sandbox import (
+    SandboxHandle,
+    SandboxKind,
+    SandboxOwnerKind,
+)
 from app.modules.workspace.providers.base import ProviderGone, ProviderInstance
 from app.modules.workspace.providers.profiles import FUNCTION_RUNTIME_PORT
 from app.modules.workspace.services.port_access import PortAccessSigner, PortGrant
@@ -71,6 +75,25 @@ class LocalProcessRef:
 
 
 @dataclass(frozen=True, slots=True)
+class LocalSandboxHandle:
+    """What callers read off an ensured sandbox.
+
+    `ready` is the field that matters and the one easiest to omit: the function
+    route resolver branches on it, and a handle without it raises an
+    AttributeError that no handler catches, so the run fails with a generic
+    message and nothing in the logs. Anything this client returns in place of
+    AgentBox's handle has to carry the same surface.
+    """
+
+    sandbox_id: UUID
+    ready: bool
+    allocation_id: UUID
+    allocation_epoch: int
+    storage_generation: int
+    retry_after_ms: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class LocalPythonSessionRef:
     """Only the session id travels; the runtime keys sessions by it."""
 
@@ -83,9 +106,34 @@ class LocalSandboxClient:
     def __init__(self, service: SandboxService) -> None:
         self._service = service
 
+    async def __aenter__(self) -> "LocalSandboxClient":
+        return self
+
+    async def __aexit__(self, *_args: object) -> None:
+        await self.close()
+
     # ------------------------------------------------------------------
     # Addressing
     # ------------------------------------------------------------------
+
+    async def _ensure_row(self, logical_id: UUID, workload_kind=None) -> UUID:
+        """Make sure a sandbox row exists for what the caller is addressing.
+
+        Workspaces are backfilled per user, but a pod's function runtime is
+        created on first invocation -- there is no moment before that when the
+        pod is known to need one. The id is pinned to the pod id, matching the
+        logical id AgentBox used, so an already-running function sandbox is
+        recognised rather than duplicated.
+        """
+        if _is_function(workload_kind):
+            sandbox = await self._service.resolve(
+                kind=SandboxKind.FUNCTION,
+                owner_kind=SandboxOwnerKind.POD,
+                owner_id=logical_id,
+                sandbox_id=logical_id,
+            )
+            return sandbox.id
+        return logical_id
 
     async def _instance(self, logical_id: UUID) -> tuple[SandboxHandle, ProviderInstance]:
         handle = await self._service.ensure(logical_id)
@@ -509,8 +557,9 @@ class LocalSandboxClient:
         AgentBox treated a lease as activity, so a long horizon kept idle
         function sandboxes alive indefinitely. Execution is the activity.
         """
-        handle = await self._service.ensure(logical_id)
-        _, instance = await self._instance(logical_id)
+        sandbox_id = await self._ensure_row(logical_id, WorkloadKind.FUNCTION)
+        handle = await self._service.ensure(sandbox_id)
+        _, instance = await self._instance(sandbox_id)
         url = await self._provider.port_base_url(
             instance, port=FUNCTION_RUNTIME_PORT, deadline_at=deadline_at
         )
@@ -552,12 +601,37 @@ class LocalSandboxClient:
         # The profile and admission class are the manager's vocabulary. Here
         # the profile lives on the sandbox row and admission is a semaphore,
         # so both are accepted and ignored rather than reshaping every caller.
-        del workload_kind, profile, admission_class, deadline_at, verify_ready
-        return await self._service.ensure(logical_id)
+        del profile, admission_class, deadline_at, verify_ready
+        sandbox_id = await self._ensure_row(logical_id, workload_kind)
+        handle = await self._service.ensure(sandbox_id)
+        # `ensure` only returns once the sandbox is serving, so a handle here
+        # is by definition ready.
+        return LocalSandboxHandle(
+            sandbox_id=handle.sandbox_id,
+            ready=True,
+            allocation_id=handle.sandbox_id,
+            allocation_epoch=handle.epoch,
+            storage_generation=handle.storage_generation,
+        )
 
     async def inspect_sandbox(self, workload_kind, logical_id: UUID):
+        """Report the sandbox without provisioning it.
+
+        Returns the same handle shape as `ensure_sandbox` rather than the
+        database row: callers branch on `.ready`, and handing back a row makes
+        that an AttributeError far from here.
+        """
         del workload_kind
-        return await self._service.get(logical_id)
+        info = await self._service.describe(logical_id)
+        if info is None:
+            return None
+        return LocalSandboxHandle(
+            sandbox_id=logical_id,
+            ready=info.status == "RUNNING",
+            allocation_id=logical_id,
+            allocation_epoch=info.allocation_epoch or 1,
+            storage_generation=info.storage_generation or 1,
+        )
 
     async def release_sandbox(
         self, workload_kind, logical_id: UUID, *, deadline_at: datetime | None = None
@@ -574,6 +648,10 @@ class LocalSandboxClient:
     async def close(self) -> None:
         # The provider outlives any one client; disposal is the service's job.
         return None
+
+
+def _is_function(workload_kind) -> bool:
+    return str(getattr(workload_kind, "value", workload_kind)).lower() == "function"
 
 
 def _deadline(seconds: float) -> datetime:
