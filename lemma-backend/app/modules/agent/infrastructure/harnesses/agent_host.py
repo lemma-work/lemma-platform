@@ -15,16 +15,13 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator, Callable, Sequence
-from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from uuid import UUID
 
-from app.core.crypto import get_secret_cipher
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.modules.agent.domain.agent_host import (
     AgentHostEventType,
-    AgentHostRunSpec,
     AgentHostRunState,
 )
 from app.modules.agent.domain.context import AgentContext
@@ -36,7 +33,6 @@ from app.modules.agent.domain.value_objects import (
     HarnessOptions,
     JsonObject,
 )
-from app.modules.agent.domain.prompts import load_agent_host_runtime_prompt
 from app.modules.agent.infrastructure.agent_host_channels import poke_host
 from app.modules.agent.infrastructure.agent_host_dispatch_repository import (
     AgentHostDispatchRepository,
@@ -46,10 +42,6 @@ from app.modules.agent.infrastructure.agent_host_event_stream import (
     StreamedEvent,
     agent_host_event_stream,
 )
-from app.modules.agent.infrastructure.agent_host_repository import (
-    AgentHostRepository,
-)
-from app.modules.agent.infrastructure import agent_host_session_memory
 from app.modules.agent.infrastructure.agent_host_repository_common import (
     AgentHostRepositoryError,
 )
@@ -63,12 +55,20 @@ from app.modules.agent.infrastructure.harnesses.agent_host_events import (
     event_text,
     is_terminal_event,
 )
+from app.modules.agent.infrastructure.harnesses.agent_host_dispatch import (
+    enqueue_run,
+    refresh_credential,
+)
+from app.modules.agent.infrastructure.harnesses.agent_host_run_config import (
+    _AgentHostRunConfig,
+    _agent_host_run_config,
+    _resolve_pod_cwd,
+)
 from app.modules.agent.infrastructure.harnesses.agent_host_run_window import (
     CREDENTIAL_DEADLINE_MESSAGE,
     DEFAULT_AGENT_HOST_EVENT_TIMEOUT_SECONDS,
     DispatchedRun,
     LeaseOutcome,
-    credential_bounded_timeout,
     credential_exhausted,
     credential_refresh_due,
     expiry_message,
@@ -82,14 +82,7 @@ from app.modules.agent.infrastructure.harnesses.agent_host_stream_reader import 
 from app.modules.agent.infrastructure.agent_host_final_answer import (
     adopt_recorded_final_answer,
 )
-from app.modules.agent.infrastructure.harnesses.remote_payload import (
-    mcp_payload,
-    run_start_payload,
-    token_expires_at,
-)
-from app.modules.agent.infrastructure.mcp import exported_tool_name
 from app.modules.agent.tools.final_answer.final_answer_toolset import (
-    FINAL_ANSWER_TOOL_NAME,
     agent_output_schema,
     final_answer_expected,
 )
@@ -103,42 +96,6 @@ DEFAULT_STREAM_BLOCK_MS = 1_000
 DEFAULT_LEASE_CHECK_SECONDS = 5.0
 DEFAULT_TERMINAL_EVENT_GRACE_SECONDS = 5.0
 
-
-
-@dataclass(frozen=True, slots=True)
-class _AgentHostRunConfig:
-    harness_id: UUID
-    runtime_profile_id: UUID
-    config_selections: JsonObject
-    wait_timeout_seconds: int
-    model_name: str | None
-
-
-def _agent_host_run_config(options: HarnessOptions) -> _AgentHostRunConfig:
-    profile = _runtime_profile(options)
-    harness_id = UUID(str(profile["harness_id"]))
-    runtime_profile_id = UUID(str(profile["profile_id"]))
-    config = _json_object(profile.get("config"))
-    # Read the saved revision so malformed legacy profiles fail before
-    # dispatch. Admission intentionally uses the latest live revision after
-    # selections are revalidated by the repository.
-    str(config["harness_snapshot_revision"])
-    # The model comes from the profile snapshot rather than options.model_name,
-    # which substitutes a "default" placeholder when nothing is pinned. Agent
-    # Host rejects any model the harness does not advertise, so an unpinned
-    # profile must send no model and let the harness use its own default.
-    raw_model = profile.get("provider_model_name") or profile.get("model_name")
-    model_name = str(raw_model).strip() if raw_model else None
-    return _AgentHostRunConfig(
-        harness_id=harness_id,
-        runtime_profile_id=runtime_profile_id,
-        config_selections=_json_object(config.get("config_selections")),
-        wait_timeout_seconds=_integer(
-            config.get("host_wait_timeout_seconds"),
-            default=300,
-        ),
-        model_name=model_name or None,
-    )
 
 
 class RemoteHarness:
@@ -187,7 +144,9 @@ class RemoteHarness:
             return
 
         try:
-            dispatch = await self._enqueue_run(
+            dispatch = await enqueue_run(
+                uow_factory=self.uow_factory,
+                event_timeout_seconds=self.event_timeout_seconds,
                 agent=agent,
                 conversation=conversation,
                 messages=messages,
@@ -308,7 +267,8 @@ class RemoteHarness:
             if credential_refresh_due(
                 expires_at=credential_expires_at, now=wall_clock
             ):
-                refreshed = await self._refresh_credential(
+                refreshed = await refresh_credential(
+                    uow_factory=self.uow_factory,
                     agent_run_id=agent_run_id,
                     ctx=ctx,
                     options=options,
@@ -450,61 +410,6 @@ class RemoteHarness:
         events.extend(normalizer.normalize(envelope, payload_override=payload_override))
         return events
 
-    async def _refresh_credential(
-        self,
-        *,
-        agent_run_id: UUID,
-        ctx: AgentContext,
-        options: HarnessOptions,
-        agent: Agent,
-        conversation: Conversation,
-    ) -> datetime | None:
-        """Mint a replacement Lemma credential and send it to the host.
-
-        The token dispatched with the run lasts an hour and nothing renewed it,
-        so a long turn either had to be cut short at that expiry or carry on
-        with every ``lemma_*`` call returning 401 — which the agent experiences
-        as its tools disappearing part-way through the task.
-
-        Returns the new expiry, or ``None`` if the refresh did not land, in
-        which case the caller keeps the old one and tries again next cycle.
-        """
-        try:
-            mcp = await mcp_payload(
-                agent_run_id=agent_run_id,
-                conversation_id=conversation.id,
-                ctx=ctx,
-                options=options,
-                extra_tool_names=(
-                    [exported_tool_name(FINAL_ANSWER_TOOL_NAME)]
-                    if final_answer_expected(agent=agent, conversation=conversation)
-                    else []
-                ),
-            )
-            encrypted = await get_secret_cipher().encrypt_json_async(mcp)
-            if encrypted is None:
-                raise RuntimeError("could not encrypt the refreshed MCP configuration")
-            async with self.uow_factory() as uow:
-                command = await AgentHostDispatchRepository(
-                    uow
-                ).enqueue_credential_refresh(
-                    run_id=agent_run_id,
-                    encrypted_mcp_payload=encrypted,
-                )
-                await uow.commit()
-        except (AgentHostRepositoryError, RuntimeError, ValueError, KeyError) as exc:
-            logger.warning(
-                "agent.harnesses.agent_host.credential_refresh_failed.degraded",
-                agent_run_id=str(agent_run_id),
-                error_type=type(exc).__name__,
-            )
-            return None
-        if command is None:
-            # The run ended while we were minting; nothing left to refresh.
-            return None
-        await poke_host(command.host_id)
-        return token_expires_at(mcp)
-
     async def _cancel_if_requested(
         self,
         *,
@@ -553,144 +458,3 @@ class RemoteHarness:
             )
             await uow.commit()
         return state
-
-    async def _enqueue_run(
-        self,
-        *,
-        agent: Agent,
-        conversation: Conversation,
-        messages: Sequence[Message],
-        ctx: AgentContext,
-        options: HarnessOptions,
-        agent_run_id: UUID,
-        run_config: _AgentHostRunConfig,
-    ) -> DispatchedRun:
-        # Resolved first, because it decides what the prompt has to contain: a
-        # run that will not even try to resume a session is talking to an agent
-        # with no history, so the prompt must carry it.
-        async with self.uow_factory() as uow:
-            harness = await AgentHostRepository(uow).get_harness(
-                harness_id=run_config.harness_id
-            )
-            if harness is None:
-                raise RuntimeError("Agent Host harness is unavailable")
-            resume_session_id = await agent_host_session_memory.resume_session_id(
-                uow,
-                conversation_id=conversation.id,
-                harness_id=run_config.harness_id,
-                capabilities=harness.capabilities,
-            )
-            harness_id = harness.id
-            host_id = harness.host_id
-            harness_key = harness.harness_key
-            config_revision = harness.config_revision
-
-        payload = run_start_payload(
-            agent=agent,
-            conversation=conversation,
-            messages=messages,
-            ctx=ctx,
-            agent_run_id=agent_run_id,
-            runtime_instructions=load_agent_host_runtime_prompt(),
-            carries_history=resume_session_id is None,
-        )
-        prompt = _json_object(payload.get("prompt"))
-        mcp = await mcp_payload(
-            agent_run_id=agent_run_id,
-            conversation_id=conversation.id,
-            ctx=ctx,
-            options=options,
-            prompt=_joined_prompt(prompt),
-            # final_answer is served by the MCP route but is not in
-            # options.toolsets (the in-process harness gets it via output_type),
-            # so name it explicitly.
-            extra_tool_names=(
-                [exported_tool_name(FINAL_ANSWER_TOOL_NAME)]
-                if final_answer_expected(agent=agent, conversation=conversation)
-                else []
-            ),
-        )
-        encrypted_mcp = await get_secret_cipher().encrypt_json_async(mcp)
-        if encrypted_mcp is None:
-            raise RuntimeError("could not encrypt MCP configuration")
-        dispatched_at = datetime.now(timezone.utc)
-        timeout_seconds, credential_bounded = credential_bounded_timeout(
-            configured_seconds=self.event_timeout_seconds,
-            credential_expires_at=token_expires_at(mcp),
-            now=dispatched_at,
-            agent_run_id=agent_run_id,
-        )
-        async with self.uow_factory() as uow:
-            run_spec = AgentHostRunSpec(
-                agent_run_id=agent_run_id,
-                conversation_id=conversation.id,
-                harness_id=harness_id,
-                profile_revision=config_revision,
-                model_name=run_config.model_name,
-                config_selections=run_config.config_selections,
-                system_prompt=str(
-                    prompt.get("system_prompt")
-                    or prompt.get("recovery_system_prompt")
-                    or ""
-                ),
-                prompt=[{"type": "text", "text": str(prompt.get("user_prompt") or "")}],
-                resume_session_id=resume_session_id,
-                context={
-                    "agent": payload.get("agent"),
-                    "conversation": payload.get("conversation"),
-                    "lemma": payload.get("context"),
-                    "session_id": prompt.get("session_id"),
-                },
-                run_deadline=dispatched_at + timedelta(seconds=timeout_seconds),
-            )
-            await AgentHostDispatchRepository(uow).enqueue_run(
-                host_id=host_id,
-                harness_id=run_config.harness_id,
-                runtime_profile_id=run_config.runtime_profile_id,
-                run_spec=run_spec,
-                encrypted_mcp_payload=encrypted_mcp,
-                command_ttl_seconds=run_config.wait_timeout_seconds,
-            )
-            await uow.commit()
-        await poke_host(host_id)
-        return DispatchedRun(
-            harness_key=harness_key,
-            event_timeout_seconds=timeout_seconds,
-            credential_bounded=credential_bounded,
-            credential_expires_at=token_expires_at(mcp),
-        )
-
-
-def _resolve_pod_cwd(conversation: Conversation) -> str:
-    from app.modules.agent.services.workspace_location import resolve_pod_cwd
-
-    return resolve_pod_cwd(conversation)
-
-
-def _runtime_profile(options: HarnessOptions) -> JsonObject:
-    extra = getattr(options, "extra", None)
-    profile = _json_object(extra).get("runtime_profile") if extra else None
-    if not isinstance(profile, dict):
-        raise ValueError("runtime profile is missing from harness options")
-    return profile
-
-
-def _json_object(value: object) -> JsonObject:
-    return dict(value) if isinstance(value, dict) else {}
-
-
-def _integer(value: object, *, default: int) -> int:
-    if isinstance(value, bool) or not isinstance(value, int | float | str):
-        return default
-    try:
-        return int(value)
-    except ValueError:
-        return default
-
-
-def _joined_prompt(prompt: JsonObject) -> str:
-    parts = [
-        str(prompt.get(key) or "")
-        for key in ("system_prompt", "recovery_system_prompt", "user_prompt")
-    ]
-    return "\n\n".join(part for part in parts if part)
