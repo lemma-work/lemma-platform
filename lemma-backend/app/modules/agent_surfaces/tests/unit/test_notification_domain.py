@@ -16,7 +16,6 @@ import pytest
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceConversationLink,
     AgentSurfaceEntity,
-    SendAudience,
     SurfaceConfig,
     SurfacePlatform,
     SurfaceSendPolicy,
@@ -351,27 +350,23 @@ def test_a_live_thread_is_not_reset():
     assert not service._should_reset_dm_conversation(surface=_dm_surface(), link=link)
 
 
-# ------------------------------------------------------------ the send audience
+# --------------------------------------------------------- the surface policy
 
 
-def test_legacy_allow_send_means_self_and_never_implies_reaching_others():
-    """A surface nobody has revisited must not silently gain a new capability."""
-    policy = SurfaceSendPolicy(allow_send=True)
-    assert policy.audience is SendAudience.SELF
-    assert policy.allows_messaging_other_members is False
+def test_surface_send_policy_does_not_gate_reaching_other_members():
+    """The MESSAGING toolset is the grant; the surface policy is not a second one.
 
-
-def test_send_policy_defaults_to_nobody():
+    ``allow_send`` governs the surface's own current-conversation
+    ``surface_send_message`` tool and nothing else. Gating ``message_user`` on it
+    too would mean a pod editor had to flip a setting on a bot before a toolset
+    grant they had already made took effect — a rule nobody would guess.
+    """
     policy = SurfaceSendPolicy()
-    assert policy.audience is SendAudience.NOBODY
     assert policy.allow_send is False
+    assert not hasattr(policy, "audience")
+    assert not hasattr(policy, "allows_messaging_other_members")
 
 
-def test_send_policy_round_trips_through_stored_json():
-    stored = SurfaceSendPolicy(audience=SendAudience.POD_MEMBERS).model_dump(
-        mode="json"
-    )
-    restored = SurfaceSendPolicy.model_validate(stored)
-    assert restored.audience is SendAudience.POD_MEMBERS
-    # The legacy field keeps agreeing with the new one, for older clients.
-    assert restored.allow_send is True
+def test_surface_send_policy_round_trips_through_stored_json():
+    stored = SurfaceSendPolicy(allow_send=True).model_dump(mode="json")
+    assert SurfaceSendPolicy.model_validate(stored).allow_send is True

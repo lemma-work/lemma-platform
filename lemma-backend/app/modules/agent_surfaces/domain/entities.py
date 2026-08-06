@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, field_validator
 
 from app.core.domain.aggregate import AggregateRoot
 from app.core.domain.entity import Entity
@@ -113,50 +113,22 @@ class SurfaceChannelRoute(BaseModel):
         )
 
 
-class SendAudience(StrEnum):
-    """Who a surface's agent may proactively reach.
-
-    An audience rather than a boolean, because telling *you* about work you asked
-    for and putting words in front of a colleague who did not ask are different
-    acts. The recipient sees the pod's bot, not "the agent someone else's
-    schedule is running", and extends it the trust they extend to Lemma — which
-    is a phishing primitive if the two share one switch.
-    """
-
-    NOBODY = "NOBODY"
-    SELF = "SELF"
-    POD_MEMBERS = "POD_MEMBERS"
-
-
 class SurfaceSendPolicy(BaseModel):
-    """Controls proactive sending (``surface.send``) for a surface."""
+    """Controls the surface's own proactive-send tool (``surface.send``).
+
+    Deliberately NOT a gate on reaching other pod members. That capability is
+    granted per *agent*, by giving it the ``MESSAGING`` toolset — an agent that
+    holds the tool can contact colleagues, and one that does not, cannot. Putting
+    a second gate on the surface meant an editor had to flip a setting on a bot
+    before a grant they had already made would take effect, which is a rule
+    nobody would guess and the wrong place to express it.
+
+    Reaching the person a run *belongs to* needs no permission at all: the run
+    already carries their delegated authority.
+    """
 
     # Expose the current-user ``surface_send_message`` tool to the agent.
     allow_send: bool = False
-    # Default NOBODY, matching exactly what every existing surface already does.
-    # A new capability that switches itself on for surfaces nobody has revisited
-    # is how a pod discovers its bot messaging staff it never authorized.
-    audience: SendAudience = SendAudience.NOBODY
-
-    @model_validator(mode="after")
-    def _reconcile_legacy_allow_send(self) -> "SurfaceSendPolicy":
-        """Keep ``allow_send`` and ``audience`` telling the same story.
-
-        ``allow_send`` is the shipped field and still round-trips for a release,
-        so a stored config or an older client that only knows the boolean has to
-        keep working. A surface that had sending on means SELF — the current-user
-        tool is exactly what it granted. Reaching other people is never implied
-        by the legacy flag; that has to be chosen explicitly.
-        """
-        if self.audience is SendAudience.NOBODY and self.allow_send:
-            self.audience = SendAudience.SELF
-        elif self.audience is not SendAudience.NOBODY and not self.allow_send:
-            self.allow_send = True
-        return self
-
-    @property
-    def allows_messaging_other_members(self) -> bool:
-        return self.audience is SendAudience.POD_MEMBERS
 
 
 class SurfaceTelegramConfig(BaseModel):

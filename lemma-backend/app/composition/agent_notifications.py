@@ -35,27 +35,6 @@ async def resolve_recipient(*, pod_id: UUID, reference: str) -> UUID | None:
         )
 
 
-async def surface_allows_messaging_members(surface_id: UUID | None) -> bool:
-    """Whether this surface's policy permits reaching *other* people.
-
-    Fails closed on a missing or unreadable surface. A run with no surface at
-    all (a schedule, a workflow, the web app) is a separate case handled by the
-    caller — the policy gates the surface an agent is *speaking on*, and there is
-    no such surface to consult.
-    """
-    if surface_id is None:
-        return False
-    async with SessionUnitOfWorkFactory(async_session_maker)() as uow:
-        from app.modules.agent_surfaces.api.dependencies import (
-            surface_repository_factory,
-        )
-
-        surface = await surface_repository_factory(uow).get(surface_id)
-        if surface is None:
-            return False
-        return surface.config.send_policy.allows_messaging_other_members
-
-
 async def send_notification(
     *,
     pod_id: UUID,

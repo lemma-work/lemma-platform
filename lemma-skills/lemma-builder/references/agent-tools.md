@@ -79,10 +79,10 @@ interval, then calls `check_messages`. Compare:
 | `ask_user` | the person already in this conversation | yes | back in this run, as the tool's return |
 | `message_user` | any pod member, wherever they are | **no** | on the notification, read later with `check_messages` |
 
-`MESSAGING` is opt-in, and reaching anyone other than the run's own owner also needs the
-surface's `send_policy.audience` set to `POD_MEMBERS`. Every delivered message names both
-the agent and the human whose authority the run carries — the recipient sees the pod's bot
-and extends it the trust they extend to Lemma.
+`MESSAGING` is opt-in and withheld from sub-agents; holding it is the whole grant. Every
+delivered message names both the agent and the human whose authority the run carries — the
+recipient sees the pod's bot and extends it the trust they extend to Lemma, so an
+unattributed message would be a phishing primitive.
 
 ---
 

@@ -24,7 +24,6 @@ from app.composition.agent_notifications import (
     check_notifications,
     resolve_recipient,
     send_notification,
-    surface_allows_messaging_members,
 )
 from app.core.log.log import get_logger
 from app.modules.agent.tools.context import BaseAgentContext
@@ -107,21 +106,11 @@ async def message_user(
             ),
         )
 
-    # Reaching *someone else* is the act that needs authorization; telling the
-    # person whose authority this run already carries is not. A run with no
-    # surface (a schedule, a workflow, the web app) has no send policy to
-    # consult, so it may only reach its own owner.
-    is_self = recipient_user_id == deps.user_id
-    if not is_self and not await surface_allows_messaging_members(deps.surface_id):
-        return MessageUserResponse(
-            success=False,
-            error=(
-                "This agent is not allowed to message other pod members. A pod "
-                "editor can enable it on the surface's send policy (audience: "
-                "POD_MEMBERS). You can still message the person this run belongs "
-                "to."
-            ),
-        )
+    # No further permission check. Holding this toolset IS the grant to contact
+    # colleagues — it is opt-in, withheld from sub-agents, and every message
+    # names the human whose authority the run carries. Reaching the run's own
+    # owner needs nothing at all: the run already carries their delegated
+    # authority. Pod membership is enforced below, in the service, fail-closed.
 
     # Not wrapped in a try: GracefulToolset already turns a raising tool body
     # into an error result the model can read, and catching here as well would

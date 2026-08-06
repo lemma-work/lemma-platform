@@ -160,10 +160,16 @@ That is a phishing primitive if shipped carelessly.
   and withheld from sub-agents.
 - **Attribution is mandatory** — every message names both the agent and the human
   whose authority the run carries.
-- **`send_policy` is an audience**, not a boolean: `NOBODY` (default) / `SELF` /
-  `POD_MEMBERS`. A legacy `allow_send: true` maps to `SELF` and **never** implies
-  reaching other people. Reaching anyone but the run's own owner needs
-  `POD_MEMBERS`.
+- **The toolset grant is the whole permission.** There is deliberately no
+  second, surface-level switch: gating on `send_policy` too would mean a pod
+  editor had to find and flip a setting on a bot before a grant they had already
+  made took effect — a rule nobody would guess, expressed in the wrong place.
+  `send_policy.allow_send` keeps its original meaning (the surface's own
+  current-conversation `surface_send_message` tool) and nothing more.
+- **Reaching the run's own owner needs no permission at all.** The run already
+  carries their delegated authority; telling you about work you asked for is not
+  an act that needs authorizing.
+- **Pod membership is enforced fail-closed** in the service, on every send.
 - **Rate limited**, per recipient per hour, in Redis — enforced, not just modelled.
 
 ## Workflow FORM nodes now push
