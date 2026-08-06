@@ -453,9 +453,39 @@ def build_provider(name: str | None = None):
     chosen = name or settings.workspace_provider
     if chosen == "e2b":
         return _build_e2b_provider()
+    if chosen == "lemma_local":
+        return _build_lemma_local_provider()
     if chosen == "docker":
         return _build_docker_provider()
     raise RuntimeError(f"unsupported workspace provider: {chosen}")
+
+
+def _build_lemma_local_provider():
+    from app.modules.workspace.providers.docker import RuntimeCredentialSigner
+    from app.modules.workspace.providers.lemma_local import (
+        LemmaLocalProviderConfig,
+        LemmaLocalSandboxProvider,
+    )
+
+    executable = settings.workspace_local_runtime_cli
+    if not executable:
+        raise RuntimeError(
+            "WORKSPACE_LOCAL_RUNTIME_CLI is required when workspace_provider "
+            "is lemma_local"
+        )
+    key = settings.workspace_runtime_credential_key
+    if not key:
+        raise RuntimeError(
+            "WORKSPACE_RUNTIME_CREDENTIAL_KEY is required to provision sandboxes"
+        )
+    return LemmaLocalSandboxProvider(
+        LemmaLocalProviderConfig(
+            executable=executable,
+            callback_required=settings.workspace_local_callback_required,
+            callback_url=settings.workspace_local_callback_url,
+        ),
+        RuntimeCredentialSigner(key=key.encode()),
+    )
 
 
 def _build_docker_provider():

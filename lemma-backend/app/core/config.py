@@ -876,7 +876,7 @@ class Settings(BaseSettings):
     )
     # Which fabric sandboxes are rented from. Docker is the default because it
     # needs no credentials and no network; e2b is the cloud path.
-    workspace_provider: Literal["docker", "e2b"] = Field(
+    workspace_provider: Literal["docker", "e2b", "lemma_local"] = Field(
         default="docker",
         description="Sandbox provider used by the workspace module",
     )
@@ -893,6 +893,18 @@ class Settings(BaseSettings):
     )
     e2b_domain: Optional[str] = Field(
         default=None, description="E2B API domain override"
+    )
+    # Lemma Desktop's native bridge into its VZ/WSL guest.
+    workspace_local_runtime_cli: Optional[str] = Field(
+        default=None,
+        description="Executable bridging to the Lemma Desktop guest runtime",
+    )
+    workspace_local_callback_required: bool = Field(
+        default=False,
+        description="Require the guest to reach the backend before reporting ready",
+    )
+    workspace_local_callback_url: Optional[str] = Field(
+        default=None, description="URL the guest calls back on"
     )
     agentbox_docker_socket_path: str = Field(
         default="/var/run/docker.sock",
