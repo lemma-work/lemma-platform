@@ -11,7 +11,7 @@ import {
   previousOnboardingStep,
   resolveOnboardingStartStep,
   setupStepsForAudience,
-  startPathLaunchConfig,
+  startPathComposerLaunch,
 } from "@/components/onboarding/account-onboarding-helpers";
 import { workDomainFromEmail } from "@/lib/utils/organization-slugs";
 
@@ -107,31 +107,72 @@ describe("onboarding step paths", () => {
     expect(generatedOrganizationName("ada@example.com", 1)).not.toBe(generated);
   });
 
-  it("turns the Telegram brief into agent instructions and app state", () => {
-    const config = startPathLaunchConfig("telegram", {
-      brief: "Capture voice notes and ask when context is missing.",
-      secondaryBrief: "A searchable logbook of ideas and tasks.",
-    });
+  it("hands the composer an unfinished sentence, not a sent message", () => {
+    // The trailing space is the point: the caret lands after it, so the user is
+    // completing a sentence rather than editing one.
+    for (const path of [
+      "telegram",
+      "chatgpt",
+      "internal-app",
+      "agent-skin",
+    ] as const) {
+      const launch = startPathComposerLaunch(path);
 
-    expect(config.intent).toBe("telegram_agent_companion_app");
-    expect(config.message).toContain(
-      "custom operating instructions: Capture voice notes",
+      expect(launch.stem).toMatch(/ $/);
+      expect(launch.stem.trim().length).toBeGreaterThan(0);
+      expect(launch.instructions.length).toBeGreaterThan(0);
+    }
+  });
+
+  it("names the pod after the path, so nothing lands as Untitled pod", () => {
+    // Pressing a start path is the one thing the user has told us at that
+    // point. Falling back to the placeholder name would discard it.
+    const names = (
+      ["telegram", "chatgpt", "internal-app", "agent-skin"] as const
+    ).map((path) => startPathComposerLaunch(path).podName);
+
+    for (const name of names) {
+      expect(name.trim()).toBe(name);
+      expect(name).not.toMatch(/untitled/i);
+      expect(name.length).toBeGreaterThan(0);
+    }
+    // Distinct, so two start paths never produce two identically named pods.
+    expect(new Set(names).size).toBe(names.length);
+  });
+
+  it("keeps the Telegram agent and its companion app as one build", () => {
+    const launch = startPathComposerLaunch("telegram");
+
+    expect(launch.intent).toBe("telegram_agent_companion_app");
+    expect(launch.podName).toBe("Telegram Agent");
+    expect(launch.stem).toBe("Build a Telegram agent and companion app that ");
+    expect(launch.instructions).toContain(
+      "the agent's custom operating instructions",
     );
-    expect(config.message).toContain(
-      "companion app should keep this organized: A searchable logbook",
+    expect(launch.instructions).toContain(
+      "Do not claim Telegram is connected until the connector is actually authorized",
     );
   });
 
   it("frames ChatGPT as an MCP client of durable pod state", () => {
-    const config = startPathLaunchConfig("chatgpt", {
-      brief: "Keep the fundraising pipeline current.",
-    });
+    const launch = startPathComposerLaunch("chatgpt");
 
-    expect(config.intent).toBe("external_ai_pod_mcp");
-    expect(config.message).toContain("pod-scoped Lemma MCP surface");
-    expect(config.message).toContain("durable tables, files, and views");
-    expect(config.message).toContain(
+    expect(launch.intent).toBe("external_ai_pod_mcp");
+    expect(launch.instructions).toContain("pod-scoped Lemma MCP surface");
+    expect(launch.instructions).toContain("durable tables, files, and views");
+    expect(launch.instructions).toContain(
       "Do not pretend the external connection is complete",
+    );
+  });
+
+  it("puts the app in front of the agents for an internal build", () => {
+    const launch = startPathComposerLaunch("internal-app");
+
+    expect(launch.intent).toBe("internal_ai_app");
+    expect(launch.podName).toBe("Internal App");
+    expect(launch.stem).toBe("Build an internal app that lets my team ");
+    expect(launch.instructions).toContain(
+      "Put the app in front and the agents behind it",
     );
   });
 
@@ -145,15 +186,16 @@ describe("onboarding step paths", () => {
   });
 
   it("keeps a local-agent skin distinct from the coding build pathway", () => {
-    const config = startPathLaunchConfig("agent-skin", {
-      brief: "Plans, tasks, run status, artifacts, and review state.",
-      secondaryBrief: "Approve plans and retry failed work.",
-      codingAgent: "opencode",
-    });
+    const launch = startPathComposerLaunch("agent-skin");
 
-    expect(config.intent).toBe("local_agent_workspace_skin");
-    expect(config.message).toContain("workspace skin around OpenCode");
-    expect(config.message).toContain("Keep the local coding agent as the executor");
-    expect(config.message).toContain("Approve plans and retry failed work");
+    expect(launch.intent).toBe("local_agent_workspace_skin");
+    expect(launch.instructions).toContain(
+      "Keep the local coding agent as the executor",
+    );
+    // The three-button picker went away with the brief screen; the agent asks
+    // instead, so no path can silently build for the wrong one.
+    expect(launch.instructions).toContain(
+      "Codex, Claude Code, or OpenCode",
+    );
   });
 });
