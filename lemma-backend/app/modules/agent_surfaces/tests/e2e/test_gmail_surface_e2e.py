@@ -48,8 +48,7 @@ async def test_gmail_email_surface_handles_trigger_payload_and_replies(
         user_id=fixed_test_user["id"],
         connector_id="gmail",
         credentials={
-            "access_token": "gmail-token",
-            "api_base_url": fake_gmail.api_base,
+            "connection_id": "gmail-surface-test-e2e-account",
         },
         email="assistant@gmail.test",
         provider=AuthProvider.COMPOSIO,

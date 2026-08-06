@@ -47,8 +47,7 @@ async def test_outlook_email_surface_handles_trigger_payload_and_replies(
         user_id=fixed_test_user["id"],
         connector_id="outlook",
         credentials={
-            "access_token": "outlook-token",
-            "api_base_url": fake_outlook.api_base,
+            "connection_id": "outlook-surface-test-e2e-account",
         },
         email="assistant@outlook.test",
         provider=AuthProvider.COMPOSIO,
