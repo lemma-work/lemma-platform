@@ -46,6 +46,9 @@ from app.modules.agent_surfaces.infrastructure import models as surface_models  
 from app.modules.usage.infrastructure import models as usage_models  # noqa: F401
 from app.modules.pod_bundle.infrastructure import models as pod_bundle_models  # noqa: F401
 
+# Workspace sandboxes (sandboxes, sandbox_instances)
+from app.modules.workspace.infrastructure import models as workspace_models  # noqa: F401
+
 config = context.config
 
 # Interpret the config file for Python logging.
