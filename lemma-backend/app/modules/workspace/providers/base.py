@@ -112,6 +112,21 @@ class ProviderInstance:
 
 
 @dataclass(frozen=True, slots=True)
+class ProcessDescriptor:
+    """A process the sandbox is running, as the sandbox reports it.
+
+    Addressed by the operation id the caller supplied, because that is the
+    handle the runtime keys on and the only one that survives the backend
+    rebuilding its client between tool calls.
+    """
+
+    process_id: str
+    state: object
+    exit_code: int | None = None
+    started_at: datetime | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class ProviderObject:
     """One object found by a sweep, with enough labels to judge it."""
 
@@ -225,6 +240,10 @@ class SandboxOpsProvider(Protocol):
         self, instance: ProviderInstance, *, process_id: str, grace_seconds: float,
         deadline_at: datetime,
     ) -> None: ...
+
+    async def list_processes(
+        self, instance: ProviderInstance, *, deadline_at: datetime
+    ) -> tuple[ProcessDescriptor, ...]: ...
 
     async def stat_file(
         self, instance: ProviderInstance, *, path: str, deadline_at: datetime

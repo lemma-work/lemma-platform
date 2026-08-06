@@ -232,12 +232,19 @@ class ResizeTerminalRequest(BaseModel):
 
 class ProcessInfo(BaseModel):
     process_id: str
-    cmd: str
-    cwd: str
-    tty: bool = False
-    started_at: float
+    # What the agent needs to act: which process, and whether it is still
+    # going. Everything below is descriptive.
     completed: bool = False
     exit_code: Optional[int] = None
+    # Defaulted because the sandbox runtime is the only thing that still knows
+    # what is running, and it does not report the command line or the working
+    # directory a process was started in -- those used to be held by a control
+    # plane that no longer exists. Reporting them as blank is honest; inventing
+    # them would tell an agent a process is somewhere it is not.
+    cmd: str = ""
+    cwd: str = ""
+    tty: bool = False
+    started_at: float = 0.0
 
 
 class ListProcessesResult(BaseToolResponse):

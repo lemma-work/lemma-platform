@@ -36,6 +36,7 @@ from agentbox.workspace_runtime.models import (
     RuntimePythonResultResponse,
     RuntimePythonSessionResponse,
     RuntimeQuiesceResponse,
+    RuntimeProcessListResponse,
     RuntimeProcessResponse,
     RuntimeResizeRequest,
     RuntimeTerminateRequest,
@@ -143,6 +144,20 @@ class WorkspaceRuntimeClient:
             content=data,
             content_type="application/octet-stream",
         )
+
+    async def list_processes(
+        self, *, deadline_at: datetime
+    ) -> tuple[RuntimeProcessResponse, ...]:
+        """Ask the runtime what it is running.
+
+        The runtime is the only thing that knows: the backend rebuilds its
+        client on every call, so anything it remembered locally would be
+        empty, and a second replica would answer differently from the first.
+        """
+        response = await self._request(
+            "GET", "/processes", deadline_at=deadline_at
+        )
+        return RuntimeProcessListResponse.model_validate(response.json()).processes
 
     async def read_output(
         self,

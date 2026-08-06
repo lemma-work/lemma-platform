@@ -255,6 +255,24 @@ AGENTBOX_DEV_ENV := \
 	AGENTBOX_FUNCTION_IDLE_SECONDS=300 \
 	AGENTBOX_CLEANUP_INTERVAL_SECONDS=30
 
+# ── Workspace sandbox provisioning ────────────────────────────────────────────
+# The workspace module can provision sandboxes itself instead of going through
+# the AgentBox manager. Both paths are present during the cutover, so this is a
+# switch rather than a rebuild:
+#
+#   make dev                                 AgentBox manager (current default)
+#   make dev WORKSPACE_OWNS_SANDBOXES=true   workspace module, Docker
+#   make dev WORKSPACE_OWNS_SANDBOXES=true WORKSPACE_PROVIDER=e2b
+#
+# E2B needs E2B_API_KEY and the two template ids in lemma-backend/.env.
+WORKSPACE_OWNS_SANDBOXES ?= false
+WORKSPACE_PROVIDER ?= docker
+
+WORKSPACE_DEV_ENV := \
+	WORKSPACE_OWNS_SANDBOXES=$(WORKSPACE_OWNS_SANDBOXES) \
+	WORKSPACE_PROVIDER=$(WORKSPACE_PROVIDER) \
+	WORKSPACE_RUNTIME_CREDENTIAL_KEY=$(DEV_AGENTBOX_RUNTIME_CREDENTIAL_KEY)
+
 # ── Help ──────────────────────────────────────────────────────────────────────
 
 help:
@@ -731,7 +749,7 @@ _run-backend:
 	@echo "  Starting unified backend ($(BACKEND_API_URL), AgentBox=$(DEV_AGENTBOX_URL))…"
 	@mkdir -p $(BACKEND_DIR)
 	@cd $(BACKEND_DIR) && rm -f $(notdir $(BACKEND_PID_FILE)) && \
-		$(COMMON_DEV_ENV) $(BACKEND_DEV_ENV) $(AGENTBOX_DEV_ENV) $(OTEL_DEV_ENV) $(LLM_OTEL_DEV_ENV) \
+		$(COMMON_DEV_ENV) $(BACKEND_DEV_ENV) $(AGENTBOX_DEV_ENV) $(WORKSPACE_DEV_ENV) $(OTEL_DEV_ENV) $(LLM_OTEL_DEV_ENV) \
 		bash -c "if [ '$(RELOAD)' = '1' ]; then \
 			uv run --extra local uvicorn local_app:app --host 0.0.0.0 --port $(DEV_BACKEND_PORT) --reload & echo \$$! > $(notdir $(BACKEND_PID_FILE)); \
 		else \

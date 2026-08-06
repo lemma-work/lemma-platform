@@ -20,14 +20,16 @@ from agentbox.domain import (
 class InMemoryOutputBuffer:
     chunks: dict[str, list[ProcessOutputChunk]] = field(default_factory=dict)
     states: dict[str, tuple[ProcessState, int | None]] = field(default_factory=dict)
-    pids: dict[str, int] = field(default_factory=dict)
+    pids: dict[str, tuple[int, bool]] = field(default_factory=dict)
 
     async def append(
         self, process_id: str, *, channel: ProcessOutputChannel, data: bytes
     ) -> None:
         held = self.chunks.setdefault(process_id, [])
+        # 1-based: sequence 0 has to mean "nothing consumed yet", or a reader
+        # whose cursor is 0 could not tell that from having read chunk 0.
         held.append(
-            ProcessOutputChunk(sequence=len(held), channel=channel, data=data)
+            ProcessOutputChunk(sequence=len(held) + 1, channel=channel, data=data)
         )
 
     async def record_start(self, process_id: str) -> None:
@@ -45,12 +47,17 @@ class InMemoryOutputBuffer:
     async def read(
         self, process_id: str, *, after_sequence: int
     ) -> ProcessOutputSnapshot:
+        """Strictly after ``after_sequence``; see the real buffer's docstring."""
         held = self.chunks.get(process_id, [])
-        pending = held[max(0, after_sequence) :]
+        pending = [chunk for chunk in held if chunk.sequence > max(0, after_sequence)]
         state, exit_code = self.states.get(process_id, (ProcessState.RUNNING, None))
         return ProcessOutputSnapshot(
             chunks=tuple(pending),
-            next_sequence=max(0, after_sequence) + len(pending),
+            next_sequence=(
+                max(chunk.sequence for chunk in pending)
+                if pending
+                else max(0, after_sequence)
+            ),
             truncated_before_sequence=0,
             state=state,
             exit_code=exit_code,
@@ -61,10 +68,13 @@ class InMemoryOutputBuffer:
         self.states.pop(process_id, None)
 
     # Stand-ins for the provider's Redis-backed pid mapping.
-    async def remember_pid(self, process_id: str, pid: int) -> None:
-        self.pids[process_id] = pid
+    async def remember_pid(
+        self, process_id: str, pid: int, *, tty: bool = False, sandbox_id: str = ""
+    ) -> None:
+        del sandbox_id
+        self.pids[process_id] = (pid, tty)
 
-    async def recall_pid(self, process_id: str) -> int:
+    async def recall_pid(self, process_id: str) -> tuple[int, bool]:
         return self.pids[process_id]
 
     def all_chunks(self) -> list[ProcessOutputChunk]:

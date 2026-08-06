@@ -319,8 +319,11 @@ class AgentBoxWorkspaceSession:
             {
                 "process_id": str(process.operation_id),
                 "cmd": "",
-                "cwd": process.cwd,
-                "tty": process.tty,
+                # Absent when the sandbox runtime is the source: it tracks what
+                # is running, not what a control plane once recorded about how
+                # it was started.
+                "cwd": getattr(process, "cwd", None) or "",
+                "tty": bool(getattr(process, "tty", None)),
                 "started_at": (
                     process.started_at.timestamp() if process.started_at else 0
                 ),

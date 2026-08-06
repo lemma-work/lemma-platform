@@ -164,9 +164,41 @@ class SandboxService:
         return await asyncio.shield(task)
 
     async def _ensure_once(self, sandbox_id: UUID) -> SandboxHandle:
+        """Provision, waiting out transient provider unavailability.
+
+        Retry lives here rather than in a provider because it is a question
+        about the caller's deadline, and the service is the only layer that
+        knows it. A cloud fabric under load answers "rate limited, try in two
+        seconds"; the right response is to wait and try, not to fail a user's
+        tool call. Definitive refusals are not retried at all.
+        """
         deadline_at = datetime.now(timezone.utc) + timedelta(
             seconds=_ENSURE_TIMEOUT_SECONDS
         )
+        attempt = 0
+        while True:
+            try:
+                return await self._attempt_ensure(sandbox_id, deadline_at=deadline_at)
+            except SandboxUnavailable as exc:
+                remaining = (deadline_at - datetime.now(timezone.utc)).total_seconds()
+                if remaining <= 0:
+                    raise
+                # The provider's hint is a floor, not the whole answer: backing
+                # off further stops a herd of waiting callers from retrying in
+                # lockstep and re-triggering the same limit.
+                hint = (exc.retry_after_ms or 500) / 1000
+                delay = min(remaining, max(hint, min(8.0, 0.5 * (2**attempt))))
+                logger.info(
+                    "workspace.sandbox_service.ensure_retrying",
+                    sandbox_id=str(sandbox_id),
+                    attempt=attempt,
+                )
+                await asyncio.sleep(delay)
+                attempt += 1
+
+    async def _attempt_ensure(
+        self, sandbox_id: UUID, *, deadline_at: datetime
+    ) -> SandboxHandle:
         async with self._uow_factory() as uow:
             repository = SandboxRepository(uow)
             sandbox = await repository.get(sandbox_id)

@@ -57,6 +57,7 @@ from app.modules.workspace.providers.base import (
     ProviderObject,
     ProviderRejected,
     ProviderStorageKind,
+    ProcessDescriptor,
 )
 from app.modules.workspace.providers.docker import RuntimeCredentialSigner
 from app.modules.workspace.providers.profiles import profile_for
@@ -410,6 +411,21 @@ class LemmaLocalSandboxProvider:
             await client.terminate(
                 process_id, grace_seconds=grace_seconds, deadline_at=deadline_at
             )
+
+    async def list_processes(
+        self, instance: ProviderInstance, *, deadline_at: datetime
+    ) -> tuple[ProcessDescriptor, ...]:
+        async with self._ops(instance, deadline_at) as client:
+            running = await client.list_processes(deadline_at=deadline_at)
+        return tuple(
+            ProcessDescriptor(
+                process_id=str(item.operation_id),
+                state=item.state,
+                exit_code=item.exit_code,
+                started_at=item.started_at,
+            )
+            for item in running
+        )
 
     async def stat_file(
         self, instance: ProviderInstance, *, path: str, deadline_at: datetime

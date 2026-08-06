@@ -108,11 +108,14 @@ class E2BOutputBuffer:
     async def read(
         self, process_id: str, *, after_sequence: int
     ) -> ProcessOutputSnapshot:
-        """Everything after ``after_sequence``, plus where the process stands.
+        """Everything *strictly after* ``after_sequence``.
 
-        Sequence numbers count chunks from the start of the process, so a
-        reader that has been away can tell whether what it missed was dropped:
-        ``truncated_before_sequence`` is the first sequence still held.
+        Both halves of that sentence are load-bearing, and getting either wrong
+        is not a subtle failure. Sequences are 1-based and the bound is
+        exclusive, because a reader advances its cursor to the sequence of the
+        last chunk it consumed and asks again from there. Treating the bound as
+        an inclusive list index re-delivers that chunk on every poll, so a
+        command that printed one line appears to have printed it twenty times.
         """
         redis = self._redis
         key = self._chunks_key(process_id)
@@ -132,8 +135,11 @@ class E2BOutputBuffer:
             except (KeyError, TypeError, ValueError):
                 pass
 
-        start = max(0, after_sequence)
-        raw_chunks = await redis.lrange(key, start, -1) if start < total else []
+        # Sequence N is list index N-1, so "after N" starts at index N.
+        start_index = max(0, after_sequence)
+        raw_chunks = (
+            await redis.lrange(key, start_index, -1) if start_index < total else []
+        )
 
         chunks: list[ProcessOutputChunk] = []
         for offset, raw in enumerate(raw_chunks):
@@ -141,7 +147,7 @@ class E2BOutputBuffer:
                 decoded = json.loads(raw)
                 chunks.append(
                     ProcessOutputChunk(
-                        sequence=start + offset,
+                        sequence=start_index + offset + 1,
                         channel=ProcessOutputChannel(decoded["c"]),
                         data=decoded["d"].encode(),
                     )
@@ -151,7 +157,7 @@ class E2BOutputBuffer:
 
         return ProcessOutputSnapshot(
             chunks=tuple(chunks),
-            next_sequence=start + len(chunks),
+            next_sequence=start_index + len(chunks),
             truncated_before_sequence=0,
             state=state,
             exit_code=exit_code,

@@ -16,8 +16,14 @@ and keeps its disk; the next ensure reconnects to the same sandbox. The
 previous adapter had to destroy and recreate, which is why it needed a separate
 notion of native storage that outlived the sandbox.
 
-*Volumes* give durable storage a name we choose, so a workspace's disk is the
-same kind of object on both providers and `find_volume` means the same thing.
+*The sandbox is the disk.* Verified against the real service: write a file,
+pause, reconnect, and it is still there. That is how production stores every
+workspace today -- the account holds no volumes at all, and volumes are not a
+public E2B feature. So `storage_kind` is SANDBOX_NATIVE, and adoption is not
+an optimisation but the only safe behaviour: creating a second sandbox for an
+existing identity would leave the user's files in the first with nothing
+pointing at it. Adoption therefore ignores the epoch, and the fence becomes the
+E2B sandbox id, which only changes when the sandbox genuinely is new.
 
 What is deliberately *not* carried over: layered retry loops around every call.
 A provider's job is to report what happened; deciding whether to wait and try
@@ -27,6 +33,7 @@ deadline. Errors here are classified and raised, not absorbed.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterable, AsyncIterator
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -47,6 +54,7 @@ from agentbox.domain import (
     TerminalSize,
 )
 
+from app.core.request_context import create_inherited_task
 from app.modules.workspace.domain.errors import (
     SandboxPathNotFound,
     SandboxRejected,
@@ -61,6 +69,7 @@ from app.modules.workspace.providers.base import (
     ProviderObject,
     ProviderRejected,
     ProviderStorageKind,
+    ProcessDescriptor,
 )
 from app.modules.workspace.providers.e2b_output import E2BOutputBuffer
 
@@ -130,6 +139,7 @@ class E2BSandboxProvider:
     ) -> None:
         self._config = config
         self._output = output or E2BOutputBuffer()
+        self._watchers: set[asyncio.Task[None]] = set()
 
     # ------------------------------------------------------------------
     # SDK access, imported lazily so a Docker-only deployment never loads it
@@ -434,8 +444,13 @@ class E2BSandboxProvider:
                     envs=environment,
                 )
                 if command:
+                    # `pty.create` always starts a shell and takes no command,
+                    # so the command is typed in. It must also be told to
+                    # leave: otherwise the shell outlives the command and the
+                    # process never reports completion, which is what a caller
+                    # polls on. `exit $?` carries the command's status out.
                     await sandbox.pty.send_stdin(
-                        handle.pid, (command + "\n").encode()
+                        handle.pid, f"{command}; exit $?\n".encode()
                     )
             else:
                 handle = await sandbox.commands.run(
@@ -451,8 +466,39 @@ class E2BSandboxProvider:
 
         # The caller addresses the process by its operation id, so the E2B pid
         # is kept beside the output rather than handed upward.
-        await self._remember_pid(process_id, handle.pid)
+        await self._remember_pid(
+            process_id,
+            handle.pid,
+            tty=request.tty is not None,
+            sandbox_id=instance.provider_id,
+        )
+        self._watch_for_exit(process_id, handle)
         return process_id
+
+    def _watch_for_exit(self, process_id: str, handle) -> None:
+        """Record the exit code when the process finishes.
+
+        Nothing else can. E2B reports completion by resolving the handle, not
+        by any state a later poll could read, so without this a finished
+        command reads as still running forever: the caller sees no exit code,
+        never treats it as complete, and polls until its deadline.
+        """
+
+        async def watch() -> None:
+            try:
+                outcome = await handle.wait()
+                exit_code = getattr(outcome, "exit_code", None)
+            except Exception as exc:
+                # A command that exits non-zero raises in some SDK versions;
+                # the exit code is still the thing the caller needs.
+                exit_code = getattr(exc, "exit_code", None)
+            await self._output.record_exit(process_id, exit_code=exit_code)
+
+        task = create_inherited_task(watch(), name=f"e2b-process-watch:{process_id}")
+        # Held so the task is not garbage collected mid-flight, and discarded
+        # once it has recorded the outcome.
+        self._watchers.add(task)
+        task.add_done_callback(self._watchers.discard)
 
     async def read_process_output(
         self,
@@ -463,8 +509,6 @@ class E2BSandboxProvider:
         wait_seconds: float,
         deadline_at: datetime,
     ) -> ProcessOutputSnapshot:
-        import asyncio
-
         snapshot = await self._output.read(process_id, after_sequence=after_sequence)
         if snapshot.chunks or wait_seconds <= 0:
             return snapshot
@@ -489,10 +533,19 @@ class E2BSandboxProvider:
         data: bytes,
         deadline_at: datetime,
     ) -> None:
+        """Write to the process, on whichever channel it was started with.
+
+        A PTY-backed process and a plain one are different objects in E2B with
+        different input methods, so which one this is has to be remembered from
+        the start; sending on the wrong one simply fails.
+        """
         sandbox = await self._connect(instance.provider_id)
-        pid = await self._recall_pid(process_id)
+        pid, tty = await self._recall_pid(process_id)
         try:
-            await sandbox.commands.send_stdin(pid, data)
+            if tty:
+                await sandbox.pty.send_stdin(pid, data)
+            else:
+                await sandbox.commands.send_stdin(pid, data)
         except Exception as exc:
             raise _classify(exc) from exc
 
@@ -507,7 +560,11 @@ class E2BSandboxProvider:
         from e2b.sandbox.commands.command_handle import PtySize
 
         sandbox = await self._connect(instance.provider_id)
-        pid = await self._recall_pid(process_id)
+        pid, tty = await self._recall_pid(process_id)
+        if not tty:
+            # Resizing something with no terminal is a no-op, not a failure:
+            # a caller should not have to know which it got.
+            return
         try:
             await sandbox.pty.resize(pid, PtySize(rows=size.rows, cols=size.cols))
         except Exception as exc:
@@ -522,9 +579,9 @@ class E2BSandboxProvider:
         deadline_at: datetime,
     ) -> None:
         sandbox = await self._connect(instance.provider_id)
-        pid = await self._recall_pid(process_id)
+        pid, tty = await self._recall_pid(process_id)
         try:
-            await sandbox.commands.kill(pid)
+            await (sandbox.pty if tty else sandbox.commands).kill(pid)
         except Exception:
             # A process that is already gone is the outcome asked for; the
             # state below is what the caller actually reads.
@@ -665,29 +722,56 @@ class E2BSandboxProvider:
         session: PythonSessionRef,
         request: ExecutePythonRequest,
     ) -> PythonResult:
-        """Run code with the session's variables carried across executions.
+        """Run code with REPL semantics and session continuity.
 
         The workspace image keeps a real interpreter per session. E2B's plain
-        sandbox does not, so continuity is provided the only way it honestly
-        can be here: each execution runs in a fresh interpreter that restores
-        and re-saves the session's namespace around the user's code.
+        sandbox does not, so both properties are rebuilt here from what it does
+        offer, and neither is faked:
+
+        *Continuity* -- each execution restores the session's namespace from
+        disk and saves it back, so a name bound in one call is available in the
+        next. Only picklable values survive, which is the honest limit: an open
+        file handle cannot cross a process boundary, and pretending it did
+        would be worse than losing it.
+
+        *A result* -- a REPL reports the value of a trailing expression, so the
+        code is split with `ast` and the last node evaluated separately when it
+        is an expression. Without this, `x = 6 * 7` followed by `x` returns
+        nothing and an agent cannot see what it computed.
         """
         sandbox = await self._connect(instance.provider_id)
         state_path = f"/tmp/lemma-python-{session.session_id}.pkl"
-        program = _SESSION_PREAMBLE.format(state_path=state_path) + request.code
-        script_path = f"/tmp/lemma-python-{request.operation_id}.py"
+        code_path = f"/tmp/lemma-python-{request.operation_id}.code"
+        result_path = f"/tmp/lemma-python-{request.operation_id}.result"
+        runner_path = f"/tmp/lemma-python-{request.operation_id}.py"
 
         try:
-            await sandbox.files.write(script_path, program)
-            result = await sandbox.commands.run(
-                f"python3 {script_path}",
+            await sandbox.files.write(code_path, request.code)
+            await sandbox.files.write(
+                runner_path,
+                _PYTHON_RUNNER.format(
+                    state_path=state_path,
+                    code_path=code_path,
+                    result_path=result_path,
+                ),
+            )
+            outcome = await sandbox.commands.run(
+                f"python3 {runner_path}",
                 envs={item.name: item.value for item in request.environment},
                 timeout=None,
             )
         except Exception as exc:
             raise _classify(exc) from exc
 
-        failed = result.exit_code != 0
+        result: str | None = None
+        try:
+            raw = await sandbox.files.read(result_path, format="text")
+            result = raw if raw else None
+        except Exception:
+            # No trailing expression, or the run failed before writing one.
+            result = None
+
+        failed = outcome.exit_code != 0
         return PythonResult(
             operation_id=request.operation_id,
             state=(
@@ -695,11 +779,11 @@ class E2BSandboxProvider:
                 if failed
                 else PythonExecutionState.SUCCEEDED
             ),
-            stdout=result.stdout or "",
-            stderr=result.stderr or "",
-            result=None,
+            stdout=outcome.stdout or "",
+            stderr=outcome.stderr or "",
+            result=result,
             error_name="ExecutionError" if failed else None,
-            error_message=(result.stderr or None) if failed else None,
+            error_message=(outcome.stderr or None) if failed else None,
             traceback=(),
             output_truncated=False,
         )
@@ -797,51 +881,113 @@ class E2BSandboxProvider:
                 raise classified from exc
             raise classified from exc
 
-    async def _remember_pid(self, process_id: str, pid: int) -> None:
-        from app.core.infrastructure.redis.client import get_redis
-        from app.core.config import settings
-
-        await get_redis(url=settings.redis_url).set(
-            f"workspace:e2b:pid:v1:{process_id}", str(pid), ex=60 * 60
+    async def _remember_pid(
+        self, process_id: str, pid: int, *, tty: bool, sandbox_id: str = ""
+    ) -> None:
+        redis = self._redis()
+        await redis.set(
+            f"workspace:e2b:pid:v1:{process_id}", f"{pid}:{int(tty)}", ex=60 * 60
         )
+        if sandbox_id:
+            # A per-sandbox index, because "list the processes" means the ones
+            # this platform started, not every pid inside the sandbox.
+            key = f"workspace:e2b:procs:v1:{sandbox_id}"
+            await redis.hset(key, process_id, f"{pid}:{int(tty)}")
+            await redis.expire(key, 60 * 60)
 
-    async def _recall_pid(self, process_id: str) -> int:
-        from app.core.infrastructure.redis.client import get_redis
-        from app.core.config import settings
-
-        raw = await get_redis(url=settings.redis_url).get(
-            f"workspace:e2b:pid:v1:{process_id}"
-        )
+    async def _recall_pid(self, process_id: str) -> tuple[int, bool]:
+        raw = await self._redis().get(f"workspace:e2b:pid:v1:{process_id}")
         if raw is None:
             raise ProviderGone(f"process {process_id} is no longer tracked")
-        return int(raw)
+        return _decode_pid(raw)
+
+    async def list_processes(
+        self, instance: ProviderInstance, *, deadline_at: datetime
+    ) -> tuple[ProcessDescriptor, ...]:
+        """The processes this platform started in this sandbox.
+
+        Read from our own index rather than E2B's process list, which reports
+        every pid inside the sandbox and cannot say which operation any of them
+        belongs to. State comes from the output buffer, which is where a
+        process's completion is recorded.
+        """
+        entries = await self._redis().hgetall(
+            f"workspace:e2b:procs:v1:{instance.provider_id}"
+        )
+        descriptors: list[ProcessDescriptor] = []
+        for raw_id in entries:
+            process_id = raw_id.decode() if isinstance(raw_id, bytes) else str(raw_id)
+            snapshot = await self._output.read(process_id, after_sequence=0)
+            descriptors.append(
+                ProcessDescriptor(
+                    process_id=process_id,
+                    state=snapshot.state,
+                    exit_code=snapshot.exit_code,
+                )
+            )
+        return tuple(descriptors)
+
+    @staticmethod
+    def _redis():
+        from app.core.config import settings
+        from app.core.infrastructure.redis.client import get_redis
+
+        return get_redis(url=settings.redis_url)
 
 
-_SESSION_PREAMBLE = '''
-import pickle as _p, os as _o
-_S = "{state_path}"
-if _o.path.exists(_S):
+_PYTHON_RUNNER = """
+import ast, pickle, os, sys
+
+_STATE = {state_path!r}
+_CODE = {code_path!r}
+_RESULT = {result_path!r}
+
+_ns = {{"__name__": "__main__"}}
+if os.path.exists(_STATE):
     try:
-        globals().update(_p.load(open(_S, "rb")))
+        with open(_STATE, "rb") as handle:
+            _ns.update(pickle.load(handle))
     except Exception:
         pass
-import atexit as _a
-def _save():
+
+with open(_CODE) as handle:
+    _source = handle.read()
+
+_tree = ast.parse(_source)
+_tail = None
+if _tree.body and isinstance(_tree.body[-1], ast.Expr):
+    _tail = ast.Expression(_tree.body.pop().value)
+
+try:
+    exec(compile(_tree, "<session>", "exec"), _ns)
+    if _tail is not None:
+        _value = eval(compile(_tail, "<session>", "eval"), _ns)
+        if _value is not None:
+            with open(_RESULT, "w") as handle:
+                handle.write(repr(_value) if not isinstance(_value, str) else _value)
+finally:
     _keep = {{}}
-    for _k, _v in list(globals().items()):
-        if _k.startswith("_"):
+    for _name, _value in list(_ns.items()):
+        if _name.startswith("__"):
             continue
         try:
-            _p.dumps(_v)
+            pickle.dumps(_value)
         except Exception:
             continue
-        _keep[_k] = _v
+        _keep[_name] = _value
     try:
-        _p.dump(_keep, open(_S, "wb"))
+        with open(_STATE, "wb") as handle:
+            pickle.dump(_keep, handle)
     except Exception:
         pass
-_a.register(_save)
-'''
+"""
+
+
+
+def _decode_pid(raw) -> tuple[int, bool]:
+    text = raw.decode() if isinstance(raw, bytes) else str(raw)
+    pid, _, flag = text.partition(":")
+    return int(pid), flag == "1"
 
 
 def _generation_of(volume_name: str) -> int:

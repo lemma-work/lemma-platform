@@ -82,11 +82,6 @@ class LocalSandboxClient:
 
     def __init__(self, service: SandboxService) -> None:
         self._service = service
-        # Process identity is the caller's operation_id, mapped to whatever the
-        # provider handed back. The provider's id is an implementation detail
-        # the session must never see, or a process would stop being addressable
-        # across the session rebuild that happens on every tool call.
-        self._processes: dict[tuple[UUID, UUID], str] = {}
 
     # ------------------------------------------------------------------
     # Addressing
@@ -137,7 +132,6 @@ class LocalSandboxClient:
         provider_process_id = await self._provider.start_process(
             instance, request, deadline_at=deadline_at
         )
-        self._processes[(logical_id, operation_id)] = provider_process_id
         return LocalProcessRef(
             operation_id=operation_id,
             provider_process_id=provider_process_id,
@@ -219,7 +213,6 @@ class LocalSandboxClient:
             grace_seconds=grace_seconds,
             deadline_at=deadline_at,
         )
-        self._processes.pop((logical_id, operation_id), None)
         return LocalProcessRef(
             operation_id=operation_id,
             state=ProcessState.CANCELLED,
@@ -228,26 +221,35 @@ class LocalSandboxClient:
     async def list_processes(
         self, workload_kind, logical_id: UUID
     ) -> tuple[LocalProcessRef, ...]:
+        """Ask the sandbox what it is running.
+
+        This deliberately holds no local process map. The backend builds a
+        fresh client on every tool call, so anything remembered here would
+        always be empty, and a second replica would answer differently from
+        the first. The sandbox runtime is the only honest source.
+        """
         del workload_kind
-        # Process listing is per-sandbox state the runtime owns; the mapping
-        # here only knows what this process started.
+        _, instance = await self._instance(logical_id)
+        running = await self._provider.list_processes(
+            instance, deadline_at=_deadline(30)
+        )
         return tuple(
             LocalProcessRef(
-                operation_id=operation_id,
-                provider_process_id=provider_id,
-                state=ProcessState.RUNNING,
+                operation_id=UUID(descriptor.process_id),
+                provider_process_id=descriptor.process_id,
+                state=descriptor.state,
+                exit_code=descriptor.exit_code,
+                started_at=descriptor.started_at,
             )
-            for (sandbox_id, operation_id), provider_id in self._processes.items()
-            if sandbox_id == logical_id
+            for descriptor in running
         )
 
-    def _process_id(self, logical_id: UUID, operation_id: UUID) -> str:
-        provider_process_id = self._processes.get((logical_id, operation_id))
-        if provider_process_id is None:
-            # The runtime keys processes by the operation id it was given, so
-            # this is a safe fallback when the mapping was lost with a restart.
-            return str(operation_id)
-        return provider_process_id
+    @staticmethod
+    def _process_id(logical_id: UUID, operation_id: UUID) -> str:
+        # The runtime keys a process by the operation id it was handed, so the
+        # caller's id is the handle and no mapping is needed.
+        del logical_id
+        return str(operation_id)
 
     # ------------------------------------------------------------------
     # Files
