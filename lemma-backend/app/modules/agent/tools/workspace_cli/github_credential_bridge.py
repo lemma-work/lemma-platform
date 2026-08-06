@@ -20,6 +20,8 @@ returned to the caller, logged, or placed in a tool-result string.
 from __future__ import annotations
 
 import re
+import shlex
+from dataclasses import dataclass
 
 from app.core.authorization.current import reset_current_context, set_current_context
 from app.core.infrastructure.db.session import async_session_maker
@@ -60,8 +62,27 @@ def looks_like_git_command(cmd: str) -> bool:
     return bool(_GIT_COMMAND_PATTERN.search(cmd))
 
 
+@dataclass(frozen=True, slots=True)
+class _GithubCredential:
+    access_token: str
+    # The account's GitHub login (`display_name`, resolved at connect time via
+    # the catalog-curated `users_get_authenticated` profile operation --
+    # see AccountIdentity/_github_identity). None only for an account
+    # connected before that profile enrichment existed; the bridge still
+    # works (the credential file is what git actually needs), it just can't
+    # set a commit identity, so `git commit` fails with git's own
+    # "Please tell me who you are" until the agent sets one itself.
+    login: str | None
+    email: str | None
+
+
 async def ensure_github_credentials(ctx: BaseAgentContext, workspace_session) -> None:
     """Provision a session-scoped GitHub credential file, once per session/TTL.
+
+    Also configures a git commit identity (`user.name`/`user.email`) from the
+    connected account so an agent never has to discover and set this itself
+    before its first commit -- the exact manual step this function exists to
+    make unnecessary.
 
     Only the "no connected account" / "not authorized" outcome is treated as
     a stable result worth caching as unavailable. Any other failure (Redis or
@@ -83,26 +104,43 @@ async def ensure_github_credentials(ctx: BaseAgentContext, workspace_session) ->
     if await redis.exists(marker_key):
         return
 
-    token = await _resolve_github_access_token(ctx)
-    if token is None:
+    credential = await _resolve_github_credential(ctx)
+    if credential is None:
         await redis.set(marker_key, "unavailable", ex=_UNAVAILABLE_TTL_SECONDS)
         return
 
     await workspace_session.write_file(
         _CREDENTIALS_PATH,
-        f"https://x-access-token:{token}@github.com\n".encode(),
+        f"https://x-access-token:{credential.access_token}@github.com\n".encode(),
     )
-    await workspace_session.exec_command(
-        cmd=(
-            "git config --global credential.helper "
-            f"'store --file={_CREDENTIALS_PATH}' && chmod 600 {_CREDENTIALS_PATH}"
-        ),
-        timeout=15,
+
+    setup_commands = [
+        f"git config --global credential.helper 'store --file={_CREDENTIALS_PATH}'",
+        f"chmod 600 {_CREDENTIALS_PATH}",
+    ]
+    if credential.login:
+        setup_commands.append(
+            f"git config --global user.name {shlex.quote(credential.login)}"
+        )
+    # GitHub commonly withholds email from the profile response when the
+    # account has "keep my email address private" enabled -- not an error,
+    # just no address to use, so fall back to GitHub's own noreply
+    # convention (the same address `git commit` shows in the GitHub UI as a
+    # verified author for commits made this way) rather than leaving the
+    # commit identity half-configured.
+    git_email = credential.email or (
+        f"{credential.login}@users.noreply.github.com" if credential.login else None
     )
+    if git_email:
+        setup_commands.append(
+            f"git config --global user.email {shlex.quote(git_email)}"
+        )
+    await workspace_session.exec_command(cmd=" && ".join(setup_commands), timeout=15)
+
     await redis.set(marker_key, "provisioned", ex=_PROVISIONED_TTL_SECONDS)
 
 
-async def _resolve_github_access_token(ctx: BaseAgentContext) -> str | None:
+async def _resolve_github_credential(ctx: BaseAgentContext) -> _GithubCredential | None:
     from app.modules.connectors.api.dependencies import get_account_resolution_service
 
     async with SessionUnitOfWorkFactory(async_session_maker)() as uow:
@@ -120,6 +158,12 @@ async def _resolve_github_access_token(ctx: BaseAgentContext) -> str | None:
                 return None
             credentials = account.credentials
             access_token = getattr(credentials, "access_token", None)
-            return access_token if isinstance(access_token, str) and access_token else None
+            if not isinstance(access_token, str) or not access_token:
+                return None
+            return _GithubCredential(
+                access_token=access_token,
+                login=account.display_name,
+                email=account.email,
+            )
         finally:
             reset_current_context(token)

@@ -105,6 +105,7 @@ class ConnectorService:
         self.operation_gateway = operation_gateway
         self.operation_repository = operation_repository
         self.auth_config_operation_repository = auth_config_operation_repository
+        self._kind_dispatcher = None
 
     def _exception_details(self, exc: Exception) -> dict | None:
         details: dict[str, object] = {"error_type": type(exc).__name__}
@@ -196,15 +197,20 @@ class ConnectorService:
             if operation is None:
                 continue
             try:
-                result = await self.operation_gateway.execute_operation(
+                result = await self._execute_profile_operation(
                     connector_id=connector_id,
-                    operation_name=operation.execution_name,
-                    payload={},
-                    third_party_credentials=credentials.model_dump(exclude_none=True),
+                    kind=kind,
+                    operation=operation,
                     provider=provider,
+                    credentials=credentials,
                 )
             except Exception:
-                logger.debug('connectors.connector_service.profile_operation_s_s_s.diagnostic', operation_name=operation_name, connector_id=connector_id)
+                logger.debug(
+                    'connectors.connector_service.profile_operation_s_s_s.diagnostic',
+                    operation_name=operation_name,
+                    connector_id=connector_id,
+                    exc_info=True,
+                )
                 continue
             profile = self._profile_to_dict(result)
             # Composio wraps every tool execution result in
@@ -221,6 +227,66 @@ class ConnectorService:
             if profile:
                 return profile
         return None
+
+    async def _execute_profile_operation(
+        self,
+        *,
+        connector_id: str,
+        kind: str,
+        operation: Any,
+        provider: str,
+        credentials: OAuthCredentials,
+    ) -> Any:
+        """Run a catalog-curated profile operation, routed by kind.
+
+        `self.operation_gateway` (`RoutingOperationGateway`) only understands
+        two routes -- Composio, and the legacy vendored-package client for
+        "LEMMA" -- because it predates the http/sql/mcp kind framework. That's
+        fine for package-kind connectors (Gmail, Slack, Jira all have a
+        vendored client), but silently fails for any newer kind's profile
+        operation (e.g. an http-kind connector like GitHub): the legacy
+        client has no entry for it, so the profile fetch always threw and
+        was swallowed by the caller's blanket `except Exception`, leaving
+        every such account's email/display_name/provider_account_id
+        permanently null. Composio and package keep the existing, proven
+        path; http/sql/mcp route through the same KindDispatcher the
+        execute-operation route itself uses.
+        """
+        third_party_credentials = credentials.model_dump(exclude_none=True)
+        if kind in (ConnectorKind.PACKAGE.value, ConnectorKind.COMPOSIO.value):
+            return await self.operation_gateway.execute_operation(
+                connector_id=connector_id,
+                operation_name=operation.execution_name,
+                payload={},
+                third_party_credentials=third_party_credentials,
+                provider=provider,
+            )
+        from app.modules.connectors.domain.connector_operation import ResolvedOperation
+
+        dispatcher = self._profile_dispatcher()
+        request = dispatcher.build_request(
+            connector_id=connector_id,
+            kind=ConnectorKind(kind),
+            operation=ResolvedOperation(
+                name=operation.name,
+                provider_operation_name=operation.execution_name,
+                input_schema=operation.input_schema,
+                execution=operation.execution,
+            ),
+            payload={},
+            credentials=third_party_credentials,
+            config={},
+        )
+        return await dispatcher.execute(request)
+
+    def _profile_dispatcher(self):
+        if self._kind_dispatcher is None:
+            from app.modules.connectors.services.execution.plumbing import (
+                build_dispatcher,
+            )
+
+            self._kind_dispatcher = build_dispatcher(self.operation_gateway)
+        return self._kind_dispatcher
 
     def _extract_provider_account_id_from_profile(
         self,
@@ -239,6 +305,7 @@ class ConnectorService:
                 "bot_id",
             ),
             "google_drive": ("user.permission_id", "user.email_address"),
+            "github": ("login",),
         }
         for path in candidate_paths_by_app.get(connector_id, ()):
             value = self._extract_nested_value(profile, path)
