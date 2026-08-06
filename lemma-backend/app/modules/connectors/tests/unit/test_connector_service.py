@@ -18,6 +18,7 @@ from app.modules.connectors.domain.connector import (
     ConnectorEntity,
     AuthProvider,
     ComposioProviderCapability,
+    HttpKindSpec,
     LemmaProviderCapability,
 )
 from app.modules.connectors.domain.connector_operation import (
@@ -114,6 +115,32 @@ async def test_get_connector_raises_not_found():
 
     with pytest.raises(ConnectorNotFoundError):
         await service.get_connector("missing")
+
+
+async def test_get_connector_enriches_system_default_for_http_kind():
+    """Regression test: _enrich_connector_defaults previously only handled
+    LemmaProviderCapability (the vendored-package kind), so an http-kind
+    OAuth2 connector with its own system_oauth (e.g. a native GitHub
+    connector) always reported system_default_available=False even when the
+    env vars were set -- forcing every org to enter its own client
+    id/secret. "LEMMA" means any non-Composio kind, matching
+    ConnectorService._lemma_capability's own docstring.
+    """
+    connector = ConnectorEntity(
+        id="github",
+        provider_capabilities=[
+            HttpKindSpec(auth_scheme=AuthScheme.OAUTH2, supports_org_custom_oauth=True),
+        ],
+    )
+    service = _service(
+        connector_repository=AsyncMock(get=AsyncMock(return_value=connector)),
+        system_oauth_config=_system_oauth(),
+    )
+
+    enriched = await service.get_connector("github")
+
+    http_spec = enriched.spec_for(ConnectorKind.HTTP)
+    assert http_spec.system_default_available is True
 
 
 async def test_initiate_connect_request_allowed_when_account_exists():

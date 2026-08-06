@@ -23,7 +23,7 @@ from app.modules.connectors.domain.connector import (
     AuthProvider,
     ConnectorKind,
     ComposioProviderCapability,
-    LemmaProviderCapability,
+    KindSpec,
     OAuth2Config,
     OAuth2CredentialConfig,
 )
@@ -346,7 +346,7 @@ class ConnectorService:
     def _lemma_capability(
         self,
         connector: ConnectorEntity,
-    ) -> LemmaProviderCapability:
+    ) -> KindSpec:
         try:
             capability = connector.capability_for(AuthProvider.LEMMA)
         except ValueError as exc:
@@ -396,7 +396,14 @@ class ConnectorService:
     ) -> ConnectorEntity:
         capabilities = []
         for capability in connector.kinds:
-            if isinstance(capability, LemmaProviderCapability):
+            # "LEMMA" means any kind we serve ourselves -- sql/mcp/http as well
+            # as the vendored package -- matching _lemma_capability above.
+            # Narrowing to the package spec specifically left every other
+            # native kind (e.g. an `http`-kind connector with its own
+            # `system_oauth`, like GitHub) with system_default_available
+            # always false, forcing every org to enter its own client
+            # id/secret even when a system default was configured.
+            if capability.kind is not ConnectorKind.COMPOSIO:
                 has_system_default = (
                     capability.auth_scheme != AuthScheme.OAUTH2
                     or self.system_oauth_config.has_default_oauth_config(connector)

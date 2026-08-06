@@ -25,6 +25,10 @@ from app.modules.agent.tools.workspace_cli.models import (
     ViewImageResponse,
     WriteStdinRequest,
 )
+from app.modules.agent.tools.workspace_cli.github_credential_bridge import (
+    ensure_github_credentials,
+    looks_like_git_command,
+)
 from app.modules.agent.tools.workspace_cli.helper import (
     CHARACTER_LIMIT_STDOUT,
     normalize_terminal_output,
@@ -258,6 +262,18 @@ async def exec_command_internal(
             close_on_exit=False,
         )
         async with workspace_session:
+            if looks_like_git_command(request.cmd):
+                try:
+                    await ensure_github_credentials(ctx, workspace_session)
+                except Exception:
+                    # A broken credential bridge (DB/Redis hiccup, sandbox
+                    # write failure) should not block the command itself --
+                    # it just runs without credentials and fails with git's
+                    # own native auth error, same as with no bridge at all.
+                    logger.debug(
+                        'agent.workspace_cli.github_credential_bridge_failed.diagnostic',
+                        exc_info=True,
+                    )
             if request.tty:
                 effective_yield_time_ms = request.yield_time_ms
                 effective_timeout = _DEFAULT_EXEC_TIMEOUT_S

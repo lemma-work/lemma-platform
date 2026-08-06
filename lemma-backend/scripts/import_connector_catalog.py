@@ -94,6 +94,7 @@ from app.modules.connectors.infrastructure.adapters.lemma_connector_factory impo
 )
 from app.modules.connectors.domain.connector import (
     ConnectorEntity,
+    ConnectorKind,
     AuthMethod,
     AuthProvider,
     ComposioProviderCapability,
@@ -677,9 +678,15 @@ def _composio_provider_capability(
     )
 
 
-def _operation_id(connector_id: str, provider: AuthProvider, operation_name: str) -> str:
-    kind = provider_to_kind(provider).value
-    return f"{connector_id}:{kind}:{operation_name}"
+def _operation_id(
+    connector_id: str,
+    provider: AuthProvider,
+    operation_name: str,
+    *,
+    kind: ConnectorKind | None = None,
+) -> str:
+    resolved_kind = (kind or provider_to_kind(provider)).value
+    return f"{connector_id}:{resolved_kind}:{operation_name}"
 
 
 def _trigger_id(
@@ -895,18 +902,29 @@ async def _upsert_operation(
     search_document: str | None,
     normalize_name: bool = True,
     execution: dict | None = None,
+    kind: ConnectorKind | None = None,
 ) -> None:
+    # `provider` only unambiguously determines `kind` for Composio (->COMPOSIO)
+    # and true vendored-package installs (->PACKAGE). A static-operations
+    # connector (sql/mcp/http) knows its real kind and must pass it explicitly
+    # -- falling back to provider_to_kind(LEMMA) silently mislabels every such
+    # operation as `package`, so a strict (connector_id, kind, name) lookup
+    # like the execute-operation route's never finds it.
+    resolved_kind = kind or provider_to_kind(provider)
     operation_name = (
         _normalize_operation_name(public_name) if normalize_name else public_name.strip()
     )
     existing = await operation_repository.get_by_connector_kind_and_name(
         connector_id,
-        provider_to_kind(provider).value,
+        resolved_kind.value,
         operation_name,
     )
     entity = ConnectorOperationEntity(
-        id=existing.id if existing else _operation_id(connector_id, provider, operation_name),
+        id=existing.id
+        if existing
+        else _operation_id(connector_id, provider, operation_name, kind=resolved_kind),
         connector_id=connector_id,
+        kind=resolved_kind,
         provider=provider,
         name=operation_name,
         provider_operation_name=provider_operation_name,
@@ -927,6 +945,8 @@ async def _sync_static_operations(
     operation_repository: ConnectorOperationRepository,
     connector_id: str,
     static_operations: list[dict],
+    *,
+    kind: str | None = None,
 ) -> int:
     """Seed operations declared inline in the catalog config.
 
@@ -935,6 +955,7 @@ async def _sync_static_operations(
     discover per install. Each carries the execution descriptor its kind's
     executor reads.
     """
+    resolved_kind = ConnectorKind(kind) if kind else ConnectorKind.PACKAGE
     count = 0
     for op in static_operations:
         public_name = op["name"]
@@ -943,6 +964,7 @@ async def _sync_static_operations(
         await _upsert_operation(
             operation_repository,
             connector_id,
+            kind=resolved_kind,
             provider=AuthProvider.LEMMA,
             public_name=public_name,
             provider_operation_name=_normalize_operation_name(public_name),
@@ -1149,6 +1171,7 @@ async def _sync_native_catalog(
                     profile_operation_names=_profile_operation_names(
                         profile_operations, connector_id, AuthProvider.LEMMA
                     ),
+                    kind=app_config.get("kind"),
                 ),
             ),
             agent_instruction=app_config.get("agent_instruction")
@@ -1166,7 +1189,10 @@ async def _sync_native_catalog(
         static_ops = app_config.get("static_operations")
         if static_ops:
             op_count = await _sync_static_operations(
-                operation_repository, connector_id, static_ops
+                operation_repository,
+                connector_id,
+                static_ops,
+                kind=app_config.get("kind"),
             )
             total_operations += op_count
             logger.info(
