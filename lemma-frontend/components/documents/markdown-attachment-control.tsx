@@ -25,26 +25,44 @@ export function canAttachDocumentMarkdown(previewType: string): boolean {
     return MARKDOWN_ATTACHABLE_PREVIEW_TYPES.has(previewType);
 }
 
+/** Whether this document's agent-facing text is one someone uploaded. */
+export function usesUserMarkdown(metadata?: Record<string, unknown> | null): boolean {
+    return metadata?.markdown_source === 'user';
+}
+
 export function MarkdownAttachmentControl({
     podId,
     datastoreName,
     filePath,
     metadata,
     disabled,
+    open: controlledOpen,
+    onOpenChange,
+    showTrigger = true,
 }: {
     podId: string;
     datastoreName: string;
     filePath: string;
     metadata?: Record<string, unknown> | null;
     disabled?: boolean;
+    /**
+     * Drive the dialog from outside when the way in is somewhere this component
+     * cannot render — a menu item, say, whose menu unmounts on select and would
+     * take a dialog nested inside it along.
+     */
+    open?: boolean;
+    onOpenChange?: (open: boolean) => void;
+    showTrigger?: boolean;
 }) {
-    const [open, setOpen] = useState(false);
+    const [uncontrolledOpen, setUncontrolledOpen] = useState(false);
+    const open = controlledOpen ?? uncontrolledOpen;
+    const setOpen = onOpenChange ?? setUncontrolledOpen;
     const [markdownFile, setMarkdownFile] = useState<File | null>(null);
     const [imageFiles, setImageFiles] = useState<File[]>([]);
     const { mutate: attach, isPending: isAttaching } = useAttachDocumentMarkdown();
     const { mutate: detach, isPending: isDetaching } = useDetachDocumentMarkdown();
 
-    const isUserMarkdown = metadata?.markdown_source === 'user';
+    const isUserMarkdown = usesUserMarkdown(metadata);
     const assetNames = Array.isArray(metadata?.markdown_asset_names)
         ? (metadata.markdown_asset_names as string[])
         : [];
@@ -86,22 +104,24 @@ export function MarkdownAttachmentControl({
 
     return (
         <>
-            <Tooltip>
-                <TooltipTrigger asChild>
-                    <Button
-                        type="button"
-                        variant="quiet"
-                        size="icon"
-                        className={cn('h-8 w-8 rounded', isUserMarkdown && 'text-[var(--action-primary)]')}
-                        onClick={() => setOpen(true)}
-                        disabled={disabled}
-                        aria-label="Document markdown"
-                    >
-                        <FileText className="h-4 w-4" />
-                    </Button>
-                </TooltipTrigger>
-                <TooltipContent>{isUserMarkdown ? 'Using your markdown' : 'Attach your markdown'}</TooltipContent>
-            </Tooltip>
+            {showTrigger ? (
+                <Tooltip>
+                    <TooltipTrigger asChild>
+                        <Button
+                            type="button"
+                            variant="quiet"
+                            size="icon"
+                            className={cn('h-8 w-8 rounded', isUserMarkdown && 'text-[var(--action-primary)]')}
+                            onClick={() => setOpen(true)}
+                            disabled={disabled}
+                            aria-label="Document markdown"
+                        >
+                            <FileText className="h-4 w-4" />
+                        </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>{isUserMarkdown ? 'Using your markdown' : 'Attach your markdown'}</TooltipContent>
+                </Tooltip>
+            ) : null}
 
             <Dialog
                 open={open}

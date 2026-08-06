@@ -26,6 +26,7 @@ import { getLemmaClient } from "@/lib/sdk/lemma-client";
 import { usePod } from "@/lib/hooks/use-pods";
 import { usePodContext } from "@/lib/hooks/use-pod-context";
 import { usePodAccess } from "@/lib/hooks/use-pod-access";
+import { parseConversationMetadataParam } from "@/lib/pods/composer-launch";
 import { clearLastOpenedPodId, writeLastOpenedPodId } from "@/lib/pods/last-opened-pod";
 import { getWorkspaceTabAfterClose, getWorkspaceTabHref } from "@/lib/pods/workspace-tabs";
 import {
@@ -75,17 +76,6 @@ function formatDisplayName(value: string | null | undefined) {
         .join(" ");
 }
 
-function parseConversationMetadataParam(value: string | null): Record<string, unknown> | undefined {
-    if (!value) return undefined;
-    try {
-        const parsed = JSON.parse(value);
-        return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-            ? parsed as Record<string, unknown>
-            : undefined;
-    } catch {
-        return undefined;
-    }
-}
 
 function getPodSectionLabel(podId: string, pathname: string) {
     const section = pathname.replace(`/pod/${podId}`, "").split("/").filter(Boolean)[0];
@@ -291,7 +281,7 @@ function PodShell({
     const conversationInstructions = searchParams.get("conversationInstructions");
     const conversationMetadata = searchParams.get("conversationMetadata");
     const parsedConversationMetadata = useMemo(
-        () => parseConversationMetadataParam(conversationMetadata),
+        () => parseConversationMetadataParam(conversationMetadata) ?? undefined,
         [conversationMetadata]
     );
     const assistantConversationId = searchParams.get("assistantConversationId");
@@ -713,7 +703,10 @@ function PodShell({
                             ) : null}
                             <div
                                 className={cn(
-                                    "pod-shell-topbar-title flex min-w-0 items-center gap-2 text-base font-semibold leading-7 text-[var(--text-primary)]",
+                                    // Medium, not semibold: the bar names where you
+                                    // are, it does not headline it. Bold here made
+                                    // the filename shout over the document under it.
+                                    "pod-shell-topbar-title flex min-w-0 items-center gap-2 text-base font-medium leading-7 text-[var(--text-primary)]",
                                     "transition-opacity duration-[var(--dur-panel)] ease-[var(--ease-standard)]",
                                     // Kept mounted rather than removed, so handing the
                                     // title back and forth cross-fades instead of

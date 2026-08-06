@@ -16,7 +16,9 @@ import { Skeleton, SkeletonText } from '@/components/shared/loading';
 /** The body fill — used on its own inside the settled viewer while a preview renders. */
 export function DocumentBodySkeleton() {
     return (
-        <div className="min-h-[220px] space-y-3" aria-hidden="true">
+        // Filled at the document's own measure, so the first paragraph lands
+        // where the placeholder line above it already was.
+        <div className="document-page min-h-[220px] space-y-3 px-2 py-5 sm:px-4" aria-hidden="true">
             <SkeletonText lines={4} />
             <SkeletonText lines={3} />
         </div>

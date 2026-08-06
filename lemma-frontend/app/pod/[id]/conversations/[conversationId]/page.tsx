@@ -25,6 +25,7 @@ import { useAgent, useAgents } from '@/lib/hooks/use-agents';
 import { useConversation } from '@/lib/hooks/use-assistants';
 import { usePod } from '@/lib/hooks/use-pods';
 import { usePodAccess } from '@/lib/hooks/use-pod-access';
+import { parseConversationMetadataParam } from '@/lib/pods/composer-launch';
 import { withSettingsReturnPath } from '@/lib/navigation/settings-return';
 import type { AgentRuntimeConfig } from '@/lib/types';
 
@@ -38,16 +39,6 @@ function waitForConversationReset() {
             window.requestAnimationFrame(() => resolve());
         });
     });
-}
-
-function parseConversationMetadata(value: string | null): Record<string, unknown> | null {
-    if (!value) return null;
-    try {
-        const parsed = JSON.parse(value);
-        return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : null;
-    } catch {
-        return null;
-    }
 }
 
 export default function PodConversationPage({
@@ -85,7 +76,7 @@ export default function PodConversationPage({
     );
     const conversationInstructions = searchParams.get('conversationInstructions');
     const conversationMetadata = useMemo(
-        () => parseConversationMetadata(searchParams.get('conversationMetadata')),
+        () => parseConversationMetadataParam(searchParams.get('conversationMetadata')),
         [searchParams]
     );
     const isNewConversation = conversationId === 'new';

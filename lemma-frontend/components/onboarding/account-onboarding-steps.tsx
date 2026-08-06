@@ -8,6 +8,7 @@ import {
   Building2,
   Check,
   CheckCircle2,
+  Circle,
   Code2,
   Copy,
   KeyRound,
@@ -71,8 +72,8 @@ import {
   type Audience,
   type CodingAgentKind,
   type BuildPath,
+  type ComposerStartPath,
   type ConnectChoice,
-  type OnboardingStartDetails,
   type OnboardingStartPath,
   type SetupStep,
   type TeamKind,
@@ -837,7 +838,7 @@ function ConnectOptionCard({
 }
 
 const START_PATHS: Array<{
-  id: Exclude<OnboardingStartPath, "coding-agents" | "templates">;
+  id: ComposerStartPath;
   title: string;
   description: string;
   tone: "channel" | "tools" | "app" | "coding";
@@ -873,7 +874,7 @@ const START_PATHS: Array<{
 ];
 
 const SUPPORT_PATHS: Array<{
-  id: Extract<OnboardingStartPath, "coding-agents" | "templates">;
+  id: Extract<OnboardingStartPath, "coding-agents" | "templates" | "blank">;
   title: string;
   description: string;
   icon: React.ComponentType<{ className?: string }>;
@@ -889,6 +890,14 @@ const SUPPORT_PATHS: Array<{
     title: "Explore templates",
     description: "Start from a complete, proven shape",
     icon: Boxes,
+  },
+  // The way past all of it. Someone who already knows what a pod is should not
+  // have to pick a theme to get one.
+  {
+    id: "blank",
+    title: "Start with an empty pod",
+    description: "Skip the guided start and build from inside",
+    icon: Circle,
   },
 ];
 
@@ -935,41 +944,37 @@ function StartPathIllustration({
   );
 }
 
+/**
+ * The first-run fork: four ways a pod gets used, and the ways past them.
+ *
+ * A card used to open a second screen with a required textarea before anything
+ * was created. That box was the worst place in the product to describe what you
+ * wanted — no attachments, no model picker, no pod to look at, and a disabled
+ * button until you typed. Picking a card now creates the pod and seeds the
+ * pod's own composer with the start of a sentence instead.
+ */
 export function StartStep({
   isCreating,
   onChoosePath,
   onBack,
-  initialPath,
-  initialBrief = "",
 }: {
   isCreating: boolean;
-  onChoosePath: (
-    path: OnboardingStartPath,
-    details: OnboardingStartDetails,
-  ) => Promise<boolean>;
+  onChoosePath: (path: OnboardingStartPath) => Promise<boolean>;
   onBack?: () => void;
-  initialPath?: Exclude<OnboardingStartPath, "templates">;
-  initialBrief?: string;
   steps?: SetupStep[];
 }) {
-  const [selectedPath, setSelectedPath] =
-    useState<Exclude<OnboardingStartPath, "templates"> | null>(
-      initialPath ?? null,
-    );
+  // Only the coding-agent pathway still has a screen behind it: it hands over a
+  // prompt to paste elsewhere, which is not something a composer can do.
+  const [showCodingAgents, setShowCodingAgents] = useState(false);
   const [pendingPath, setPendingPath] = useState<OnboardingStartPath | null>(null);
-  const [brief, setBrief] = useState(initialBrief);
-  const [secondaryBrief, setSecondaryBrief] = useState("");
   const [codingAgent, setCodingAgent] = useState<CodingAgentKind>("codex");
   const [promptCopied, setPromptCopied] = useState(false);
 
-  const choosePath = async (
-    path: OnboardingStartPath,
-    details: OnboardingStartDetails,
-  ) => {
+  const choosePath = async (path: OnboardingStartPath) => {
     if (isCreating || pendingPath) return;
     setPendingPath(path);
     try {
-      const isNavigating = await onChoosePath(path, details);
+      const isNavigating = await onChoosePath(path);
       if (isNavigating) return;
       setPendingPath(null);
     } catch {
@@ -977,17 +982,16 @@ export function StartStep({
     }
   };
 
-  if (selectedPath) {
-    if (selectedPath === "coding-agents") {
-      const starterPrompt = codingAgentStarterPrompt(codingAgent);
+  if (showCodingAgents) {
+    const starterPrompt = codingAgentStarterPrompt(codingAgent);
 
-      return (
-        <SetupStandalonePage
-          onBack={() => {
-            setSelectedPath(null);
-            setPromptCopied(false);
-          }}
-        >
+    return (
+      <SetupStandalonePage
+        onBack={() => {
+          setShowCodingAgents(false);
+          setPromptCopied(false);
+        }}
+      >
           <div className="m-auto w-full max-w-2xl pb-12">
             <p className="setup-first-run-eyebrow">Coding agent pathway</p>
             <h1 className="mt-3 font-display text-2xl font-medium leading-tight tracking-tight text-[var(--text-primary)] sm:text-3xl">
@@ -1070,179 +1074,6 @@ export function StartStep({
             </Button>
           </div>
         </SetupStandalonePage>
-      );
-    }
-
-    const detailCopy = {
-      telegram: {
-        eyebrow: "Telegram agent + app",
-        title: "What should your agent do?",
-        description:
-          "Write the instructions it should operate by. Lemma will turn them into the agent's custom instructions, then build the companion app around the resulting work.",
-        label: "Agent instructions",
-        placeholder:
-          "Example: Capture every voice note and message, classify it as an idea, task, or person, and ask one follow-up question when context is missing.",
-        secondaryLabel: "What should the companion app keep organized?",
-        secondaryPlaceholder:
-          "Example: A searchable logbook with people, ideas, tasks, and weekly review.",
-        action: "Build agent + app",
-      },
-      chatgpt: {
-        eyebrow: "External AI + Lemma MCP",
-        title: "What work should your AI keep updated?",
-        description:
-          "Lemma will create the durable work state. ChatGPT or Claude can read it, update it, and continue where they left off through the pod's MCP surface.",
-        label: "Work state",
-        placeholder:
-          "Example: Keep my fundraising pipeline current—investors, last interaction, open questions, next step, and anything that is going stale.",
-        secondaryLabel: null,
-        secondaryPlaceholder: null,
-        action: "Create shared work state",
-      },
-      "internal-app": {
-        eyebrow: "Internal AI app",
-        title: "What should the app help your team do?",
-        description:
-          "Start with one repeated job or decision. Lemma will build the app in front, with agents and durable state behind it.",
-        label: "The job to be done",
-        placeholder:
-          "Example: Review inbound partnership requests, enrich each company, recommend an owner, and prepare an approve-or-reject decision.",
-        secondaryLabel: "Who will use it?",
-        secondaryPlaceholder:
-          "Example: Partnerships and operations",
-        action: "Build internal app",
-      },
-      "agent-skin": {
-        eyebrow: "Local agent workspace",
-        title: "What should stay visible around your agent?",
-        description:
-          "The local agent remains the executor. Lemma becomes the persistent product surface around it—state, controls, outputs, and history that survive each terminal session.",
-        label: "Persistent workspace",
-        placeholder:
-          "Example: The current plan, task queue, run status, decisions, generated artifacts, and everything waiting for my review.",
-        secondaryLabel: "How should people steer it?",
-        secondaryPlaceholder:
-          "Example: Approve the plan, reprioritize tasks, retry a failed step, and review generated work.",
-        action: "Build agent workspace",
-      },
-    }[selectedPath];
-
-    return (
-      <SetupStandalonePage
-        onBack={() => {
-          if (pendingPath) return;
-          setSelectedPath(null);
-          setBrief("");
-          setSecondaryBrief("");
-        }}
-      >
-        <div className="m-auto w-full max-w-2xl pb-12">
-          <p className="setup-first-run-eyebrow">{detailCopy.eyebrow}</p>
-          <h1 className="mt-3 font-display text-2xl font-medium leading-tight tracking-tight text-[var(--text-primary)] sm:text-3xl">
-            {detailCopy.title}
-          </h1>
-          <p className="mt-3 max-w-xl text-sm leading-6 text-[var(--text-secondary)]">
-            {detailCopy.description}
-          </p>
-
-          {selectedPath === "agent-skin" ? (
-            <div className="mt-7">
-              <Label className="text-sm text-[var(--text-secondary)]">
-                Local agent
-              </Label>
-              <div className="mt-2 grid grid-cols-3 gap-2">
-                {[
-                  { id: "codex" as const, label: "Codex" },
-                  { id: "claude-code" as const, label: "Claude Code" },
-                  { id: "opencode" as const, label: "OpenCode" },
-                ].map((agent) => (
-                  <Button
-                    key={agent.id}
-                    type="button"
-                    variant="quiet"
-                    data-active={codingAgent === agent.id}
-                    onClick={() => setCodingAgent(agent.id)}
-                    className="setup-detail-choice h-11 justify-between px-3 text-sm"
-                  >
-                    {agent.label}
-                    {codingAgent === agent.id ? (
-                      <Check className="h-4 w-4 text-[var(--action-primary)]" />
-                    ) : null}
-                  </Button>
-                ))}
-              </div>
-            </div>
-          ) : null}
-
-          <div className="mt-7">
-            <Label
-              htmlFor="start-path-brief"
-              className="text-sm text-[var(--text-secondary)]"
-            >
-              {detailCopy.label}
-            </Label>
-            <Textarea
-              id="start-path-brief"
-              autoFocus
-              rows={6}
-              value={brief}
-              onChange={(event) => setBrief(event.target.value)}
-              placeholder={detailCopy.placeholder}
-              className="setup-detail-textarea mt-2 resize-none text-sm leading-6"
-            />
-          </div>
-
-          {detailCopy.secondaryLabel ? (
-            <div className="mt-5">
-              <Label
-                htmlFor="start-path-secondary"
-                className="text-sm text-[var(--text-secondary)]"
-              >
-                {detailCopy.secondaryLabel}
-                <span className="ml-1 font-normal text-[var(--text-tertiary)]">
-                  optional
-                </span>
-              </Label>
-              <Input
-                id="start-path-secondary"
-                value={secondaryBrief}
-                onChange={(event) => setSecondaryBrief(event.target.value)}
-                placeholder={detailCopy.secondaryPlaceholder || undefined}
-                className="setup-detail-input mt-2 h-11 text-sm"
-              />
-            </div>
-          ) : null}
-
-          {selectedPath === "chatgpt" ? (
-            <div className="setup-mcp-note mt-5 flex items-start gap-3 px-4 py-3">
-              <span className="setup-mcp-pill mt-0.5">MCP</span>
-              <p className="text-xs leading-5 text-[var(--text-secondary)]">
-                The pod remains the source of truth. Connecting an external AI
-                gives it scoped tools to work with that state—it does not copy
-                the work into a disposable chat.
-              </p>
-            </div>
-          ) : null}
-
-          <Button variant="primary"
-            type="button"
-            onClick={() =>
-              void choosePath(selectedPath, {
-                brief,
-                secondaryBrief,
-                codingAgent,
-              })
-            }
-            loading={pendingPath === selectedPath}
-            loadingLabel="Preparing your pod"
-            disabled={!brief.trim() || isCreating || Boolean(pendingPath)}
-            className="setup-primary-action !flex mt-6 h-11 w-full gap-2 text-sm font-medium"
-          >
-            {detailCopy.action}
-            <ArrowRight className="h-4 w-4" />
-          </Button>
-        </div>
-      </SetupStandalonePage>
     );
   }
 
@@ -1262,20 +1093,21 @@ export function StartStep({
 
         <div className="mx-auto mt-7 grid max-w-5xl gap-3 sm:grid-cols-2">
           {START_PATHS.map((path) => {
+            const isPending = pendingPath === path.id;
             return (
               <Button
                 key={path.id}
                 type="button"
                 variant="quiet"
-                onClick={() => setSelectedPath(path.id)}
-                disabled={isCreating}
+                onClick={() => void choosePath(path.id)}
+                disabled={isCreating || Boolean(pendingPath)}
                 data-tone={path.tone}
                 className="setup-route-card group h-auto min-h-64 flex-col items-stretch justify-start whitespace-normal p-0 text-left"
               >
                 <StartPathIllustration path={path.id} />
                 <span className="flex items-start gap-4 px-5 pb-5 pt-4">
                   <span className="min-w-0 flex-1">
-                    <span className="block text-sm font-semibold text-[var(--text-primary)]">
+                    <span className="block text-sm font-medium text-[var(--text-primary)]">
                       {path.title}
                     </span>
                     <span className="mt-1 block max-w-md text-xs leading-5 text-[var(--text-secondary)]">
@@ -1283,7 +1115,11 @@ export function StartStep({
                     </span>
                   </span>
                   <span className="setup-route-arrow mt-1 flex h-7 w-7 shrink-0 items-center justify-center rounded-full">
-                    <ArrowRight className="h-3.5 w-3.5" />
+                    {isPending ? (
+                      <StepLoader size="sm" />
+                    ) : (
+                      <ArrowRight className="h-3.5 w-3.5" />
+                    )}
                   </span>
                 </span>
               </Button>
@@ -1291,7 +1127,7 @@ export function StartStep({
           })}
         </div>
 
-        <div className="mx-auto mt-4 grid max-w-3xl gap-2 sm:grid-cols-2">
+        <div className="mx-auto mt-4 grid max-w-5xl gap-2 sm:grid-cols-3">
           {SUPPORT_PATHS.map((path) => {
             const Icon = path.icon;
             const isPending = pendingPath === path.id;
@@ -1302,10 +1138,10 @@ export function StartStep({
                 variant="quiet"
                 onClick={() => {
                   if (path.id === "coding-agents") {
-                    setSelectedPath(path.id);
+                    setShowCodingAgents(true);
                     return;
                   }
-                  void choosePath("templates", { brief: "" });
+                  void choosePath(path.id);
                 }}
                 disabled={isCreating || Boolean(pendingPath)}
                 className="setup-support-path h-auto justify-start gap-3 whitespace-normal px-4 py-3.5 text-left"
@@ -1318,7 +1154,7 @@ export function StartStep({
                   )}
                 </span>
                 <span className="min-w-0">
-                  <span className="block text-xs font-semibold text-[var(--text-primary)]">
+                  <span className="block text-xs font-medium text-[var(--text-primary)]">
                     {path.title}
                   </span>
                   <span className="mt-0.5 block text-xs text-[var(--text-tertiary)]">

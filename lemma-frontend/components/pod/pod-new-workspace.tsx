@@ -111,7 +111,17 @@ const BUILD_THEME_TILES = TILES_PER_ROW - 1;
 const POD_TILES = TILES_PER_ROW * 2 - 1;
 const MAX_PROMPT_ROWS = 2;
 
-// A FIXED height, not a floor. The launcher and the composer are centred as one
+/**
+ * Where the launcher sits relative to the composer, which is the only thing
+ * that changes between its two homes.
+ *
+ * `empty-state` — the new-conversation screen, launcher ABOVE the composer.
+ * `below-composer` — pod home, where the composer is the hero and this is the
+ * tray under it.
+ */
+export type PodNewWorkspacePlacement = 'empty-state' | 'below-composer';
+
+// A FIXED height, not a floor. Above the composer the two are centred as one
 // group, so a panel taller than its neighbour moves the whole block — including
 // the pod line and the tabs you are aiming at — every time you switch tabs.
 //
@@ -122,6 +132,10 @@ const MAX_PROMPT_ROWS = 2;
 // scrollbar in the Create panel and clipped its caption. `overflow-y-auto`
 // stays as the safety net for anything longer still.
 const PANEL_HEIGHT = 'h-72 overflow-y-auto';
+
+// Below the composer there is nothing above to shove around, so the lock buys
+// nothing and costs a block of dead space under every short panel.
+const PANEL_HEIGHT_NATURAL = 'min-h-0';
 
 function formatPodName(value: string | null | undefined) {
     const cleaned = (value || '').replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim();
@@ -326,13 +340,19 @@ export function PodNewWorkspace({
     selectedAgentName,
     onPreparePrompt,
     onSelectAgent,
+    placement = 'empty-state',
 }: {
     podId: string;
     /** Agent the composer is currently scoped to, or `null` for the pod default. */
     selectedAgentName: string | null;
     onPreparePrompt: (prompt: string) => void;
     onSelectAgent: (agentName: string | null) => void;
+    placement?: PodNewWorkspacePlacement;
 }) {
+    // Below the composer the pod is already named by the heading above it, and
+    // nothing sits above the panel for a height change to disturb.
+    const isBelowComposer = placement === 'below-composer';
+    const panelHeight = isBelowComposer ? PANEL_HEIGHT_NATURAL : PANEL_HEIGHT;
     const assistant = useAIAssistant();
     const podAccess = usePodAccess(podId);
     const { data: pod } = usePod(podId);
@@ -380,6 +400,7 @@ export function PodNewWorkspace({
 
     return (
         <div className="flex w-full flex-col gap-3 text-[var(--text-primary)]">
+            {isBelowComposer ? null : (
             <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5">
                 {podName ? (
                     <span className="text-sm font-medium text-[var(--text-primary)]">{podName}</span>
@@ -410,6 +431,7 @@ export function PodNewWorkspace({
                     </>
                 )}
             </div>
+            )}
 
             <Tabs value={activeTab} onValueChange={(value) => setTab(value as LauncherTab)} className="min-w-0">
                 <TabsList>
@@ -420,7 +442,7 @@ export function PodNewWorkspace({
                 </TabsList>
 
                 {/* A floor under every panel keeps the composer still between tabs. */}
-                <TabsContent value="build" className={PANEL_HEIGHT}>
+                <TabsContent value="build" className={panelHeight}>
                     <BuildPanel
                         podId={podId}
                         disabled={disabled}
@@ -432,7 +454,7 @@ export function PodNewWorkspace({
                     />
                 </TabsContent>
 
-                <TabsContent value="create" className={PANEL_HEIGHT}>
+                <TabsContent value="create" className={panelHeight}>
                     <TileGrid>
                         {CREATE_FORMATS.map((format) => (
                             <LauncherTile
@@ -449,7 +471,7 @@ export function PodNewWorkspace({
                 </TabsContent>
 
                 {hasDo ? (
-                    <TabsContent value="do" className={PANEL_HEIGHT}>
+                    <TabsContent value="do" className={panelHeight}>
                         <TileGrid>
                             {doTiles.map((tile) => (
                                 <LauncherTile
@@ -492,7 +514,7 @@ export function PodNewWorkspace({
                 ) : null}
 
                 {hasContinue ? (
-                    <TabsContent value="continue" className={PANEL_HEIGHT}>
+                    <TabsContent value="continue" className={panelHeight}>
                         <TileGrid>
                             {continueRows.map((conversation) => (
                                 <LauncherTile
