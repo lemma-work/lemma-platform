@@ -503,6 +503,16 @@
   flex-shrink: 0;
 }
 
+/* The same mark at card size, for surfaces where a pod is the subject rather
+   than a row in a menu — home's pod cards. Size and radius only; the fill,
+   the weight and the tracking stay the switcher's. */
+.lemma-pod-badge-lg {
+  width: 44px;
+  height: 44px;
+  border-radius: var(--radius-lg);
+  font-size: var(--text-sm);
+}
+
 /* Product shell motion: short, shared transitions for navigation context changes. */
 .pod-sidebar-slot {
   transition:
