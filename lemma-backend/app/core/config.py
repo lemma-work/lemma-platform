@@ -844,6 +844,29 @@ class Settings(BaseSettings):
         pattern=r"^sha256:[0-9a-f]{64}$",
         description="Immutable AgentBox function profile digest",
     )
+    # Which image each sandbox kind runs. The backend needs these now that it
+    # provisions sandboxes itself rather than asking a separate manager to
+    # resolve a profile into an artifact.
+    agentbox_workspace_image: str = Field(
+        default="agentbox-workspace:dev",
+        description="Container image backing workspace sandboxes",
+    )
+    agentbox_function_image: str = Field(
+        default="agentbox-function:dev",
+        description="Container image backing function runtime sandboxes",
+    )
+    # Signs the per-container token the in-sandbox runtime accepts. Required
+    # before the workspace module can provision anything itself.
+    workspace_runtime_credential_key: Optional[str] = Field(
+        default=None,
+        description="At least 32 bytes; signs in-sandbox runtime credentials",
+    )
+    # Selects who provisions sandboxes while both paths exist. Flipping this to
+    # True moves provisioning from the AgentBox manager into this module.
+    workspace_owns_sandboxes: bool = Field(
+        default=False,
+        description="Provision sandboxes in the workspace module, not AgentBox",
+    )
     function_builder_executable: str = Field(
         default="uv",
         description="Executable used only while prebuilding function dependencies",
