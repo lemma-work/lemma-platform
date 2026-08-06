@@ -5,12 +5,20 @@ import { useRouter } from 'next/navigation';
 import { Maximize2, PanelRightClose } from '@/components/ui/icons';
 import { useEffect, useRef, type ReactNode } from 'react';
 
+import { useApp } from '@/components/app/app-context';
+import { AppFrame } from '@/components/app/app-launch';
+import { StepLoader } from '@/components/brand/loader';
+import { EmptyState } from '@/components/shared/empty-state';
 import { Button } from '@/components/ui/button';
+import { PanelsTopLeft } from '@/components/ui/icons';
 import {
     buildConversationStageEmbedHref,
     buildConversationStandaloneResourceHref,
+    conversationStageAppSlug,
     resolveConversationStageNavigationHref,
 } from '@/lib/assistant/conversation-presentation';
+import { formatWorkspaceAppTitle } from '@/lib/pods/workspace-tabs';
+import type { AppPageRef } from '@/lib/types/app';
 
 function decodeLabel(value: string | null | undefined): string {
     if (!value) return '';
@@ -38,6 +46,52 @@ function presentationTitle(resourceHref: string): string {
     return 'Presented view';
 }
 
+/**
+ * The app itself, in the pane — no workspace around it. The stage's own header
+ * already names the app and holds the close and full-view controls, so the frame
+ * draws without the context bar it would otherwise claim from the conversation.
+ */
+function StageAppBody({
+    podId,
+    page,
+    title,
+    isLoading,
+}: {
+    podId: string;
+    page: AppPageRef | null;
+    title: string;
+    isLoading: boolean;
+}) {
+    if (page?.url) {
+        return (
+            <AppFrame
+                podId={podId}
+                appId={page.id}
+                appName={page.appName || page.title}
+                title={title}
+                url={page.url}
+                visibility={page.visibility}
+                chrome="none"
+            />
+        );
+    }
+
+    return (
+        <div className="absolute inset-0 flex items-center justify-center">
+            {isLoading ? (
+                <StepLoader size="sm" />
+            ) : (
+                <EmptyState
+                    variant="region"
+                    icon={<PanelsTopLeft className="h-5 w-5" />}
+                    title="App unavailable"
+                    description="This app didn't return a web app URL. Try opening it again from the Apps list."
+                />
+            )}
+        </div>
+    );
+}
+
 export function ConversationPresentationStage({
     podId,
     resourceHref,
@@ -51,7 +105,15 @@ export function ConversationPresentationStage({
 }) {
     const router = useRouter();
     const iframeRef = useRef<HTMLIFrameElement | null>(null);
-    const embedHref = buildConversationStageEmbedHref(resourceHref);
+    const { pages, isLoading: appsLoading } = useApp();
+    // An app is presented in place rather than framed: the stage already sits
+    // inside the pod's `AppProvider`, so it can mount the app's own frame
+    // directly instead of re-loading the workspace to reach `AppFrameHost`.
+    const appSlug = conversationStageAppSlug(resourceHref, podId);
+    const appPage = appSlug
+        ? pages.find((page) => page.slug === appSlug) ?? null
+        : null;
+    const embedHref = appSlug ? null : buildConversationStageEmbedHref(resourceHref);
     const standaloneHref = buildConversationStandaloneResourceHref(resourceHref);
 
     useEffect(() => {
@@ -67,9 +129,27 @@ export function ConversationPresentationStage({
         return () => window.removeEventListener('message', handleMessage);
     }, [podId, router]);
 
-    if (!embedHref || !standaloneHref) return children;
+    // The app's own record names it the way the tab strip does ("Ledger"), so the
+    // pane stops printing the raw slug back at the reader.
+    const title = appPage
+        ? formatWorkspaceAppTitle(appPage.title || appPage.slug)
+        : presentationTitle(resourceHref);
 
-    const title = presentationTitle(resourceHref);
+    const stageBody = appSlug ? (
+        <StageAppBody podId={podId} page={appPage} title={title} isLoading={appsLoading} />
+    ) : embedHref ? (
+        <iframe
+            key={embedHref}
+            ref={iframeRef}
+            src={embedHref}
+            title={title}
+            className="absolute inset-0 block h-full min-h-0 w-full border-0 bg-[var(--pod-main-bg)]"
+            allow="clipboard-read; clipboard-write; fullscreen"
+            referrerPolicy="strict-origin-when-cross-origin"
+        />
+    ) : null;
+
+    if (!stageBody || !standaloneHref) return children;
 
     return (
         <div className="conversation-presentation-layout grid h-full min-h-0 min-w-0 overflow-hidden">
@@ -105,15 +185,7 @@ export function ConversationPresentationStage({
                     </Button>
                 </header>
                 <div className="relative min-h-0 flex-1 overflow-hidden">
-                    <iframe
-                        key={embedHref}
-                        ref={iframeRef}
-                        src={embedHref}
-                        title={title}
-                        className="absolute inset-0 block h-full min-h-0 w-full border-0 bg-[var(--pod-main-bg)]"
-                        allow="clipboard-read; clipboard-write; fullscreen"
-                        referrerPolicy="strict-origin-when-cross-origin"
-                    />
+                    {stageBody}
                 </div>
             </section>
         </div>

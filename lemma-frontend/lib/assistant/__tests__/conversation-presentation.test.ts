@@ -6,6 +6,7 @@ import {
     buildConversationStageNavigationMessage,
     buildConversationStandaloneResourceHref,
     buildResourceShareUrl,
+    conversationStageAppSlug,
     normalizeConversationPresentedResourceHref,
     removeConversationPresentationParam,
     resolveConversationStageNavigationHref,
@@ -85,6 +86,26 @@ describe('conversation presentation routes', () => {
             '/pod/p1/data?tab=projects&embed=conversation-stage&assistant=docked&presentation=side',
             'http://localhost:3000',
         )).toBe('http://localhost:3000/pod/p1/data?tab=projects');
+    });
+
+    it('names the app a presented resource points at, so the stage skips the frame', () => {
+        expect(conversationStageAppSlug('/pod/p1/app/view?page=ledger', 'p1')).toBe('ledger');
+        expect(conversationStageAppSlug(
+            '/pod/p1/app/view?page=ledger&assistantConversationId=c1',
+            'p1',
+        )).toBe('ledger');
+    });
+
+    it('only treats a same-pod app view with a slug as an app', () => {
+        // The apps index, and a view route that lost its slug, are pages of their
+        // own — framing them is still correct, so they must not read as an app.
+        expect(conversationStageAppSlug('/pod/p1/app/pages', 'p1')).toBeNull();
+        expect(conversationStageAppSlug('/pod/p1/app/view', 'p1')).toBeNull();
+        expect(conversationStageAppSlug('/pod/p1/app/view?page=', 'p1')).toBeNull();
+        expect(conversationStageAppSlug('/pod/p1/app/view?page=%20', 'p1')).toBeNull();
+        expect(conversationStageAppSlug('/pod/p2/app/view?page=ledger', 'p1')).toBeNull();
+        expect(conversationStageAppSlug('/pod/p1/data?tab=orders', 'p1')).toBeNull();
+        expect(conversationStageAppSlug('https://example.com/pod/p1/app/view?page=ledger', 'p1')).toBeNull();
     });
 
     it('removes only the presentation state when returning to chat', () => {

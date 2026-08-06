@@ -24,6 +24,13 @@ interface AppFrameProps {
     url: string;
     visibility?: string | null;
     canShare?: boolean;
+    /**
+     * What draws around the frame. `bar` claims the shell's context bar, for a
+     * pane the app owns. `none` draws the frame alone, for a pane that already
+     * has a header — the conversation stage, where claiming the shell bar would
+     * rename the conversation still being read beside it.
+     */
+    chrome?: 'bar' | 'none';
 }
 
 export function AppFrame({
@@ -34,6 +41,7 @@ export function AppFrame({
     url,
     visibility,
     canShare = false,
+    chrome = 'bar',
 }: AppFrameProps) {
     const queryClient = useQueryClient();
     const { resolvedTheme } = useTheme();
@@ -95,79 +103,81 @@ export function AppFrame({
 
     return (
         <div className="embedded-canvas relative flex h-full w-full flex-col overflow-hidden text-[var(--text-primary)]">
-            <ResourceHeader
-                title={title}
-                backHref={`/pod/${podId}/app/pages`}
-                backLabel="Apps"
-                actions={(
-                    <TooltipProvider>
-                        <div className="flex shrink-0 items-center gap-1">
-                            <Tooltip>
-                                <TooltipTrigger asChild>
-                                    <Button type="button" variant="quiet" size="icon" className="h-8 w-8 rounded" onClick={reloadFrame} aria-label="Reload app">
-                                        <RefreshCw className="h-4 w-4" />
-                                    </Button>
-                                </TooltipTrigger>
-                                <TooltipContent>Reload app</TooltipContent>
-                            </Tooltip>
-                            <Tooltip>
-                                <TooltipTrigger asChild>
-                                    <Button type="button" variant="quiet" size="icon" className="h-8 w-8 rounded" onClick={copyLink} aria-label="Copy app link">
-                                        <Copy className="h-4 w-4" />
-                                    </Button>
-                                </TooltipTrigger>
-                                <TooltipContent>Copy app link</TooltipContent>
-                            </Tooltip>
-                            {canShare ? (
-                                <ResourceShareButton
-                                    value={visibility}
-                                    podId={podId}
-                                    resourceType="app"
-                                    resourceId={appId}
-                                    resourceLabel="apps"
-                                    resourceName={title}
-                                    shareUrl={typeof window === 'undefined'
-                                        ? undefined
-                                        : buildResourceShareUrl(
-                                            `${window.location.pathname}${window.location.search}${window.location.hash}`,
-                                            window.location.origin,
-                                        ) ?? undefined}
-                                    onChange={handleShareVisibilityChange}
-                                    disabled={!appId || !appName}
-                                    trigger={({ openShare, disabled }) => (
-                                        <Tooltip>
-                                            <TooltipTrigger asChild>
-                                                <Button
-                                                    type="button"
-                                                    variant="quiet"
-                                                    size="icon"
-                                                    className="h-8 w-8 rounded"
-                                                    onClick={openShare}
-                                                    disabled={disabled}
-                                                    aria-label="Share app"
-                                                >
-                                                    <Share2 className="h-4 w-4" />
-                                                </Button>
-                                            </TooltipTrigger>
-                                            <TooltipContent>Share app</TooltipContent>
-                                        </Tooltip>
-                                    )}
-                                />
-                            ) : null}
-                            <Tooltip>
-                                <TooltipTrigger asChild>
-                                    <Button asChild variant="quiet" size="icon" className="h-8 w-8 rounded" aria-label="Open app in new tab">
-                                        <a href={url} target="_blank" rel="noreferrer">
-                                            <ExternalLink className="h-4 w-4" />
-                                        </a>
-                                    </Button>
-                                </TooltipTrigger>
-                                <TooltipContent>Open app in new tab</TooltipContent>
-                            </Tooltip>
-                        </div>
-                    </TooltipProvider>
-                )}
-            />
+            {chrome === 'bar' ? (
+                <ResourceHeader
+                    title={title}
+                    backHref={`/pod/${podId}/app/pages`}
+                    backLabel="Apps"
+                    actions={(
+                        <TooltipProvider>
+                            <div className="flex shrink-0 items-center gap-1">
+                                <Tooltip>
+                                    <TooltipTrigger asChild>
+                                        <Button type="button" variant="quiet" size="icon" className="h-8 w-8 rounded" onClick={reloadFrame} aria-label="Reload app">
+                                            <RefreshCw className="h-4 w-4" />
+                                        </Button>
+                                    </TooltipTrigger>
+                                    <TooltipContent>Reload app</TooltipContent>
+                                </Tooltip>
+                                <Tooltip>
+                                    <TooltipTrigger asChild>
+                                        <Button type="button" variant="quiet" size="icon" className="h-8 w-8 rounded" onClick={copyLink} aria-label="Copy app link">
+                                            <Copy className="h-4 w-4" />
+                                        </Button>
+                                    </TooltipTrigger>
+                                    <TooltipContent>Copy app link</TooltipContent>
+                                </Tooltip>
+                                {canShare ? (
+                                    <ResourceShareButton
+                                        value={visibility}
+                                        podId={podId}
+                                        resourceType="app"
+                                        resourceId={appId}
+                                        resourceLabel="apps"
+                                        resourceName={title}
+                                        shareUrl={typeof window === 'undefined'
+                                            ? undefined
+                                            : buildResourceShareUrl(
+                                                `${window.location.pathname}${window.location.search}${window.location.hash}`,
+                                                window.location.origin,
+                                            ) ?? undefined}
+                                        onChange={handleShareVisibilityChange}
+                                        disabled={!appId || !appName}
+                                        trigger={({ openShare, disabled }) => (
+                                            <Tooltip>
+                                                <TooltipTrigger asChild>
+                                                    <Button
+                                                        type="button"
+                                                        variant="quiet"
+                                                        size="icon"
+                                                        className="h-8 w-8 rounded"
+                                                        onClick={openShare}
+                                                        disabled={disabled}
+                                                        aria-label="Share app"
+                                                    >
+                                                        <Share2 className="h-4 w-4" />
+                                                    </Button>
+                                                </TooltipTrigger>
+                                                <TooltipContent>Share app</TooltipContent>
+                                            </Tooltip>
+                                        )}
+                                    />
+                                ) : null}
+                                <Tooltip>
+                                    <TooltipTrigger asChild>
+                                        <Button asChild variant="quiet" size="icon" className="h-8 w-8 rounded" aria-label="Open app in new tab">
+                                            <a href={url} target="_blank" rel="noreferrer">
+                                                <ExternalLink className="h-4 w-4" />
+                                            </a>
+                                        </Button>
+                                    </TooltipTrigger>
+                                    <TooltipContent>Open app in new tab</TooltipContent>
+                                </Tooltip>
+                            </div>
+                        </TooltipProvider>
+                    )}
+                />
+            ) : null}
 
             <div className="embedded-canvas relative min-h-0 flex-1 overflow-hidden">
                 {!frameLoaded && !frameFailed ? (
