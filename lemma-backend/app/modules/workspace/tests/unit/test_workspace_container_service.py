@@ -37,13 +37,11 @@ def _sandbox_info(
 class _FakeSandbox:
     def __init__(self) -> None:
         self.infos: dict[UUID, SandboxInfo] = {}
-        self.ensure_calls: list[tuple[UUID, dict[str, str] | None]] = []
+        self.ensure_calls: list[UUID] = []
         self.suspended: list[UUID] = []
 
-    async def ensure_sandbox(
-        self, user_id: UUID, *, env: dict[str, str] | None = None
-    ) -> SandboxInfo:
-        self.ensure_calls.append((user_id, env))
+    async def ensure_sandbox(self, user_id: UUID) -> SandboxInfo:
+        self.ensure_calls.append(user_id)
         await asyncio.sleep(0)
         return self.infos.setdefault(user_id, _sandbox_info(user_id))
 
@@ -55,41 +53,6 @@ class _FakeSandbox:
 
     async def delete_sandbox(self, user_id: UUID) -> None:
         self.infos.pop(user_id, None)
-
-
-class _FakeStateStore:
-    def __init__(self) -> None:
-        self.states: list[str] = []
-        self.errors: list[str] = []
-
-    async def mark_creating(self, **_kwargs: Any) -> None:
-        self.states.append("CREATING")
-
-    async def get_state(self, **_kwargs: Any):
-        return None
-
-    async def mark_running(self, **_kwargs: Any) -> None:
-        self.states.append("RUNNING")
-
-    async def mark_error(self, *, error: str, **_kwargs: Any) -> None:
-        self.states.append("ERROR")
-        self.errors.append(error)
-
-    async def mark_stopped(self, **_kwargs: Any) -> None:
-        self.states.append("STOPPED")
-
-
-class _FakeActivityStore:
-    def __init__(self) -> None:
-        self.marked: list[dict[str, Any]] = []
-        self.removed: list[UUID] = []
-
-    async def mark_active(self, **kwargs: Any) -> None:
-        self.marked.append(kwargs)
-
-    async def remove(self, *, runtime: str, user_id: UUID) -> None:
-        del runtime
-        self.removed.append(user_id)
 
 
 class _FakeManagerClient:
@@ -126,32 +89,15 @@ def _api_error(retry: RetryDisposition) -> AgentBoxApiError:
     )
 
 
-def _service(
-    sandbox: _FakeSandbox,
-    *,
-    runtime: str = "agentbox",
-    state: _FakeStateStore | None = None,
-    activity: _FakeActivityStore | None = None,
-) -> WorkspaceSandboxService:
-    return WorkspaceSandboxService(
-        runtime=runtime,
-        sandbox=sandbox,  # type: ignore[arg-type]
-        state_store=state or _FakeStateStore(),  # type: ignore[arg-type]
-        activity_store=activity or _FakeActivityStore(),  # type: ignore[arg-type]
-    )
-
-
-def test_service_uses_one_agentbox_runtime() -> None:
-    assert _service(_FakeSandbox()).runtime == "agentbox"
+def _service(sandbox: _FakeSandbox) -> WorkspaceSandboxService:
+    return WorkspaceSandboxService(sandbox=sandbox)  # type: ignore[arg-type]
 
 
 @pytest.mark.asyncio
 async def test_ensure_returns_typed_sandbox_and_coalesces_concurrency() -> None:
     user_id = uuid4()
     sandbox = _FakeSandbox()
-    state = _FakeStateStore()
-    activity = _FakeActivityStore()
-    service = _service(sandbox, state=state, activity=activity)
+    service = _service(sandbox)
 
     first, second = await asyncio.gather(
         service.get_or_create_sandbox(user_id),
@@ -162,9 +108,6 @@ async def test_ensure_returns_typed_sandbox_and_coalesces_concurrency() -> None:
     assert first == second
     assert first.sandbox_id == str(user_id)
     assert len(sandbox.ensure_calls) == 1
-    assert state.states.count("CREATING") == 1
-    assert state.states.count("RUNNING") == 1
-    assert len(activity.marked) == 1
 
 
 @pytest.mark.asyncio
@@ -186,12 +129,10 @@ async def test_stop_waits_for_inflight_ensure_before_suspend() -> None:
     allow_ensure = asyncio.Event()
 
     class _SlowSandbox(_FakeSandbox):
-        async def ensure_sandbox(
-            self, user_id: UUID, *, env: dict[str, str] | None = None
-        ) -> SandboxInfo:
+        async def ensure_sandbox(self, user_id: UUID) -> SandboxInfo:
             ensure_started.set()
             await allow_ensure.wait()
-            return await super().ensure_sandbox(user_id, env=env)
+            return await super().ensure_sandbox(user_id)
 
     sandbox = _SlowSandbox()
     service = _service(sandbox)
@@ -239,54 +180,56 @@ async def test_ensure_requested_during_stop_waits_then_recreates() -> None:
     assert sandbox.suspended == [user_id]
 
 
-@pytest.mark.asyncio
-async def test_ensure_never_rewrites_the_configured_callback_host(monkeypatch) -> None:
-    user_id = uuid4()
-    sandbox = _FakeSandbox()
+def test_callback_host_is_never_rewritten(monkeypatch) -> None:
+    """The URL a sandbox calls back on is taken verbatim from config.
+
+    This is the value that reaches the sandbox as LEMMA_BASE_URL via
+    get_env_vars, so a rewrite here would silently point workspaces at the
+    wrong host.
+    """
     monkeypatch.setattr(settings, "workspace_callback_api_url", None)
     monkeypatch.setattr(settings, "cli_api_url", "http://127-0-0-1.sslip.io:8710")
-    service = _service(sandbox, runtime="docker")
+    assert (
+        WorkspaceSandboxService._resolve_workspace_api_url()
+        == "http://127-0-0-1.sslip.io:8710"
+    )
 
-    await service.get_or_create_sandbox(user_id)
-
-    assert sandbox.ensure_calls == [
-        (user_id, {"LEMMA_BASE_URL": "http://127-0-0-1.sslip.io:8710"})
-    ]
+    monkeypatch.setattr(
+        settings, "workspace_callback_api_url", "http://callback.test:9000"
+    )
+    assert (
+        WorkspaceSandboxService._resolve_workspace_api_url()
+        == "http://callback.test:9000"
+    )
 
 
 @pytest.mark.asyncio
-async def test_ensure_records_failure_without_backend_lifecycle_lock() -> None:
+async def test_ensure_propagates_provider_failure_without_lifecycle_lock() -> None:
     class _FailingSandbox(_FakeSandbox):
-        async def ensure_sandbox(
-            self, user_id: UUID, *, env: dict[str, str] | None = None
-        ) -> SandboxInfo:
-            del user_id, env
+        async def ensure_sandbox(self, user_id: UUID) -> SandboxInfo:
+            del user_id
             raise RuntimeError("provider unavailable")
 
-    state = _FakeStateStore()
-    service = _service(_FailingSandbox(), state=state)
+    service = _service(_FailingSandbox())
 
     with pytest.raises(RuntimeError, match="provider unavailable"):
         await service.get_or_create_sandbox(uuid4())
 
-    assert state.states == ["CREATING", "ERROR"]
-    assert state.errors == ["provider unavailable"]
+    # A failed ensure must not leave the singleflight entry behind, or every
+    # later caller would await a task that already raised.
+    assert not WorkspaceSandboxService._inflight_ensures
 
 
 @pytest.mark.asyncio
-async def test_stop_suspends_once_and_updates_caches() -> None:
+async def test_stop_suspends_once() -> None:
     user_id = uuid4()
     sandbox = _FakeSandbox()
     sandbox.infos[user_id] = _sandbox_info(user_id)
-    state = _FakeStateStore()
-    activity = _FakeActivityStore()
-    service = _service(sandbox, state=state, activity=activity)
+    service = _service(sandbox)
 
     await service.stop_sandbox(user_id)
 
     assert sandbox.suspended == [user_id]
-    assert activity.removed == [user_id]
-    assert state.states == ["STOPPED"]
 
 
 @pytest.mark.asyncio

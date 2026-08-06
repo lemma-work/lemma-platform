@@ -39,14 +39,8 @@ class AgentBoxSandbox(ISandbox):
             context_headers_provider=correlation_headers,
         )
 
-    async def ensure_sandbox(
-        self,
-        user_id: UUID,
-        *,
-        env: dict[str, str] | None = None,
-    ) -> SandboxInfo:
+    async def ensure_sandbox(self, user_id: UUID) -> SandboxInfo:
         sandbox_id = agentbox_sandbox_id(user_id)
-        del env
         deadline_at = self._deadline()
         profile = ProfileRef(
             name=settings.agentbox_workspace_profile_name,
@@ -73,7 +67,7 @@ class AgentBoxSandbox(ISandbox):
                 attempt += 1
                 continue
             if sandbox.ready:
-                return self._to_container_info(str(sandbox_id), sandbox)
+                return self._to_sandbox_info(str(sandbox_id), sandbox)
             await self._wait(
                 sandbox.retry_after_ms,
                 deadline_at,
@@ -87,7 +81,7 @@ class AgentBoxSandbox(ISandbox):
         sandbox = await self.client.inspect_sandbox(WorkloadKind.WORKSPACE, sandbox_id)
         if sandbox is None:
             return None
-        return self._to_container_info(str(sandbox_id), sandbox)
+        return self._to_sandbox_info(str(sandbox_id), sandbox)
 
     async def delete_sandbox(self, user_id: UUID) -> None:
         await self.client.destroy_sandbox(
@@ -127,13 +121,6 @@ class AgentBoxSandbox(ISandbox):
             allocation_epoch=sandbox.allocation_epoch,
             storage_generation=sandbox.storage_generation,
         )
-
-    def _to_container_info(
-        self,
-        sandbox_id: str,
-        sandbox: SandboxHandle,
-    ) -> SandboxInfo:
-        return self._to_sandbox_info(sandbox_id, sandbox)
 
     @staticmethod
     def _deadline() -> datetime:

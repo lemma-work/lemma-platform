@@ -13,7 +13,6 @@ from agentbox_client.models import (
 import httpx
 import pytest
 
-from app.core.config import settings
 from app.modules.workspace.services.workspace_file_manager import WorkspaceFileManager
 
 
@@ -95,7 +94,6 @@ def _api_error(*, status_code: int, code: str) -> AgentBoxApiError:
 def _configure_remote_manager(
     monkeypatch: pytest.MonkeyPatch, session: _FakeWorkspaceSession
 ) -> WorkspaceFileManager:
-    monkeypatch.setattr(settings, "environment", "development")
     monkeypatch.setattr(
         "app.modules.workspace.services.workspace_sandbox_service.WorkspaceSandboxService",
         lambda: _FakeWorkspaceService(session),
@@ -164,7 +162,6 @@ async def test_workspace_file_manager_converts_only_typed_missing_error(
 def test_workspace_file_manager_rejects_escaping_cwd_and_paths(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(settings, "environment", "development")
 
     with pytest.raises(ValueError, match="cwd escapes"):
         WorkspaceFileManager(uuid4(), cwd="../../outside")
@@ -172,18 +169,3 @@ def test_workspace_file_manager_rejects_escaping_cwd_and_paths(
     manager = WorkspaceFileManager(uuid4(), cwd="conversations/abc")
     with pytest.raises(ValueError, match="escapes"):
         manager._workspace_path("../../outside")
-
-
-@pytest.mark.asyncio
-async def test_local_workspace_file_manager_bounds_paths_and_deletes_directories(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(settings, "environment", "testing")
-    manager = WorkspaceFileManager(uuid4(), cwd="conversations/abc")
-
-    await manager.write_file("nested/note.txt", "content")
-    await manager.delete_file("nested")
-
-    assert await manager.list_files("") == []
-    with pytest.raises(ValueError, match="escapes"):
-        await manager.write_file("../../outside.txt", "content")

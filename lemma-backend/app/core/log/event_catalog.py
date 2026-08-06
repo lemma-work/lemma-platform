@@ -585,7 +585,4 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'workspace.agentbox_session.output_cursor_read_failed': EventSpec('debug', frozenset({'process_id', 'sandbox_id'})),
     'workspace.agentbox_session.output_cursor_write_failed': EventSpec('debug', frozenset({'process_id', 'sandbox_id'})),
     'workspace.mime_type.unknown': EventSpec('debug', frozenset()),
-    'workspace.workspace_activity_store.invalid_workspace_activity_payload_user.diagnostic': EventSpec('debug', frozenset({'user_id'})),
-    'workspace.workspace_state_store.invalid_workspace_state_payload_user.diagnostic': EventSpec('debug', frozenset({'user_id'})),
-    'workspace.workspace_state_store.release_workspace_lock_user_s.diagnostic': EventSpec('debug', frozenset({'user_id'})),
 }

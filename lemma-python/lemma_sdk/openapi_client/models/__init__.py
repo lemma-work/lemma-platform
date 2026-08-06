@@ -497,11 +497,6 @@ _NAME_TO_MODULE = {
     'WorkflowUpdateRequest': 'workflow_update_request',
     'WorkspaceAppAccessRequest': 'workspace_app_access_request',
     'WorkspaceAppAccessResponse': 'workspace_app_access_response',
-    'WorkspaceMeApp': 'workspace_me_app',
-    'WorkspaceMeResponse': 'workspace_me_response',
-    'WorkspaceMeResponseApps': 'workspace_me_response_apps',
-    'WorkspaceMeSandbox': 'workspace_me_sandbox',
-    'WorkspaceMeSession': 'workspace_me_session',
 }
 
 if TYPE_CHECKING:
@@ -993,11 +988,6 @@ if TYPE_CHECKING:
     from .workflow_update_request import WorkflowUpdateRequest
     from .workspace_app_access_request import WorkspaceAppAccessRequest
     from .workspace_app_access_response import WorkspaceAppAccessResponse
-    from .workspace_me_app import WorkspaceMeApp
-    from .workspace_me_response import WorkspaceMeResponse
-    from .workspace_me_response_apps import WorkspaceMeResponseApps
-    from .workspace_me_sandbox import WorkspaceMeSandbox
-    from .workspace_me_session import WorkspaceMeSession
 
 
 def __getattr__(name: str):
@@ -1502,9 +1492,4 @@ __all__ = [
     'WorkflowUpdateRequest',
     'WorkspaceAppAccessRequest',
     'WorkspaceAppAccessResponse',
-    'WorkspaceMeApp',
-    'WorkspaceMeResponse',
-    'WorkspaceMeResponseApps',
-    'WorkspaceMeSandbox',
-    'WorkspaceMeSession',
 ]

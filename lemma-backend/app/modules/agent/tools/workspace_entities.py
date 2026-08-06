@@ -2,7 +2,6 @@
 
 from app.modules.workspace.contracts import (
     ContainerInfo,
-    ExecutionResult,
     PythonExecutionResult,
     SandboxInfo,
     ShellCommandResult,
@@ -11,7 +10,6 @@ from app.modules.workspace.contracts import (
 
 __all__ = [
     "ContainerInfo",
-    "ExecutionResult",
     "PythonExecutionResult",
     "SandboxInfo",
     "ShellCommandResult",

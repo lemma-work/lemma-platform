@@ -378,10 +378,6 @@ export type { WorkflowSummaryResponse } from './models/WorkflowSummaryResponse.j
 export type { WorkflowUpdateRequest } from './models/WorkflowUpdateRequest.js';
 export type { WorkspaceAppAccessRequest } from './models/WorkspaceAppAccessRequest.js';
 export type { WorkspaceAppAccessResponse } from './models/WorkspaceAppAccessResponse.js';
-export type { WorkspaceMeApp } from './models/WorkspaceMeApp.js';
-export type { WorkspaceMeResponse } from './models/WorkspaceMeResponse.js';
-export type { WorkspaceMeSandbox } from './models/WorkspaceMeSandbox.js';
-export type { WorkspaceMeSession } from './models/WorkspaceMeSession.js';
 
 export { AgentConversationsService } from './services/AgentConversationsService.js';
 export { AgentHostService } from './services/AgentHostService.js';
@@ -414,5 +410,4 @@ export { UsageService } from './services/UsageService.js';
 export { UsersService } from './services/UsersService.js';
 export { WidgetsService } from './services/WidgetsService.js';
 export { WorkflowsService } from './services/WorkflowsService.js';
-export { WorkspaceService } from './services/WorkspaceService.js';
 export { WorkspaceAppsService } from './services/WorkspaceAppsService.js';

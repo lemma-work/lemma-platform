@@ -42,15 +42,6 @@ class WorkspaceStatus(str, Enum):
     ERROR = "ERROR"
 
 
-@dataclass
-class ExecutionResult:
-    success: bool
-    output: str
-    error: str | None = None
-    execution_count: int | None = None
-    data: dict[str, Any] | None = None
-
-
 class ShellCommandResult(BaseModel):
     success: bool
     exit_code: int | None = None

@@ -52,7 +52,6 @@ class AgentBoxWorkspaceSession:
         env_vars: dict[str, str] | None = None,
         initial_cwd: str = "/workspace",
         auto_close: bool = True,
-        activity_callback=None,
         owns_client: bool = True,
         output_cursor_store=None,
         workspace_recreated: bool = False,
@@ -73,7 +72,6 @@ class AgentBoxWorkspaceSession:
         self._cwd = canonical_workspace_cwd(initial_cwd)
         self.auto_close = auto_close
         self._owns_client = owns_client
-        self._activity_callback = activity_callback
         self._python_session_observed = False
         self._output_cursor = OutputCursor(
             output_cursor_store, sandbox_id=self.sandbox_id
@@ -83,12 +81,7 @@ class AgentBoxWorkspaceSession:
         # rather than having to infer it from an empty directory.
         self.workspace_recreated = workspace_recreated
 
-    async def _touch_activity(self) -> None:
-        if self._activity_callback is not None:
-            await self._activity_callback(self.session_id)
-
     async def execute_code(self, code: str, timeout: int = 60) -> PythonExecutionResult:
-        await self._touch_activity()
         deadline = self._deadline(timeout)
         try:
             await self._ensure_python_session(deadline)
@@ -164,7 +157,6 @@ class AgentBoxWorkspaceSession:
         cols: int = 120,
         rows: int = 40,
     ) -> dict[str, Any]:
-        await self._touch_activity()
         operation_id = uuid4()
         deadline = self._deadline(timeout or 300)
         output_limit = min(
@@ -216,7 +208,6 @@ class AgentBoxWorkspaceSession:
         yield_time_ms: int | None = None,
     ) -> dict[str, Any]:
         del max_output_tokens
-        await self._touch_activity()
         operation_id = UUID(process_id)
         deadline = self._deadline(35)
         input_accepted = False
@@ -293,7 +284,6 @@ class AgentBoxWorkspaceSession:
         into unreadable output.
         """
 
-        await self._touch_activity()
         return await resize_process_terminal(
             self.client,
             self.logical_id,
@@ -304,7 +294,6 @@ class AgentBoxWorkspaceSession:
         )
 
     async def terminate_process(self, process_id: str) -> dict[str, Any]:
-        await self._touch_activity()
         operation_id = UUID(process_id)
         response = await self.client.terminate_process(
             WorkloadKind.WORKSPACE,
@@ -323,7 +312,6 @@ class AgentBoxWorkspaceSession:
         }
 
     async def list_processes(self) -> list[dict[str, Any]]:
-        await self._touch_activity()
         processes = await self.client.list_processes(
             WorkloadKind.WORKSPACE, self.logical_id
         )
@@ -343,7 +331,6 @@ class AgentBoxWorkspaceSession:
         ]
 
     async def stat_file(self, path: str, *, timeout: int = 30) -> FileStat:
-        await self._touch_activity()
         return await self.client.stat_file(
             self.logical_id,
             await self._resolve_path(path),
@@ -351,7 +338,6 @@ class AgentBoxWorkspaceSession:
         )
 
     async def list_files(self, path: str, *, timeout: int = 30) -> tuple[FileStat, ...]:
-        await self._touch_activity()
         return await self.client.list_files(
             self.logical_id,
             await self._resolve_path(path),
@@ -366,7 +352,6 @@ class AgentBoxWorkspaceSession:
         length: int | None = None,
         timeout: int = 60,
     ) -> bytes:
-        await self._touch_activity()
         return await self.client.read_file(
             self.logical_id,
             await self._resolve_path(path),
@@ -384,7 +369,6 @@ class AgentBoxWorkspaceSession:
         length: int | None = None,
         timeout: int = 60,
     ) -> AsyncIterator[AsyncIterator[bytes]]:
-        await self._touch_activity()
         async with self.client.stream_file(
             self.logical_id,
             await self._resolve_path(path),
@@ -402,7 +386,6 @@ class AgentBoxWorkspaceSession:
         expected_sha256: str | None = None,
         timeout: int = 60,
     ) -> FileStat:
-        await self._touch_activity()
         return await self.client.write_file(
             self.logical_id,
             await self._resolve_path(path),
@@ -419,7 +402,6 @@ class AgentBoxWorkspaceSession:
         expected_sha256: str | None = None,
         timeout: int = 60,
     ) -> FileStat:
-        await self._touch_activity()
         return await self.client.write_file_stream(
             self.logical_id,
             await self._resolve_path(path),
@@ -435,7 +417,6 @@ class AgentBoxWorkspaceSession:
         *,
         timeout: int = 30,
     ) -> None:
-        await self._touch_activity()
         await self.client.move_file(
             self.logical_id,
             await self._resolve_path(source),
@@ -450,7 +431,6 @@ class AgentBoxWorkspaceSession:
         recursive: bool = False,
         timeout: int = 30,
     ) -> None:
-        await self._touch_activity()
         await self.client.delete_file(
             self.logical_id,
             await self._resolve_path(path),
@@ -491,7 +471,6 @@ class AgentBoxWorkspaceSession:
                 await self.client.close()
 
     async def __aenter__(self) -> AgentBoxWorkspaceSession:
-        await self._touch_activity()
         return self
 
     async def __aexit__(self, *_args: object) -> None:
