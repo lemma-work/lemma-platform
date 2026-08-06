@@ -350,6 +350,7 @@ async def _ensure_connector_account(
     config_source: str = "SYSTEM_DEFAULT",
 ) -> Account:
     await _ensure_connector(db_session, connector_id, provider=provider)
+    kind = provider_to_kind(provider).value
     organization_id = await db_session.scalar(
         select(OrganizationMember.organization_id)
         .where(OrganizationMember.user_id == UUID(user_id))
@@ -367,15 +368,15 @@ async def _ensure_connector_account(
             organization_id=organization_id,
             connector_id=connector_id,
             name=f"{connector_id} {config_source.lower()}",
-            provider=provider.value,
+            kind=kind,
             config_source=config_source,
             status="ACTIVE",
         )
         db_session.add(auth_config)
         await db_session.flush()
     else:
-        if auth_config.provider != provider.value:
-            auth_config.provider = provider.value
+        if auth_config.kind != kind:
+            auth_config.kind = kind
         if auth_config.config_source != config_source:
             auth_config.config_source = config_source
         await db_session.flush()

@@ -74,6 +74,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'agent.speech.speech_say_surface_delivery_s.diagnostic': EventSpec('debug', frozenset()),
     'agent.speech.speech_say_synthesize_s.diagnostic': EventSpec('debug', frozenset()),
     'agent.web_search.failed': EventSpec('debug', frozenset()),
+    'agent.workspace_cli.github_credential_bridge_failed.diagnostic': EventSpec('debug', frozenset()),
     'agent.workspace_cli.workspace_cli_list_processes_s.diagnostic': EventSpec('debug', frozenset()),
     'agent.workspace_cli.workspace_cli_s_s.diagnostic': EventSpec('debug', frozenset({'operation'})),
     'agent_surfaces.adapter.teams_fetch_email_bf_connector.observed': EventSpec('debug', frozenset()),

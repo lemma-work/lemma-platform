@@ -1,0 +1,20 @@
+title = "lemma-platform gitleaks config"
+
+# Keep the full default detection ruleset; this file only adds a repo-specific
+# allowlist entry on top of it.
+[extend]
+useDefault = true
+
+[allowlist]
+description = '''
+GitHub's own official REST API OpenAPI description (fetched on demand by
+lemma-backend/scripts/generate_github_static_operations.py, no longer
+committed -- see lemma-backend/.gitignore) was briefly committed and is still
+present in this branch's git history. It is a vendor doc full of
+realistic-looking example secret values (fake access_token/client_secret/
+webhook_secret strings used purely to illustrate schema shape), not real
+leaked credentials. Path-allowlisted rather than purged from history.
+'''
+paths = [
+  '''lemma-backend/lemma-connectors/openapi_specs/github\.json''',
+]

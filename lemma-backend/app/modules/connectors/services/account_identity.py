@@ -91,6 +91,13 @@ async def resolve_account_identity(
             return _email_identity(creds, profile, raw, user_data)
         if app == "slack":
             return _slack_identity(creds, profile, raw, user_data)
+        # "github" is both the native LEMMA connector (profile has "login",
+        # from the curated users_get_authenticated operation) and a Composio
+        # toolkit (whose identity lives in raw.word_id and is handled by the
+        # generic fallback below) -- distinguish by shape, not by kind, since
+        # this function only sees connector_id.
+        if app == "github" and _nested(profile, "login"):
+            return _github_identity(profile)
         return _generic_identity(creds, profile, raw, user_data)
     except Exception:  # pragma: no cover - identity is best-effort
         logger.debug(
@@ -189,6 +196,24 @@ def _slack_identity(
     return AccountIdentity(
         provider_account_id=provider_account_id,
         display_name=team_name or team_id or provider_account_id,
+    )
+
+
+def _github_identity(profile: dict) -> AccountIdentity:
+    """GitHub's `users/get-authenticated` response: `login` is the stable,
+    always-present handle (id numerically also works but `login` is what a
+    git credential/commit-author setup actually wants); `email` is commonly
+    null when the account has "keep my email address private" enabled, which
+    is normal and not an error -- callers needing a git-committable email
+    fall back to GitHub's own noreply convention (`{login}@users.noreply.
+    github.com`), not this function's job to decide.
+    """
+    login = _nested(profile, "login")
+    email = _nested(profile, "email")
+    return AccountIdentity(
+        provider_account_id=login,
+        email=email,
+        display_name=login or email,
     )
 
 

@@ -169,7 +169,7 @@ export function EditableNumberCell({ value, onSave, onCancel }: Omit<EditableCel
                 className="flex min-h-7 cursor-pointer items-center rounded-md px-1.5 py-1 transition-gentle hover:bg-[var(--bg-subtle)]"
                 onClick={() => setIsEditing(true)}
             >
-                <span className="w-full tabular-nums text-sm text-[var(--text-primary)]">
+                <span className="w-full truncate tabular-nums text-sm text-[var(--text-primary)]">
                     {originalValue || <span className="text-[var(--text-tertiary)]">—</span>}
                 </span>
             </div>
@@ -251,7 +251,7 @@ export function EditableDateCell({ value, onSave, onCancel }: Omit<EditableCellP
                 className="flex min-h-7 cursor-pointer items-center rounded-md px-1.5 py-1 transition-gentle hover:bg-[var(--bg-subtle)]"
                 onClick={() => setIsEditing(true)}
             >
-                <span className="w-full text-sm text-[var(--text-primary)]">
+                <span className="w-full truncate text-sm text-[var(--text-primary)]">
                     {displayValue || <span className="text-[var(--text-tertiary)]">—</span>}
                 </span>
             </div>
@@ -349,8 +349,11 @@ export function EditableEnumCell({
                 onClick={() => setIsEditing(true)}
             >
                 {normalizedValue ? (
-                    <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium shadow-[var(--shadow-xs)] ${color.bg} ${color.text}`}>
-                        {normalizedValue}
+                    // The label truncates inside the pill rather than the pill
+                    // truncating inside the cell: a chip clipped mid-curve reads
+                    // as a rendering fault, an ellipsis reads as a long value.
+                    <span className={`inline-flex min-w-0 max-w-full items-center rounded-full px-2 py-0.5 text-xs font-medium shadow-[var(--shadow-xs)] ${color.bg} ${color.text}`}>
+                        <span className="truncate">{normalizedValue}</span>
                     </span>
                 ) : (
                     <span className="text-sm text-[var(--text-tertiary)]">—</span>

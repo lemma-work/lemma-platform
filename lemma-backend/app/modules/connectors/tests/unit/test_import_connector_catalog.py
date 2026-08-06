@@ -17,6 +17,7 @@ from app.modules.connectors.domain.connector import (
     AuthProvider,
     ComposioProviderCapability,
     DiscoveryMode,
+    HttpKindSpec,
     LemmaProviderCapability,
     McpKindSpec,
     SqlKindSpec,
@@ -205,6 +206,110 @@ async def test_sync_native_catalog_adds_default_oauth_auth_config_schema():
         },
         "additionalProperties": False,
     }
+
+
+@pytest.mark.asyncio
+async def test_sync_static_operations_stores_the_declared_kind():
+    """Regression test: `_sync_static_operations` always upserted operations as
+    `AuthProvider.LEMMA`, which `provider_to_kind` maps to `PACKAGE` as an
+    ambiguous best-effort default -- so every static-operations connector's
+    rows (not just github's: `sql`'s query/list_tables/describe_table too)
+    were stored with `kind='package'` regardless of the connector's real
+    declared kind. `get_by_connector_kind_and_name` -- what the execute-
+    operation route uses -- looks up by the *real* kind, so every such
+    operation was unreachable at runtime despite importing without error.
+    """
+    created: list = []
+
+    class _FakeOperationRepository:
+        async def get_by_connector_kind_and_name(self, connector_id, kind, name):
+            del connector_id, kind, name
+            return None
+
+        async def create(self, entity):
+            created.append(entity)
+
+        async def update(self, entity):
+            created.append(entity)
+
+    await importer._sync_static_operations(
+        _FakeOperationRepository(),
+        "github",
+        [
+            {
+                "name": "users_get_authenticated",
+                "description": "Get the authenticated user",
+                "execution": {"kind": "http", "mode": "openapi"},
+            }
+        ],
+        kind="http",
+    )
+
+    assert len(created) == 1
+    assert created[0].kind == ConnectorKind.HTTP
+
+
+@pytest.mark.asyncio
+async def test_sync_native_catalog_honors_declared_kind():
+    """A lemma_apps_config.json entry's "kind" field must drive the connector's
+    capability class, not silently fall back to a vendored-package kind.
+
+    Regression test: `_sync_native_catalog` previously never forwarded
+    `app_config.get("kind")` into `_native_kind_spec`, so every connector
+    sourced from lemma_apps_config.json -- including `sql`, `mcp`, `openapi`,
+    and `github` -- was built as a `PackageKindSpec` regardless of its
+    declared kind. That only surfaced once a real install tried to select
+    the connector's own declared kind and got a "cannot be installed as"
+    error, because no test exercised `_sync_native_catalog` end-to-end for a
+    non-package kind.
+    """
+    connector_repository = SimpleNamespace(get=AsyncMock(return_value=None))
+    operation_repository = SimpleNamespace()
+    trigger_repository = SimpleNamespace()
+
+    with (
+        patch.object(
+            importer,
+            "_load_lemma_apps_config",
+            return_value=[
+                {
+                    "name": "sql",
+                    "title": "SQL Database",
+                    "description": "Connect to an external SQL database.",
+                    "auth_method": "API_KEY",
+                    "kind": "sql",
+                    "is_active": True,
+                    "triggers": [],
+                },
+                {
+                    "name": "github",
+                    "title": "GitHub",
+                    "description": "GitHub connector.",
+                    "auth_method": "OAUTH2",
+                    "kind": "http",
+                    "is_active": True,
+                    "triggers": [],
+                },
+            ],
+        ),
+        patch.object(importer, "_upsert_connector", AsyncMock()) as upsert_connector,
+    ):
+        totals = await importer._sync_native_catalog(
+            connector_repository,
+            operation_repository,
+            trigger_repository,
+            app_filters={"sql", "github"},
+            schema_compiler=importer.PydanticCodeSchemaCompiler(),
+        )
+
+    assert totals == (2, 0, 0)
+    entities = {call.args[1].id: call.args[1] for call in upsert_connector.await_args_list}
+
+    sql_spec = entities["sql"].spec_for(ConnectorKind.SQL)
+    assert isinstance(sql_spec, SqlKindSpec)
+
+    github_spec = entities["github"].spec_for(ConnectorKind.HTTP)
+    assert isinstance(github_spec, HttpKindSpec)
 
 
 @pytest.mark.asyncio

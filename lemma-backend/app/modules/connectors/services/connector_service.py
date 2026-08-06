@@ -23,7 +23,7 @@ from app.modules.connectors.domain.connector import (
     AuthProvider,
     ConnectorKind,
     ComposioProviderCapability,
-    LemmaProviderCapability,
+    KindSpec,
     OAuth2Config,
     OAuth2CredentialConfig,
 )
@@ -69,6 +69,9 @@ from app.modules.connectors.services.install_provisioning import (
     validate_install_config,
 )
 from app.modules.connectors.services.install_update import update_install
+from app.modules.connectors.services.profile_operation_execution import (
+    execute_profile_operation,
+)
 from app.core.log.log import get_logger
 
 logger = get_logger(__name__)
@@ -105,6 +108,7 @@ class ConnectorService:
         self.operation_gateway = operation_gateway
         self.operation_repository = operation_repository
         self.auth_config_operation_repository = auth_config_operation_repository
+        self._kind_dispatcher = None
 
     def _exception_details(self, exc: Exception) -> dict | None:
         details: dict[str, object] = {"error_type": type(exc).__name__}
@@ -196,15 +200,17 @@ class ConnectorService:
             if operation is None:
                 continue
             try:
-                result = await self.operation_gateway.execute_operation(
+                result = await execute_profile_operation(
                     connector_id=connector_id,
-                    operation_name=operation.execution_name,
-                    payload={},
-                    third_party_credentials=credentials.model_dump(exclude_none=True),
+                    kind=kind,
+                    operation=operation,
                     provider=provider,
+                    credentials=credentials,
+                    operation_gateway=self.operation_gateway,
+                    get_dispatcher=self._profile_dispatcher,
                 )
             except Exception:
-                logger.debug('connectors.connector_service.profile_operation_s_s_s.diagnostic', operation_name=operation_name, connector_id=connector_id)
+                logger.debug('connectors.connector_service.profile_operation_s_s_s.diagnostic', operation_name=operation_name, connector_id=connector_id, exc_info=True)
                 continue
             profile = self._profile_to_dict(result)
             # Composio wraps every tool execution result in
@@ -221,6 +227,15 @@ class ConnectorService:
             if profile:
                 return profile
         return None
+
+    def _profile_dispatcher(self):
+        if self._kind_dispatcher is None:
+            from app.modules.connectors.services.execution.plumbing import (
+                build_dispatcher,
+            )
+
+            self._kind_dispatcher = build_dispatcher(self.operation_gateway)
+        return self._kind_dispatcher
 
     def _extract_provider_account_id_from_profile(
         self,
@@ -239,6 +254,7 @@ class ConnectorService:
                 "bot_id",
             ),
             "google_drive": ("user.permission_id", "user.email_address"),
+            "github": ("login",),
         }
         for path in candidate_paths_by_app.get(connector_id, ()):
             value = self._extract_nested_value(profile, path)
@@ -346,7 +362,7 @@ class ConnectorService:
     def _lemma_capability(
         self,
         connector: ConnectorEntity,
-    ) -> LemmaProviderCapability:
+    ) -> KindSpec:
         try:
             capability = connector.capability_for(AuthProvider.LEMMA)
         except ValueError as exc:
@@ -396,7 +412,10 @@ class ConnectorService:
     ) -> ConnectorEntity:
         capabilities = []
         for capability in connector.kinds:
-            if isinstance(capability, LemmaProviderCapability):
+            # "LEMMA" means any kind we serve ourselves, matching
+            # _lemma_capability above -- narrowing to the package spec left
+            # every other native kind's system_default_available always false.
+            if capability.kind is not ConnectorKind.COMPOSIO:
                 has_system_default = (
                     capability.auth_scheme != AuthScheme.OAUTH2
                     or self.system_oauth_config.has_default_oauth_config(connector)

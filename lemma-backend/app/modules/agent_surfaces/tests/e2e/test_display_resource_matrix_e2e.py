@@ -738,8 +738,7 @@ async def test_display_resource_gmail_attaches_datastore_file_via_composio(
         user_id=fixed_test_user["id"],
         connector_id="gmail",
         credentials={
-            "access_token": "gmail-token",
-            "api_base_url": fake_gmail.api_base,
+            "connection_id": "gmail-file-e2e-account",
         },
         email="assistant@gmail.test",
         provider=AuthProvider.COMPOSIO,
@@ -833,8 +832,7 @@ async def test_display_resource_outlook_attaches_datastore_file_via_composio(
         user_id=fixed_test_user["id"],
         connector_id="outlook",
         credentials={
-            "access_token": "outlook-token",
-            "api_base_url": fake_outlook.api_base,
+            "connection_id": "outlook-file-e2e-account",
         },
         email="assistant@outlook.test",
         provider=AuthProvider.COMPOSIO,

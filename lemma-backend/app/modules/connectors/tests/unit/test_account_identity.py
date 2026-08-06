@@ -34,6 +34,31 @@ async def test_gmail_identity_falls_back_to_sub_when_profile_has_no_email():
     assert identity.display_name == "109876543210"
 
 
+async def test_github_identity_uses_login_and_email():
+    identity = await resolve_account_identity(
+        connector_id="github",
+        credentials={},
+        profile={"login": "octocat", "id": 1, "email": "octocat@github.com"},
+    )
+    assert identity.provider_account_id == "octocat"
+    assert identity.email == "octocat@github.com"
+    assert identity.display_name == "octocat"
+
+
+async def test_github_identity_uses_login_when_email_is_private():
+    """GitHub's own "keep my email address private" setting nulls the email
+    field in the profile response -- this is normal, not a missing-scope
+    error, so the login must still carry the account's identity."""
+    identity = await resolve_account_identity(
+        connector_id="github",
+        credentials={},
+        profile={"login": "octocat", "id": 1, "email": None},
+    )
+    assert identity.provider_account_id == "octocat"
+    assert identity.email is None
+    assert identity.display_name == "octocat"
+
+
 async def test_slack_identity_uses_team_name_and_user_id():
     identity = await resolve_account_identity(
         connector_id="slack",

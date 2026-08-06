@@ -343,8 +343,7 @@ async def test_multi_tool_turn_gmail_two_widgets_then_one_reply(
         user_id=fixed_test_user["id"],
         connector_id="gmail",
         credentials={
-            "access_token": "gmail-token",
-            "api_base_url": fake_gmail.api_base,
+            "connection_id": "gmail-multi-e2e-account",
         },
         email="assistant@gmail.test",
         provider=AuthProvider.COMPOSIO,
@@ -432,8 +431,7 @@ async def test_multi_tool_turn_outlook_two_widgets_then_one_reply(
         user_id=fixed_test_user["id"],
         connector_id="outlook",
         credentials={
-            "access_token": "outlook-token",
-            "api_base_url": fake_outlook.api_base,
+            "connection_id": "outlook-multi-e2e-account",
         },
         email="assistant@outlook.test",
         provider=AuthProvider.COMPOSIO,

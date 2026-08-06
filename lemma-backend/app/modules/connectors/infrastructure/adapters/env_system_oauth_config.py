@@ -4,8 +4,9 @@ import os
 
 from app.modules.connectors.domain.connector import (
     ConnectorEntity,
+    ConnectorKind,
     AuthProvider,
-    LemmaProviderCapability,
+    KindSpec,
     OAuth2Config,
     OAuth2Defaults,
     SystemOAuthCredentialRef,
@@ -97,12 +98,17 @@ class EnvSystemOAuthConfigAdapter(SystemOAuthConfigPort):
     def _lemma_capability(
         self,
         connector: ConnectorEntity,
-    ) -> LemmaProviderCapability | None:
+    ) -> KindSpec | None:
+        # "LEMMA" means any kind we serve ourselves -- sql/mcp/http as well as
+        # the vendored package -- matching ConnectorService._lemma_capability.
+        # Narrowing to the package spec specifically silently dropped system
+        # OAuth default availability for every non-package native kind (e.g.
+        # an `http`-kind connector with its own `system_oauth`, like GitHub).
         try:
             capability = connector.capability_for(AuthProvider.LEMMA)
         except ValueError:
             return None
-        return capability if isinstance(capability, LemmaProviderCapability) else None
+        return capability if capability.kind is not ConnectorKind.COMPOSIO else None
 
     def _first_env_value(self, names: list[str]) -> str | None:
         for name in names:
