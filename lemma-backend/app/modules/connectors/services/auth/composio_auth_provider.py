@@ -115,7 +115,7 @@ class ComposioAuthProvider(AuthProviderInterface):
                 return datetime.now(timezone.utc) + timedelta(
                     seconds=int(float(expires_in))
                 )
-            except TypeError, ValueError:
+            except (TypeError, ValueError):
                 logger.debug(
                     'connectors.composio_auth_provider.parse_composio_expires_value_s.diagnostic'
                 )

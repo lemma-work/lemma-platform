@@ -39,6 +39,28 @@ def _is_default_pod_agent(deps: BaseAgentContext) -> bool:
     )
 
 
+async def build_delegated_context(
+    uow: SqlAlchemyUnitOfWork, deps: BaseAgentContext
+) -> Context:
+    """Build the delegated-workload authorization context for an agent tool call.
+
+    Shared by every in-process caller that needs to make the same "does this
+    workload have the grant it's using" decision `AccountResolutionService`
+    makes -- currently connector operation execution and the workspace
+    GitHub-credential bridge -- so there is one implementation of the
+    delegation shape, not several that can drift.
+    """
+    return await create_authorization_service(uow).build_delegated_workload_context(
+        user_id=deps.user_id,
+        principal_type="AGENT",
+        principal_id=deps.workload_id or DEFAULT_POD_AGENT_ID,
+        pod_id=deps.pod_id,
+        is_default_pod_agent=_is_default_pod_agent(deps),
+        delegation_actor_name=deps.agent_name,
+        delegation_session_id=str(deps.conversation_id),
+    )
+
+
 @dataclass(slots=True)
 class ConnectorServices:
     connector: object
@@ -58,17 +80,7 @@ async def connector_services(
     )
 
     async with SessionUnitOfWorkFactory(async_session_maker)() as uow:
-        auth_ctx = await create_authorization_service(
-            uow
-        ).build_delegated_workload_context(
-            user_id=deps.user_id,
-            principal_type="AGENT",
-            principal_id=deps.workload_id or DEFAULT_POD_AGENT_ID,
-            pod_id=deps.pod_id,
-            is_default_pod_agent=_is_default_pod_agent(deps),
-            delegation_actor_name=deps.agent_name,
-            delegation_session_id=str(deps.conversation_id),
-        )
+        auth_ctx = await build_delegated_context(uow, deps)
         token = set_current_context(auth_ctx)
         try:
             yield ConnectorServices(

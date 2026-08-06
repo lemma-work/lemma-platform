@@ -902,10 +902,16 @@ async def _upsert_operation(
     execution: dict | None = None,
     kind: str | None = None,
 ) -> None:
+    # `provider` only unambiguously determines `kind` for Composio (->COMPOSIO)
+    # and true vendored-package installs (->PACKAGE). A static-operations
+    # connector (sql/mcp/http) knows its real kind and must pass it explicitly
+    # -- falling back to provider_to_kind(LEMMA) silently mislabels every such
+    # operation as `package`, so a strict (connector_id, kind, name) lookup
+    # like the execute-operation route's never finds it.
+    resolved_kind = kind or provider_to_kind(provider).value
     operation_name = (
         _normalize_operation_name(public_name) if normalize_name else public_name.strip()
     )
-    resolved_kind = kind or provider_to_kind(provider).value
     existing = await operation_repository.get_by_connector_kind_and_name(
         connector_id,
         resolved_kind,
@@ -966,6 +972,7 @@ async def _sync_static_operations(
         await _upsert_operation(
             operation_repository,
             connector_id,
+            kind=kind,
             provider=AuthProvider.LEMMA,
             public_name=public_name,
             provider_operation_name=_normalize_operation_name(public_name),
@@ -979,7 +986,6 @@ async def _sync_static_operations(
                 description=description,
             ),
             execution=op["execution"],
-            kind=kind,
         )
         count += 1
     return count

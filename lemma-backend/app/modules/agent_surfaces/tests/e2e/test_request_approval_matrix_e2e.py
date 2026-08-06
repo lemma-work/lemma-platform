@@ -883,8 +883,7 @@ async def test_request_approval_suppressed_on_gmail_reply_completes_via_reply_to
         user_id=fixed_test_user["id"],
         connector_id="gmail",
         credentials={
-            "access_token": "gmail-token",
-            "api_base_url": fake_gmail.api_base,
+            "connection_id": "gmail-approval-e2e-account",
         },
         email="assistant@gmail.test",
         provider=AuthProvider.COMPOSIO,
@@ -949,8 +948,7 @@ async def test_request_approval_suppressed_on_outlook_reply_completes_via_reply_
         user_id=fixed_test_user["id"],
         connector_id="outlook",
         credentials={
-            "access_token": "outlook-token",
-            "api_base_url": fake_outlook.api_base,
+            "connection_id": "outlook-approval-e2e-account",
         },
         email="assistant@outlook.test",
         provider=AuthProvider.COMPOSIO,

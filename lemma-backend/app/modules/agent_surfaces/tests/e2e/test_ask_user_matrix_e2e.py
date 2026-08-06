@@ -775,8 +775,7 @@ async def test_ask_user_suppressed_on_gmail_reply_completes_via_reply_tool(
         user_id=fixed_test_user["id"],
         connector_id="gmail",
         credentials={
-            "access_token": "gmail-token",
-            "api_base_url": fake_gmail.api_base,
+            "connection_id": "gmail-ask-user-e2e-account",
         },
         email="assistant@gmail.test",
         provider=AuthProvider.COMPOSIO,
@@ -842,8 +841,7 @@ async def test_ask_user_on_email_fails_fast_and_completes_via_reply_tool(
         user_id=fixed_test_user["id"],
         connector_id="gmail",
         credentials={
-            "access_token": "gmail-token",
-            "api_base_url": fake_gmail.api_base,
+            "connection_id": "gmail-ask-user-failfast-e2e-account",
         },
         email="assistant@gmail.test",
         provider=AuthProvider.COMPOSIO,
@@ -915,8 +913,7 @@ async def test_ask_user_suppressed_on_outlook_reply_completes_via_reply_tool(
         user_id=fixed_test_user["id"],
         connector_id="outlook",
         credentials={
-            "access_token": "outlook-token",
-            "api_base_url": fake_outlook.api_base,
+            "connection_id": "outlook-ask-user-e2e-account",
         },
         email="assistant@outlook.test",
         provider=AuthProvider.COMPOSIO,

@@ -18,6 +18,7 @@ from app.modules.connectors.domain.connector import (
     ConnectorEntity,
     AuthProvider,
     ComposioProviderCapability,
+    HttpKindSpec,
     LemmaProviderCapability,
 )
 from app.modules.connectors.domain.connector_operation import (
@@ -114,6 +115,88 @@ async def test_get_connector_raises_not_found():
 
     with pytest.raises(ConnectorNotFoundError):
         await service.get_connector("missing")
+
+
+async def test_get_connector_enriches_system_default_for_http_kind():
+    """Regression test: _enrich_connector_defaults previously only handled
+    LemmaProviderCapability (the vendored-package kind), so an http-kind
+    OAuth2 connector with its own system_oauth (e.g. a native GitHub
+    connector) always reported system_default_available=False even when the
+    env vars were set -- forcing every org to enter its own client
+    id/secret. "LEMMA" means any non-Composio kind, matching
+    ConnectorService._lemma_capability's own docstring.
+    """
+    connector = ConnectorEntity(
+        id="github",
+        provider_capabilities=[
+            HttpKindSpec(auth_scheme=AuthScheme.OAUTH2, supports_org_custom_oauth=True),
+        ],
+    )
+    service = _service(
+        connector_repository=AsyncMock(get=AsyncMock(return_value=connector)),
+        system_oauth_config=_system_oauth(),
+    )
+
+    enriched = await service.get_connector("github")
+
+    http_spec = enriched.spec_for(ConnectorKind.HTTP)
+    assert http_spec.system_default_available is True
+
+
+async def test_fetch_account_profile_routes_http_kind_through_kind_dispatcher():
+    """Regression test: `_fetch_account_profile` always went through
+    `operation_gateway.execute_operation` -- the legacy provider-gateway
+    split, which only knows Composio and the vendored-package client for
+    "LEMMA" -- so an http-kind connector's profile operation (e.g. GitHub's
+    `users_get_authenticated`) always threw (no vendored `lemma_connectors`
+    package exists for it) and the exception was silently swallowed by the
+    caller, leaving email/display_name/provider_account_id permanently null
+    for every such account. http/sql/mcp must route through the same
+    KindDispatcher the execute-operation route itself uses; Composio/package
+    keep the existing, already-proven gateway path untouched.
+    """
+    github_app = ConnectorEntity(
+        id="github",
+        provider_capabilities=[
+            HttpKindSpec(
+                auth_scheme=AuthScheme.OAUTH2,
+                profile_operation_names=["users_get_authenticated"],
+            ),
+        ],
+    )
+    operation = ConnectorOperationEntity(
+        id="github:http:users_get_authenticated",
+        connector_id="github",
+        kind=ConnectorKind.HTTP,
+        name="users_get_authenticated",
+        provider_operation_name="users_get_authenticated",
+        execution={"kind": "http", "mode": "openapi", "method": "GET", "path": "/user"},
+    )
+    operation_repository = AsyncMock()
+    operation_repository.get_by_connector_kind_and_name.return_value = operation
+
+    fake_dispatcher = AsyncMock()
+    fake_dispatcher.build_request.return_value = "resolved-request"
+    fake_dispatcher.execute.return_value = {"login": "octocat", "email": "octocat@github.com"}
+
+    unused_gateway = AsyncMock()
+    service = _service(
+        connector_repository=AsyncMock(get=AsyncMock(return_value=github_app)),
+        operation_repository=operation_repository,
+        operation_gateway=unused_gateway,
+    )
+
+    with patch(
+        "app.modules.connectors.services.execution.plumbing.build_dispatcher",
+        return_value=fake_dispatcher,
+    ):
+        profile = await service._fetch_account_profile(
+            github_app, AuthProvider.LEMMA.value, OAuthCredentials(access_token="tok")
+        )
+
+    assert profile == {"login": "octocat", "email": "octocat@github.com"}
+    unused_gateway.execute_operation.assert_not_awaited()
+    fake_dispatcher.execute.assert_awaited_once()
 
 
 async def test_initiate_connect_request_allowed_when_account_exists():
