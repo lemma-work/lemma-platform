@@ -82,3 +82,20 @@ def test_public_app_branding_links_to_remix_handoff(monkeypatch):
     assert "Remix on Lemma" in body
     assert branding["url"] in body
     assert "source=https%3A%2F%2Fresearch.apps.lemma.work" in body
+
+
+def test_public_app_branding_is_dismissable_and_persists_via_local_storage():
+    branding = {
+        "label": "Remix on Lemma",
+        "url": "https://lemma.work/remix?source=research",
+    }
+    body = inject_runtime_config(
+        "<html><head></head><body></body></html>",
+        uuid4(),
+        branding=branding,
+    ).decode()
+
+    assert "lemma:app-branding:dismissed" in body
+    assert "localStorage.getItem(dismissKey)" in body
+    assert "localStorage.setItem(dismissKey,'1')" in body
+    assert 'aria-label="Dismiss"' in body

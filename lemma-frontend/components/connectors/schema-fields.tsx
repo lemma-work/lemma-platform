@@ -1,12 +1,53 @@
 'use client';
 
+import { useState } from 'react';
+
+import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Plus, X } from '@/components/ui/icons';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { buildSchemaFormFields, type JsonSchemaLike, type SchemaFormField } from 'lemma-sdk';
 import type { SchemaValues } from './connector-utils';
+
+/**
+ * A free-form map of string headers — `extra_headers` on an MCP install,
+ * `default_headers` on an OpenAPI one.
+ *
+ * The schema builder folds every object into a `json` field, which renders as a
+ * textarea asking a person to hand-write `{"Authorization": "Bearer …"}` with
+ * the braces in the right places. These are the only object-shaped fields the
+ * connector forms have, and they are always this shape, so they get rows.
+ */
+const isStringMapSchema = (schema: JsonSchemaLike | undefined): boolean => {
+    if (!schema || schema.type !== 'object') return false;
+    const properties = schema.properties;
+    if (properties && Object.keys(properties).length > 0) return false;
+    const additional = schema.additionalProperties;
+    return Boolean(
+        additional && typeof additional === 'object' && (additional as JsonSchemaLike).type === 'string',
+    );
+};
+
+/** Reads a header map back from whatever the form is holding — object or JSON text. */
+const toEntries = (value: unknown): Array<[string, string]> => {
+    let parsed: unknown = value;
+    if (typeof value === 'string') {
+        if (!value.trim()) return [];
+        try {
+            parsed = JSON.parse(value);
+        } catch {
+            return [];
+        }
+    }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return [];
+    return Object.entries(parsed as Record<string, unknown>).map(([key, item]) => [
+        key,
+        typeof item === 'string' ? item : String(item ?? ''),
+    ]);
+};
 
 export function SchemaFields({
     schema,
@@ -14,14 +55,29 @@ export function SchemaFields({
     onChange,
     emptyMessage = 'No configurable fields are required for this provider.',
     autoFocusFirst = false,
+    followSchemaOrder = false,
 }: {
     schema: JsonSchemaLike | null;
     values: SchemaValues;
     onChange: (values: SchemaValues) => void;
     emptyMessage?: string;
     autoFocusFirst?: boolean;
+    /**
+     * Render fields in the order the schema declares them.
+     *
+     * `buildSchemaFormFields` otherwise sorts by label, which for a connection
+     * form puts Database above Host — alphabetical, and backwards from how
+     * anyone reads a connection string. Opt-in so the other connector forms keep
+     * the ordering they already ship.
+     */
+    followSchemaOrder?: boolean;
 }) {
-    const fields = buildSchemaFormFields(schema);
+    const declaredOrder =
+        followSchemaOrder && schema?.properties ? Object.keys(schema.properties) : null;
+    const fields = buildSchemaFormFields(
+        schema,
+        declaredOrder ? { 'ui:order': declaredOrder } : undefined,
+    );
 
     if (fields.length === 0) {
         return (
@@ -85,6 +141,10 @@ function SchemaField({
         );
     }
 
+    if (field.kind === 'json' && isStringMapSchema(field.schema)) {
+        return <StringMapField field={field} label={label} value={value} onChange={onChange} />;
+    }
+
     return (
         <div className="space-y-1.5">
             <Label htmlFor={fieldId}>{label}</Label>
@@ -130,6 +190,94 @@ function SchemaField({
                     onChange={(event) => onChange(event.target.value)}
                 />
             )}
+            {field.description ? (
+                <p className="text-xs leading-5 text-[var(--text-tertiary)]">{field.description}</p>
+            ) : null}
+        </div>
+    );
+}
+
+function StringMapField({
+    field,
+    label,
+    value,
+    onChange,
+}: {
+    field: SchemaFormField;
+    label: string;
+    value: unknown;
+    onChange: (value: unknown) => void;
+}) {
+    // Rows are local so a half-typed header — a key with no value yet, or two
+    // rows briefly sharing a name — survives the keystroke instead of being
+    // collapsed away by the object round-trip.
+    const [rows, setRows] = useState<Array<{ key: string; value: string }>>(() =>
+        toEntries(value).map(([key, item]) => ({ key, value: item })),
+    );
+
+    const commit = (next: Array<{ key: string; value: string }>) => {
+        setRows(next);
+        onChange(
+            Object.fromEntries(
+                next
+                    .map((row) => [row.key.trim(), row.value] as const)
+                    .filter(([key]) => key.length > 0),
+            ),
+        );
+    };
+
+    const updateRow = (index: number, patch: Partial<{ key: string; value: string }>) =>
+        commit(rows.map((row, position) => (position === index ? { ...row, ...patch } : row)));
+
+    return (
+        <div className="space-y-1.5">
+            <Label>{label}</Label>
+            <div className="space-y-2">
+                {rows.map((row, index) => (
+                    <div key={index} className="flex items-center gap-2">
+                        <Input
+                            aria-label={`${field.label} name`}
+                            autoComplete="off"
+                            data-1p-ignore
+                            data-lpignore="true"
+                            placeholder="Header"
+                            className="flex-1"
+                            value={row.key}
+                            onChange={(event) => updateRow(index, { key: event.target.value })}
+                        />
+                        <Input
+                            aria-label={`${field.label} value`}
+                            autoComplete="off"
+                            data-1p-ignore
+                            data-lpignore="true"
+                            placeholder="Value"
+                            className="flex-1"
+                            value={row.value}
+                            onChange={(event) => updateRow(index, { value: event.target.value })}
+                        />
+                        <Button
+                            type="button"
+                            variant="quiet"
+                            size="icon"
+                            className="h-8 w-8 shrink-0"
+                            aria-label={`Remove ${row.key || 'header'}`}
+                            onClick={() => commit(rows.filter((_, position) => position !== index))}
+                        >
+                            <X className="h-3.5 w-3.5" />
+                        </Button>
+                    </div>
+                ))}
+                <Button
+                    type="button"
+                    variant="quiet"
+                    size="sm"
+                    className="h-8 px-2 text-xs text-[var(--text-tertiary)]"
+                    onClick={() => setRows([...rows, { key: '', value: '' }])}
+                >
+                    <Plus className="mr-1.5 h-3.5 w-3.5" />
+                    Add header
+                </Button>
+            </div>
             {field.description ? (
                 <p className="text-xs leading-5 text-[var(--text-tertiary)]">{field.description}</p>
             ) : null}

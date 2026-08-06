@@ -10,83 +10,18 @@ import {
     agentHostBridge,
     useThisComputer,
     type AgentHostTarget,
-    type ThisComputerStatus,
 } from '@/lib/desktop/agent-host-bridge';
 import { DestructiveConfirmationDialog } from '@/components/shared/destructive-confirmation-dialog';
 import { getLemmaApiBaseUrl } from '@/lib/sdk/lemma-client';
 import { useCreateAgentHostPairing } from '@/lib/hooks/use-agent-runtime';
 import { allowAutoConnect, declineAutoConnect } from '@/lib/desktop/auto-connect';
 import { cn } from '@/lib/utils';
+import { describeThisComputer, selectWorkspaceTarget, type Tone } from './this-computer-status';
 
 export type ThisComputerState = {
     /** The paired-computer id the backend knows this machine by, if any. */
     hostId: string | null;
 };
-
-type Tone = 'ok' | 'warn' | 'muted';
-
-// What the machine can actually do right now, which is not the same question as
-// whether a process is alive: an unpaired host and one that cannot reach the
-// workspace are both running, and neither will pick up a run.
-//
-// A missing status is a state too, and used to be rendered as nothing at all.
-// In a hosted workspace the first poll is the one that has to start locald, so
-// "nothing yet" is the normal opening state and a failure there — no daemon, a
-// build without the sidecar — left an empty space where the only way to connect
-// this computer should have been.
-export function describe(
-    status: ThisComputerStatus | null,
-    error: string | null,
-): { label: string; detail: string; tone: Tone } {
-    if (!status) {
-        return error
-            ? {
-                  label: 'Unavailable',
-                  detail: error,
-                  tone: 'warn',
-              }
-            : {
-                  label: 'Checking',
-                  detail: 'Asking this computer which agents it can run.',
-                  tone: 'muted',
-              };
-    }
-    if (!status.available) {
-        return {
-            label: 'Not available',
-            detail: 'This build of Lemma does not include the Agent Host.',
-            tone: 'muted',
-        };
-    }
-    if (!status.paired) {
-        return {
-            label: 'Not connected',
-            detail: 'Connect this computer to run Claude Code, Codex, and other local agents here.',
-            tone: 'muted',
-        };
-    }
-    if (!status.running) {
-        return {
-            label: 'Off',
-            detail: 'Turn it on to let this workspace send work to this computer.',
-            tone: 'muted',
-        };
-    }
-    const target = status.targets[0];
-    if (target?.connection_state === 'ONLINE') {
-        const runs = target.active_runs ?? 0;
-        return {
-            label: 'Connected',
-            detail: runs > 0 ? `Running ${runs} ${runs === 1 ? 'task' : 'tasks'} now.` : 'Ready for work.',
-            tone: 'ok',
-        };
-    }
-    return {
-        label: 'Reconnecting',
-        detail: target?.last_error || status.last_error || 'Trying to reach this workspace.',
-        tone: 'warn',
-    };
-}
 
 function StatusDot({ tone }: { tone: Tone }) {
     return (
@@ -122,7 +57,12 @@ export function ThisComputerCard({
     const [busy, setBusy] = useState<string | null>(null);
     const [confirmDisconnect, setConfirmDisconnect] = useState(false);
 
-    const target: AgentHostTarget | undefined = status?.targets[0];
+    // This workspace's pairing, not whichever one happens to be first: a Mac
+    // paired to its own local stack and then opened against a hosted workspace
+    // has two, and only one of them is what this card is about.
+    const workspaceUrl = getLemmaApiBaseUrl();
+    const target: AgentHostTarget | null = selectWorkspaceTarget(status?.targets ?? [], workspaceUrl);
+    const pairedHere = Boolean(target);
     const hostId = target?.host_id ?? null;
     // Tell the paired-computer list which card is this machine, so it can label
     // that one instead of listing the same machine twice.
@@ -134,7 +74,7 @@ export function ThisComputerCard({
     // section falls back to the download card instead.
     if (!isDesktop) return null;
 
-    const state = describe(status, error);
+    const state = describeThisComputer(status, error, workspaceUrl);
 
     const run = async (action: string, work: () => Promise<unknown>, success?: string) => {
         setBusy(action);
@@ -216,7 +156,7 @@ export function ThisComputerCard({
                     </Button>
                 ) : null}
 
-                {status?.available && status.paired ? (
+                {status?.available && pairedHere ? (
                     <Button
                         type="button"
                         variant={status.running ? 'quiet' : 'primary'}
@@ -236,7 +176,7 @@ export function ThisComputerCard({
                 ) : null}
             </div>
 
-            {status?.available && !status.paired ? (
+            {status?.available && !pairedHere ? (
                 <div className="mt-3 flex flex-wrap items-end gap-2">
                     <Input
                         value={displayName}
@@ -256,7 +196,7 @@ export function ThisComputerCard({
                 </div>
             ) : null}
 
-            {status?.paired ? (
+            {pairedHere ? (
                 <div className="mt-3 flex flex-wrap items-center gap-2">
                     <Button
                         type="button"

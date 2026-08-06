@@ -7,7 +7,10 @@ import {
     useCreateConnectRequest,
     useCreateConnectorAccount,
     useDeleteAccount,
+    useDeleteAuthConfig,
     useEnableConnector,
+    useRefreshAuthConfigOperations,
+    useUpdateAuthConfig,
 } from '@/lib/hooks/use-connectors';
 import { EmptyState } from '@/components/shared/empty-state';
 import { DestructiveConfirmationDialog } from '@/components/shared/destructive-confirmation-dialog';
@@ -15,21 +18,28 @@ import { Input } from '@/components/ui/input';
 import { Plug, Search } from '@/components/ui/icons';
 import { useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
-import type { Account, Connector } from '@/lib/types';
+import type { Account, AuthConfig, Connector } from '@/lib/types';
 import { useOrganization } from '@/components/dashboard/org-context';
 import { ResourceCardGridSkeleton } from '@/components/shared/loading';
 import { ConnectorGrid } from './connector-grid';
 import { ConnectorMosaic } from './connector-mosaic';
 import { ConnectedAccountRow } from './connector-card';
+import { AddYourOwnRow, ConnectionRow } from './connection-rows';
 import { ConnectAccountDialog, type CredentialTarget } from './connect-account-dialog';
+import { AddConnectionDialog, type ConnectionSubmission, type ConnectionTarget } from './add-connection-dialog';
 import { AdvancedConfigDialog, type AdvancedEnablePayload } from './advanced-config';
 import {
+    canConnectWithDefaults,
+    describeConnectorError,
     findAuthConfigForAccount,
     getAccountStatusMeta,
     getAppLabel,
+    getInstallLabel,
     getPrimaryKindSpec,
     getKindSpec,
-    hasSystemDefault,
+    getTenantConfiguredConnectors,
+    getTenantConfiguredKindSpec,
+    isTenantConfigured,
     usesDirectCredentials,
     type ConnectorKindSpec,
 } from './connector-utils';
@@ -60,6 +70,9 @@ export function ConnectorsView({ organizationId, organizationName, embedded = fa
     const enableConnector = useEnableConnector(effectiveOrganizationId);
     const createConnectRequest = useCreateConnectRequest(effectiveOrganizationId);
     const createConnectorAccount = useCreateConnectorAccount(effectiveOrganizationId);
+    const updateAuthConfig = useUpdateAuthConfig(effectiveOrganizationId);
+    const deleteAuthConfig = useDeleteAuthConfig(effectiveOrganizationId);
+    const refreshOperations = useRefreshAuthConfigOperations(effectiveOrganizationId);
 
     const [searchTerm, setSearchTerm] = useState('');
     const [busyAppId, setBusyAppId] = useState<string | null>(null);
@@ -79,6 +92,11 @@ export function ConnectorsView({ organizationId, organizationName, embedded = fa
         appName: string;
         accountLabel: string;
     } | null>(null);
+    const [connectionTarget, setConnectionTarget] = useState<ConnectionTarget | null>(null);
+    const [connectionError, setConnectionError] = useState<string | null>(null);
+    const [isSavingConnection, setIsSavingConnection] = useState(false);
+    const [busyInstallName, setBusyInstallName] = useState<string | null>(null);
+    const [installPendingDelete, setInstallPendingDelete] = useState<AuthConfig | null>(null);
 
     useEffect(() => {
         if (!pendingOAuth) return;
@@ -116,15 +134,74 @@ export function ConnectorsView({ organizationId, organizationName, embedded = fa
         [connectors],
     );
 
-    const enabledConfigByAppId = useMemo(
-        () =>
-            new Map(
-                (authConfigs || [])
-                    .filter((config) => config.status === 'ACTIVE')
-                    .map((config) => [config.connector_id, config]),
-            ),
+    const activeConfigs = useMemo(
+        () => (authConfigs || []).filter((config) => config.status === 'ACTIVE'),
         [authConfigs],
     );
+
+    // The install a bare connector answers to. An org may hold several of one
+    // connector, and exactly one carries `is_default` — reading whichever came
+    // back first made this depend on list order.
+    const defaultConfigByAppId = useMemo(() => {
+        const byApp = new Map<string, typeof activeConfigs[number]>();
+        for (const config of activeConfigs) {
+            const held = byApp.get(config.connector_id);
+            if (!held || (config.is_default && !held.is_default)) byApp.set(config.connector_id, config);
+        }
+        return byApp;
+    }, [activeConfigs]);
+
+    // Connections the org configured itself — databases, APIs, MCP servers.
+    // They get their own section and their own entry point, so they are also
+    // taken out of the catalog grid below.
+    const tenantConfiguredConnectors = useMemo(
+        () => getTenantConfiguredConnectors(connectors),
+        [connectors],
+    );
+    const tenantConfiguredIds = useMemo(
+        () => new Set(tenantConfiguredConnectors.map((app) => app.id)),
+        [tenantConfiguredConnectors],
+    );
+    const connections = useMemo(
+        () =>
+            activeConfigs
+                .filter((config) => isTenantConfigured(getKindSpec(connectorsById.get(config.connector_id), config.kind)))
+                .sort((a, b) => a.name.localeCompare(b.name)),
+        [activeConfigs, connectorsById],
+    );
+    const existingInstallNames = useMemo(
+        () => activeConfigs.map((config) => config.name),
+        [activeConfigs],
+    );
+
+    const connectionInstallIds = useMemo(
+        () => new Set(connections.map((install) => install.id)),
+        [connections],
+    );
+
+    // A connection's account is the same fact as its connection row, so listing
+    // both says everything twice. The exception is an account that needs
+    // attention: editing a connection can invalidate its credentials, and
+    // reconnecting is only reachable from the account row.
+    const listedAccounts = useMemo(
+        () =>
+            (accounts || []).filter(
+                (account) =>
+                    !connectionInstallIds.has(account.auth_config_id) ||
+                    getAccountStatusMeta(account.status).needsAttention,
+            ),
+        [accounts, connectionInstallIds],
+    );
+
+    /** Which connection an account belongs to, so its row names the right one. */
+    const installNameByAccountId = useMemo(() => {
+        const byInstall = new Map(connections.map((install) => [install.id, install.name]));
+        return new Map(
+            (accounts || [])
+                .map((account) => [account.id, byInstall.get(account.auth_config_id)] as const)
+                .filter((entry): entry is readonly [string, string] => Boolean(entry[1])),
+        );
+    }, [accounts, connections]);
 
     const connectedAppIds = useMemo(
         () => new Set((accounts || []).map((account) => account.connector_id)),
@@ -135,19 +212,20 @@ export function ConnectorsView({ organizationId, organizationName, embedded = fa
         const query = searchTerm.toLowerCase();
         const matches = (connectors || []).filter(
             (app) =>
-                (app.title && app.title.toLowerCase().includes(query)) ||
-                (app.name && app.name.toLowerCase().includes(query)) ||
-                (app.description && app.description.toLowerCase().includes(query)),
+                !tenantConfiguredIds.has(app.id) &&
+                ((app.title && app.title.toLowerCase().includes(query)) ||
+                    (app.name && app.name.toLowerCase().includes(query)) ||
+                    (app.description && app.description.toLowerCase().includes(query))),
         );
         // Float connected connectors to the top, then enabled ones, keeping the
         // original order stable within each group.
         const rank = (app: Connector) =>
-            connectedAppIds.has(app.id) ? 0 : enabledConfigByAppId.has(app.id) ? 1 : 2;
+            connectedAppIds.has(app.id) ? 0 : defaultConfigByAppId.has(app.id) ? 1 : 2;
         return matches
             .map((app, index) => ({ app, index }))
             .sort((a, b) => rank(a.app) - rank(b.app) || a.index - b.index)
             .map((entry) => entry.app);
-    }, [connectors, searchTerm, connectedAppIds, enabledConfigByAppId]);
+    }, [connectors, searchTerm, connectedAppIds, defaultConfigByAppId, tenantConfiguredIds]);
 
     const attentionCount = useMemo(
         () => (accounts || []).filter((account) => getAccountStatusMeta(account.status).needsAttention).length,
@@ -177,18 +255,31 @@ export function ConnectorsView({ organizationId, organizationName, embedded = fa
         }
     };
 
+    const openConnectionDialog = (app: Connector, install: AuthConfig | null = null) => {
+        setConnectionError(null);
+        setConnectionTarget({ connector: app, install });
+    };
+
     const handleConnect = async (app: Connector) => {
-        const existing = enabledConfigByAppId.get(app.id) ?? null;
+        const existing = defaultConfigByAppId.get(app.id) ?? null;
         const capability = existing ? getKindSpec(app, existing.kind) : getPrimaryKindSpec(app);
         if (!capability) {
             toast.error('This connector is not available yet');
             return;
         }
 
+        // A connection the org configures: always a new install, never a second
+        // account on the existing one. "Add another database" means another
+        // database, and reusing the install would have pointed it at the first.
+        if (isTenantConfigured(getTenantConfiguredKindSpec(app))) {
+            openConnectionDialog(app);
+            return;
+        }
+
         // Credential apps: open the form immediately so keystrokes land in the field,
         // not the page. Enabling (if needed) is deferred to submit time.
         if (usesDirectCredentials(capability)) {
-            if (!existing && !hasSystemDefault(capability)) {
+            if (!existing && !canConnectWithDefaults(capability)) {
                 setAdvancedApp(app);
                 return;
             }
@@ -201,7 +292,7 @@ export function ConnectorsView({ organizationId, organizationName, embedded = fa
         try {
             let authConfig = existing;
             if (!authConfig) {
-                if (!hasSystemDefault(capability)) {
+                if (!canConnectWithDefaults(capability)) {
                     setAdvancedApp(app);
                     return;
                 }
@@ -217,6 +308,92 @@ export function ConnectorsView({ organizationId, organizationName, embedded = fa
             toast.error('Failed to connect');
         } finally {
             setBusyAppId(null);
+        }
+    };
+
+    /**
+     * Creating a connection is two calls that read as one action: the install
+     * carries the address, the account carries the credentials. An account is
+     * always created, even with an empty credential set — execution resolves
+     * one even for an MCP server that needs no auth.
+     */
+    const handleConnectionSubmit = async (submission: ConnectionSubmission) => {
+        const target = connectionTarget;
+        if (!target) return;
+        const capability = getTenantConfiguredKindSpec(target.connector);
+        if (!capability) return;
+
+        setIsSavingConnection(true);
+        setConnectionError(null);
+        try {
+            if (target.install) {
+                const result = await updateAuthConfig.mutateAsync({
+                    authConfigName: target.install.name,
+                    name: submission.name,
+                    config: submission.config,
+                });
+                const reauth = result?.accounts_marked_for_reauth ?? 0;
+                toast.success(
+                    reauth > 0
+                        ? `Updated ${submission.name} · ${reauth} account${reauth === 1 ? '' : 's'} need${reauth === 1 ? 's' : ''} to reconnect`
+                        : `Updated ${submission.name}`,
+                );
+            } else {
+                const install = await enableConnector.mutateAsync({
+                    connectorId: target.connector.id,
+                    kind: capability.kind,
+                    // The org supplied the connection itself, which is what
+                    // ORG_CUSTOM records. Nothing branches on it for these
+                    // kinds, but the column is immutable once written.
+                    configSource: 'ORG_CUSTOM',
+                    config: submission.config,
+                    name: submission.name,
+                });
+                await createConnectorAccount.mutateAsync({
+                    authConfigId: install.id,
+                    credentials: submission.credentials,
+                });
+                toast.success(`Added ${submission.name}`);
+            }
+            setConnectionTarget(null);
+        } catch (error) {
+            console.error('Failed to save connection:', error);
+            setConnectionError(describeConnectorError(error, 'Could not save this connection'));
+        } finally {
+            setIsSavingConnection(false);
+        }
+    };
+
+    const handleRefreshInstall = async (install: AuthConfig) => {
+        setBusyInstallName(install.name);
+        try {
+            const result = await refreshOperations.mutateAsync(install.name);
+            const count = result?.operation_count ?? 0;
+            toast.success(
+                count > 0
+                    ? `${install.name}: ${count} operation${count === 1 ? '' : 's'}`
+                    : `${install.name} responded, but exposed no operations`,
+            );
+        } catch (error) {
+            console.error('Failed to refresh operations:', error);
+            toast.error(describeConnectorError(error, 'Could not reach this connection'));
+        } finally {
+            setBusyInstallName(null);
+        }
+    };
+
+    const handleDeleteInstall = async () => {
+        if (!installPendingDelete) return;
+        setBusyInstallName(installPendingDelete.name);
+        try {
+            await deleteAuthConfig.mutateAsync(installPendingDelete.name);
+            toast.success(`${installPendingDelete.name} deleted`);
+            setInstallPendingDelete(null);
+        } catch (error) {
+            console.error('Failed to delete connection:', error);
+            toast.error(describeConnectorError(error, 'Could not delete this connection'));
+        } finally {
+            setBusyInstallName(null);
         }
     };
 
@@ -284,7 +461,7 @@ export function ConnectorsView({ organizationId, organizationName, embedded = fa
             // Enable the managed default now if the org hasn't configured this connector yet.
             let authConfigId = target.authConfigId;
             if (!authConfigId) {
-                if (!target.capability || !hasSystemDefault(target.capability)) {
+                if (!target.capability || !canConnectWithDefaults(target.capability)) {
                     throw new Error('Connector is not configured for direct credentials');
                 }
                 const authConfig = await enableConnector.mutateAsync({
@@ -386,11 +563,41 @@ export function ConnectorsView({ organizationId, organizationName, embedded = fa
         <div className={embedded ? 'min-h-full bg-transparent' : 'context-shell min-h-full bg-transparent pb-8'}>
             {masthead}
 
-            {accounts && accounts.length > 0 && (
+            <AddYourOwnRow connectors={tenantConfiguredConnectors} onAdd={(app) => openConnectionDialog(app)} />
+
+            {connections.length > 0 && (
+                <section className="context-section">
+                    <div className="mb-3 flex items-center gap-2">
+                        <h2 className="text-base font-normal text-[var(--text-primary)]">Your connections</h2>
+                        <span className="text-xs text-[var(--text-tertiary)]">{connections.length}</span>
+                    </div>
+                    <div className="grid grid-cols-1 gap-x-4 lg:grid-cols-2">
+                        {connections.map((install) => (
+                            <ConnectionRow
+                                key={install.id}
+                                install={install}
+                                connector={connectorsById.get(install.connector_id) ?? null}
+                                organizationId={effectiveOrganizationId}
+                                isBusy={busyInstallName === install.name}
+                                onEdit={(target) =>
+                                    openConnectionDialog(
+                                        connectorsById.get(target.connector_id) as Connector,
+                                        target,
+                                    )
+                                }
+                                onRefresh={(target) => void handleRefreshInstall(target)}
+                                onDelete={setInstallPendingDelete}
+                            />
+                        ))}
+                    </div>
+                </section>
+            )}
+
+            {listedAccounts.length > 0 && (
                 <section className="context-section">
                     <div className="mb-3 flex items-center gap-2">
                         <h2 className="text-base font-normal text-[var(--text-primary)]">Your accounts</h2>
-                        <span className="text-xs text-[var(--text-tertiary)]">{accounts.length}</span>
+                        <span className="text-xs text-[var(--text-tertiary)]">{listedAccounts.length}</span>
                         {attentionCount > 0 ? (
                             <span className="text-xs font-medium text-[var(--state-warning)]">
                                 · {attentionCount} need{attentionCount === 1 ? 's' : ''} attention
@@ -398,10 +605,11 @@ export function ConnectorsView({ organizationId, organizationName, embedded = fa
                         ) : null}
                     </div>
                     <div className="grid grid-cols-1 gap-x-4 lg:grid-cols-2">
-                        {accounts.map((account) => (
+                        {listedAccounts.map((account) => (
                             <ConnectedAccountRow
                                 key={account.id}
                                 account={account}
+                                label={installNameByAccountId.get(account.id)}
                                 isBusy={
                                     reconnectAccountId === account.id
                                     || deletingAccountId === account.id
@@ -435,6 +643,46 @@ export function ConnectorsView({ organizationId, organizationName, embedded = fa
                     onAdvanced={setAdvancedApp}
                 />
             </section>
+
+            <AddConnectionDialog
+                target={connectionTarget}
+                isSubmitting={isSavingConnection}
+                existingNames={existingInstallNames}
+                error={connectionError}
+                onOpenChange={(open) => {
+                    if (!open) {
+                        setConnectionTarget(null);
+                        setConnectionError(null);
+                    }
+                }}
+                onSubmit={(submission) => void handleConnectionSubmit(submission)}
+            />
+
+            <DestructiveConfirmationDialog
+                open={Boolean(installPendingDelete)}
+                onOpenChange={(open) => {
+                    if (!open) setInstallPendingDelete(null);
+                }}
+                title="Delete connection"
+                description={`Delete ${installPendingDelete?.name ?? 'this connection'}? Every account connected through it is removed with it.`}
+                resourceName={
+                    installPendingDelete
+                        ? getInstallLabel(
+                              installPendingDelete,
+                              connectorsById.get(installPendingDelete.connector_id) ?? null,
+                          )
+                        : 'connection'
+                }
+                confirmationText="delete"
+                consequences={[
+                    'Accounts connected through this connection are deleted with it.',
+                    'Agents and workflows using its operations will lose access.',
+                ]}
+                confirmLabel="Delete"
+                pendingLabel="Deleting..."
+                isPending={Boolean(busyInstallName && installPendingDelete?.name === busyInstallName)}
+                onConfirm={() => void handleDeleteInstall()}
+            />
 
             <AdvancedConfigDialog
                 app={advancedApp}

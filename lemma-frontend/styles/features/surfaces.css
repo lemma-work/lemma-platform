@@ -749,6 +749,27 @@
     border-left: 1px solid color-mix(in srgb, var(--border-subtle) 38%, transparent);
   }
 }
+}
+
+/* ===========================================================================
+   READING A DOCUMENT
+
+   In the utilities layer, and that is the whole point. Everything below used
+   to live in @layer components alongside the rest of this file, where
+   Tailwind Typography — which ships in @layer utilities — beat every one of
+   its declarations no matter how specific they were. Only the properties
+   `prose` happens not to set (font-family, the --tw-prose-* variables, the
+   code and rule colours) ever reached the screen.
+
+   So the document viewer was never styled by the block that claimed to style
+   it. What readers actually got was stock Typography: a 36px/800 hero for the
+   first heading, 24px/700 under it, magazine margins, and a table padded like
+   a settings form — inside a working pane. That is the whole of "everything
+   seems weird", and no amount of editing those rules in place would have
+   changed a pixel. `.agent-instructions-prose` is in the utilities layer for
+   exactly this reason, which is why the prompt page reads correctly today.
+   =========================================================================== */
+@layer utilities {
 
 .lemma-markdown-editor {
   --lemma-markdown-text: color-mix(in srgb, var(--text-primary) 93%, var(--text-secondary));
@@ -774,13 +795,12 @@
   --tw-prose-th-borders: var(--border-default);
   --tw-prose-td-borders: var(--border-subtle);
 
-  max-width: 76ch;
-  margin-inline: auto;
+  max-width: none;
   color: var(--lemma-markdown-text);
   font-family: var(--font-document-family);
-  font-size: var(--text-sm);
+  font-size: var(--text-base);
   font-weight: 400;
-  line-height: 1.62;
+  line-height: var(--leading-relaxed);
 }
 
 .dark .lemma-markdown-editor {
@@ -802,56 +822,73 @@
 }
 
 .lemma-markdown-editor.prose p {
-  margin-block: 0.72em;
+  margin-block: var(--space-4);
 }
 
+/* ---------------------------------------------------------------------------
+   The ladder
+
+   Nothing in a document is bold. Headings lead by size and by the air above
+   them — the space over a heading is several times the space under it, which
+   is what binds it to the paragraph it introduces. Weight is held at 500 all
+   the way down, including `strong`, so an emphasised phrase mid-sentence can
+   never out-shout the heading it sits beneath.
+
+   The steps are 24 / 20 / 16 / 16 over a 16px body. The bottom two rungs are
+   the body's own size and separate on tone: past the third level a document
+   is listing, not sectioning, and a fourth distinct size would be a fiction.
+   --------------------------------------------------------------------------- */
+
 .lemma-markdown-editor.prose h1 {
-  margin: 0 0 0.72em;
+  margin: 0 0 var(--space-3);
   color: var(--lemma-markdown-heading);
-  font-family: var(--font-landing-serif), Georgia, serif;
-  font-size: var(--text-2xl);
-  font-weight: 400;
+  font-family: var(--font-document-family);
+  font-size: var(--text-xl);
+  font-weight: 500;
   letter-spacing: 0;
-  line-height: 1.18;
+  line-height: var(--leading-tight);
   text-wrap: balance;
 }
 
 .lemma-markdown-editor.prose h2 {
-  margin: 1.65rem 0 0.5rem;
+  margin: var(--space-10) 0 var(--space-2);
   color: var(--lemma-markdown-heading);
   font-family: var(--font-document-family);
-  font-size: var(--text-base);
-  font-weight: 600;
+  font-size: var(--text-lg);
+  font-weight: 500;
   letter-spacing: 0;
-  line-height: 1.32;
+  line-height: var(--leading-snug);
 }
 
 .lemma-markdown-editor.prose h3 {
-  margin: 1.35rem 0 0.38rem;
-  color: var(--lemma-markdown-muted);
+  margin: var(--space-7) 0 var(--space-1-5);
+  color: var(--lemma-markdown-heading);
   font-family: var(--font-document-family);
-  font-size: var(--text-sm);
-  font-weight: 600;
-  letter-spacing: 0.035em;
-  line-height: 1.35;
-  text-transform: uppercase;
+  font-size: var(--text-base);
+  font-weight: 500;
+  letter-spacing: 0;
+  line-height: var(--leading-snug);
 }
 
 .lemma-markdown-editor.prose h4,
 .lemma-markdown-editor.prose h5,
 .lemma-markdown-editor.prose h6 {
-  margin: 1.2rem 0 0.3rem;
-  color: var(--lemma-markdown-heading);
+  margin: var(--space-5) 0 var(--space-1);
+  color: var(--lemma-markdown-muted);
   font-family: var(--font-document-family);
-  font-size: var(--text-sm);
-  font-weight: 600;
+  font-size: var(--text-base);
+  font-weight: 500;
   letter-spacing: 0;
-  line-height: 1.4;
+  line-height: var(--leading-normal);
+}
+
+.lemma-markdown-editor.prose :is(h1, h2, h3, h4, h5, h6):first-child {
+  margin-top: 0;
 }
 
 .lemma-markdown-editor.prose strong {
   color: var(--lemma-markdown-heading);
-  font-weight: 600;
+  font-weight: 500;
 }
 
 .lemma-markdown-editor.prose a {
@@ -861,12 +898,25 @@
   text-underline-offset: 0.18em;
 }
 
-/* Lists intentionally defer to Tailwind Typography (`prose`) for spacing and
-   markers, so they share the airy rhythm of the body copy. `prose` lives in
-   @layer utilities and this file is @layer components, so any list override
-   here would lose to `prose` anyway and only half-apply (that was the old
-   "numbers floating above the text" bug). The marker tone is themed via
-   --tw-prose-counters / --tw-prose-bullets on .lemma-markdown-editor above. */
+/* Lists sit on the paragraph rhythm rather than Typography's looser one; the
+   marker tone still comes from --tw-prose-counters / --tw-prose-bullets above.
+   These rules used to be omitted deliberately, because from @layer components
+   they could only ever half-apply — that was the old "numbers floating above
+   the text" bug. From here they land whole. */
+
+.lemma-markdown-editor.prose :is(ul, ol) {
+  margin-block: var(--space-4);
+  padding-left: var(--space-6);
+}
+
+.lemma-markdown-editor.prose li {
+  margin-block: var(--space-1);
+  padding-left: var(--space-1);
+}
+
+.lemma-markdown-editor.prose li > :is(p, ul, ol) {
+  margin-block: var(--space-1);
+}
 
 .lemma-markdown-editor.prose blockquote {
   margin-block: 1em;
@@ -899,21 +949,270 @@
 }
 
 .lemma-markdown-editor.prose hr {
-  margin-block: 1.5rem;
+  margin-block: var(--space-8);
   border-color: var(--lemma-markdown-rule);
 }
 
+/* ---------------------------------------------------------------------------
+   Tables are data, not prose
+
+   A boxed grid with a filled header row and a paragraph's worth of padding in
+   every cell is a settings form. It made a seven-row fee table taller than the
+   screen and heavier than the argument around it.
+
+   So: one step down in size, rules only between rows, no vertical lines, no
+   fill behind the header, and rows tight enough that the table is something
+   you take in at once. The header earns its place by tone, not by weight.
+   --------------------------------------------------------------------------- */
+
 .lemma-markdown-editor.prose .lemma-markdown-table {
+  margin-block: var(--space-5);
+  border-collapse: collapse;
+  width: 100%;
   font-size: var(--text-sm);
-  line-height: 1.55;
+  line-height: var(--leading-normal);
 }
 
-.document-viewer-shell:fullscreen {
-  width: 100vw;
-  height: 100vh;
-  height: 100dvh;
-  background: var(--card-bg);
+.lemma-markdown-editor.prose .lemma-markdown-table :is(th, td) {
+  border: 0;
+  border-bottom: 1px solid var(--lemma-markdown-rule);
+  padding: var(--space-2) var(--space-3);
+  vertical-align: top;
+  text-align: left;
 }
+
+/* First column carries the row's subject, so it starts at the text's own left
+   edge instead of a cell's worth of indent in from it. */
+.lemma-markdown-editor.prose .lemma-markdown-table :is(th, td):first-child {
+  padding-left: 0;
+}
+
+.lemma-markdown-editor.prose .lemma-markdown-table :is(th, td):last-child {
+  padding-right: 0;
+}
+
+.lemma-markdown-editor.prose .lemma-markdown-table th {
+  border-bottom-color: var(--lemma-markdown-marker);
+  background: transparent;
+  color: var(--lemma-markdown-muted);
+  font-size: var(--text-xs);
+  font-weight: 500;
+}
+
+.lemma-markdown-editor.prose .lemma-markdown-table tbody tr:last-child :is(th, td) {
+  border-bottom: 0;
+}
+
+.lemma-markdown-editor.prose .lemma-markdown-table p {
+  margin-block: 0;
+}
+
+/* ---------------------------------------------------------------------------
+   THE DOCUMENT PAGE — one measure, one left edge
+
+   The body used to nest two competing widths: a `max-w-4xl` wrapper around a
+   prose block that centred itself again at 76ch. The frontmatter and its rule
+   ran the full 896px while the sentences under them stopped at ~540 — two
+   left edges on one page, which is most of why the viewer read as crooked.
+   The page owns the measure now and the prose fills it.
+
+   `ch` is sized off the document text here on purpose, so the frontmatter row
+   (set smaller) still stops at the same pixel as the paragraphs below it.
+   --------------------------------------------------------------------------- */
+
+.document-page {
+  max-width: 46rem;
+  margin-inline: auto;
+}
+
+/* ---------------------------------------------------------------------------
+   READING MODE
+
+   In-app state first, browser fullscreen second. `requestFullscreen` alone was
+   never enough: the docs section renders its controls into the pod topbar,
+   which lives outside the element being promoted, so going fullscreen there
+   produced a document with no header, no save, and no way out but Esc. The
+   overlay below is what actually covers the screen, so the mode works the same
+   inside an iframe that was never granted fullscreen.
+
+   The type and the measure do not change here. The working pane already sets
+   a document the way it should be read; reading mode's job is to take away
+   what is around it, not to hand you a different document.
+   --------------------------------------------------------------------------- */
+
+/* 40, not 50: dialogs and menus portal to the end of `body` at 50 and must
+   still stack above this. */
+.document-viewer-shell[data-reading='true'] {
+  position: fixed;
+  z-index: 40;
+  inset: 0;
+  background: var(--bg-canvas);
+}
+
+.document-viewer-shell[data-reading='true'] .document-page {
+  padding-block: var(--space-16);
+}
+
+/* Quiet, not hidden. A hover-only reveal would be unreachable on touch, and
+   Esc is not discoverable enough to be the only way back. */
+.document-reading-exit {
+  position: absolute;
+  z-index: 1;
+  top: var(--space-4);
+  right: var(--space-4);
+  opacity: 0.45;
+  transition: opacity var(--dur-fast) var(--ease-standard);
+}
+
+.document-reading-exit:hover,
+.document-reading-exit:focus-within {
+  opacity: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .document-reading-exit {
+    transition: none;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   ON PAPER
+
+   Print is the PDF story: every desktop browser and iOS offers "Save as PDF"
+   from its own print dialog, so the honest thing to build is a page worth
+   printing rather than a converter that re-renders the document a second way.
+   The reading column is already that page — one measure, no chrome — so this
+   only has to get the application out of the way.
+
+   Two things make a naive print of this app come out wrong, and both are
+   handled below.
+
+   First, the app paints. `visibility: hidden` on everything, then visible again
+   from the page down, so the sidebar, the bar and the menus stop printing
+   without any of them having to be named — a list of chrome selectors would go
+   stale the first time the shell changes.
+
+   Second, the app scrolls. The document sits inside a pane with a fixed height
+   and `overflow: auto`, and paper has no fold to scroll past: printed as-is you
+   get the first screenful and nothing after it. Taking the page absolute out of
+   a statically-positioned shell makes the initial containing block its
+   container, so no ancestor's overflow can clip it and the whole document
+   flows across as many sheets as it needs.
+   --------------------------------------------------------------------------- */
+
+/* Everything here is `!important`, which in any other block would be a smell.
+   Print is the exception: this is not one more voice in the cascade, it is a
+   different medium taking over from a screen layout built out of utilities,
+   inline styles and unlayered base rules. There is no later author rule that
+   should ever win, and the failures when one does are invisible until someone
+   prints — which is how the first two attempts at this shipped wrong. */
+@media print {
+  body * {
+    visibility: hidden !important;
+  }
+
+  .document-page,
+  .document-page * {
+    visibility: visible !important;
+  }
+
+  /* `body *` reaches the body's descendants and nothing else — not the root,
+     not the body, and not the body's own pseudo-elements. All three paint, so
+     all three needed naming:
+       · `body` carries the warm canvas colour, and with no background on `html`
+         it propagates to the sheet itself — that is the block of ink behind
+         every page.
+       · `body::before` and `body::after` are two fixed decorative layers, an
+         atmosphere wash and a noise grain that blends over what is under it. A
+         fixed layer repeats on every page, so the grain lands on all of them.
+     Static as well as unpainted: `body` is positioned, which makes it the
+     containing block for the absolute page below instead of the page box. */
+  html,
+  body {
+    position: static !important;
+    background: none !important;
+    min-height: 0 !important;
+  }
+
+  body::before,
+  body::after {
+    display: none !important;
+  }
+
+  /* Static so the absolutely-positioned page below escapes it entirely —
+     position, not just overflow, is what decides who gets to clip. The reading
+     overlay is `fixed` at higher specificity, so it has to be named here or a
+     print started from reading mode keeps its viewport-sized box. */
+  .document-viewer-shell,
+  .document-viewer-shell[data-reading='true'] {
+    position: static !important;
+    height: auto !important;
+    max-height: none !important;
+    overflow: visible !important;
+  }
+
+  /* Screen ink is mixed to sit on a warm canvas. The same greys on white paper
+     read as haze, so the document prints at full strength. */
+  .document-page .lemma-markdown-editor {
+    --lemma-markdown-text: var(--text-primary);
+    --lemma-markdown-heading: var(--text-primary);
+    --lemma-markdown-muted: var(--text-secondary);
+    --lemma-markdown-marker: var(--text-secondary);
+    --lemma-markdown-rule: var(--border-default);
+  }
+
+  /* The sheet is white. Browsers drop backgrounds by default, but "background
+     graphics" is one checkbox away in every print dialog, and with it on the
+     warm canvas prints as a solid block of ink behind every page — which is
+     not a document anyone wants to hand over. Forced, because the fills come
+     from utilities of equal specificity and this is not a cascade to lose. */
+  .document-page,
+  .document-page * {
+    background: none !important;
+    box-shadow: none !important;
+  }
+
+  /* Absolute out of a now-static ancestry, so the containing block is the page
+     box itself: no ancestor can clip it and nothing above it on screen can push
+     it down the first sheet. `relative` on the shell is a Tailwind utility of
+     equal specificity to the rule that unsets it, which is exactly the kind of
+     tie this block refuses to leave to source order. */
+  .document-page {
+    position: absolute !important;
+    top: 0 !important;
+    left: 0 !important;
+    width: 100% !important;
+    max-width: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
+  /* The paper supplies the margin; the screen's centred measure would only
+     add a second one inside it. */
+  @page {
+    margin: 18mm;
+  }
+
+  /* Nothing is orphaned from what it introduces: a heading never ends a sheet,
+     and a row never splits down the middle of its own numbers. */
+  .document-page :is(h1, h2, h3, h4, h5, h6) {
+    break-after: avoid;
+    break-inside: avoid;
+  }
+
+  .document-page :is(tr, li, blockquote, pre) {
+    break-inside: avoid;
+  }
+
+  .document-page .lemma-markdown-table thead {
+    display: table-header-group;
+  }
+}
+
+}
+/* End of the document-reading utilities layer. */
+
+@layer components {
 
 /* ---------------------------------------------------------------------------
    Surface setup modal.

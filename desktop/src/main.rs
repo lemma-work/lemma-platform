@@ -593,12 +593,37 @@ fn hosted_url() -> String {
 /// The workspace origins `capabilities/workspace.json` already covers.
 const SHIPPED_WORKSPACE_ORIGINS: &[&str] = &["http://app.lemma.localhost:*", "https://lemma.work"];
 
-/// A capability granting the overridden workspace origin the same single
-/// command the shipped one gets, or `None` when nothing is overridden.
+/// The shipped workspace capability, read at compile time so the override below
+/// cannot drift from it.
 ///
-/// Only the origin varies. The permission list must stay identical to
-/// `capabilities/workspace.json`, so a dev build can never reach further into
-/// the shell than a packaged one.
+/// It did drift. The override was written when the shipped capability granted a
+/// single command; the Agent Host and provider commands were added to the file
+/// alone, and every non-shipped origin — a self-hosted workspace, a dev server —
+/// lost the Computers card and the provider steps to `Command
+/// agent_host_status not allowed by ACL`, with nothing the user could do about
+/// it. Reading the list is what keeps the two the same next time.
+const SHIPPED_WORKSPACE_CAPABILITY: &str = include_str!("../capabilities/workspace.json");
+
+/// The permissions the shipped workspace origins get.
+///
+/// Panics on a malformed capability, which is a build-time fact rather than a
+/// runtime one: the file is compiled in, so a bad edit fails the first test that
+/// touches this rather than reaching a user.
+fn shipped_workspace_permissions() -> Vec<Value> {
+    serde_json::from_str::<Value>(SHIPPED_WORKSPACE_CAPABILITY)
+        .expect("capabilities/workspace.json is valid JSON")["permissions"]
+        .as_array()
+        .expect("capabilities/workspace.json grants an array of permissions")
+        .clone()
+}
+
+/// A capability granting the overridden workspace origin the same commands the
+/// shipped one gets, or `None` when nothing is overridden.
+///
+/// Only the origin varies. The permission list is taken from
+/// `capabilities/workspace.json` itself, so a dev or self-hosted build can
+/// never reach further into the shell than a packaged one — nor, as it did,
+/// less far.
 fn overridden_workspace_capability() -> Option<String> {
     let configured = ["LEMMA_DESKTOP_HOSTED_URL", "LEMMA_DESKTOP_LOCAL_URL"]
         .into_iter()
@@ -632,11 +657,11 @@ fn workspace_capability_for(configured: impl Iterator<Item = String>) -> Option<
     Some(
         json!({
             "identifier": "workspace-override-capability",
-            "description": "Development or self-hosted workspace origin, granted the same single command as the shipped one.",
+            "description": "Development or self-hosted workspace origin, granted the same commands as the shipped one.",
             "local": false,
             "webviews": ["main"],
             "remote": {"urls": urls},
-            "permissions": ["allow-open-control-center"],
+            "permissions": shipped_workspace_permissions(),
         })
         .to_string(),
     )
@@ -864,6 +889,31 @@ fn runtime_info_snapshot() -> RuntimeInfo {
     }
 }
 
+/// Whether the daemon on the socket is the one this build ships.
+///
+/// Version and API revision are not enough: replacing an installed app leaves
+/// the previous bundle's daemon running — from `~/.Trash`, once macOS has moved
+/// it — holding the control socket, reporting the same `0.7.0` and the same
+/// revision, and supervising the *previous* release's runtime. The hosted path
+/// used to accept whatever was listening, so a new app adopted that daemon,
+/// sent it Agent Host commands it answered from stale state, and started a
+/// local stack out of the old host pack that could never come up.
+///
+/// A daemon that does not say which binary it is answers this with `false`,
+/// which is the right answer: every build that does not report it predates the
+/// field, and is therefore not this one.
+fn locald_is_this_build(hello: &Value, expected_executable: Option<&std::path::Path>) -> bool {
+    if hello["daemon_api_revision"].as_u64() != Some(REQUIRED_LOCALD_API_REVISION) {
+        return false;
+    }
+    let Some(expected) = expected_executable else {
+        // No packaged sidecar to compare against — a source checkout running
+        // whatever it built. Identity is the developer's business there.
+        return true;
+    };
+    hello["executable"].as_str() == Some(path_identity(expected).as_str())
+}
+
 fn locald_matches_host_pack(
     hello: &Value,
     required_release: Option<&str>,
@@ -924,12 +974,20 @@ fn ensure_locald(app: &AppHandle) -> Result<(), String> {
 
     let required_root = host_pack_root();
     let required_release = required_root.as_deref().and_then(host_pack_release);
+    let expected_executable = locald_binary();
+    // The host pack says which runtime it serves; the executable says which
+    // build is serving it. A daemon left over from a replaced app bundle can
+    // satisfy the first and still be the wrong process.
+    let acceptable = |hello: &Value| {
+        locald_is_this_build(hello, expected_executable.as_deref())
+            && locald_matches_host_pack(
+                hello,
+                required_release.as_deref(),
+                required_root.as_deref(),
+            )
+    };
     if let Ok(connection) = connect_locald() {
-        if locald_matches_host_pack(
-            &connection.hello,
-            required_release.as_deref(),
-            required_root.as_deref(),
-        ) {
+        if acceptable(&connection.hello) {
             install_locald_connection(app, connection);
             return Ok(());
         }
@@ -940,13 +998,7 @@ fn ensure_locald(app: &AppHandle) -> Result<(), String> {
     let mut last_error = "daemon did not create its control endpoint".to_string();
     for _ in 0..80 {
         match connect_locald() {
-            Ok(connection)
-                if locald_matches_host_pack(
-                    &connection.hello,
-                    required_release.as_deref(),
-                    required_root.as_deref(),
-                ) =>
-            {
+            Ok(connection) if acceptable(&connection.hello) => {
                 install_locald_connection(app, connection);
                 return Ok(());
             }
@@ -961,9 +1013,16 @@ fn ensure_locald(app: &AppHandle) -> Result<(), String> {
 /// Bring up locald for a workspace that has no local stack.
 ///
 /// A hosted workspace still wants the Agent Host on this machine, and locald is
-/// what supervises it. Unlike the local path this downloads nothing and accepts
-/// whatever daemon is already listening: with no host pack there is no release
-/// to match, and locald without one only holds its socket and the sidecar.
+/// what supervises it. Unlike the local path this downloads nothing: with no
+/// host pack there is no release to match, and locald without one only holds
+/// its socket and the sidecar.
+///
+/// It does still insist the daemon be this build's. It used to accept whatever
+/// was listening, and "whatever" turned out to include the previous app
+/// bundle's daemon, still running from the Trash after an update, supervising
+/// the previous release's runtime. Adopting it made the Agent Host controls
+/// report and command stale state, and left a local start booting a runtime the
+/// installed app had already replaced.
 fn ensure_locald_without_host_pack(app: &AppHandle) -> Result<(), String> {
     let shell: State<Shell> = app.state();
     if shell.locald_writer.lock().unwrap().is_some() {
@@ -974,19 +1033,24 @@ fn ensure_locald_without_host_pack(app: &AppHandle) -> Result<(), String> {
         return Ok(());
     }
 
+    let expected = locald_binary();
     if let Ok(connection) = connect_locald() {
-        install_locald_connection(app, connection);
-        return Ok(());
+        if locald_is_this_build(&connection.hello, expected.as_deref()) {
+            install_locald_connection(app, connection);
+            return Ok(());
+        }
+        replace_locald(connection)?;
     }
 
     spawn_locald()?;
     let mut last_error = "daemon did not create its control endpoint".to_string();
     for _ in 0..80 {
         match connect_locald() {
-            Ok(connection) => {
+            Ok(connection) if locald_is_this_build(&connection.hello, expected.as_deref()) => {
                 install_locald_connection(app, connection);
                 return Ok(());
             }
+            Ok(_) => last_error = "another build's daemon holds the control socket".into(),
             Err(error) => last_error = error,
         }
         std::thread::sleep(Duration::from_millis(100));
@@ -1259,22 +1323,32 @@ fn emit_runtime_install_error(app: &AppHandle, message: &str) {
     show_splash(app);
 }
 
-fn spawn_locald() -> Result<(), String> {
-    let root = runtime_root();
-    let have_checkout = root.join("locald/Cargo.toml").exists();
-    let locald_bin = std::env::var("LEMMA_DESKTOP_LOCALD_BIN")
+/// The daemon binary this build starts.
+///
+/// Shared with the identity check rather than duplicated: comparing a running
+/// daemon against a *different* resolution than the one that spawns it is how a
+/// dev run — where `LEMMA_DESKTOP_LOCALD_BIN` overrides the sidecar — would
+/// reject the very daemon it had just started, forever.
+fn locald_binary() -> Option<PathBuf> {
+    std::env::var("LEMMA_DESKTOP_LOCALD_BIN")
         .ok()
         .map(PathBuf::from)
         .filter(|p| p.exists())
         .or_else(bundled_locald)
         .or_else(|| {
-            let candidate = root.join(if cfg!(windows) {
+            let candidate = runtime_root().join(if cfg!(windows) {
                 "locald/target/debug/lemma-locald.exe"
             } else {
                 "locald/target/debug/lemma-locald"
             });
             candidate.exists().then_some(candidate)
-        });
+        })
+}
+
+fn spawn_locald() -> Result<(), String> {
+    let root = runtime_root();
+    let have_checkout = root.join("locald/Cargo.toml").exists();
+    let locald_bin = locald_binary();
 
     let mut command = match &locald_bin {
         Some(bin) => Command::new(bin),
@@ -2876,7 +2950,22 @@ fn toggle_agent_host_from_tray(app: &AppHandle) -> Result<(), String> {
 /// Reachability, not liveness. A running host that is unpaired or cannot reach
 /// its workspace takes no work, so reporting it as simply "on" would be a lie
 /// the user only discovers when a run never starts.
-fn agent_host_tray_label(available: bool, running: bool, paired: bool, connected: bool) -> String {
+///
+/// "Reconnecting" is a claim about a connection that is coming back, and it was
+/// made for every disconnected state — including a host paired to a workspace
+/// that is simply not there any more, which is what a local pairing becomes the
+/// moment the local stack stops. That host retries for days behind a word that
+/// promises the opposite, so a failed last attempt now says so. The journal
+/// carries the error of the latest attempt only, cleared on a connect, so this
+/// distinguishes "trying" from "tried and failed" rather than remembering an
+/// old failure forever.
+fn agent_host_tray_label(
+    available: bool,
+    running: bool,
+    paired: bool,
+    connected: bool,
+    unreachable: bool,
+) -> String {
     if !available {
         "Agent Host: not installed".into()
     } else if !running {
@@ -2885,6 +2974,8 @@ fn agent_host_tray_label(available: bool, running: bool, paired: bool, connected
         "Agent Host: not paired".into()
     } else if connected {
         "Agent Host: connected".into()
+    } else if unreachable {
+        "Agent Host: workspace unreachable".into()
     } else {
         "Agent Host: reconnecting…".into()
     }
@@ -2898,16 +2989,25 @@ fn refresh_agent_host_tray(app: &AppHandle, status: &Value) {
     let available = status.get("available").and_then(Value::as_bool) == Some(true);
     let running = status.get("running").and_then(Value::as_bool) == Some(true);
     let paired = status.get("paired").and_then(Value::as_bool) == Some(true);
-    let connected = status
-        .get("targets")
-        .and_then(Value::as_array)
-        .is_some_and(|targets| {
-            targets.iter().any(|target| {
-                target.get("connection_state").and_then(Value::as_str) == Some("ONLINE")
+    let targets = status.get("targets").and_then(Value::as_array);
+    let connected = targets.is_some_and(|targets| {
+        targets
+            .iter()
+            .any(|target| target.get("connection_state").and_then(Value::as_str) == Some("ONLINE"))
+    });
+    // Every paired workspace failed its last attempt: nothing here is on its way
+    // back, whatever the retry loop is still doing.
+    let unreachable = targets.is_some_and(|targets| {
+        !targets.is_empty()
+            && targets.iter().all(|target| {
+                target
+                    .get("last_error")
+                    .and_then(Value::as_str)
+                    .is_some_and(|error| !error.trim().is_empty())
             })
-        });
+    });
 
-    let state = agent_host_tray_label(available, running, paired, connected);
+    let state = agent_host_tray_label(available, running, paired, connected, unreachable);
 
     {
         let shell: State<Shell> = app.state();
@@ -3483,6 +3583,104 @@ fn desktop_vibrancy_enabled() -> bool {
 /// Off by default: action colour is the brand violet, and letting the OS accent
 /// overwrite it would hand the product's one loud colour to a system preference.
 /// The reader stays wired up because "tint the app to my Mac" is a plausible
+/// What switching connection will do, in the terms the person is about to live
+/// with.
+///
+/// The switch used to happen on the press. Choosing Local starts the private
+/// runtime — a VM boot, an image pull on a cold machine, and a ninety-second
+/// health gate before it will say whether it worked — and choosing Hosted takes
+/// the workspace away from the stack still running on this Mac. Neither is a
+/// thing to do because a menu item was next to the one you meant.
+fn connection_switch_prompt(current: &str, running: bool) -> (String, String, String) {
+    if current == "local" {
+        (
+            "Use the hosted workspace?".into(),
+            if running {
+                "Lemma keeps running on this Mac and your local pods stay where they are — this window just stops pointing at them. Use this menu item again to come back."
+            } else {
+                "This window will point at the hosted workspace instead of this Mac. Your local pods stay where they are. Use this menu item again to come back."
+            }
+            .into(),
+            "Use Hosted".into(),
+        )
+    } else {
+        (
+            "Run Lemma on this Mac?".into(),
+            "Starting the local stack boots a private Linux runtime and waits for its database, cache, and auth service. On a cold machine that takes a few minutes, and the window will show the splash until it is ready."
+                .into(),
+            "Start Local".into(),
+        )
+    }
+}
+
+/// Ask before switching, then switch and say so if it fails.
+fn confirm_then_switch_connection(app: AppHandle) {
+    let current = current_mode(&app);
+    if current == "undecided" {
+        show_splash(&app);
+        return;
+    }
+    let running = {
+        let shell: State<Shell> = app.state();
+        let ui = shell.ui.lock().unwrap();
+        ui.running
+    };
+    let (title, body, confirm) = connection_switch_prompt(&current, running);
+    let handle = app.clone();
+    app.dialog()
+        .message(body)
+        .title(title)
+        .kind(MessageDialogKind::Warning)
+        .buttons(MessageDialogButtons::OkCancelCustom(
+            confirm,
+            "Cancel".into(),
+        ))
+        .show(move |confirmed| {
+            if !confirmed {
+                return;
+            }
+            let inner = handle.clone();
+            menu_attempt(&inner, "Switch connection", || {
+                choose_connection_mode(handle).map(|_| ())
+            });
+        });
+}
+
+/// Whether the Agent Host is running, as the tray last understood it.
+fn agent_host_is_running(app: &AppHandle) -> bool {
+    let shell: State<Shell> = app.state();
+    let ui = shell.ui.lock().unwrap();
+    ui.agent_host_running
+}
+
+/// Say so when a menu action fails.
+///
+/// Every arm of `handle_menu_action` used to discard its `Result`, so a menu
+/// item could not report a failure even in principle: a local start that spent
+/// ninety seconds failing to reach the private runtime, or an Agent Host
+/// command that never left the shell, both looked exactly like a dead button.
+/// The daemon wrote the reason to its log and the person pressing the item was
+/// told nothing.
+fn report_action_failure(app: &AppHandle, action: &str, error: &str) {
+    append_bounded_log(
+        &launch_log_path(),
+        &format!("menu {action} failed: {error}"),
+    );
+    app.dialog()
+        .message(error)
+        .title(action)
+        .kind(MessageDialogKind::Warning)
+        .buttons(MessageDialogButtons::Ok)
+        .show(|_| {});
+}
+
+/// Run a menu action, and surface whatever it has to say about failing.
+fn menu_attempt(app: &AppHandle, action: &str, work: impl FnOnce() -> Result<(), String>) {
+    if let Err(error) = work() {
+        report_action_failure(app, action, &error);
+    }
+}
+
 /// setting to offer later — it just is not the default identity.
 fn desktop_system_accent_enabled() -> bool {
     std::env::var("LEMMA_DESKTOP_SYSTEM_ACCENT").as_deref() == Ok("1")
@@ -3585,7 +3783,8 @@ fn handle_menu_action(app: &AppHandle, id: &str) {
     let app = app.clone();
     match id {
         "open" | "home" => {
-            let _ = open_app(app);
+            let handle = app.clone();
+            menu_attempt(&handle, "Open Lemma", || open_app(app).map(|_| ()));
         }
         "login" => {
             tauri::async_runtime::spawn(async move {
@@ -3608,19 +3807,27 @@ fn handle_menu_action(app: &AppHandle, id: &str) {
             }
         }
         "start" => {
-            let _ = start_impl(app);
+            let handle = app.clone();
+            menu_attempt(&handle, "Start Lemma", || start_impl(app).map(|_| ()));
         }
         "stop" => {
-            let _ = stop_impl(app, Some(false));
+            let handle = app.clone();
+            menu_attempt(&handle, "Stop Lemma", || {
+                stop_impl(app, Some(false)).map(|_| ())
+            });
         }
         "stop-all" => {
-            let _ = stop_impl(app, Some(true));
+            let handle = app.clone();
+            menu_attempt(&handle, "Stop Lemma completely", || {
+                stop_impl(app, Some(true)).map(|_| ())
+            });
         }
         "restart" => {
-            let _ = restart_impl(app);
+            let handle = app.clone();
+            menu_attempt(&handle, "Restart Lemma", || restart_impl(app).map(|_| ()));
         }
         "mode" => {
-            let _ = choose_connection_mode(app);
+            confirm_then_switch_connection(app);
         }
         "autostart" => {
             let autolaunch = app.autolaunch();
@@ -3631,7 +3838,7 @@ fn handle_menu_action(app: &AppHandle, id: &str) {
             }
         }
         "control" => {
-            let _ = show_control_center(&app);
+            menu_attempt(&app, "Local settings", || show_control_center(&app));
         }
         "control-ai" => {
             let _ = show_control_center_page(&app, Some("ai"));
@@ -3643,7 +3850,12 @@ fn handle_menu_action(app: &AppHandle, id: &str) {
             let _ = show_control_center_page(&app, Some("diagnostics"));
         }
         "agent-host-toggle" => {
-            let _ = toggle_agent_host_from_tray(&app);
+            let action = if agent_host_is_running(&app) {
+                "Turn Agent Host off"
+            } else {
+                "Turn Agent Host on"
+            };
+            menu_attempt(&app, action, || toggle_agent_host_from_tray(&app));
         }
         "agent-host-log" => {
             let _ = reveal_path(&agent_host_log_path());
@@ -4652,30 +4864,99 @@ mod tests {
     }
 
     #[test]
+    fn a_daemon_from_a_replaced_app_bundle_is_not_this_build() {
+        let expected = std::path::Path::new("/Applications/Lemma.app/Contents/MacOS/lemma-locald");
+        let this_build = json!({
+            "daemon_api_revision": REQUIRED_LOCALD_API_REVISION,
+            "executable": path_identity(expected),
+        });
+        assert!(locald_is_this_build(&this_build, Some(expected)));
+
+        // The failure this exists for. Updating the app moves the previous
+        // bundle to the Trash; its daemon keeps running and keeps the socket,
+        // reporting the same version and the same revision as the one that
+        // replaced it.
+        let from_the_trash = json!({
+            "daemon_api_revision": REQUIRED_LOCALD_API_REVISION,
+            "daemon_version": env!("CARGO_PKG_VERSION"),
+            "executable": "/Users/someone/.Trash/Lemma 4.23.56 PM.app/Contents/MacOS/lemma-locald",
+        });
+        assert!(
+            !locald_is_this_build(&from_the_trash, Some(expected)),
+            "a daemon running from another bundle must be replaced, not adopted",
+        );
+
+        // Every build older than the field predates the check, so silence is a
+        // mismatch rather than a pass.
+        let before_the_field = json!({ "daemon_api_revision": REQUIRED_LOCALD_API_REVISION });
+        assert!(!locald_is_this_build(&before_the_field, Some(expected)));
+
+        let wrong_revision = json!({
+            "daemon_api_revision": REQUIRED_LOCALD_API_REVISION + 1,
+            "executable": path_identity(expected),
+        });
+        assert!(!locald_is_this_build(&wrong_revision, Some(expected)));
+
+        // A source checkout has no packaged sidecar to be, and its daemon is
+        // whatever the developer just built.
+        assert!(locald_is_this_build(&before_the_field, None));
+    }
+
+    #[test]
+    fn switching_connection_says_what_it_is_about_to_do() {
+        let (title, body, confirm) = connection_switch_prompt("hosted", false);
+        assert_eq!(title, "Run Lemma on this Mac?");
+        assert_eq!(confirm, "Start Local");
+        // The ninety-second health gate is the whole reason this prompt exists:
+        // the press used to be followed by silence for minutes.
+        assert!(body.contains("takes a few minutes"), "{body}");
+
+        let (title, body, confirm) = connection_switch_prompt("local", true);
+        assert_eq!(title, "Use the hosted workspace?");
+        assert_eq!(confirm, "Use Hosted");
+        assert!(body.contains("keeps running on this Mac"), "{body}");
+        // Leaving must never read as destroying: the pods stay.
+        assert!(body.contains("stay where they are"), "{body}");
+    }
+
+    #[test]
     fn the_tray_reports_reachability_rather_than_liveness() {
         // Each of these is a live process that cannot take work, and the old
         // process-only status called them all "running".
         assert_eq!(
-            agent_host_tray_label(true, true, false, false),
+            agent_host_tray_label(true, true, false, false, false),
             "Agent Host: not paired",
         );
         assert_eq!(
-            agent_host_tray_label(true, true, true, false),
+            agent_host_tray_label(true, true, true, false, false),
             "Agent Host: reconnecting…",
         );
         assert_eq!(
-            agent_host_tray_label(true, true, true, true),
+            agent_host_tray_label(true, true, true, true, false),
             "Agent Host: connected",
         );
         assert_eq!(
-            agent_host_tray_label(true, false, true, false),
+            agent_host_tray_label(true, false, true, false, false),
             "Agent Host: off"
         );
         // A build without the sidecar cannot be switched on, so say so rather
         // than offering a toggle that always fails.
         assert_eq!(
-            agent_host_tray_label(false, false, false, false),
+            agent_host_tray_label(false, false, false, false, false),
             "Agent Host: not installed",
+        );
+        // The state this distinction was added for: a workspace that answered
+        // yesterday and is not there today. "Reconnecting" for a week is a
+        // promise the retry loop cannot keep.
+        assert_eq!(
+            agent_host_tray_label(true, true, true, false, true),
+            "Agent Host: workspace unreachable",
+        );
+        // Connected wins over a stale error on another target: one workspace
+        // failing does not stop this computer taking work from the other.
+        assert_eq!(
+            agent_host_tray_label(true, true, true, true, true),
+            "Agent Host: connected",
         );
     }
 
@@ -4774,7 +5055,7 @@ mod tests {
     }
 
     #[test]
-    fn an_overridden_workspace_origin_gets_the_same_single_command() {
+    fn an_overridden_workspace_origin_gets_the_same_commands() {
         let capability_for = |values: &[&str]| {
             workspace_capability_for(values.iter().map(|value| value.to_string()))
         };
@@ -4792,10 +5073,23 @@ mod tests {
             capability["remote"]["urls"],
             json!(["https://staging.lemma.work", "http://127.0.0.1:3711"]),
         );
+        // Read from the shipped file rather than restated here: a hardcoded copy
+        // is exactly what drifted, and an assertion that has to be remembered
+        // catches nothing.
+        let shipped: Value =
+            serde_json::from_str(SHIPPED_WORKSPACE_CAPABILITY).expect("valid shipped capability");
         assert_eq!(
-            capability["permissions"],
-            json!(["allow-open-control-center"]),
-            "an override must not reach further than the shipped capability",
+            capability["permissions"], shipped["permissions"],
+            "an override must reach neither further nor less far than the shipped capability",
+        );
+        // The one this drift actually cost, named so the regression reads as
+        // the symptom it produced.
+        assert!(
+            capability["permissions"]
+                .as_array()
+                .expect("permissions are an array")
+                .contains(&json!("allow-agent-host-status")),
+            "a self-hosted workspace must be able to ask this computer for its status",
         );
         assert_eq!(capability["local"], json!(false));
     }

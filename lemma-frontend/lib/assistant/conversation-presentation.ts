@@ -5,6 +5,7 @@ export const CONVERSATION_STAGE_NAVIGATION_MESSAGE_TYPE = 'lemma:conversation-st
 
 const ASSISTANT_CONVERSATION_PARAM = 'assistantConversationId';
 const WIDGET_VIEW_SUFFIX = '/widgets/view';
+const APP_VIEW_SUFFIX = '/app/view';
 
 function localResourceUrl(href: string): URL | null {
     if (!href || !href.startsWith('/')) return null;
@@ -81,6 +82,26 @@ export function normalizeConversationPresentedResourceHref(
     if (url.pathname.startsWith(`${podBase}/conversations`)) return null;
 
     return hrefFromLocalUrl(url);
+}
+
+/**
+ * The app slug a presented resource names, or null when it is not an app.
+ *
+ * An app is the one presented type whose surface belongs to the pod *layout*
+ * rather than to its own page — `/app/view` is an empty placeholder and the live
+ * iframe lives in `AppFrameHost`, above the router. Framing that route to reach
+ * the host boots a second copy of the entire workspace inside the stage, and
+ * mounts the app's own iframe under it: three levels deep to show one app. The
+ * stage reads the slug instead and renders the app frame itself.
+ */
+export function conversationStageAppSlug(
+    resourceHref: string,
+    podId: string,
+): string | null {
+    const url = localResourceUrl(resourceHref);
+    if (!url) return null;
+    if (url.pathname !== `/pod/${encodeURIComponent(podId)}${APP_VIEW_SUFFIX}`) return null;
+    return url.searchParams.get('page')?.trim() || null;
 }
 
 export function buildConversationPresentationHref({

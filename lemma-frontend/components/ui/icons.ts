@@ -172,6 +172,7 @@ export {
     Sidebar as PanelLeftOpen,
     SidebarSimple as PanelRightClose,
     Layout as PanelsTopLeft,
+    Printer,
     PuzzlePiece as Puzzle,
     Receipt as ReceiptText,
     ArrowsClockwise as RefreshCw,
