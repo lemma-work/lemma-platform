@@ -5,13 +5,18 @@ imports this module). Run by hand whenever the curated operation set changes,
 and paste the output into ``lemma_apps_config.json``'s ``"github"`` entry
 under ``static_operations``.
 
-The spec at ``lemma-connectors/openapi_specs/github.json`` is GitHub's own
-official REST API OpenAPI description (unmodified, fetched from
-https://raw.githubusercontent.com/github/rest-api-description/main/descriptions/api.github.com/api.github.com.json).
+The spec this reads is GitHub's own official REST API OpenAPI description,
+fetched on demand from ``SPEC_URL`` below and cached at ``SPEC_PATH`` --
+deliberately *not* committed to the repo (see ``.gitignore``): it's a vendor
+doc full of realistic-looking example secret values (fake access_token/
+client_secret/webhook_secret strings used purely to illustrate schema shape),
+which a secret scanner cannot distinguish from a real leaked credential, so
+keeping it out of git history avoids that fight entirely. Delete the cached
+copy and re-run to pick up a newer GitHub API version.
+
 ``build_operation_descriptors`` walks the *whole* spec but only materializes
-the operations named in ``ALLOWLIST`` below, so nothing needs to be pre-trimmed
-out of the source file. To refresh the spec to a newer GitHub API version,
-just re-download that URL over the existing file and re-run this script.
+the operations named in ``ALLOWLIST`` below, so nothing needs pre-trimming
+out of the source file.
 
 Usage::
 
@@ -24,6 +29,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import urllib.request
 from pathlib import Path
 
 sys.path.append(str(Path(__file__).parent.parent))
@@ -34,10 +40,23 @@ from app.modules.connectors.infrastructure.openapi.spec_import import (  # noqa:
     build_raw_passthrough,
 )
 
+SPEC_URL = (
+    "https://raw.githubusercontent.com/github/rest-api-description/main/"
+    "descriptions/api.github.com/api.github.com.json"
+)
 SPEC_PATH = (
     Path(__file__).parent.parent / "lemma-connectors" / "openapi_specs" / "github.json"
 )
 LEMMA_APPS_CONFIG_PATH = Path(__file__).parent / "lemma_apps_config.json"
+
+
+def _ensure_spec() -> None:
+    if SPEC_PATH.exists():
+        return
+    print(f"Fetching {SPEC_URL} -> {SPEC_PATH} (not committed; see .gitignore) ...")
+    SPEC_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with urllib.request.urlopen(SPEC_URL, timeout=60) as response:  # noqa: S310
+        SPEC_PATH.write_bytes(response.read())
 
 SERVER_URL = "https://api.github.com"
 
@@ -136,6 +155,7 @@ def _operation_to_static_entry(op: OpenAPIOperation) -> dict:
 
 
 def build_static_operations() -> list[dict]:
+    _ensure_spec()
     spec = json.loads(SPEC_PATH.read_text(encoding="utf-8"))
     operations = build_operation_descriptors(
         spec,

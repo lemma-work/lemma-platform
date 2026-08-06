@@ -16,3 +16,12 @@ dist/
 
 # Offline OpenAPI dump (scripts/dump_openapi_spec.py) feeding the SDK generators.
 .generated/
+
+# GitHub's own official OpenAPI spec, fetched on demand by
+# scripts/generate_github_static_operations.py -- not committed. It's a
+# vendor doc with realistic-looking example secret values throughout (fake
+# access_token/client_secret/webhook_secret examples used to illustrate
+# schema shape), which a secret scanner cannot distinguish from real leaked
+# credentials, so keeping it out of history avoids that entirely rather than
+# fighting it with allowlist rules.
+lemma-connectors/openapi_specs/github.json

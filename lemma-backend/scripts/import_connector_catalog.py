@@ -94,7 +94,6 @@ from app.modules.connectors.infrastructure.adapters.lemma_connector_factory impo
 )
 from app.modules.connectors.domain.connector import (
     ConnectorEntity,
-    ConnectorKind,
     AuthMethod,
     AuthProvider,
     ComposioProviderCapability,
