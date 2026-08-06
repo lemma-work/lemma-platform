@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 from uuid import UUID
 
@@ -15,6 +16,12 @@ from app.modules.agent_surfaces.domain.entities import (
     SurfacePlatform,
     SurfaceSendPolicy,
     SurfaceTelegramConfig,
+)
+from app.modules.agent_surfaces.domain.notification import (
+    NotificationDeliveryStatus,
+    NotificationEntity,
+    NotificationOriginKind,
+    NotificationStatus,
 )
 from app.modules.agent_surfaces.domain.setup_guides import (
     SurfaceSetupAction,
@@ -366,3 +373,124 @@ class AvailableSurface(BaseModel):
 
 class AvailableSurfacesResponse(BaseModel):
     surfaces: list[AvailableSurface] = Field(default_factory=list)
+
+
+class NotificationResponse(BaseModel):
+    """One notification, shaped for the inbox that renders it.
+
+    Carries enough to draw the row *and* decide what its action button does,
+    without a second request: ``awaiting_response`` says whether to draw one at
+    all, and ``responds_through_action`` says whether it opens a text box or the
+    real form described by ``action``.
+    """
+
+    id: UUID
+    pod_id: UUID
+    title: str
+    body: str
+    origin_kind: NotificationOriginKind
+    origin_id: UUID | None = None
+    origin_conversation_id: UUID | None = None
+
+    # Who asked. Both, because "the pod's bot" is not an answer a person can act
+    # on and the human behind a run is the one they will reply to.
+    actor_user_id: UUID | None = None
+    actor_agent_id: UUID | None = None
+
+    status: NotificationStatus
+    delivery_status: NotificationDeliveryStatus
+    expects_response: bool
+    awaiting_response: bool
+    responds_through_action: bool
+    action: dict[str, Any] | None = None
+
+    delivery_platform: str | None = None
+    delivery_conversation_id: UUID | None = None
+    # Why nobody could be reached, in words a person can act on ("they have not
+    # messaged the bot yet"). Present only when delivery did not succeed.
+    undeliverable_reason: str | None = None
+
+    response_summary: str | None = None
+    response_data: dict[str, Any] | None = None
+
+    created_at: datetime
+    expires_at: datetime | None = None
+    delivered_at: datetime | None = None
+    read_at: datetime | None = None
+    responded_at: datetime | None = None
+
+    @classmethod
+    def from_entity(cls, entity: NotificationEntity) -> "NotificationResponse":
+        return cls(
+            id=entity.id,
+            pod_id=entity.pod_id,
+            title=entity.title,
+            body=entity.body,
+            origin_kind=entity.origin_kind,
+            origin_id=entity.origin_id,
+            origin_conversation_id=entity.origin_conversation_id,
+            actor_user_id=entity.actor_user_id,
+            actor_agent_id=entity.actor_agent_id,
+            status=entity.status,
+            delivery_status=entity.delivery_status,
+            expects_response=entity.expects_response,
+            awaiting_response=entity.awaiting_response,
+            responds_through_action=entity.responds_through_action,
+            action=entity.action,
+            delivery_platform=entity.delivery_platform,
+            delivery_conversation_id=entity.delivery_conversation_id,
+            undeliverable_reason=entity.delivery_error,
+            response_summary=entity.response_summary,
+            response_data=entity.response_data,
+            created_at=entity.created_at,
+            expires_at=entity.expires_at,
+            delivered_at=entity.delivered_at,
+            read_at=entity.read_at,
+            responded_at=entity.responded_at,
+        )
+        # NB: ``background_instruction`` is deliberately absent. It is addressed
+        # to the agent handling the reply and carries the asker's private
+        # framing; showing it to the recipient would leak how they are being
+        # managed.
+
+
+class NotificationListResponse(BaseModel):
+    items: list[NotificationResponse] = Field(default_factory=list)
+    limit: int
+    next_page_token: str | None = None
+
+
+class NotificationUnreadCountResponse(BaseModel):
+    # Keyed on read_at, not status: a badge that only clears when you *answer*
+    # is a badge people learn to ignore.
+    unread: int
+
+
+class NotificationRespondRequest(BaseModel):
+    summary: str = Field(min_length=1, description="The answer, in the person's words.")
+    data: dict[str, Any] | None = Field(
+        default=None, description="Optional structured payload alongside the answer."
+    )
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class NotifyMemberRequest(BaseModel):
+    """Send a notification to one pod member."""
+
+    recipient: str = Field(
+        description="Pod member id, user id, or email address of the recipient."
+    )
+    title: str = Field(min_length=1, max_length=255)
+    body: str = Field(min_length=1)
+    background_instruction: str | None = Field(
+        default=None,
+        description=(
+            "Never shown to the recipient. Tells the agent that handles their "
+            "reply what to do with it."
+        ),
+    )
+    expects_response: bool = True
+    expires_in_seconds: int | None = Field(default=None, gt=0)
+
+    model_config = ConfigDict(extra="forbid")

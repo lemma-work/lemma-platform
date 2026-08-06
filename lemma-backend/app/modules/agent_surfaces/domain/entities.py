@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.core.domain.aggregate import AggregateRoot
 from app.core.domain.entity import Entity
@@ -113,11 +113,50 @@ class SurfaceChannelRoute(BaseModel):
         )
 
 
+class SendAudience(StrEnum):
+    """Who a surface's agent may proactively reach.
+
+    An audience rather than a boolean, because telling *you* about work you asked
+    for and putting words in front of a colleague who did not ask are different
+    acts. The recipient sees the pod's bot, not "the agent someone else's
+    schedule is running", and extends it the trust they extend to Lemma — which
+    is a phishing primitive if the two share one switch.
+    """
+
+    NOBODY = "NOBODY"
+    SELF = "SELF"
+    POD_MEMBERS = "POD_MEMBERS"
+
+
 class SurfaceSendPolicy(BaseModel):
     """Controls proactive sending (``surface.send``) for a surface."""
 
     # Expose the current-user ``surface_send_message`` tool to the agent.
     allow_send: bool = False
+    # Default NOBODY, matching exactly what every existing surface already does.
+    # A new capability that switches itself on for surfaces nobody has revisited
+    # is how a pod discovers its bot messaging staff it never authorized.
+    audience: SendAudience = SendAudience.NOBODY
+
+    @model_validator(mode="after")
+    def _reconcile_legacy_allow_send(self) -> "SurfaceSendPolicy":
+        """Keep ``allow_send`` and ``audience`` telling the same story.
+
+        ``allow_send`` is the shipped field and still round-trips for a release,
+        so a stored config or an older client that only knows the boolean has to
+        keep working. A surface that had sending on means SELF — the current-user
+        tool is exactly what it granted. Reaching other people is never implied
+        by the legacy flag; that has to be chosen explicitly.
+        """
+        if self.audience is SendAudience.NOBODY and self.allow_send:
+            self.audience = SendAudience.SELF
+        elif self.audience is not SendAudience.NOBODY and not self.allow_send:
+            self.allow_send = True
+        return self
+
+    @property
+    def allows_messaging_other_members(self) -> bool:
+        return self.audience is SendAudience.POD_MEMBERS
 
 
 class SurfaceTelegramConfig(BaseModel):
@@ -537,3 +576,22 @@ class AgentSurfaceConversationLink(Entity):
     route_key: str | None = None
     last_event: dict[str, Any] = Field(default_factory=dict)
     last_message_id: str | None = None
+    # When this person last wrote to us. Distinct from ``updated_at``, which an
+    # outbound notification also bumps — keying the DM reset off ``updated_at``
+    # means a proactive message silently suppresses the reset and leaks
+    # yesterday's context into today. Also the ranking key when choosing which of
+    # someone's channels to reach them on: freshest inbound is the best available
+    # guess at where they are actually looking.
+    last_inbound_at: datetime | None = None
+
+    @property
+    def inbound_activity_at(self) -> datetime:
+        """Last inbound time, falling back to ``updated_at`` for legacy rows.
+
+        Rows written before ``last_inbound_at`` existed have NULL there, and for
+        those ``updated_at`` *was* the last inbound time, because until then only
+        inbound events wrote this row. The fallback is correct by definition, and
+        it has to survive in code as well as in the backfill: a row the backfill
+        touched can still be NULL if it was created by an older worker mid-deploy.
+        """
+        return self.last_inbound_at or self.updated_at

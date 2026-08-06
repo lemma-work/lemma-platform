@@ -27,6 +27,7 @@ _SKILLS_PROMPT_PATH = _PROMPT_DIR / "skills.md"
 _WEB_SEARCH_PROMPT_PATH = _PROMPT_DIR / "web_search.md"
 _TODO_PROMPT_PATH = _PROMPT_DIR / "todo.md"
 _SPEECH_PROMPT_PATH = _PROMPT_DIR / "speech.md"
+_MESSAGING_PROMPT_PATH = _PROMPT_DIR / "messaging.md"
 _AGENT_HOST_RUNTIME_PROMPT_PATH = _PROMPT_DIR / "agent_host_runtime.md"
 
 # Per-toolset prompt fragments, in the order they should appear in the system
@@ -42,6 +43,7 @@ FRAGMENT_BY_TOOLSET: dict[AgentToolset, Path] = {
     AgentToolset.WEB_SEARCH: _WEB_SEARCH_PROMPT_PATH,
     AgentToolset.SPEECH: _SPEECH_PROMPT_PATH,
     AgentToolset.TODO: _TODO_PROMPT_PATH,
+    AgentToolset.MESSAGING: _MESSAGING_PROMPT_PATH,
 }
 
 
@@ -73,6 +75,10 @@ def load_web_search_prompt() -> str:
 
 def load_todo_prompt() -> str:
     return _read_required_prompt(_TODO_PROMPT_PATH)
+
+
+def load_messaging_prompt() -> str:
+    return _read_required_prompt(_MESSAGING_PROMPT_PATH)
 
 
 def load_speech_prompt() -> str:

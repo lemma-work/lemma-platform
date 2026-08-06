@@ -52,7 +52,17 @@ name** everywhere (`slack`, `gmail`, …) — there is no separate surface id to
   system bot).
 - **`config`** — user-editable behavior: `dm_conversation_reset_after_hours`
   (default 24 — don't let one DM thread accumulate forever), `identity`
-  (allow-list of senders), and `channels` (Slack/Teams channel→agent routes).
+  (allow-list of senders), `channels` (Slack/Teams channel→agent routes), and
+  `send_policy`.
+- **`config.send_policy.audience`** — who this surface's agent may reach *first*,
+  rather than in reply: `NOBODY` (the default, and what every surface did before
+  this existed), `SELF` (only the person a run belongs to), or `POD_MEMBERS`.
+  Only `POD_MEMBERS` lets an agent with the `MESSAGING` toolset message a
+  colleague. Set it deliberately: the recipient sees the pod's bot, not "the
+  agent someone else's schedule is running", and extends it the trust they
+  extend to Lemma — which is why every such message names both the agent and the
+  human whose authority the run carries. The older boolean `allow_send` still
+  reads and writes, and maps to `SELF`.
 - **`default_agent_name`** — the pod agent that answers. Per-channel routing can
   send specific channels to other agents.
 

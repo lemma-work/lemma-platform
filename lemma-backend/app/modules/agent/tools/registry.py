@@ -6,6 +6,7 @@ from collections.abc import Iterable
 
 from app.modules.agent.domain.value_objects import AgentToolset
 from app.modules.agent.tools.connectors.pydantic_adapter import connectors_toolset
+from app.modules.agent.tools.messaging.pydantic_adapter import messaging_toolset
 from app.modules.agent.tools.speech.pydantic_adapter import speech_toolset
 from app.modules.agent.tools.pod.pydantic_adapter import pod_toolset
 from app.modules.agent.tools.skills.pydantic_adapter import skills_toolset
@@ -45,6 +46,7 @@ _TOOLSET_BY_NAME: dict[AgentToolset, object] = {
     AgentToolset.VIEW_IMAGE: view_image_toolset,
     AgentToolset.CONNECTORS: connectors_toolset,
     AgentToolset.SNOOZE: snooze_toolset,
+    AgentToolset.MESSAGING: messaging_toolset,
 }
 
 # Toolsets that are NOT static singletons — they are realized per-conversation as

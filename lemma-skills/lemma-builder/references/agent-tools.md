@@ -64,6 +64,26 @@ still works.
 
 `display_resource`, `say`, and `listen` do **not** pause — they return immediately.
 
+`message_user` does **not** pause either, and that catches people out, because it *looks*
+like asking a question. It reaches a pod member who is **not** in this conversation and
+returns straight away; their reply never arrives as a tool return. The answer comes back
+by a different route entirely — the recipient's own agent handles their reply in their own
+thread, under their own permissions, guided by the `background_instruction` the sender
+wrote, and records it with `respond_to_notification`.
+
+So an agent that needs answers sends every message, `snooze`s once for a realistic
+interval, then calls `check_messages`. Compare:
+
+| | Who it reaches | Pauses the run | Where the answer lands |
+| --- | --- | --- | --- |
+| `ask_user` | the person already in this conversation | yes | back in this run, as the tool's return |
+| `message_user` | any pod member, wherever they are | **no** | on the notification, read later with `check_messages` |
+
+`MESSAGING` is opt-in, and reaching anyone other than the run's own owner also needs the
+surface's `send_policy.audience` set to `POD_MEMBERS`. Every delivered message names both
+the agent and the human whose authority the run carries — the recipient sees the pod's bot
+and extends it the trust they extend to Lemma.
+
 ---
 
 ## `ask_user`

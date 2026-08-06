@@ -123,6 +123,142 @@
     }
   },
   {
+    "tool_name": "check_messages",
+    "toolset": "MESSAGING",
+    "description": "Find out whether the people you messaged have answered.\n\nCall it after a `snooze`, not in a loop \u2014 every call costs a wake and a full\nhistory replay, and people do not answer faster for being asked twice.\n\n`RESPONDED` is the only status that means somebody answered; read\n`response_summary` for what they said. `OPEN` means still waiting. Anything\nelse means it is over: `EXPIRED` (deadline passed), `ACKNOWLEDGED` (seen,\nnothing owed), `CANCELLED` (withdrawn).\n\nIf several are still OPEN and you have already waited a long time, say so and\nfinish with what you have. Do not wait indefinitely on people.",
+    "input_schema": {
+      "properties": {
+        "notification_ids": {
+          "description": "The ids message_user gave you, for the messages you are waiting on.",
+          "items": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "maxItems": 25,
+          "type": "array"
+        }
+      },
+      "required": [
+        "notification_ids"
+      ],
+      "title": "CheckMessagesRequest",
+      "type": "object"
+    },
+    "output_schema": {
+      "$defs": {
+        "NotificationStatusReport": {
+          "properties": {
+            "notification_id": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "status": {
+              "description": "OPEN: still waiting. RESPONDED: they answered \u2014 read response_summary. ACKNOWLEDGED: seen, nothing owed. EXPIRED: the deadline passed. CANCELLED: withdrawn.",
+              "type": "string"
+            },
+            "delivery_status": {
+              "type": "string"
+            },
+            "recipient_user_id": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": {
+              "type": "string"
+            },
+            "response_summary": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "response_data": {
+              "anyOf": [
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "responded_at": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            }
+          },
+          "required": [
+            "notification_id",
+            "status",
+            "delivery_status",
+            "recipient_user_id",
+            "title"
+          ],
+          "title": "NotificationStatusReport",
+          "type": "object"
+        }
+      },
+      "properties": {
+        "success": {
+          "default": false,
+          "description": "Whether the tool completed successfully.",
+          "type": "boolean"
+        },
+        "error": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Human-readable error details when the tool fails."
+        },
+        "message": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Human-readable status or follow-up information for the tool call."
+        },
+        "messages": {
+          "items": {
+            "$ref": "#/$defs/NotificationStatusReport"
+          },
+          "type": "array"
+        },
+        "pending": {
+          "default": 0,
+          "description": "How many are still OPEN \u2014 nobody has answered those.",
+          "type": "integer"
+        }
+      },
+      "title": "CheckMessagesResponse",
+      "type": "object"
+    }
+  },
+  {
     "tool_name": "describe_connector_operation",
     "toolset": "CONNECTORS",
     "description": "Get one operation's description and input/output schemas.\n\nCall this before running an operation you have not run before -- the input\nschema is what `run_connector_operation` validates `arguments` against.",
@@ -1162,6 +1298,161 @@
       "type": "object"
     },
     "output_schema": {}
+  },
+  {
+    "tool_name": "message_user",
+    "toolset": "MESSAGING",
+    "description": "Send a message to a pod member, wherever they actually are.\n\nFinds them on the chat app they last used \u2014 Slack, Telegram, WhatsApp,\nTeams \u2014 or emails them, and always leaves a copy in their Lemma inbox. Use\nit to ask a colleague for something, hand work over for review, or tell the\nperson whose schedule you are running what you found.\n\n**This does not pause your turn.** It returns as soon as the message is on\nits way. You will not see their reply as a tool result, ever.\n\nSo getting an answer back is a three-step loop:\n\n1. Send every message you need, one call each. Give each a\n   `background_instruction` saying what counts as an answer and where it\n   goes \u2014 without one, their reply is just a chat message and nothing comes\n   back to you.\n2. `snooze` once, for how long a person realistically takes. Ten minutes if\n   they are mid-conversation; an hour or more for a standup. Not a poll loop\n   \u2014 every wake replays this whole conversation.\n3. `check_messages` with the ids you were given, plus whatever your\n   instruction told their agent to write.\n\nTwo things that bite:\n\n- **`DELIVERED` does not mean answered.** Only `RESPONDED` does. A person can\n  read something and do nothing, which is normal.\n- **`UNDELIVERABLE` is not a failure.** It means no chat app or mailbox could\n  carry it, and the message is sitting in their Lemma inbox. Say so, and pass\n  on `undeliverable_reason` \u2014 it usually means they have never messaged the\n  bot, which is something a human can fix.\n\nIf you only want to reply to the person you are already talking to, don't use\nthis \u2014 just answer them.",
+    "input_schema": {
+      "properties": {
+        "to": {
+          "description": "Who to reach: their pod member id, user id, or email address. They must be a member of this pod.",
+          "type": "string"
+        },
+        "message": {
+          "description": "What they read, verbatim. Write it to them, not about them \u2014 they see it on Slack or Telegram like any other message. Say who needs what, and by when if that matters.",
+          "type": "string"
+        },
+        "background_instruction": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "NEVER shown to them. Instructions for the agent that handles their reply: what counts as an answer, and where to put it. Be concrete \u2014 'record their status update as the response summary', or 'write the PO number into the purchase_orders table, column po_number'. Without this their reply is just a chat message and nothing comes back."
+        },
+        "title": {
+          "anyOf": [
+            {
+              "maxLength": 120,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Short label for their inbox and the email subject. Defaults to a truncated message."
+        },
+        "expects_response": {
+          "default": true,
+          "description": "False for pure FYI. It changes what they are offered in the app: a Respond box, or just Dismiss.",
+          "type": "boolean"
+        },
+        "expires_in_seconds": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Give up waiting after this long. Defaults to 72 hours, which is deliberately generous \u2014 people are asleep, on leave, in meetings."
+        }
+      },
+      "required": [
+        "to",
+        "message"
+      ],
+      "title": "MessageUserRequest",
+      "type": "object"
+    },
+    "output_schema": {
+      "properties": {
+        "success": {
+          "default": false,
+          "description": "Whether the tool completed successfully.",
+          "type": "boolean"
+        },
+        "error": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Human-readable error details when the tool fails."
+        },
+        "message": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Human-readable status or follow-up information for the tool call."
+        },
+        "notification_id": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Pass this to check_messages to find out whether they answered. Keep it \u2014 there is no other way to look this message up later."
+        },
+        "delivery_status": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "DELIVERED: it reached a chat app or mailbox. UNDELIVERABLE: no channel could carry it, but it IS in their Lemma inbox, so this is not a failure. FAILED: a channel was tried and errored."
+        },
+        "delivered_via": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Which platform took it, when one did."
+        },
+        "undeliverable_reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Why no channel worked, in words worth repeating to whoever asked you to send it."
+        },
+        "interaction_fallback": {
+          "default": false,
+          "description": "True when this runtime cannot send; say so and carry on.",
+          "type": "boolean"
+        }
+      },
+      "title": "MessageUserResponse",
+      "type": "object"
+    }
   },
   {
     "tool_name": "pod_get_file_url",
@@ -2452,6 +2743,79 @@
         }
       },
       "title": "RequestApprovalResponse",
+      "type": "object"
+    }
+  },
+  {
+    "tool_name": "respond_to_notification",
+    "toolset": "MESSAGING",
+    "description": "Record this person's answer to something the pod asked them.\n\nCall it once you actually have the answer \u2014 not when they say \"sure, one\nsec\". The asking agent is waiting on this and reads nothing else.\n\nOnly record what they told you. If they declined, or drifted onto another\nsubject, leave the request open and say so; an invented answer is worse than\na missing one, because the asker will act on it.",
+    "input_schema": {
+      "properties": {
+        "notification_id": {
+          "description": "The id from the open request you were told about.",
+          "format": "uuid",
+          "type": "string"
+        },
+        "summary": {
+          "description": "What they actually said, in their terms. This is the whole of what the asker will see, so do not compress it to 'done' \u2014 if they gave a number, a date, or a reason, it belongs here.",
+          "minLength": 1,
+          "type": "string"
+        },
+        "data": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Structured values alongside the summary, when the request asked for specific fields."
+        }
+      },
+      "required": [
+        "notification_id",
+        "summary"
+      ],
+      "title": "RespondToNotificationRequest",
+      "type": "object"
+    },
+    "output_schema": {
+      "properties": {
+        "success": {
+          "default": false,
+          "description": "Whether the tool completed successfully.",
+          "type": "boolean"
+        },
+        "error": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Human-readable error details when the tool fails."
+        },
+        "message": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Human-readable status or follow-up information for the tool call."
+        }
+      },
+      "title": "RespondToNotificationResponse",
       "type": "object"
     }
   },
