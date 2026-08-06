@@ -52,6 +52,7 @@ from app.modules.workspace.providers.base import (
     ProviderInstance,
     ProviderNotReady,
     ProviderRejected,
+    ProviderStorageKind,
 )
 from app.modules.workspace.providers.profiles import profile_for
 
@@ -251,11 +252,30 @@ class SandboxService:
             await self._fail(instance.id, str(exc))
             raise SandboxRejected(str(exc)) from exc
 
+        # A sandbox-native provider only learns whether the disk survived by
+        # trying to adopt it, so the generation is settled here rather than
+        # before the create.
+        if created.storage_adopted is False and sandbox.provider_volume_id:
+            async with self._uow_factory() as uow:
+                repository = SandboxRepository(uow)
+                storage_generation = await repository.bump_storage_generation(
+                    sandbox.id
+                )
+                await uow.commit()
+            logger.info(
+                "workspace.sandbox_service.workspace_storage_recreated",
+                sandbox_id=str(sandbox.id),
+            )
+
         async with self._uow_factory() as uow:
             repository = SandboxRepository(uow)
             await repository.mark_instance_ready(instance.id)
             if volume_name is not None:
                 await repository.set_provider_volume(sandbox.id, volume_name)
+            elif created.storage_adopted is not None:
+                # Records that this sandbox has durable storage at all, so a
+                # later loss is distinguishable from a first provision.
+                await repository.set_provider_volume(sandbox.id, created.provider_id)
             await repository.touch(sandbox.id)
             await repository.set_desired_state(
                 sandbox.id, SandboxDesiredState.PRESENT
@@ -279,6 +299,15 @@ class SandboxService:
         lost nothing and needs no volume.
         """
         if sandbox.kind is SandboxKind.FUNCTION:
+            return None, sandbox.storage_generation
+
+        if (
+            getattr(self._provider, "storage_kind", ProviderStorageKind.VOLUME)
+            is ProviderStorageKind.SANDBOX_NATIVE
+        ):
+            # The provider's sandbox *is* the disk, so there is no separate
+            # volume to manage and adoption happens inside create. The
+            # generation is settled afterwards, from whether it adopted.
             return None, sandbox.storage_generation
 
         adopted = await self._provider.find_volume(

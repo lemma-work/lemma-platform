@@ -62,6 +62,7 @@ from app.modules.workspace.providers.base import (
     ProviderNotReady,
     ProviderObject,
     ProviderRejected,
+    ProviderStorageKind,
 )
 from app.modules.workspace.providers.docker_engine import (
     DockerContainerCreateRequest,
@@ -125,6 +126,9 @@ class RuntimeCredentialSigner:
 
 class DockerSandboxProvider:
     name = "docker"
+    # A container and its volume are separate objects, so compute can be
+    # replaced without touching the user's files.
+    storage_kind = ProviderStorageKind.VOLUME
 
     def __init__(
         self,

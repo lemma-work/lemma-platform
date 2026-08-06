@@ -110,11 +110,16 @@ async def test_creating_twice_yields_one_sandbox(
     assert len(world.created) == 1
 
 
-async def test_a_new_epoch_is_a_different_sandbox(
+async def test_a_new_epoch_adopts_the_same_sandbox(
     provider: E2BSandboxProvider, world: FakeE2B
 ) -> None:
-    """The fence has to hold on E2B too, or a stale handle reaches the
-    replacement."""
+    """Deliberately unlike Docker, and this is the important difference.
+
+    On Docker a new epoch means a new container while the volume persists. Here
+    the sandbox *is* the disk, so making a second one for a new epoch would
+    leave the user's files in the first. Identity alone decides; the fence is
+    the E2B sandbox id, which only changes when the sandbox really is new.
+    """
     sandbox_id = uuid4()
     first = await provider.create(_spec(sandbox_id, epoch=1))
     second = await provider.create(
@@ -125,8 +130,10 @@ async def test_a_new_epoch_is_a_different_sandbox(
         )
     )
 
-    assert first.provider_id != second.provider_id
-    assert len(world.created) == 2
+    assert first.provider_id == second.provider_id
+    assert len(world.created) == 1
+    assert first.storage_adopted is False, "the first provision made the disk"
+    assert second.storage_adopted is True, "the second adopted it"
 
 
 async def test_another_sandboxes_metadata_is_never_matched(
@@ -202,73 +209,96 @@ async def test_destroying_something_already_gone_is_success(
 
 
 # ---------------------------------------------------------------------------
-# Volumes
+# Storage
 # ---------------------------------------------------------------------------
 
 
-async def test_a_volume_is_found_by_name_and_mounted(
-    provider: E2BSandboxProvider, world: FakeE2B
-) -> None:
-    sandbox_id = uuid4()
-    name = naming.volume_name(sandbox_id, 1)
-    await provider.ensure_volume(
-        sandbox_id=sandbox_id, name=name, deadline_at=_deadline()
-    )
-
-    assert (
-        await provider.find_volume(sandbox_id=sandbox_id, deadline_at=_deadline())
-        == name
-    )
-
-    await provider.create(_spec(sandbox_id, volume_name=name))
-    assert world.created[0]["volume_mounts"] is not None
-
-
-async def test_ensure_volume_does_not_create_a_second_one(
-    provider: E2BSandboxProvider, world: FakeE2B
-) -> None:
-    sandbox_id = uuid4()
-    name = naming.volume_name(sandbox_id, 1)
-    await provider.ensure_volume(
-        sandbox_id=sandbox_id, name=name, deadline_at=_deadline()
-    )
-    await provider.ensure_volume(
-        sandbox_id=sandbox_id, name=name, deadline_at=_deadline()
-    )
-    assert len(world.volumes) == 1
-
-
-async def test_the_newest_generation_wins_when_an_old_disk_lingers(
+async def test_storage_is_the_sandbox_not_a_volume(
     provider: E2BSandboxProvider,
 ) -> None:
-    """A replaced disk may leave its volume behind; adopting the old one would
-    hand the user back files they already lost."""
-    sandbox_id = uuid4()
-    for generation in (1, 2):
-        await provider.ensure_volume(
-            sandbox_id=sandbox_id,
-            name=naming.volume_name(sandbox_id, generation),
-            deadline_at=_deadline(),
-        )
+    """Production holds zero volumes: every workspace's files live inside a
+    paused sandbox. Reporting a volume would send the service looking for a
+    disk that does not exist, and creating one would leave the real files
+    behind."""
+    from app.modules.workspace.providers.base import ProviderStorageKind
 
-    assert await provider.find_volume(
-        sandbox_id=sandbox_id, deadline_at=_deadline()
-    ) == naming.volume_name(sandbox_id, 2)
-
-
-async def test_another_sandboxes_volume_is_never_adopted(
-    provider: E2BSandboxProvider,
-) -> None:
-    theirs = uuid4()
-    await provider.ensure_volume(
-        sandbox_id=theirs,
-        name=naming.volume_name(theirs, 1),
-        deadline_at=_deadline(),
-    )
+    assert provider.storage_kind is ProviderStorageKind.SANDBOX_NATIVE
     assert (
         await provider.find_volume(sandbox_id=uuid4(), deadline_at=_deadline())
         is None
     )
+    with pytest.raises(ProviderRejected):
+        await provider.ensure_volume(
+            sandbox_id=uuid4(), name="lemma-vol-x-1", deadline_at=_deadline()
+        )
+
+
+async def test_a_pre_consolidation_production_sandbox_is_adopted(
+    provider: E2BSandboxProvider, world: FakeE2B
+) -> None:
+    """The E2B equivalent of the Docker volume guard, and it matters more.
+
+    Production workspaces are paused sandboxes labelled by AgentBox with
+    `logical-id` and `managed-by=agentbox`, holding the user's files inside
+    them. Failing to match one would not merely duplicate compute -- it would
+    hand the user an empty workspace and leave their work in a sandbox nothing
+    points at any more.
+    """
+    from app.modules.workspace.testing.fake_e2b import FakeSandboxInfo
+
+    user_id = uuid4()
+    world.sandboxes["legacy-prod"] = FakeSandboxInfo(
+        sandbox_id="legacy-prod",
+        state="paused",
+        metadata={
+            "managed-by": "agentbox",
+            "logical-id": str(user_id),
+            "workload-kind": "workspace",
+            "profile-name": "workspace-python-v1",
+        },
+    )
+
+    instance = await provider.create(_spec(user_id))
+
+    assert instance.provider_id == "legacy-prod", "the user's files are in there"
+    assert instance.storage_adopted is True
+    assert world.created == [], "a second sandbox would strand the real one"
+
+
+async def test_a_legacy_sandbox_belonging_to_someone_else_is_not_adopted(
+    provider: E2BSandboxProvider, world: FakeE2B
+) -> None:
+    from app.modules.workspace.testing.fake_e2b import FakeSandboxInfo
+
+    world.sandboxes["theirs"] = FakeSandboxInfo(
+        sandbox_id="theirs",
+        state="paused",
+        metadata={"managed-by": "agentbox", "logical-id": str(uuid4())},
+    )
+
+    instance = await provider.create(_spec(uuid4()))
+
+    assert instance.provider_id != "theirs"
+    assert instance.storage_adopted is False
+
+
+async def test_a_running_match_is_preferred_over_a_paused_duplicate(
+    provider: E2BSandboxProvider, world: FakeE2B
+) -> None:
+    """An earlier failure can leave two sandboxes for one identity; the one
+    actually serving must not be shadowed by the stale one."""
+    from app.modules.workspace.testing.fake_e2b import FakeSandboxInfo
+
+    sandbox_id = uuid4()
+    for name, state in (("stale", "paused"), ("live", "running")):
+        world.sandboxes[name] = FakeSandboxInfo(
+            sandbox_id=name,
+            state=state,
+            metadata={META_SANDBOX_ID: str(sandbox_id)},
+        )
+
+    instance = await provider.create(_spec(sandbox_id))
+    assert instance.provider_id == "live"
 
 
 # ---------------------------------------------------------------------------

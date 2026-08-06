@@ -60,14 +60,41 @@ from app.modules.workspace.providers.base import (
     ProviderInstance,
     ProviderObject,
     ProviderRejected,
+    ProviderStorageKind,
 )
 from app.modules.workspace.providers.e2b_output import E2BOutputBuffer
 
 # E2B metadata values are strings, so identity travels as strings and is parsed
 # back on the way in.
-META_SANDBOX_ID = "lemma-sandbox-id"
-META_SANDBOX_KIND = "lemma-sandbox-kind"
-META_EPOCH = "lemma-epoch"
+#
+# The prefix is configurable rather than hardcoded because one E2B account is
+# shared: a conformance run must be able to label its sandboxes so that neither
+# its queries nor its sweeps can ever see production's, and vice versa.
+DEFAULT_METADATA_NAMESPACE = "lemma"
+
+
+def meta_sandbox_id(namespace: str) -> str:
+    return f"{namespace}-sandbox-id"
+
+
+def meta_sandbox_kind(namespace: str) -> str:
+    return f"{namespace}-sandbox-kind"
+
+
+def meta_epoch(namespace: str) -> str:
+    return f"{namespace}-epoch"
+
+
+# The production namespace, kept as module constants for readability at the
+# call sites that do not vary.
+META_SANDBOX_ID = meta_sandbox_id(DEFAULT_METADATA_NAMESPACE)
+META_SANDBOX_KIND = meta_sandbox_kind(DEFAULT_METADATA_NAMESPACE)
+META_EPOCH = meta_epoch(DEFAULT_METADATA_NAMESPACE)
+# What AgentBox stamped on the same sandboxes. Read-only: matched so existing
+# production workspaces are adopted, never written.
+LEGACY_MANAGED_BY_KEY = "managed-by"
+LEGACY_MANAGED_BY = "agentbox"
+LEGACY_LOGICAL_ID = "logical-id"
 
 WORKSPACE_MOUNT = "/workspace"
 
@@ -82,10 +109,21 @@ class E2BProviderConfig:
     # backend dies, not the primary idle policy.
     sandbox_timeout_seconds: int = 60 * 30
     domain: str | None = None
+    # Namespaces every metadata key this provider writes and queries. Changing
+    # it makes a provider blind to sandboxes labelled by another namespace,
+    # which is exactly what a conformance run against a shared account needs.
+    metadata_namespace: str = DEFAULT_METADATA_NAMESPACE
+    # Whether pre-consolidation AgentBox sandboxes may be adopted. Off for any
+    # namespace but the production one: a test must never adopt a real user's
+    # workspace.
+    adopt_legacy: bool = True
 
 
 class E2BSandboxProvider:
     name = "e2b"
+    # A paused E2B sandbox keeps its filesystem, so the sandbox *is* the disk.
+    # Verified against the real service: write, pause, reconnect, read back.
+    storage_kind = ProviderStorageKind.SANDBOX_NATIVE
 
     def __init__(
         self, config: E2BProviderConfig, *, output: E2BOutputBuffer | None = None
@@ -119,6 +157,14 @@ class E2BSandboxProvider:
             params["domain"] = self._config.domain
         return params
 
+    def _identity_metadata(self, spec: ProviderCreateSpec) -> dict[str, str]:
+        namespace = self._config.metadata_namespace
+        return {
+            meta_sandbox_id(namespace): str(spec.sandbox_id),
+            meta_sandbox_kind(namespace): spec.kind.value,
+            meta_epoch(namespace): str(spec.epoch),
+        }
+
     def _template(self, kind: SandboxKind) -> str:
         return (
             self._config.function_template
@@ -131,30 +177,37 @@ class E2BSandboxProvider:
     # ------------------------------------------------------------------
 
     async def create(self, spec: ProviderCreateSpec) -> ProviderInstance:
-        # Idempotence, the E2B way: identity lives in metadata rather than in a
-        # name, so the lookup is a query instead of an inspect. The property
-        # that matters is the same -- a retry finds what a lost response left
-        # behind rather than creating a second sandbox.
-        existing = await self._find(spec.sandbox_id, epoch=spec.epoch)
-        if existing is not None:
-            return existing
+        """Adopt this sandbox's existing E2B sandbox, or make its first one.
 
-        volume_mounts = None
-        if spec.volume_name:
-            volume = await self._connect_volume(spec.volume_name)
-            volume_mounts = {WORKSPACE_MOUNT: volume}
+        Because the sandbox is also the disk, "create" here means "make sure
+        the one sandbox that holds this workspace's files exists and is
+        running". Creating a second one would leave the user's files stranded
+        in the first, which is the whole reason adoption is not optional --
+        production workspaces today are paused sandboxes with no volume behind
+        them.
+
+        Adoption deliberately ignores the epoch. On Docker the epoch fences a
+        container that can be replaced independently of its volume; here
+        replacement would destroy the disk, so identity alone decides, and the
+        fence is the E2B sandbox id -- a genuinely new sandbox has a new id, so
+        a stale operation fails rather than landing on it.
+        """
+        existing = await self._find_any(spec.sandbox_id)
+        if existing is not None:
+            await self._stamp(existing.provider_id, spec)
+            return ProviderInstance(
+                provider_id=existing.provider_id,
+                name=spec.name,
+                running=existing.running,
+                storage_adopted=True,
+            )
 
         try:
             sandbox = await self._sdk.create(
                 template=self._template(spec.kind),
                 timeout=self._config.sandbox_timeout_seconds,
-                metadata={
-                    META_SANDBOX_ID: str(spec.sandbox_id),
-                    META_SANDBOX_KIND: spec.kind.value,
-                    META_EPOCH: str(spec.epoch),
-                },
+                metadata=self._identity_metadata(spec),
                 envs=dict(spec.env),
-                volume_mounts=volume_mounts,
                 **self._api(),
             )
         except Exception as exc:
@@ -163,9 +216,23 @@ class E2BSandboxProvider:
         return ProviderInstance(
             provider_id=sandbox.sandbox_id,
             name=spec.name,
-            volume_name=spec.volume_name,
             running=True,
+            storage_adopted=False,
         )
+
+    async def _stamp(self, provider_id: str, spec: ProviderCreateSpec) -> None:
+        """Best effort: record the current epoch on an adopted sandbox.
+
+        Only bookkeeping -- identity and the fence come from the sandbox id, so
+        an SDK without metadata updates costs nothing but a stale epoch label.
+        """
+        try:
+            sandbox = await self._connect(provider_id)
+            setter = getattr(sandbox, "set_metadata", None)
+            if setter is not None:
+                await setter(self._identity_metadata(spec), **self._api())
+        except Exception:
+            return
 
     async def inspect(
         self, name: str, *, deadline_at: datetime
@@ -181,8 +248,10 @@ class E2BSandboxProvider:
         parsed = naming.parse_container_name(name)
         if parsed is None:
             return None
-        sandbox_id, _, epoch = parsed
-        return await self._find(sandbox_id, epoch=epoch)
+        sandbox_id, _, _ = parsed
+        # Epoch is not part of the lookup: the sandbox is adopted across
+        # epochs because destroying it would destroy the user's files.
+        return await self._find_any(sandbox_id)
 
     async def wait_ready(
         self,
@@ -200,7 +269,7 @@ class E2BSandboxProvider:
         """
         sandbox = await self._connect(instance.provider_id)
         try:
-            if not await sandbox.is_running(**self._api()):
+            if not await sandbox.is_running():
                 raise ProviderFailed(
                     f"e2b sandbox {instance.provider_id} is not running"
                 )
@@ -241,60 +310,24 @@ class E2BSandboxProvider:
     async def find_volume(
         self, *, sandbox_id: UUID, deadline_at: datetime
     ) -> str | None:
-        from app.modules.workspace.providers import naming
+        """Always None: E2B storage is the sandbox, not a separate volume.
 
-        try:
-            volumes = await self._volumes.list(**self._api())
-        except Exception as exc:
-            raise _classify(exc) from exc
-
-        # Volume names carry the generation, so the newest one wins if an
-        # earlier disk was replaced and its volume is still lying around.
-        owned = sorted(
-            (
-                volume.name
-                for volume in volumes
-                if volume.name
-                and volume.name.startswith(f"lemma-vol-{sandbox_id.hex}-")
-            ),
-            key=lambda candidate: _generation_of(candidate),
-            reverse=True,
-        )
-        del naming
-        return owned[0] if owned else None
+        The service skips this entirely for SANDBOX_NATIVE providers. It is
+        implemented so the protocol is satisfied and so a future caller that
+        forgets the distinction gets "no volume" rather than a crash.
+        """
+        return None
 
     async def ensure_volume(
         self, *, sandbox_id: UUID, name: str, deadline_at: datetime
     ) -> str:
-        existing = await self.find_volume(
-            sandbox_id=sandbox_id, deadline_at=deadline_at
+        raise ProviderRejected(
+            "e2b storage lives in the sandbox itself; there is no volume to create"
         )
-        if existing == name:
-            return existing
-        try:
-            volume = await self._volumes.create(name, **self._api())
-        except Exception as exc:
-            raise _classify(exc) from exc
-        return volume.name or name
 
     async def destroy_volume(self, name: str, *, deadline_at: datetime) -> None:
-        try:
-            volume = await self._connect_volume(name)
-            await self._volumes.destroy(volume.volume_id, **self._api())
-        except ProviderGone:
-            return
-        except Exception as exc:
-            raise _classify(exc) from exc
-
-    async def _connect_volume(self, name: str):
-        try:
-            volumes = await self._volumes.list(**self._api())
-        except Exception as exc:
-            raise _classify(exc) from exc
-        for volume in volumes:
-            if volume.name == name:
-                return await self._volumes.connect(volume.volume_id, **self._api())
-        raise ProviderGone(f"e2b volume {name} does not exist")
+        """Nothing to destroy separately: killing the sandbox takes the disk."""
+        return None
 
     # ------------------------------------------------------------------
     # Reclamation
@@ -313,7 +346,13 @@ class E2BSandboxProvider:
         found: list[ProviderObject] = []
         try:
             paginator = self._sdk.list(
-                query=SandboxQuery(metadata={META_SANDBOX_KIND: "workspace"}),
+                query=SandboxQuery(
+                    metadata={
+                        meta_sandbox_kind(
+                            self._config.metadata_namespace
+                        ): SandboxKind.WORKSPACE.value
+                    }
+                ),
                 **self._api(),
             )
             pages = await paginator.next_items()
@@ -322,7 +361,7 @@ class E2BSandboxProvider:
 
         for info in pages:
             metadata = info.metadata or {}
-            raw_id = metadata.get(META_SANDBOX_ID)
+            raw_id = metadata.get(meta_sandbox_id(self._config.metadata_namespace))
             if not raw_id:
                 continue
             try:
@@ -330,7 +369,7 @@ class E2BSandboxProvider:
             except ValueError:
                 continue
             epoch = None
-            raw_epoch = metadata.get(META_EPOCH)
+            raw_epoch = metadata.get(meta_epoch(self._config.metadata_namespace))
             if raw_epoch:
                 try:
                     epoch = int(raw_epoch)
@@ -692,24 +731,55 @@ class E2BSandboxProvider:
     # Internals
     # ------------------------------------------------------------------
 
-    async def _find(self, sandbox_id: UUID, *, epoch: int) -> ProviderInstance | None:
+    async def _find_any(self, sandbox_id: UUID) -> ProviderInstance | None:
+        """The sandbox holding this workspace's files, whatever labelled it.
+
+        Pre-consolidation sandboxes carry ``logical-id`` and
+        ``managed-by=agentbox``. Those are live production workspaces, paused
+        with the user's files inside them, so failing to match one would not
+        merely duplicate compute -- it would hand the user an empty workspace
+        and leave their work in a sandbox nothing points at any more.
+
+        Paused sandboxes count as found. Pausing is how storage persists here.
+        """
+        namespace = self._config.metadata_namespace
+        queries: list[dict[str, str]] = [
+            {meta_sandbox_id(namespace): str(sandbox_id)}
+        ]
+        if self._config.adopt_legacy:
+            queries.append(
+                {
+                    LEGACY_MANAGED_BY_KEY: LEGACY_MANAGED_BY,
+                    LEGACY_LOGICAL_ID: str(sandbox_id),
+                }
+            )
+        for query in queries:
+            match = await self._first_matching(query)
+            if match is not None:
+                return match
+        return None
+
+    async def _first_matching(
+        self, metadata: dict[str, str]
+    ) -> ProviderInstance | None:
         from e2b.sandbox.sandbox_api import SandboxQuery
 
         try:
             paginator = self._sdk.list(
-                query=SandboxQuery(
-                    metadata={
-                        META_SANDBOX_ID: str(sandbox_id),
-                        META_EPOCH: str(epoch),
-                    }
-                ),
-                **self._api(),
+                query=SandboxQuery(metadata=metadata), **self._api()
             )
             matches = await paginator.next_items()
         except Exception as exc:
             raise _classify(exc) from exc
 
-        for info in matches:
+        # Prefer a running sandbox when several match, so a duplicate left by
+        # an earlier failure does not shadow the one actually serving.
+        ordered = sorted(
+            matches,
+            key=lambda info: str(info.state).lower().endswith("running"),
+            reverse=True,
+        )
+        for info in ordered:
             return ProviderInstance(
                 provider_id=info.sandbox_id,
                 name=info.sandbox_id,

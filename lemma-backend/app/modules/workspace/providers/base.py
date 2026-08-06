@@ -23,6 +23,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterable, AsyncIterator, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
+from enum import StrEnum
 from typing import Protocol
 from uuid import UUID
 
@@ -73,6 +74,29 @@ class ProviderCreateSpec:
     env: Mapping[str, str] = field(default_factory=dict)
 
 
+class ProviderStorageKind(StrEnum):
+    """Where a workspace's durable files actually live.
+
+    This is not a detail the service can paper over, because it decides what
+    "the disk survived" means and therefore when a user must be told their
+    files are gone.
+
+    ``VOLUME`` -- compute and storage are separate objects. A container can be
+    destroyed and replaced while the volume persists, so the epoch fences the
+    container and the volume is adopted across epochs. Docker works this way.
+
+    ``SANDBOX_NATIVE`` -- one object is both. A paused E2B sandbox keeps its
+    filesystem, so resuming it *is* how storage persists; creating a second
+    sandbox would leave the files in the first. Adoption therefore means
+    finding and resuming the existing sandbox, and the fence is the provider's
+    own id rather than an epoch in a name: a genuinely new sandbox has a new
+    id, so a stale operation fails instead of landing on it.
+    """
+
+    VOLUME = "volume"
+    SANDBOX_NATIVE = "sandbox_native"
+
+
 @dataclass(frozen=True, slots=True)
 class ProviderInstance:
     """A provider object that exists, whether or not it is ready."""
@@ -81,6 +105,10 @@ class ProviderInstance:
     name: str
     volume_name: str | None = None
     running: bool = False
+    # Only meaningful for SANDBOX_NATIVE providers, which do their own
+    # adoption inside create. False means a fresh sandbox was made, and
+    # therefore that whatever files existed before are gone.
+    storage_adopted: bool | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -131,6 +159,9 @@ class SandboxProvider(Protocol):
     """Lifecycle over some compute fabric."""
 
     name: str
+    # Decides whether the service manages a separate disk for this provider or
+    # leaves storage to the provider's own adoption. See ProviderStorageKind.
+    storage_kind: ProviderStorageKind
 
     async def create(self, spec: ProviderCreateSpec) -> ProviderInstance: ...
 
