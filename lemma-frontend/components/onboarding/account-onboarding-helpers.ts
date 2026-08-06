@@ -38,12 +38,15 @@ export type OnboardingStartPath =
   | "internal-app"
   | "agent-skin"
   | "coding-agents"
-  | "templates";
-export type OnboardingStartDetails = {
-  brief: string;
-  secondaryBrief?: string;
-  codingAgent?: CodingAgentKind;
-};
+  | "templates"
+  // An empty pod, and nothing else. The way out of every guided path, for
+  // anyone who already knows what they are doing.
+  | "blank";
+/** A start path that seeds the pod's own composer rather than a form. */
+export type ComposerStartPath = Extract<
+  OnboardingStartPath,
+  "telegram" | "chatgpt" | "internal-app" | "agent-skin"
+>;
 export type CodingAgentKind = "codex" | "claude-code" | "opencode";
 
 export function codingAgentStarterPrompt(agent: CodingAgentKind) {
@@ -67,22 +70,39 @@ First inspect this repository and explain, in one short paragraph, the most usef
 Ask only one question if the repository does not make the intended outcome clear. Work through the ${agentName} session you are already running in.`;
 }
 
-export function startPathLaunchConfig(
-  path: Exclude<OnboardingStartPath, "templates" | "coding-agents">,
-  details: OnboardingStartDetails,
-) {
-  const brief = details.brief.trim();
-  const secondaryBrief = details.secondaryBrief?.trim();
-
+/**
+ * What a start path hands to the pod, now that it no longer collects a brief.
+ *
+ * A path used to be a form: pick a card, fill a textarea, and we baked the
+ * answer into one long prompt and sent it. That textarea was a second, worse
+ * composer — no attachments, no model picker, no agent scope, and disabled
+ * until you typed. So a path now produces two things instead:
+ *
+ * - `stem`, an unfinished sentence the real composer opens with, cursor at the
+ *   end. The user finishes it where they can also attach a file or change model.
+ * - `instructions`, the durable framing that used to surround the brief. It
+ *   rides along as the conversation's background instructions, so it shapes the
+ *   build without being something the user has to read or write.
+ * - `podName`, because picking a path already says what the pod is. Falling back
+ *   to "Untitled pod" after someone pressed "Telegram agent" throws away the one
+ *   thing they just told us. Only used when they did not type a name themselves.
+ *
+ * Nothing is sent until they press enter.
+ */
+export function startPathComposerLaunch(path: ComposerStartPath): {
+  intent: string;
+  podName: string;
+  stem: string;
+  instructions: string;
+} {
   if (path === "telegram") {
     return {
       intent: "telegram_agent_companion_app",
-      message: [
-        "Build a Telegram agent and a companion app inside this pod.",
-        `Use these as the agent's custom operating instructions: ${brief}`,
-        secondaryBrief
-          ? `The companion app should keep this organized: ${secondaryBrief}`
-          : "The companion app should turn the agent's messages and actions into a useful, persistent view.",
+      podName: "Telegram Agent",
+      stem: "Build a Telegram agent and companion app that ",
+      instructions: [
+        "Treat the user's message as the agent's custom operating instructions.",
+        "The companion app should turn the agent's messages and actions into a useful, persistent view.",
         "Create the smallest working version, with believable sample data. Then guide me through connecting Telegram. Do not claim Telegram is connected until the connector is actually authorized.",
       ].join("\n\n"),
     };
@@ -91,9 +111,10 @@ export function startPathLaunchConfig(
   if (path === "chatgpt") {
     return {
       intent: "external_ai_pod_mcp",
-      message: [
+      podName: "ChatGPT Work State",
+      stem: "Keep this work state current so ChatGPT or Claude can continue it: ",
+      instructions: [
         "Set up this pod so ChatGPT or Claude can keep real work state updated through the pod-scoped Lemma MCP surface.",
-        `The work that should stay current is: ${brief}`,
         "Create the durable tables, files, and views needed for that state, seed a useful first version, and preserve clear ownership and history.",
         "Then guide me through connecting my external AI client to this pod's MCP surface. Do not pretend the external connection is complete before it is authorized and tested.",
       ].join("\n\n"),
@@ -101,35 +122,26 @@ export function startPathLaunchConfig(
   }
 
   if (path === "agent-skin") {
-    const agentName =
-      details.codingAgent === "claude-code"
-        ? "Claude Code"
-        : details.codingAgent === "opencode"
-          ? "OpenCode"
-          : "Codex";
-
     return {
       intent: "local_agent_workspace_skin",
-      message: [
-        `Build a persistent Lemma workspace skin around ${agentName}.`,
-        `The state and controls that should remain visible between local-agent sessions are: ${brief}`,
-        secondaryBrief
-          ? `People should be able to steer the agent through: ${secondaryBrief}`
-          : "Give people a clear place to inspect state, steer the work, and revisit outputs without reading a terminal transcript.",
+      podName: "Coding Agent Pod",
+      stem: "Put a persistent workspace around my coding agent showing ",
+      instructions: [
+        "Build a persistent Lemma workspace skin around the user's local coding agent. Ask which one they run — Codex, Claude Code, or OpenCode — if they have not said.",
+        "Give people a clear place to inspect state, steer the work, and revisit outputs without reading a terminal transcript.",
         "Keep the local coding agent as the executor. Build the durable state, app surfaces, run history, and artifacts around it in Lemma, using the Agent Host and MCP boundary where supported.",
-        `Then guide me through connecting ${agentName}. Do not claim the local agent is connected until its runtime is available, authorized, and tested.`,
+        "Then guide me through connecting that agent. Do not claim the local agent is connected until its runtime is available, authorized, and tested.",
       ].join("\n\n"),
     };
   }
 
   return {
     intent: "internal_ai_app",
-    message: [
+    podName: "Internal App",
+    stem: "Build an internal app that lets my team ",
+    instructions: [
       "Build an internal AI app inside this pod.",
-      `The team should be able to: ${brief}`,
-      secondaryBrief
-        ? `The primary users are: ${secondaryBrief}`
-        : "Keep the first version focused on one clear user and one repeated decision or workflow.",
+      "Keep the first version focused on one clear user and one repeated decision or workflow.",
       "Put the app in front and the agents behind it. Create the durable state, approval points, and believable sample data needed to make the first version immediately usable.",
     ].join("\n\n"),
   };

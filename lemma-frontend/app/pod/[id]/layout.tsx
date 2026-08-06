@@ -26,6 +26,7 @@ import { getLemmaClient } from "@/lib/sdk/lemma-client";
 import { usePod } from "@/lib/hooks/use-pods";
 import { usePodContext } from "@/lib/hooks/use-pod-context";
 import { usePodAccess } from "@/lib/hooks/use-pod-access";
+import { parseConversationMetadataParam } from "@/lib/pods/composer-launch";
 import { clearLastOpenedPodId, writeLastOpenedPodId } from "@/lib/pods/last-opened-pod";
 import { getWorkspaceTabAfterClose, getWorkspaceTabHref } from "@/lib/pods/workspace-tabs";
 import {
@@ -75,17 +76,6 @@ function formatDisplayName(value: string | null | undefined) {
         .join(" ");
 }
 
-function parseConversationMetadataParam(value: string | null): Record<string, unknown> | undefined {
-    if (!value) return undefined;
-    try {
-        const parsed = JSON.parse(value);
-        return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-            ? parsed as Record<string, unknown>
-            : undefined;
-    } catch {
-        return undefined;
-    }
-}
 
 function getPodSectionLabel(podId: string, pathname: string) {
     const section = pathname.replace(`/pod/${podId}`, "").split("/").filter(Boolean)[0];
@@ -291,7 +281,7 @@ function PodShell({
     const conversationInstructions = searchParams.get("conversationInstructions");
     const conversationMetadata = searchParams.get("conversationMetadata");
     const parsedConversationMetadata = useMemo(
-        () => parseConversationMetadataParam(conversationMetadata),
+        () => parseConversationMetadataParam(conversationMetadata) ?? undefined,
         [conversationMetadata]
     );
     const assistantConversationId = searchParams.get("assistantConversationId");

@@ -2,13 +2,14 @@
 
 import { use, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { ArrowRight, ArrowUp, ChevronDown, ChevronUp, Plus, UserPlus, X } from '@/components/ui/icons';
 
 import { useAIAssistant } from '@/components/ai/ai-assistant-context';
 import { ProtectedRoute } from '@/components/auth/protected-route';
 import { resolveDefaultAgentRuntime } from '@/components/agents/agent-runtime-helpers';
 import { RuntimeModelPicker } from '@/components/lemma/assistant/model-picker';
+import { PodNewWorkspace } from '@/components/pod/pod-new-workspace';
 import { StarterThemePicker } from '@/components/recipes/starter-theme-card';
 import { Button } from '@/components/ui/button';
 import { FEATURED_STARTER_THEMES } from '@/lib/recipes/recipes';
@@ -26,6 +27,7 @@ import { usePod } from '@/lib/hooks/use-pods';
 import { usePodAccess } from '@/lib/hooks/use-pod-access';
 import { usePodJoinRequests } from '@/lib/hooks/use-pod-join-requests';
 import { usePodSurfaces } from '@/lib/hooks/use-pod-surfaces';
+import { buildScopedConversationHref } from '@/lib/assistant/conversation-composer-context';
 import { useSchedules } from '@/lib/hooks/use-schedules';
 import { PodHomePresence } from '@/components/pod/pod-home-presence';
 import { cn } from '@/lib/utils';
@@ -36,6 +38,7 @@ import {
     resolvePodHomeStarterMode,
     type PodHomeResourceSignals,
 } from '@/lib/pods/pod-home-starters';
+import { readComposerLaunch, stripComposerLaunchParams } from '@/lib/pods/composer-launch';
 import type { AgentRuntimeConfig, Conversation } from '@/lib/types';
 import { StepLoader } from '@/components/brand/loader';
 import { Skeleton } from '@/components/shared/loading';
@@ -78,10 +81,11 @@ interface ComposerLaunchAnimation {
 
 function PodBlankChatHome({ podId }: { podId: string }) {
     const router = useRouter();
+    const pathname = usePathname();
+    const searchParams = useSearchParams();
     const assistant = useAIAssistant();
     const podAccess = usePodAccess(podId);
     const { data: pod } = usePod(podId);
-    const { launchRecipe } = useLaunchRecipe(podId, { podName: pod?.name });
     const { data: runtimeCatalog } = useAgentRuntimes(pod?.organization_id);
     const canWriteConversations = podAccess.can('conversation.write');
     const canReadAgents = podAccess.can('agent.read');
@@ -110,6 +114,12 @@ function PodBlankChatHome({ podId }: { podId: string }) {
     const submittedFromConversationRef = useRef<string | null>(null);
     const launchFrameRef = useRef<number | null>(null);
     const launchTimerRef = useRef<number | null>(null);
+    // A composer launch arrives as URL params, is consumed once, and is stripped
+    // from the URL. Refs rather than state because nothing renders from them and
+    // a re-render mid-send must not drop the framing off the message in flight.
+    const composerLaunchSeededRef = useRef(false);
+    const launchInstructionsRef = useRef<string | null>(null);
+    const launchMetadataRef = useRef<Record<string, unknown> | null>(null);
 
     const isLaunchingComposer = launchAnimation !== null;
     const isBlankingHome = isLaunchingComposer || isRouteHandoff;
@@ -148,6 +158,43 @@ function PodBlankChatHome({ podId }: { podId: string }) {
         const timer = window.setTimeout(() => setShowHomePanels(true), HOME_PANELS_DEFER_MS);
         return () => window.clearTimeout(timer);
     }, []);
+
+    /** Caret after the stem's trailing space, so the next keystroke continues it. */
+    const focusComposerAtEnd = () => {
+        window.requestAnimationFrame(() => {
+            const input = composerInputRef.current;
+            if (!input) return;
+            input.focus();
+            input.setSelectionRange(input.value.length, input.value.length);
+        });
+    };
+
+    /** A shortcut tile hands over an unfinished sentence; it never sends one. */
+    const prepareComposerPrompt = (prompt: string) => {
+        setDraft(prompt);
+        focusComposerAtEnd();
+    };
+
+    // Arriving from a start path: the composer opens holding the start of a
+    // sentence, cursor at the end, and nothing is sent. Once only — the params
+    // come straight back off the URL so a refresh cannot re-seed a draft the
+    // user already cleared.
+    useEffect(() => {
+        if (composerLaunchSeededRef.current) return;
+        const launch = readComposerLaunch(searchParams);
+        if (!launch) return;
+
+        composerLaunchSeededRef.current = true;
+        if (launch.draft) setDraft(launch.draft);
+        launchInstructionsRef.current = launch.instructions ?? null;
+        launchMetadataRef.current = launch.metadata ?? null;
+
+        const nextQuery = stripComposerLaunchParams(searchParams);
+        router.replace(nextQuery ? `${pathname}?${nextQuery}` : pathname);
+
+        // After the replace, so the focus is not stolen by the re-render.
+        focusComposerAtEnd();
+    }, [pathname, router, searchParams]);
 
     useEffect(() => {
         const previousConversationId = submittedFromConversationRef.current;
@@ -245,7 +292,15 @@ function PodBlankChatHome({ podId }: { podId: string }) {
         setIsSending(true);
         try {
             assistant.clearMessages();
-            await assistant.sendMessage(message, { forceNewConversation: true });
+            await assistant.sendMessage(message, {
+                forceNewConversation: true,
+                instructions: launchInstructionsRef.current || undefined,
+                conversationMetadata: launchMetadataRef.current ?? undefined,
+            });
+            // The framing belonged to the sentence they just finished, not to
+            // the pod. Everything after this is an ordinary message.
+            launchInstructionsRef.current = null;
+            launchMetadataRef.current = null;
             setDraft('');
         } catch (error) {
             setLaunchAnimation(null);
@@ -278,40 +333,18 @@ function PodBlankChatHome({ podId }: { podId: string }) {
                 )}
             >
                 {showStarterHome ? (
-                    <section className="w-full">
-                        <div className="max-w-3xl">
-                            <p className="type-eyebrow-mono text-[var(--text-tertiary)]">Start inside this pod</p>
-                            <h1 className="mt-3 text-3xl font-semibold leading-tight tracking-tight text-[var(--text-primary)] sm:text-4xl">
-                                What should {pod?.name || 'this pod'} become?
-                            </h1>
-                            <p className="mt-3 max-w-2xl text-base leading-7 text-[var(--text-secondary)]">
-                                Choose a direction, then pick a concrete starting point inside it. Lemma builds the app, agent, data, and connections together — all inside this pod.
-                            </p>
-                        </div>
-                        <div className="mt-7">
-                            <StarterThemePicker
-                                themes={FEATURED_STARTER_THEMES}
-                                onLaunch={(recipe, message) => launchRecipe(recipe, { message })}
-                            />
-                        </div>
-                        <div className="mt-5 flex items-center justify-between gap-4">
-                            <p className="text-sm text-[var(--text-tertiary)]">Explore a family first. Choose the concrete build inside.</p>
-                            <Link
-                                href={`/pod/${podId}/recipes`}
-                                className="custom-focus-ring inline-flex shrink-0 items-center gap-1.5 text-sm font-medium text-[var(--text-primary)]"
-                            >
-                                See every starting point
-                                <ArrowRight className="h-4 w-4" />
-                            </Link>
-                        </div>
-                        <div className="my-8 flex items-center gap-3 text-xs text-[var(--text-tertiary)]">
-                            <span className="h-px flex-1 bg-[var(--border-subtle)]" />
-                            or describe your own
-                            <span className="h-px flex-1 bg-[var(--border-subtle)]" />
-                        </div>
+                    <section className="w-full max-w-3xl">
+                        <p className="type-eyebrow-mono text-[var(--text-tertiary)]">Start inside this pod</p>
+                        <h1 className="mt-3 text-2xl font-medium leading-tight tracking-tight text-[var(--text-primary)] sm:text-3xl">
+                            What should {pod?.name || 'this pod'} become?
+                        </h1>
                     </section>
                 ) : null}
-                <div className="w-full max-w-3xl">
+                {/* The composer sits directly under the question it answers.
+                    It used to be last, below a themed picker, a prompt list and
+                    two captions explaining them — so the screen asked three
+                    times and buried the one field that takes any answer. */}
+                <div className={cn('w-full max-w-3xl', showStarterHome && 'mt-6')}>
                     {showStarterHome ? null : (
                         <p className="pod-home-eyebrow mb-3.5">{pod?.name || 'This pod'}</p>
                     )}
@@ -413,6 +446,29 @@ function PodBlankChatHome({ podId }: { podId: string }) {
                         </div>
                     )}
                 </div>
+                {/* The same launcher the new-conversation screen uses, in the same
+                    place relative to the composer: shortcuts under the box you
+                    type in. Home used to grow its own for the identical job —
+                    taller themed tabs, a second prompt list, and two captions
+                    explaining both — which is what made this read as three
+                    screens asking the same question. */}
+                {showStarterHome ? (
+                    <section className="mt-8 w-full max-w-3xl">
+                        <PodNewWorkspace
+                            podId={podId}
+                            selectedAgentName={null}
+                            onPreparePrompt={prepareComposerPrompt}
+                            onSelectAgent={(agentName) =>
+                                router.push(buildScopedConversationHref({
+                                    podId,
+                                    conversationId: 'new',
+                                    agentName,
+                                }))
+                            }
+                            placement="below-composer"
+                        />
+                    </section>
+                ) : null}
                 {/* Nothing until we know which home this is. A fresh pod shows the
                     starter section above and no activity region at all, so drawing
                     the activity skeleton first promised a panel that never arrived

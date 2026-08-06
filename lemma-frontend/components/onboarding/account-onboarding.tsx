@@ -23,6 +23,7 @@ import {
   readOnboardingSkippedFirstPod,
   subscribeToOnboardingSkippedFirstPod,
 } from "@/lib/pods/onboarding-skip";
+import { buildComposerLaunchHref } from "@/lib/pods/composer-launch";
 import {
   clearOnboardingDraft,
   findDraftBasePod,
@@ -73,13 +74,12 @@ import {
   personalWorkspaceName,
   setupStepsForAudience,
   splitName,
-  startPathLaunchConfig,
+  startPathComposerLaunch,
   teamLabelForKind,
   previousOnboardingStep,
   resolveOnboardingStartStep,
   type Audience,
   type ConnectChoice,
-  type OnboardingStartDetails,
   type OnboardingStartPath,
   type SetupStep,
   type TeamKind,
@@ -530,6 +530,10 @@ function SetupAssistant({
     audienceForPod: Audience,
     teamName = "",
     organizationOverride?: Organization | null,
+    // What the chosen start path calls this pod. Picking "Build a Telegram
+    // agent" and landing in one called "Personal Pod" throws away the only
+    // thing the user has said so far.
+    nameOverride?: string,
   ): Promise<Pod | null> => {
     const restoredCandidate = findDraftBasePod(
       basePod,
@@ -565,7 +569,8 @@ function SetupAssistant({
           return null;
         }
 
-        const podName = podNameForAudience(audienceForPod, teamName);
+        const podName =
+          nameOverride || podNameForAudience(audienceForPod, teamName);
         const pod = await getLemmaClient().pods.create({
           name: podName,
           description:
@@ -816,29 +821,17 @@ function SetupAssistant({
     }
   };
 
-  const openBuildConversation = (pod: Pod, message: string, metadataIntent: string) => {
-    const params = new URLSearchParams({
-      assistantMessage: message,
-      conversationInstructions: [
-        FIRST_RUN_DELIGHT,
-        `The pod already exists: ${pod.name}. Do not create another pod. Use the user-visible message as the goal and build inside the current pod. Inspect existing resources first, reuse anything that fits, seed believable sample data, and wire any surface or connector that fits how they already work.`,
-      ].join("\n\n"),
-      conversationMetadata: JSON.stringify({
-        source: "onboarding",
-        intent: metadataIntent,
-        first_run: true,
-        pod_id: pod.id,
-      }),
-    });
-    clearOnboardingDraft();
-    router.push(`/pod/${pod.id}/conversations/new?${params.toString()}`);
-  };
-
-  const handleChooseStartPath = async (
-    path: OnboardingStartPath,
-    details: OnboardingStartDetails,
-  ) => {
-    const pod = basePod || (await createBasePod("personal"));
+  const handleChooseStartPath = async (path: OnboardingStartPath) => {
+    // Resolved before the pod exists, because it is what the pod gets called.
+    // A pod restored from a draft keeps the name it already has — this only
+    // ever names a pod being created right now.
+    const launch =
+      path === "templates" || path === "coding-agents" || path === "blank"
+        ? null
+        : startPathComposerLaunch(path);
+    const pod =
+      basePod ||
+      (await createBasePod("personal", "", undefined, launch?.podName));
     if (!pod) return false;
 
     if (path === "templates") {
@@ -855,8 +848,31 @@ function SetupAssistant({
       });
     }
 
-    const config = startPathLaunchConfig(path, details);
-    openBuildConversation(pod, config.message, config.intent);
+    clearOnboardingDraft();
+
+    // Nothing to say on their behalf. The pod's own home already asks the
+    // question better than a form could.
+    if (!launch) {
+      router.push(`/pod/${pod.id}`);
+      return true;
+    }
+
+    router.push(
+      buildComposerLaunchHref(pod.id, {
+        draft: launch.stem,
+        instructions: [
+          FIRST_RUN_DELIGHT,
+          launch.instructions,
+          `The pod already exists: ${pod.name}. Do not create another pod. Build inside the current pod. Inspect existing resources first, reuse anything that fits, seed believable sample data, and wire any surface or connector that fits how they already work.`,
+        ].join("\n\n"),
+        metadata: {
+          source: "onboarding",
+          intent: launch.intent,
+          first_run: true,
+          pod_id: pod.id,
+        },
+      }),
+    );
     return true;
   };
 
