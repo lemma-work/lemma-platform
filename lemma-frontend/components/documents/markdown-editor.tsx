@@ -65,23 +65,16 @@ export function MarkdownEditor({
     const editor = useEditor({
         extensions: [
             StarterKit,
+            // Marker classes only. How a table looks belongs to the document
+            // stylesheet, which sets it as data rather than as a boxed form;
+            // utilities pinned here would fight those rules cell by cell.
             Table.configure({
                 resizable: true,
-                HTMLAttributes: {
-                    class: 'lemma-markdown-table my-4 w-full border-collapse text-sm',
-                },
+                HTMLAttributes: { class: 'lemma-markdown-table' },
             }),
             TableRow,
-            TableHeader.configure({
-                HTMLAttributes: {
-                    class: 'border border-[var(--border-subtle)] bg-[var(--surface-2)] px-3 py-2 text-left text-xs font-semibold text-[var(--text-primary)]',
-                },
-            }),
-            TableCell.configure({
-                HTMLAttributes: {
-                    class: 'border border-[var(--border-subtle)] px-3 py-2 align-top',
-                },
-            }),
+            TableHeader,
+            TableCell,
             Placeholder.configure({
                 placeholder,
             }),

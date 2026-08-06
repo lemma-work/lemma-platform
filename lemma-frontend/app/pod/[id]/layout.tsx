@@ -713,7 +713,10 @@ function PodShell({
                             ) : null}
                             <div
                                 className={cn(
-                                    "pod-shell-topbar-title flex min-w-0 items-center gap-2 text-base font-semibold leading-7 text-[var(--text-primary)]",
+                                    // Medium, not semibold: the bar names where you
+                                    // are, it does not headline it. Bold here made
+                                    // the filename shout over the document under it.
+                                    "pod-shell-topbar-title flex min-w-0 items-center gap-2 text-base font-medium leading-7 text-[var(--text-primary)]",
                                     "transition-opacity duration-[var(--dur-panel)] ease-[var(--ease-standard)]",
                                     // Kept mounted rather than removed, so handing the
                                     // title back and forth cross-fades instead of
