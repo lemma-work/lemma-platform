@@ -188,6 +188,38 @@ export function getDocumentPreviewType(filePath: string): DocumentPreviewType {
     return 'unsupported';
 }
 
+/**
+ * Whether this document has a printable page behind it.
+ *
+ * Markdown only, and the restraint is the point. Print here means "lay the
+ * rendered page out on paper", which is a thing the viewer can honestly do for
+ * prose it typeset itself. A PDF is already the artefact — Download hands over
+ * the real bytes rather than a browser's re-print of a rasterised page. Office
+ * files and images are the same story, and an HTML preview lives in a sandboxed
+ * iframe the parent page cannot lay out at all.
+ */
+export function canPrintDocument(previewType: DocumentPreviewType): boolean {
+    return previewType === 'markdown';
+}
+
+/**
+ * What a printed copy of this document should be called.
+ *
+ * Browsers seed the "Save as PDF" filename from the page title, so without this
+ * a proposal saves as whatever the route was named. The extension goes because
+ * the browser appends its own — `Zapdata_Proposal.md.pdf` reads like a mistake.
+ */
+export function printFileName(documentName: string): string {
+    const trimmed = documentName.trim();
+    const lastDot = trimmed.lastIndexOf('.');
+
+    // `<= 0` covers both "no extension" and a leading dot, where the dot opens a
+    // hidden file's name rather than closing one — `.gitignore` must not print
+    // as the empty string.
+    if (lastDot <= 0) return trimmed;
+    return trimmed.slice(0, lastDot);
+}
+
 export function getOfficePreviewKind(filePath: string): OfficePreviewKind {
     const lowerPath = filePath.toLowerCase();
     if (lowerPath.endsWith('.docx')) return 'docx';

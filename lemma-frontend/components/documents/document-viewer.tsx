@@ -11,28 +11,44 @@ import {
     Download,
     Eye,
     File as FileIcon,
+    FileText,
     Maximize2,
     Minimize2,
+    Printer,
     Save,
     Share2,
-    Trash2,
 } from '@/components/ui/icons';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
+import { DropdownMenuItem, DropdownMenuSeparator } from '@/components/ui/dropdown-menu';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { DestructiveConfirmationDialog } from '@/components/shared/destructive-confirmation-dialog';
+import { DestructiveResourceActionItem, ResourceActionsMenu } from '@/components/shared/resource-actions-menu';
 import { ResourceShareButton, ResourceVisibilityBadge, type ResourceVisibilityValue } from '@/components/shared/resource-visibility';
 import { usePodTopbar } from '@/components/pod/pod-topbar-context';
 import { resourceAllows } from '@/lib/authz/resource-actions';
 import { isPersonalPath } from '@/lib/files/doc-sections';
 import { FileIndexStatusBadge } from '@/components/documents/file-index-status-badge';
-import { MarkdownAttachmentControl, canAttachDocumentMarkdown } from '@/components/documents/markdown-attachment-control';
+import {
+    MarkdownAttachmentControl,
+    canAttachDocumentMarkdown,
+    usesUserMarkdown,
+} from '@/components/documents/markdown-attachment-control';
+import {
+    AUTOSAVE_DELAY_MS,
+    describeAutosaveStatus,
+    isAutosavedPreviewType,
+    shouldShowSaveButton,
+    type DocumentSaveState,
+} from '@/components/documents/document-save-state';
 import { useDatastoreFile, useDeleteDatastoreFile } from '@/lib/hooks/use-datastores';
 import { getLemmaClient } from '@/lib/sdk/lemma-client';
 import {
+    canPrintDocument,
     getDocumentPreviewType,
     getOfficePreviewKind,
+    printFileName,
     renderDocxPreview,
     renderPdfPreview,
 } from '@/components/documents/preview-renderers';
@@ -40,7 +56,7 @@ import { DocumentFrontmatter } from '@/components/documents/document-frontmatter
 import { joinFrontmatter, splitFrontmatter } from '@/lib/files/frontmatter';
 import { MarkdownEditor } from './markdown-editor';
 import { DocumentBodySkeleton, DocumentSkeleton } from '@/components/documents/document-skeleton';
-import { StepLoader } from '@/components/brand/loader';
+import { cn } from '@/lib/utils';
 
 interface DocumentViewerProps {
     podId: string;
@@ -335,8 +351,9 @@ export function DocumentViewer({
     const [isLoadingContent, setIsLoadingContent] = useState(false);
     const [loadError, setLoadError] = useState<string | null>(null);
     const [textViewMode, setTextViewMode] = useState<TextViewMode>('preview');
-    const [isFullscreen, setIsFullscreen] = useState(false);
-    const [isFullscreenSupported, setIsFullscreenSupported] = useState(false);
+    const [isReading, setIsReading] = useState(false);
+    const [isAttachmentOpen, setIsAttachmentOpen] = useState(false);
+    const [saveState, setSaveState] = useState<DocumentSaveState>('idle');
     const viewerShellRef = useRef<HTMLDivElement | null>(null);
 
     const documentPath = doc?.path || fileId;
@@ -381,6 +398,8 @@ export function DocumentViewer({
         setImagePreviewUrl(null);
         setHtmlPreviewDocument(null);
         setTextViewMode(previewType === 'html' ? 'preview' : 'source');
+        // "Saved" belongs to the document you saved, not to the next one.
+        setSaveState('idle');
 
         const load = async () => {
             try {
@@ -480,37 +499,121 @@ export function DocumentViewer({
     ), [docxPreview]);
 
 
-    useEffect(() => {
-        setIsFullscreenSupported(Boolean(document.fullscreenEnabled));
-
-        const handleFullscreenChange = () => {
-            setIsFullscreen(document.fullscreenElement === viewerShellRef.current);
-        };
-
-        document.addEventListener('fullscreenchange', handleFullscreenChange);
-        return () => {
-            document.removeEventListener('fullscreenchange', handleFullscreenChange);
-        };
+    /**
+     * Reading mode is in-app state; browser full screen is a bonus on top.
+     *
+     * It used to be the other way round, and that is why the docs section
+     * shipped a full screen with no chrome in it: those controls render into the
+     * pod topbar, which lives outside the element being promoted, so the reader
+     * got a document with no header, no save, and no exit but Esc. An overlay
+     * this component owns behaves the same whether or not the surrounding frame
+     * was ever granted full screen.
+     */
+    const exitReading = useCallback(() => {
+        setIsReading(false);
+        if (typeof document !== 'undefined' && document.fullscreenElement) {
+            void document.exitFullscreen().catch(() => undefined);
+        }
     }, []);
 
-    const handleToggleFullscreen = useCallback(async () => {
-        const target = viewerShellRef.current;
-        if (!target || !document.fullscreenEnabled) {
-            toast.error('Full screen is not available');
+    const handleToggleReading = useCallback(() => {
+        if (isReading) {
+            exitReading();
             return;
         }
 
-        try {
-            if (document.fullscreenElement) {
-                await document.exitFullscreen();
-                return;
-            }
-
-            await target.requestFullscreen();
-        } catch {
-            toast.error('Could not enter full screen');
+        setIsReading(true);
+        // Best effort: the overlay is already covering the app, so a frame that
+        // refuses full screen costs the browser chrome and nothing else.
+        if (document.fullscreenEnabled) {
+            void viewerShellRef.current?.requestFullscreen().catch(() => undefined);
         }
+    }, [exitReading, isReading]);
+
+    useEffect(() => {
+        if (!isReading) return;
+
+        // Esc is the reflex, and inside an in-app overlay it is not the
+        // browser's to handle. When full screen *is* active the browser exits it
+        // without ever dispatching the key, which the change listener catches.
+        const handleKeyDown = (event: KeyboardEvent) => {
+            if (event.key === 'Escape') exitReading();
+        };
+        const handleFullscreenChange = () => {
+            if (!document.fullscreenElement) setIsReading(false);
+        };
+
+        document.addEventListener('keydown', handleKeyDown);
+        document.addEventListener('fullscreenchange', handleFullscreenChange);
+        return () => {
+            document.removeEventListener('keydown', handleKeyDown);
+            document.removeEventListener('fullscreenchange', handleFullscreenChange);
+        };
+    }, [exitReading, isReading]);
+
+    /**
+     * Print, which is also how you get a PDF: every desktop browser and iOS
+     * offers "Save as PDF" from its own print dialog, so the page does the work
+     * and the platform supplies the file. Nothing to render twice, nothing to
+     * keep in sync with what the screen shows.
+     */
+    const handlePrint = useCallback(() => {
+        // Said now, not after: the browser reports when its dialog closes but
+        // never whether a file was written, so "Saved" would be a guess that is
+        // wrong every time someone cancels. This acknowledges the click and
+        // names the one choice in the dialog that produces a file.
+        toast('Opening print — choose "Save as PDF" for a file');
+        // A frame's delay so the toast paints before the modal dialog blocks.
+        requestAnimationFrame(() => window.print());
     }, []);
+
+    /**
+     * Paper is white whatever the app is wearing.
+     *
+     * Browsers drop background colours when printing but keep text colours, so
+     * printing a dark-themed document lays near-white ink on a white sheet and
+     * hands you a blank-looking page. The theme class comes off for the length
+     * of the print and goes back after — the light palette is already the one
+     * that reads as ink.
+     */
+    const printedFileName = doc ? printFileName(doc.name) : '';
+
+    useEffect(() => {
+        const root = document.documentElement;
+        let restoreDark = false;
+        let previousTitle = '';
+
+        const handleBeforePrint = () => {
+            restoreDark = root.classList.contains('dark');
+            if (restoreDark) root.classList.remove('dark');
+
+            // The page title is where browsers get the default "Save as PDF"
+            // filename, so while the dialog is open the tab is named after the
+            // document rather than after the route it happens to be on.
+            if (printedFileName) {
+                previousTitle = document.title;
+                document.title = printedFileName;
+            }
+        };
+        const handleAfterPrint = () => {
+            if (restoreDark) root.classList.add('dark');
+            restoreDark = false;
+            if (previousTitle) {
+                document.title = previousTitle;
+                previousTitle = '';
+            }
+        };
+
+        window.addEventListener('beforeprint', handleBeforePrint);
+        window.addEventListener('afterprint', handleAfterPrint);
+        return () => {
+            window.removeEventListener('beforeprint', handleBeforePrint);
+            window.removeEventListener('afterprint', handleAfterPrint);
+            // A print started and never finished must not leave the app light,
+            // or the tab wearing a document's name after you have left it.
+            handleAfterPrint();
+        };
+    }, [printedFileName]);
 
     const handleDownload = useCallback(async () => {
         if (!doc) return;
@@ -548,23 +651,80 @@ export function DocumentViewer({
         );
     }, [canDeleteDocument, datastoreName, deleteDocument, doc, documentPath, onClose, onDeleted, podId]);
 
-    const handleSave = useCallback(async () => {
+    /**
+     * One write, however it was asked for.
+     *
+     * The run counter is what keeps a slow save from undoing a fast one: two
+     * writes can be in flight when you keep typing through an autosave, and only
+     * the last one may report what is now on disk.
+     */
+    const saveRunRef = useRef(0);
+    const persist = useCallback(async (content: string) => {
         if (!doc || !isTextEditable || !canWriteDocument) return;
 
+        const run = ++saveRunRef.current;
+        setSaveState('saving');
         try {
-            const blob = new Blob([docContent], { type: inferTextMimeType(doc.name) });
+            const blob = new Blob([content], { type: inferTextMimeType(doc.name) });
             await getLemmaClient(podId).files.update(documentPath, {
                 file: blob,
                 name: doc.name,
             });
-            setOriginalContent(docContent);
+            if (saveRunRef.current !== run) return;
+            setOriginalContent(content);
+            setSaveState('saved');
+        } catch {
+            if (saveRunRef.current !== run) return;
+            setSaveState('error');
+            throw new Error('save failed');
+        }
+    }, [canWriteDocument, doc, documentPath, isTextEditable, podId]);
+
+    const handleSave = useCallback(async () => {
+        try {
+            await persist(docContent);
             toast.success('File saved');
         } catch {
             toast.error('Failed to save file');
         }
-    }, [canWriteDocument, doc, docContent, documentPath, isTextEditable, podId]);
+    }, [docContent, persist]);
 
     const hasUnsavedChanges = Boolean(doc && isTextEditable && docContent !== originalContent);
+    const isAutosaving = canWriteDocument && isAutosavedPreviewType(previewType);
+
+    /**
+     * Prose saves itself once typing stops, the way an agent's prompt does.
+     *
+     * Only ever fires behind a real edit: the editor emits changes when it has
+     * focus, so a document you opened and read is never rewritten — which
+     * matters because the round-trip through the editor normalises the markdown
+     * to its own dialect.
+     */
+    useEffect(() => {
+        if (!isAutosaving || !hasUnsavedChanges) return;
+
+        const timer = setTimeout(() => {
+            void persist(docContent).catch(() => undefined);
+        }, AUTOSAVE_DELAY_MS);
+        return () => clearTimeout(timer);
+    }, [docContent, hasUnsavedChanges, isAutosaving, persist]);
+
+    /**
+     * Closing the tab mid-pause must not cost the last sentence. Held in a ref
+     * so the unmount effect below never re-runs on a keystroke.
+     */
+    const pendingSaveRef = useRef<(() => void) | null>(null);
+    useEffect(() => {
+        pendingSaveRef.current = isAutosaving && hasUnsavedChanges
+            ? () => { void persist(docContent).catch(() => undefined); }
+            : null;
+    }, [docContent, hasUnsavedChanges, isAutosaving, persist]);
+
+    useEffect(() => () => pendingSaveRef.current?.(), []);
+
+    const autosaveStatus = isAutosaving
+        ? describeAutosaveStatus({ state: saveState, hasUnsavedChanges })
+        : null;
     const canToggleTextView = previewType === 'html';
     const isTextSourceMode = !canToggleTextView || textViewMode === 'source';
     const textModeToggleLabel = textViewMode === 'preview' ? 'Source' : 'Preview';
@@ -617,20 +777,35 @@ export function DocumentViewer({
         }
     }, [doc, docContent, fileBlob, isTextEditable]);
 
+    /**
+     * Reading a document is the common case, so the header is not a toolbar.
+     *
+     * Inline: what changes the document's state (save, or the note that it saved
+     * itself), what changes the view (reading mode, source), and who can see it.
+     * Everything else — copy, download, the markdown override, delete — is a
+     * verb you reach for occasionally and can afford to open a menu for.
+     */
     const headerActions = useMemo(() => (
         <TooltipProvider>
             <div className="flex shrink-0 items-center gap-1">
             {extraActions}
-            {canWriteDocument && canAttachDocumentMarkdown(previewType) ? (
-                <MarkdownAttachmentControl
-                    podId={podId}
-                    datastoreName={datastoreName}
-                    filePath={documentPath}
-                    metadata={doc?.metadata}
-                    disabled={!doc}
-                />
+            {autosaveStatus ? (
+                <span
+                    className={cn(
+                        'px-1 text-xs',
+                        autosaveStatus.tone === 'error'
+                            ? 'text-[var(--state-error)]'
+                            : 'text-[var(--text-tertiary)]'
+                    )}
+                    // Announced politely: it is a reassurance, not an
+                    // interruption in the middle of a sentence.
+                    role="status"
+                    aria-live="polite"
+                >
+                    {autosaveStatus.label}
+                </span>
             ) : null}
-            {canWriteDocument && hasUnsavedChanges && (
+            {shouldShowSaveButton({ previewType, canWrite: canWriteDocument, hasUnsavedChanges }) && (
                 <Button variant="primary"
                     size="sm"
                     className="h-8 gap-1.5 px-3 text-xs font-medium"
@@ -647,30 +822,14 @@ export function DocumentViewer({
                         variant="quiet"
                         size="icon"
                         className="h-8 w-8 rounded"
-                        onClick={() => void handleToggleFullscreen()}
-                        disabled={!isFullscreenSupported}
-                        aria-label={isFullscreen ? 'Exit full screen' : 'Enter full screen'}
+                        onClick={handleToggleReading}
+                        disabled={!doc}
+                        aria-label="Read full screen"
                     >
-                        {isFullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
+                        <Maximize2 className="h-4 w-4" />
                     </Button>
                 </TooltipTrigger>
-                <TooltipContent>{isFullscreen ? 'Exit full screen' : 'Full screen'}</TooltipContent>
-            </Tooltip>
-            <Tooltip>
-                <TooltipTrigger asChild>
-                    <Button
-                        type="button"
-                        variant="quiet"
-                        size="icon"
-                        className="h-8 w-8 rounded"
-                        onClick={() => void handleCopyContent()}
-                        disabled={!doc || isLoadingContent}
-                        aria-label="Copy content"
-                    >
-                        <CopyCheck className="h-4 w-4" />
-                    </Button>
-                </TooltipTrigger>
-                <TooltipContent>Copy content</TooltipContent>
+                <TooltipContent>Read full screen</TooltipContent>
             </Tooltip>
             {/* Personal files promote instead of sharing: `/me` is an alias for
                 whoever is reading, so they have no address that means the same
@@ -723,45 +882,56 @@ export function DocumentViewer({
                     <TooltipContent>{textModeToggleLabel}</TooltipContent>
                 </Tooltip>
             ) : null}
-            <Tooltip>
-                <TooltipTrigger asChild>
-                    <Button
-                        variant="quiet"
-                        size="icon"
-                        className="h-8 w-8 rounded"
-                        onClick={() => void handleDownload()}
-                        disabled={!doc}
-                        aria-label="Download"
+            <ResourceActionsMenu ariaLabel="More document actions">
+                <DropdownMenuItem
+                    disabled={!doc || isLoadingContent}
+                    onSelect={() => void handleCopyContent()}
+                >
+                    <CopyCheck className="mr-2 h-4 w-4" />
+                    Copy content
+                </DropdownMenuItem>
+                <DropdownMenuItem disabled={!doc} onSelect={() => void handleDownload()}>
+                    <Download className="mr-2 h-4 w-4" />
+                    Download
+                </DropdownMenuItem>
+                {/* Named for what it does, not for the file it can produce. The
+                    dialog this opens is the browser's, and "Save as PDF" is one
+                    of the destinations in it — so calling this "Export as PDF"
+                    would promise a file landing in the pod. It does not. */}
+                {canPrintDocument(previewType) ? (
+                    <DropdownMenuItem
+                        disabled={!doc || isLoadingContent}
+                        onSelect={handlePrint}
                     >
-                        <Download className="h-4 w-4" />
-                    </Button>
-                </TooltipTrigger>
-                <TooltipContent>Download</TooltipContent>
-            </Tooltip>
-            {canDeleteDocument ? (
-                <Tooltip>
-                    <TooltipTrigger asChild>
-                        <Button
-                            variant="quiet"
-                            size="icon"
-                            className="h-8 w-8 rounded text-[var(--state-error)] hover:text-[var(--state-error)]"
-                            onClick={() => setShowDeleteDialog(true)}
+                        <Printer className="mr-2 h-4 w-4" />
+                        Print or save as PDF
+                    </DropdownMenuItem>
+                ) : null}
+                {canWriteDocument && canAttachDocumentMarkdown(previewType) ? (
+                    <DropdownMenuItem disabled={!doc} onSelect={() => setIsAttachmentOpen(true)}>
+                        <FileText className="mr-2 h-4 w-4" />
+                        {usesUserMarkdown(doc?.metadata) ? 'Using your markdown' : 'Attach your markdown'}
+                    </DropdownMenuItem>
+                ) : null}
+                {canDeleteDocument ? (
+                    <>
+                        <DropdownMenuSeparator />
+                        <DestructiveResourceActionItem
                             disabled={!doc || isDeleting}
-                            aria-label="Delete"
+                            onSelect={() => setShowDeleteDialog(true)}
                         >
-                            {isDeleting ? <StepLoader size="sm" /> : <Trash2 className="h-4 w-4" />}
-                        </Button>
-                    </TooltipTrigger>
-                    <TooltipContent>Delete</TooltipContent>
-                </Tooltip>
-            ) : null}
+                            Delete file
+                        </DestructiveResourceActionItem>
+                    </>
+                ) : null}
+            </ResourceActionsMenu>
             </div>
         </TooltipProvider>
     ), [
+        autosaveStatus,
         canDeleteDocument,
         canToggleTextView,
         canWriteDocument,
-        datastoreName,
         doc,
         documentPath,
         documentShareUrl,
@@ -770,13 +940,12 @@ export function DocumentViewer({
         previewType,
         handleCopyContent,
         handleDownload,
+        handlePrint,
         handleSave,
         handleShareVisibilityChange,
-        handleToggleFullscreen,
+        handleToggleReading,
         hasUnsavedChanges,
         isDeleting,
-        isFullscreen,
-        isFullscreenSupported,
         isLoadingContent,
         podId,
         textModeToggleLabel,
@@ -821,9 +990,45 @@ export function DocumentViewer({
         || (pdfPreviewError instanceof Error ? pdfPreviewError.message : null)
         || (docxPreviewError instanceof Error ? docxPreviewError.message : null);
 
+    /**
+     * Reading mode is read-only, and that is the point rather than a shortcut.
+     * The chrome that saves, shares and deletes is gone from the screen, so the
+     * mode should not also accept edits it has no way to acknowledge.
+     */
+    const isEditable = canWriteDocument && !isReading;
+
     return (
-        <div ref={viewerShellRef} className="document-viewer-shell relative flex h-full min-h-0 flex-col bg-[var(--card-bg)]">
-            {headerMode === 'inline' ? (
+        <div
+            ref={viewerShellRef}
+            className={cn(
+                'document-viewer-shell relative flex h-full min-h-0 flex-col',
+                isReading ? 'bg-[var(--bg-canvas)]' : 'bg-[var(--card-bg)]'
+            )}
+            data-reading={isReading ? 'true' : undefined}
+        >
+            {isReading ? (
+                <TooltipProvider>
+                    <div className="document-reading-exit">
+                        <Tooltip>
+                            <TooltipTrigger asChild>
+                                <Button
+                                    type="button"
+                                    variant="quiet"
+                                    size="icon"
+                                    className="h-8 w-8 rounded"
+                                    onClick={exitReading}
+                                    aria-label="Exit reading mode"
+                                >
+                                    <Minimize2 className="h-4 w-4" />
+                                </Button>
+                            </TooltipTrigger>
+                            <TooltipContent side="left">Exit reading mode — Esc</TooltipContent>
+                        </Tooltip>
+                    </div>
+                </TooltipProvider>
+            ) : null}
+
+            {headerMode === 'inline' && !isReading ? (
                 <div className="context-row flex-wrap items-center justify-between gap-2 px-3 py-2">
                 <div className="min-w-0 flex items-center gap-2">
                     {onClose ? (
@@ -864,17 +1069,20 @@ export function DocumentViewer({
 
                 {!isLoadingPreview && !previewError && (
                     previewType === 'markdown' ? (
-                        <div className="mx-auto max-w-4xl px-2 py-5 sm:px-4">
+                        // One column, one left edge. The frontmatter and the
+                        // prose used to sit in boxes of different widths, which
+                        // is what made a plain document look crooked.
+                        <div className="document-page px-2 py-5 sm:px-4">
                             <DocumentFrontmatter
                                 content={docContent}
                                 path={documentPath}
-                                editable={canWriteDocument}
+                                editable={isEditable}
                                 onChange={setDocContent}
                             />
                             <MarkdownEditor
                                 content={markdownBody}
-                                onChange={canWriteDocument ? handleMarkdownBodyChange : () => undefined}
-                                editable={canWriteDocument}
+                                onChange={isEditable ? handleMarkdownBodyChange : () => undefined}
+                                editable={isEditable}
                                 className="min-h-[70vh]"
                                 editorClassName="min-h-[70vh]"
                                 readableProse
@@ -893,9 +1101,9 @@ export function DocumentViewer({
                             className="document-viewer-source-field h-[78vh] w-full resize-none rounded-md border border-[color:var(--field-border)] bg-[var(--field-bg)] p-3 font-mono text-xs leading-5 text-[var(--text-secondary)] focus:outline-none"
                             value={docContent}
                             onChange={(event) => {
-                                if (canWriteDocument) setDocContent(event.target.value);
+                                if (isEditable) setDocContent(event.target.value);
                             }}
-                            readOnly={!canWriteDocument}
+                            readOnly={!isEditable}
                             spellCheck={false}
                         />
                     ) : previewType === 'image' ? (
@@ -982,6 +1190,20 @@ export function DocumentViewer({
                 isPending={isDeleting}
                 onConfirm={handleDelete}
             /> : null}
+
+            {/* Rendered here rather than inside the menu that opens it: a menu
+                unmounts on select, and would take a dialog nested in it along. */}
+            {canWriteDocument && canAttachDocumentMarkdown(previewType) ? (
+                <MarkdownAttachmentControl
+                    podId={podId}
+                    datastoreName={datastoreName}
+                    filePath={documentPath}
+                    metadata={doc.metadata}
+                    open={isAttachmentOpen}
+                    onOpenChange={setIsAttachmentOpen}
+                    showTrigger={false}
+                />
+            ) : null}
         </div>
     );
 }
