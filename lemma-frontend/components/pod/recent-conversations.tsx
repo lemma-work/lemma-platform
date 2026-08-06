@@ -6,28 +6,15 @@ import { ChevronRight, MessageCircle } from '@/components/ui/icons';
 import { StartConversationButton } from '@/components/pod/start-conversation-button';
 import { buildScopedConversationHref } from '@/lib/assistant/conversation-composer-context';
 import { requestConversationStageNavigation } from '@/lib/assistant/conversation-presentation';
+import { formatRelativeTime } from '@/lib/utils/relative-time';
 
 // Shared between the agent detail page and the pod assistant page — the same
 // list, scoped to a named agent or to the pod default.
 
-export function formatRelativeTime(value?: string | null): string | null {
-    if (!value) return null;
-    const then = new Date(value).getTime();
-    if (Number.isNaN(then)) return null;
-    const diffSec = Math.round((Date.now() - then) / 1000);
-    if (diffSec < 45) return 'just now';
-    const diffMin = Math.round(diffSec / 60);
-    if (diffMin < 60) return `${diffMin}m ago`;
-    const diffHr = Math.round(diffMin / 60);
-    if (diffHr < 24) return `${diffHr}h ago`;
-    const diffDay = Math.round(diffHr / 24);
-    if (diffDay < 7) return `${diffDay}d ago`;
-    const diffWk = Math.round(diffDay / 7);
-    if (diffWk < 5) return `${diffWk}w ago`;
-    const diffMo = Math.round(diffDay / 30);
-    if (diffMo < 12) return `${diffMo}mo ago`;
-    return `${Math.round(diffDay / 365)}y ago`;
-}
+// The clock moved to `lib/utils/relative-time` once the home pod list needed it
+// too. Re-exported here so the surfaces that already import it from this module
+// keep working.
+export { formatRelativeTime };
 
 export function RecentConversations({
     podId,

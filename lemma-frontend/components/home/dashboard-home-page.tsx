@@ -61,7 +61,10 @@ function PendingInvitationsHomePanel() {
     if (isLoading || invitations.length === 0 || !firstInvitation) return null;
 
     return (
-        <section className="lemma-pop-card mx-auto mb-8 max-w-4xl p-4 sm:p-5">
+        // Same measure as the pod cards below it — the two stack, so a wider
+        // panel over narrower cards reads as a misalignment rather than a
+        // hierarchy.
+        <section className="lemma-pop-card mx-auto mb-8 max-w-3xl p-4 sm:p-5">
             <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                 <div className="flex min-w-0 items-start gap-3">
                     <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-[var(--row-border)] bg-[var(--delight-soft)] text-[var(--delight)]">

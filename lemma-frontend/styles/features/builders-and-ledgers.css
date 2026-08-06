@@ -497,6 +497,66 @@
   border-spacing: 0;
 }
 
+/* A column is furniture with a width, not a report on whichever cell in it
+   happens to hold the most text. The grid used to carry `table-fixed`, which
+   did nothing: CSS hands the fixed algorithm only to a table whose own width is
+   definite, and this one's was `auto` under a `min-width: 100%`. So the
+   automatic algorithm ran instead, one long note stretched its column past the
+   pane, and reading a single row meant scrolling sideways through the rest.
+
+   The widths now come from the colgroup — a per-type default the reader can
+   drag — the table is as wide as those add up to, and `min-width` only decides
+   what happens when they add up to less than the pane. Scoped to the element,
+   not the workbench, so the standalone table is governed by the same rule. */
+.data-table-grid {
+  table-layout: fixed;
+  min-width: 100%;
+}
+
+/* The width is the promise; this is what keeps it. Without it a cell's content
+   simply paints over its neighbour instead of ending in an ellipsis. */
+.data-table-grid th,
+.data-table-grid td {
+  overflow: hidden;
+}
+
+.data-table-grid[data-resizing='true'] {
+  cursor: col-resize;
+  user-select: none;
+}
+
+/* Nine pixels of grip, and one hairline of it visible. A resizer that is always
+   drawn turns the header into a picket fence; one that appears under the
+   pointer is found by everyone who goes looking for it and by no one else. */
+.data-table-column-resizer {
+  position: absolute;
+  inset-block: 0;
+  right: 0;
+  width: 9px;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.data-table-column-resizer::after {
+  content: '';
+  position: absolute;
+  inset-block: 0.25rem;
+  right: 4px;
+  width: 2px;
+  background: transparent;
+  transition: background-color 120ms ease;
+}
+
+.data-table-column-resizer:hover::after,
+.data-table-column-resizer:focus-visible::after,
+.data-table-column-resizer[data-dragging='true']::after {
+  background: var(--action-primary);
+}
+
+.data-table-column-resizer:focus-visible {
+  outline: none;
+}
+
 .data-table-workbench .data-table-head {
   box-shadow: 0 1px 0 var(--border-subtle);
 }
