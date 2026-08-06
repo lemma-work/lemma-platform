@@ -12,10 +12,17 @@ os.environ.setdefault("COMPOSIO_CACHE_DIR", "/tmp/composio")
 
 from app.modules.connectors.domain.connector import (
     ConnectorEntity,
+    ConnectorKind,
     AuthMethod,
     AuthProvider,
     ComposioProviderCapability,
+    DiscoveryMode,
     LemmaProviderCapability,
+    McpKindSpec,
+    SqlKindSpec,
+)
+from app.modules.connectors.domain.connector_operation import (
+    ConnectorOperationEntity,
 )
 
 _MODULE_PATH = Path(__file__).resolve().parents[5] / "scripts" / "import_connector_catalog.py"
@@ -1188,6 +1195,192 @@ async def test_upsert_trigger_tags_kind():
     assert entity.provider == AuthProvider.COMPOSIO
     assert entity.id == "gmail:composio:new_message"
     assert entity.event_type == "new_message"
+
+
+# --- tenant-configured kinds (sql / mcp / http) -------------------------------
+
+
+class _FakeOperationRepo:
+    """Enough of the operation repository to observe kind tagging."""
+
+    def __init__(self, existing: list[ConnectorOperationEntity] | None = None):
+        self.rows = list(existing or [])
+        self.created: list[ConnectorOperationEntity] = []
+        self.updated: list[ConnectorOperationEntity] = []
+
+    async def get_by_connector_kind_and_name(self, connector_id, kind, name):
+        for row in self.rows:
+            if (
+                row.connector_id == connector_id
+                and row.kind.value == kind
+                and row.name == name
+            ):
+                return row
+        return None
+
+    async def create(self, entity):
+        self.created.append(entity)
+        return entity
+
+    async def update(self, entity):
+        self.updated.append(entity)
+        return entity
+
+
+def _sql_app_config() -> dict:
+    return {
+        "name": "sql",
+        "title": "SQL Database",
+        "description": "Connect to an external SQL database.",
+        "auth_method": "API_KEY",
+        "kind": "sql",
+        "auth_config_schema": {
+            "type": "object",
+            "required": ["dialect", "host", "database"],
+            "properties": {
+                "dialect": {"type": "string"},
+                "host": {"type": "string"},
+                "database": {"type": "string"},
+            },
+            "additionalProperties": False,
+        },
+        "credential_schema": {
+            "type": "object",
+            "required": ["username", "password"],
+            "properties": {
+                "username": {"type": "string"},
+                "password": {"type": "string", "format": "password"},
+            },
+        },
+        "is_active": True,
+        "triggers": [],
+        "static_operations": [
+            {
+                "name": "execute_query",
+                "description": "Run a read-only SELECT.",
+                "execution": {"kind": "sql", "op": "query"},
+                "input_schema": {"type": "object"},
+                "output_schema": {"type": "object"},
+            }
+        ],
+    }
+
+
+@pytest.mark.asyncio
+async def test_sync_native_catalog_installs_sql_entry_as_the_sql_kind():
+    """The catalog's own `kind` decides the executor; dropping it broke both."""
+    connector_repository = SimpleNamespace(get=AsyncMock(return_value=None))
+    operation_repository = _FakeOperationRepo()
+    trigger_repository = SimpleNamespace()
+
+    with (
+        patch.object(
+            importer, "_load_lemma_apps_config", return_value=[_sql_app_config()]
+        ),
+        patch.object(importer, "_upsert_connector", AsyncMock()) as upsert_connector,
+    ):
+        totals = await importer._sync_native_catalog(
+            connector_repository,
+            operation_repository,
+            trigger_repository,
+            app_filters={"sql"},
+            schema_compiler=importer.PydanticCodeSchemaCompiler(),
+        )
+
+    assert totals == (1, 1, 0)
+    entity = upsert_connector.await_args.args[1]
+    capability = _capability(entity, AuthProvider.LEMMA)
+    assert isinstance(capability, SqlKindSpec)
+    assert capability.kind is ConnectorKind.SQL
+    assert capability.auth_scheme == AuthMethod.API_KEY
+
+    # The operation has to carry the same kind: execution resolves it by
+    # (connector, install kind, name), so a package-tagged row is invisible to
+    # a sql install.
+    assert len(operation_repository.created) == 1
+    operation = operation_repository.created[0]
+    assert operation.kind is ConnectorKind.SQL
+    assert operation.id == "sql:sql:execute_query"
+
+
+@pytest.mark.asyncio
+async def test_sync_native_catalog_marks_mcp_entry_for_tool_discovery():
+    connector_repository = SimpleNamespace(get=AsyncMock(return_value=None))
+    operation_repository = _FakeOperationRepo()
+    trigger_repository = SimpleNamespace()
+
+    with (
+        patch.object(
+            importer,
+            "_load_lemma_apps_config",
+            return_value=[
+                {
+                    "name": "mcp",
+                    "title": "MCP Server",
+                    "auth_method": "API_KEY",
+                    "kind": "mcp",
+                    "description": "Connect an MCP server.",
+                    "auth_config_schema": {
+                        "type": "object",
+                        "required": ["server_url"],
+                        "properties": {"server_url": {"type": "string"}},
+                    },
+                    "is_active": True,
+                    "triggers": [],
+                }
+            ],
+        ),
+        patch.object(importer, "_upsert_connector", AsyncMock()) as upsert_connector,
+    ):
+        await importer._sync_native_catalog(
+            connector_repository,
+            operation_repository,
+            trigger_repository,
+            app_filters={"mcp"},
+            schema_compiler=importer.PydanticCodeSchemaCompiler(),
+        )
+
+    capability = _capability(upsert_connector.await_args.args[1], AuthProvider.LEMMA)
+    assert isinstance(capability, McpKindSpec)
+    assert capability.discovery is DiscoveryMode.MCP
+
+
+@pytest.mark.asyncio
+async def test_upsert_operation_retags_a_legacy_package_row_in_place():
+    """Re-running the import must migrate, not duplicate.
+
+    The unique index is (connector, kind, name), so a fresh insert under the
+    new kind would leave the package-tagged row behind and the catalog would
+    list the operation twice.
+    """
+    legacy = ConnectorOperationEntity(
+        id="sql:package:execute_query",
+        connector_id="sql",
+        kind=ConnectorKind.PACKAGE,
+        name="execute_query",
+        provider_operation_name="execute_query",
+    )
+    repo = _FakeOperationRepo([legacy])
+
+    await importer._upsert_operation(
+        repo,
+        "sql",
+        provider=AuthProvider.LEMMA,
+        public_name="execute_query",
+        provider_operation_name="execute_query",
+        display_name="Execute query",
+        description="Run a read-only SELECT.",
+        input_schema=None,
+        output_schema=None,
+        search_document=None,
+        execution={"kind": "sql", "op": "query"},
+        kind="sql",
+    )
+
+    assert repo.created == []
+    assert len(repo.updated) == 1
+    assert repo.updated[0].id == "sql:package:execute_query"
+    assert repo.updated[0].kind is ConnectorKind.SQL
 
 
 # --- connector id rename migration -------------------------------------------
