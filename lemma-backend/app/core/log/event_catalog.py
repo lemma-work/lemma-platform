@@ -585,4 +585,5 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'workspace.agentbox_session.output_cursor_read_failed': EventSpec('debug', frozenset({'process_id', 'sandbox_id'})),
     'workspace.agentbox_session.output_cursor_write_failed': EventSpec('debug', frozenset({'process_id', 'sandbox_id'})),
     'workspace.mime_type.unknown': EventSpec('debug', frozenset()),
+    'workspace.sandbox_service.workspace_storage_recreated': EventSpec('info', frozenset({'sandbox_id'})),
 }

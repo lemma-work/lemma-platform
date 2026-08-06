@@ -12,6 +12,7 @@ from types import SimpleNamespace
 
 import pytest
 import pytest_asyncio
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.modules.workspace.infrastructure.models import (
@@ -29,6 +30,56 @@ def _database_url() -> str:
             "postgresql+asyncpg://postgres:postgres@localhost:5432/lemma",
         ),
     )
+
+
+@pytest_asyncio.fixture
+async def sandbox_uow_factory() -> AsyncIterator[object]:
+    """A unit-of-work factory over real, isolated sandbox tables.
+
+    The service opens several short units of work per operation, so unlike the
+    repository fixture this cannot hold one transaction open. It creates the
+    tables, hands out real sessions, and truncates afterwards.
+    """
+    from contextlib import asynccontextmanager
+
+    engine = create_async_engine(_database_url())
+    try:
+        async with engine.begin() as connection:
+            await connection.run_sync(
+                SandboxModel.metadata.create_all,
+                tables=[SandboxModel.__table__, SandboxInstanceModel.__table__],
+                checkfirst=True,
+            )
+    except Exception as exc:  # pragma: no cover - environment guard
+        await engine.dispose()
+        pytest.skip(f"postgres not reachable for integration tests: {exc}")
+
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+
+    @asynccontextmanager
+    async def factory():
+        async with maker() as session:
+            uow = SimpleNamespace(
+                session=session,
+                commit=session.commit,
+                rollback=session.rollback,
+            )
+            try:
+                yield uow
+            except BaseException:
+                await session.rollback()
+                raise
+            else:
+                await session.commit()
+
+    try:
+        yield factory
+    finally:
+        async with engine.begin() as connection:
+            await connection.execute(
+                text("TRUNCATE sandboxes, sandbox_instances CASCADE")
+            )
+        await engine.dispose()
 
 
 @pytest_asyncio.fixture

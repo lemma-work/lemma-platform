@@ -88,6 +88,13 @@ class WorkspaceSandboxService:
         self.process_store = process_store or get_workspace_process_store()
 
     def _build_sandbox(self) -> ISandbox:
+        from app.modules.workspace.services.sandbox_composition import (
+            LocalSandbox,
+            workspace_owns_sandboxes,
+        )
+
+        if workspace_owns_sandboxes():
+            return LocalSandbox()
         return AgentBoxSandbox()
 
     async def close(self) -> None:
@@ -450,14 +457,26 @@ class WorkspaceSandboxService:
         )
 
     def _get_manager_client(self) -> AgentBoxClient:
-        """Return a process-shared AgentBox manager client.
+        """Return the client the session and file operations run through.
 
-        Pooled so parallel/sequential tool calls reuse one httpx connection pool
-        instead of paying a fresh TLS handshake to the manager on every call. The
-        cache key includes the running event loop id so a new client is created
-        when settings change or when a different loop is in play (e.g. tests),
-        since an httpx.AsyncClient is bound to the loop that created it.
+        When this module owns provisioning, that is a local client with the
+        same surface -- which is why the session above it needs no changes.
+
+        The AgentBox path is pooled so parallel/sequential tool calls reuse one
+        httpx connection pool instead of paying a fresh TLS handshake to the
+        manager on every call. The cache key includes the running event loop id
+        so a new client is created when settings change or when a different
+        loop is in play (e.g. tests), since an httpx.AsyncClient is bound to
+        the loop that created it.
         """
+        from app.modules.workspace.services.sandbox_composition import (
+            build_local_client,
+            workspace_owns_sandboxes,
+        )
+
+        if workspace_owns_sandboxes():
+            return build_local_client()  # type: ignore[return-value]
+
         api_key = settings.agentbox_api_key
         if not api_key:
             raise RuntimeError("AGENTBOX_API_KEY is required for workspace sandboxes")

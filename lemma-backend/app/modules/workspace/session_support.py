@@ -48,6 +48,44 @@ def canonical_workspace_cwd(value: str) -> str:
     return canonical_runtime_path(value)
 
 
+def describe_sandbox_failure(exc: BaseException) -> tuple[str, bool]:
+    """Normalise either provisioning path's failure into (message, retryable).
+
+    The session runs over the AgentBox manager or over this module's own
+    sandbox service depending on configuration, and the two raise different
+    exception families. Both reduce to the same two facts a tool call needs:
+    what to tell the agent, and whether trying again could help.
+    """
+
+    from agentbox_client import AgentBoxApiError
+
+    from app.modules.workspace.domain.errors import (
+        SandboxRejected,
+        SandboxUnavailable,
+    )
+
+    if isinstance(exc, AgentBoxApiError):
+        return (
+            f"AgentBox {exc.code}: {exc}",
+            exc.retry.value != "do_not_retry",
+        )
+    if isinstance(exc, SandboxUnavailable):
+        return (f"Workspace unavailable: {exc}", True)
+    if isinstance(exc, SandboxRejected):
+        return (f"Workspace refused the operation: {exc}", False)
+    return (f"Workspace transport failed: {type(exc).__name__}: {exc}", True)
+
+
+def sandbox_failure_types() -> tuple[type[BaseException], ...]:
+    """Every failure a sandbox operation may raise, across both paths."""
+
+    from agentbox_client import AgentBoxApiError
+
+    from app.modules.workspace.domain.errors import SandboxError
+
+    return (AgentBoxApiError, SandboxError)
+
+
 def agentbox_command_failure(
     *,
     error: str,

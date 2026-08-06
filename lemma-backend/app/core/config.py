@@ -867,6 +867,25 @@ class Settings(BaseSettings):
         default=False,
         description="Provision sandboxes in the workspace module, not AgentBox",
     )
+    workspace_port_access_url: Optional[str] = Field(
+        default=None,
+        description=(
+            "Public base URL for signed sandbox port access. Defaults to "
+            "api_url; set when the proxy is reached on a different origin."
+        ),
+    )
+    agentbox_docker_socket_path: str = Field(
+        default="/var/run/docker.sock",
+        description="Docker Engine unix socket used to provision sandboxes",
+    )
+    agentbox_docker_allow_mutable_images: bool = Field(
+        default=False,
+        description=(
+            "Allow sandbox images pinned by tag rather than sha256 digest. "
+            "Development only: a moving tag means the image that ran is not "
+            "the image that was reviewed."
+        ),
+    )
     function_builder_executable: str = Field(
         default="uv",
         description="Executable used only while prebuilding function dependencies",
