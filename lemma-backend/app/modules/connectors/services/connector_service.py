@@ -69,6 +69,9 @@ from app.modules.connectors.services.install_provisioning import (
     validate_install_config,
 )
 from app.modules.connectors.services.install_update import update_install
+from app.modules.connectors.services.profile_operation_execution import (
+    execute_profile_operation,
+)
 from app.core.log.log import get_logger
 
 logger = get_logger(__name__)
@@ -197,20 +200,17 @@ class ConnectorService:
             if operation is None:
                 continue
             try:
-                result = await self._execute_profile_operation(
+                result = await execute_profile_operation(
                     connector_id=connector_id,
                     kind=kind,
                     operation=operation,
                     provider=provider,
                     credentials=credentials,
+                    operation_gateway=self.operation_gateway,
+                    get_dispatcher=self._profile_dispatcher,
                 )
             except Exception:
-                logger.debug(
-                    'connectors.connector_service.profile_operation_s_s_s.diagnostic',
-                    operation_name=operation_name,
-                    connector_id=connector_id,
-                    exc_info=True,
-                )
+                logger.debug('connectors.connector_service.profile_operation_s_s_s.diagnostic', operation_name=operation_name, connector_id=connector_id, exc_info=True)
                 continue
             profile = self._profile_to_dict(result)
             # Composio wraps every tool execution result in
@@ -227,57 +227,6 @@ class ConnectorService:
             if profile:
                 return profile
         return None
-
-    async def _execute_profile_operation(
-        self,
-        *,
-        connector_id: str,
-        kind: str,
-        operation: Any,
-        provider: str,
-        credentials: OAuthCredentials,
-    ) -> Any:
-        """Run a catalog-curated profile operation, routed by kind.
-
-        `self.operation_gateway` (`RoutingOperationGateway`) only understands
-        two routes -- Composio, and the legacy vendored-package client for
-        "LEMMA" -- because it predates the http/sql/mcp kind framework. That's
-        fine for package-kind connectors (Gmail, Slack, Jira all have a
-        vendored client), but silently fails for any newer kind's profile
-        operation (e.g. an http-kind connector like GitHub): the legacy
-        client has no entry for it, so the profile fetch always threw and
-        was swallowed by the caller's blanket `except Exception`, leaving
-        every such account's email/display_name/provider_account_id
-        permanently null. Composio and package keep the existing, proven
-        path; http/sql/mcp route through the same KindDispatcher the
-        execute-operation route itself uses.
-        """
-        third_party_credentials = credentials.model_dump(exclude_none=True)
-        if kind in (ConnectorKind.PACKAGE.value, ConnectorKind.COMPOSIO.value):
-            return await self.operation_gateway.execute_operation(
-                connector_id=connector_id,
-                operation_name=operation.execution_name,
-                payload={},
-                third_party_credentials=third_party_credentials,
-                provider=provider,
-            )
-        from app.modules.connectors.domain.connector_operation import ResolvedOperation
-
-        dispatcher = self._profile_dispatcher()
-        request = dispatcher.build_request(
-            connector_id=connector_id,
-            kind=ConnectorKind(kind),
-            operation=ResolvedOperation(
-                name=operation.name,
-                provider_operation_name=operation.execution_name,
-                input_schema=operation.input_schema,
-                execution=operation.execution,
-            ),
-            payload={},
-            credentials=third_party_credentials,
-            config={},
-        )
-        return await dispatcher.execute(request)
 
     def _profile_dispatcher(self):
         if self._kind_dispatcher is None:
@@ -463,13 +412,9 @@ class ConnectorService:
     ) -> ConnectorEntity:
         capabilities = []
         for capability in connector.kinds:
-            # "LEMMA" means any kind we serve ourselves -- sql/mcp/http as well
-            # as the vendored package -- matching _lemma_capability above.
-            # Narrowing to the package spec specifically left every other
-            # native kind (e.g. an `http`-kind connector with its own
-            # `system_oauth`, like GitHub) with system_default_available
-            # always false, forcing every org to enter its own client
-            # id/secret even when a system default was configured.
+            # "LEMMA" means any kind we serve ourselves, matching
+            # _lemma_capability above -- narrowing to the package spec left
+            # every other native kind's system_default_available always false.
             if capability.kind is not ConnectorKind.COMPOSIO:
                 has_system_default = (
                     capability.auth_scheme != AuthScheme.OAUTH2
