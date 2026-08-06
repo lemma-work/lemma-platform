@@ -477,8 +477,10 @@ class DockerSandboxProvider:
         deadline_at: datetime,
     ) -> str:
         async with self._ops_client(instance, deadline_at=deadline_at) as client:
-            started = await client.start_process(request, deadline_at=deadline_at)
-            return started.provider_process_id
+            started = await client.start_process(request)
+            # The runtime keys a process by the operation id it was handed, so
+            # that id is the handle. There is no separate provider id to track.
+            return str(started.operation_id)
 
     async def read_process_output(
         self,
@@ -490,7 +492,7 @@ class DockerSandboxProvider:
         deadline_at: datetime,
     ) -> ProcessOutputSnapshot:
         async with self._ops_client(instance, deadline_at=deadline_at) as client:
-            return await client.read_process_output(
+            return await client.read_output(
                 process_id,
                 after_sequence=after_sequence,
                 wait_seconds=wait_seconds,
@@ -506,9 +508,7 @@ class DockerSandboxProvider:
         deadline_at: datetime,
     ) -> None:
         async with self._ops_client(instance, deadline_at=deadline_at) as client:
-            await client.send_process_input(
-                process_id, data=data, deadline_at=deadline_at
-            )
+            await client.send_input(process_id, data, deadline_at=deadline_at)
 
     async def resize_process(
         self,
@@ -519,7 +519,7 @@ class DockerSandboxProvider:
         deadline_at: datetime,
     ) -> None:
         async with self._ops_client(instance, deadline_at=deadline_at) as client:
-            await client.resize_process(process_id, size=size, deadline_at=deadline_at)
+            await client.resize(process_id, size, deadline_at=deadline_at)
 
     async def terminate_process(
         self,
@@ -530,7 +530,7 @@ class DockerSandboxProvider:
         deadline_at: datetime,
     ) -> None:
         async with self._ops_client(instance, deadline_at=deadline_at) as client:
-            await client.terminate_process(
+            await client.terminate(
                 process_id, grace_seconds=grace_seconds, deadline_at=deadline_at
             )
 
@@ -561,9 +561,11 @@ class DockerSandboxProvider:
         deadline_at: datetime,
     ) -> AsyncIterator[bytes]:
         async with self._ops_client(instance, deadline_at=deadline_at) as client:
-            async for chunk in client.open_file(
-                path, byte_range=byte_range, deadline_at=deadline_at
-            ):
+            # open_file returns the iterator; it is not itself a generator.
+            stream = await client.open_file(
+                path, byte_range, deadline_at=deadline_at
+            )
+            async for chunk in stream:
                 yield chunk
 
     async def write_file(
@@ -578,7 +580,7 @@ class DockerSandboxProvider:
         async with self._ops_client(instance, deadline_at=deadline_at) as client:
             return await client.write_file(
                 path,
-                data=data,
+                data,
                 expected_sha256=expected_sha256,
                 deadline_at=deadline_at,
             )
@@ -592,9 +594,7 @@ class DockerSandboxProvider:
         deadline_at: datetime,
     ) -> None:
         async with self._ops_client(instance, deadline_at=deadline_at) as client:
-            await client.move_file(
-                source=source, destination=destination, deadline_at=deadline_at
-            )
+            await client.move_file(source, destination, deadline_at=deadline_at)
 
     async def delete_file(
         self,
@@ -605,9 +605,8 @@ class DockerSandboxProvider:
         deadline_at: datetime,
     ) -> bool:
         async with self._ops_client(instance, deadline_at=deadline_at) as client:
-            return await client.delete_file(
-                path, recursive=recursive, deadline_at=deadline_at
-            )
+            await client.delete_file(path, recursive=recursive, deadline_at=deadline_at)
+            return True
 
     async def ensure_python_session(
         self,
