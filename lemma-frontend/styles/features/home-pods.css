@@ -1,0 +1,101 @@
+/* ────────────────────────────────────────────
+   HOME — THE POD LIST
+
+   An account holds one, two, maybe three pods. The page was built as a
+   directory for a number nobody has: a 100px row carrying an icon, a name, a
+   sentence that was the same sentence on every row, and an arrow — stretched
+   the full width of a 1150px shell, so three of them read as a page that failed
+   to load.
+
+   The fix is not a box. Boxed cards put three outlines around one app — the
+   card's, the divider under the pod's name, and the chip's — and the page went
+   from empty to loud without passing through calm. The page background here is
+   already `--surface-1`, so a card can only be drawn as an outline; a sheet
+   would be invisible against the sheet.
+
+   So each pod is a block of space on a sane measure, separated from the next by
+   a hairline rule, with its apps sitting underneath as the things you actually
+   came to open. One enclosure on the page, and it is the thing you click.
+
+   Like the rest of `styles/features`, these rules sit outside Tailwind's layers
+   so a utility on the same element does not silently win.
+   ──────────────────────────────────────────── */
+
+.home-pod-item {
+  /* The mark is a gutter, not a column of its own: name, description and apps
+     share one left edge so the block reads as one pod rather than three rows
+     that happen to be adjacent. */
+  --home-pod-gutter: calc(2.75rem + var(--space-4));
+  padding: var(--space-4) var(--space-2);
+}
+
+.home-pod-item + .home-pod-item {
+  border-top: 1px solid var(--row-border);
+}
+
+/* ── The app shelf ──
+   Held to the pod above it by proximity rather than by a rule. A divider here
+   was the third line inside one card and bought nothing: the gap already says
+   where the name ends. */
+.home-pod-apps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-2-5);
+  margin-left: var(--home-pod-gutter);
+}
+
+/* Fill, not outline — but a fill that actually lands.
+   `--chip-bg` is a mix of surface-2 into surface-1, drawn for chips that sit on
+   a canvas or a panel. This page's background *is* surface-1, so that mix came
+   out within a hair of the paper and the chips stopped being objects at all:
+   link text floating in space, its own padding pushing it out of line with the
+   name above it. `--surface-3` is the token for a control that reads as a
+   control, which is what these are. */
+.home-pod-app-tile {
+  display: inline-flex;
+  max-width: 100%;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1-5) var(--space-3);
+  border-radius: var(--radius-md);
+  background: var(--surface-3);
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  line-height: 1.25rem;
+  transition:
+    background-color var(--dur-fast) var(--ease-standard),
+    color var(--dur-fast) var(--ease-standard);
+}
+
+/* Violet carries action (design.md §2). On a page whose only verbs are "open
+   the pod" and "open an app", the app is worth saying so. */
+.home-pod-app-tile:hover {
+  background: var(--action-primary-soft);
+  color: var(--action-primary);
+}
+
+/* ── Item actions ──
+   Present at every width, quiet until wanted. They stay laid out rather than
+   mounting on hover so nothing beside them shifts; below the hover breakpoint —
+   touch, where there is no hover to reveal them — they are simply always
+   visible. */
+.home-pod-item-actions {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+@media (hover: hover) and (min-width: 768px) {
+  .home-pod-item-actions {
+    opacity: 0;
+    transition: opacity var(--dur-fast) var(--ease-standard);
+  }
+
+  .home-pod-item:hover .home-pod-item-actions,
+  .home-pod-item:focus-within .home-pod-item-actions,
+  .home-pod-item-actions:has([data-state='open']) {
+    opacity: 1;
+  }
+}

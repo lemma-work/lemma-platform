@@ -1778,6 +1778,27 @@
     background: var(--border);
   }
 
+  /* A resource icon that is a typed glyph rather than an uploaded picture.
+     The same component renders at 24px in the pod switcher and 44px on home,
+     so the glyph is sized from its own box: the outer span becomes a size
+     container and the inner one measures against it. Browsers without
+     container units drop the `cqmin` line and keep the 1rem above it, which is
+     a small emoji rather than a broken one. */
+  .resource-icon-glyph-box {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    container-type: size;
+  }
+
+  .resource-icon-glyph {
+    font-size: var(--text-base);
+    font-size: 58cqmin;
+    line-height: 1;
+  }
+
   .resource-template-swatch-mint {
     background: linear-gradient(135deg, color-mix(in srgb, var(--state-success) 54%, var(--surface-1)), var(--state-success));
   }

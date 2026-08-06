@@ -1,7 +1,7 @@
 'use client';
 
 import { useMemo } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { getLemmaClient } from '../sdk/lemma-client';
 import type { AppConfig, AppPage, AppPageRef } from '../types/app';
 import { createUniqueAppPageSlug, normalizeAppPageSlug } from '../utils/app-page-slugs';
@@ -156,6 +156,43 @@ export function useApps(podId: string) {
         staleTime: 2 * 60 * 1000,
         gcTime: 30 * 60 * 1000,
     });
+}
+
+/**
+ * App pages for several pods at once, keyed by pod.
+ *
+ * The home list draws each pod's apps as shortcuts, and a pod's app index is
+ * the only thing that says what they are. Sharing `appIndexQueryKey` with
+ * `useAppConfig` means opening a pod after the list has loaded reads the index
+ * out of the cache rather than fetching it a second time.
+ *
+ * A pod the viewer cannot read fails quietly and contributes no shortcuts,
+ * which is why this does not retry: a 403 is an answer, not a flake.
+ */
+export function useAppPagesForPods(podIds: string[]) {
+    const results = useQueries({
+        queries: podIds.map((podId) => ({
+            queryKey: appIndexQueryKey(podId),
+            queryFn: () => listAppIndex(podId),
+            select: appPageRefsFromIndex,
+            enabled: !!podId,
+            retry: false,
+            staleTime: 2 * 60 * 1000,
+            gcTime: 30 * 60 * 1000,
+        })),
+    });
+
+    return useMemo(() => {
+        const pagesByPod = new Map<string, AppPageRef[]>();
+
+        podIds.forEach((podId, index) => {
+            const pages = results[index]?.data;
+            if (!pages?.length) return;
+            pagesByPod.set(podId, [...pages].sort((a, b) => a.order - b.order));
+        });
+
+        return pagesByPod;
+    }, [podIds, results]);
 }
 
 export function useDeleteApp() {

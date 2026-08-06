@@ -2,6 +2,7 @@
 
 import { ReactNode, useMemo, useState } from 'react';
 import { cn } from '@/lib/utils';
+import { parseResourceIcon } from '@/lib/utils/resource-icon-value';
 
 interface ResourceIconProps {
     iconUrl?: string | null;
@@ -22,7 +23,13 @@ function getInitials(label?: string): string {
 export function ResourceIcon({ iconUrl, alt, label, fallback, className, imageClassName }: ResourceIconProps) {
     const [imageFailed, setImageFailed] = useState(false);
     const initials = useMemo(() => getInitials(label), [label]);
-    const shouldShowImage = Boolean(iconUrl) && !imageFailed;
+    // A resource's icon field holds either a picture or a typed glyph; which
+    // one is decided in exactly one place. Without this, an emoji reached the
+    // `<img>` below, failed to load, and only then fell back — a broken-image
+    // flash on every render of a pod someone gave an emoji to.
+    const icon = useMemo(() => parseResourceIcon(iconUrl), [iconUrl]);
+    const shouldShowImage = icon?.kind === 'url' && !imageFailed;
+    const glyph = icon?.kind === 'glyph' ? icon.glyph : null;
 
     return (
         <div
@@ -35,11 +42,21 @@ export function ResourceIcon({ iconUrl, alt, label, fallback, className, imageCl
             {shouldShowImage ? (
                 // eslint-disable-next-line @next/next/no-img-element
                 <img
-                    src={iconUrl || ''}
+                    src={icon.url}
                     alt={alt}
                     className={cn('h-full w-full object-cover', imageClassName)}
                     onError={() => setImageFailed(true)}
                 />
+            ) : glyph ? (
+                // Sized from the box rather than from a font scale, because the
+                // same component is drawn at 24px in the pod switcher and 44px
+                // on home, and an emoji that ignores its container is the one
+                // thing more obviously wrong than no emoji at all.
+                <span className="resource-icon-glyph-box">
+                    <span className="resource-icon-glyph" role="img" aria-label={alt}>
+                        {glyph}
+                    </span>
+                </span>
             ) : fallback ? (
                 fallback
             ) : (
