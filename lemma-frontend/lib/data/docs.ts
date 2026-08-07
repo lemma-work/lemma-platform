@@ -322,6 +322,19 @@ lemma pod describe <pod-id>`,
           'Scope the pod around the work it moves: triage support, qualify leads, review expenses, onboard teammates, track launch items, or run a back-office loop. Multiple apps, workflows, agents, and assistants can live inside one pod when they serve the same operating job.',
       },
       {
+        type: 'paragraph',
+        title: 'Who can talk to a pod',
+        body:
+          'Everyone who interacts with a pod directly is a member of it. Surfaces resolve the sender to a Lemma user and check pod membership before an agent ever runs, and apps do the same through AuthGuard. Someone who is not a member gets a signup or request-access link back instead of an answer — so a customer, a lead, an applicant, or a community member cannot message your bot or open your app.',
+      },
+      {
+        type: 'callout',
+        tone: 'note',
+        title: 'Reaching people outside the pod',
+        body:
+          'Use a connector, not a surface. Read their mail, tickets, or records from the source system on a schedule, keep the work in the pod where your team can see it, and send whatever goes back out through the same connector once a member approves it. The person outside never needs a Lemma account — which is why an email support desk works and a customer-facing chatbot does not.',
+      },
+      {
         type: 'list',
         title: 'Good pod scope',
         items: [
