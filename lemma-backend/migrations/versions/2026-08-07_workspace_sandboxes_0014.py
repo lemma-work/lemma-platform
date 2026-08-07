@@ -41,8 +41,8 @@ state, so the resolver creates one lazily on first invocation with
 ``id = pod_id`` -- matching the logical id AgentBox already used, so a running
 function container is recognised rather than duplicated.
 
-Revision ID: 0013_workspace_sandboxes
-Revises: 0012_agent_snooze
+Revision ID: 0014_workspace_sandboxes
+Revises: 0013_notifications
 """
 
 from alembic import op
@@ -50,8 +50,8 @@ import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
 
-revision = "0013_workspace_sandboxes"
-down_revision = "0012_agent_snooze"
+revision = "0014_workspace_sandboxes"
+down_revision = "0013_notifications"
 branch_labels = None
 depends_on = None
 
