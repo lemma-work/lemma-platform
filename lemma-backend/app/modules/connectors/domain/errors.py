@@ -104,21 +104,29 @@ class ConnectorNotFoundError(_ConnectorNotFoundBase):
         self.code = "CONNECTOR_NOT_FOUND"
 
 
+# These stay subclasses of ConnectorNotFoundError so existing `except` clauses
+# keep catching them, but they build their message through the *base* rather
+# than through ConnectorNotFoundError.__init__ — that one formats its argument
+# as "Connector '{...}' not found", so passing it an already-formatted message
+# produced doubly-wrapped nonsense like:
+#     Connector 'Account '019f…' not found' not found
 class ConnectorTriggerNotFoundError(ConnectorNotFoundError):
     def __init__(self, trigger_id: str):
-        super().__init__(f"Trigger '{trigger_id}' not found")
+        _ConnectorNotFoundBase.__init__(self, f"Trigger '{trigger_id}' not found")
         self.code = "CONNECTOR_TRIGGER_NOT_FOUND"
 
 
 class AccountNotFoundError(ConnectorNotFoundError):
     def __init__(self, account_id: str):
-        super().__init__(f"Account '{account_id}' not found")
+        _ConnectorNotFoundBase.__init__(self, f"Account '{account_id}' not found")
         self.code = "ACCOUNT_NOT_FOUND"
 
 
 class CredentialsNotFoundError(ConnectorNotFoundError):
     def __init__(self, account_id: str):
-        super().__init__(f"Credentials not found for account '{account_id}'")
+        _ConnectorNotFoundBase.__init__(
+            self, f"Credentials not found for account '{account_id}'"
+        )
         self.code = "ACCOUNT_CREDENTIALS_NOT_FOUND"
 
 
