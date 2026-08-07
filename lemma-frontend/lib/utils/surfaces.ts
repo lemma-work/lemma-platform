@@ -52,6 +52,18 @@ export function surfaceUsesDefaultAgent(surface: AssistantSurface): boolean {
     return surface.uses_default_agent ?? !surface.agent_name;
 }
 
+/**
+ * A surface reaches the pod default assistant when it answers its direct
+ * messages *or* routes a channel with no agent of its own.
+ *
+ * The channel half matters on Slack and Teams, where a workspace whose DMs
+ * belong to one agent can still route `#general` to the pod assistant — which
+ * `surfaceUsesDefaultAgent` alone would read as "not reached here".
+ */
+export function surfaceReachesDefaultAgent(surface: AssistantSurface): boolean {
+    return surfaceReaches(surface, null).length > 0;
+}
+
 /** The surface's own address — a phone number, bot handle, workspace name, etc. */
 export function getSurfaceIdentity(surface: AssistantSurface): string | null {
     const identity = surface.surface_identity_username?.trim();
@@ -82,23 +94,88 @@ export function getSurfaceDeepLink(surface: AssistantSurface): string | null {
 }
 
 /**
+ * One distinct place a surface reaches an agent.
+ *
+ * On Slack and Teams a single workspace install carries many of these — the
+ * bot's DMs plus every channel routed by name — and they are what a person
+ * thinks in ("#sales"), not the install. Identity platforms have exactly one.
+ */
+export interface SurfaceReach {
+    /** Stable across renders; also what the modal targets. */
+    key: string;
+    kind: 'dm' | 'channel';
+    /** Chip text. Channels arrive already prefixed with `#`. */
+    label: string;
+    /** Set when `kind` is `channel`. */
+    channelId?: string;
+}
+
+/** Display form of a route's channel, or null when it names neither id nor name. */
+function channelLabel(route: { channel_id?: string | null; channel_name?: string | null }): string | null {
+    const name = route.channel_name || route.channel_id;
+    if (!name) return null;
+    return name.startsWith('#') ? name : `#${name}`;
+}
+
+/**
+ * Every place this surface reaches one agent. `reachFor` is the agent name whose
+ * perspective we render; `null` means the pod default assistant.
+ *
+ * DMs come first because they are the surface's own address — the thing that
+ * exists before anyone routes anything.
+ */
+export function surfaceReaches(
+    surface: AssistantSurface,
+    reachFor: string | null,
+): SurfaceReach[] {
+    const reaches: SurfaceReach[] = [];
+    if (surfaceAnswersDirectMessages(surface, reachFor)) {
+        reaches.push({ key: 'dm', kind: 'dm', label: 'Direct messages' });
+    }
+
+    for (const route of surface.config?.channels ?? []) {
+        const routed = reachFor === null ? !route.agent_name : route.agent_name === reachFor;
+        if (!routed) continue;
+        const label = channelLabel(route);
+        if (!label) continue;
+        reaches.push({
+            key: `channel:${route.channel_id || label}`,
+            kind: 'channel',
+            label,
+            channelId: route.channel_id || undefined,
+        });
+    }
+
+    return reaches;
+}
+
+/** Whether this agent is the one that answers the surface's direct messages. */
+export function surfaceAnswersDirectMessages(
+    surface: AssistantSurface,
+    reachFor: string | null,
+): boolean {
+    return reachFor === null
+        ? surfaceUsesDefaultAgent(surface)
+        : surface.agent_name === reachFor;
+}
+
+/**
+ * The agent that answers this surface's DMs, for naming the holder to everyone
+ * else. `null` means the pod default assistant.
+ *
+ * A surface has exactly one — DMs carry no channel to route on, so they always
+ * fall to `surface.agent_name`. That is the one hard limit on a Slack workspace,
+ * and naming the holder is how it stops being invisible.
+ */
+export function surfaceDirectMessageAgent(surface: AssistantSurface): string | null {
+    return surfaceUsesDefaultAgent(surface) ? null : surface.agent_name ?? null;
+}
+
+/**
  * Short reach description for a surface from one perspective. `reachFor` is the
  * agent name whose perspective we render; `null` means the pod default assistant.
  */
 export function describeReach(surface: AssistantSurface, reachFor: string | null): string {
-    const parts: string[] = [];
-    const isDefaultResponder = reachFor === null
-        ? surfaceUsesDefaultAgent(surface)
-        : surface.agent_name === reachFor;
-    if (isDefaultResponder) parts.push('Direct messages');
-
-    const routes = (surface.config?.channels ?? []).filter((route) =>
-        reachFor === null ? !route.agent_name : route.agent_name === reachFor,
-    );
-    for (const route of routes) {
-        const name = route.channel_name || route.channel_id;
-        if (name) parts.push(name.startsWith('#') ? name : `#${name}`);
-    }
-
+    const parts = surfaceReaches(surface, reachFor).map((reach) => reach.label);
     return parts.join(' · ') || 'Routed here';
 }
