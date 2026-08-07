@@ -980,16 +980,14 @@ function ConditionFields({
                                         ) : (
                                             <div className="flex-1" />
                                         )}
-                                        <Button
+                                        <button
                                             type="button"
-                                            variant="quiet"
-                                            size="icon"
-                                            className="h-8 w-8 shrink-0"
+                                            className="resource-remove-button custom-focus-ring"
                                             aria-label="Remove condition"
                                             onClick={() => onConditionsChange(conditions.filter((_, i) => i !== index))}
                                         >
                                             <X className="h-3.5 w-3.5" />
-                                        </Button>
+                                        </button>
                                     </div>
                                     {unanswerable ? (
                                         <p className="text-xs leading-5 text-[var(--text-tertiary)]">
@@ -1005,7 +1003,7 @@ function ConditionFields({
 
                 <button
                     type="button"
-                    className="text-xs text-[var(--text-secondary)] transition-gentle hover:text-[var(--text-primary)]"
+                    className="resource-add-trigger custom-focus-ring"
                     onClick={() => onConditionsChange([
                         ...conditions,
                         { column: columns[0]?.name ?? '', operator: operators[0] ?? 'is', value: '' },
@@ -1046,7 +1044,7 @@ function ConditionFields({
                 ) : (
                     <button
                         type="button"
-                        className="text-xs text-[var(--text-secondary)] transition-gentle hover:text-[var(--text-primary)]"
+                        className="resource-add-trigger custom-focus-ring"
                         onClick={() => setInstructionOpened(true)}
                     >
                         Need judgement a comparison cannot make?
