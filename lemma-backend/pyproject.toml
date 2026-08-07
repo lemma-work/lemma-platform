@@ -47,7 +47,7 @@ dependencies = [
     "supertokens-python==0.31.3",
     "greenlet>=3.3.2",
     "markdown>=3.8.2",
-    "cryptography>=46.0.6",
+    "cryptography>=50.0.0",  # CVE-2026-69247 (HIGH) is fixed in 50.0.0.
     "pyjwt[crypto]>=2.10.1",
     "fastembed>=0.7.4",
     "agentbox-client",
