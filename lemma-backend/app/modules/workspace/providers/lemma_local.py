@@ -331,7 +331,12 @@ class LemmaLocalSandboxProvider:
         for entry in entries:
             if not isinstance(entry, dict):
                 continue
-            guest_id = entry.get("sandbox_id")
+            guest_id = _guest_id_of(entry)
+            if guest_id is None:
+                # Without an id there is nothing the sweeper could act on, and
+                # a placeholder would be worse than an omission: destroy()
+                # would silently no-op on it forever.
+                continue
             metadata = entry.get("metadata")
             metadata = metadata if isinstance(metadata, dict) else {}
             raw_id = metadata.get("lemma-sandbox-id")
@@ -341,14 +346,14 @@ class LemmaLocalSandboxProvider:
                     sandbox_id = UUID(raw_id)
                 except ValueError:
                     sandbox_id = None
-            if sandbox_id is None and isinstance(guest_id, str):
+            if sandbox_id is None:
                 # Pre-consolidation guests carry no metadata, but their id is
                 # `{w|f}-{hex}` and that is enough to identify the owner.
                 sandbox_id = _sandbox_id_from_guest_id(guest_id)
             found.append(
                 ProviderObject(
-                    provider_id=str(guest_id),
-                    name=str(guest_id),
+                    provider_id=guest_id,
+                    name=guest_id,
                     sandbox_id=sandbox_id,
                     # The guest reuses one sandbox across epochs, so an epoch
                     # here would only ever be the current one.
@@ -707,6 +712,26 @@ def _is_running(snapshot: dict[str, Any]) -> bool:
         state = status.get("state") or status.get("status")
         return str(state).lower() in {"running", "ready"}
     return str(snapshot.get("state", "")).lower() in {"running", "ready"}
+
+
+def _guest_id_of(entry: dict[str, Any]) -> str | None:
+    """The guest id of one `sandbox.list` entry.
+
+    A list entry wraps the snapshot: the id lives at ``status.id``, while
+    ``sandbox.status`` returns that snapshot unwrapped. Both shapes are read
+    here so a caller never has to know which call produced the dict.
+    """
+
+    status = entry.get("status")
+    if isinstance(status, dict):
+        nested = status.get("id")
+        if isinstance(nested, str) and nested:
+            return nested
+    for key in ("sandbox_id", "id"):
+        value = entry.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return None
 
 
 def _sandbox_id_from_guest_id(guest_id: str) -> UUID | None:

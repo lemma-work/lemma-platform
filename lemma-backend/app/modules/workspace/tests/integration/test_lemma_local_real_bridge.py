@@ -13,6 +13,11 @@ guest itself.
 
 Build the bridge with:
     cargo build --release --manifest-path local-runtime/hostctl/Cargo.toml
+
+A stub is not the guest, and the difference has already cost one bug: this
+file's fake agreed with the provider that `sandbox.list` returns a top-level
+`sandbox_id`, when the real guest nests it at `status.id`. To drive an actual
+VM by hand -- which is how that was caught -- see `docs/local-runtime-vm.md`.
 """
 
 from __future__ import annotations

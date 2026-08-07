@@ -50,7 +50,7 @@ def _bridge(tmp_path: Path, script: str) -> Path:
 
 
 _RECORDING_BRIDGE = '''
-import json, os, sys
+import hashlib, json, os, sys
 state_path = os.environ["BRIDGE_STATE"]
 state = json.load(open(state_path)) if os.path.exists(state_path) else {"sandboxes": {}, "calls": []}
 request = json.loads(sys.stdin.read())
@@ -100,8 +100,17 @@ if op == "sandbox.delete":
 if op == "sandbox.purge_storage":
     ok({})
 if op == "sandbox.list":
+    # Shaped exactly like the real guest: a list entry wraps the snapshot, so
+    # the guest id is at status.id and provider_id is the container hash. An
+    # earlier version of this fake invented a top-level "sandbox_id", which
+    # agreed with a provider bug and hid it until a real VM was driven.
     ok({"sandboxes": [
-        {"sandbox_id": k, "metadata": v["metadata"], "status": {"state": v["state"]}}
+        {
+            "provider_id": hashlib.sha256(k.encode()).hexdigest(),
+            "image": "ghcr.io/example/image@sha256:" + "d" * 64,
+            "metadata": v["metadata"],
+            "status": {"id": k, "status": v["state"], "ready": v["state"] == "running"},
+        }
         for k, v in state["sandboxes"].items()
     ]})
 fail("unsupported", "unknown operation: " + op, retryable=False)
@@ -352,6 +361,12 @@ async def test_the_sweep_identifies_its_own_sandboxes(
 
     assert [obj.sandbox_id for obj in objects] == [sandbox_id]
     assert objects[0].legacy is False
+    # The name is what the sweeper hands back to destroy(), so a listing that
+    # identifies the owner but not the object is useless: destroy() would parse
+    # nothing out of it and silently no-op, leaking the sandbox forever.
+    assert objects[0].name == f"w-{sandbox_id.hex}"
+    assert objects[0].provider_id == objects[0].name
+    assert objects[0].running is True
 
 
 async def test_a_pre_consolidation_guest_sandbox_is_still_identifiable(
