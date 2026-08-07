@@ -41,6 +41,17 @@ class PlatformCapabilities:
     formatting_style: str  # one-line human guidance, used verbatim in the fragment
     soft_char_limit: int  # rough per-message length budget for guidance
     reply_tool: str | None = None  # email reply tool name (gmail/outlook); None for chat
+    # Can the pod address someone who has never written to us first? Data, not a
+    # rule in prose that every new call site has to remember. Chat bots cannot:
+    # a Slack/Telegram/WhatsApp bot needs a prior interaction before it may DM.
+    # Email genuinely can — it is the only reason an unreachable colleague still
+    # gets told anything.
+    can_cold_open: bool = False
+    # Hours after the person's last inbound message during which free-form
+    # replies are allowed. WhatsApp's 24h customer-service rule is real: past it
+    # a send is refused unless it is a pre-approved template. None means no
+    # window (every other platform).
+    reply_window_hours: int | None = None
 
     @property
     def attachment_byte_cap(self) -> int:
@@ -119,6 +130,10 @@ PLATFORM_CAPABILITIES: dict[str, PlatformCapabilities] = {
         markdown_mode="whatsapp",
         formatting_style=_WHATSAPP_FORMATTING,
         soft_char_limit=1500,
+        # Meta closes free-form messaging 24h after the person's last message.
+        # A notification past that window needs an approved template, which we
+        # do not have, so delivery falls through to the next channel.
+        reply_window_hours=24,
     ),
     "TELEGRAM": PlatformCapabilities(
         platform="TELEGRAM",
@@ -145,6 +160,7 @@ PLATFORM_CAPABILITIES: dict[str, PlatformCapabilities] = {
         formatting_style=_EMAIL_FORMATTING,
         soft_char_limit=6000,
         reply_tool="gmail_reply_email",
+        can_cold_open=True,
     ),
     "OUTLOOK": PlatformCapabilities(
         platform="OUTLOOK",
@@ -157,6 +173,7 @@ PLATFORM_CAPABILITIES: dict[str, PlatformCapabilities] = {
         formatting_style=_EMAIL_FORMATTING,
         soft_char_limit=6000,
         reply_tool="outlook_reply_email",
+        can_cold_open=True,
     ),
     "RESEND": PlatformCapabilities(
         platform="RESEND",
@@ -169,6 +186,7 @@ PLATFORM_CAPABILITIES: dict[str, PlatformCapabilities] = {
         formatting_style=_EMAIL_FORMATTING,
         soft_char_limit=6000,
         reply_tool="resend_reply_email",
+        can_cold_open=True,
     ),
 }
 

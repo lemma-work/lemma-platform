@@ -17,6 +17,7 @@ import {
     X,
 } from '@/components/ui/icons';
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
+import { NotificationsBell } from '@/components/notifications/notifications-bell';
 import { POD_DEFAULT_AGENT_SELECTOR } from 'lemma-sdk';
 
 import { useAIAssistant } from '@/components/ai/ai-assistant-context';
@@ -549,6 +550,10 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
                         <Search className="h-4 w-4" strokeWidth={1.8} />
                     </button>
                 ) : null}
+                {/* Beside filter and collapse rather than in the nav list: this
+                    is something that arrives on its own and wants a count, which
+                    a navigation row cannot carry. */}
+                <NotificationsBell podId={podId} />
                 {onCollapse ? (
                     <button
                         type="button"

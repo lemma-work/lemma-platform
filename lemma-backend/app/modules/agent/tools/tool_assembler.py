@@ -67,6 +67,12 @@ class RunToolAssembler:
             # would sit waiting on a child that is deliberately asleep. Same
             # depth=1 rule, same reason.
             toolset_names = [t for t in toolset_names if t != AgentToolset.SNOOZE]
+            # Messaging is withheld for a different reason: a sub-agent is an
+            # implementation detail of its parent's turn, and a colleague
+            # receiving a message from one has no way to place it. Whatever needs
+            # saying, the parent should say — it is the thing with the context and
+            # the attribution.
+            toolset_names = [t for t in toolset_names if t != AgentToolset.MESSAGING]
         toolsets: list[object] = list(resolve_agent_toolsets(toolset_names))
         # TODO is conversation-scoped (its list lives in conversation metadata), so
         # it isn't a static singleton in the registry — build it per conversation

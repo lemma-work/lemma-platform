@@ -1,0 +1,191 @@
+"""Messaging toolset: reach a person who is not in this conversation.
+
+The distinction that matters, and the one the docstrings spend their words on:
+
+  ``ask_user``      pauses this turn and resumes it with the answer — but only
+                    for the person already here, on the surface already in use.
+  ``message_user``  reaches somebody else and returns immediately. Nothing
+                    pauses. Their reply is handled by *their* agent, in *their*
+                    thread, under *their* permissions, guided by the
+                    ``background_instruction`` you write.
+
+Because nothing pauses, an agent that needs answers fires all its messages, then
+``snooze``s once for a realistic interval, then calls ``check_messages``. That
+loop only works if the model understands the tool does not block, which is why
+the docstring says so three different ways.
+"""
+
+from __future__ import annotations
+
+from pydantic_ai.tools import RunContext
+from pydantic_ai.toolsets import FunctionToolset
+
+from app.composition.agent_notifications import (
+    check_notifications,
+    resolve_recipient,
+    send_notification,
+)
+from app.core.log.log import get_logger
+from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.tools.messaging.models import (
+    MAX_TITLE_LENGTH,
+    CheckMessagesRequest,
+    CheckMessagesResponse,
+    MessageUserRequest,
+    MessageUserResponse,
+    NotificationStatusReport,
+)
+
+logger = get_logger(__name__)
+
+MESSAGE_USER_TOOL_NAME = "message_user"
+
+
+def _title_for(request: MessageUserRequest) -> str:
+    if request.title:
+        return request.title.strip()
+    first_line = request.message.strip().splitlines()[0]
+    if len(first_line) <= MAX_TITLE_LENGTH:
+        return first_line
+    return first_line[: MAX_TITLE_LENGTH - 1].rstrip() + "…"
+
+
+async def message_user(
+    ctx: RunContext[BaseAgentContext], request: MessageUserRequest
+) -> MessageUserResponse:
+    """Message a pod member who is not in this conversation.
+
+    Reaches them on the chat app they last used, or by email, and always leaves
+    a copy in their Lemma inbox.
+
+    It does **not** pause your turn, and their reply never comes back as a tool
+    result. To get an answer: send every message you need, give each a
+    `background_instruction`, `snooze` once for as long as a person realistically
+    takes, then `check_messages`.
+
+    To answer the person you are already talking to, just reply — don't use this.
+    """
+    deps = ctx.deps
+
+    if deps.pod_id is None:
+        return MessageUserResponse(
+            success=False, error="message_user is only available inside a pod."
+        )
+
+    recipient_user_id = await resolve_recipient(
+        pod_id=deps.pod_id, reference=request.to
+    )
+    if recipient_user_id is None:
+        return MessageUserResponse(
+            success=False,
+            error=(
+                f"No member of this pod matches '{request.to}'. Use their pod "
+                "member id, user id, or email address."
+            ),
+        )
+
+    # No further permission check. Holding this toolset IS the grant to contact
+    # colleagues — it is opt-in, withheld from sub-agents, and every message
+    # names the human whose authority the run carries. Reaching the run's own
+    # owner needs nothing at all: the run already carries their delegated
+    # authority. Pod membership is enforced below, in the service, fail-closed.
+
+    # Not wrapped in a try: GracefulToolset already turns a raising tool body
+    # into an error result the model can read, and catching here as well would
+    # bury a bug in our own code as "the send failed".
+    result = await send_notification(
+        pod_id=deps.pod_id,
+        recipient_user_id=recipient_user_id,
+        title=_title_for(request),
+        body=request.message,
+        actor_user_id=deps.user_id,
+        actor_agent_id=deps.workload_id,
+        agent_name=deps.agent_display_name,
+        origin_conversation_id=deps.conversation_id,
+        origin_agent_run_id=deps.agent_run_id,
+        background_instruction=request.background_instruction,
+        expects_response=request.expects_response,
+        expires_in_seconds=request.expires_in_seconds,
+            # A retried worker job replays this exact tool call. Without a key it
+            # posts the message twice, and there is no outbound dedup store to
+            # catch it.
+        idempotency_key=(
+            f"run:{deps.agent_run_id}:{ctx.tool_call_id}"
+            if deps.agent_run_id and ctx.tool_call_id
+            else None
+        ),
+    )
+
+    delivery_status = result["delivery_status"]
+    if delivery_status == "DELIVERED":
+        message = (
+            f"Sent on {result['delivered_via']}. They have not answered yet — "
+            "check with check_messages after giving them time."
+        )
+    elif delivery_status == "UNDELIVERABLE":
+        message = (
+            "No chat app or mailbox could carry this, so it is in their Lemma "
+            f"inbox only. {result['undeliverable_reason'] or ''}".strip()
+        )
+    else:
+        message = (
+            "Delivery failed, but the notification exists and is in their Lemma "
+            f"inbox. {result['undeliverable_reason'] or ''}".strip()
+        )
+
+    return MessageUserResponse(
+        success=True,
+        notification_id=result["notification_id"],
+        delivery_status=delivery_status,
+        delivered_via=result["delivered_via"],
+        undeliverable_reason=result["undeliverable_reason"],
+        message=message,
+    )
+
+
+async def check_messages(
+    ctx: RunContext[BaseAgentContext], request: CheckMessagesRequest
+) -> CheckMessagesResponse:
+    """Check whether the people you messaged have answered.
+
+    Call it after a `snooze`, not in a loop — each call replays this whole
+    conversation. `RESPONDED` is the only status that means somebody answered.
+
+    If some are still OPEN after you have genuinely waited, say who has not
+    answered and finish with what you have.
+    """
+    deps = ctx.deps
+    if deps.pod_id is None:
+        return CheckMessagesResponse(
+            success=False, error="check_messages is only available inside a pod."
+        )
+    if not request.notification_ids:
+        return CheckMessagesResponse(
+            success=False, error="Give at least one notification id."
+        )
+
+    reports = await check_notifications(
+        pod_id=deps.pod_id, notification_ids=request.notification_ids
+    )
+    messages = [NotificationStatusReport(**report) for report in reports]
+    pending = sum(1 for report in messages if report.status == "OPEN")
+    answered = sum(1 for report in messages if report.status == "RESPONDED")
+
+    missing = len(request.notification_ids) - len(messages)
+    note = f" {missing} id(s) matched nothing in this pod." if missing > 0 else ""
+
+    return CheckMessagesResponse(
+        success=True,
+        messages=messages,
+        pending=pending,
+        message=(
+            f"{answered} answered, {pending} still waiting.{note}"
+            if messages
+            else f"No matching notifications.{note}"
+        ),
+    )
+
+
+messaging_toolset = FunctionToolset[BaseAgentContext](
+    tools=[message_user, check_messages]
+)

@@ -52,7 +52,13 @@ name** everywhere (`slack`, `gmail`, …) — there is no separate surface id to
   system bot).
 - **`config`** — user-editable behavior: `dm_conversation_reset_after_hours`
   (default 24 — don't let one DM thread accumulate forever), `identity`
-  (allow-list of senders), and `channels` (Slack/Teams channel→agent routes).
+  (allow-list of senders), `channels` (Slack/Teams channel→agent routes), and
+  `send_policy.allow_send` (exposes this surface's own current-conversation
+  `surface_send_message` tool).
+- **`send_policy` does not gate reaching other pod members.** That capability is
+  granted per *agent*, by giving it the `MESSAGING` toolset — see `agents.md`.
+  A surface setting would be a second gate an editor had to find before a grant
+  they had already made took effect.
 - **`default_agent_name`** — the pod agent that answers. Per-channel routing can
   send specific channels to other agents.
 

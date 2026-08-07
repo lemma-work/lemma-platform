@@ -18,12 +18,24 @@ from app.modules.agent_surfaces.infrastructure.adapters.account_binding import (
 from app.modules.agent_surfaces.infrastructure.adapters.routing_resolution_adapter import (
     SqlAlchemySurfaceRoutingResolutionAdapter,
 )
+from app.modules.agent_surfaces.infrastructure.repositories.external_user_repository import (
+    ExternalSurfaceUserRepository,
+)
+from app.modules.agent_surfaces.infrastructure.repositories.notification_repository import (
+    NotificationRepository,
+)
 from app.modules.agent_surfaces.infrastructure.repositories.surface_repository import (
     SurfaceConversationLinkRepository,
     SurfaceRepository,
 )
 from app.modules.agent_surfaces.services.ingress_service import (
     AgentSurfaceIngressService,
+)
+from app.modules.agent_surfaces.services.notification_rate_limiter import (
+    NotificationRateLimiter,
+)
+from app.modules.agent_surfaces.services.notification_service import (
+    NotificationService,
 )
 from app.modules.agent_surfaces.services.webhook_security_service import (
     SurfaceWebhookSecurityService,
@@ -82,6 +94,23 @@ def get_surface_event_handler(
     )
 
 
+def get_notification_service(
+    uow: UoWDep,
+    conversation_service: ConversationServiceDep,
+) -> NotificationService:
+    return NotificationService(
+        uow=uow,
+        notification_repository=NotificationRepository(uow),
+        surface_repository=surface_repository_factory(uow),
+        conversation_link_repository=SurfaceConversationLinkRepository(uow),
+        external_user_repository=ExternalSurfaceUserRepository(uow),
+        conversation_service=conversation_service,
+        ingress_service=get_surface_event_handler(uow, conversation_service),
+        pod_membership_port=SqlAlchemySurfaceRoutingResolutionAdapter(uow),
+        rate_limiter=NotificationRateLimiter(),
+    )
+
+
 def get_surface_webhook_security_service(
     uow: UoWDep,
 ) -> SurfaceWebhookSecurityService:
@@ -119,4 +148,7 @@ SurfaceWebhookSecurityServiceDep = Annotated[
 ]
 TelegramManagerServiceDep = Annotated[
     TelegramManagerService, Depends(get_telegram_manager_service)
+]
+NotificationServiceDep = Annotated[
+    NotificationService, Depends(get_notification_service)
 ]

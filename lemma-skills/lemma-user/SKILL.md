@@ -231,6 +231,23 @@ suspended itself and wakes on its own within 24 hours. A snoozed conversation is
 healthy and needs nothing from you. Conversation status carries `wait_reason`
 (`HUMAN` or `SNOOZE`) and, when snoozed, `wakes_at`.
 
+A **notification** is the third thing, and unlike the other two it comes looking for
+you: an agent or a workflow has asked *you* for something. They arrive wherever you
+already talk to the pod — Slack, Telegram, WhatsApp, email — and always leave a copy
+in your Lemma inbox, so nothing is only on a channel that can fail.
+
+Each carries two independent states, and reading them as one is the usual mistake.
+`status` is about you: `OPEN` (still owed), `RESPONDED`, `ACKNOWLEDGED`, `EXPIRED`
+(nobody answered in 72h), `CANCELLED`. `delivery_status` is about the channel:
+`DELIVERED`, or `UNDELIVERABLE` when no chat app or mailbox could carry it —
+usually because you have never messaged the pod's bot. `UNDELIVERABLE` is not a
+failure; the notification exists and the inbox has it.
+
+Answer it in the app, or just reply on the surface it arrived on — the agent handling
+that thread records your answer either way, and the asker sees the same result. A
+notification with `responds_through_action` is a workflow form: it is answered by
+`runs submit-form`, which validates against the node's schema, not by free text.
+
 ## Agents and chat
 
 ```bash

@@ -104,6 +104,40 @@ class AgentSurfaceCredentialError(AgentSurfaceError):
         )
 
 
+class NotificationNotFoundError(AgentSurfaceError):
+    def __init__(self, notification_id: str):
+        super().__init__(
+            message=f"Notification '{notification_id}' not found",
+            code="NOTIFICATION_NOT_FOUND",
+            status_code=404,
+        )
+
+
+class NotificationTransitionError(AgentSurfaceError):
+    """An illegal move on a notification's lifecycle.
+
+    A notification owns the ask from the moment it is created until it resolves,
+    so *it* decides which transitions are legal — not the controller, not the
+    tool, not the surface adapter. Every one of them ends up here, and every one
+    of them is a 409: the request was well-formed, the row is simply not in a
+    state where it can be honoured.
+
+    ``details`` carries the current status so a caller (or a UI that raced
+    another tab) can re-render without a second round trip.
+    """
+
+    def __init__(self, message: str, *, notification_id: UUID, status: str):
+        super().__init__(
+            message=message,
+            code="NOTIFICATION_INVALID_TRANSITION",
+            status_code=409,
+        )
+        self.details = {
+            "notification_id": str(notification_id),
+            "status": status,
+        }
+
+
 class TelegramManagerNotConfiguredError(AgentSurfaceError):
     def __init__(self):
         super().__init__(

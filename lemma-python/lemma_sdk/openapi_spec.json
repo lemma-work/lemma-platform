@@ -2409,6 +2409,7 @@
           "TODO",
           "CONNECTORS",
           "SNOOZE",
+          "MESSAGING",
           "VIEW_IMAGE"
         ],
         "title": "AgentToolset",
@@ -8519,6 +8520,400 @@
           "message"
         ],
         "title": "MessageResponseSchema",
+        "type": "object"
+      },
+      "NotificationDeliveryStatus": {
+        "description": "Where the *channel* is: did the message physically get to them?\n\nDeliberately a second column rather than more members on\n:class:`NotificationStatus`. The two axes are independent \u2014 a notification\ncan be DELIVERED and still OPEN (they haven't answered), or UNDELIVERABLE\nand still RESPONDED (they saw it in the app and replied there). Smearing\nthem into one enum is how you end up unable to answer \"who did we fail to\nreach?\", which is the only question this column exists for.",
+        "enum": [
+          "PENDING",
+          "DELIVERED",
+          "UNDELIVERABLE",
+          "FAILED"
+        ],
+        "title": "NotificationDeliveryStatus",
+        "type": "string"
+      },
+      "NotificationListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/NotificationResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "limit": {
+            "title": "Limit",
+            "type": "integer"
+          },
+          "next_page_token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Page Token"
+          }
+        },
+        "required": [
+          "limit"
+        ],
+        "title": "NotificationListResponse",
+        "type": "object"
+      },
+      "NotificationOriginKind": {
+        "description": "What produced the notification. ``origin_id`` is read against this.",
+        "enum": [
+          "AGENT_RUN",
+          "WORKFLOW_FORM",
+          "SCHEDULE",
+          "API"
+        ],
+        "title": "NotificationOriginKind",
+        "type": "string"
+      },
+      "NotificationRespondRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional structured payload alongside the answer.",
+            "title": "Data"
+          },
+          "summary": {
+            "description": "The answer, in the person's words.",
+            "minLength": 1,
+            "title": "Summary",
+            "type": "string"
+          }
+        },
+        "required": [
+          "summary"
+        ],
+        "title": "NotificationRespondRequest",
+        "type": "object"
+      },
+      "NotificationResponse": {
+        "description": "One notification, shaped for the inbox that renders it.\n\nCarries enough to draw the row *and* decide what its action button does,\nwithout a second request: ``awaiting_response`` says whether to draw one at\nall, and ``responds_through_action`` says whether it opens a text box or the\nreal form described by ``action``.",
+        "properties": {
+          "action": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Action"
+          },
+          "actor_agent_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actor Agent Id"
+          },
+          "actor_user_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actor User Id"
+          },
+          "awaiting_response": {
+            "title": "Awaiting Response",
+            "type": "boolean"
+          },
+          "body": {
+            "title": "Body",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "delivered_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Delivered At"
+          },
+          "delivery_conversation_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Delivery Conversation Id"
+          },
+          "delivery_platform": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Delivery Platform"
+          },
+          "delivery_status": {
+            "$ref": "#/components/schemas/NotificationDeliveryStatus"
+          },
+          "expects_response": {
+            "title": "Expects Response",
+            "type": "boolean"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "origin_conversation_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Origin Conversation Id"
+          },
+          "origin_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Origin Id"
+          },
+          "origin_kind": {
+            "$ref": "#/components/schemas/NotificationOriginKind"
+          },
+          "pod_id": {
+            "format": "uuid",
+            "title": "Pod Id",
+            "type": "string"
+          },
+          "read_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Read At"
+          },
+          "responded_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Responded At"
+          },
+          "responds_through_action": {
+            "title": "Responds Through Action",
+            "type": "boolean"
+          },
+          "response_data": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Response Data"
+          },
+          "response_summary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Response Summary"
+          },
+          "status": {
+            "$ref": "#/components/schemas/NotificationStatus"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "undeliverable_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Undeliverable Reason"
+          }
+        },
+        "required": [
+          "id",
+          "pod_id",
+          "title",
+          "body",
+          "origin_kind",
+          "status",
+          "delivery_status",
+          "expects_response",
+          "awaiting_response",
+          "responds_through_action",
+          "created_at"
+        ],
+        "title": "NotificationResponse",
+        "type": "object"
+      },
+      "NotificationStatus": {
+        "description": "Where the *person* is: has the thing we needed from them happened?",
+        "enum": [
+          "OPEN",
+          "RESPONDED",
+          "ACKNOWLEDGED",
+          "EXPIRED",
+          "CANCELLED"
+        ],
+        "title": "NotificationStatus",
+        "type": "string"
+      },
+      "NotificationUnreadCountResponse": {
+        "properties": {
+          "unread": {
+            "title": "Unread",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "unread"
+        ],
+        "title": "NotificationUnreadCountResponse",
+        "type": "object"
+      },
+      "NotifyMemberRequest": {
+        "additionalProperties": false,
+        "description": "Send a notification to one pod member.",
+        "properties": {
+          "background_instruction": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Never shown to the recipient. Tells the agent that handles their reply what to do with it.",
+            "title": "Background Instruction"
+          },
+          "body": {
+            "minLength": 1,
+            "title": "Body",
+            "type": "string"
+          },
+          "expects_response": {
+            "default": true,
+            "title": "Expects Response",
+            "type": "boolean"
+          },
+          "expires_in_seconds": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires In Seconds"
+          },
+          "recipient": {
+            "description": "Pod member id, user id, or email address of the recipient.",
+            "title": "Recipient",
+            "type": "string"
+          },
+          "title": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "recipient",
+          "title",
+          "body"
+        ],
+        "title": "NotifyMemberRequest",
         "type": "object"
       },
       "OAuth2DefaultsResponseSchema": {
@@ -27212,6 +27607,472 @@
           "resource": "pod.member",
           "result": "entity",
           "verb": "update_roles"
+        }
+      }
+    },
+    "/pods/{pod_id}/notifications": {
+      "get": {
+        "description": "Notifications addressed to the current user in this pod, newest first. Filter with `status` (repeatable). Each item carries everything needed to render its action: `awaiting_response` decides whether to offer one, and `responds_through_action` decides whether it is a free-text reply or the form described by `action`.",
+        "operationId": "notification.list",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "items": {
+                    "$ref": "#/components/schemas/NotificationStatus"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page_token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Page Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List My Notifications",
+        "tags": [
+          "notifications"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": true,
+          "resource": "notification",
+          "result": "collection",
+          "verb": "list"
+        }
+      },
+      "post": {
+        "description": "Reach a pod member on whichever surface they actually use, leaving a copy in their Lemma inbox either way.\n\nGated on `conversation.write` rather than an editor permission: this opens a conversation and writes a message into it, which is exactly that grant. Requiring `agent.update` is what left the older `surface.send` endpoint with no caller in the product.\n\nA 201 with `delivery_status` of `UNDELIVERABLE` is a success, not a failure \u2014 the notification exists and the inbox has it. Read `undeliverable_reason` to tell the user what to do about it.",
+        "operationId": "notification.send",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NotifyMemberRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Notify A Pod Member",
+        "tags": [
+          "notifications"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "notification"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "notification",
+          "result": "entity",
+          "verb": "send"
+        }
+      }
+    },
+    "/pods/{pod_id}/notifications/read-all": {
+      "post": {
+        "description": "Returns the remaining unread count, which is always zero.",
+        "operationId": "notification.mark_all_read",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationUnreadCountResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Mark All My Notifications Read",
+        "tags": [
+          "notifications"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "notification"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "notification",
+          "result": "entity",
+          "verb": "mark_all_read"
+        }
+      }
+    },
+    "/pods/{pod_id}/notifications/unread-count": {
+      "get": {
+        "description": "Unread, not unanswered. A notification you have read but not yet acted on has stopped being new.",
+        "operationId": "notification.unread_count",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationUnreadCountResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Count My Unread Notifications",
+        "tags": [
+          "notifications"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "notification",
+          "result": "entity",
+          "verb": "unread_count"
+        }
+      }
+    },
+    "/pods/{pod_id}/notifications/{notification_id}/acknowledge": {
+      "post": {
+        "description": "Dismiss a notification that asked for nothing. Returns 409 when a response is owed \u2014 dismissing a question is not answering it.",
+        "operationId": "notification.acknowledge",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "notification_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Notification Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Acknowledge A Notification",
+        "tags": [
+          "notifications"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "notification"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "notification",
+          "result": "entity",
+          "verb": "acknowledge"
+        }
+      }
+    },
+    "/pods/{pod_id}/notifications/{notification_id}/read": {
+      "post": {
+        "operationId": "notification.mark_read",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "notification_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Notification Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Mark Notification Read",
+        "tags": [
+          "notifications"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "notification"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "notification",
+          "result": "entity",
+          "verb": "mark_read"
+        }
+      }
+    },
+    "/pods/{pod_id}/notifications/{notification_id}/respond": {
+      "post": {
+        "description": "Answer a notification from the app. Produces the same `RESPONDED` an agent-mediated reply on a chat surface produces, so the asking run sees it either way.\n\nReturns 409 when the notification is answered by completing its `action` instead \u2014 a workflow form is submitted through the workflow run endpoint, where it is validated against the node's schema. It also returns 409 if somebody already answered it, rather than overwriting an answer that may already have been acted on.",
+        "operationId": "notification.respond",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "notification_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Notification Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NotificationRespondRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Respond To A Notification",
+        "tags": [
+          "notifications"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "notification"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "notification",
+          "result": "entity",
+          "verb": "respond"
         }
       }
     },
