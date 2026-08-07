@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
@@ -406,9 +407,15 @@ class SurfaceConversationLinkRepository:
     ) -> AgentSurfaceConversationLink | None:
         """The member's most recent thread on a surface.
 
-        ``surface.send`` reuses this existing thread (and its valid reply
-        target) to reach a member proactively — bots can't cold-DM, so a prior
-        interaction is required.
+        ``surface.send`` and notification delivery reuse this existing thread
+        (and its valid reply target) to reach a member proactively — bots can't
+        cold-DM, so a prior interaction is required.
+
+        Ordered by inbound recency, not ``updated_at``: an outbound message also
+        bumps ``updated_at``, so ranking by it would mean "the thread we last
+        talked *at* them on" rather than "the thread they last talked to us on".
+        Only the second is evidence of where they are actually looking. COALESCE
+        keeps pre-migration rows, where the two were the same thing, in the sort.
         """
         stmt = (
             select(AgentSurfaceConversationLinkModel)
@@ -416,7 +423,12 @@ class SurfaceConversationLinkRepository:
                 AgentSurfaceConversationLinkModel.surface_id == surface_id,
                 AgentSurfaceConversationLinkModel.external_user_id == external_user_id,
             )
-            .order_by(AgentSurfaceConversationLinkModel.updated_at.desc())
+            .order_by(
+                func.coalesce(
+                    AgentSurfaceConversationLinkModel.last_inbound_at,
+                    AgentSurfaceConversationLinkModel.updated_at,
+                ).desc()
+            )
             .limit(1)
         )
         result = await self.session.execute(stmt)
@@ -456,6 +468,7 @@ class SurfaceConversationLinkRepository:
             route_key=link.route_key,
             last_event=link.last_event,
             last_message_id=link.last_message_id,
+            last_inbound_at=link.last_inbound_at,
         )
         self.session.add(model)
         await self.session.flush()
@@ -473,6 +486,39 @@ class SurfaceConversationLinkRepository:
             return None
         model.last_event = last_event
         model.last_message_id = last_message_id
+        # Unconditional: this method exists to record an inbound event, and its
+        # only caller is the ingress path. An outbound send that needs to repoint
+        # a link uses ``repoint_conversation_for_outbound`` precisely so it can
+        # never land here and fake inbound activity.
+        model.last_inbound_at = datetime.now(timezone.utc)
+        await self.session.flush()
+        return model.to_entity()
+
+    async def repoint_conversation_for_outbound(
+        self,
+        *,
+        link_id: UUID,
+        conversation_id: UUID,
+        expected_conversation_id: UUID,
+    ) -> AgentSurfaceConversationLink | None:
+        """Point a thread at a newly opened conversation, without faking inbound.
+
+        Used when a notification opens a fresh conversation on a cold thread.
+        Deliberately narrow next to ``update_conversation``: it leaves
+        ``last_event``, ``last_message_id`` and ``last_inbound_at`` untouched, so
+        the surface still knows when the person last spoke and the DM reset rule
+        still works.
+
+        Compare-and-set on ``expected_conversation_id``: an inbound arriving
+        between our read and this write has already repointed the link, and
+        stealing it back would split one thread across two conversations. Losing
+        that race returns None and the caller delivers into the conversation the
+        inbound created.
+        """
+        model = await self.session.get(AgentSurfaceConversationLinkModel, link_id)
+        if model is None or model.conversation_id != expected_conversation_id:
+            return None
+        model.conversation_id = conversation_id
         await self.session.flush()
         return model.to_entity()
 
@@ -497,5 +543,7 @@ class SurfaceConversationLinkRepository:
         if conversation_kind is not None:
             model.conversation_kind = conversation_kind
         model.route_key = route_key
+        # See ``update_last_event``: this is an inbound writer.
+        model.last_inbound_at = datetime.now(timezone.utc)
         await self.session.flush()
         return model.to_entity()

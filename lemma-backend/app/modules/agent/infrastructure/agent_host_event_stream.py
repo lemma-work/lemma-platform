@@ -57,6 +57,82 @@ _STREAM_TTL_SECONDS = 24 * 60 * 60
 
 _START_ID = "0-0"
 
+# The sequence is written as its own stream field as well as inside the payload
+# so the append script can read it without decoding JSON. Entries from a build
+# that predates it are still readable: the script falls back to the payload.
+_SEQUENCE_FIELD = "sequence"
+
+# Append is one atomic read-modify-write, because the watermark it appends
+# against lives in the stream it is appending to.
+#
+# The alternative -- read the watermark, decide in Python, then append -- is
+# only safe while something else serializes concurrent batches for a run, and
+# what used to serialize them was a PostgreSQL row lock on the lease, held
+# across both of these Redis calls. That put a lock and a pooled database
+# connection behind a network round trip with a 15s socket timeout, on the one
+# path whose whole point is that it writes no rows. Redis executes a script
+# atomically, so the ordering guarantee lives with the data it is about.
+#
+# Returns {status, watermark, expected, got, resynced_from}: status 0 appended
+# (or deduped), status 1 found a gap and appended nothing. ``resynced_from`` is
+# the sequence a lost stream restarted at, or 0.
+_APPEND_SCRIPT = """
+local key = KEYS[1]
+local ttl = tonumber(ARGV[1])
+
+local last = 0
+local newest = redis.call('XREVRANGE', key, '+', '-', 'COUNT', 1)
+if #newest > 0 then
+  local fields = newest[1][2]
+  for index = 1, #fields, 2 do
+    if fields[index] == 'sequence' then
+      last = tonumber(fields[index + 1]) or 0
+    elseif fields[index] == 'event' and last == 0 then
+      -- Only entries from a build predating the sequence field reach here, and
+      -- an unreadable one must not abort the append: a script error would let a
+      -- single poison entry stall the run's whole feed. Unreadable reads as 0,
+      -- which is the lost-stream path -- exactly what the Python reader did.
+      local ok, decoded = pcall(cjson.decode, fields[index + 1])
+      if ok and type(decoded) == 'table' then
+        last = tonumber(decoded['sequence']) or 0
+      end
+    end
+  end
+end
+
+-- An empty stream means a lost stream, not a run that has emitted nothing:
+-- the host drops each event once we ack it, so its oldest surviving event is
+-- far above 1. Demanding 1 here would reject everything it has left, forever.
+local stream_was_lost = (last == 0)
+local expected = last + 1
+local appended = 0
+local resynced_from = 0
+
+for index = 2, #ARGV, 2 do
+  local sequence = tonumber(ARGV[index])
+  local payload = ARGV[index + 1]
+  -- A resend after a lost acknowledgement replays what we already hold.
+  if sequence >= expected then
+    if sequence ~= expected then
+      if stream_was_lost and appended == 0 then
+        expected = sequence
+        resynced_from = sequence
+      else
+        return {1, last, expected, sequence, 0}
+      end
+    end
+    redis.call('XADD', key, '*', 'sequence', sequence, 'event', payload)
+    appended = appended + 1
+    expected = expected + 1
+  end
+end
+
+if appended > 0 then
+  redis.call('EXPIRE', key, ttl)
+end
+return {0, expected - 1, 0, 0, resynced_from}
+"""
+
 # Every command on this client is bounded so a black-holed Redis cannot hang a
 # caller indefinitely. ``append_events`` runs its stream calls while holding a
 # row lock on the lease, so an unbounded wait there pins a PostgreSQL lock for
@@ -69,6 +145,20 @@ _MAX_BLOCK_MS = 5_000
 
 def run_events_stream_key(run_id: UUID) -> str:
     return f"agent-host:run:{run_id}:events"
+
+
+@dataclass(frozen=True, slots=True)
+class AppendOutcome:
+    """What one append decided.
+
+    ``gap`` is ``(expected, got)`` when the batch could not be applied because
+    it skipped a sequence the stream never saw — real loss in flight, as
+    opposed to a resend of events already held, which is deduplicated silently.
+    """
+
+    watermark: int
+    gap: tuple[int, int] | None = None
+    resynced_from: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -122,17 +212,35 @@ class AgentHostEventStream:
         *,
         run_id: UUID,
         events: list[JsonObject],
-    ) -> None:
-        """Append events in order. Callers pass already-validated payloads."""
+    ) -> "AppendOutcome":
+        """Append a contiguous batch against the stream's own watermark.
+
+        Deduplication, gap detection and the lost-stream resync all happen
+        inside one atomic script, so two batches racing for the same run cannot
+        interleave and no caller has to hold a lock to make that true.
+        """
         if not events:
-            return
+            return AppendOutcome(watermark=await self.last_sequence(run_id=run_id))
         redis = self._client()
-        key = run_events_stream_key(run_id)
-        async with redis.pipeline(transaction=False) as pipe:
-            for event in events:
-                pipe.xadd(key, {_PAYLOAD_FIELD: json.dumps(event)})
-            pipe.expire(key, _STREAM_TTL_SECONDS)
-            await pipe.execute()
+        arguments: list[object] = [_STREAM_TTL_SECONDS]
+        for event in events:
+            arguments.append(_integer(event.get("sequence")))
+            arguments.append(json.dumps(event))
+        status, watermark, expected, got, resynced_from = await redis.eval(
+            _APPEND_SCRIPT,
+            1,
+            run_events_stream_key(run_id),
+            *arguments,
+        )
+        if int(status) != 0:
+            return AppendOutcome(
+                watermark=int(watermark),
+                gap=(int(expected), int(got)),
+            )
+        return AppendOutcome(
+            watermark=int(watermark),
+            resynced_from=int(resynced_from) or None,
+        )
 
     async def read(
         self,
@@ -210,7 +318,10 @@ class AgentHostEventStream:
         entries = await redis.xrevrange(key, count=1)
         if not entries:
             return 0
-        parsed = _decode(entries[0][1])
+        fields = entries[0][1]
+        if _SEQUENCE_FIELD in fields:
+            return _integer(fields[_SEQUENCE_FIELD])
+        parsed = _decode(fields)
         return _integer(parsed.get("sequence")) if parsed else 0
 
     async def delete(self, *, run_id: UUID) -> None:

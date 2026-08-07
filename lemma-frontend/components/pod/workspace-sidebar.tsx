@@ -17,6 +17,7 @@ import {
     X,
 } from '@/components/ui/icons';
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
+import { NotificationsBell } from '@/components/notifications/notifications-bell';
 import { POD_DEFAULT_AGENT_SELECTOR } from 'lemma-sdk';
 
 import { useAIAssistant } from '@/components/ai/ai-assistant-context';
@@ -26,6 +27,7 @@ import { ShareSheet } from '@/components/bundle/share-sheet';
 import { ImportDialog } from '@/components/bundle/import-dialog';
 import { ProductIcon, type ProductIconKind } from '@/components/pod/product-icon';
 import { AccountMenu } from '@/components/shared/account-menu';
+import { PodMark } from '@/components/pod/pod-mark';
 import { ResourceIcon } from '@/components/shared/resource-icon';
 import { Button } from '@/components/ui/button';
 import {
@@ -548,6 +550,10 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
                         <Search className="h-4 w-4" strokeWidth={1.8} />
                     </button>
                 ) : null}
+                {/* Beside filter and collapse rather than in the nav list: this
+                    is something that arrives on its own and wants a count, which
+                    a navigation row cannot carry. */}
+                <NotificationsBell podId={podId} />
                 {onCollapse ? (
                     <button
                         type="button"
@@ -989,22 +995,6 @@ function ConversationRow({
             {signal.label ? <span className="sr-only">{signal.label}</span> : null}
         </button>
     );
-}
-
-/**
- * The fallback mark for a pod with no uploaded icon: its initials on the brand
- * fill, the same mark the sidebar header wears. Small, but it is what makes a
- * row in the switcher a place you can go rather than a line of text.
- */
-function PodMark({ name }: { name?: string | null }) {
-    const initials = (name || 'Pod')
-        .trim()
-        .split(/\s+/)
-        .slice(0, 2)
-        .map((part) => part.charAt(0).toUpperCase())
-        .join('') || 'P';
-
-    return <span className="lemma-pod-badge">{initials}</span>;
 }
 
 type PodSwitcherMenuProps = {

@@ -96,6 +96,7 @@ export {
 export {
     WarningCircle as AlertCircle,
     Warning as AlertTriangle,
+    Bell,
     CurrencyDollar as BadgeDollarSign,
     ChartBar as BarChart3,
     BookOpenText as BookA,
@@ -138,6 +139,9 @@ export {
     GithubLogo as Github,
     Globe as Globe2,
     DotsSixVertical as GripVertical,
+    // A column's data type, in the width a bounded grid header can spare. The
+    // three below exist for that vocabulary: a number, a word, a label.
+    Hash,
     ClockCounterClockwise as History,
     House as Home,
     ImageSquare as ImagePlus,
@@ -195,7 +199,9 @@ export {
     Sparkle as Sparkles,
     TerminalWindow as SquareTerminal,
     Table as Table2,
+    Tag,
     TerminalWindow as TerminalSquare,
+    TextAa as TextT,
     Trash as Trash2,
     UserCircle as UserRound,
     UsersThree as UsersRound,

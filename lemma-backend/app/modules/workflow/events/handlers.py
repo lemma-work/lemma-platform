@@ -214,6 +214,32 @@ async def reconcile_agent_snoozes():
     await SnoozeReconcileService().reconcile_due_waits()
 
 
+@streaq_cron("*/5 * * * *", name="expire_past_due_notifications")
+async def expire_past_due_notifications():
+    """Close out notifications nobody answered before their deadline.
+
+    Not a failure — people are busy, and the deadline is 72h precisely so that
+    ordinary out-of-hours delay does not trip it. But a row that stays OPEN
+    forever is an inbox badge that never clears and an asking run waiting on
+    something that will never arrive.
+
+    Lives beside the two wait sweeps deliberately: same cadence, same batch
+    discipline, same "the timer may have been lost, the row is the truth" shape.
+    A third invention here would drift from the other two.
+    """
+    from app.composition.workflow_notifications import expire_past_due_notifications
+
+    worker_ctx: AppWorkerContext = streaq_worker.context
+    async with worker_ctx.uow() as uow:
+        expired = await expire_past_due_notifications(uow)
+        if expired:
+            logger.info(
+                "agent_surfaces.notifications.expired.observed",
+                count=expired,
+            )
+        await uow.commit()
+
+
 # --- Schedule Integration ---
 
 

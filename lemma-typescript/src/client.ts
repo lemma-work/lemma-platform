@@ -22,6 +22,7 @@ import { PodJoinRequestsNamespace } from "./namespaces/pod-join-requests.js";
 import { PodsNamespace } from "./namespaces/pods.js";
 import { PodRolesNamespace } from "./namespaces/pod-roles.js";
 import { PodSurfacesNamespace } from "./namespaces/pod-surfaces.js";
+import { NotificationsNamespace } from "./namespaces/notifications.js";
 import { UserSurfacesNamespace } from "./namespaces/user-surfaces.js";
 import { RecordsNamespace } from "./namespaces/records.js";
 import { ResourceAccessNamespace } from "./namespaces/resource-access.js";
@@ -81,6 +82,7 @@ export class LemmaClient {
   readonly organizations: OrganizationsNamespace;
   readonly podSurfaces: PodSurfacesNamespace;
   /** The caller's own surfaces across all pods (grouped by platform). */
+  readonly notifications: NotificationsNamespace;
   readonly userSurfaces: UserSurfacesNamespace;
 
   constructor(
@@ -119,6 +121,7 @@ export class LemmaClient {
     this.agentHost = new AgentHostNamespace(this._generated);
     this.conversations = new ConversationsNamespace(this._http, podIdFn);
     this.workflows = new WorkflowsNamespace(this._generated, this._http, podIdFn);
+    this.notifications = new NotificationsNamespace(this._generated, podIdFn);
     this.apps = new AppsNamespace(this._generated, this._http, podIdFn);
     this.widgets = new WidgetsNamespace(this._http, podIdFn);
     this.connectors = new ConnectorsNamespace(this._generated, this._http);

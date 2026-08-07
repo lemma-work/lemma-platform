@@ -50,6 +50,8 @@ run `uv run python scripts/generate_route_inventory.py`.
 | --- | --- | --- | --- |
 | DELETE | `/pods/{pod_id}/surfaces/{surface_name}` | `agent.surface.delete` | Delete Surface |
 | GET | `/pods/{pod_id}/available-surfaces` | `agent.surface.available` | List Available Surfaces |
+| GET | `/pods/{pod_id}/notifications` | `notification.list` | List My Notifications |
+| GET | `/pods/{pod_id}/notifications/unread-count` | `notification.unread_count` | Count My Unread Notifications |
 | GET | `/pods/{pod_id}/surface-setup/{platform}` | `agent.surface.setup_guide` | Get Surface Setup Guide |
 | GET | `/pods/{pod_id}/surfaces` | `agent.surface.list` | List Surfaces |
 | GET | `/pods/{pod_id}/surfaces/{surface_name}` | `agent.surface.get` | Get Surface |
@@ -61,6 +63,11 @@ run `uv run python scripts/generate_route_inventory.py`.
 | GET | `/surfaces/webhooks/{platform}` | `surface.webhook.verify` | Verify surface webhook using the platform callback URL |
 | GET | `/surfaces/{surface_id}/webhook` | `surface.webhook.verify_surface` | Verify surface webhook using a surface-level callback URL |
 | PATCH | `/pods/{pod_id}/surfaces/{surface_name}` | `agent.surface.update` | Update Surface |
+| POST | `/pods/{pod_id}/notifications` | `notification.send` | Notify A Pod Member |
+| POST | `/pods/{pod_id}/notifications/read-all` | `notification.mark_all_read` | Mark All My Notifications Read |
+| POST | `/pods/{pod_id}/notifications/{notification_id}/acknowledge` | `notification.acknowledge` | Acknowledge A Notification |
+| POST | `/pods/{pod_id}/notifications/{notification_id}/read` | `notification.mark_read` | Mark Notification Read |
+| POST | `/pods/{pod_id}/notifications/{notification_id}/respond` | `notification.respond` | Respond To A Notification |
 | POST | `/pods/{pod_id}/surfaces` | `agent.surface.create` | Create Surface |
 | POST | `/pods/{pod_id}/surfaces/{surface_name}/send` | `agent.surface.send` | Send Surface Message |
 | POST | `/pods/{pod_id}/telegram-bot-setups` | `agent.surface.telegram_managed.start` | Start Telegram Managed Bot Setup |

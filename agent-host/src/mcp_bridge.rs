@@ -17,11 +17,22 @@ pub async fn run_bridge(paths: &HostPaths, target_id: Uuid, run_id: Uuid) -> any
     // and journaled durably before dispatch, so the bridge is fully local.
     // Cancellation reaches it through the supervised process tree, and the
     // Lemma MCP endpoint re-validates the run-scoped token on every request.
+    //
+    // Note this bridge only ever *answers*: the Lemma MCP server is stateless
+    // and JSON-only by construction (`app/mcp_server.py`), because a stateful
+    // session lives in one replica's memory and a follow-up landing on another
+    // 404s. There is therefore no server-initiated MCP traffic to carry, and
+    // adding a persistent stream here would have nothing to receive.
     let journal = Journal::open(&paths.journal)?;
-    let run = journal
-        .get_run(target_id, run_id)?
-        .ok_or_else(|| anyhow::anyhow!("MCP bridge run is missing from the journal"))?;
-    let endpoint = endpoint_from_mcp(run_id, &run.spec.mcp)?;
+    let load_endpoint = || -> anyhow::Result<ResolvedEndpoint> {
+        let run = journal
+            .get_run(target_id, run_id)?
+            .ok_or_else(|| anyhow::anyhow!("MCP bridge run is missing from the journal"))?;
+        endpoint_from_mcp(run_id, &run.spec.mcp)
+    };
+    // Read once up front so a misconfigured run fails immediately rather than
+    // on its first tool call.
+    let mut endpoint = load_endpoint()?;
     let http = reqwest::Client::builder()
         .connect_timeout(std::time::Duration::from_secs(10))
         .timeout(std::time::Duration::from_secs(90))
@@ -37,6 +48,19 @@ pub async fn run_bridge(paths: &HostPaths, target_id: Uuid, run_id: Uuid) -> any
             anyhow::bail!("MCP input exceeded the {MAX_MCP_MESSAGE_BYTES} byte limit");
         }
         let request: Value = serde_json::from_str(&line).context("MCP input was not valid JSON")?;
+        // Re-read before every call, because this is how a refreshed credential
+        // reaches us: Lemma sends REFRESH_CREDENTIAL, the supervisor journals
+        // it, and we are a separate process with nothing else listening. A
+        // local SQLite read per tool call is cheap next to the HTTP round trip
+        // it precedes.
+        match load_endpoint() {
+            Ok(current) => endpoint = current,
+            // Keep using the endpoint we already hold. A journal read failing
+            // mid-run is not a reason to break tools that are still working.
+            Err(error) => {
+                tracing::warn!(%error, "could not re-read the run's MCP configuration");
+            }
+        }
         if request.get("method").and_then(Value::as_str) == Some("initialize")
             && let Some(version) = request
                 .pointer("/params/protocolVersion")

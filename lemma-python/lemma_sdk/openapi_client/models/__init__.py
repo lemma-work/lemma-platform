@@ -277,6 +277,17 @@ _NAME_TO_MODULE = {
     'MessageResponse': 'message_response',
     'MessageResponseMetadataType0': 'message_response_metadata_type_0',
     'MessageResponseSchema': 'message_response_schema',
+    'NotificationDeliveryStatus': 'notification_delivery_status',
+    'NotificationListResponse': 'notification_list_response',
+    'NotificationOriginKind': 'notification_origin_kind',
+    'NotificationRespondRequest': 'notification_respond_request',
+    'NotificationRespondRequestDataType0': 'notification_respond_request_data_type_0',
+    'NotificationResponse': 'notification_response',
+    'NotificationResponseActionType0': 'notification_response_action_type_0',
+    'NotificationResponseResponseDataType0': 'notification_response_response_data_type_0',
+    'NotificationStatus': 'notification_status',
+    'NotificationUnreadCountResponse': 'notification_unread_count_response',
+    'NotifyMemberRequest': 'notify_member_request',
     'OAuth2DefaultsResponseSchema': 'o_auth_2_defaults_response_schema',
     'OAuth2DefaultsResponseSchemaExtraParams': 'o_auth_2_defaults_response_schema_extra_params',
     'OperationDetail': 'operation_detail',
@@ -768,6 +779,17 @@ if TYPE_CHECKING:
     from .message_response import MessageResponse
     from .message_response_metadata_type_0 import MessageResponseMetadataType0
     from .message_response_schema import MessageResponseSchema
+    from .notification_delivery_status import NotificationDeliveryStatus
+    from .notification_list_response import NotificationListResponse
+    from .notification_origin_kind import NotificationOriginKind
+    from .notification_respond_request import NotificationRespondRequest
+    from .notification_respond_request_data_type_0 import NotificationRespondRequestDataType0
+    from .notification_response import NotificationResponse
+    from .notification_response_action_type_0 import NotificationResponseActionType0
+    from .notification_response_response_data_type_0 import NotificationResponseResponseDataType0
+    from .notification_status import NotificationStatus
+    from .notification_unread_count_response import NotificationUnreadCountResponse
+    from .notify_member_request import NotifyMemberRequest
     from .o_auth_2_defaults_response_schema import OAuth2DefaultsResponseSchema
     from .o_auth_2_defaults_response_schema_extra_params import OAuth2DefaultsResponseSchemaExtraParams
     from .operation_detail import OperationDetail
@@ -1272,6 +1294,17 @@ __all__ = [
     'MessageResponse',
     'MessageResponseMetadataType0',
     'MessageResponseSchema',
+    'NotificationDeliveryStatus',
+    'NotificationListResponse',
+    'NotificationOriginKind',
+    'NotificationRespondRequest',
+    'NotificationRespondRequestDataType0',
+    'NotificationResponse',
+    'NotificationResponseActionType0',
+    'NotificationResponseResponseDataType0',
+    'NotificationStatus',
+    'NotificationUnreadCountResponse',
+    'NotifyMemberRequest',
     'OAuth2DefaultsResponseSchema',
     'OAuth2DefaultsResponseSchemaExtraParams',
     'OperationDetail',
