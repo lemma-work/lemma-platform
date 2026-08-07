@@ -53,39 +53,17 @@ def _title_for(request: MessageUserRequest) -> str:
 async def message_user(
     ctx: RunContext[BaseAgentContext], request: MessageUserRequest
 ) -> MessageUserResponse:
-    """Send a message to a pod member, wherever they actually are.
+    """Message a pod member who is not in this conversation.
 
-    Finds them on the chat app they last used — Slack, Telegram, WhatsApp,
-    Teams — or emails them, and always leaves a copy in their Lemma inbox. Use
-    it to ask a colleague for something, hand work over for review, or tell the
-    person whose schedule you are running what you found.
+    Reaches them on the chat app they last used, or by email, and always leaves
+    a copy in their Lemma inbox.
 
-    **This does not pause your turn.** It returns as soon as the message is on
-    its way. You will not see their reply as a tool result, ever.
+    It does **not** pause your turn, and their reply never comes back as a tool
+    result. To get an answer: send every message you need, give each a
+    `background_instruction`, `snooze` once for as long as a person realistically
+    takes, then `check_messages`.
 
-    So getting an answer back is a three-step loop:
-
-    1. Send every message you need, one call each. Give each a
-       `background_instruction` saying what counts as an answer and where it
-       goes — without one, their reply is just a chat message and nothing comes
-       back to you.
-    2. `snooze` once, for how long a person realistically takes. Ten minutes if
-       they are mid-conversation; an hour or more for a standup. Not a poll loop
-       — every wake replays this whole conversation.
-    3. `check_messages` with the ids you were given, plus whatever your
-       instruction told their agent to write.
-
-    Two things that bite:
-
-    - **`DELIVERED` does not mean answered.** Only `RESPONDED` does. A person can
-      read something and do nothing, which is normal.
-    - **`UNDELIVERABLE` is not a failure.** It means no chat app or mailbox could
-      carry it, and the message is sitting in their Lemma inbox. Say so, and pass
-      on `undeliverable_reason` — it usually means they have never messaged the
-      bot, which is something a human can fix.
-
-    If you only want to reply to the person you are already talking to, don't use
-    this — just answer them.
+    To answer the person you are already talking to, just reply — don't use this.
     """
     deps = ctx.deps
 
@@ -168,18 +146,13 @@ async def message_user(
 async def check_messages(
     ctx: RunContext[BaseAgentContext], request: CheckMessagesRequest
 ) -> CheckMessagesResponse:
-    """Find out whether the people you messaged have answered.
+    """Check whether the people you messaged have answered.
 
-    Call it after a `snooze`, not in a loop — every call costs a wake and a full
-    history replay, and people do not answer faster for being asked twice.
+    Call it after a `snooze`, not in a loop — each call replays this whole
+    conversation. `RESPONDED` is the only status that means somebody answered.
 
-    `RESPONDED` is the only status that means somebody answered; read
-    `response_summary` for what they said. `OPEN` means still waiting. Anything
-    else means it is over: `EXPIRED` (deadline passed), `ACKNOWLEDGED` (seen,
-    nothing owed), `CANCELLED` (withdrawn).
-
-    If several are still OPEN and you have already waited a long time, say so and
-    finish with what you have. Do not wait indefinitely on people.
+    If some are still OPEN after you have genuinely waited, say who has not
+    answered and finish with what you have.
     """
     deps = ctx.deps
     if deps.pod_id is None:

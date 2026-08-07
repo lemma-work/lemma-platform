@@ -19,82 +19,48 @@ MAX_STATUS_CHECK = 25
 
 class MessageUserRequest(BaseModel):
     to: str = Field(
-        description=(
-            "Who to reach: their pod member id, user id, or email address. They "
-            "must be a member of this pod."
-        )
+        description="Pod member id, user id, or email address."
     )
     message: str = Field(
-        description=(
-            "What they read, verbatim. Write it to them, not about them — they "
-            "see it on Slack or Telegram like any other message. Say who needs "
-            "what, and by when if that matters."
-        )
+        description="Delivered verbatim. Write it to them, not about them."
     )
     background_instruction: str | None = Field(
         default=None,
         description=(
-            "NEVER shown to them. Instructions for the agent that handles their "
-            "reply: what counts as an answer, and where to put it. Be concrete — "
-            "'record their status update as the response summary', or 'write the "
-            "PO number into the purchase_orders table, column po_number'. Without "
-            "this their reply is just a chat message and nothing comes back."
+            "Never shown to them; tells the agent handling their reply what "
+            "counts as an answer and where to put it. Omit and nothing comes "
+            "back to you."
         ),
     )
     title: str | None = Field(
         default=None,
         max_length=MAX_TITLE_LENGTH,
-        description=(
-            "Short label for their inbox and the email subject. Defaults to a "
-            "truncated message."
-        ),
+        description="Inbox label and email subject. Defaults to the message.",
     )
     expects_response: bool = Field(
-        default=True,
-        description=(
-            "False for pure FYI. It changes what they are offered in the app: a "
-            "Respond box, or just Dismiss."
-        ),
+        default=True, description="False for a pure FYI."
     )
     expires_in_seconds: int | None = Field(
-        default=None,
-        gt=0,
-        description=(
-            "Give up waiting after this long. Defaults to 72 hours, which is "
-            "deliberately generous — people are asleep, on leave, in meetings."
-        ),
+        default=None, gt=0, description="Default 72h."
     )
 
 
 class MessageUserResponse(BaseToolResponse):
     notification_id: UUID | None = Field(
-        default=None,
-        description=(
-            "Pass this to check_messages to find out whether they answered. Keep "
-            "it — there is no other way to look this message up later."
-        ),
+        default=None, description="Pass to check_messages. Keep it."
     )
     delivery_status: str | None = Field(
         default=None,
         description=(
-            "DELIVERED: it reached a chat app or mailbox. UNDELIVERABLE: no "
-            "channel could carry it, but it IS in their Lemma inbox, so this is "
-            "not a failure. FAILED: a channel was tried and errored."
+            "DELIVERED / UNDELIVERABLE (inbox only — not a failure) / FAILED."
         ),
     )
-    delivered_via: str | None = Field(
-        default=None, description="Which platform took it, when one did."
-    )
+    delivered_via: str | None = Field(default=None)
     undeliverable_reason: str | None = Field(
-        default=None,
-        description=(
-            "Why no channel worked, in words worth repeating to whoever asked "
-            "you to send it."
-        ),
+        default=None, description="Worth repeating to whoever asked you to send."
     )
     interaction_fallback: bool = Field(
-        default=False,
-        description="True when this runtime cannot send; say so and carry on.",
+        default=False, description="This runtime cannot send; say so and carry on."
     )
 
 
@@ -102,9 +68,8 @@ class NotificationStatusReport(BaseModel):
     notification_id: UUID
     status: str = Field(
         description=(
-            "OPEN: still waiting. RESPONDED: they answered — read "
-            "response_summary. ACKNOWLEDGED: seen, nothing owed. EXPIRED: the "
-            "deadline passed. CANCELLED: withdrawn."
+            "OPEN (still waiting) / RESPONDED (read response_summary) / "
+            "ACKNOWLEDGED / EXPIRED / CANCELLED."
         )
     )
     delivery_status: str
@@ -118,12 +83,10 @@ class NotificationStatusReport(BaseModel):
 class CheckMessagesRequest(BaseModel):
     notification_ids: list[UUID] = Field(
         max_length=MAX_STATUS_CHECK,
-        description="The ids message_user gave you, for the messages you are waiting on.",
+        description="Ids from message_user.",
     )
 
 
 class CheckMessagesResponse(BaseToolResponse):
     messages: list[NotificationStatusReport] = Field(default_factory=list)
-    pending: int = Field(
-        default=0, description="How many are still OPEN — nobody has answered those."
-    )
+    pending: int = Field(default=0, description="How many are still OPEN.")

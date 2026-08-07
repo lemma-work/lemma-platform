@@ -27,45 +27,43 @@ from app.modules.agent.tools.messaging.respond import respond_toolset
 
 
 def render_open_notifications(notifications: list[dict]) -> str:
-    """Build the prompt fragment. Empty string when nothing is open."""
+    """Build the prompt fragment. Empty string when nothing is open.
+
+    Every line is a separate list element rather than adjacent string literals:
+    inside a list, implicit concatenation reads as a missing comma and is one
+    typo away from silently merging two bullets.
+    """
     if not notifications:
         return ""
 
     lines = [
         "## Open requests for this person",
         "",
-        "Someone in this pod has asked this person for something, and the "
-        "request is still open. Their next message may well be the answer.",
+        "Someone in this pod has asked them for something. Their next message",
+        "may be the answer.",
         "",
     ]
     for item in notifications:
         lines.append(f"### {item['title']}")
         lines.append(f"- Request id: `{item['notification_id']}`")
-        lines.append(f"- What they were sent: {item['body']}")
+        lines.append(f"- Sent to them: {item['body']}")
         if item.get("background_instruction"):
-            lines.append(
-                f"- What to do with their reply: {item['background_instruction']}"
-            )
+            lines.append(f"- Do with their reply: {item['background_instruction']}")
         if item.get("responds_through_action"):
             action = item.get("action") or {}
             lines.append(
-                "- This one is answered by submitting a workflow form "
-                f"(run `{action.get('run_id')}`, node `{action.get('node_id')}`), "
-                "not by recording a free-text response."
+                f"- Answered by submitting workflow form (run `{action.get('run_id')}`,"
+                f" node `{action.get('node_id')}`), not a free-text response."
             )
         lines.append("")
 
-    lines.extend(
-        [
-            "When you have a real answer, call `respond_to_notification` with the "
-            "request id and what they actually said. Only then — not when they "
-            "say they will get to it.",
-            "",
-            "Do not raise these unprompted if they are talking about something "
-            "else; answer what they asked, then bring it up. If they decline, "
-            "leave the request open and tell them who was asking.",
-        ]
+    lines.append(
+        "Call `respond_to_notification` once you have a real answer — not when"
     )
+    lines.append(
+        "they say they will get to it. If they decline, leave it open and say"
+    )
+    lines.append("who was asking. Don't raise these while they're mid-topic.")
     return "\n".join(lines)
 
 

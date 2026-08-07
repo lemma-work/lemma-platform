@@ -13,6 +13,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from pydantic import ValidationError
+
 from app.core.log.log import get_logger
 from app.modules.agent.domain.value_objects import AgentRunApprovalDecision
 from app.modules.agent.services.conversation_service import ConversationService
@@ -158,7 +160,10 @@ async def maybe_resume_pending_interaction(
             if raw_request is not None:
                 try:
                     questions = AskUserRequest.model_validate(raw_request).questions
-                except Exception:
+                except ValidationError:
+                    # Leave `questions` empty: the reply is then treated as
+                    # free text rather than matched against options. Losing the
+                    # option match is better than losing the answer.
                     pass
             answers = _parse_ask_user_reply(text, questions)
             decision = AgentRunApprovalDecision.APPROVE_ONCE

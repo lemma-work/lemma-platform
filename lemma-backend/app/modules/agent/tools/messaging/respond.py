@@ -27,23 +27,16 @@ logger = get_logger(__name__)
 
 
 class RespondToNotificationRequest(BaseModel):
-    notification_id: UUID = Field(
-        description="The id from the open request you were told about."
-    )
+    notification_id: UUID = Field(description="Id of the open request.")
     summary: str = Field(
         min_length=1,
         description=(
-            "What they actually said, in their terms. This is the whole of what "
-            "the asker will see, so do not compress it to 'done' — if they gave "
-            "a number, a date, or a reason, it belongs here."
+            "What they actually said, in their terms — this is all the asker "
+            "sees. Keep numbers, dates and reasons; don't compress to 'done'."
         ),
     )
     data: dict | None = Field(
-        default=None,
-        description=(
-            "Structured values alongside the summary, when the request asked for "
-            "specific fields."
-        ),
+        default=None, description="Structured values, when specific fields were asked for."
     )
 
 
@@ -56,12 +49,10 @@ async def respond_to_notification(
 ) -> RespondToNotificationResponse:
     """Record this person's answer to something the pod asked them.
 
-    Call it once you actually have the answer — not when they say "sure, one
-    sec". The asking agent is waiting on this and reads nothing else.
-
-    Only record what they told you. If they declined, or drifted onto another
-    subject, leave the request open and say so; an invented answer is worse than
-    a missing one, because the asker will act on it.
+    Call it once you actually have the answer — not when they say they will get
+    to it. Record only what they told you: an invented answer is worse than a
+    missing one, because the asker acts on it. If they decline, leave the request
+    open and say so.
     """
     deps = ctx.deps
     if deps.pod_id is None:

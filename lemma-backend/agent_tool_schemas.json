@@ -125,11 +125,11 @@
   {
     "tool_name": "check_messages",
     "toolset": "MESSAGING",
-    "description": "Find out whether the people you messaged have answered.\n\nCall it after a `snooze`, not in a loop \u2014 every call costs a wake and a full\nhistory replay, and people do not answer faster for being asked twice.\n\n`RESPONDED` is the only status that means somebody answered; read\n`response_summary` for what they said. `OPEN` means still waiting. Anything\nelse means it is over: `EXPIRED` (deadline passed), `ACKNOWLEDGED` (seen,\nnothing owed), `CANCELLED` (withdrawn).\n\nIf several are still OPEN and you have already waited a long time, say so and\nfinish with what you have. Do not wait indefinitely on people.",
+    "description": "Check whether the people you messaged have answered.\n\nCall it after a `snooze`, not in a loop \u2014 each call replays this whole\nconversation. `RESPONDED` is the only status that means somebody answered.\n\nIf some are still OPEN after you have genuinely waited, say who has not\nanswered and finish with what you have.",
     "input_schema": {
       "properties": {
         "notification_ids": {
-          "description": "The ids message_user gave you, for the messages you are waiting on.",
+          "description": "Ids from message_user.",
           "items": {
             "format": "uuid",
             "type": "string"
@@ -153,7 +153,7 @@
               "type": "string"
             },
             "status": {
-              "description": "OPEN: still waiting. RESPONDED: they answered \u2014 read response_summary. ACKNOWLEDGED: seen, nothing owed. EXPIRED: the deadline passed. CANCELLED: withdrawn.",
+              "description": "OPEN (still waiting) / RESPONDED (read response_summary) / ACKNOWLEDGED / EXPIRED / CANCELLED.",
               "type": "string"
             },
             "delivery_status": {
@@ -250,7 +250,7 @@
         },
         "pending": {
           "default": 0,
-          "description": "How many are still OPEN \u2014 nobody has answered those.",
+          "description": "How many are still OPEN.",
           "type": "integer"
         }
       },
@@ -1302,15 +1302,15 @@
   {
     "tool_name": "message_user",
     "toolset": "MESSAGING",
-    "description": "Send a message to a pod member, wherever they actually are.\n\nFinds them on the chat app they last used \u2014 Slack, Telegram, WhatsApp,\nTeams \u2014 or emails them, and always leaves a copy in their Lemma inbox. Use\nit to ask a colleague for something, hand work over for review, or tell the\nperson whose schedule you are running what you found.\n\n**This does not pause your turn.** It returns as soon as the message is on\nits way. You will not see their reply as a tool result, ever.\n\nSo getting an answer back is a three-step loop:\n\n1. Send every message you need, one call each. Give each a\n   `background_instruction` saying what counts as an answer and where it\n   goes \u2014 without one, their reply is just a chat message and nothing comes\n   back to you.\n2. `snooze` once, for how long a person realistically takes. Ten minutes if\n   they are mid-conversation; an hour or more for a standup. Not a poll loop\n   \u2014 every wake replays this whole conversation.\n3. `check_messages` with the ids you were given, plus whatever your\n   instruction told their agent to write.\n\nTwo things that bite:\n\n- **`DELIVERED` does not mean answered.** Only `RESPONDED` does. A person can\n  read something and do nothing, which is normal.\n- **`UNDELIVERABLE` is not a failure.** It means no chat app or mailbox could\n  carry it, and the message is sitting in their Lemma inbox. Say so, and pass\n  on `undeliverable_reason` \u2014 it usually means they have never messaged the\n  bot, which is something a human can fix.\n\nIf you only want to reply to the person you are already talking to, don't use\nthis \u2014 just answer them.",
+    "description": "Message a pod member who is not in this conversation.\n\nReaches them on the chat app they last used, or by email, and always leaves\na copy in their Lemma inbox.\n\nIt does **not** pause your turn, and their reply never comes back as a tool\nresult. To get an answer: send every message you need, give each a\n`background_instruction`, `snooze` once for as long as a person realistically\ntakes, then `check_messages`.\n\nTo answer the person you are already talking to, just reply \u2014 don't use this.",
     "input_schema": {
       "properties": {
         "to": {
-          "description": "Who to reach: their pod member id, user id, or email address. They must be a member of this pod.",
+          "description": "Pod member id, user id, or email address.",
           "type": "string"
         },
         "message": {
-          "description": "What they read, verbatim. Write it to them, not about them \u2014 they see it on Slack or Telegram like any other message. Say who needs what, and by when if that matters.",
+          "description": "Delivered verbatim. Write it to them, not about them.",
           "type": "string"
         },
         "background_instruction": {
@@ -1323,7 +1323,7 @@
             }
           ],
           "default": null,
-          "description": "NEVER shown to them. Instructions for the agent that handles their reply: what counts as an answer, and where to put it. Be concrete \u2014 'record their status update as the response summary', or 'write the PO number into the purchase_orders table, column po_number'. Without this their reply is just a chat message and nothing comes back."
+          "description": "Never shown to them; tells the agent handling their reply what counts as an answer and where to put it. Omit and nothing comes back to you."
         },
         "title": {
           "anyOf": [
@@ -1336,11 +1336,11 @@
             }
           ],
           "default": null,
-          "description": "Short label for their inbox and the email subject. Defaults to a truncated message."
+          "description": "Inbox label and email subject. Defaults to the message."
         },
         "expects_response": {
           "default": true,
-          "description": "False for pure FYI. It changes what they are offered in the app: a Respond box, or just Dismiss.",
+          "description": "False for a pure FYI.",
           "type": "boolean"
         },
         "expires_in_seconds": {
@@ -1354,7 +1354,7 @@
             }
           ],
           "default": null,
-          "description": "Give up waiting after this long. Defaults to 72 hours, which is deliberately generous \u2014 people are asleep, on leave, in meetings."
+          "description": "Default 72h."
         }
       },
       "required": [
@@ -1406,7 +1406,7 @@
             }
           ],
           "default": null,
-          "description": "Pass this to check_messages to find out whether they answered. Keep it \u2014 there is no other way to look this message up later."
+          "description": "Pass to check_messages. Keep it."
         },
         "delivery_status": {
           "anyOf": [
@@ -1418,7 +1418,7 @@
             }
           ],
           "default": null,
-          "description": "DELIVERED: it reached a chat app or mailbox. UNDELIVERABLE: no channel could carry it, but it IS in their Lemma inbox, so this is not a failure. FAILED: a channel was tried and errored."
+          "description": "DELIVERED / UNDELIVERABLE (inbox only \u2014 not a failure) / FAILED."
         },
         "delivered_via": {
           "anyOf": [
@@ -1429,8 +1429,7 @@
               "type": "null"
             }
           ],
-          "default": null,
-          "description": "Which platform took it, when one did."
+          "default": null
         },
         "undeliverable_reason": {
           "anyOf": [
@@ -1442,11 +1441,11 @@
             }
           ],
           "default": null,
-          "description": "Why no channel worked, in words worth repeating to whoever asked you to send it."
+          "description": "Worth repeating to whoever asked you to send."
         },
         "interaction_fallback": {
           "default": false,
-          "description": "True when this runtime cannot send; say so and carry on.",
+          "description": "This runtime cannot send; say so and carry on.",
           "type": "boolean"
         }
       },
@@ -2749,16 +2748,16 @@
   {
     "tool_name": "respond_to_notification",
     "toolset": "MESSAGING",
-    "description": "Record this person's answer to something the pod asked them.\n\nCall it once you actually have the answer \u2014 not when they say \"sure, one\nsec\". The asking agent is waiting on this and reads nothing else.\n\nOnly record what they told you. If they declined, or drifted onto another\nsubject, leave the request open and say so; an invented answer is worse than\na missing one, because the asker will act on it.",
+    "description": "Record this person's answer to something the pod asked them.\n\nCall it once you actually have the answer \u2014 not when they say they will get\nto it. Record only what they told you: an invented answer is worse than a\nmissing one, because the asker acts on it. If they decline, leave the request\nopen and say so.",
     "input_schema": {
       "properties": {
         "notification_id": {
-          "description": "The id from the open request you were told about.",
+          "description": "Id of the open request.",
           "format": "uuid",
           "type": "string"
         },
         "summary": {
-          "description": "What they actually said, in their terms. This is the whole of what the asker will see, so do not compress it to 'done' \u2014 if they gave a number, a date, or a reason, it belongs here.",
+          "description": "What they actually said, in their terms \u2014 this is all the asker sees. Keep numbers, dates and reasons; don't compress to 'done'.",
           "minLength": 1,
           "type": "string"
         },
@@ -2773,7 +2772,7 @@
             }
           ],
           "default": null,
-          "description": "Structured values alongside the summary, when the request asked for specific fields."
+          "description": "Structured values, when specific fields were asked for."
         }
       },
       "required": [

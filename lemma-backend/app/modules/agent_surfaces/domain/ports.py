@@ -363,7 +363,6 @@ class SurfacePodMembershipPort(Protocol):
         surface the person deliberately picked outranks one we merely observed
         them use.
         """
-        ...
 
     async def get_pod_member_id(self, user_id: UUID, pod_id: UUID) -> UUID | None:
         """The pod-scoped member id, or None when they are not in the pod.
@@ -373,7 +372,6 @@ class SurfacePodMembershipPort(Protocol):
         kind of thing, and so removing someone from a pod takes their inbox
         entries with it.
         """
-        ...
 
     async def resolve_pod_recipient(
         self, *, pod_id: UUID, reference: str
@@ -385,8 +383,6 @@ class SurfacePodMembershipPort(Protocol):
         Always scoped to the pod, so a valid id for someone outside it resolves
         to None rather than to a person the caller cannot see.
         """
-        ...
 
     async def get_user_display_name(self, user_id: UUID) -> str | None:
         """Used to attribute a message to the human behind the run."""
-        ...
