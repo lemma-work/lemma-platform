@@ -26,10 +26,14 @@ from app.modules.agent.infrastructure.agent_host_repository_common import (
 )
 from app.modules.agent.infrastructure.harnesses.agent_host_run_window import (
     CREDENTIAL_DEADLINE_MESSAGE,
+    CREDENTIAL_REFRESH_MARGIN_SECONDS,
+    CREDENTIAL_SAFETY_MARGIN_SECONDS,
     DEADLINE_MESSAGE,
     DEFAULT_AGENT_HOST_EVENT_TIMEOUT_SECONDS,
     DispatchedRun,
     credential_bounded_timeout,
+    credential_exhausted,
+    credential_refresh_due,
 )
 from app.modules.agent.infrastructure.harnesses.remote_payload import token_expires_at
 
@@ -67,6 +71,46 @@ class TestTheCeilingsAgree:
         """At the default five-minute command TTL, a decision made at minute six
         expired before a sleeping laptop could ever collect it."""
         assert DEFAULT_PERMISSION_COMMAND_TTL_SECONDS >= HOST_PERMISSION_WINDOW_SECONDS
+
+
+class TestCredentialRefresh:
+    """A run should be bounded by its work, not by a one-hour token.
+
+    The credential is renewed in flight now, so the ceiling only bites when
+    every renewal failed — at which point ending the run is still far better
+    than letting every ``lemma_*`` call 401 in silence for the rest of it.
+    """
+
+    def test_a_fresh_credential_needs_no_renewal(self) -> None:
+        assert not credential_refresh_due(
+            expires_at=_now() + timedelta(hours=1), now=_now()
+        )
+
+    def test_renewal_starts_well_before_expiry(self) -> None:
+        """With room for several attempts before the safety margin bites."""
+        assert credential_refresh_due(
+            expires_at=_now() + timedelta(seconds=CREDENTIAL_REFRESH_MARGIN_SECONDS - 1),
+            now=_now(),
+        )
+        assert CREDENTIAL_REFRESH_MARGIN_SECONDS > CREDENTIAL_SAFETY_MARGIN_SECONDS
+
+    def test_a_credential_that_was_never_renewed_ends_the_run(self) -> None:
+        assert credential_exhausted(
+            expires_at=_now() + timedelta(seconds=CREDENTIAL_SAFETY_MARGIN_SECONDS - 1),
+            now=_now(),
+        )
+
+    def test_a_run_is_never_ended_before_renewal_has_been_tried(self) -> None:
+        """Exhaustion must not fire in the same window renewal opens in, or a
+        run would be killed at the first refresh check rather than renewed."""
+        at_refresh_time = _now() + timedelta(
+            seconds=CREDENTIAL_REFRESH_MARGIN_SECONDS - 1
+        )
+        assert not credential_exhausted(expires_at=at_refresh_time, now=_now())
+
+    def test_an_unreadable_credential_bounds_nothing(self) -> None:
+        assert not credential_refresh_due(expires_at=None, now=_now())
+        assert not credential_exhausted(expires_at=None, now=_now())
 
 
 class TestCredentialBoundedTimeout:

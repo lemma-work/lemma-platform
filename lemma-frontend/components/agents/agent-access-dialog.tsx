@@ -14,6 +14,7 @@ import {
     MessageCircle,
     Plug,
     Search,
+    Send,
     Sparkles,
     SquareTerminal,
     Table as TableIcon,
@@ -126,6 +127,12 @@ const TOOL_COPY: Record<string, { label: string; description: string; icon: Lemm
         description: 'Pause mid-task for a while, then pick up where it left off.',
         icon: Timer,
     },
+    MESSAGING: {
+        label: 'Message people',
+        description:
+            'Reach teammates on Slack, Telegram or email to ask for something, and read their replies.',
+        icon: Send,
+    },
     VIEW_IMAGE: {
         label: 'Vision',
         description: 'Look at images and screenshots in its workspace.',
@@ -151,6 +158,7 @@ const TOOL_ORDER: string[] = [
     'TODO',
     'SPEECH',
     'SNOOZE',
+    'MESSAGING',
     'VIEW_IMAGE',
     'CONNECTORS',
 ];

@@ -43,10 +43,14 @@ async def append_events(
 ) -> AgentHostEventAck:
     """Append one ordered batch to the run's stream.
 
-    Deliberately performs no row write. The lease is read under a row lock only
-    to serialize concurrent batches for the same run and to validate the epoch;
-    the watermark that fences replays lives in the stream, so a chatty run costs
-    the database nothing.
+    Deliberately performs no row write, and deliberately takes no row lock. The
+    lease is read only to answer three questions -- is this host allowed to
+    write here, is its epoch current, and has the run already ended -- none of
+    which it then mutates. Locking it used to be how concurrent batches for one
+    run were serialized, which meant holding a row lock and a pooled database
+    connection across two Redis round trips with a 15s socket timeout. That
+    ordering guarantee now lives in the stream's own atomic append, next to the
+    watermark it is about.
 
     An *empty* stream is treated as a lost stream, not as a run that has emitted
     nothing. The host deletes each event from its own outbox once we ack it, so
@@ -58,57 +62,50 @@ async def append_events(
     gap really does mean loss in flight.
     """
     first = batch.events[0]
-    lease = await session.get(
-        AgentHostRunLeaseModel,
-        first.run_id,
-        with_for_update=True,
-    )
+    lease = await session.get(AgentHostRunLeaseModel, first.run_id)
     if lease is None or lease.host_id != host_id:
         raise AgentHostNotFound("run lease does not belong to this host")
     if lease.lease_epoch != first.lease_epoch:
         raise AgentHostProtocolViolation("stale run lease epoch")
 
-    acked_through = await events.last_sequence(run_id=first.run_id)
-    expected = acked_through + 1
-    terminal = AgentHostRunState(lease.state) in TERMINAL_AGENT_HOST_RUN_STATES
-
-    stream_was_lost = acked_through == 0
-    pending: list[dict] = []
-    for event in batch.events:
-        # A resend after a lost acknowledgement replays events the stream
-        # already holds; first write wins.
-        if event.sequence < expected:
-            continue
-        if terminal:
+    if AgentHostRunState(lease.state) in TERMINAL_AGENT_HOST_RUN_STATES:
+        # A pure replay of what the stream already holds is still tolerated:
+        # the host resends until acked, and refusing forever would wedge it.
+        watermark = await events.last_sequence(run_id=first.run_id)
+        if batch.events[-1].sequence > watermark:
             raise AgentHostProtocolViolation("terminal run cannot accept events")
-        if event.sequence != expected:
-            if stream_was_lost and not pending:
-                logger.warning(
-                    "agent.infrastructure.agent_host_event_intake.stream_resynced",
-                    agent_run_id=str(first.run_id),
-                    from_sequence=event.sequence,
-                )
-                expected = event.sequence
-            else:
-                raise AgentHostProtocolViolation(
-                    f"event sequence gap: expected {expected}, got {event.sequence}"
-                )
-        pending.append(
+        return AgentHostEventAck(
+            run_id=first.run_id,
+            lease_epoch=first.lease_epoch,
+            acked_through=watermark,
+        )
+
+    outcome = await events.append(
+        run_id=first.run_id,
+        events=[
             {
                 "sequence": event.sequence,
                 "type": event.type.value,
                 "object_id": event.object_id,
                 "payload": event.payload,
             }
+            for event in batch.events
+        ],
+    )
+    if outcome.gap is not None:
+        expected, got = outcome.gap
+        raise AgentHostProtocolViolation(
+            f"event sequence gap: expected {expected}, got {got}"
         )
-        expected += 1
-
-    if pending:
-        await events.append(run_id=first.run_id, events=pending)
-        acked_through = expected - 1
+    if outcome.resynced_from is not None:
+        logger.warning(
+            "agent.infrastructure.agent_host_event_intake.stream_resynced",
+            agent_run_id=str(first.run_id),
+            from_sequence=outcome.resynced_from,
+        )
 
     return AgentHostEventAck(
         run_id=first.run_id,
         lease_epoch=first.lease_epoch,
-        acked_through=acked_through,
+        acked_through=outcome.watermark,
     )

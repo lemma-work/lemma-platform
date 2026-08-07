@@ -34,6 +34,9 @@ from app.modules.agent.capabilities.instructed_toolset import (
     InstructedToolsetCapability,
 )
 from app.modules.agent.capabilities.prompt_caching import PromptCachingCapability
+from app.modules.agent.capabilities.open_notifications import (
+    build_open_notifications_capability,
+)
 from app.modules.agent.capabilities.surface_platform import SurfacePlatformCapability
 from app.modules.agent.capabilities.todo import TODO_TOOLSET_ID, TodoCapability
 from app.modules.agent.capabilities.web_search import WebSearchCapability
@@ -41,6 +44,7 @@ from app.modules.agent.domain.context import AgentContext
 from app.modules.agent.domain.entities import Agent
 from app.modules.agent.domain.runtime_profiles import RuntimeProfileProtocol
 from app.modules.agent.domain.prompts import (
+    load_messaging_prompt,
     load_skills_prompt,
     load_speech_prompt,
     load_workspace_cli_prompt,
@@ -50,6 +54,7 @@ from app.modules.agent.tools.graceful_toolset import GracefulToolset
 from app.modules.agent.tools.registry import EXTRA_TOOLSET_OBJECTS
 from app.modules.agent.tools.skills.pydantic_adapter import skills_toolset
 from app.modules.agent.tools.speech.pydantic_adapter import speech_toolset
+from app.modules.agent.tools.messaging.pydantic_adapter import messaging_toolset
 from app.modules.agent.tools.web.pydantic_adapter import web_search_toolset
 from app.modules.agent.tools.workspace_cli.pydantic_adapter import (
     is_workspace_cli_toolset,
@@ -145,6 +150,16 @@ def _visible_capability(toolset: object) -> object:
             name="speech",
             instructions_loader=load_speech_prompt,
         )
+    if toolset is messaging_toolset:
+        # The guidance matters more here than for most toolsets: the tool does
+        # not pause, so an agent that has not been taught the send/snooze/check
+        # loop will send a message and then sit waiting for a reply that arrives
+        # as a tool result never.
+        return InstructedToolsetCapability(
+            _graceful(toolset),
+            name="messaging",
+            instructions_loader=load_messaging_prompt,
+        )
     if getattr(toolset, "id", None) == TODO_TOOLSET_ID:
         return TodoCapability(_graceful(toolset))
     return ToolsetCapability(_graceful(toolset))
@@ -192,6 +207,20 @@ async def build_lemma_harness_tooling(
     surface_platform = getattr(ctx, "surface_platform", None)
     if surface_platform and platform_is_known(surface_platform):
         capabilities.append(SurfacePlatformCapability(str(surface_platform)))
+
+    # Somebody may be waiting on the person this agent is talking to. Their next
+    # message is often the answer, and without this the agent has no idea a
+    # question is open or what the asker wanted done with the reply — so the
+    # reply stays a chat message and the asking run waits forever.
+    #
+    # Appended AFTER the caching-sensitive fragments above and rebuilt each run
+    # on purpose: unlike per-platform guidance, this changes the moment somebody
+    # answers, and a cached copy would have the agent chasing a closed question.
+    open_notifications = await build_open_notifications_capability(
+        ctx.conversation_id
+    )
+    if open_notifications is not None:
+        capabilities.append(open_notifications)
 
     if enable_prompt_caching:
         capabilities.append(

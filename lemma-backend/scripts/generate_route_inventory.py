@@ -43,6 +43,7 @@ TAG_MODULES = {
     "agents": "agent",
     "files": "datastore",
     "icons": "icon",
+    "notifications": "agent_surfaces",
     "query": "datastore",
     "records": "datastore",
     "tables": "datastore",

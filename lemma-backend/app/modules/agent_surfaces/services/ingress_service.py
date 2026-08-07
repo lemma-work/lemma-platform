@@ -71,6 +71,12 @@ from app.modules.agent_surfaces.infrastructure.repositories.surface_repository i
 from app.modules.agent_surfaces.services.credential_resolver import (
     SurfaceCredentialResolver,
 )
+from app.modules.agent_surfaces.services.pending_interaction_resume import (
+    # Re-exported: ``_ask_user_request_dict`` still has a caller here (the
+    # native-interaction path) and a unit test that imports it from this module.
+    _ask_user_request_dict,
+    maybe_resume_pending_interaction,
+)
 from app.modules.agent_surfaces.services.fallback_reply_service import (
     deliver_fallback_reply,
     identity_confirmation_context,
@@ -532,7 +538,7 @@ class AgentSurfaceIngressService:
             # answer and resume — rather than starting a new message/run. This is
             # how the formatted-text fallback (and any "type your own" reply) gets
             # back into the run as a structured answer.
-            if not await self._maybe_resume_pending_interaction(
+            if not await maybe_resume_pending_interaction(
                 context, message_text, conversation_service=conversation_service
             ):
                 return await conversation_service.add_user_message_and_start_run(
@@ -657,75 +663,6 @@ class AgentSurfaceIngressService:
             return f"{original}\n\n{combined}"
         return combined
 
-    async def _maybe_resume_pending_interaction(
-        self,
-        context: SurfaceChatContext,
-        message_text: str,
-        *,
-        conversation_service: ConversationService,
-    ) -> bool:
-        """Resume a paused ask_user or request_approval from a typed surface reply.
-
-        Returns True when the message was consumed as an answer so the caller
-        skips the normal new-message path. Best-effort: any failure returns False.
-
-        ask_user: parses the reply as a numbered option (1, 2, …) or an exact
-        label match, falling back to the raw text as a free-form "Other" answer.
-        request_approval: "approve"/"yes"/… → APPROVE_ONCE; anything else → DENY.
-        """
-        if context.conversation_id is None:
-            return False
-        text = (message_text or "").strip()
-        if not text:
-            return False
-        try:
-            pending = await conversation_service.get_pending_user_interaction(
-                conversation_id=context.conversation_id
-            )
-            if not isinstance(pending, dict):
-                return False
-            kind = str(pending.get("kind") or "")
-            conversation = (
-                await conversation_service.conversation_repository.get_conversation(
-                    context.conversation_id
-                )
-            )
-            if conversation is None:
-                return False
-
-            if kind == "ask_user":
-                raw_request = _ask_user_request_dict(pending.get("tool_args"))
-                questions = []
-                if raw_request is not None:
-                    try:
-                        questions = AskUserRequest.model_validate(raw_request).questions
-                    except Exception:
-                        pass
-                answers = _parse_ask_user_reply(text, questions)
-                decision = AgentRunApprovalDecision.APPROVE_ONCE
-                response: dict[str, Any] = {"answers": answers}
-            else:
-                decision = _parse_approval_decision(text)
-                response = {}
-
-            # Deferred: a webhook deadline is shorter than an approved command.
-            await conversation_service.resolve_user_approval_internal(
-                conversation=conversation,
-                approval_id=str(pending.get("tool_call_id") or ""),
-                user_id=context.user_id,
-                pod_id=context.pod_id,
-                decision=decision,
-                response=response,
-                defer_reconciliation=True,
-            )
-            return True
-        except Exception:
-            logger.debug(
-                'agent_surfaces.ingress_service.surface_interaction_typed_reply_resume.diagnostic',
-                conversation_id=context.conversation_id,
-            )
-            return False
-
     async def _resolve_egress_target(
         self, conversation_id: UUID
     ) -> "_SurfaceEgressTarget | None":
@@ -818,13 +755,20 @@ class AgentSurfaceIngressService:
         """
         if not surface.is_active:
             return False
-        # Only ever reach members of the surface's pod.
-        if self.pod_membership_port is not None:
-            member_pod_ids = set(
-                await self.pod_membership_port.get_user_pod_ids(user_id)
+        # Members of this surface's pod only, and FAIL CLOSED: this was once
+        # `if self.pod_membership_port is not None`, which skipped the check
+        # entirely when mis-wired — turning a wiring bug into "any user id can be
+        # messaged". Not running the check is not the same as passing it.
+        if self.pod_membership_port is None:
+            logger.error(
+                "agent_surfaces.ingress_service.send_to_member_no_membership_port.failed",
+                surface_id=str(surface.id),
             )
-            if surface.pod_id not in member_pod_ids:
-                return False
+            return False
+        if surface.pod_id not in set(
+            await self.pod_membership_port.get_user_pod_ids(user_id)
+        ):
+            return False
         external_user_repository = getattr(self, "external_user_repository", None)
         if external_user_repository is None:
             return False
@@ -1023,7 +967,7 @@ class AgentSurfaceIngressService:
         routes back via ``handle_interaction``); on any platform without native
         buttons, or if the native render fails, falls back to a text prompt the
         user answers "approve"/"deny" (routed back by the typed-reply path in
-        ``start_agent_chat`` via ``_maybe_resume_pending_interaction``). Never
+        ``start_agent_chat`` via ``maybe_resume_pending_interaction``). Never
         swallowed.
         """
         target = await self._resolve_egress_target(conversation_id)
@@ -2136,6 +2080,8 @@ class AgentSurfaceIngressService:
                 route_key=route.route_key,
                 last_event=event_payload,
                 last_message_id=parsed.external_message_id,
+                # This row exists because they just wrote to us.
+                last_inbound_at=datetime.now(timezone.utc),
             )
         )
 
@@ -2160,7 +2106,10 @@ class AgentSurfaceIngressService:
         reset_hours = surface.config.dm_conversation_reset_after_hours
         if reset_hours <= 0:
             return False
-        last_seen = link.updated_at
+        # Inbound activity, NOT ``updated_at``: an outbound notification also
+        # writes this row, so keying the reset off ``updated_at`` would let a
+        # proactive message suppress it and leak yesterday's context into today.
+        last_seen = link.inbound_activity_at
         if last_seen.tzinfo is None:
             last_seen = last_seen.replace(tzinfo=timezone.utc)
         return datetime.now(timezone.utc) - last_seen > timedelta(hours=reset_hours)
@@ -2319,97 +2268,3 @@ class AgentSurfaceIngressService:
         return f"{title[: _CONVERSATION_TITLE_MAX_LENGTH - 3].rstrip()}..."
 
 
-def _ask_user_request_dict(tool_args: object) -> dict[str, Any] | None:
-    """The ``AskUserRequest`` payload from a persisted ask_user call's args.
-
-    pydantic-ai flattens a tool's single pydantic-model parameter, so a real
-    ``ask_user(ctx, request: AskUserRequest)`` call persists its args as the
-    model's own fields — ``{"questions": [...]}`` — NOT ``{"request": {...}}``.
-    Older/hand-built (e.g. scripted-test) calls may still use the wrapped shape.
-    Accept both so the questions are never lost (which silently swallows the
-    whole ask_user — no card, no text fallback, run stuck WAITING).
-    """
-    if not isinstance(tool_args, dict):
-        return None
-    request = tool_args.get("request")
-    if isinstance(request, dict):
-        return request
-    if isinstance(tool_args.get("questions"), list):
-        return tool_args
-    return None
-
-
-def _ask_user_question_headers(tool_args: object) -> list[str]:
-    """Extract question headers from a persisted ask_user tool call's args."""
-    request = _ask_user_request_dict(tool_args)
-    if request is None:
-        return []
-    questions = request.get("questions")
-    if not isinstance(questions, list):
-        return []
-    headers: list[str] = []
-    for question in questions:
-        if isinstance(question, dict):
-            header = question.get("header")
-            if isinstance(header, str) and header:
-                headers.append(header)
-    return headers
-
-
-def _parse_ask_user_reply(
-    text: str,
-    questions: list,
-) -> dict[str, Any]:
-    """Map a typed surface reply to an ask_user answers dict.
-
-    Single question: tries to match the text as a 1-based number or an exact
-    case-insensitive option label; falls back to the raw text (free-form Other).
-    Multiple questions: maps the raw text to every header — the agent receives
-    the same string for all questions, which is the best we can do with a single
-    unstructured reply.
-    """
-    if not questions:
-        return {"answer": text}
-    if len(questions) == 1:
-        q = questions[0]
-        options = getattr(q, "options", None) or []
-        stripped = text.strip()
-        # Number → option by 1-based index
-        if stripped.isdigit():
-            idx = int(stripped) - 1
-            if 0 <= idx < len(options):
-                return {q.header: options[idx].label}
-        # Case-insensitive label match
-        lower = stripped.lower()
-        for opt in options:
-            if (getattr(opt, "label", "") or "").lower() == lower:
-                return {q.header: opt.label}
-        # Free-form Other
-        return {q.header: stripped}
-    # Multiple questions — crude but the only option for a plain text reply
-    return {q.header: text for q in questions}
-
-
-def _parse_approval_decision(text: str) -> "AgentRunApprovalDecision":
-    """Parse a typed surface reply as an approval decision.
-
-    "approve", "yes", "y", "ok", "confirm", "1", "run", "allow" → APPROVE_ONCE.
-    Anything else → DENY (safe default).
-    """
-    from app.modules.agent.contracts import AgentRunApprovalDecision
-
-    _APPROVE_WORDS = {
-        "approve",
-        "yes",
-        "y",
-        "ok",
-        "okay",
-        "confirm",
-        "1",
-        "run",
-        "allow",
-        "go",
-    }
-    if text.strip().lower() in _APPROVE_WORDS:
-        return AgentRunApprovalDecision.APPROVE_ONCE
-    return AgentRunApprovalDecision.DENY

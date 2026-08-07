@@ -23,6 +23,7 @@ _NAME_TO_MODULE = {
     "PodFunctions": "functions",
     "BoundConnectors": "connectors",
     "PodMembers": "members",
+    "PodNotifications": "notifications",
     "BoundOrg": "orgs",
     "Orgs": "orgs",
     "BoundOrgRuntime": "runtime",
@@ -45,6 +46,7 @@ if TYPE_CHECKING:
     from .functions import PodFunctions
     from .connectors import BoundConnectors
     from .members import PodMembers
+    from .notifications import PodNotifications
     from .orgs import BoundOrg, Orgs
     from .pods import BoundPods
     from .runtime import BoundOrgRuntime
@@ -81,6 +83,7 @@ __all__ = [
     "PodFiles",
     "PodFunctions",
     "PodMembers",
+    "PodNotifications",
     "PodQueries",
     "PodRecords",
     "PodSchedules",
