@@ -98,7 +98,7 @@ async def _delegated_client(
 
 def _feedback_payload(subject: str) -> dict[str, str]:
     return {
-        "category": "TOOLING_ISSUE",
+        "category": "cli",
         "subject": f"  {subject}  ",
         "issue_encountered": "  The tool encountered a deterministic issue.  ",
         "expected_behavior": "  Feedback is stored.  ",

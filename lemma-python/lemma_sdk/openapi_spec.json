@@ -5932,12 +5932,13 @@
         "type": "object"
       },
       "FeedbackCategory": {
+        "description": "Which part of Lemma the report is about.",
         "enum": [
-          "SYSTEM_ISSUE",
-          "SKILL_ISSUE",
-          "INCORRECT_KNOWLEDGE",
-          "TOOLING_ISSUE",
-          "OTHER"
+          "cli",
+          "skill",
+          "platform",
+          "docs",
+          "other"
         ],
         "title": "FeedbackCategory",
         "type": "string"
@@ -11087,7 +11088,7 @@
           },
           "category": {
             "$ref": "#/components/schemas/FeedbackCategory",
-            "description": "High-level category for the feedback report."
+            "description": "Which part of Lemma the report is about: 'cli' (the lemma command-line tool), 'skill' (a bundled skill's guidance), 'platform' (the API, runtime, or product behavior), 'docs' (wrong or missing documentation), or 'other'."
           },
           "expected_behavior": {
             "description": "What the caller expected to happen instead.",
@@ -31808,7 +31809,7 @@
     },
     "/tools/report-feedback": {
       "post": {
-        "description": "Record a maintainer-facing feedback report about system issues, skill issues, incorrect knowledge, or other unexpected behavior.",
+        "description": "Record a maintainer-facing feedback report about the CLI, a skill, the platform, or the docs.",
         "operationId": "agent.tool.report_feedback",
         "requestBody": {
           "content": {

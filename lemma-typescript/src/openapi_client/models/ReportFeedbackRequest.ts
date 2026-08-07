@@ -12,7 +12,7 @@ export type ReportFeedbackRequest = {
      */
     actual_behavior: string;
     /**
-     * High-level category for the feedback report.
+     * Which part of Lemma the report is about: 'cli' (the lemma command-line tool), 'skill' (a bundled skill's guidance), 'platform' (the API, runtime, or product behavior), 'docs' (wrong or missing documentation), or 'other'.
      */
     category: FeedbackCategory;
     /**
