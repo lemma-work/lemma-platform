@@ -104,9 +104,59 @@ class TestTextAccumulation:
         assert _tokens(out) == "Hello"
         assert _final_text(out) == "Hello"
 
-    def test_upsert_that_does_not_extend_emits_no_duplicate(self) -> None:
-        """Ordered delivery means this should not happen; if it somehow does,
-        re-emitting the full text would duplicate what the user already saw."""
+    def test_text_either_side_of_a_tool_call_is_all_kept(self) -> None:
+        """The host seals and *clears* its buffer before every non-chunk event,
+        so a message containing a tool call arrives as several upserts, each
+        carrying only the piece since the last one.
+
+        Treating each as the authoritative whole meant the persisted message
+        held only the text after the final tool call. Nobody saw it: the chunks
+        had already streamed the full text to the screen, so the loss showed up
+        on reload and in the history the next turn was given.
+        """
+        n = _normalizer()
+        out = _run(
+            n,
+            [
+                _event(1, AgentHostEventType.AGENT_MESSAGE_CHUNK, {"text": "Hello"}),
+                _event(2, AgentHostEventType.AGENT_MESSAGE_UPSERT, {"text": "Hello"}),
+                _event(
+                    3,
+                    AgentHostEventType.TOOL_CALL_UPSERT,
+                    {"name": "read_file"},
+                    object_id="c1",
+                ),
+                _event(
+                    4,
+                    AgentHostEventType.TOOL_CALL_UPDATE,
+                    {"status": "COMPLETED", "result": "ok"},
+                    object_id="c1",
+                ),
+                _event(5, AgentHostEventType.AGENT_MESSAGE_CHUNK, {"text": "! there"}),
+                _event(
+                    6, AgentHostEventType.AGENT_MESSAGE_UPSERT, {"text": "! there"}
+                ),
+            ],
+        )
+        assert _tokens(out) == "Hello! there"
+        assert _final_text(out) == "Hello! there", (
+            "what is persisted must match what the user watched stream"
+        )
+
+    def test_a_segment_no_chunk_delivered_still_streams(self) -> None:
+        """The host seals rich content ahead of itself, so an upsert can carry
+        text the chunk lane never sent."""
+        n = _normalizer()
+        out = _run(
+            n,
+            [_event(1, AgentHostEventType.AGENT_MESSAGE_UPSERT, {"text": "Recovered"})],
+        )
+        assert _tokens(out) == "Recovered"
+        assert _final_text(out) == "Recovered"
+
+    def test_a_disagreeing_upsert_does_not_retract_what_was_streamed(self) -> None:
+        """A token stream cannot take back what it emitted, so the host's
+        record wins for the persisted text and nothing is re-streamed."""
         n = _normalizer()
         out = _run(
             n,
@@ -199,6 +249,54 @@ class TestToolCalls:
         assert len(_messages(opened)) == 1
         assert duplicate == []
         assert len(_messages(closed)) == 1
+
+    def test_an_untagged_call_and_its_update_are_the_same_call(self) -> None:
+        """ACP's ToolCall has no required id, so an adapter can report a call
+        and its completion with nothing linking them. Falling back to the event
+        sequence gave the two different ids by construction: the call was left
+        open and swept as abandoned, while the result addressed a call nobody
+        held — one tool use rendering as two broken halves."""
+        n = _normalizer()
+
+        opened = n.normalize(
+            _event(1, AgentHostEventType.TOOL_CALL_UPSERT, {"name": "read_file"})
+        )
+        closed = n.normalize(
+            _event(
+                2,
+                AgentHostEventType.TOOL_CALL_UPDATE,
+                {"status": "COMPLETED", "result": "ok"},
+            )
+        )
+        finished = n.normalize(
+            _event(3, AgentHostEventType.TERMINAL, {"state": "SUCCEEDED"})
+        )
+
+        call = _messages(opened)[0].data
+        result = _messages(closed)[0].data
+        assert call.tool_call_id == result.tool_call_id
+        # And nothing is left over to be swept as an abandoned call.
+        assert [
+            m for m in _messages(finished) if m.data.tool_call_id == call.tool_call_id
+        ] == []
+
+    def test_two_untagged_calls_do_not_collapse_into_one(self) -> None:
+        n = _normalizer()
+
+        first = n.normalize(
+            _event(1, AgentHostEventType.TOOL_CALL_UPSERT, {"name": "read_file"})
+        )
+        n.normalize(
+            _event(2, AgentHostEventType.TOOL_CALL_UPDATE, {"status": "COMPLETED"})
+        )
+        second = n.normalize(
+            _event(3, AgentHostEventType.TOOL_CALL_UPSERT, {"name": "write_file"})
+        )
+
+        assert (
+            _messages(first)[0].data.tool_call_id
+            != _messages(second)[0].data.tool_call_id
+        )
 
     def test_unfinished_tool_calls_are_closed_at_terminal(self) -> None:
         n = _normalizer()

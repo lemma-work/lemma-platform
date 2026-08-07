@@ -47,9 +47,12 @@ next run's `resume_session_id`; the host then sends `session/load` rather than
 
 Three properties this depends on:
 
-- **A failed load starts a new session.** Providers expire sessions on their own
-  schedule, so a stale id is normal operation. Losing history is survivable;
-  losing the answer is not.
+- **A failed load starts a new session, and the prompt brings the history.**
+  Providers expire sessions on their own schedule, so a stale id is normal
+  operation. Lemma only sends the latest message when it knows the agent can
+  resume; when it cannot — a harness with no `loadSession`, or a session the
+  provider has forgotten — the prompt carries the conversation instead, so a
+  fresh session is a fresh session rather than an amnesiac one.
 - **Replayed history is dropped.** `session/load` streams the whole prior
   conversation back before returning. Lemma already has those turns, so session
   updates are suppressed until this run's own prompt is dispatched.
@@ -103,10 +106,12 @@ somewhere else.
 - Agent Host does not advertise ACP client-side filesystem or terminal
   capabilities, permission requests fail closed, and known unrestricted or
   pre-approved provider modes are filtered and rejected again at dispatch.
-- Adapter subprocesses start in private scratch directories and are terminated
-  as a process tree during cancellation or shutdown. ACP is not an operating
-  system sandbox; deployments needing stronger isolation should run Agent Host
-  under a dedicated OS account or sandbox policy.
+- Adapter subprocesses start in private scratch directories. A cancellation is
+  first an ACP `session/cancel`, so the agent ends its own turn and the provider
+  flushes the session file the next turn resumes from; a process-tree kill is
+  the backstop for an adapter that ignores it, and for shutdown. ACP is not an
+  operating system sandbox; deployments needing stronger isolation should run
+  Agent Host under a dedicated OS account or sandbox policy.
 - Logs contain redacted operational metadata, never host secrets, run-scoped
   bearer tokens, or MCP authorization values.
 

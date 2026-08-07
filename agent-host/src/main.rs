@@ -407,6 +407,10 @@ async fn main() -> anyhow::Result<()> {
                         // rather than stalling on a prompt nobody will see.
                         permissions: PermissionGate::new(),
                         permission_timeout: Duration::ZERO,
+                        // Nothing can ask a smoke run to stop: it has no
+                        // control plane, and Ctrl-C takes the whole process.
+                        cancel: lemma_agent_host::acp::never_cancelled(),
+                        cancel_grace: Duration::ZERO,
                     },
                     Arc::new(ConsoleCallbacks { json }),
                 )

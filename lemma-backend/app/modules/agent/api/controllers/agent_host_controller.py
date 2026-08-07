@@ -75,8 +75,10 @@ _LONG_POLL_SECONDS = 25.0
 # fast path; this is the floor on correctness.
 _IDLE_REPOLL_SECONDS = 5.0
 _MAX_COMMANDS_PER_POLL = 16
-# After applying control updates, ask the host back promptly rather than
-# holding the connection open for a full long poll.
+# After a control update that actually changed something, ask the host back
+# promptly rather than holding the connection open for a full long poll: it has
+# more to tell us, or something to clear from its outbox. A repeated heartbeat
+# is not such an update, or a busy host would never long-poll at all.
 _CONTROL_UPDATE_BACKOFF_MS = 1_000
 
 
@@ -358,20 +360,24 @@ async def poll_agent_host_commands(
             raise _repository_error(exc) from exc
         await uow.commit()
 
-    control_update_applied = bool(
-        request.acknowledged_command_ids or request.checkpoints or request.rejections
-    )
+    # Only a control update that *changed* something is a reason to cut the
+    # long poll short. A non-terminal checkpoint is the run's lease heartbeat,
+    # which the host resends on every poll for as long as the run lives, so
+    # treating "the host sent a checkpoint" as news meant a host was never once
+    # allowed to long-poll while it had work — it round-tripped at 1Hz for the
+    # whole run and rewrote a lease and a conversation-metadata row each time.
     if (
         commands
-        or control_update_applied
-        or request.capacity.available_runs == 0
+        or commands.progressed
         or host_status is AgentHostStatus.UPGRADE_REQUIRED
     ):
         return AgentHostPollResponse(
             protocol_version=negotiated_protocol,
             host_status=host_status,
             commands=commands,
-            poll_after_ms=_CONTROL_UPDATE_BACKOFF_MS if control_update_applied else 0,
+            poll_after_ms=(
+                _CONTROL_UPDATE_BACKOFF_MS if commands.progressed else 0
+            ),
         )
 
     # Idle path: wait for a poke, falling back to a slow re-query so a missed

@@ -18,6 +18,7 @@ import pytest
 
 from app.modules.agent.domain.value_objects import AgentEvent, AgentEventType
 from app.modules.agent.infrastructure.agent_host_event_stream import StreamBatch
+from app.modules.agent.infrastructure.harnesses import agent_host
 from app.modules.agent.infrastructure.harnesses.agent_host import RemoteHarness
 from app.modules.agent.infrastructure.harnesses.agent_host_run_window import (
     DispatchedRun,
@@ -66,7 +67,9 @@ def _stub_dispatch(harness: RemoteHarness, monkeypatch: pytest.MonkeyPatch) -> N
             credential_bounded=False,
         )
 
-    monkeypatch.setattr(harness, "_enqueue_run", _enqueue)
+    # Dispatch lives in its own module now; the harness imported the name,
+    # so that binding is what a stub has to replace.
+    monkeypatch.setattr(agent_host, "enqueue_run", _enqueue)
 
 
 async def _drive(harness: RemoteHarness, agent_run_id):
@@ -158,7 +161,7 @@ class TestStreamDeletion:
         async def _refuse(**_kwargs):
             raise RuntimeError("Agent Host harness is unavailable")
 
-        monkeypatch.setattr(harness, "_enqueue_run", _refuse)
+        monkeypatch.setattr(agent_host, "enqueue_run", _refuse)
 
         events = [event async for event in await _drive(harness, agent_run_id)]
 

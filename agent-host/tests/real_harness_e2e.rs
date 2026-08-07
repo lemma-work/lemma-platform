@@ -126,6 +126,8 @@ async fn authenticated_harnesses_stream_real_answers_over_acp() {
                         can_load_session: false,
                         permissions: PermissionGate::new(),
                         permission_timeout: Duration::ZERO,
+                        cancel: lemma_agent_host::acp::never_cancelled(),
+                        cancel_grace: Duration::from_secs(5),
                     },
                     callbacks.clone(),
                 )
@@ -162,13 +164,35 @@ async fn authenticated_harnesses_stream_real_answers_over_acp() {
         }
     }
 
-    run_through_paired_agent_host(&paths, "codex").await;
+    // Whichever agent the developer selected, not a hardcoded one:
+    // `LEMMA_REAL_AGENT_E2E_AGENTS` exists so a machine with only some of the
+    // harnesses authenticated can still run this, and pinning Codex here meant
+    // selecting any other agent still failed on Codex's credentials.
+    let agent = configured_agents()
+        .into_iter()
+        .next()
+        .expect("at least one agent must be configured");
+    run_through_paired_agent_host(&paths, &agent).await;
+}
+
+/// The one working directory a conversation's turns all share.
+///
+/// A provider may refuse to load a session into a different cwd — Claude Code
+/// does — so a conversation that wandered between directories would fail every
+/// resume and start over each turn. `runtime::scratch_directory` keys the real
+/// thing on the conversation for the same reason.
+fn conversation_workspace(paths: &HostPaths, agent: &str, conversation_id: Uuid) -> PathBuf {
+    paths
+        .root
+        .join("real-conversations")
+        .join(agent)
+        .join(conversation_id.to_string())
 }
 
 /// Drive one turn and return `(session id, what the agent streamed back)`.
 async fn one_turn(
     manifest: &AdapterManifest,
-    paths: &HostPaths,
+    workspace: &std::path::Path,
     agent: &str,
     conversation_id: Uuid,
     prompt: &str,
@@ -194,18 +218,17 @@ async fn one_turn(
                     mcp: Value::Null,
                     run_deadline: Utc::now() + chrono::Duration::minutes(5),
                 },
-                scratch_directory: paths
-                    .root
-                    .join("real-continuity")
-                    .join(agent)
-                    // Both turns share a directory: a provider is entitled to
-                    // refuse to load a session into a different cwd, and a
-                    // Lemma conversation keeps one workspace anyway.
-                    .join(conversation_id.to_string()),
+                // The caller's directory, not one invented here. A provider
+                // is entitled to refuse to load a session into a different cwd
+                // — Claude Code does — and a Lemma conversation keeps one
+                // workspace precisely so this cannot drift.
+                scratch_directory: workspace.to_path_buf(),
                 mcp_server: None,
                 can_load_session: true,
                 permissions: PermissionGate::new(),
                 permission_timeout: Duration::ZERO,
+                cancel: lemma_agent_host::acp::never_cancelled(),
+                cancel_grace: Duration::from_secs(5),
             },
             callbacks.clone(),
         )
@@ -243,9 +266,10 @@ async fn a_conversation_keeps_one_provider_session_across_turns() {
 
     for agent in configured_agents() {
         let conversation_id = Uuid::new_v4();
+        let workspace = conversation_workspace(&paths, &agent, conversation_id);
         let (session_id, _) = one_turn(
             &manifest,
-            &paths,
+            &workspace,
             &agent,
             conversation_id,
             "My name is Ada. Remember it.",
@@ -256,7 +280,7 @@ async fn a_conversation_keeps_one_provider_session_across_turns() {
         let started = std::time::Instant::now();
         let (resumed_session_id, answer) = one_turn(
             &manifest,
-            &paths,
+            &workspace,
             &agent,
             conversation_id,
             "What is my name? Reply with just the name.",
@@ -300,11 +324,12 @@ async fn a_session_the_provider_has_forgotten_still_answers() {
         .with_cache_root(paths.adapters.clone());
 
     for agent in configured_agents() {
+        let conversation_id = Uuid::new_v4();
         let (session_id, answer) = one_turn(
             &manifest,
-            &paths,
+            &conversation_workspace(&paths, &agent, conversation_id),
             &agent,
-            Uuid::new_v4(),
+            conversation_id,
             "Reply with exactly: LEMMA_FALLBACK_OK",
             Some(Uuid::new_v4().to_string()),
         )
@@ -368,6 +393,8 @@ async fn codex_native_image_generation_creates_a_publishable_artifact() {
             can_load_session: false,
             permissions: PermissionGate::new(),
             permission_timeout: Duration::ZERO,
+            cancel: lemma_agent_host::acp::never_cancelled(),
+            cancel_grace: Duration::from_secs(5),
         },
         callbacks,
     );
@@ -876,4 +903,215 @@ async fn run_through_paired_agent_host(source_paths: &HostPaths, agent: &str) {
         "paired Agent Host did not durably append a terminal event"
     );
     println!("paired-agent-host: LEMMA_PAIRED_AGENT_HOST_STREAM_OK");
+}
+
+/// How much output has to have streamed before cancelling is meaningful.
+///
+/// Below this the turn may simply have finished, and cancelling something that
+/// already ended proves nothing about cancellation.
+const CANCEL_AFTER_CHARS: usize = 200;
+
+/// Everything the agent has streamed so far.
+fn streamed_text(callbacks: &StreamCapture) -> String {
+    callbacks
+        .events
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(event_type, _)| *event_type == EventType::AgentMessageChunk)
+        .filter_map(|(_, payload)| payload.get("text").and_then(Value::as_str))
+        .collect()
+}
+
+/// Cancelling a turn must ask the agent to stop, not kill it mid-thought.
+///
+/// The host used to answer `CANCEL_RUN` by killing the adapter's process tree.
+/// That ends the turn, but it ends it before the provider has written the
+/// session file the conversation's *next* turn loads — so stopping one message
+/// could silently cost the conversation its whole history. This asserts both
+/// halves against a real provider: that it honours `session/cancel` with ACP's
+/// own `cancelled` stop reason, and that the session it was working in is still
+/// there afterwards.
+#[tokio::test]
+#[ignore = "requires authenticated local agents and spends real provider quota"]
+async fn a_real_agent_stops_on_session_cancel_and_keeps_its_session() {
+    let paths = HostPaths::under(agent_host_data_directory());
+    let manifest = AdapterManifest::builtin()
+        .unwrap()
+        .with_cache_root(paths.adapters.clone());
+
+    for agent in configured_agents() {
+        let conversation_id = Uuid::new_v4();
+        let scratch = paths
+            .root
+            .join("real-cancel")
+            .join(&agent)
+            .join(conversation_id.to_string());
+        let callbacks = Arc::new(StreamCapture::default());
+        let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
+
+        // Ask it to stop only once it is demonstrably mid-answer, not merely
+        // once *something* has streamed. Cancelling on the first event races a
+        // turn that may already have finished, and a turn that finished on its
+        // own reports `end_turn` quite correctly — which would make this a
+        // measure of how fast the provider is rather than of anything we do.
+        let watching = {
+            let callbacks = Arc::clone(&callbacks);
+            tokio::spawn(async move {
+                for _ in 0..900 {
+                    if streamed_text(&callbacks).len() >= CANCEL_AFTER_CHARS {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
+                cancel_tx.send_replace(true);
+            })
+        };
+
+        let outcome = AcpDriver
+            .run(
+                AcpRunRequest {
+                    adapter: manifest.resolve(&agent).unwrap(),
+                    run_spec: RunSpec {
+                        agent_run_id: Uuid::new_v4(),
+                        conversation_id,
+                        harness_id: Uuid::new_v4(),
+                        profile_revision: "real-cancel-e2e".to_owned(),
+                        model_name: None,
+                        config_selections: JsonMap::new(),
+                        system_prompt: "Do exactly what the user asks.".to_owned(),
+                        prompt: vec![json!({
+                            "type": "text",
+                            // Prose, not counting: models shortcut a
+                            // mechanical "list 1..300" with a sentence, and a
+                            // turn that ends in 29 characters cannot be
+                            // interrupted. An essay reliably streams for a
+                            // while, which is the precondition this needs.
+                            "text": "Write a detailed 2000-word essay on the \
+                                     history of the bicycle, directly in your \
+                                     reply. Do not use any tools.",
+                        })],
+                        resume_session_id: None,
+                        context: BTreeMap::new(),
+                        mcp: Value::Null,
+                        run_deadline: Utc::now() + chrono::Duration::minutes(5),
+                    },
+                    scratch_directory: scratch.clone(),
+                    mcp_server: None,
+                    can_load_session: true,
+                    permissions: PermissionGate::new(),
+                    permission_timeout: Duration::ZERO,
+                    cancel: cancel_rx,
+                    cancel_grace: Duration::from_secs(30),
+                },
+                Arc::clone(&callbacks) as Arc<dyn AcpCallbacks>,
+            )
+            .await
+            .unwrap_or_else(|error| panic!("{agent} cancelled run failed: {error:#}"));
+        watching.await.unwrap();
+
+        let answer = streamed_text(&callbacks);
+        // Whether the turn was long enough to interrupt is the provider's
+        // choice, not ours: a model that declines to count, or finishes before
+        // the cancel lands, leaves nothing to have cancelled. Say so and move
+        // on rather than asserting on a run that proves nothing — the
+        // deterministic version of this lives in `cancel_flow_e2e`.
+        if answer.len() < CANCEL_AFTER_CHARS {
+            println!(
+                "{agent}: SKIPPED — the turn ended on its own after {} chars, \
+                 so there was nothing to cancel",
+                answer.len()
+            );
+            continue;
+        }
+        // The state is ours to get right, whatever the agent reports. ACP
+        // requires `cancelled` here and OpenCode says `end_turn`; taking that
+        // literally recorded a run the user stopped as SUCCEEDED, with a
+        // truncated answer presented as the whole one.
+        assert_eq!(
+            outcome.state,
+            RunState::Cancelled,
+            "{agent} reported stop_reason {:?} and the run was recorded as {:?} \
+             rather than cancelled, after {} chars",
+            outcome.stop_reason,
+            outcome.state,
+            answer.len()
+        );
+        if outcome.stop_reason != "cancelled" {
+            println!(
+                "{agent}: NOTE ends a cancelled turn as {:?}, not ACP's \
+                 `cancelled` — Lemma relies on its own record instead",
+                outcome.stop_reason
+            );
+        }
+
+        // The point of asking rather than killing: the session the agent was
+        // working in is still there, so the conversation continues in it rather
+        // than starting over.
+        // The same working directory the cancelled turn ran in: resuming a
+        // session into a different cwd is a load a provider may simply refuse.
+        let (resumed_session, answer) = one_turn(
+            &manifest,
+            &scratch,
+            &agent,
+            conversation_id,
+            "In one short sentence, what were you just doing?",
+            Some(outcome.provider_session_id.clone()),
+        )
+        .await;
+        // Whether the session survives a cancelled turn is the provider's own
+        // business, and they differ: OpenCode loads it back, Claude Code
+        // refuses. Lemma does not depend on either, which is the point -- it
+        // keeps its own messages and the host attaches them whenever it ends up
+        // opening a new session. Reported rather than asserted.
+        if resumed_session == outcome.provider_session_id {
+            println!("{agent}: cancelled cleanly and resumed the same session");
+        } else {
+            println!(
+                "{agent}: NOTE refuses to load a cancelled turn's session, so \
+                 the next turn opens a new one and the prompt carries the \
+                 conversation"
+            );
+        }
+        let _ = answer;
+    }
+}
+
+/// A run that cannot resume a provider session must still know the conversation.
+///
+/// Lemma sends only the latest message when it knows the agent can resume. When
+/// it cannot — a harness with no `loadSession`, or a session the provider has
+/// since forgotten — the prompt carries the conversation instead. That rendering
+/// is only worth anything if a real agent can actually use it, which is what
+/// this checks: a fresh session, no resume id, and a question that can only be
+/// answered from the history in the prompt.
+#[tokio::test]
+#[ignore = "requires authenticated local agents and spends real provider quota"]
+async fn a_real_agent_answers_from_history_carried_in_the_prompt() {
+    let paths = HostPaths::under(agent_host_data_directory());
+    let manifest = AdapterManifest::builtin()
+        .unwrap()
+        .with_cache_root(paths.adapters.clone());
+
+    for agent in configured_agents() {
+        let (_, answer) = one_turn(
+            &manifest,
+            &conversation_workspace(&paths, &agent, Uuid::new_v4()),
+            &agent,
+            Uuid::new_v4(),
+            // Exactly the shape `remote_payload._render_history` produces.
+            "USER:\nMy favourite colour is teal.\n\n\
+             ASSISTANT:\nNoted, teal it is.\n\n\
+             USER:\nWhat is my favourite colour? Reply with only the colour.",
+            None,
+        )
+        .await;
+
+        assert!(
+            answer.to_lowercase().contains("teal"),
+            "{agent} could not use the history the prompt carried; it answered \
+             {answer:?}"
+        );
+        println!("{agent}: answered from prompt-carried history");
+    }
 }

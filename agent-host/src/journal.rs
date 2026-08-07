@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
+use serde_json::Value;
 use uuid::Uuid;
 
 use crate::protocol::{
@@ -977,6 +978,45 @@ impl Journal {
         }
         transaction.commit()?;
         Ok(())
+    }
+
+    /// Replace a live run's Lemma MCP configuration.
+    ///
+    /// The credential inside it expires while long turns are still running, so
+    /// Lemma sends a replacement and this is where it lands. Durable rather
+    /// than held in memory because the bridge is a *separate process* that
+    /// reads its endpoint from here on every request — that is the whole
+    /// delivery mechanism.
+    ///
+    /// Fenced on the lease epoch, so a credential minted for a superseded
+    /// dispatch cannot overwrite the current one.
+    pub fn refresh_run_mcp(
+        &self,
+        target_id: Uuid,
+        run_id: Uuid,
+        lease_epoch: u32,
+        mcp: &Value,
+    ) -> Result<bool, JournalError> {
+        let Some(run) = self.get_run(target_id, run_id)? else {
+            return Ok(false);
+        };
+        if run.lease_epoch != lease_epoch || run.state.is_terminal() {
+            return Ok(false);
+        }
+        let mut spec = run.spec;
+        spec.mcp = mcp.clone();
+        let connection = self.connection()?;
+        let updated = connection.execute(
+            "UPDATE runs SET spec_json=?3, updated_at=?4 \
+             WHERE target_id=?1 AND run_id=?2",
+            params![
+                target_id.to_string(),
+                run_id.to_string(),
+                serde_json::to_string(&spec)?,
+                Utc::now().to_rfc3339(),
+            ],
+        )?;
+        Ok(updated > 0)
     }
 
     pub fn get_run(
