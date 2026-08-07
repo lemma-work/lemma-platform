@@ -1,9 +1,8 @@
-"""Chooses who provisions sandboxes, and builds the pieces for that choice.
+"""Builds the sandbox service and the adapters that sit on it.
 
-While both paths exist, ``workspace_owns_sandboxes`` is the single switch. It
-is a config flag rather than a code branch at each call site so the cutover can
-be rolled forward and back without a deploy of different code, and so exactly
-one place has to be read to know which path is live.
+There is one provisioning path now. This used to hold the cutover switch that
+chose between it and the AgentBox manager; the manager is gone, so what remains
+is composition rather than choice.
 """
 
 from __future__ import annotations
@@ -27,10 +26,6 @@ from app.modules.workspace.services.sandbox_service import SandboxService
 
 _service: SandboxService | None = None
 _service_key: tuple[int, str] | None = None
-
-
-def workspace_owns_sandboxes() -> bool:
-    return bool(settings.workspace_owns_sandboxes)
 
 
 def get_sandbox_service() -> SandboxService:
@@ -66,8 +61,7 @@ def build_local_client() -> LocalSandboxClient:
 class LocalSandbox(ISandbox):
     """``ISandbox`` over the local sandbox service.
 
-    Exists so ``WorkspaceSandboxService`` keeps one shape for both paths. It
-    resolves the row before ensuring, because a user whose default workspace
+    Resolves the row before ensuring, because a user whose default workspace
     predates the backfill -- or was created after it -- still has to get one.
     """
 

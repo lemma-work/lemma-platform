@@ -63,15 +63,15 @@ def _cleanup_e2e_workspace_containers(*, sandboxes_only: bool = False) -> None:
     """Remove leftover Docker containers created by e2e runs.
 
     The shared session testcontainers (postgres/redis/supertokens/kreuzberg) and
-    the AgentBox sandbox pods BOTH carry ``lemma.e2e=true``, so a broad sweep by
-    that label would tear down the live session containers mid-run. AgentBox
-    sandbox pods additionally carry ``app.kubernetes.io/name=agentbox-sandbox``
-    (set unconditionally in ``agentbox/providers/docker.py``).
+    the sandboxes BOTH carry ``lemma.e2e=true``, so a broad sweep by that label
+    would tear down the live session containers mid-run. Sandboxes are
+    identifiable on their own: the workspace module labels its containers
+    ``managed-by=lemma-workspace``, and pre-cutover ones carry
+    ``app.kubernetes.io/name=agentbox-sandbox``.
 
-    - ``sandboxes_only=True`` (per-test cleanup): remove ONLY agentbox sandbox
-      pods, sparing the shared session containers — otherwise the workspace
-      teardown after the first test kills postgres/redis and every later test
-      fails to connect.
+    - ``sandboxes_only=True`` (per-test cleanup): remove ONLY sandboxes, sparing
+      the shared session containers — otherwise the workspace teardown after the
+      first test kills postgres/redis and every later test fails to connect.
     - default (session boundaries): remove ALL e2e-labeled containers for a clean
       slate, which is safe because the session containers aren't up yet (start)
       or are being torn down anyway (finish).
@@ -80,9 +80,7 @@ def _cleanup_e2e_workspace_containers(*, sandboxes_only: bool = False) -> None:
         return
 
     # Docker's filters are conjunctive, so each way of labelling a sandbox has
-    # to be swept separately. The workspace module labels its own containers
-    # `managed-by=lemma-workspace`; without that pass, every run that
-    # provisions through it leaves its sandboxes behind.
+    # to be swept separately.
     #
     # Note this sweep is machine-wide, not run-scoped: two e2e runs sharing a
     # Docker daemon will destroy each other's sandboxes, which surfaces as
@@ -353,29 +351,13 @@ def e2e_settings(test_database_url, test_redis_url, supertokens_container):
         f"/tmp/lemma-object-storage-tests{worker_suffix}"
     )
 
-    # Pin a stable, session-wide AgentBox manager endpoint. The worker subprocess
-    # is session-scoped and captures os.environ once at spawn, while the manager
-    # (``local_agentbox_server``) is recreated per test -- if its port changed per
-    # test the worker would point at a dead port and every worker-driven job would
-    # fail with ConnectError. Fixing the port here (set before the worker spawns,
-    # since the worker depends on this fixture) lets the manager rebind to it each
-    # test and keeps the worker's captured URL valid for the whole run.
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.bind(("127.0.0.1", 0))
-        agentbox_port = int(sock.getsockname()[1])
-    agentbox_url = f"http://127.0.0.1:{agentbox_port}"
-    agentbox_key = settings.agentbox_api_key or "e2e-agentbox-key"
-    settings.agentbox_api_url = agentbox_url
-    settings.agentbox_api_key = agentbox_key
-    os.environ["AGENTBOX_API_URL"] = agentbox_url
-    os.environ["AGENTBOX_API_KEY"] = agentbox_key
-
-    # Pin the callback server to one session-wide port for the same reason as
-    # AgentBox above. Queued functions are dispatched by the session-scoped
-    # worker, whose settings are loaded once when its subprocess starts. The
-    # function-scoped backend server rebinds this port for each test, so both
-    # API- and worker-driven sandboxes receive the same explicit, reachable URL.
-    # Production code intentionally performs no localhost/container rewriting.
+    # Pin the callback server to one session-wide port. Queued functions are
+    # dispatched by the session-scoped worker, whose settings load once when its
+    # subprocess starts, so a port that changed per test would leave it pointing
+    # at a dead one. The function-scoped backend server rebinds this port for
+    # each test, so both API- and worker-driven sandboxes get the same explicit,
+    # reachable URL. Production code intentionally performs no localhost or
+    # container-hostname rewriting.
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.bind(("127.0.0.1", 0))
         callback_port = int(sock.getsockname()[1])
@@ -630,8 +612,6 @@ async def worker(e2e_settings, sandbox_reachable_backend):
                 ),
                 # The manager rebinds to this stable port each test; keep the
                 # worker pointed at it so worker-driven function jobs reach it.
-                "AGENTBOX_API_URL": e2e_settings.agentbox_api_url,
-                "AGENTBOX_API_KEY": e2e_settings.agentbox_api_key,
                 "SUPERTOKENS_CORE_URL": e2e_settings.supertokens_core_url,
                 "ENVIRONMENT": "testing",
                 "DEBUG": "true",

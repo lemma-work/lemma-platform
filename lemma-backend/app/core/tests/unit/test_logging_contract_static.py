@@ -3,10 +3,8 @@
 from __future__ import annotations
 
 import ast
-from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 import re
-import sys
 
 from app.core.log.event_catalog import EVENT_CATALOG as BACKEND_CATALOG
 
@@ -40,16 +38,6 @@ PROHIBITED_FIELD_PARTS = {
 }
 
 
-def _load_agentbox_catalog():
-    path = REPO_ROOT / "agentbox" / "agentbox" / "event_catalog.py"
-    spec = spec_from_file_location("agentbox_event_catalog_for_test", path)
-    assert spec is not None and spec.loader is not None
-    module = module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module.EVENT_CATALOG
-
-
 def _logger_method(node: ast.Call) -> str | None:
     if not isinstance(node.func, ast.Attribute) or node.func.attr not in METHODS:
         return None
@@ -78,7 +66,10 @@ def test_every_runtime_log_call_matches_its_exact_catalog_contract() -> None:
     roots = {
         REPO_ROOT / "lemma-backend" / "app": BACKEND_CATALOG,
         REPO_ROOT / "lemma-backend" / "scripts": BACKEND_CATALOG,
-        REPO_ROOT / "agentbox" / "agentbox": _load_agentbox_catalog(),
+        # agentbox had its own catalog for the manager's logging. What survives
+        # of that package -- the two sandbox runtimes, the domain types and the
+        # wire contracts -- contains no logging calls at all, so there is no
+        # longer a second catalog to hold to its contract.
     }
     failures: list[str] = []
     seen_by_catalog: dict[int, set[str]] = {id(catalog): set() for catalog in roots.values()}

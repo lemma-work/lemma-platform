@@ -1,4 +1,9 @@
-"""Workspace sandbox service for AgentBox and local Docker runtimes."""
+"""Sessions, environment and file access over a provisioned workspace.
+
+Sits above ``SandboxService``: that decides a sandbox exists, this decides
+what a caller is allowed to do with one and hands back a session bound to
+the right workspace, cwd and credentials.
+"""
 
 from __future__ import annotations
 
@@ -8,10 +13,9 @@ from typing import Optional
 from uuid import UUID, uuid4
 
 from app.core.config import settings
-from app.core.request_context import correlation_headers, create_inherited_task
+from app.core.request_context import create_inherited_task
 from agentbox_client import (
     AgentBoxApiError,
-    AgentBoxClient,
     PortAccessGrant,
     PortProtocol,
     RetryDisposition,
@@ -22,11 +26,8 @@ from app.modules.workspace.agentbox_session import (
     AgentBoxWorkspaceSession,
     canonical_workspace_cwd,
 )
-from app.modules.workspace.services.agentbox_manager import (
-    AgentBoxSandbox,
-    agentbox_sandbox_id,
-)
 from app.modules.workspace.services.interfaces import ISandbox, IWorkspaceSession
+from app.modules.workspace.services.local_sandbox_client import LocalSandboxClient
 from app.modules.workspace.services.workspace_process_store import WorkspaceProcessStore
 from app.modules.workspace.services.workspace_storage_generation_store import (
     WorkspaceStorageGenerationStore,
@@ -65,9 +66,6 @@ async def reset_workspace_store_state() -> None:
 class WorkspaceSandboxService:
     """Service for user-scoped workspace sandbox lifecycle and sessions."""
 
-    # Process-shared manager client, keyed by (base_url, api_key). Reused across
-    # tool calls so each call doesn't open a fresh httpx connection pool.
-    _shared_manager_client: "tuple[tuple[str, str, int], AgentBoxClient] | None" = None
     _inflight_ensures: dict[tuple[int, UUID], asyncio.Task[SandboxInfo]] = {}
     _inflight_directories: dict[
         tuple[int, UUID, str, int, str], asyncio.Task[SandboxInfo]
@@ -88,14 +86,9 @@ class WorkspaceSandboxService:
         self.process_store = process_store or get_workspace_process_store()
 
     def _build_sandbox(self) -> ISandbox:
-        from app.modules.workspace.services.sandbox_composition import (
-            LocalSandbox,
-            workspace_owns_sandboxes,
-        )
+        from app.modules.workspace.services.sandbox_composition import LocalSandbox
 
-        if workspace_owns_sandboxes():
-            return LocalSandbox()
-        return AgentBoxSandbox()
+        return LocalSandbox()
 
     async def close(self) -> None:
         close = getattr(self.sandbox, "close", None)
@@ -104,16 +97,18 @@ class WorkspaceSandboxService:
 
     @classmethod
     async def close_shared_manager_client(cls) -> None:
-        cached = cls._shared_manager_client
-        cls._shared_manager_client = None
+        """Cancel in-flight directory work at shutdown.
+
+        The name is from when this also disposed a pooled HTTP client to the
+        manager. The client is in-process now and owns no connection pool, so
+        only the tasks remain.
+        """
         directory_tasks = tuple(cls._inflight_directories.values())
         for task in directory_tasks:
             task.cancel()
         if directory_tasks:
             await asyncio.gather(*directory_tasks, return_exceptions=True)
         cls._inflight_directories.clear()
-        if cached is not None:
-            await cached[1].close()
 
     async def _get_sandbox_info(self, user_id: UUID) -> SandboxInfo | None:
         return await self.sandbox.get_sandbox(user_id)
@@ -227,7 +222,7 @@ class WorkspaceSandboxService:
             await self.get_or_create_sandbox(user_id)
         return await self._get_manager_client().create_port_access(
             WorkloadKind.WORKSPACE,
-            agentbox_sandbox_id(user_id),
+            user_id,
             4848,
             protocol=PortProtocol.HTTP,
             expires_at=datetime.now(timezone.utc) + timedelta(seconds=ttl_seconds),
@@ -345,7 +340,7 @@ class WorkspaceSandboxService:
 
         return AgentBoxWorkspaceSession(
             client=self._get_manager_client(),
-            sandbox_id=str(agentbox_sandbox_id(user_id)),
+            sandbox_id=str(user_id),
             session_id=session_id,
             env_vars=env_vars,
             initial_cwd=resolved_cwd,
@@ -411,7 +406,7 @@ class WorkspaceSandboxService:
                 )
             try:
                 await self._get_manager_client().create_directory(
-                    agentbox_sandbox_id(user_id),
+                    user_id,
                     path,
                     deadline_at=deadline_at,
                 )
@@ -432,7 +427,7 @@ class WorkspaceSandboxService:
                 continue
             return sandbox_info
         raise TimeoutError(
-            f"workspace sandbox {agentbox_sandbox_id(user_id)} did not become usable"
+            f"workspace sandbox {user_id} did not become usable"
         )
 
     def _directory_cache_key(
@@ -456,39 +451,14 @@ class WorkspaceSandboxService:
             path,
         )
 
-    def _get_manager_client(self) -> AgentBoxClient:
-        """Return the client the session and file operations run through.
+    def _get_manager_client(self) -> LocalSandboxClient:
+        """The client the session and file operations run through.
 
-        When this module owns provisioning, that is a local client with the
-        same surface -- which is why the session above it needs no changes.
-
-        The AgentBox path is pooled so parallel/sequential tool calls reuse one
-        httpx connection pool instead of paying a fresh TLS handshake to the
-        manager on every call. The cache key includes the running event loop id
-        so a new client is created when settings change or when a different
-        loop is in play (e.g. tests), since an httpx.AsyncClient is bound to
-        the loop that created it.
+        In-process, with the surface the AgentBox HTTP client had -- which is
+        why the session above it never needed to know the difference.
         """
         from app.modules.workspace.services.sandbox_composition import (
             build_local_client,
-            workspace_owns_sandboxes,
         )
 
-        if workspace_owns_sandboxes():
-            return build_local_client()  # type: ignore[return-value]
-
-        api_key = settings.agentbox_api_key
-        if not api_key:
-            raise RuntimeError("AGENTBOX_API_KEY is required for workspace sandboxes")
-        key = (settings.agentbox_api_url, api_key, id(asyncio.get_running_loop()))
-        cached = WorkspaceSandboxService._shared_manager_client
-        if cached is not None and cached[0] == key:
-            return cached[1]
-        client = AgentBoxClient(
-            base_url=settings.agentbox_api_url,
-            api_key=api_key,
-            timeout_seconds=_SANDBOX_MANAGER_HTTP_TIMEOUT_SECONDS,
-            context_headers_provider=correlation_headers,
-        )
-        WorkspaceSandboxService._shared_manager_client = (key, client)
-        return client
+        return build_local_client()
