@@ -2,6 +2,8 @@
 
 import { useState } from 'react';
 import { Bell } from '@/components/ui/icons';
+import { Button } from '@/components/ui/button';
+import { Textarea } from '@/components/ui/textarea';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { formatRelativeTime } from '@/lib/utils/relative-time';
 import {
@@ -82,7 +84,7 @@ function NotificationRow({
                         {notification.body}
                     </p>
 
-                    <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-[var(--text-tertiary)]">
+                    <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs leading-4 text-[var(--text-tertiary)]">
                         <span>{formatRelativeTime(notification.created_at)}</span>
                         {notification.delivery_platform ? (
                             <span>· {notification.delivery_platform.toLowerCase()}</span>
@@ -98,7 +100,7 @@ function NotificationRow({
                         can fix in a minute, so it is worth the line. */}
                     {notification.delivery_status === 'UNDELIVERABLE' &&
                     notification.undeliverable_reason ? (
-                        <p className="mt-1 text-[11px] leading-4 text-[var(--text-tertiary)]">
+                        <p className="mt-1 text-xs leading-4 text-[var(--text-tertiary)]">
                             Not sent to a chat app: {notification.undeliverable_reason}
                         </p>
                     ) : null}
@@ -112,80 +114,88 @@ function NotificationRow({
                     {notification.awaiting_response ? (
                         <div className="mt-2">
                             {notification.responds_through_action ? (
-                                <button
+                                <Button
                                     type="button"
+                                    variant="secondary"
+                                    size="xs"
                                     onClick={() => onOpenAction(notification)}
-                                    className="custom-focus-ring rounded-md border border-[var(--border-subtle)] bg-[var(--surface-2)] px-2 py-1 text-xs text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-3)]"
                                 >
                                     Open form
-                                </button>
+                                </Button>
                             ) : replying ? (
                                 <div className="flex flex-col gap-1.5">
-                                    <textarea
+                                    <Textarea
                                         autoFocus
                                         rows={2}
                                         value={draft}
                                         onChange={(event) => setDraft(event.target.value)}
                                         placeholder="Your reply"
-                                        className="custom-focus-ring w-full resize-none rounded-md border border-[var(--border-subtle)] bg-[var(--surface-1)] px-2 py-1.5 text-xs text-[var(--text-primary)]"
+                                        className="min-h-16 resize-none text-xs"
                                     />
                                     <div className="flex items-center gap-1.5">
-                                        <button
+                                        <Button
                                             type="button"
+                                            variant="secondary"
+                                            size="xs"
                                             onClick={submit}
                                             disabled={!draft.trim() || respond.isPending}
-                                            className="custom-focus-ring rounded-md border border-[var(--border-subtle)] bg-[var(--surface-2)] px-2 py-1 text-xs text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-3)] disabled:opacity-50"
                                         >
                                             {respond.isPending ? 'Sending…' : 'Send'}
-                                        </button>
-                                        <button
+                                        </Button>
+                                        <Button
                                             type="button"
+                                            variant="quiet"
+                                            size="xs"
                                             onClick={() => setReplying(false)}
-                                            className="custom-focus-ring rounded-md px-2 py-1 text-xs text-[var(--text-tertiary)] transition-colors hover:text-[var(--text-primary)]"
                                         >
                                             Cancel
-                                        </button>
+                                        </Button>
                                     </div>
                                     {/* 409 means somebody answered while this was
                                         open. Say so — the row is stale and
                                         silently failing would leave them retyping. */}
                                     {respond.isError ? (
-                                        <p className="text-[11px] text-[var(--text-danger,#c33)]">
+                                        <p className="text-xs leading-4 text-[var(--state-error)]">
                                             Could not record that — it may already have
                                             been answered.
                                         </p>
                                     ) : null}
                                 </div>
                             ) : (
-                                <button
+                                <Button
                                     type="button"
+                                    variant="secondary"
+                                    size="xs"
                                     onClick={() => setReplying(true)}
-                                    className="custom-focus-ring rounded-md border border-[var(--border-subtle)] bg-[var(--surface-2)] px-2 py-1 text-xs text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-3)]"
                                 >
                                     Respond
-                                </button>
+                                </Button>
                             )}
                         </div>
                     ) : notification.status === 'OPEN' ? (
-                        <button
+                        <Button
                             type="button"
+                            variant="quiet"
+                            size="xs"
+                            className="mt-2"
                             onClick={() => acknowledge.mutate(notification.id)}
-                            className="custom-focus-ring mt-2 rounded-md px-2 py-1 text-xs text-[var(--text-tertiary)] transition-colors hover:text-[var(--text-primary)]"
                         >
                             Dismiss
-                        </button>
+                        </Button>
                     ) : null}
                 </div>
 
                 {unread ? (
-                    <button
+                    <Button
                         type="button"
+                        variant="quiet"
+                        size="xs"
+                        className="shrink-0"
                         onClick={() => markRead.mutate(notification.id)}
-                        className="custom-focus-ring shrink-0 rounded-md px-1.5 py-0.5 text-[11px] text-[var(--text-tertiary)] transition-colors hover:text-[var(--text-primary)]"
                         title="Mark read"
                     >
                         Mark read
-                    </button>
+                    </Button>
                 ) : null}
             </div>
         </li>
@@ -226,7 +236,7 @@ export function NotificationsBell({ podId }: NotificationsBellProps) {
                     {unread > 0 ? (
                         <span
                             aria-hidden
-                            className="absolute right-1 top-1 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-[var(--accent-9)] px-1 text-[9px] font-medium leading-none text-[var(--accent-contrast,#fff)]"
+                            className="absolute right-0.5 top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-[var(--accent-9)] px-1 text-xs font-medium leading-none text-[var(--text-on-brand)]"
                         >
                             {unread > 9 ? '9+' : unread}
                         </span>
@@ -239,13 +249,14 @@ export function NotificationsBell({ podId }: NotificationsBellProps) {
                         Notifications
                     </span>
                     {unread > 0 ? (
-                        <button
+                        <Button
                             type="button"
+                            variant="quiet"
+                            size="xs"
                             onClick={() => markAllRead.mutate()}
-                            className="custom-focus-ring rounded-md px-1.5 py-0.5 text-xs text-[var(--text-tertiary)] transition-colors hover:text-[var(--text-primary)]"
                         >
                             Mark all read
-                        </button>
+                        </Button>
                     ) : null}
                 </div>
 
