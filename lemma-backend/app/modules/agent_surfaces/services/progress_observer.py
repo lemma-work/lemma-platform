@@ -23,6 +23,7 @@ from app.modules.agent_surfaces.platforms.platform_capabilities import (
     PLATFORM_CAPABILITIES,
 )
 from app.modules.agent_surfaces.platforms.rendering import (
+    ThinkingStreamFilter,
     sanitize_user_visible_text,
     strip_thinking_tokens,
 )
@@ -42,12 +43,19 @@ _MAX_TYPING_REFRESH_SECONDS = 15 * 60.0
 # WhatsApp has no message-edit API, so it gets no per-step progress (the inbound
 # reaction indicator signals work) and email gets a single composed reply.
 _TEXT_PROGRESS_PLATFORMS: set[str] = set()
+# Slack is deliberately absent: it streams the answer token by token, and a
+# step chunk appended into that same stream lands *inside* the sentence being
+# written — splitting it mid-word. The streamed text is the progress indicator,
+# so a separate step timeline is both redundant and destructive.
 _STREAM_PROGRESS_PLATFORMS = {
-    SurfacePlatform.SLACK.value,
     SurfacePlatform.TELEGRAM.value,
     SurfacePlatform.TEAMS.value,
 }
 _MIN_TEXT_PROGRESS_INTERVAL_SECONDS = 2.0
+# Token flush policy: batch deltas so a fast model does not spend the Slack
+# rate limit one word at a time, while staying frequent enough to read as live.
+_TOKEN_FLUSH_CHARS = 280
+_TOKEN_FLUSH_INTERVAL_SECONDS = 0.8
 _MAX_PROGRESS_TEXT_LENGTH = 120
 # Email recipients should get one composed reply, not a stream of chat
 # messages. Agents reply via the platform reply tools; the observer only
@@ -109,6 +117,17 @@ class SurfaceAgentRunProgressObserver:
         # Opaque handle for the live progress message on streaming platforms
         # (Telegram/Teams), threaded across edits and cleared on finish.
         self._progress_handle: dict[str, Any] | None = None
+        # Live token streaming. ``_streamed_text`` is what the user has already
+        # seen in the stream; ``_token_buffer`` is what has arrived but not yet
+        # been flushed. Flushing every token would blow Slack's rate limit, so
+        # deltas are batched by size or elapsed time, whichever comes first.
+        self._token_buffer: str = ""
+        self._streamed_text: str = ""
+        self._last_token_flush: float = 0.0
+        # Reasoning arrives inline in the text stream on some models
+        # (``<think>…</think>``), and a tag can straddle two deltas — so the
+        # filter has to be stateful across the whole run.
+        self._think_filter = ThinkingStreamFilter()
         self._rendered_waiting_tool_calls: set[tuple[str, str]] = set()
 
     async def on_run_started(
@@ -120,6 +139,14 @@ class SurfaceAgentRunProgressObserver:
         platform = _surface_platform(conversation)
         if platform is None:
             return
+        capabilities = PLATFORM_CAPABILITIES.get(platform or "")
+        if capabilities is not None and capabilities.finishes_stream_with_answer:
+            # Open the stream up front. Slack shows a live indicator on an open
+            # stream, which is the only "working on it" signal a *channel* gets
+            # — setStatus is assistant-DM only, and waiting for the first token
+            # leaves a tool-heavy run looking dead. An empty stream is disposed
+            # of by end_progress if no answer ever arrives.
+            await self._open_stream(conversation)
         interval = _TYPING_REFRESH_INTERVAL_SECONDS.get(platform)
         if interval is None:
             return
@@ -147,6 +174,10 @@ class SurfaceAgentRunProgressObserver:
 
         if event.type == AgentEventType.WAITING:
             await self._handle_waiting_event(event, conversation)
+            return
+
+        if event.type == AgentEventType.TOKEN:
+            await self._on_token(event, conversation)
             return
 
         if _is_agent_host_permission_event(event):
@@ -312,6 +343,129 @@ class SurfaceAgentRunProgressObserver:
         if handle is not None:
             self._progress_handle = handle
 
+    async def _finish_stream_with_answer(self, conversation: Conversation) -> bool:
+        """Close a live stream with the final answer, so they are one message.
+
+        Only attempted on platforms whose streaming API can carry the answer
+        (``finishes_stream_with_answer``) and only when there is a live stream
+        and an answer to put in it. Returns True when the answer was delivered
+        this way, which also marks it delivered so ``_deliver_final_answer``
+        does not send it a second time.
+        """
+        if self._progress_handle is None or self._final_delivered or self._run_errored:
+            return False
+        capabilities = PLATFORM_CAPABILITIES.get(_surface_platform(conversation) or "")
+        if capabilities is None or not capabilities.finishes_stream_with_answer:
+            return False
+        await self._flush_tokens(conversation, final=True)
+        message = (self._final_answer_text or self._buffered_text or "").strip()
+        if not message:
+            return False
+        # Whatever already streamed is on screen. Send only what is left, or the
+        # user reads the answer twice.
+        if self._streamed_text:
+            if message.startswith(self._streamed_text):
+                message = message[len(self._streamed_text) :]
+            else:
+                # The stream and the final text disagree (a retry, or a rewritten
+                # answer). Trust the stream the user already saw and just close.
+                message = ""
+        handle = self._progress_handle
+        try:
+            async with self.uow_factory() as uow:
+                service = self.service_factory(uow)
+                delivered = await service.finish_progress_for_conversation(
+                    conversation_id=conversation.id,
+                    progress_handle=handle,
+                    message=message,
+                    already_streamed=bool(self._streamed_text),
+                )
+        except Exception:
+            logger.debug(
+                'agent_surfaces.progress_observer.surface_finish_stream_conversation.diagnostic'
+            )
+            return False
+        if not delivered:
+            return False
+        self._progress_handle = None
+        self._final_delivered = True
+        return True
+
+    async def _open_stream(self, conversation: Conversation) -> None:
+        """Open the live stream before any text exists."""
+        if self._progress_handle is not None:
+            return
+        try:
+            async with self.uow_factory() as uow:
+                service = self.service_factory(uow)
+                handle = await service.append_stream_text_for_conversation(
+                    conversation_id=conversation.id,
+                    progress_handle=None,
+                    text="",
+                )
+        except Exception:
+            logger.debug(
+                'agent_surfaces.progress_observer.surface_token_flush_conversation.diagnostic'
+            )
+            return
+        if handle is not None:
+            self._progress_handle = handle
+
+    async def _on_token(self, event: AgentEvent, conversation: Conversation) -> None:
+        """Stream the answer as it is written, on platforms that can show it.
+
+        Only ``text`` deltas: ``thinking`` deltas are model reasoning and must
+        never reach a surface — the same rule ``sanitize_user_visible_text``
+        enforces on every other path.
+        """
+        capabilities = PLATFORM_CAPABILITIES.get(_surface_platform(conversation) or "")
+        if capabilities is None or not capabilities.finishes_stream_with_answer:
+            return
+        payload = event.data if isinstance(event.data, dict) else {}
+        if str(payload.get("kind") or "") != "text":
+            return
+        delta = str(payload.get("data") or "")
+        if not delta:
+            return
+        visible = self._think_filter.feed(delta)
+        if not visible:
+            return
+        self._token_buffer += visible
+        now = time.monotonic()
+        if (
+            len(self._token_buffer) < _TOKEN_FLUSH_CHARS
+            and (now - self._last_token_flush) < _TOKEN_FLUSH_INTERVAL_SECONDS
+        ):
+            return
+        await self._flush_tokens(conversation)
+
+    async def _flush_tokens(
+        self, conversation: Conversation, *, final: bool = False
+    ) -> None:
+        if final:
+            self._token_buffer += self._think_filter.flush()
+        pending = self._token_buffer
+        if not pending:
+            return
+        self._token_buffer = ""
+        self._last_token_flush = time.monotonic()
+        try:
+            async with self.uow_factory() as uow:
+                service = self.service_factory(uow)
+                handle = await service.append_stream_text_for_conversation(
+                    conversation_id=conversation.id,
+                    progress_handle=self._progress_handle,
+                    text=pending,
+                )
+        except Exception:
+            logger.debug(
+                'agent_surfaces.progress_observer.surface_token_flush_conversation.diagnostic'
+            )
+            return
+        if handle is not None:
+            self._progress_handle = handle
+        self._streamed_text += pending
+
     async def _clear_progress(self, conversation_id) -> None:
         if not self._progress_handle:
             return
@@ -339,7 +493,8 @@ class SurfaceAgentRunProgressObserver:
             except asyncio.CancelledError:
                 # Expected after task.cancel(); delivery cleanup must continue.
                 pass
-        await self._clear_progress(conversation.id)
+        if not await self._finish_stream_with_answer(conversation):
+            await self._clear_progress(conversation.id)
         await self._deliver_final_answer(conversation)
 
     async def on_run_failed(
