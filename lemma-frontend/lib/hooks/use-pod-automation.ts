@@ -5,7 +5,7 @@ import { useMemo } from 'react';
 import { usePodSurfaces } from './use-pod-surfaces';
 import { useSchedules } from './use-schedules';
 import { getScheduleTargetKind } from '@/lib/utils/schedules';
-import { surfaceReachesAgent, surfaceUsesDefaultAgent } from '@/lib/utils/surfaces';
+import { surfaceReachesAgent, surfaceReachesDefaultAgent } from '@/lib/utils/surfaces';
 import type { AssistantSurface, Schedule } from '@/lib/types';
 
 // One pod-wide schedule query, keyed identically to the schedules page and
@@ -68,7 +68,7 @@ export function usePodAutomation(
                 (schedule) => getScheduleTargetKind(schedule) === 'workflow' && schedule.workflow_name === workflowName,
             ),
         surfacesForAgent: (agentName) => surfaces.filter((surface) => surfaceReachesAgent(surface, agentName)),
-        defaultSurfaces: surfaces.filter(surfaceUsesDefaultAgent),
+        defaultSurfaces: surfaces.filter(surfaceReachesDefaultAgent),
     }), [
         schedules,
         surfaces,

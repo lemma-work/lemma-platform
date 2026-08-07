@@ -390,6 +390,9 @@ lemma feedback --category cli --subject "…" \
   --issue-encountered "…" --expected-behavior "…" --actual-behavior "…"
 ```
 
+`--category` is one of `cli`, `skill`, `platform`, `docs`, `other` — which part
+of Lemma the report is about.
+
 ## See also
 
 - The model → `lemma-builder/references/pod-model.md`

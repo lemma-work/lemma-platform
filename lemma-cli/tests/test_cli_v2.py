@@ -2292,6 +2292,62 @@ def test_feedback_dispatches_the_tool_api(monkeypatch):
     assert captured["suggested_next_steps"] is None
 
 
+def test_feedback_categories_match_the_api_enum():
+    """The CLI's category list must equal the API's, value for value.
+
+    `app.py` spells the categories out instead of importing them, so that
+    `lemma --help` never loads the SDK. That duplication is exactly how the
+    original bug happened: the help offered cli/skill/platform/docs while the
+    wire accepted SYSTEM_ISSUE/SKILL_ISSUE/…, and nothing compared the two.
+    This is the comparison.
+    """
+    from lemma_sdk.openapi_client.models.feedback_category import (
+        FeedbackCategory as ApiFeedbackCategory,
+    )
+
+    from lemma_cli.cli_core.app import FeedbackCategory as CliFeedbackCategory
+
+    assert {member.value for member in CliFeedbackCategory} == {
+        member.value for member in ApiFeedbackCategory
+    }
+
+
+def test_feedback_rejects_an_unknown_category_and_names_the_valid_ones():
+    """A wrong category must fail at parse time, listing what would work.
+
+    It used to reach the SDK and die on `'nope' is not a valid
+    FeedbackCategory` — no flag named, no list of accepted values — which left
+    a caller guessing at a closed set it could not see.
+    """
+    result = runner.invoke(
+        app,
+        [
+            "feedback",
+            "--category", "nope",
+            "--subject", "import aborts mid-write",
+            "--issue-encountered", "dry-run passed, import died on step 12",
+            "--expected-behavior", "dry-run catches it",
+            "--actual-behavior", "422 with no file named",
+        ],
+    )
+
+    assert result.exit_code == 2, result.output
+    output = unstyle(result.output)
+    assert "--category" in output
+    for value in ("cli", "skill", "platform", "docs", "other"):
+        assert value in output
+
+
+def test_feedback_help_lists_every_category():
+    """The help must name the categories, not trail off into an ellipsis."""
+    result = runner.invoke(app, ["feedback", "--help"])
+
+    assert result.exit_code == 0, result.output
+    output = unstyle(result.output).replace("\n", " ")
+    for value in ("cli", "skill", "platform", "docs", "other"):
+        assert value in output
+
+
 def test_apps_init_rejects_non_empty_directory(tmp_path):
     target = tmp_path / "existing"
     target.mkdir()
