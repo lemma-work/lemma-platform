@@ -355,8 +355,12 @@ async def _temporary_workspace_tunnel(
     try:
         public_url = await asyncio.wait_for(asyncio.shield(published), timeout=45)
         last_health_result = "no response"
+        # A freshly published tunnel hostname is not immediately resolvable,
+        # and the quick-tunnel service is occasionally slow to route the first
+        # request. Waiting a minute is far cheaper than a spurious failure in a
+        # suite that takes minutes to reach this point.
         async with httpx.AsyncClient(timeout=10) as client:
-            for _ in range(30):
+            for _ in range(60):
                 if process.returncode is not None:
                     raise RuntimeError(
                         f"{tunnel} exited after publishing its URL: "
@@ -899,9 +903,17 @@ async def configure_workspace_api_url(
     original_manager_key = settings.agentbox_api_key
     original_manager_key_env = os.environ.get("AGENTBOX_API_KEY")
 
+    # A sandbox running in someone else's cloud cannot reach a laptop, so the
+    # backend has to be published for it. This is needed whenever the *live*
+    # provisioner puts sandboxes off-box, which is no longer only a question
+    # about AgentBox: the workspace module selects its own provider.
+    needs_public_backend = local_agentbox_server["provider"] == "e2b" or (
+        os.getenv("WORKSPACE_OWNS_SANDBOXES", "").lower() in {"1", "true", "yes"}
+        and os.getenv("WORKSPACE_PROVIDER", "docker").lower() == "e2b"
+    )
     tunnel = (
         _temporary_workspace_tunnel(backend_server["host_base_url"])
-        if local_agentbox_server["provider"] == "e2b"
+        if needs_public_backend
         else contextlib.nullcontext(None)
     )
     async with tunnel as public_callback_url:
