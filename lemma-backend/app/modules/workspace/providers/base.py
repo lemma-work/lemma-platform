@@ -178,34 +178,40 @@ class SandboxProvider(Protocol):
     # leaves storage to the provider's own adoption. See ProviderStorageKind.
     storage_kind: ProviderStorageKind
 
-    async def create(self, spec: ProviderCreateSpec) -> ProviderInstance: ...
+    async def create(self, spec: ProviderCreateSpec) -> ProviderInstance:
+        """Materialise the sandbox this spec names, or adopt the existing one."""
 
     async def wait_ready(
         self, instance: ProviderInstance, *, kind: SandboxKind, deadline_at: datetime
-    ) -> None: ...
+    ) -> None:
+        """Return once the sandbox is serving, or raise saying why it is not."""
 
     async def inspect(
         self, name: str, *, deadline_at: datetime
-    ) -> ProviderInstance | None: ...
+    ) -> ProviderInstance | None:
+        """The instance behind this name, or None when nothing holds it."""
 
     async def release(
         self, instance: ProviderInstance, *, kind: SandboxKind, deadline_at: datetime
     ) -> None:
         """Stop compute, keep the disk. The sandbox can be resumed."""
 
-    async def destroy(self, name: str, *, deadline_at: datetime) -> None: ...
+    async def destroy(self, name: str, *, deadline_at: datetime) -> None:
+        """Remove the object this name refers to. Already-gone is success."""
 
     async def find_volume(
         self, *, sandbox_id: UUID, deadline_at: datetime
     ) -> str | None:
         """Locate an existing volume for this sandbox, including a legacy one."""
 
-    async def destroy_volume(self, name: str, *, deadline_at: datetime) -> None: ...
+    async def destroy_volume(self, name: str, *, deadline_at: datetime) -> None:
+        """Remove a volume by name. Already-gone is success."""
 
     async def list_objects(self, *, deadline_at: datetime) -> tuple[ProviderObject, ...]:
         """Every sandbox object this provider holds, for orphan reclamation."""
 
-    async def close(self) -> None: ...
+    async def close(self) -> None:
+        """Release any transport this provider holds."""
 
 
 class SandboxOpsProvider(Protocol):
@@ -219,73 +225,89 @@ class SandboxOpsProvider(Protocol):
     async def start_process(
         self, instance: ProviderInstance, request: StartProcessRequest, *,
         deadline_at: datetime,
-    ) -> str: ...
+    ) -> str:
+        """Begin a process and return the id its output is read by."""
 
     async def read_process_output(
         self, instance: ProviderInstance, *, process_id: str, after_sequence: int,
         wait_seconds: float, deadline_at: datetime,
-    ) -> ProcessOutputSnapshot: ...
+    ) -> ProcessOutputSnapshot:
+        """Output after `after_sequence`, which is exclusive and 1-based."""
 
     async def send_process_input(
         self, instance: ProviderInstance, *, process_id: str, data: bytes,
         deadline_at: datetime,
-    ) -> None: ...
+    ) -> None:
+        """Write to the process's stdin, or its PTY when it has one."""
 
     async def resize_process(
         self, instance: ProviderInstance, *, process_id: str, size: TerminalSize,
         deadline_at: datetime,
-    ) -> None: ...
+    ) -> None:
+        """Tell a PTY-backed process its terminal changed size."""
 
     async def terminate_process(
         self, instance: ProviderInstance, *, process_id: str, grace_seconds: float,
         deadline_at: datetime,
-    ) -> None: ...
+    ) -> None:
+        """Signal the process, escalating once the grace period lapses."""
 
     async def list_processes(
         self, instance: ProviderInstance, *, deadline_at: datetime
-    ) -> tuple[ProcessDescriptor, ...]: ...
+    ) -> tuple[ProcessDescriptor, ...]:
+        """Every process the sandbox is currently tracking."""
 
     async def stat_file(
         self, instance: ProviderInstance, *, path: str, deadline_at: datetime
-    ) -> FileStat: ...
+    ) -> FileStat:
+        """Metadata for one path, raising when it does not exist."""
 
     async def list_files(
         self, instance: ProviderInstance, *, path: str, deadline_at: datetime
-    ) -> tuple[FileStat, ...]: ...
+    ) -> tuple[FileStat, ...]:
+        """The direct children of a directory."""
 
     async def create_directory(
         self, instance: ProviderInstance, *, path: str, deadline_at: datetime
-    ) -> None: ...
+    ) -> None:
+        """Create a directory and any missing parents. Idempotent."""
 
     async def open_file(
         self, instance: ProviderInstance, *, path: str, byte_range: ByteRange,
         deadline_at: datetime,
-    ) -> AsyncIterator[bytes]: ...
+    ) -> AsyncIterator[bytes]:
+        """Stream a byte range of a file."""
 
     async def write_file(
         self, instance: ProviderInstance, *, path: str, data: AsyncIterable[bytes],
         expected_sha256: str | None, deadline_at: datetime,
-    ) -> FileStat: ...
+    ) -> FileStat:
+        """Write a stream to a path, verifying the digest when one is given."""
 
     async def move_file(
         self, instance: ProviderInstance, *, source: str, destination: str,
         deadline_at: datetime,
-    ) -> None: ...
+    ) -> None:
+        """Rename within the sandbox."""
 
     async def delete_file(
         self, instance: ProviderInstance, *, path: str, recursive: bool,
         deadline_at: datetime,
-    ) -> bool: ...
+    ) -> bool:
+        """Remove a path, reporting whether anything was there to remove."""
 
     async def ensure_python_session(
         self, instance: ProviderInstance, request: CreatePythonSessionRequest
-    ) -> None: ...
+    ) -> None:
+        """Make a persistent Python session exist, keeping its namespace."""
 
     async def execute_python(
         self, instance: ProviderInstance, session: PythonSessionRef,
         request: ExecutePythonRequest,
-    ) -> PythonResult: ...
+    ) -> PythonResult:
+        """Run a fragment in a session and return what it produced."""
 
     async def delete_python_session(
         self, instance: ProviderInstance, *, session_id: str, deadline_at: datetime
-    ) -> None: ...
+    ) -> None:
+        """Discard a session and the namespace it held."""

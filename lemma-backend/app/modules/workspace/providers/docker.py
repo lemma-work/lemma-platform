@@ -734,6 +734,9 @@ class DockerSandboxProvider:
                 await client.health(deadline_at=deadline_at)
                 return
             except WorkspaceRuntimeError:
+                # Not answering yet is the expected case on a cold or
+                # resumed container; the credential delivery below is what
+                # this call exists to do.
                 pass
             # The runtime reads this file once and unlinks it, so a resumed
             # container needs it delivered again before it will answer.
@@ -769,6 +772,8 @@ class DockerSandboxProvider:
                     if (await client.get("/healthz")).status_code == 200:
                         return
                 except httpx.TransportError:
+                    # Still starting: nothing is listening yet. Poll until
+                    # the deadline rather than failing on the first refusal.
                     pass
                 await asyncio.sleep(0.05)
         raise ProviderNotReady("Docker function runtime is still starting")

@@ -31,6 +31,7 @@ from app.modules.workspace.providers.e2b import (
 from app.modules.workspace.testing.fake_e2b import (
     AuthenticationException,
     FakeE2B,
+    FakeSandboxSdk,
     NotFoundException,
     RateLimitException,
 )
@@ -56,11 +57,10 @@ def provider(world: FakeE2B, monkeypatch) -> E2BSandboxProvider:
             function_template="lemma-function",
         )
     )
+    # Only the SDK is substituted. The query type comes through the SDK itself,
+    # so this one patch is enough and the real e2b package is never imported.
     monkeypatch.setattr(
         type(instance), "_sdk", property(lambda self: world.sandbox_class())
-    )
-    monkeypatch.setattr(
-        type(instance), "_volumes", property(lambda self: world.volume_class())
     )
     return instance
 
@@ -504,7 +504,7 @@ async def test_sdk_failures_are_classified_not_swallowed(
     """The provider says what happened; whether to wait is the service's call,
     because only it knows the caller's deadline."""
 
-    class _Exploding:
+    class _Exploding(FakeSandboxSdk):
         @staticmethod
         def list(query=None, **_kwargs):
             raise error
@@ -518,7 +518,7 @@ async def test_sdk_failures_are_classified_not_swallowed(
 async def test_rate_limiting_carries_a_retry_hint(
     provider: E2BSandboxProvider, monkeypatch
 ) -> None:
-    class _Limited:
+    class _Limited(FakeSandboxSdk):
         @staticmethod
         def list(query=None, **_kwargs):
             raise RateLimitException("429")

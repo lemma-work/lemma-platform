@@ -24,7 +24,7 @@ SHELL := /bin/bash
         test-frontend test-cli test-cli-unit test-cli-e2e test-python \
         coverage coverage-backend coverage-backend-unit coverage-backend-e2e \
         coverage-backend-module coverage-cli coverage-cli-unit coverage-cli-e2e coverage-frontend \
-        lint migrate
+        lint quality check codeql codeql-python codeql-javascript codeql-all migrate
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 
@@ -1013,6 +1013,43 @@ lint:
 	@cd $(PYTHON_DIR) && uv run ruff check . --quiet 2>/dev/null || true
 	@echo "→ Frontend (eslint)…"
 	@cd $(FRONTEND_DIR) && npm run lint --silent 2>/dev/null || true
+
+# ── Static analysis ───────────────────────────────────────────────────────────
+#
+# `lint` above is the fast pass. These are the gates CI actually blocks on, so
+# that a red PR is something you can reproduce and fix here instead of learning
+# about it twenty minutes after pushing.
+
+# Everything the "lemma-backend quality gates" job runs, in its order.
+quality:
+	@echo "→ Ruff…"
+	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint
+	@echo "→ Async-safety…"
+	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-async
+	@echo "→ Critical domain types…"
+	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory typecheck-critical
+	@echo "→ Architecture ratchet + route inventory…"
+	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory architecture
+	@echo "→ OpenAPI spec freshness…"
+	@cd $(BACKEND_DIR) && uv run python scripts/dump_openapi_spec.py --check
+	@echo "✓ quality gates pass"
+
+# CodeQL, the same suites CI runs. Reports only what this branch changed;
+# `codeql-all` reports the repository's full backlog.
+codeql:
+	@./scripts/run_codeql.sh
+
+codeql-python:
+	@./scripts/run_codeql.sh --language python
+
+codeql-javascript:
+	@./scripts/run_codeql.sh --language javascript-typescript
+
+codeql-all:
+	@./scripts/run_codeql.sh --all
+
+# Everything a PR is judged on, short of the test suites themselves.
+check: quality codeql
 
 # ── Migrations ────────────────────────────────────────────────────────────────
 

@@ -37,6 +37,38 @@ class FakeSandboxInfo:
 
 
 @dataclass
+class FakeSandboxQuery:
+    """Stands in for `e2b.sandbox.sandbox_api.SandboxQuery`.
+
+    Only the metadata filter matters to the provider, and matching the real
+    type's shape here is what lets the unit tests run with no e2b extra
+    installed -- which is the same configuration a Docker-only deployment ships.
+    """
+
+    metadata: dict[str, str] | None = None
+
+
+@dataclass
+class FakePtySize:
+    """Stands in for `e2b.sandbox.commands.command_handle.PtySize`."""
+
+    rows: int
+    cols: int
+
+
+class FakeSandboxSdk:
+    """Base for anything standing in for `e2b.AsyncSandbox`.
+
+    Carries the types the provider reaches for through the SDK seam, so an
+    ad-hoc stand-in written for one test -- an SDK whose `list` only raises,
+    say -- still satisfies the provider without importing the real package.
+    """
+
+    query_type = FakeSandboxQuery
+    pty_size_type = FakePtySize
+
+
+@dataclass
 class FakeVolumeInfo:
     volume_id: str
     name: str
@@ -161,7 +193,7 @@ class FakeE2B:
             async def kill(self, pid, **_kwargs):
                 return True
 
-        class FakeAsyncSandbox:
+        class FakeAsyncSandbox(FakeSandboxSdk):
             def __init__(self, sandbox_id: str):
                 self.sandbox_id = sandbox_id
                 self.commands = _Commands(sandbox_id)

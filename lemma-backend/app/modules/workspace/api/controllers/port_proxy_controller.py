@@ -13,6 +13,7 @@ sandbox must never see the caller's Lemma cookies or API key.
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from urllib.parse import quote
 
 import httpx
 from fastapi import APIRouter, Request, Response, status
@@ -79,11 +80,21 @@ async def proxy_sandbox_port(token: str, path: str, request: Request) -> Respons
     except ProviderGone:
         return Response(status_code=status.HTTP_404_NOT_FOUND)
 
-    upstream = httpx.AsyncClient(base_url=base_url, timeout=httpx.Timeout(60.0))
+    # `path` is caller-controlled, so the target is built from the trusted base
+    # rather than handed to base_url merging. Merging would have been safe by
+    # accident -- the leading slash stops it parsing as absolute -- but only by
+    # accident, and it silently ate a segment when a path began with "//",
+    # reading the first one as an authority. Setting the path component alone
+    # makes the host un-influenceable by construction.
+    target = httpx.URL(base_url).copy_with(
+        path="/" + quote(path.lstrip("/"), safe="/")
+    )
+
+    upstream = httpx.AsyncClient(timeout=httpx.Timeout(60.0))
     try:
         proxied = await upstream.request(
             request.method,
-            f"/{path}",
+            target,
             params=request.query_params,
             headers={
                 name: value

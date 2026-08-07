@@ -133,6 +133,9 @@ class E2BOutputBuffer:
                 state = ProcessState(decoded["s"])
                 exit_code = decoded["e"]
             except (KeyError, TypeError, ValueError):
+                # A malformed or half-written state key means the process
+                # is simply not known to have finished, which is what the
+                # RUNNING/None defaults above already say.
                 pass
 
         # Sequence N is list index N-1, so "after N" starts at index N.

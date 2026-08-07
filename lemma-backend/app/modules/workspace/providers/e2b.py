@@ -156,10 +156,33 @@ class E2BSandboxProvider:
         return AsyncSandbox
 
     @property
-    def _volumes(self):
-        from e2b.volume.volume_async import AsyncVolume
+    def _query(self):
+        """The metadata-query type, reached through the same seam as the SDK.
 
-        return AsyncVolume
+        Importing it directly made the provider need the real package even when
+        the client itself was faked, so the unit job -- which installs no e2b
+        extra, because nothing about a Docker deployment should -- failed on
+        every listing test. A substitute for the SDK now substitutes its query
+        type with it.
+        """
+
+        substitute = getattr(self._sdk, "query_type", None)
+        if substitute is not None:
+            return substitute
+        from e2b.sandbox.sandbox_api import SandboxQuery
+
+        return SandboxQuery
+
+    @property
+    def _pty_size(self):
+        """The PTY dimensions type, reached through the SDK seam like `_query`."""
+
+        substitute = getattr(self._sdk, "pty_size_type", None)
+        if substitute is not None:
+            return substitute
+        from e2b.sandbox.commands.command_handle import PtySize
+
+        return PtySize
 
     def _api(self) -> dict[str, object]:
         params: dict[str, object] = {"api_key": self._config.api_key}
@@ -351,12 +374,11 @@ class E2BSandboxProvider:
         Sandboxes without it belong to something else using the same E2B
         account and are not ours to reap.
         """
-        from e2b.sandbox.sandbox_api import SandboxQuery
 
         found: list[ProviderObject] = []
         try:
             paginator = self._sdk.list(
-                query=SandboxQuery(
+                query=self._query(
                     metadata={
                         meta_sandbox_kind(
                             self._config.metadata_namespace
@@ -435,10 +457,8 @@ class E2BSandboxProvider:
                         process_id, channel=ProcessOutputChannel.PTY, data=data
                     )
 
-                from e2b.sandbox.commands.command_handle import PtySize
-
                 handle = await sandbox.pty.create(
-                    PtySize(rows=request.tty.rows, cols=request.tty.cols),
+                    self._pty_size(rows=request.tty.rows, cols=request.tty.cols),
                     on_data=on_pty,
                     cwd=request.cwd,
                     envs=environment,
@@ -557,8 +577,6 @@ class E2BSandboxProvider:
         size: TerminalSize,
         deadline_at: datetime,
     ) -> None:
-        from e2b.sandbox.commands.command_handle import PtySize
-
         sandbox = await self._connect(instance.provider_id)
         pid, tty = await self._recall_pid(process_id)
         if not tty:
@@ -566,7 +584,9 @@ class E2BSandboxProvider:
             # a caller should not have to know which it got.
             return
         try:
-            await sandbox.pty.resize(pid, PtySize(rows=size.rows, cols=size.cols))
+            await sandbox.pty.resize(
+                pid, self._pty_size(rows=size.rows, cols=size.cols)
+            )
         except Exception as exc:
             raise _classify(exc) from exc
 
@@ -846,11 +866,9 @@ class E2BSandboxProvider:
     async def _first_matching(
         self, metadata: dict[str, str]
     ) -> ProviderInstance | None:
-        from e2b.sandbox.sandbox_api import SandboxQuery
-
         try:
             paginator = self._sdk.list(
-                query=SandboxQuery(metadata=metadata), **self._api()
+                query=self._query(metadata=metadata), **self._api()
             )
             matches = await paginator.next_items()
         except Exception as exc:
