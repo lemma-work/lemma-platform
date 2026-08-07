@@ -50,6 +50,15 @@ WORKDIR /app
 # sandboxes never contain a package manager.
 COPY --from=builder /usr/local/bin/uv /usr/local/bin/uv
 
+# Remove the base image's pip. Function dependency resolution goes through
+# `uv pip`, which is uv's own implementation and needs nothing here; the system
+# pip exists only because python:slim ships it. Its *vendored* msgpack and
+# setuptools are the only HIGH findings left in this image, and no dependency
+# of ours can move them -- they are pip's, not the application's.
+RUN rm -rf /usr/local/lib/python3.14/site-packages/pip \
+           /usr/local/lib/python3.14/site-packages/pip-*.dist-info \
+           /usr/local/bin/pip /usr/local/bin/pip3 /usr/local/bin/pip3.14
+
 # Create non-root user for security
 # -d /home/appuser: explicitly set home directory
 # -m: create the home directory
