@@ -21,7 +21,9 @@ dependencies = [
     "faststream[cli,redis]>=0.6.4",
     "jmespath>=1.0.1",
     "jsonschema>=4.26.0",
-    "slack-sdk>=3.39.0",
+    # >=3.43 for the agent messaging experience (features.agent_view) and the
+    # suggested-prompts/thread-title methods it enables.
+    "slack-sdk>=3.43.0",
     "redis>=6.4.0,<9",
     "pytz>=2025.2",
     "psycopg[binary,pool]>=3.3.2",
