@@ -16,6 +16,10 @@ def _routers():
     return [browser, port_proxy]
 
 
+def _register_streaq() -> None:
+    import app.modules.workspace.events.tasks  # noqa: F401
+
+
 @asynccontextmanager
 async def _close_workspace_clients(app):
     del app
@@ -40,5 +44,6 @@ async def _close_workspace_clients(app):
 module = LemmaModule(
     name="workspace",
     routers=_routers,
+    register_streaq=_register_streaq,
     api_lifespans=(_close_workspace_clients,),
 )

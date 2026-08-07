@@ -869,6 +869,26 @@ class Settings(BaseSettings):
         default="docker",
         description="Sandbox provider used by the workspace module",
     )
+    workspace_idle_release_seconds: int = Field(
+        default=900,
+        validation_alias=AliasChoices(
+            "WORKSPACE_IDLE_RELEASE_SECONDS",
+            "AGENTBOX_WORKSPACE_IDLE_SECONDS",
+        ),
+        description=(
+            "Release a sandbox that has gone unused for this long. Releasing "
+            "stops compute and keeps the disk, so the cost of being wrong is a "
+            "slower next tool call rather than lost work. 0 disables the sweep."
+        ),
+    )
+    workspace_sweep_cron: str = Field(
+        default="*/5 * * * *",
+        description=(
+            "How often the idle-release and orphan-reclaim sweep runs. Orphan "
+            "reclaim is what stops a container or paid sandbox outliving the "
+            "row that owned it, so this is a cost control, not housekeeping."
+        ),
+    )
     e2b_api_key: Optional[SecretStr] = Field(
         default=None, description="E2B API key"
     )
