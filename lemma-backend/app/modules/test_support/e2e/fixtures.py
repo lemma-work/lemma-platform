@@ -14,6 +14,7 @@ redis_container = e2e_base.redis_container
 test_database_url = e2e_base.test_database_url
 test_redis_url = e2e_base.test_redis_url
 e2e_settings = e2e_base.e2e_settings
+sandbox_reachable_backend = e2e_base.sandbox_reachable_backend
 worker = e2e_base.worker
 db_manager = e2e_base.db_manager
 test_app = e2e_base.test_app
@@ -41,5 +42,6 @@ __all__ = [
     "test_database_url",
     "test_network",
     "test_redis_url",
+    "sandbox_reachable_backend",
     "worker",
 ]

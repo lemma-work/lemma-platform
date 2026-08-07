@@ -83,6 +83,12 @@ def _cleanup_e2e_workspace_containers(*, sandboxes_only: bool = False) -> None:
     # to be swept separately. The workspace module labels its own containers
     # `managed-by=lemma-workspace`; without that pass, every run that
     # provisions through it leaves its sandboxes behind.
+    #
+    # Note this sweep is machine-wide, not run-scoped: two e2e runs sharing a
+    # Docker daemon will destroy each other's sandboxes, which surfaces as
+    # "container is marked for removal and cannot be started" in whichever one
+    # loses. That is fine for a single run and for CI's one-runner-per-job
+    # layout; it is a trap for anyone running two suites side by side.
     filter_sets = [["--filter", "label=lemma.e2e=true"]]
     if sandboxes_only:
         filter_sets = [
@@ -499,7 +505,60 @@ def _import_e2e_models() -> None:
 
 
 @pytest_asyncio.fixture(scope="session")
-async def worker(e2e_settings):
+async def sandbox_reachable_backend(e2e_settings):
+    """A backend URL the *live* provisioner's sandboxes can actually reach.
+
+    `e2e_settings` pins the session-wide gateway to `host.docker.internal`,
+    which is right for a sandbox on this machine and unresolvable for one in
+    E2B's cloud. Queued functions are dispatched by the session-scoped worker,
+    which captures its environment once at spawn, so the per-test tunnel in
+    `configure_workspace_api_url` comes far too late for it -- which is exactly
+    why every JOB function test failed on E2B while the API ones passed.
+
+    Session-scoped for the same reason the port beneath it is: one tunnel, held
+    for the whole run, pointed at the port each test's backend rebinds.
+    """
+
+    from app.core.config import settings
+    from app.modules.test_support.e2e.runtime import _temporary_workspace_tunnel
+
+    off_box = (
+        settings.workspace_owns_sandboxes
+        and settings.workspace_provider.lower() == "e2b"
+    ) or os.getenv("AGENTBOX_PROVIDER", "").lower() == "e2b"
+    if not off_box:
+        yield None
+        return
+
+    port = os.environ["WORKSPACE_E2E_BACKEND_PORT"]
+    previous = {
+        key: os.environ.get(key)
+        for key in ("WORKSPACE_CALLBACK_API_URL", "FUNCTION_RUNTIME_GATEWAY_URL")
+    }
+    original_callback = settings.workspace_callback_api_url
+    original_gateway = settings.function_runtime_gateway_url
+
+    async with _temporary_workspace_tunnel(
+        f"http://127.0.0.1:{port}", wait_for_backend=False
+    ) as public_url:
+        settings.workspace_callback_api_url = public_url
+        settings.function_runtime_gateway_url = public_url
+        os.environ["WORKSPACE_CALLBACK_API_URL"] = public_url
+        os.environ["FUNCTION_RUNTIME_GATEWAY_URL"] = public_url
+        try:
+            yield public_url
+        finally:
+            settings.workspace_callback_api_url = original_callback
+            settings.function_runtime_gateway_url = original_gateway
+            for key, value in previous.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+
+
+@pytest_asyncio.fixture(scope="session")
+async def worker(e2e_settings, sandbox_reachable_backend):
     """Run the real streaq worker process used in production.
 
     Session-scoped: one worker subprocess for the whole run instead of spawning

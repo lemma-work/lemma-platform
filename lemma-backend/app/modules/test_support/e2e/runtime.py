@@ -288,8 +288,17 @@ async def _external_e2b_agentbox_server(
 @asynccontextmanager
 async def _temporary_workspace_tunnel(
     backend_url: str,
+    *,
+    wait_for_backend: bool = True,
 ) -> AsyncIterator[str]:
-    """Expose the test backend to a remote E2B workspace for CLI callbacks."""
+    """Expose the test backend to a remote E2B workspace for CLI callbacks.
+
+    `wait_for_backend` is False for the session-scoped tunnel, which is
+    opened before any test has bound the port beneath it. The tunnel itself
+    does not need an upstream to exist -- it forwards whatever is listening
+    when a request arrives -- so probing here would only assert an ordering
+    that is deliberately the other way round.
+    """
 
     configured = os.getenv("WORKSPACE_E2E_PUBLIC_URL")
     if configured:
@@ -354,6 +363,9 @@ async def _temporary_workspace_tunnel(
     output_task = asyncio.create_task(consume_output(published))
     try:
         public_url = await asyncio.wait_for(asyncio.shield(published), timeout=45)
+        if not wait_for_backend:
+            yield public_url
+            return
         last_health_result = "no response"
         # A freshly published tunnel hostname is not immediately resolvable,
         # and the quick-tunnel service is occasionally slow to route the first
@@ -915,11 +927,18 @@ async def configure_workspace_api_url(
         settings.workspace_owns_sandboxes
         and settings.workspace_provider.lower() == "e2b"
     )
-    tunnel = (
-        _temporary_workspace_tunnel(backend_server["host_base_url"])
-        if needs_public_backend
-        else contextlib.nullcontext(None)
-    )
+    # A session-scoped tunnel may already be published for the worker, which
+    # cannot see a per-test one. Reuse it: a second tunnel to the same port
+    # would work but costs a process and a startup wait per test.
+    session_tunnel = os.getenv("WORKSPACE_CALLBACK_API_URL", "")
+    if needs_public_backend and session_tunnel.startswith("https://"):
+        tunnel = contextlib.nullcontext(session_tunnel)
+    else:
+        tunnel = (
+            _temporary_workspace_tunnel(backend_server["host_base_url"])
+            if needs_public_backend
+            else contextlib.nullcontext(None)
+        )
     async with tunnel as public_callback_url:
         await close_workspace_tool_runtimes()
         workspace_callback_url = (
