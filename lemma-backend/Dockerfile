@@ -21,8 +21,6 @@ RUN apt-get update && apt-get install -y git
 COPY lemma-backend/pyproject.toml lemma-backend/uv.lock ./
 
 # Copy local path dependencies and repo-native skills.
-COPY agentbox-client /agentbox-client
-COPY agentbox /agentbox
 COPY lemma-pod-bundle /lemma-pod-bundle
 COPY lemma-backend/lemma-connectors ./lemma-connectors
 COPY lemma-skills ./lemma-skills
@@ -69,11 +67,10 @@ RUN mkdir -p /app/.composio && chown -R appuser:appuser /app/.composio
 
 # Copy virtual environment from builder
 COPY --from=builder --chown=appuser:appuser /app/.venv /app/.venv
-COPY --from=builder --chown=appuser:appuser /agentbox-client /agentbox-client
-COPY --from=builder --chown=appuser:appuser /agentbox /agentbox
-# uv installs monorepo path dependencies as editable links. Keep the linked
-# source in the runtime image (as we already do for agentbox-client), otherwise
-# importing lemma_pod_bundle fails after the builder stage is discarded.
+# uv installs monorepo path dependencies as editable links, so the linked
+# source has to survive into the runtime image or importing lemma_pod_bundle
+# fails once the builder stage is discarded. `sandbox_runtime` needs no such
+# line: it lives inside lemma-backend/, which is copied wholesale below.
 COPY --from=builder --chown=appuser:appuser /lemma-pod-bundle /lemma-pod-bundle
 # Copy skills from the builder stage explicitly instead of relying on the blanket repo copy.
 COPY --from=builder --chown=appuser:appuser /app/lemma-skills /app/lemma-skills

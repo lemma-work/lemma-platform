@@ -6,6 +6,12 @@ from pathlib import Path
 import pytest
 
 
+# The builder these exercise imports the E2B SDK, which is an optional extra:
+# a Docker-only deployment installs neither, and the unit job deliberately
+# does not either, so that the provider's SDK seam stays honest. The E2B
+# conformance workflow installs it and runs these.
+pytest.importorskip("e2b")
+
 _MODULE_PATH = (
     Path(__file__).resolve().parents[2]
     / "sandbox-images"
