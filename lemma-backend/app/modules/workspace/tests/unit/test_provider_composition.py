@@ -43,7 +43,7 @@ def test_the_docker_provider_carries_the_host_gateway(monkeypatch) -> None:
     fetches its artifact and a workspace never calls back -- both long after
     provisioning has reported success."""
     from app.core.config import settings
-    from app.modules.workspace.services.sandbox_service import build_provider
+    from app.modules.workspace.services.provider_factory import build_provider
 
     monkeypatch.setattr(settings, "workspace_provider", "docker")
     monkeypatch.setattr(settings, "workspace_runtime_credential_key", "k" * 32)
@@ -76,7 +76,7 @@ def test_each_provider_declares_where_storage_lives() -> None:
 
 
 def test_an_unknown_provider_is_refused_at_startup(monkeypatch) -> None:
-    from app.modules.workspace.services.sandbox_service import build_provider
+    from app.modules.workspace.services.provider_factory import build_provider
 
     with pytest.raises(RuntimeError, match="unsupported"):
         build_provider("kubernetes")
@@ -84,7 +84,7 @@ def test_an_unknown_provider_is_refused_at_startup(monkeypatch) -> None:
 
 def test_e2b_requires_its_key_rather_than_failing_later(monkeypatch) -> None:
     from app.core.config import settings
-    from app.modules.workspace.services.sandbox_service import build_provider
+    from app.modules.workspace.services.provider_factory import build_provider
 
     monkeypatch.setattr(settings, "e2b_api_key", None)
     with pytest.raises(RuntimeError, match="E2B_API_KEY"):
@@ -95,7 +95,7 @@ def test_lemma_local_requires_its_bridge_rather_than_failing_later(
     monkeypatch,
 ) -> None:
     from app.core.config import settings
-    from app.modules.workspace.services.sandbox_service import build_provider
+    from app.modules.workspace.services.provider_factory import build_provider
 
     monkeypatch.setattr(settings, "workspace_local_runtime_cli", None)
     with pytest.raises(RuntimeError, match="RUNTIME_CLI"):

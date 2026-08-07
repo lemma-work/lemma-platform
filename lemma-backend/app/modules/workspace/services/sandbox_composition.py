@@ -22,10 +22,8 @@ from app.modules.workspace.domain.sandbox import (
 )
 from app.modules.workspace.services.interfaces import ISandbox
 from app.modules.workspace.services.local_sandbox_client import LocalSandboxClient
-from app.modules.workspace.services.sandbox_service import (
-    SandboxService,
-    build_provider,
-)
+from app.modules.workspace.services.provider_factory import build_provider
+from app.modules.workspace.services.sandbox_service import SandboxService
 
 _service: SandboxService | None = None
 _service_key: tuple[int, str] | None = None

@@ -23,10 +23,12 @@ from app.modules.workspace.providers.base import (
     ProviderRejected,
 )
 from app.modules.workspace.providers.e2b import (
-    META_EPOCH,
-    META_SANDBOX_ID,
     E2BProviderConfig,
     E2BSandboxProvider,
+)
+from app.modules.workspace.providers.e2b_common import (
+    META_EPOCH,
+    META_SANDBOX_ID,
 )
 from app.modules.workspace.testing.fake_e2b import (
     AuthenticationException,
