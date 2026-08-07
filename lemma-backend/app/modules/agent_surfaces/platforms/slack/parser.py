@@ -195,7 +195,7 @@ class SlackMessageParser:
                     raw_payload=payload,
                 )
             return None
-        except Exception:
+        except (AttributeError, KeyError, TypeError, ValueError):
             logger.debug("surface.slack.parse_lifecycle_failed", exc_info=True)
             return None
 
@@ -211,131 +211,134 @@ class SlackMessageParser:
     def parse_channel_setup(
         self, payload: dict[str, Any], headers: dict[str, str] | None = None
     ) -> dict[str, Any] | None:
-        """Recognise the two halves of the channel-setup round trip.
+        """Recognise the setup round trips a person drives from Slack.
 
-        Returns ``{"kind": "open"|"submit", ...}`` or None. Kept separate from
-        ``parse_interaction`` because these configure a surface rather than
-        resume a paused agent run — the two share a transport, not a meaning.
+        Returns ``{"kind": ...}`` or None. Kept apart from ``parse_interaction``
+        because these configure a surface rather than resume a paused run — the
+        two share a transport, not a meaning.
         """
         del headers
         try:
             payload = self._unwrap_payload(payload)
             kind = str(payload.get("type") or "")
             team = payload.get("team") or {}
-            user = payload.get("user") or {}
+            actor = str((payload.get("user") or {}).get("id") or "").strip() or None
             tenant_id = str(team.get("id") or payload.get("team_id") or "") or None
-            actor = str(user.get("id") or "").strip() or None
-
             if kind == "block_actions":
-                actions = [
-                    a for a in payload.get("actions") or [] if isinstance(a, dict)
-                ]
-                starter = next(
-                    (
-                        a
-                        for a in actions
-                        if str(a.get("action_id") or "").startswith(
-                            _AGENT_DM_ACTION_ID
-                        )
-                    ),
-                    None,
-                )
-                if starter is not None:
-                    prompt = str(starter.get("value") or "").strip()
-                    if not prompt or not actor:
-                        return None
-                    return {
-                        "kind": "starter_prompt",
-                        "prompt": prompt,
-                        "tenant_id": tenant_id,
-                        "actor_external_user_id": actor,
-                    }
-                if any(
-                    a.get("action_id") == _DM_AGENT_SETUP_ACTION_ID for a in actions
-                ):
-                    trigger_id = str(payload.get("trigger_id") or "").strip()
-                    if not trigger_id:
-                        return None
-                    return {
-                        "kind": "open_dm",
-                        "trigger_id": trigger_id,
-                        "tenant_id": tenant_id,
-                        "actor_external_user_id": actor,
-                    }
-                action = next(
-                    (
-                        a
-                        for a in actions
-                        if a.get("action_id") == _CHANNEL_SETUP_ACTION_ID
-                    ),
-                    None,
-                )
-                if action is None:
-                    return None
-                # trigger_id expires in 3 seconds — the caller must open the
-                # modal before doing anything slow with this.
-                trigger_id = str(payload.get("trigger_id") or "").strip()
-                channel_id = str(
-                    action.get("value")
-                    or (payload.get("channel") or {}).get("id")
-                    or ""
-                ).strip()
-                if not trigger_id or not channel_id:
-                    return None
-                return {
-                    "kind": "open",
-                    "trigger_id": trigger_id,
-                    "channel_id": channel_id,
-                    "tenant_id": tenant_id,
-                    "actor_external_user_id": actor,
-                }
-
+                return self._parse_setup_click(payload, tenant_id, actor)
             if kind == "view_submission":
-                view = payload.get("view") or {}
-                if view.get("callback_id") == _DM_AGENT_VIEW_CALLBACK_ID:
-                    values = (view.get("state") or {}).get("values") or {}
-                    selected = (
-                        ((values.get(_DM_AGENT_BLOCK_ID) or {}).get(
-                            _DM_AGENT_SELECT_ACTION_ID
-                        ) or {}).get("selected_option")
-                        or {}
-                    ).get("value")
-                    if not selected or not actor:
-                        return None
-                    return {
-                        "kind": "submit_dm",
-                        "agent_name": (
-                            None if selected == _POD_ASSISTANT_VALUE else str(selected)
-                        ),
-                        "tenant_id": tenant_id,
-                        "actor_external_user_id": actor,
-                    }
-                if view.get("callback_id") != _CHANNEL_SETUP_VIEW_CALLBACK_ID:
-                    return None
-                channel_id = str(view.get("private_metadata") or "").strip()
-                values = (view.get("state") or {}).get("values") or {}
-                selected = (
-                    ((values.get(_CHANNEL_SETUP_BLOCK_ID) or {}).get(
-                        _CHANNEL_SETUP_SELECT_ACTION_ID
-                    ) or {}).get("selected_option")
-                    or {}
-                ).get("value")
-                if not channel_id or not selected:
-                    return None
-                return {
-                    "kind": "submit",
-                    "channel_id": channel_id,
-                    # The pod assistant is an empty agent name on the route.
-                    "agent_name": (
-                        None if selected == _POD_ASSISTANT_VALUE else str(selected)
-                    ),
-                    "tenant_id": tenant_id,
-                    "actor_external_user_id": actor,
-                }
+                return self._parse_setup_submission(payload, tenant_id, actor)
             return None
-        except Exception:
+        except (AttributeError, KeyError, TypeError, ValueError):
             logger.debug("surface.slack.parse_channel_setup_failed", exc_info=True)
             return None
+
+    def _parse_setup_click(
+        self, payload: dict[str, Any], tenant_id: str | None, actor: str | None
+    ) -> dict[str, Any] | None:
+        """A button on the App Home or on the post-invite ephemeral."""
+        actions = [a for a in payload.get("actions") or [] if isinstance(a, dict)]
+        trigger_id = str(payload.get("trigger_id") or "").strip()
+
+        starter = next(
+            (
+                a
+                for a in actions
+                if str(a.get("action_id") or "").startswith(_AGENT_DM_ACTION_ID)
+            ),
+            None,
+        )
+        if starter is not None:
+            prompt = str(starter.get("value") or "").strip()
+            if not prompt or not actor:
+                return None
+            return {
+                "kind": "starter_prompt",
+                "prompt": prompt,
+                "tenant_id": tenant_id,
+                "actor_external_user_id": actor,
+            }
+
+        if any(a.get("action_id") == _DM_AGENT_SETUP_ACTION_ID for a in actions):
+            if not trigger_id:
+                return None
+            return {
+                "kind": "open_dm",
+                "trigger_id": trigger_id,
+                "tenant_id": tenant_id,
+                "actor_external_user_id": actor,
+            }
+
+        channel_setup = next(
+            (a for a in actions if a.get("action_id") == _CHANNEL_SETUP_ACTION_ID),
+            None,
+        )
+        if channel_setup is None:
+            return None
+        channel_id = str(
+            channel_setup.get("value") or (payload.get("channel") or {}).get("id") or ""
+        ).strip()
+        # trigger_id expires in 3 seconds — the caller must open the modal
+        # before doing anything slow with this.
+        if not trigger_id or not channel_id:
+            return None
+        return {
+            "kind": "open",
+            "trigger_id": trigger_id,
+            "channel_id": channel_id,
+            "tenant_id": tenant_id,
+            "actor_external_user_id": actor,
+        }
+
+    def _parse_setup_submission(
+        self, payload: dict[str, Any], tenant_id: str | None, actor: str | None
+    ) -> dict[str, Any] | None:
+        """A saved modal. Which one it was is the view's callback_id."""
+        view = payload.get("view") or {}
+        callback_id = view.get("callback_id")
+        values = (view.get("state") or {}).get("values") or {}
+
+        if callback_id == _DM_AGENT_VIEW_CALLBACK_ID:
+            selected = self._selected_value(
+                values, _DM_AGENT_BLOCK_ID, _DM_AGENT_SELECT_ACTION_ID
+            )
+            if not selected or not actor:
+                return None
+            return {
+                "kind": "submit_dm",
+                "agent_name": self._agent_or_pod_assistant(selected),
+                "tenant_id": tenant_id,
+                "actor_external_user_id": actor,
+            }
+
+        if callback_id != _CHANNEL_SETUP_VIEW_CALLBACK_ID:
+            return None
+        # A view_submission carries no channel of its own; it rode private_metadata.
+        channel_id = str(view.get("private_metadata") or "").strip()
+        selected = self._selected_value(
+            values, _CHANNEL_SETUP_BLOCK_ID, _CHANNEL_SETUP_SELECT_ACTION_ID
+        )
+        if not channel_id or not selected:
+            return None
+        return {
+            "kind": "submit",
+            "channel_id": channel_id,
+            "agent_name": self._agent_or_pod_assistant(selected),
+            "tenant_id": tenant_id,
+            "actor_external_user_id": actor,
+        }
+
+    @staticmethod
+    def _selected_value(values: dict[str, Any], block_id: str, action_id: str):
+        return (
+            ((values.get(block_id) or {}).get(action_id) or {}).get("selected_option")
+            or {}
+        ).get("value")
+
+    @staticmethod
+    def _agent_or_pod_assistant(selected: str) -> str | None:
+        """The pod assistant is the *absence* of a named agent."""
+        return None if selected == _POD_ASSISTANT_VALUE else str(selected)
 
     def parse_interaction(
         self, payload: dict[str, Any], headers: dict[str, str] | None = None

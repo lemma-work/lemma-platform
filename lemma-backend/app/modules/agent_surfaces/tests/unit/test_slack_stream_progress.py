@@ -9,6 +9,7 @@ from app.modules.agent_surfaces.domain.entities import (
     ParsedInboundSurfaceEvent,
 )
 from app.modules.agent_surfaces.platforms.slack.service import SlackPlatformService
+from app.modules.agent_surfaces.platforms.slack.streaming import SlackStreamSurface
 
 pytestmark = pytest.mark.asyncio
 
@@ -65,10 +66,10 @@ async def test_progress_opens_a_stream_and_appends_each_step(monkeypatch):
     overwrites its own history.
     """
     calls = _stream_fakes(monkeypatch)
-    svc = SlackPlatformService(credentials={"access_token": "xoxb-test"})
+    stream = SlackStreamSurface(credentials={"access_token": "xoxb-test"})
     event = _event()
 
-    handle = await svc.stream_progress(event, "Searching the web")
+    handle = await stream.stream_progress(event, "Searching the web")
     assert handle["ts"] == "200.5"
     assert handle["stream"] is True
     assert handle["task_seq"] == 1
@@ -83,7 +84,7 @@ async def test_progress_opens_a_stream_and_appends_each_step(monkeypatch):
         }
     ]
 
-    handle2 = await svc.stream_progress(event, "Reading results", handle)
+    handle2 = await stream.stream_progress(event, "Reading results", handle)
     assert handle2["task_seq"] == 2
     # The step in flight is completed, and the next opened, in one append.
     assert calls["append"][1]["chunks"] == [
@@ -113,11 +114,11 @@ async def test_finish_progress_closes_the_stream_with_the_answer(monkeypatch):
     reply fell back to a separate message beside a dead "Thinking…" bubble.
     """
     calls = _stream_fakes(monkeypatch)
-    svc = SlackPlatformService(credentials={"access_token": "xoxb-test"})
+    stream = SlackStreamSurface(credentials={"access_token": "xoxb-test"})
     event = _event()
 
-    handle = await svc.stream_progress(event, "Searching the web")
-    delivered = await svc.finish_progress(event, handle, "## Answer\n\nAll done.")
+    handle = await stream.stream_progress(event, "Searching the web")
+    delivered = await stream.finish_progress(event, handle, "## Answer\n\nAll done.")
 
     assert delivered is True
     # The body rides append, not stop.
@@ -146,22 +147,22 @@ async def test_finish_progress_closes_the_stream_with_the_answer(monkeypatch):
 async def test_finish_progress_declines_without_a_live_stream(monkeypatch):
     """No stream means the caller must deliver the answer the ordinary way."""
     calls = _stream_fakes(monkeypatch)
-    svc = SlackPlatformService(credentials={"access_token": "xoxb-test"})
+    stream = SlackStreamSurface(credentials={"access_token": "xoxb-test"})
 
-    assert await svc.finish_progress(_event(), None, "answer") is False
-    assert await svc.finish_progress(_event(), {"ts": "1"}, "   ") is False
+    assert await stream.finish_progress(_event(), None, "answer") is False
+    assert await stream.finish_progress(_event(), {"ts": "1"}, "   ") is False
     assert calls["stop"] == []
 
 
 async def test_finish_progress_spills_an_oversized_answer_into_messages(monkeypatch):
     """An answer past the 12k markdown budget still arrives in full."""
     calls = _stream_fakes(monkeypatch)
-    svc = SlackPlatformService(credentials={"access_token": "xoxb-test"})
+    stream = SlackStreamSurface(credentials={"access_token": "xoxb-test"})
     event = _event()
 
-    handle = await svc.stream_progress(event, "Working")
+    handle = await stream.stream_progress(event, "Working")
     body = "\n\n".join(["word " * 400] * 12)
-    assert await svc.finish_progress(event, handle, body) is True
+    assert await stream.finish_progress(event, handle, body) is True
 
     assert len(calls["stop"]) == 1
     # The overflow continues as ordinary markdown messages rather than vanishing.
@@ -186,10 +187,10 @@ async def test_end_progress_disposes_of_a_stream_with_no_answer(monkeypatch):
 
     monkeypatch.setattr(AsyncWebClient, "chat_delete", fake_delete)
 
-    svc = SlackPlatformService(credentials={"access_token": "xoxb-test"})
+    stream = SlackStreamSurface(credentials={"access_token": "xoxb-test"})
     event = _event()
-    handle = await svc.stream_progress(event, "Searching the web")
-    await svc.end_progress(event, handle)
+    handle = await stream.stream_progress(event, "Searching the web")
+    await stream.end_progress(event, handle)
 
     assert calls["stop"][0]["ts"] == "200.5"
     assert calls["stop"][0]["chunks"][0]["status"] == "complete"
@@ -268,11 +269,11 @@ async def test_streamed_text_is_a_chunk_not_top_level_markdown(monkeypatch):
     was rejected on every single append against a real workspace.
     """
     calls = _stream_fakes(monkeypatch)
-    svc = SlackPlatformService(credentials={"access_token": "xoxb-test"})
+    stream = SlackStreamSurface(credentials={"access_token": "xoxb-test"})
     event = _event()
 
-    handle = await svc.append_stream_text(event, None, "Hello ")
-    handle = await svc.append_stream_text(event, handle, "world")
+    handle = await stream.append_stream_text(event, None, "Hello ")
+    handle = await stream.append_stream_text(event, handle, "world")
 
     # Opened in the same mode the step timeline uses.
     assert calls["start"][0]["task_display_mode"] == "timeline"

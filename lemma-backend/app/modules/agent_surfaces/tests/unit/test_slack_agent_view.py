@@ -11,7 +11,7 @@ from app.modules.agent_surfaces.domain.entities import (
     ConversationType,
     ParsedInboundSurfaceEvent,
 )
-from app.modules.agent_surfaces.platforms.slack.service import SlackPlatformService
+from app.modules.agent_surfaces.platforms.slack.home import SlackHomeSurface
 
 pytestmark = pytest.mark.asyncio
 
@@ -45,11 +45,11 @@ async def test_thread_title_is_set_for_a_dm(monkeypatch):
         return {"ok": True}
 
     monkeypatch.setattr(AsyncWebClient, "assistant_threads_setTitle", fake_set_title)
-    svc = SlackPlatformService(
+    home = SlackHomeSurface(
         credentials={"access_token": "xoxb-test", "scope": _DM_SCOPES}
     )
 
-    assert await svc.set_thread_title(event=_event(), title="Q3 pipeline") is True
+    assert await home.set_thread_title(event=_event(), title="Q3 pipeline") is True
     assert calls == [
         {"channel_id": "D1", "thread_ts": "100.0", "title": "Q3 pipeline"}
     ]
@@ -63,15 +63,15 @@ async def test_thread_title_is_skipped_outside_a_dm_and_without_scope(monkeypatc
 
     monkeypatch.setattr(AsyncWebClient, "assistant_threads_setTitle", fake_set_title)
 
-    scoped = SlackPlatformService(
+    scoped_home = SlackHomeSurface(
         credentials={"access_token": "xoxb-test", "scope": _DM_SCOPES}
     )
-    assert await scoped.set_thread_title(event=_event(is_dm=False), title="x") is False
+    assert await scoped_home.set_thread_title(event=_event(is_dm=False), title="x") is False
 
-    unscoped = SlackPlatformService(
+    unscoped_home = SlackHomeSurface(
         credentials={"access_token": "xoxb-test", "scope": "chat:write"}
     )
-    assert await unscoped.set_thread_title(event=_event(), title="x") is False
+    assert await unscoped_home.set_thread_title(event=_event(), title="x") is False
 
 
 async def test_thread_title_never_raises(monkeypatch):
@@ -81,11 +81,11 @@ async def test_thread_title_never_raises(monkeypatch):
         raise _api_error("missing_scope")
 
     monkeypatch.setattr(AsyncWebClient, "assistant_threads_setTitle", fake_set_title)
-    svc = SlackPlatformService(
+    home = SlackHomeSurface(
         credentials={"access_token": "xoxb-test", "scope": _DM_SCOPES}
     )
 
-    assert await svc.set_thread_title(event=_event(), title="Q3 pipeline") is False
+    assert await home.set_thread_title(event=_event(), title="Q3 pipeline") is False
 
 
 async def test_suggested_prompts_are_capped_and_shaped(monkeypatch):
@@ -98,11 +98,11 @@ async def test_suggested_prompts_are_capped_and_shaped(monkeypatch):
     monkeypatch.setattr(
         AsyncWebClient, "assistant_threads_setSuggestedPrompts", fake_set_prompts
     )
-    svc = SlackPlatformService(
+    home = SlackHomeSurface(
         credentials={"access_token": "xoxb-test", "scope": _DM_SCOPES}
     )
 
-    delivered = await svc.set_suggested_prompts(
+    delivered = await home.set_suggested_prompts(
         event=_event(),
         prompts=[
             ("Pipeline", "Show me the pipeline"),
@@ -134,13 +134,13 @@ async def test_suggested_prompts_need_at_least_one_usable_pair(monkeypatch):
     monkeypatch.setattr(
         AsyncWebClient, "assistant_threads_setSuggestedPrompts", fake_set_prompts
     )
-    svc = SlackPlatformService(
+    home = SlackHomeSurface(
         credentials={"access_token": "xoxb-test", "scope": _DM_SCOPES}
     )
 
-    assert await svc.set_suggested_prompts(event=_event(), prompts=[]) is False
+    assert await home.set_suggested_prompts(event=_event(), prompts=[]) is False
     assert (
-        await svc.set_suggested_prompts(event=_event(), prompts=[("  ", "  ")]) is False
+        await home.set_suggested_prompts(event=_event(), prompts=[("  ", "  ")]) is False
     )
 
 
@@ -254,7 +254,7 @@ async def test_publish_home_view_accepts_everything_the_caller_sends():
         inspect.signature(SlackSurfaceAdapter.publish_home_view).parameters
     )
     service_params = set(
-        inspect.signature(SlackPlatformService.publish_home_view).parameters
+        inspect.signature(SlackHomeSurface.publish_home_view).parameters
     )
 
     # Everything the view can render must be reachable through both layers.

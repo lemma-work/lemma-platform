@@ -106,7 +106,7 @@ async def test_setup_prompt_is_ephemeral_to_the_inviter(monkeypatch):
     from app.modules.agent_surfaces.platforms.slack.blocks import (
         CHANNEL_SETUP_ACTION_ID,
     )
-    from app.modules.agent_surfaces.platforms.slack.service import SlackPlatformService
+    from app.modules.agent_surfaces.platforms.slack.home import SlackHomeSurface
 
     sent: list[dict] = []
     posted: list[dict] = []
@@ -122,8 +122,8 @@ async def test_setup_prompt_is_ephemeral_to_the_inviter(monkeypatch):
     monkeypatch.setattr(AsyncWebClient, "chat_postEphemeral", fake_ephemeral)
     monkeypatch.setattr(AsyncWebClient, "chat_postMessage", fake_post)
 
-    svc = SlackPlatformService(credentials={"access_token": "xoxb-test"})
-    delivered = await svc.send_channel_setup_prompt(
+    home = SlackHomeSurface(credentials={"access_token": "xoxb-test"})
+    delivered = await home.send_channel_setup_prompt(
         channel_id="C_SALES", user_id="U_HUMAN", channel_name="sales"
     )
 
@@ -139,11 +139,11 @@ async def test_setup_prompt_is_ephemeral_to_the_inviter(monkeypatch):
 
 async def test_setup_prompt_needs_somebody_to_ask(monkeypatch):
     """chat:write.public self-joins have no inviter — stay silent."""
-    from app.modules.agent_surfaces.platforms.slack.service import SlackPlatformService
+    from app.modules.agent_surfaces.platforms.slack.home import SlackHomeSurface
 
-    svc = SlackPlatformService(credentials={"access_token": "xoxb-test"})
+    home = SlackHomeSurface(credentials={"access_token": "xoxb-test"})
     assert (
-        await svc.send_channel_setup_prompt(channel_id="C_SALES", user_id="")
+        await home.send_channel_setup_prompt(channel_id="C_SALES", user_id="")
         is False
     )
 

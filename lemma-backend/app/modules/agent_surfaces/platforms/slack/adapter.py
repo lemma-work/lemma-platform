@@ -16,7 +16,9 @@ from app.modules.agent_surfaces.domain.models import (
 )
 from app.modules.agent_surfaces.platforms.base import BaseSurfaceAdapter
 from app.modules.agent_surfaces.platforms.slack.parser import SlackMessageParser
+from app.modules.agent_surfaces.platforms.slack.home import SlackHomeSurface
 from app.modules.agent_surfaces.platforms.slack.service import SlackPlatformService
+from app.modules.agent_surfaces.platforms.slack.streaming import SlackStreamSurface
 
 
 class SlackSurfaceAdapter(BaseSurfaceAdapter):
@@ -84,7 +86,7 @@ class SlackSurfaceAdapter(BaseSurfaceAdapter):
         progress_handle: dict[str, Any] | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any] | None:
-        return await self._service(credentials).stream_progress(
+        return await self._stream(credentials).stream_progress(
             event, progress_text, progress_handle, metadata
         )
 
@@ -95,7 +97,7 @@ class SlackSurfaceAdapter(BaseSurfaceAdapter):
         event: ParsedInboundSurfaceEvent,
         progress_handle: dict[str, Any] | None = None,
     ) -> None:
-        await self._service(credentials).end_progress(event, progress_handle)
+        await self._stream(credentials).end_progress(event, progress_handle)
 
     async def append_stream_text(
         self,
@@ -106,7 +108,7 @@ class SlackSurfaceAdapter(BaseSurfaceAdapter):
         text: str,
         metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any] | None:
-        return await self._service(credentials).append_stream_text(
+        return await self._stream(credentials).append_stream_text(
             event, progress_handle, text, metadata
         )
 
@@ -119,7 +121,7 @@ class SlackSurfaceAdapter(BaseSurfaceAdapter):
         message: str,
         metadata: dict[str, Any] | None = None,
     ) -> bool:
-        return await self._service(credentials).finish_progress(
+        return await self._stream(credentials).finish_progress(
             event, progress_handle, message, metadata
         )
 
@@ -161,7 +163,7 @@ class SlackSurfaceAdapter(BaseSurfaceAdapter):
         channel_name: str | None = None,
         confirmed_agent: str | None = None,
     ) -> bool:
-        return await self._service(credentials).send_channel_setup_prompt(
+        return await self._home(credentials).send_channel_setup_prompt(
             channel_id=channel_id,
             user_id=user_id,
             channel_name=channel_name,
@@ -182,7 +184,7 @@ class SlackSurfaceAdapter(BaseSurfaceAdapter):
         channel_label: str | None,
         agent_names: list[str],
     ) -> bool:
-        return await self._service(credentials).open_channel_setup_modal(
+        return await self._home(credentials).open_channel_setup_modal(
             trigger_id=trigger_id,
             channel_id=channel_id,
             channel_label=channel_label,
@@ -192,7 +194,7 @@ class SlackSurfaceAdapter(BaseSurfaceAdapter):
     async def send_starter_prompt(
         self, *, credentials: dict[str, Any], user_id: str, prompt: str
     ) -> bool:
-        return await self._service(credentials).send_starter_prompt(
+        return await self._home(credentials).send_starter_prompt(
             user_id=user_id, prompt=prompt
         )
 
@@ -204,7 +206,7 @@ class SlackSurfaceAdapter(BaseSurfaceAdapter):
         agent_names: list,
         current: str | None,
     ) -> bool:
-        return await self._service(credentials).open_dm_agent_modal(
+        return await self._home(credentials).open_dm_agent_modal(
             trigger_id=trigger_id, agent_names=list(agent_names), current=current
         )
 
@@ -221,7 +223,7 @@ class SlackSurfaceAdapter(BaseSurfaceAdapter):
         workspace_url: str | None = None,
         logo_url: str | None = None,
     ) -> bool:
-        return await self._service(credentials).publish_home_view(
+        return await self._home(credentials).publish_home_view(
             user_id=user_id,
             pod_name=pod_name,
             dm_agent_name=dm_agent_name,
@@ -235,7 +237,7 @@ class SlackSurfaceAdapter(BaseSurfaceAdapter):
     async def channel_name(
         self, *, credentials: dict[str, Any], channel_id: str
     ) -> str | None:
-        return await self._service(credentials).channel_name(channel_id)
+        return await self._home(credentials).channel_name(channel_id)
 
     async def set_thread_title(
         self,
@@ -244,7 +246,7 @@ class SlackSurfaceAdapter(BaseSurfaceAdapter):
         event: ParsedInboundSurfaceEvent,
         title: str,
     ) -> bool:
-        return await self._service(credentials).set_thread_title(
+        return await self._home(credentials).set_thread_title(
             event=event, title=title
         )
 
@@ -300,3 +302,9 @@ class SlackSurfaceAdapter(BaseSurfaceAdapter):
 
     def _service(self, credentials: dict[str, Any]) -> SlackPlatformService:
         return SlackPlatformService(credentials=credentials, parser=self.parser)
+
+    def _home(self, credentials: dict[str, Any]) -> SlackHomeSurface:
+        return SlackHomeSurface(credentials=credentials)
+
+    def _stream(self, credentials: dict[str, Any]) -> SlackStreamSurface:
+        return SlackStreamSurface(credentials=credentials)

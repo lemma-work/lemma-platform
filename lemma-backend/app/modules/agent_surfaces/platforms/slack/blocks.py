@@ -190,8 +190,13 @@ def channel_setup_modal(
     }
 
 
-def _truncate(value: str, limit: int) -> str:
+def truncate_slack_text(value: str, limit: int) -> str:
+    """Trim to Slack's per-field ceiling without cutting an ellipsis in half."""
     return value if len(value) <= limit else value[: limit - 1].rstrip() + "…"
+
+
+def _truncate(value: str, limit: int) -> str:
+    return truncate_slack_text(value, limit)
 
 
 def fallback_text(message: str) -> str:
