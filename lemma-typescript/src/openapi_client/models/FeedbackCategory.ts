@@ -2,10 +2,13 @@
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
+/**
+ * Which part of Lemma the report is about.
+ */
 export enum FeedbackCategory {
-    SYSTEM_ISSUE = 'SYSTEM_ISSUE',
-    SKILL_ISSUE = 'SKILL_ISSUE',
-    INCORRECT_KNOWLEDGE = 'INCORRECT_KNOWLEDGE',
-    TOOLING_ISSUE = 'TOOLING_ISSUE',
-    OTHER = 'OTHER',
+    CLI = 'cli',
+    SKILL = 'skill',
+    PLATFORM = 'platform',
+    DOCS = 'docs',
+    OTHER = 'other',
 }

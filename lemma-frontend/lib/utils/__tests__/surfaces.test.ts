@@ -1,0 +1,107 @@
+import { describe, expect, it } from 'vitest';
+
+import {
+    describeReach,
+    surfaceAnswersDirectMessages,
+    surfaceDirectMessageAgent,
+    surfaceReaches,
+    surfaceReachesDefaultAgent,
+} from '@/lib/utils/surfaces';
+import type { AssistantSurface } from '@/lib/types';
+
+/** A Slack surface: one workspace install, DMs owned by one agent, N routes. */
+function slack(
+    dmAgent: string | null,
+    channels: Array<{ channel_id?: string; channel_name?: string; agent_name?: string | null }> = [],
+): AssistantSurface {
+    return {
+        name: 'slack',
+        surface_type: 'SLACK',
+        agent_name: dmAgent,
+        uses_default_agent: dmAgent === null,
+        config: { channels },
+    } as unknown as AssistantSurface;
+}
+
+describe('surface reaches', () => {
+    it('lists direct messages and every channel routed to the agent', () => {
+        const surface = slack('sales-agent', [
+            { channel_id: 'C1', channel_name: 'sales', agent_name: 'sales-agent' },
+            { channel_id: 'C2', channel_name: 'support', agent_name: 'support-agent' },
+            { channel_id: 'C3', channel_name: 'deals', agent_name: 'sales-agent' },
+        ]);
+
+        expect(surfaceReaches(surface, 'sales-agent').map((reach) => reach.label)).toEqual([
+            'Direct messages',
+            '#sales',
+            '#deals',
+        ]);
+    });
+
+    it('gives another agent its channels without the workspace DMs', () => {
+        const surface = slack('sales-agent', [
+            { channel_id: 'C2', channel_name: 'support', agent_name: 'support-agent' },
+        ]);
+
+        const reaches = surfaceReaches(surface, 'support-agent');
+        expect(reaches.map((reach) => reach.label)).toEqual(['#support']);
+        // The limit that used to be invisible: one agent holds a workspace's DMs.
+        expect(surfaceAnswersDirectMessages(surface, 'support-agent')).toBe(false);
+        expect(surfaceDirectMessageAgent(surface)).toBe('sales-agent');
+    });
+
+    it('reads an unrouted channel as the pod default assistant', () => {
+        const surface = slack('sales-agent', [
+            { channel_id: 'C9', channel_name: 'general', agent_name: null },
+        ]);
+
+        expect(surfaceReaches(surface, null).map((reach) => reach.label)).toEqual(['#general']);
+        // Would be missed by a DM-only filter, which is why `defaultSurfaces`
+        // asks about reach rather than about the responder.
+        expect(surfaceReachesDefaultAgent(surface)).toBe(true);
+        expect(surfaceDirectMessageAgent(surface)).toBe('sales-agent');
+    });
+
+    it('hands the pod default assistant the DMs when no agent claims them', () => {
+        const surface = slack(null);
+        expect(surfaceAnswersDirectMessages(surface, null)).toBe(true);
+        expect(surfaceDirectMessageAgent(surface)).toBeNull();
+        expect(surfaceReaches(surface, 'sales-agent')).toEqual([]);
+    });
+
+    it('prefixes a channel name once, whether or not it arrives with one', () => {
+        const surface = slack(null, [
+            { channel_id: 'C1', channel_name: '#already', agent_name: null },
+            { channel_id: 'C2', channel_name: 'bare', agent_name: null },
+            // No name — the id is all we can show, and showing nothing would
+            // silently drop a route that really does deliver messages.
+            { channel_id: 'C3', agent_name: null },
+        ]);
+
+        expect(surfaceReaches(surface, null).map((reach) => reach.label)).toEqual([
+            'Direct messages',
+            '#already',
+            '#bare',
+            '#C3',
+        ]);
+    });
+
+    it('keys channels distinctly so exploded chips stay stable', () => {
+        const surface = slack(null, [
+            { channel_id: 'C1', channel_name: 'a', agent_name: null },
+            { channel_id: 'C2', channel_name: 'b', agent_name: null },
+        ]);
+
+        const keys = surfaceReaches(surface, null).map((reach) => reach.key);
+        expect(new Set(keys).size).toBe(keys.length);
+    });
+
+    it('still describes reach as one line for the tooltip', () => {
+        const surface = slack('sales-agent', [
+            { channel_id: 'C1', channel_name: 'sales', agent_name: 'sales-agent' },
+        ]);
+
+        expect(describeReach(surface, 'sales-agent')).toBe('Direct messages · #sales');
+        expect(describeReach(surface, 'nobody')).toBe('Routed here');
+    });
+});
