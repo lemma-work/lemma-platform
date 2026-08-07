@@ -11,10 +11,15 @@ from app.modules.agent_surfaces.config import surface_settings
 from app.core.infrastructure.events.inbox import stable_event_id
 from app.core.infrastructure.events.publisher import EventPublisher
 from app.core.redaction import redact_value
+from app.core.api.dependencies import get_uow_factory
+from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.agent_surfaces.api.dependencies import (
     SurfaceWebhookSecurityServiceDep,
     TelegramManagerServiceDep,
     get_surface_service,
+)
+from app.modules.agent_surfaces.domain.ingress_request import (
+    SurfacePlatformWebhookIngress,
 )
 from app.modules.agent_surfaces.domain.events import SurfaceWebhookReceivedEvent
 from app.modules.identity.domain.events import WhatsAppMobileVerificationReceivedEvent
@@ -30,6 +35,35 @@ from app.modules.agent_surfaces.services.telegram_manager_service import (
 )
 
 router = APIRouter(prefix="/surfaces", tags=["Agent Surfaces (Ingress)"])
+
+
+_MODAL_OPENING_ACTION_IDS = {
+    "lemma_channel_setup",
+    "lemma_dm_agent_setup",
+}
+# App Home taps that must feel instant. Starter prompts carry no trigger_id but
+# a visible lag on a "try this" button reads as a dead button.
+_FAST_LANE_ACTION_PREFIXES = ("lemma_agent_dm",)
+
+
+def _opens_a_slack_modal(payload: dict) -> bool:
+    """True for a click whose only job is to open a modal within 3 seconds."""
+    inner = payload
+    for key in ("payload", "data"):
+        nested = inner.get(key)
+        if isinstance(nested, dict):
+            inner = nested
+            break
+    if inner.get("type") != "block_actions":
+        return False
+    return any(
+        isinstance(action, dict)
+        and (
+            action.get("action_id") in _MODAL_OPENING_ACTION_IDS
+            or str(action.get("action_id") or "").startswith(_FAST_LANE_ACTION_PREFIXES)
+        )
+        for action in inner.get("actions") or []
+    )
 
 
 def _surface_source_event_id(platform: str, payload: dict, raw_body: bytes) -> str:
@@ -169,6 +203,7 @@ async def handle_platform_webhook(
     request: Request,
     security_service: SurfaceWebhookSecurityServiceDep,
     service: AgentSurfaceService = Depends(get_surface_service),
+    uow_factory: UnitOfWorkFactory = Depends(get_uow_factory),
 ):
     """Handle platform-level webhook callbacks."""
     headers = dict(request.headers)
@@ -237,6 +272,26 @@ async def handle_platform_webhook(
                 )
                 return {"message": "Verification message received"}
 
+    # Opening a Slack modal is the one thing that cannot go through the queue:
+    # ``trigger_id`` dies ~3 seconds after the click, and by the time a worker
+    # dequeues the event it is usually already expired. So this runs inline, in
+    # the HTTP request, before anything is published.
+    if platform == "slack" and _opens_a_slack_modal(payload):
+        from app.modules.agent_surfaces.events.handlers import (
+            build_surface_event_handler,
+        )
+
+        async with uow_factory() as uow:
+            handled = await build_surface_event_handler(uow).try_handle_channel_setup(
+                SurfacePlatformWebhookIngress(
+                    source=platform,
+                    payload=payload,
+                    headers=_redacted_headers(headers),
+                )
+            )
+        if handled:
+            return Response(status_code=200)
+
     source_event_id = _surface_source_event_id(platform, payload, raw_body)
     event = SurfaceWebhookReceivedEvent(
         event_id=stable_event_id({"event_id": source_event_id}),
@@ -246,6 +301,13 @@ async def handle_platform_webhook(
         source_event_id=source_event_id,
     )
     await EventPublisher.publish(event.stream_name(), event)
+
+    # A Slack modal submission is the one webhook whose *body* is protocol, not
+    # acknowledgement: Slack parses it as a response_action and shows the user
+    # "We had some trouble connecting" for anything it doesn't recognise. An
+    # empty 200 means "accepted, close the modal".
+    if platform == "slack" and payload.get("type") == "view_submission":
+        return Response(status_code=200)
 
     return {"message": "Webhook received"}
 

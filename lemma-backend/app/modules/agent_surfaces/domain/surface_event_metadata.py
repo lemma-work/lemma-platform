@@ -48,6 +48,11 @@ class SlackSurfaceEventMetadata(BaseModel):
     is_thread_reply: bool = False
     mentioned_user_ids: list[str] = Field(default_factory=list)
     attachments: list[SlackFileAttachment] = Field(default_factory=list)
+    # Ephemeral token Slack attaches to an event, and the only way a *bot*
+    # token may call the Real-Time Search API (assistant.search.context).
+    # Parsed since the assistant work landed; carried here so the search tool
+    # can actually reach it.
+    assistant_thread_action_token: str | None = None
 
 
 class WhatsAppSurfaceEventMetadata(BaseModel):

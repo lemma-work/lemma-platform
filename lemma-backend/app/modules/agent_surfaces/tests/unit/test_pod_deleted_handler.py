@@ -82,6 +82,8 @@ async def test_on_pod_deleted_ignores_non_delete_events(monkeypatch):
 async def test_handle_surface_webhook_enqueues_prepared_context(monkeypatch):
     handler = AsyncMock()
     context = _reply_context()
+    handler.try_handle_channel_setup.return_value = False
+    handler.try_handle_lifecycle.return_value = False
     handler.try_handle_interaction.return_value = False
     handler.prepare_ingress.return_value = context
     job_queue = AsyncMock()
@@ -107,6 +109,8 @@ async def test_handle_surface_webhook_skips_queue_when_interaction_was_handled(
     monkeypatch,
 ):
     handler = AsyncMock()
+    handler.try_handle_channel_setup.return_value = False
+    handler.try_handle_lifecycle.return_value = False
     handler.try_handle_interaction.return_value = True
     job_queue = AsyncMock()
     uow_mock = AsyncMock()
@@ -127,6 +131,8 @@ async def test_handle_surface_webhook_skips_queue_when_interaction_was_handled(
 @pytest.mark.asyncio
 async def test_handle_surface_webhook_skips_queue_when_no_context(monkeypatch):
     handler = AsyncMock()
+    handler.try_handle_channel_setup.return_value = False
+    handler.try_handle_lifecycle.return_value = False
     handler.try_handle_interaction.return_value = False
     handler.prepare_ingress.return_value = None
     job_queue = AsyncMock()
@@ -148,6 +154,8 @@ async def test_handle_surface_webhook_skips_queue_when_no_context(monkeypatch):
 @pytest.mark.asyncio
 async def test_direct_webhook_builds_direct_ingress(monkeypatch):
     handler = AsyncMock()
+    handler.try_handle_channel_setup.return_value = False
+    handler.try_handle_lifecycle.return_value = False
     handler.try_handle_interaction.return_value = False
     handler.prepare_ingress.return_value = None
     uow_mock = AsyncMock()
@@ -279,3 +287,31 @@ def _reply_context() -> SurfaceReplyContext:
         ),
         reply_message="hello",
     )
+
+
+@pytest.mark.asyncio
+async def test_handle_surface_webhook_stops_at_a_lifecycle_event(monkeypatch):
+    """A lifecycle event is answered and stopped — it starts no conversation.
+
+    The bot joining a channel must not fall through to the message path, or an
+    event with no message text would try to become a run.
+    """
+    handler = AsyncMock()
+    handler.try_handle_channel_setup.return_value = False
+    handler.try_handle_lifecycle.return_value = True
+    job_queue = AsyncMock()
+    uow_mock = AsyncMock()
+    monkeypatch.setattr(handlers, "build_surface_event_handler", lambda uow: handler)
+
+    await handlers.handle_surface_webhook(
+        SurfaceWebhookReceivedEvent(source="slack", payload={"type": "event_callback"}),
+        logging.getLogger("test"),
+        uow_factory=partial(_mock_uow_factory, uow_mock),
+        job_queue=job_queue,
+        inbox=PassthroughEventInbox(),
+    )
+
+    handler.try_handle_lifecycle.assert_awaited_once()
+    handler.try_handle_interaction.assert_not_awaited()
+    handler.prepare_ingress.assert_not_awaited()
+    job_queue.enqueue.assert_not_awaited()

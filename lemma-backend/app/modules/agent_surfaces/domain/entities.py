@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from enum import StrEnum
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, ClassVar
 from uuid import UUID
 
 from pydantic import BaseModel, Field, field_validator
@@ -95,13 +95,23 @@ class SurfaceIdentityPolicy(BaseModel):
 
 
 class SurfaceChannelRoute(BaseModel):
-    """Routes one platform channel to an agent (by pod-unique agent name;
-    None → the surface default agent). A route existing means it is active —
-    remove it to stop routing the channel."""
+    """Routes one platform channel to an agent (by pod-unique agent name).
+
+    Three states, not two — conflating the last two silently sends "the pod
+    assistant" to whichever agent the surface happens to default to:
+
+    * ``agent_name`` set — that named agent answers.
+    * ``use_pod_assistant`` — the pod's own assistant answers, which is a
+      conversation with *no* agent at all, not a fallback.
+    * neither — unconfigured, so the surface default answers.
+
+    A route existing means it is active; remove it to stop routing the channel.
+    """
 
     channel_id: str | None = None
     channel_name: str | None = None
     agent_name: str | None = None
+    use_pod_assistant: bool = False
 
     def matches(self, *, channel_id: str, channel_name: str) -> bool:
         route_channel_id = str(self.channel_id or "").strip()
@@ -137,6 +147,47 @@ class SurfaceTelegramConfig(BaseModel):
     app_name: str | None = None
 
 
+class SurfaceSlackConfig(BaseModel):
+    """Slack-only settings for a surface.
+
+    ``dm_agent_by_user`` is the per-person answer to "who am I talking to?" —
+    Slack external user id to pod-unique agent name. Slack DMs otherwise route
+    to one agent for the whole workspace (``surface.agent_id``), which is the
+    single hard limit the platform used to impose on us. A person picks their
+    own agent; anyone who has not picked keeps the surface default, so this is
+    additive and needs no migration.
+
+    ``app_name`` mirrors :class:`SurfaceTelegramConfig` — the pod app to offer
+    from the channel's bookmark bar and App Home, Slack's nearest equivalent to
+    Telegram's chat menu button.
+    """
+
+    # Stored when someone explicitly picks the pod assistant. Deleting the
+    # entry instead would make "chose the pod assistant" identical to "never
+    # chose", so their pick would silently read as the surface default.
+    POD_ASSISTANT: ClassVar[str] = "__pod_assistant__"
+
+    dm_agent_by_user: dict[str, str] = Field(default_factory=dict)
+    app_name: str | None = None
+
+    def choice_for_user(self, external_user_id: str | None) -> str | None:
+        """Whatever this person picked — an agent name, the pod-assistant
+        sentinel, or None for "never picked"."""
+        if not external_user_id:
+            return None
+        return self.dm_agent_by_user.get(str(external_user_id)) or None
+
+    def agent_for_user(self, external_user_id: str | None) -> str | None:
+        """The named agent this person chose. None for the pod assistant *or*
+        for no choice — callers that must tell those apart use
+        :meth:`chose_pod_assistant`."""
+        choice = self.choice_for_user(external_user_id)
+        return None if choice == self.POD_ASSISTANT else choice
+
+    def chose_pod_assistant(self, external_user_id: str | None) -> bool:
+        return self.choice_for_user(external_user_id) == self.POD_ASSISTANT
+
+
 class SurfaceConfig(BaseModel):
     """User-editable surface behavior. Exactly what the API accepts and returns.
 
@@ -149,6 +200,7 @@ class SurfaceConfig(BaseModel):
     channels: list[SurfaceChannelRoute] = Field(default_factory=list)
     send_policy: SurfaceSendPolicy = Field(default_factory=SurfaceSendPolicy)
     telegram: SurfaceTelegramConfig = Field(default_factory=SurfaceTelegramConfig)
+    slack: SurfaceSlackConfig = Field(default_factory=SurfaceSlackConfig)
 
 
 class ExternalSurfaceUserEntity(Entity):
@@ -192,6 +244,38 @@ class ParsedInboundSurfaceEvent(BaseModel):
             or self.reply_target.get("chat_id")
             or self.external_channel_id
         )
+
+
+class SurfaceLifecycleKind(StrEnum):
+    """What happened to the app itself, as opposed to what someone said to it."""
+
+    # The bot was added to a channel. Carries the person who added it — the one
+    # worth asking which agent should answer there.
+    JOINED_CHANNEL = "JOINED_CHANNEL"
+    # Someone opened the app's own surface (Slack's App Home / agent DM tab).
+    HOME_OPENED = "HOME_OPENED"
+
+
+class ParsedSurfaceLifecycleEvent(BaseModel):
+    """The third kind of inbound event: neither a message nor an interaction.
+
+    A message becomes a conversation; an interaction resumes a paused run. These
+    do neither — nothing here reaches an agent. They are the platform telling us
+    the app's own situation changed, and the only correct response is to
+    configure something or to offer to.
+
+    Kept a separate contract on purpose: folding them into the message parser
+    would mean every consumer of ``ParsedInboundSurfaceEvent`` grows a branch for
+    events that carry no message and start no run.
+    """
+
+    platform: SurfacePlatform
+    kind: SurfaceLifecycleKind
+    tenant_id: str | None = None
+    external_channel_id: str | None = None
+    # Who caused it: the inviter for JOINED_CHANNEL, the viewer for HOME_OPENED.
+    actor_external_user_id: str | None = None
+    raw_payload: dict[str, Any] = Field(default_factory=dict)
 
 
 class ParsedSurfaceInteraction(BaseModel):

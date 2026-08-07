@@ -6,8 +6,22 @@ from app.modules.agent_surfaces.domain.entities import (
     ConversationType,
     ParsedInboundSurfaceEvent,
     ParsedSurfaceInteraction,
+    ParsedSurfaceLifecycleEvent,
+    SurfaceLifecycleKind,
 )
 from app.modules.agent_surfaces.platforms.common import render_attachment_prompt_block
+from app.modules.agent_surfaces.platforms.slack.blocks import (
+    CHANNEL_SETUP_ACTION_ID as _CHANNEL_SETUP_ACTION_ID,
+    CHANNEL_SETUP_BLOCK_ID as _CHANNEL_SETUP_BLOCK_ID,
+    CHANNEL_SETUP_SELECT_ACTION_ID as _CHANNEL_SETUP_SELECT_ACTION_ID,
+    CHANNEL_SETUP_VIEW_CALLBACK_ID as _CHANNEL_SETUP_VIEW_CALLBACK_ID,
+    AGENT_DM_ACTION_ID as _AGENT_DM_ACTION_ID,
+    DM_AGENT_BLOCK_ID as _DM_AGENT_BLOCK_ID,
+    DM_AGENT_SELECT_ACTION_ID as _DM_AGENT_SELECT_ACTION_ID,
+    DM_AGENT_SETUP_ACTION_ID as _DM_AGENT_SETUP_ACTION_ID,
+    DM_AGENT_VIEW_CALLBACK_ID as _DM_AGENT_VIEW_CALLBACK_ID,
+    POD_ASSISTANT_VALUE as _POD_ASSISTANT_VALUE,
+)
 from app.modules.agent_surfaces.platforms.slack.models import (
     SLACK_APPROVAL_DECISION_BY_ACTION_ID as _APPROVAL_DECISION_BY_ACTION_ID,
     SLACK_FORM_SUBMIT_ACTION_ID as _FORM_SUBMIT_ACTION_ID,
@@ -129,6 +143,199 @@ class SlackMessageParser:
                 exc_info=True,
             )
             raise
+
+    def parse_lifecycle(
+        self, payload: dict[str, Any], headers: dict[str, str] | None = None
+    ) -> ParsedSurfaceLifecycleEvent | None:
+        """Recognise events about the app itself rather than about a message.
+
+        Returns None for everything else, including a *person* joining a
+        channel — only the bot's own arrival is a setup moment.
+        """
+        del headers
+        try:
+            payload = self._unwrap_payload(payload)
+            if payload.get("type") != "event_callback":
+                return None
+            event = payload.get("event") or {}
+            event_type = str(event.get("type") or "")
+            tenant_id = str(payload.get("team_id") or "").strip() or None
+
+            if event_type == "member_joined_channel":
+                # ``authorizations`` names the bot user for this delivery; if the
+                # user who joined is not it, a colleague joined and it is not
+                # ours to react to.
+                bot_user_id = self._authorized_bot_user_id(payload)
+                joined_user = str(event.get("user") or "").strip()
+                if not bot_user_id or joined_user != bot_user_id:
+                    return None
+                channel_id = str(event.get("channel") or "").strip()
+                if not channel_id:
+                    return None
+                return ParsedSurfaceLifecycleEvent(
+                    platform=self.platform,
+                    kind=SurfaceLifecycleKind.JOINED_CHANNEL,
+                    tenant_id=tenant_id,
+                    external_channel_id=channel_id,
+                    # The inviter is the whole point: they just acted, so they
+                    # are the right person to ask who should answer here.
+                    actor_external_user_id=(
+                        str(event.get("inviter") or "").strip() or None
+                    ),
+                    raw_payload=payload,
+                )
+
+            if event_type == "app_home_opened":
+                return ParsedSurfaceLifecycleEvent(
+                    platform=self.platform,
+                    kind=SurfaceLifecycleKind.HOME_OPENED,
+                    tenant_id=tenant_id,
+                    external_channel_id=str(event.get("channel") or "").strip() or None,
+                    actor_external_user_id=str(event.get("user") or "").strip() or None,
+                    raw_payload=payload,
+                )
+            return None
+        except Exception:
+            logger.debug("surface.slack.parse_lifecycle_failed", exc_info=True)
+            return None
+
+    def _authorized_bot_user_id(self, payload: dict[str, Any]) -> str | None:
+        for authorization in payload.get("authorizations") or []:
+            if not isinstance(authorization, dict):
+                continue
+            user_id = str(authorization.get("user_id") or "").strip()
+            if user_id:
+                return user_id
+        return None
+
+    def parse_channel_setup(
+        self, payload: dict[str, Any], headers: dict[str, str] | None = None
+    ) -> dict[str, Any] | None:
+        """Recognise the two halves of the channel-setup round trip.
+
+        Returns ``{"kind": "open"|"submit", ...}`` or None. Kept separate from
+        ``parse_interaction`` because these configure a surface rather than
+        resume a paused agent run — the two share a transport, not a meaning.
+        """
+        del headers
+        try:
+            payload = self._unwrap_payload(payload)
+            kind = str(payload.get("type") or "")
+            team = payload.get("team") or {}
+            user = payload.get("user") or {}
+            tenant_id = str(team.get("id") or payload.get("team_id") or "") or None
+            actor = str(user.get("id") or "").strip() or None
+
+            if kind == "block_actions":
+                actions = [
+                    a for a in payload.get("actions") or [] if isinstance(a, dict)
+                ]
+                starter = next(
+                    (
+                        a
+                        for a in actions
+                        if str(a.get("action_id") or "").startswith(
+                            _AGENT_DM_ACTION_ID
+                        )
+                    ),
+                    None,
+                )
+                if starter is not None:
+                    prompt = str(starter.get("value") or "").strip()
+                    if not prompt or not actor:
+                        return None
+                    return {
+                        "kind": "starter_prompt",
+                        "prompt": prompt,
+                        "tenant_id": tenant_id,
+                        "actor_external_user_id": actor,
+                    }
+                if any(
+                    a.get("action_id") == _DM_AGENT_SETUP_ACTION_ID for a in actions
+                ):
+                    trigger_id = str(payload.get("trigger_id") or "").strip()
+                    if not trigger_id:
+                        return None
+                    return {
+                        "kind": "open_dm",
+                        "trigger_id": trigger_id,
+                        "tenant_id": tenant_id,
+                        "actor_external_user_id": actor,
+                    }
+                action = next(
+                    (
+                        a
+                        for a in actions
+                        if a.get("action_id") == _CHANNEL_SETUP_ACTION_ID
+                    ),
+                    None,
+                )
+                if action is None:
+                    return None
+                # trigger_id expires in 3 seconds — the caller must open the
+                # modal before doing anything slow with this.
+                trigger_id = str(payload.get("trigger_id") or "").strip()
+                channel_id = str(
+                    action.get("value")
+                    or (payload.get("channel") or {}).get("id")
+                    or ""
+                ).strip()
+                if not trigger_id or not channel_id:
+                    return None
+                return {
+                    "kind": "open",
+                    "trigger_id": trigger_id,
+                    "channel_id": channel_id,
+                    "tenant_id": tenant_id,
+                    "actor_external_user_id": actor,
+                }
+
+            if kind == "view_submission":
+                view = payload.get("view") or {}
+                if view.get("callback_id") == _DM_AGENT_VIEW_CALLBACK_ID:
+                    values = (view.get("state") or {}).get("values") or {}
+                    selected = (
+                        ((values.get(_DM_AGENT_BLOCK_ID) or {}).get(
+                            _DM_AGENT_SELECT_ACTION_ID
+                        ) or {}).get("selected_option")
+                        or {}
+                    ).get("value")
+                    if not selected or not actor:
+                        return None
+                    return {
+                        "kind": "submit_dm",
+                        "agent_name": (
+                            None if selected == _POD_ASSISTANT_VALUE else str(selected)
+                        ),
+                        "tenant_id": tenant_id,
+                        "actor_external_user_id": actor,
+                    }
+                if view.get("callback_id") != _CHANNEL_SETUP_VIEW_CALLBACK_ID:
+                    return None
+                channel_id = str(view.get("private_metadata") or "").strip()
+                values = (view.get("state") or {}).get("values") or {}
+                selected = (
+                    ((values.get(_CHANNEL_SETUP_BLOCK_ID) or {}).get(
+                        _CHANNEL_SETUP_SELECT_ACTION_ID
+                    ) or {}).get("selected_option")
+                    or {}
+                ).get("value")
+                if not channel_id or not selected:
+                    return None
+                return {
+                    "kind": "submit",
+                    "channel_id": channel_id,
+                    # The pod assistant is an empty agent name on the route.
+                    "agent_name": (
+                        None if selected == _POD_ASSISTANT_VALUE else str(selected)
+                    ),
+                    "tenant_id": tenant_id,
+                    "actor_external_user_id": actor,
+                }
+            return None
+        except Exception:
+            logger.debug("surface.slack.parse_channel_setup_failed", exc_info=True)
+            return None
 
     def parse_interaction(
         self, payload: dict[str, Any], headers: dict[str, str] | None = None

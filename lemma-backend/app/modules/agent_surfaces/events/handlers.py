@@ -125,6 +125,17 @@ async def _process_surface_webhook(
 
     async with uow_factory() as uow:
         handler = build_surface_event_handler(uow)
+        # Lifecycle events (the bot joined a channel, someone opened the app
+        # home) are about the app itself: they never become a conversation, so
+        # they are answered and stopped before the interaction/message paths.
+        # Channel setup is time-critical: Slack expires the modal trigger in
+        # ~3 seconds, so it runs before anything slower.
+        if await handler.try_handle_channel_setup(ingress_request):
+            return
+
+        if await handler.try_handle_lifecycle(ingress_request):
+            return
+
         if await handler.try_handle_interaction(ingress_request):
             return
 

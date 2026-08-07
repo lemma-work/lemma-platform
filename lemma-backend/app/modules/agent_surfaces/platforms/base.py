@@ -142,10 +142,11 @@ class BaseSurfaceAdapter:
         event: ParsedInboundSurfaceEvent,
         progress_text: str,
         progress_handle: dict[str, Any] | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any] | None:
         """Show live progress text. Default: platform has no editable progress
         message → return None so the caller keeps using typing indicators."""
-        del credentials, event, progress_text, progress_handle
+        del credentials, event, progress_text, progress_handle, metadata
         return None
 
     async def end_progress(
@@ -157,6 +158,69 @@ class BaseSurfaceAdapter:
     ) -> None:
         """Clean up the streaming progress message. Default: no-op."""
         del credentials, event, progress_handle
+
+    async def parse_inbound_lifecycle(
+        self, payload: dict[str, Any], headers: dict[str, str] | None = None
+    ):
+        """Parse an event about the app itself. Default: not a lifecycle event."""
+        del payload, headers
+        return None
+
+    async def send_channel_setup_prompt(
+        self,
+        *,
+        credentials: dict[str, Any],
+        channel_id: str,
+        user_id: str,
+        channel_name: str | None = None,
+        confirmed_agent: str | None = None,
+    ) -> bool:
+        """Offer to configure a freshly joined channel. Default: unsupported."""
+        del credentials, channel_id, user_id, channel_name, confirmed_agent
+        return False
+
+    async def set_thread_title(
+        self,
+        *,
+        credentials: dict[str, Any],
+        event: ParsedInboundSurfaceEvent,
+        title: str,
+    ) -> bool:
+        """Name the conversation thread on the platform. Default: unsupported."""
+        del credentials, event, title
+        return False
+
+    async def append_stream_text(
+        self,
+        *,
+        credentials: dict[str, Any],
+        event: ParsedInboundSurfaceEvent,
+        progress_handle: dict[str, Any] | None,
+        text: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        """Append model text to a live stream. Default: platform cannot stream."""
+        del credentials, event, text, metadata
+        return progress_handle
+
+    async def finish_progress(
+        self,
+        *,
+        credentials: dict[str, Any],
+        event: ParsedInboundSurfaceEvent,
+        progress_handle: dict[str, Any] | None,
+        message: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> bool:
+        """Close a live progress stream *with* the final answer, as one message.
+
+        Only platforms with a real streaming API can do this. Returning False
+        means "I did not deliver the answer" — the caller then clears progress
+        and sends the answer as its own message, which is the path every other
+        platform takes.
+        """
+        del credentials, event, progress_handle, message, metadata
+        return False
 
     async def download_attachment(
         self,

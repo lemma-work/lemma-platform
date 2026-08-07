@@ -918,3 +918,25 @@ async def test_available_catalog_channel_discovery_and_teams_consent_journey(
     ready = await authenticated_client.get(f"/pods/{pod_id}/surfaces/teams/setup")
     assert ready.status_code == 200, ready.text
     assert ready.json()["admin_consent"]["granted"] is True
+
+
+@pytest.mark.e2e
+@pytest.mark.asyncio
+async def test_slack_view_submission_is_acknowledged_with_an_empty_body(
+    authenticated_client, monkeypatch
+):
+    """Slack parses a view_submission's response body as a response_action.
+
+    Anything it does not recognise — including our usual
+    ``{"message": "Webhook received"}`` — surfaces to the user as
+    "We had some trouble connecting." An empty 200 closes the modal.
+    """
+    from app.modules.agent_surfaces.config import surface_settings
+
+    monkeypatch.setattr(surface_settings, "surface_webhook_security_enabled", False)
+    response = await authenticated_client.post(
+        "/surfaces/webhooks/slack",
+        json={"type": "view_submission", "view": {"callback_id": "x"}},
+    )
+    assert response.status_code == 200
+    assert response.content == b""

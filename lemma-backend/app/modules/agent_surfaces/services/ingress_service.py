@@ -11,6 +11,8 @@ from pydantic import TypeAdapter
 
 from app.core.authorization.current import reset_current_context, set_current_context
 from app.core.authorization.factory import create_authorization_data_service
+from app.core.config import settings
+from app.modules.agent_surfaces.config import surface_settings
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.agent.contracts import AgentRunApprovalDecision
 from app.composition.surface_agent import ConversationService
@@ -27,6 +29,8 @@ from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
     ParsedInboundSurfaceEvent,
     ParsedSurfaceInteraction,
+    ParsedSurfaceLifecycleEvent,
+    SurfaceLifecycleKind,
     ResolvedSurfaceUser,
     SurfaceChannelRoute,
     SurfaceCredentialMode,
@@ -483,6 +487,23 @@ class AgentSurfaceIngressService:
         # The only DB writes happen here, AFTER all the external I/O above — so
         # in worker (factory) mode a pooled connection is held just for this
         # short tail, not across the platform/file/transcription calls.
+        # A brand-new conversation is the one moment worth naming the thread on
+        # the platform, so Slack's own DM history reads as a list of topics
+        # rather than a stack of identical bot threads. Best-effort by
+        # construction: the adapter returns False where it is unsupported.
+        if context.created_conversation_title:
+            try:
+                await adapter.set_thread_title(
+                    credentials=credentials,
+                    event=context.event,
+                    title=context.created_conversation_title,
+                )
+            except Exception:
+                logger.debug(
+                    'agent_surfaces.ingress_service.surface_thread_title_set.diagnostic',
+                    conversation_id=context.conversation_id,
+                )
+
         run_result = await self._commit_inbound_message(
             context, message_text, metadata
         )
@@ -730,14 +751,45 @@ class AgentSurfaceIngressService:
         metadata: dict[str, Any] | None,
     ) -> dict[str, Any]:
         resolved = dict(metadata or {})
-        resolved.setdefault(
-            "agent_display_name",
-            await self._agent_name_for_agent_id(
-                target.link.routed_agent_id or target.surface.agent_id
-            )
-            or "Lemma",
+        agent_id = target.link.routed_agent_id or target.surface.agent_id
+        # A pod-assistant route has no agent *by design*, so the usual
+        # "fall back to the surface default" would put the default agent's name
+        # and face on the pod assistant's replies.
+        if self._routes_to_pod_assistant(target):
+            agent_id = None
+        agent = (
+            await self.conversation_service.agent_repository.get(agent_id)
+            if agent_id
+            else None
         )
+        resolved.setdefault(
+            "agent_display_name", getattr(agent, "name", None) or "Lemma"
+        )
+        icon_url = getattr(agent, "icon_url", None)
+        if icon_url:
+            resolved.setdefault("agent_icon_url", str(icon_url))
         return resolved
+
+    def _routes_to_pod_assistant(self, target: "_SurfaceEgressTarget") -> bool:
+        """True when this conversation is answered by the pod assistant.
+
+        Two ways to get there, and both have to be checked: a *channel* routed
+        to it, or a *person* who chose it for their own DMs. Checking only the
+        channel left every pod-assistant DM wearing the default agent's name.
+        """
+        if target.surface.surface_type is SurfacePlatform.SLACK:
+            external_user_id = str(
+                getattr(target.link, "external_user_id", "") or ""
+            )
+            if target.surface.config.slack.chose_pod_assistant(external_user_id):
+                return True
+        channel_id = str(getattr(target.link, "external_channel_id", "") or "")
+        if not channel_id:
+            return False
+        route = target.surface.channel_route_for(
+            channel_id=channel_id, channel_name=""
+        )
+        return bool(route is not None and route.use_pod_assistant)
 
     async def send_to_member(
         self,
@@ -1169,6 +1221,370 @@ class AgentSurfaceIngressService:
             caption=caption,
         )
 
+    async def try_handle_channel_setup(
+        self,
+        request: SurfacePlatformWebhookIngress | SurfaceDirectWebhookIngress,
+    ) -> bool:
+        """Open the "who answers here?" modal, or persist what it returned.
+
+        Returns True when the payload belonged to this flow, so the caller stops
+        — none of it reaches an agent.
+        """
+        adapter, platform = self._adapter_for_request(request)
+        if adapter is None:
+            return False
+        setup = await adapter.parse_channel_setup(request.payload, request.headers)
+        if setup is None:
+            return False
+
+        surface = await self._surface_for_workspace(
+            request, tenant_id=setup.get("tenant_id"), platform=platform
+        )
+        if surface is None:
+            return True
+        credentials = await self._resolve_credentials(surface)
+        channel_id = str(setup.get("channel_id") or "")
+        try:
+            if setup.get("kind") == "starter_prompt":
+                await adapter.send_starter_prompt(
+                    credentials=credentials,
+                    user_id=str(setup.get("actor_external_user_id") or ""),
+                    prompt=str(setup.get("prompt") or ""),
+                )
+                return True
+
+            if setup.get("kind") == "open_dm":
+                agents, _ = await self.conversation_service.agent_repository.list_by_pod(
+                    pod_id=surface.pod_id
+                )
+                await adapter.open_dm_agent_modal(
+                    credentials=credentials,
+                    trigger_id=str(setup.get("trigger_id") or ""),
+                    agent_names=[agent.name for agent in agents],
+                    current=surface.config.slack.choice_for_user(
+                        setup.get("actor_external_user_id")
+                    ),
+                )
+                return True
+
+            if setup.get("kind") == "submit_dm":
+                await self._set_dm_agent_for_user(
+                    surface=surface,
+                    external_user_id=str(setup.get("actor_external_user_id") or ""),
+                    agent_name=setup.get("agent_name"),
+                )
+                await self._publish_home(
+                    surface=surface,
+                    adapter=adapter,
+                    credentials=credentials,
+                    external_user_id=str(setup.get("actor_external_user_id") or ""),
+                )
+                return True
+
+            if setup.get("kind") == "open":
+                agents, _ = await self.conversation_service.agent_repository.list_by_pod(
+                    pod_id=surface.pod_id
+                )
+                await adapter.open_channel_setup_modal(
+                    credentials=credentials,
+                    trigger_id=str(setup.get("trigger_id") or ""),
+                    channel_id=channel_id,
+                    channel_label=await adapter.channel_name(
+                        credentials=credentials, channel_id=channel_id
+                    ),
+                    agent_names=[agent.name for agent in agents],
+                )
+                return True
+
+            agent_name = setup.get("agent_name")
+            await self._route_channel_to_agent(
+                surface=surface,
+                channel_id=channel_id,
+                agent_name=agent_name,
+            )
+            # The modal just closes on save, so without this the person has no
+            # idea whether anything happened — and no way to see what they set.
+            await adapter.send_channel_setup_prompt(
+                credentials=credentials,
+                channel_id=channel_id,
+                user_id=str(setup.get("actor_external_user_id") or ""),
+                confirmed_agent=agent_name or "the pod assistant",
+            )
+        except Exception:
+            logger.debug(
+                'agent_surfaces.ingress_service.surface_channel_setup_handling.diagnostic',
+                surface_id=str(surface.id),
+                exc_info=True,
+            )
+        return True
+
+    async def _set_dm_agent_for_user(
+        self,
+        *,
+        surface,
+        external_user_id: str,
+        agent_name: str | None,
+    ) -> None:
+        """Record who answers one person's DMs.
+
+        Choosing the pod assistant stores a sentinel rather than removing the
+        entry — absence means "never chose", which resolves to the surface
+        default agent, and that is a different answer.
+        """
+        if not external_user_id:
+            return
+        chosen = dict(surface.config.slack.dm_agent_by_user)
+        chosen[external_user_id] = (
+            agent_name or surface.config.slack.POD_ASSISTANT
+        )
+        surface.config.slack.dm_agent_by_user = chosen
+        await self.surface_repository.update(surface)
+        await self.uow.commit()
+
+    async def _publish_home(
+        self, *, surface, adapter, credentials, external_user_id: str
+    ) -> None:
+        """Render the Home tab for one viewer."""
+        if not external_user_id:
+            return
+        agents, _ = await self.conversation_service.agent_repository.list_by_pod(
+            pod_id=surface.pod_id
+        )
+        await adapter.publish_home_view(
+            credentials=credentials,
+            user_id=external_user_id,
+            pod_name=None,
+            dm_agent_name=(
+                None
+                if surface.config.slack.chose_pod_assistant(external_user_id)
+                else (
+                    surface.config.slack.agent_for_user(external_user_id)
+                    or await self._agent_name_for_agent_id(surface.agent_id)
+                )
+            ),
+            channel_routes=[
+                (
+                    route.channel_id,
+                    None if route.use_pod_assistant else route.agent_name,
+                )
+                for route in surface.config.channels
+                if route.channel_id
+            ],
+            agents=[(agent.name, agent.description) for agent in agents],
+            apps=await self._home_apps(surface=surface, external_user_id=external_user_id),
+            workspace_url=str(getattr(settings, "frontend_url", "") or "") or None,
+            logo_url=surface_settings.slack_home_logo_url,
+        )
+
+    async def _home_apps(self, *, surface, external_user_id: str) -> list:
+        """Apps this *viewer* may open — never the pod's full list.
+
+        Visibility is per-user, so an unresolvable Slack identity gets no apps
+        rather than everyone else's.
+        """
+        try:
+            from app.modules.apps.contracts import list_ready_pod_apps
+
+            external = (
+                await self.external_user_repository.get_by_identity(
+                    platform="SLACK",
+                    tenant_id=surface.external_workspace_id,
+                    external_user_id=external_user_id,
+                )
+                if self.external_user_repository
+                else None
+            )
+            resolved_user_id = getattr(external, "resolved_user_id", None)
+            if resolved_user_id is None:
+                return []
+            auth_ctx = await create_authorization_data_service(
+                self.uow
+            ).build_user_context(user_id=resolved_user_id, pod_id=surface.pod_id)
+            apps = await list_ready_pod_apps(
+                uow=self.uow, pod_id=surface.pod_id, ctx=auth_ctx
+            )
+        except Exception:
+            logger.debug(
+                'agent_surfaces.ingress_service.surface_home_apps.diagnostic',
+                surface_id=str(surface.id),
+            )
+            return []
+        domain = str(getattr(settings, "app_base_domain", "") or "").strip()
+        if not domain:
+            return []
+        return [(app.name, f"https://{app.public_slug}.{domain}") for app in apps]
+
+    async def _route_channel_to_agent(
+        self,
+        *,
+        surface,
+        channel_id: str,
+        agent_name: str | None,
+    ) -> None:
+        """Point one channel at one agent, replacing any existing route.
+
+        ``agent_name=None`` means the pod's own assistant — which is what an
+        empty ``agent_name`` on a route already resolves to, so the two agree
+        without a special case downstream.
+        """
+        if not channel_id:
+            return
+        routes = [
+            route
+            for route in surface.config.channels
+            if str(route.channel_id or "") != channel_id
+        ]
+        routes.append(
+            SurfaceChannelRoute(
+                channel_id=channel_id,
+                agent_name=agent_name,
+                use_pod_assistant=agent_name is None,
+            )
+        )
+        surface.config.channels = routes
+        await self.surface_repository.update(surface)
+        await self.uow.commit()
+
+    def _adapter_for_request(self, request):
+        if isinstance(request, SurfaceDirectWebhookIngress):
+            return None, None
+        platform = self._resolve_platform(request.source)
+        return (self.adapter_registry.get(platform) if platform else None), platform
+
+    async def _surface_for_workspace(self, request, *, tenant_id, platform):
+        candidates = await self.surface_repository.list_active_by_type(platform)
+        receiver_ids = set(getattr(request, "receiver_surface_ids", None) or [])
+        if receiver_ids:
+            candidates = [s for s in candidates if s.id in receiver_ids]
+        if tenant_id:
+            scoped = [
+                surface
+                for surface in candidates
+                if str(surface.external_workspace_id or "") == str(tenant_id)
+            ]
+            if scoped:
+                return scoped[0]
+        return candidates[0] if len(candidates) == 1 else None
+
+    async def try_handle_lifecycle(
+        self,
+        request: SurfacePlatformWebhookIngress | SurfaceDirectWebhookIngress,
+    ) -> bool:
+        """Parse + route an event about the app itself rather than a message.
+
+        Returns True when the payload was a lifecycle event, so the caller stops
+        — these never become conversations. False means fall through to the
+        interaction and message paths.
+        """
+        surface = None
+        if isinstance(request, SurfaceDirectWebhookIngress):
+            surface = await self.surface_repository.get(request.surface_id)
+            if surface is None:
+                return False
+            adapter = self.adapter_registry.get(surface.surface_type)
+            platform = surface.surface_type
+        else:
+            platform = self._resolve_platform(request.source)
+            adapter = self.adapter_registry.get(platform) if platform else None
+        if adapter is None:
+            return False
+        parsed = await adapter.parse_inbound_lifecycle(
+            request.payload, request.headers
+        )
+        if parsed is None:
+            return False
+
+        if surface is None:
+            surface = await self._surface_for_lifecycle(request, parsed, platform)
+        if surface is None:
+            # Nothing installed for this workspace — nothing to configure.
+            return True
+        try:
+            await self._handle_lifecycle_event(surface=surface, parsed=parsed)
+        except Exception:
+            # exc_info: a swallowed TypeError here silently leaves Slack showing
+            # a stale App Home, which looks exactly like "the deploy didn't work".
+            logger.debug(
+                'agent_surfaces.ingress_service.surface_lifecycle_handling.diagnostic',
+                surface_id=str(surface.id),
+                exc_info=True,
+            )
+        return True
+
+    async def _surface_for_lifecycle(
+        self,
+        request: SurfacePlatformWebhookIngress | SurfaceDirectWebhookIngress,
+        parsed: ParsedSurfaceLifecycleEvent,
+        platform,
+    ):
+        """The installed surface this lifecycle event belongs to.
+
+        Matches on the workspace id the event carries, so one deployment serving
+        many Slack workspaces configures the right one.
+        """
+        candidates = await self.surface_repository.list_active_by_type(platform)
+        receiver_ids = set(
+            getattr(request, "receiver_surface_ids", None) or []
+        )
+        if receiver_ids:
+            candidates = [s for s in candidates if s.id in receiver_ids]
+        if parsed.tenant_id:
+            scoped = [
+                surface
+                for surface in candidates
+                if str(surface.external_workspace_id or "") == str(parsed.tenant_id)
+            ]
+            if scoped:
+                return scoped[0]
+        return candidates[0] if len(candidates) == 1 else None
+
+    async def _handle_lifecycle_event(
+        self,
+        *,
+        surface,
+        parsed: ParsedSurfaceLifecycleEvent,
+    ) -> None:
+        """React to the app's own situation changing.
+
+        Today the one reaction is offering to configure a freshly joined
+        channel. A channel that already has a route needs no prompt — the
+        invite was someone re-adding the bot, not setting it up.
+        """
+        adapter = self.adapter_registry.get(surface.surface_type)
+        if adapter is None:
+            return
+        credentials = await self._resolve_credentials(surface)
+
+        if parsed.kind is SurfaceLifecycleKind.HOME_OPENED:
+            # Slack spins forever until a view is published, so this must answer
+            # every open — including the very first, before anything is set up.
+            if not parsed.actor_external_user_id:
+                return
+            await self._publish_home(
+                surface=surface,
+                adapter=adapter,
+                credentials=credentials,
+                external_user_id=parsed.actor_external_user_id,
+            )
+            return
+
+        if parsed.kind is not SurfaceLifecycleKind.JOINED_CHANNEL:
+            return
+        if not parsed.actor_external_user_id or not parsed.external_channel_id:
+            return
+        if surface.channel_route_for(
+            channel_id=parsed.external_channel_id, channel_name=""
+        ):
+            return
+        await adapter.send_channel_setup_prompt(
+            credentials=credentials,
+            channel_id=parsed.external_channel_id,
+            user_id=parsed.actor_external_user_id,
+            channel_name=await adapter.channel_name(
+                credentials=credentials, channel_id=parsed.external_channel_id
+            ),
+        )
+
     async def try_handle_interaction(
         self,
         request: SurfacePlatformWebhookIngress | SurfaceDirectWebhookIngress,
@@ -1383,7 +1799,7 @@ class AgentSurfaceIngressService:
         route = await self._resolve_route(surface=surface, parsed=last_event)
         if route is None:
             return link, conversation, False
-        refreshed_link = await self._get_or_create_conversation_link(
+        refreshed_link, _ = await self._get_or_create_conversation_link(
             surface=surface,
             parsed=last_event,
             resolved_user=ResolvedSurfaceUser(
@@ -1439,11 +1855,16 @@ class AgentSurfaceIngressService:
         if target is None:
             return progress_handle
         try:
+            # Author the stream as the agent: the answer that closes this same
+            # message carries the agent's name, so the stream must too or the
+            # thread reads as two different speakers.
+            metadata = await self._egress_metadata_with_agent_name(target, None)
             return await target.adapter.stream_progress(
                 credentials=target.credentials,
                 event=target.event,
                 progress_text=progress_text,
                 progress_handle=progress_handle,
+                metadata=metadata,
             )
         except Exception:
             logger.debug(
@@ -1451,6 +1872,78 @@ class AgentSurfaceIngressService:
                 conversation_id=conversation_id,
             )
             return progress_handle
+
+    async def append_stream_text_for_conversation(
+        self,
+        *,
+        conversation_id: UUID,
+        progress_handle: dict[str, Any] | None,
+        text: str,
+    ) -> dict[str, Any] | None:
+        """Append streamed model text; returns the (possibly new) handle.
+
+        Best-effort by construction — a dropped delta must never take down a
+        run, and the final answer still lands through the normal path.
+        """
+        target = await self._resolve_egress_target(conversation_id)
+        if target is None:
+            return progress_handle
+        try:
+            metadata = await self._egress_metadata_with_agent_name(target, None)
+            return await target.adapter.append_stream_text(
+                credentials=target.credentials,
+                event=target.event,
+                progress_handle=progress_handle,
+                text=text,
+                metadata=metadata,
+            )
+        except Exception:
+            logger.debug(
+                'agent_surfaces.ingress_service.surface_stream_text_conversation_s.diagnostic',
+                conversation_id=conversation_id,
+            )
+            return progress_handle
+
+    async def finish_progress_for_conversation(
+        self,
+        *,
+        conversation_id: UUID,
+        progress_handle: dict[str, Any] | None,
+        message: str,
+        metadata: dict[str, Any] | None = None,
+        already_streamed: bool = False,
+    ) -> bool:
+        """Close a live progress stream with the final answer, as one message.
+
+        Returns False when the platform cannot do this (every platform except
+        Slack today) or the attempt failed, so the caller falls back to clearing
+        progress and sending the answer separately.
+        """
+        if not progress_handle:
+            return False
+        target = await self._resolve_egress_target(conversation_id)
+        if target is None:
+            return False
+        clean_message = sanitize_user_visible_text(message)
+        # An already-streamed answer legitimately has nothing left to send — the
+        # stream still has to be closed, or it spins forever.
+        if not clean_message and not already_streamed:
+            return False
+        message_metadata = await self._egress_metadata_with_agent_name(target, metadata)
+        try:
+            return await target.adapter.finish_progress(
+                credentials=target.credentials,
+                event=target.event,
+                progress_handle=progress_handle,
+                message=clean_message,
+                metadata=message_metadata,
+            )
+        except Exception:
+            logger.debug(
+                'agent_surfaces.ingress_service.surface_progress_finish_conversation_s.diagnostic',
+                conversation_id=conversation_id,
+            )
+            return False
 
     async def clear_progress_for_conversation(
         self,
@@ -1856,7 +2349,7 @@ class AgentSurfaceIngressService:
                 agent_display_name=fallback_agent_display_name,
             )
 
-        link = await self._get_or_create_conversation_link(
+        link, created_conversation_title = await self._get_or_create_conversation_link(
             surface=surface,
             parsed=parsed,
             resolved_user=resolved_user,
@@ -1864,6 +2357,7 @@ class AgentSurfaceIngressService:
         )
 
         return SurfaceChatContext(
+            created_conversation_title=created_conversation_title,
             platform=surface.surface_type,
             pod_id=surface.pod_id,
             agent_name=route.agent_name,
@@ -1896,6 +2390,11 @@ class AgentSurfaceIngressService:
     ) -> tuple[UUID | None, str | None]:
         """Resolve a route's agent name to (id, name); a renamed or deleted
         route agent falls back to the surface default agent."""
+        # The pod assistant is the *absence* of an agent, so it must short
+        # circuit before the surface-default fallback below — otherwise picking
+        # it silently routes to whichever agent the surface defaults to.
+        if route.use_pod_assistant:
+            return None, None
         if route.agent_name:
             agent = (
                 await self.conversation_service.agent_repository.get_by_pod_and_name(
@@ -1936,6 +2435,39 @@ class AgentSurfaceIngressService:
         if parsed.is_dm or surface.mode is SurfaceMode.EMAIL:
             agent_id = surface.agent_id
             agent_name = await self._agent_name_for_agent_id(agent_id)
+            # On Slack a person can choose which agent answers their own DMs.
+            # Their choice wins over the workspace default; everyone who has
+            # not chosen keeps it, so this is purely additive.
+            if surface.surface_type is SurfacePlatform.SLACK:
+                # An explicit pod-assistant pick means *no* agent, which is not
+                # the same as falling back to the surface default.
+                if surface.config.slack.chose_pod_assistant(
+                    parsed.sender_external_user_id
+                ):
+                    return ResolvedSurfaceRoute(
+                        agent_id=None,
+                        agent_name=None,
+                        agent_display_name="Lemma",
+                        conversation_kind="DM",
+                        route_key="dm",
+                    )
+                chosen = surface.config.slack.agent_for_user(
+                    parsed.sender_external_user_id
+                )
+                if chosen:
+                    agent = await self.conversation_service.agent_repository.get_by_pod_and_name(
+                        pod_id=surface.pod_id,
+                        name=chosen,
+                    )
+                    if agent is not None:
+                        agent_id, agent_name = agent.id, agent.name
+                    else:
+                        # A renamed or deleted agent must not strand the person
+                        # with a dead DM — fall back to the surface default.
+                        logger.debug(
+                            'agent_surfaces.ingress_service.surface_dm_agent_choice_missing.diagnostic',
+                            pod_id=surface.pod_id,
+                        )
             return ResolvedSurfaceRoute(
                 agent_id=agent_id,
                 agent_name=agent_name,
@@ -2010,7 +2542,13 @@ class AgentSurfaceIngressService:
         resolved_user: ResolvedSurfaceUser,
         route: ResolvedSurfaceRoute,
         current_conversation_agent_id: UUID | None = None,
-    ) -> AgentSurfaceConversationLink:
+    ) -> tuple[AgentSurfaceConversationLink, str | None]:
+        """Return the link, plus the new conversation's title when one was created.
+
+        The title is how a caller learns a *fresh* conversation started on this
+        turn — which is the only moment worth naming the thread on the platform.
+        None means the link already existed.
+        """
         external_user_id = resolved_user.external_user_id
         link = await self.conversation_link_repository.get_by_external_thread(
             surface_id=surface.id,
@@ -2043,7 +2581,7 @@ class AgentSurfaceIngressService:
                     conversation_kind=route.conversation_kind,
                     route_key=route.route_key,
                 )
-                return updated or link
+                return (updated or link), conversation.title
             updated = await self.conversation_link_repository.update_last_event(
                 link_id=link.id,
                 last_event=event_payload,
@@ -2058,7 +2596,7 @@ class AgentSurfaceIngressService:
                 routed_agent_id=link.routed_agent_id or route.agent_id,
                 conversation_kind=link.conversation_kind or route.conversation_kind,
             )
-            return updated or link
+            return (updated or link), None
 
         conversation = await self._create_surface_conversation(
             surface=surface,
@@ -2067,7 +2605,7 @@ class AgentSurfaceIngressService:
             external_user_id=external_user_id,
             route=route,
         )
-        return await self.conversation_link_repository.create(
+        created_link = await self.conversation_link_repository.create(
             AgentSurfaceConversationLink(
                 surface_id=surface.id,
                 conversation_id=conversation.id,
@@ -2084,6 +2622,7 @@ class AgentSurfaceIngressService:
                 last_inbound_at=datetime.now(timezone.utc),
             )
         )
+        return created_link, conversation.title
 
     def _should_reset_dm_conversation(
         self,
