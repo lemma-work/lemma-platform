@@ -55,7 +55,7 @@ FUNCTION_BENCH_ENV = \
 	FUNCTION_BENCH_TERMINAL_TIMEOUT_SECONDS=$(FUNCTION_BENCH_TERMINAL_TIMEOUT_SECONDS)
 FUNCTION_BENCH_TEST = app/modules/function/tests/perf/test_function_execution_benchmark.py
 
-.PHONY: help test test-unit test-e2e test-e2e-real test-e2e-fast test-e2e-runtime test-module coverage coverage-unit coverage-e2e coverage-backend-unit coverage-backend-e2e-shard coverage-backend-report coverage-backend-gate test-collect lint lint-async typecheck-critical architecture migrate docker-build docker-build-cloud docker-build-arm64 docker-build-amd64 agentbox-build benchmark-functions-docker benchmark-functions-e2b teams-manifest-zip load-test-build load-test-up load-test-migrate load-test-setup load-test-run load-test-sse load-test-journey load-test-datastore-up load-test-datastore-setup load-test-datastore-files load-test-datastore-stats load-test-datastore-down load-test-monitor load-test-down load-test
+.PHONY: help test test-unit test-e2e test-e2e-real test-e2e-fast test-e2e-runtime test-module coverage coverage-unit coverage-e2e coverage-backend-unit coverage-backend-e2e-shard coverage-backend-report coverage-backend-gate test-collect lint lint-async typecheck-critical architecture migrate docker-build docker-build-cloud docker-build-arm64 docker-build-amd64 benchmark-functions-docker benchmark-functions-e2b teams-manifest-zip load-test-build load-test-up load-test-migrate load-test-setup load-test-run load-test-sse load-test-journey load-test-datastore-up load-test-datastore-setup load-test-datastore-files load-test-datastore-stats load-test-datastore-down load-test-monitor load-test-down load-test
 
 help:
 	@echo "Lemma backend:"
@@ -79,7 +79,7 @@ help:
 	@echo "  make teams-manifest-zip OUTPUT=path"
 	@echo "                         # package Teams manifest zip"
 	@echo "  make docker-build      # build backend image from monorepo root"
-	@echo "  make agentbox-build # build local AgentBox runtime images"
+	@echo "  make # build local AgentBox runtime images"
 	@echo "  make benchmark-functions-docker # no-op + single/batch API/JOB benchmark on Docker"
 	@echo "  make benchmark-functions-e2b    # same benchmark on pinned E2B builds"
 	@echo ""
@@ -261,9 +261,6 @@ docker-build-arm64:
 
 docker-build-amd64:
 	cd .. && docker buildx build --platform linux/amd64 -f lemma-backend/Dockerfile -t lemma-backend:local .
-
-agentbox-build:
-	$(MAKE) -C ../agentbox build
 
 benchmark-functions-docker:
 	$(FUNCTION_BENCH_ENV) \
