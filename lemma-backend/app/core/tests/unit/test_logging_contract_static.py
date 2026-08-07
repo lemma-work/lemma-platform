@@ -138,7 +138,7 @@ def test_runtime_does_not_create_framework_owned_application_loggers() -> None:
     for root in (
         REPO_ROOT / "lemma-backend" / "app",
         REPO_ROOT / "lemma-backend" / "scripts",
-        REPO_ROOT / "agentbox" / "agentbox",
+        REPO_ROOT / "lemma-backend" / "sandbox_runtime",
     ):
         for path in _runtime_files(root):
             if path == REPO_ROOT / "lemma-backend" / "app" / "core" / "log" / "log.py":
@@ -164,13 +164,13 @@ def test_runtime_does_not_create_framework_owned_application_loggers() -> None:
 def test_runtime_async_tasks_choose_inherited_or_clean_context_explicitly() -> None:
     allowed_helpers = {
         REPO_ROOT / "lemma-backend" / "app" / "core" / "request_context.py",
-        REPO_ROOT / "agentbox" / "agentbox" / "tasks.py",
+        REPO_ROOT / "lemma-backend" / "sandbox_runtime" / "tasks.py",
     }
     failures: list[str] = []
     for root in (
         REPO_ROOT / "lemma-backend" / "app",
         REPO_ROOT / "lemma-backend" / "scripts",
-        REPO_ROOT / "agentbox" / "agentbox",
+        REPO_ROOT / "lemma-backend" / "sandbox_runtime",
     ):
         for path in _runtime_files(root):
             if path in allowed_helpers:

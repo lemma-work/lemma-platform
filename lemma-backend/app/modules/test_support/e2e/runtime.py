@@ -294,7 +294,7 @@ def workspace_image(e2e_settings) -> Generator[str, None, None]:
     )
 
     if should_build:
-        dockerfile = repo_root / "agentbox" / "Dockerfile.workspace"
+        dockerfile = repo_root / "lemma-backend" / "sandbox-images" / "Dockerfile.workspace"
         build = subprocess.run(
             [
                 "docker",
@@ -356,7 +356,7 @@ def function_image(e2e_settings) -> Generator[str, None, None]:
                 "--platform",
                 platform,
                 "-f",
-                str(repo_root / "agentbox" / "Dockerfile.function"),
+                str(repo_root / "lemma-backend" / "sandbox-images" / "Dockerfile.function"),
                 "-t",
                 image,
                 str(repo_root),

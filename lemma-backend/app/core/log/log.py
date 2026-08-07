@@ -255,7 +255,7 @@ def _safe_module_name(filename: str) -> str:
     for marker in ("/lemma-backend/app/", "/lemma-backend/sandbox_runtime/"):
         if marker in normalized:
             relative = normalized.split(marker, 1)[1].rsplit(".", 1)[0]
-            prefix = "app" if "lemma-backend" in marker else "agentbox"
+            prefix = "app" if marker.endswith("/app/") else "sandbox_runtime"
             return prefix + "." + relative.replace("/", ".")
     return Path(filename).stem
 
