@@ -864,8 +864,12 @@ class Settings(BaseSettings):
     # Selects who provisions sandboxes while both paths exist. Flipping this to
     # True moves provisioning from the AgentBox manager into this module.
     workspace_owns_sandboxes: bool = Field(
-        default=False,
-        description="Provision sandboxes in the workspace module, not AgentBox",
+        default=True,
+        description=(
+            "Provision sandboxes in the workspace module, not AgentBox. The "
+            "AgentBox manager remains reachable by setting this false, which is "
+            "the rollback; it is deleted once this default has soaked."
+        ),
     )
     workspace_port_access_url: Optional[str] = Field(
         default=None,

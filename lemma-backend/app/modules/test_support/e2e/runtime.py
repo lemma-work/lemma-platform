@@ -907,9 +907,13 @@ async def configure_workspace_api_url(
     # backend has to be published for it. This is needed whenever the *live*
     # provisioner puts sandboxes off-box, which is no longer only a question
     # about AgentBox: the workspace module selects its own provider.
+    # Read the setting rather than re-deriving its default from the
+    # environment: the two disagreed the moment the cutover default flipped,
+    # and the harness would then have decided the old path was live while the
+    # backend it started was running the new one.
     needs_public_backend = local_agentbox_server["provider"] == "e2b" or (
-        os.getenv("WORKSPACE_OWNS_SANDBOXES", "").lower() in {"1", "true", "yes"}
-        and os.getenv("WORKSPACE_PROVIDER", "docker").lower() == "e2b"
+        settings.workspace_owns_sandboxes
+        and settings.workspace_provider.lower() == "e2b"
     )
     tunnel = (
         _temporary_workspace_tunnel(backend_server["host_base_url"])

@@ -256,16 +256,15 @@ AGENTBOX_DEV_ENV := \
 	AGENTBOX_CLEANUP_INTERVAL_SECONDS=30
 
 # ── Workspace sandbox provisioning ────────────────────────────────────────────
-# The workspace module can provision sandboxes itself instead of going through
-# the AgentBox manager. Both paths are present during the cutover, so this is a
-# switch rather than a rebuild:
+# The workspace module provisions sandboxes itself. The AgentBox manager is
+# still present as the rollback, so this is a switch rather than a rebuild:
 #
-#   make dev                                 AgentBox manager (current default)
-#   make dev WORKSPACE_OWNS_SANDBOXES=true   workspace module, Docker
-#   make dev WORKSPACE_OWNS_SANDBOXES=true WORKSPACE_PROVIDER=e2b
+#   make dev                                  workspace module, Docker
+#   make dev WORKSPACE_PROVIDER=e2b           workspace module, E2B
+#   make dev WORKSPACE_OWNS_SANDBOXES=false   AgentBox manager (rollback)
 #
 # E2B needs E2B_API_KEY and the two template ids in lemma-backend/.env.
-WORKSPACE_OWNS_SANDBOXES ?= false
+WORKSPACE_OWNS_SANDBOXES ?= true
 WORKSPACE_PROVIDER ?= docker
 
 WORKSPACE_DEV_ENV := \
