@@ -114,7 +114,18 @@ class SurfaceChannelRoute(BaseModel):
 
 
 class SurfaceSendPolicy(BaseModel):
-    """Controls proactive sending (``surface.send``) for a surface."""
+    """Controls the surface's own proactive-send tool (``surface.send``).
+
+    Deliberately NOT a gate on reaching other pod members. That capability is
+    granted per *agent*, by giving it the ``MESSAGING`` toolset — an agent that
+    holds the tool can contact colleagues, and one that does not, cannot. Putting
+    a second gate on the surface meant an editor had to flip a setting on a bot
+    before a grant they had already made would take effect, which is a rule
+    nobody would guess and the wrong place to express it.
+
+    Reaching the person a run *belongs to* needs no permission at all: the run
+    already carries their delegated authority.
+    """
 
     # Expose the current-user ``surface_send_message`` tool to the agent.
     allow_send: bool = False
@@ -537,3 +548,22 @@ class AgentSurfaceConversationLink(Entity):
     route_key: str | None = None
     last_event: dict[str, Any] = Field(default_factory=dict)
     last_message_id: str | None = None
+    # When this person last wrote to us. Distinct from ``updated_at``, which an
+    # outbound notification also bumps — keying the DM reset off ``updated_at``
+    # means a proactive message silently suppresses the reset and leaks
+    # yesterday's context into today. Also the ranking key when choosing which of
+    # someone's channels to reach them on: freshest inbound is the best available
+    # guess at where they are actually looking.
+    last_inbound_at: datetime | None = None
+
+    @property
+    def inbound_activity_at(self) -> datetime:
+        """Last inbound time, falling back to ``updated_at`` for legacy rows.
+
+        Rows written before ``last_inbound_at`` existed have NULL there, and for
+        those ``updated_at`` *was* the last inbound time, because until then only
+        inbound events wrote this row. The fallback is correct by definition, and
+        it has to survive in code as well as in the backfill: a row the backfill
+        touched can still be NULL if it was created by an older worker mid-deploy.
+        """
+        return self.last_inbound_at or self.updated_at

@@ -354,3 +354,35 @@ class SurfacePodMembershipPort(Protocol):
         Called when a stored default points at a surface the user is no longer a
         member of (a stale default), so routing stops silently honoring it."""
         ...
+
+    async def get_user_default_surface_ids(self, user_id: UUID) -> list[UUID]:
+        """Every surface the user has chosen as a default, across platforms.
+
+        Ingress asks "which surface for *this* platform"; egress has no platform
+        in hand yet — choosing one is the whole job — so it needs the set. A
+        surface the person deliberately picked outranks one we merely observed
+        them use.
+        """
+
+    async def get_pod_member_id(self, user_id: UUID, pod_id: UUID) -> UUID | None:
+        """The pod-scoped member id, or None when they are not in the pod.
+
+        Notifications store this alongside the user id so a workflow FORM
+        assignee (which is a pod member) and an agent's recipient are the same
+        kind of thing, and so removing someone from a pod takes their inbox
+        entries with it.
+        """
+
+    async def resolve_pod_recipient(
+        self, *, pod_id: UUID, reference: str
+    ) -> UUID | None:
+        """Resolve a user id from a pod member id, user id, or email address.
+
+        An agent naming a colleague has whichever of these it happens to know;
+        refusing two of the three would just push the lookup into the prompt.
+        Always scoped to the pod, so a valid id for someone outside it resolves
+        to None rather than to a person the caller cannot see.
+        """
+
+    async def get_user_display_name(self, user_id: UUID) -> str | None:
+        """Used to attribute a message to the human behind the run."""

@@ -95,6 +95,15 @@ Start types: `MANUAL`, `SCHEDULED`, `DATASTORE_EVENT`, `EVENT`. Create schedules
 
 Pauses the run until the assigned pod member submits the form. Use for intake, review, approval, missing-data collection, QA, and exceptions. A FORM as the **entry node** is how manual workflows collect their input.
 
+**Assigning one now tells the person.** A FORM with an `assignee_pod_member_id` sends them
+a notification — on the chat surface they last used, or by email, always with a copy in
+their Lemma inbox — carrying the resolved form schema. It used to be a pure pull queue:
+the wait existed, `workflows runs waiting` listed it, and nobody was ever told, so a run
+could sit for days on someone who had no idea. Submitting the form closes the
+notification; cancelling the run closes it too. An **unassigned** FORM notifies nobody, by
+design — there is no one person to tell, and broadcasting would make every form everyone's
+problem.
+
 ```json
 {
   "id": "manager_review",

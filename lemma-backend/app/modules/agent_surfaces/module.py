@@ -15,6 +15,9 @@ def _routers():
         router as surface,
         setup_guide_router as surface_setup_guide,
     )
+    from app.modules.agent_surfaces.api.controllers.notification_controller import (
+        router as notifications,
+    )
     from app.modules.agent_surfaces.api.controllers.user_surfaces_controller import (
         router as user_surfaces,
     )
@@ -31,6 +34,7 @@ def _routers():
         surface_catalog,
         telegram_manager,
         user_surfaces,
+        notifications,
         surface_public,
     ]
 
