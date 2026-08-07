@@ -551,11 +551,19 @@ class LocalSandboxClient:
         required_valid_until: datetime,
         deadline_at: datetime,
     ) -> FunctionRuntimeLease:
-        """Where a pod's function runtime can be reached, right now.
+        """Where a pod's function runtime can be reached, and for how long.
 
-        The lease is short lived and re-taken per invocation on purpose:
-        AgentBox treated a lease as activity, so a long horizon kept idle
-        function sandboxes alive indefinitely. Execution is the activity.
+        The expiry must sit meaningfully *beyond* what the caller asked for.
+        The endpoint cache subtracts a refresh headroom from the remaining
+        lifetime to decide how long it may cache, so a lease expiring exactly
+        at the caller's deadline leaves nothing to cache and is rejected --
+        which under concurrency fails the invocations that joined the cache
+        rather than minting their own.
+
+        Being generous is safe here in a way it was not before. AgentBox
+        treated a lease as activity, so a long horizon kept idle function
+        sandboxes alive; here activity is recorded when a sandbox is used, and
+        the expiry only bounds caching.
         """
         sandbox_id = await self._ensure_row(logical_id, WorkloadKind.FUNCTION)
         handle = await self._service.ensure(sandbox_id)
@@ -573,7 +581,10 @@ class LocalSandboxClient:
             ),
             url=url.rstrip("/") + "/",
             request_headers=(),
-            expires_at=required_valid_until,
+            expires_at=max(
+                required_valid_until, datetime.now(timezone.utc)
+            )
+            + timedelta(seconds=_LEASE_HEADROOM_SECONDS),
         )
 
     def _signer(self) -> PortAccessSigner:
@@ -648,6 +659,11 @@ class LocalSandboxClient:
     async def close(self) -> None:
         # The provider outlives any one client; disposal is the service's job.
         return None
+
+
+# Beyond whatever the caller asked for, so the endpoint cache has room to
+# cache after subtracting its refresh headroom (30s by default).
+_LEASE_HEADROOM_SECONDS = 300
 
 
 def _is_function(workload_kind) -> bool:

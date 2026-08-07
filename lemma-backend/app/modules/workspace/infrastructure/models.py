@@ -173,4 +173,5 @@ class SandboxInstanceModel(UUIDAuditBase):
             last_error=self.last_error,
             ready_at=self.ready_at,
             released_at=self.released_at,
+            created_at=self.created_at,
         )

@@ -144,6 +144,17 @@ class FunctionDispatcher:
             if isinstance(exc, InvocationOutcomeUnconfirmed) and started is not None:
                 await self._best_effort_cancel(dispatch, endpoint=endpoint)
             message = self._execution_error(exc)
+            # The message a user sees is deliberately vague, and every branch
+            # above turns a *recognised* failure into a specific one. Anything
+            # reaching the generic fallback is by definition a failure mode
+            # nobody anticipated, so it is the one most worth recording -- and
+            # it was previously stored with nothing logged at all, leaving
+            # "Function execution failed" and no way to find out why.
+            logger.warning(
+                "function.function_dispatcher.execution_failed",
+                run_id=str(run_id),
+                error_type=type(exc).__name__,
+            )
             async with self._uow_factory() as uow:
                 failed = await FunctionExecutionRepository(uow).fail_dispatch(
                     dispatch,

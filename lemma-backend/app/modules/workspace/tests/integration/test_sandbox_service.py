@@ -332,3 +332,49 @@ async def test_describe_never_provisions(
     assert info is not None
     assert info.status == "STOPPED"
     assert provider.created == []
+
+
+# ---------------------------------------------------------------------------
+# Concurrency
+# ---------------------------------------------------------------------------
+
+
+async def test_a_slow_create_does_not_let_a_second_caller_provision_again(
+    service: SandboxService, provider: FakeProvider
+) -> None:
+    """The window that matters: a row exists but its container does not yet.
+
+    `begin_instance` records the provider object before the provider is asked
+    to make it, so for the length of a create there is a row pointing at a
+    container that cannot be inspected. A caller arriving in that window must
+    not read "no container" as "gone, replace it" -- doing so bumps the epoch
+    and builds a second sandbox, pulling the disk out from under whoever is
+    already using the first.
+    """
+    import asyncio
+
+    sandbox = await _workspace(service)
+    creating = asyncio.Event()
+    finish = asyncio.Event()
+    original_create = provider.create
+
+    async def slow_create(spec):
+        creating.set()
+        await finish.wait()
+        return await original_create(spec)
+
+    provider.create = slow_create  # type: ignore[method-assign]
+
+    first = asyncio.create_task(service.ensure(sandbox.id))
+    await creating.wait()
+
+    # A second caller arrives mid-create, on a fresh singleflight entry.
+    SandboxService._inflight.clear()
+    second = asyncio.create_task(service.ensure(sandbox.id))
+    await asyncio.sleep(0.05)
+
+    finish.set()
+    handles = await asyncio.gather(first, second)
+
+    assert len(provider.created) == 1, provider.created
+    assert len({handle.provider_id for handle in handles}) == 1

@@ -895,16 +895,31 @@ class Settings(BaseSettings):
         default=None, description="E2B API domain override"
     )
     # Lemma Desktop's native bridge into its VZ/WSL guest.
+    # Desktop already sets the AGENTBOX_LOCAL_* names (see
+    # lemma-stack/config/render.py). Accepting them here is what lets the
+    # cutover happen without Desktop shipping a new config in lockstep -- a
+    # rename would have left the guest unreachable and every workspace broken
+    # on machines running the current desktop build.
     workspace_local_runtime_cli: Optional[str] = Field(
         default=None,
+        validation_alias=AliasChoices(
+            "WORKSPACE_LOCAL_RUNTIME_CLI", "AGENTBOX_LOCAL_RUNTIME_CLI"
+        ),
         description="Executable bridging to the Lemma Desktop guest runtime",
     )
     workspace_local_callback_required: bool = Field(
         default=False,
+        validation_alias=AliasChoices(
+            "WORKSPACE_LOCAL_CALLBACK_REQUIRED", "AGENTBOX_LOCAL_CALLBACK_REQUIRED"
+        ),
         description="Require the guest to reach the backend before reporting ready",
     )
     workspace_local_callback_url: Optional[str] = Field(
-        default=None, description="URL the guest calls back on"
+        default=None,
+        validation_alias=AliasChoices(
+            "WORKSPACE_LOCAL_CALLBACK_URL", "AGENTBOX_LOCAL_CALLBACK_URL"
+        ),
+        description="URL the guest calls back on",
     )
     agentbox_docker_socket_path: str = Field(
         default="/var/run/docker.sock",

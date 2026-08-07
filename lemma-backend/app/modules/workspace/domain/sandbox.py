@@ -148,6 +148,9 @@ class SandboxInstance:
     last_error: str | None = None
     ready_at: datetime | None = None
     released_at: datetime | None = None
+    # When the row was written, which is when provisioning was claimed. Used to
+    # tell a claim someone is still working on from one whose owner died.
+    created_at: datetime | None = None
 
 
 @dataclass(frozen=True, slots=True)

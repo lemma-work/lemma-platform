@@ -39,6 +39,7 @@ from app.modules.workspace.domain.sandbox import (
     Sandbox,
     SandboxDesiredState,
     SandboxHandle,
+    SandboxInstanceState,
     SandboxKind,
     SandboxOwnerKind,
     capabilities_for,
@@ -59,6 +60,10 @@ from app.modules.workspace.providers.profiles import profile_for
 logger = get_logger(__name__)
 
 _ENSURE_TIMEOUT_SECONDS = 300.0
+# How long another caller's in-flight create is believed. Long enough to cover
+# pulling an image and booting a sandbox, short enough that a provisioner that
+# died does not strand the sandbox.
+_CLAIM_TIMEOUT_SECONDS = 180.0
 
 
 class SandboxService:
@@ -209,17 +214,60 @@ class SandboxService:
         # A container that is already there is the common case, and answering
         # it costs one inspect rather than a provisioning round trip.
         if instance is not None and instance.provider_id:
-            existing = await self._provider.inspect(
-                naming.container_name(sandbox_id, sandbox.kind, sandbox.epoch),
-                deadline_at=deadline_at,
-            )
+            name = naming.container_name(sandbox_id, sandbox.kind, sandbox.epoch)
+            existing = await self._provider.inspect(name, deadline_at=deadline_at)
             if existing is not None:
                 if not existing.running:
                     await self._start(sandbox, existing, deadline_at=deadline_at)
                 await self._touch(sandbox_id)
                 return self._handle(sandbox, existing)
 
+            # No container, but a row claiming one. `begin_instance` writes the
+            # row *before* the provider is asked, so for the length of a create
+            # this is what an onlooker sees -- and reading it as "gone, replace
+            # it" is how a second sandbox gets built underneath whoever is
+            # already using the first. In one process the singleflight prevents
+            # that; across replicas nothing does, so the claim is honoured
+            # here. Waiting is bounded: a claim whose owner died must not block
+            # the sandbox forever.
+            if instance.state is SandboxInstanceState.CREATING:
+                claimed = await self._await_claim(
+                    sandbox, instance, name=name, deadline_at=deadline_at
+                )
+                if claimed is not None:
+                    return claimed
+
         return await self._provision(sandbox, deadline_at=deadline_at)
+
+    async def _await_claim(
+        self,
+        sandbox: Sandbox,
+        instance,
+        *,
+        name: str,
+        deadline_at: datetime,
+    ) -> SandboxHandle | None:
+        """Wait for someone else's in-flight create, or take it over.
+
+        Returns None when the claim is stale, meaning nobody is coming back for
+        it and this caller should provision instead.
+        """
+        claimed_at = instance.created_at or datetime.now(timezone.utc)
+        expires_at = claimed_at + timedelta(seconds=_CLAIM_TIMEOUT_SECONDS)
+        while datetime.now(timezone.utc) < min(expires_at, deadline_at):
+            await asyncio.sleep(0.25)
+            found = await self._provider.inspect(name, deadline_at=deadline_at)
+            if found is None:
+                continue
+            if not found.running:
+                await self._start(sandbox, found, deadline_at=deadline_at)
+            await self._touch(sandbox.id)
+            return self._handle(sandbox, found)
+        logger.info(
+            "workspace.sandbox_service.provisioning_claim_expired",
+            sandbox_id=str(sandbox.id),
+        )
+        return None
 
     async def _provision(
         self, sandbox: Sandbox, *, deadline_at: datetime

@@ -19,6 +19,36 @@ from app.modules.test_support.e2e.runtime import (
 
 pytestmark = pytest.mark.e2e
 
+
+def _sandbox_can_reach_test_backend() -> bool:
+    """Whether a sandbox can reach the backend this suite starts locally.
+
+    A function *must* fetch its artifact from the backend gateway, so unlike
+    the workspace tools there is no useful subset that runs without it. A local
+    Docker sandbox reaches the host over the gateway alias; a sandbox running in
+    E2B's cloud cannot resolve a laptop, and fails with a DNS error from inside
+    the sandbox. Verifying functions on E2B needs a backend the sandbox can
+    actually reach -- a deployed environment, not this one.
+    """
+    import os
+
+    if os.getenv("WORKSPACE_OWNS_SANDBOXES", "").lower() in {"1", "true", "yes"}:
+        return os.getenv("WORKSPACE_PROVIDER", "docker").lower() != "e2b"
+    return os.getenv("E2E_SANDBOX_MODE", "docker").lower() in {"", "docker"}
+
+
+def pytest_collection_modifyitems(config, items):
+    if _sandbox_can_reach_test_backend():
+        return
+    skip = pytest.mark.skip(
+        reason=(
+            "function runtimes must fetch their artifact from the backend; a "
+            "cloud sandbox cannot reach the test backend on 127.0.0.1"
+        )
+    )
+    for item in items:
+        item.add_marker(skip)
+
 test_network = e2e_fixtures.test_network
 postgres_container = e2e_fixtures.postgres_container
 supertokens_container = e2e_fixtures.supertokens_container
