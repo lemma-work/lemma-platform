@@ -8,14 +8,16 @@ use std::time::Duration;
 
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
-    ContentBlock, InitializeRequest, LoadSessionRequest, McpServer, NewSessionRequest,
-    PermissionOptionKind, PromptRequest, RequestPermissionOutcome, RequestPermissionRequest,
-    RequestPermissionResponse, SelectedPermissionOutcome, SessionConfigOption,
-    SessionConfigOptionValue, SessionNotification, SetSessionConfigOptionRequest, TextContent,
+    CancelNotification, ContentBlock, InitializeRequest, LoadSessionRequest, McpServer,
+    NewSessionRequest, PermissionOptionKind, PromptRequest, RequestPermissionOutcome,
+    RequestPermissionRequest, RequestPermissionResponse, SelectedPermissionOutcome,
+    SessionConfigOption, SessionConfigOptionValue, SessionNotification,
+    SetSessionConfigOptionRequest, TextContent,
 };
 use agent_client_protocol::{AcpAgent, AcpAgentConfig, Agent, ConnectionTo};
 use async_trait::async_trait;
 use serde_json::{Map, Value};
+use tokio::sync::watch;
 
 use crate::adapters::ResolvedAdapter;
 use crate::permissions::{PermissionDecision, PermissionGate};
@@ -35,6 +37,12 @@ pub struct AcpRunRequest {
     /// How long a parked request waits before it is denied, so a prompt
     /// nobody answers cannot pin the adapter open.
     pub permission_timeout: Duration,
+    /// Raised when Lemma wants this run stopped. Watched rather than acted on
+    /// by killing the process, so the turn can end through ACP.
+    pub cancel: watch::Receiver<bool>,
+    /// How long the agent has to honour `session/cancel` before the run is
+    /// failed and the supervisor falls back to killing the process tree.
+    pub cancel_grace: Duration,
 }
 
 #[derive(Clone, Debug)]
@@ -42,6 +50,14 @@ pub struct AcpRunOutcome {
     pub provider_session_id: String,
     pub state: RunState,
     pub stop_reason: String,
+    /// Why the turn ended, when that is not self-evident from the state.
+    ///
+    /// ACP distinguishes five ways a turn can stop and only two of them are
+    /// plain success or cancellation. The other three were all reported as
+    /// `FAILED` with no detail, so a run that simply ran out of context told
+    /// the user "Agent Host run ended in FAILED" while its partial answer sat
+    /// directly above.
+    pub message: Option<String>,
 }
 
 #[derive(Clone, Debug, serde::Serialize)]
@@ -131,6 +147,8 @@ impl AgentDriver for AcpDriver {
         let permission_timeout = request.permission_timeout;
         let permission_run_id = request.run_spec.agent_run_id;
         let can_load_session = request.can_load_session;
+        let mut cancel = request.cancel;
+        let cancel_grace = request.cancel_grace;
         let run_spec = request.run_spec;
         let scratch_directory = request.scratch_directory;
         let mcp_server = request.mcp_server;
@@ -362,32 +380,142 @@ impl AgentDriver for AcpDriver {
                     })?;
                 // Past this point every session update belongs to this turn.
                 streaming.store(true, Ordering::SeqCst);
-                let prompt = render_prompt(&run_spec);
-                let response = connection
+                let turn = connection
                     .send_request(PromptRequest::new(
                         session_id.clone(),
-                        vec![ContentBlock::Text(TextContent::new(prompt))],
+                        prompt_blocks(&run_spec),
                     ))
-                    .block_task()
-                    .await?;
+                    .block_task();
+                tokio::pin!(turn);
+                // A cancel is asked for, not inflicted. Killing the process
+                // here is what the supervisor falls back to, and it is the
+                // worst moment to do it: the provider has not flushed the
+                // session file the *next* turn resumes from, so cancelling one
+                // message used to cost the conversation its whole history.
+                let mut asked_to_stop = false;
+                let response = tokio::select! {
+                    result = &mut turn => result?,
+                    () = cancel_requested(&mut cancel) => {
+                        connection
+                            .send_notification(CancelNotification::new(session_id.clone()))?;
+                        asked_to_stop = true;
+                        tokio::time::timeout(cancel_grace, &mut turn)
+                            .await
+                            .map_err(|_| {
+                                agent_client_protocol::schema::v1::Error::internal_error().data(
+                                    "the agent did not stop within the cancellation grace period",
+                                )
+                            })??
+                    }
+                };
                 let stop_reason = serde_json::to_value(response.stop_reason)
                     .ok()
                     .and_then(|value| value.as_str().map(str::to_owned))
                     .unwrap_or_else(|| "unknown".to_owned());
-                let state = match stop_reason.as_str() {
-                    "end_turn" => RunState::Succeeded,
-                    "cancelled" => RunState::Cancelled,
-                    _ => RunState::Failed,
-                };
+                let (state, message) = run_outcome(asked_to_stop, &stop_reason);
                 Ok(AcpRunOutcome {
                     provider_session_id: session_id.to_string(),
                     state,
                     stop_reason,
+                    message,
                 })
             })
             .await?;
         Ok(outcome)
     }
+}
+
+/// How a finished turn is recorded, given what we asked of it.
+///
+/// What *we* did outranks what the agent says about it. ACP requires the
+/// `cancelled` stop reason for a turn stopped by `session/cancel` — and
+/// `OpenCode` reports `end_turn`, verified against the real agent in
+/// `real_harness_e2e`. Taking that literally records a run the user cancelled
+/// as having *succeeded*, presenting a truncated answer as the whole one. We
+/// know whether we asked it to stop, so that is what the run is.
+fn run_outcome(asked_to_stop: bool, stop_reason: &str) -> (RunState, Option<String>) {
+    if asked_to_stop {
+        if stop_reason != "cancelled" {
+            tracing::debug!(
+                stop_reason,
+                "the agent ended a cancelled turn without ACP's cancelled stop reason"
+            );
+        }
+        return (RunState::Cancelled, None);
+    }
+    outcome_for(stop_reason)
+}
+
+/// How one ACP stop reason ends a Lemma run, and what to say about it.
+///
+/// ACP names five ways a turn can end. Only `end_turn` and `cancelled` speak
+/// for themselves; the rest are distinct, actionable conditions that all used
+/// to arrive as an undifferentiated `FAILED`. They stay `FAILED` — the turn
+/// genuinely did not finish the work — but they now say which ceiling was hit,
+/// because the difference between "out of context" and "the agent crashed" is
+/// the difference between retrying usefully and retrying forever.
+fn outcome_for(stop_reason: &str) -> (RunState, Option<String>) {
+    match stop_reason {
+        "end_turn" => (RunState::Succeeded, None),
+        "cancelled" => (RunState::Cancelled, None),
+        "max_tokens" => (
+            RunState::Failed,
+            Some(
+                "The agent stopped because it reached its maximum context \
+                 length. Anything it had already written is above; continue in \
+                 a new conversation to give it room."
+                    .to_owned(),
+            ),
+        ),
+        "max_turn_requests" => (
+            RunState::Failed,
+            Some(
+                "The agent stopped because it reached its limit on tool calls \
+                 for a single turn. Ask it to continue, or narrow the task."
+                    .to_owned(),
+            ),
+        ),
+        "refusal" => (
+            RunState::Failed,
+            Some(
+                "The agent declined to continue with this request. It will not \
+                 see this prompt again, so rephrasing it is worth trying."
+                    .to_owned(),
+            ),
+        ),
+        other => (
+            RunState::Failed,
+            Some(format!("The agent ended its turn unexpectedly ({other}).")),
+        ),
+    }
+}
+
+/// A cancel signal nothing will ever raise.
+///
+/// For callers with no control plane behind them — a local smoke run, a test
+/// exercising some other part of the driver — so they do not have to invent a
+/// channel they will never send on.
+#[must_use]
+pub fn never_cancelled() -> watch::Receiver<bool> {
+    watch::channel(false).1
+}
+
+/// Resolves once Lemma has asked for this run to stop.
+///
+/// Never resolves if the sender is dropped: the run task owns that sender for
+/// its whole life, so a dropped one means the supervisor is already tearing
+/// this run down by other means and a spurious `session/cancel` would only
+/// race it.
+async fn cancel_requested(cancel: &mut watch::Receiver<bool>) {
+    if *cancel.borrow() {
+        return;
+    }
+    while cancel.changed().await.is_ok() {
+        if *cancel.borrow() {
+            return;
+        }
+    }
+    std::future::pending::<()>().await;
 }
 
 /// The session this run should continue, or `None` to open a new one.
@@ -421,6 +549,42 @@ fn build_agent(adapter: &ResolvedAdapter) -> AcpAgent {
             );
         }
     })
+}
+
+/// The prompt as ACP content blocks.
+///
+/// Text is still assembled into one leading block, because that is what every
+/// certified adapter has been receiving and splitting it changes how agents
+/// read the boundary between the system framing and the user's words.
+///
+/// Anything that is *not* text is then carried through as itself. It used to be
+/// flattened by `extract_text` along with everything else, which for an image
+/// or an embedded resource means silently dropped: `PromptRequest` takes a
+/// `Vec<ContentBlock>` precisely so those can travel, and a block this build
+/// cannot parse falls back to its text rather than disappearing.
+fn prompt_blocks(spec: &RunSpec) -> Vec<ContentBlock> {
+    let mut blocks = vec![ContentBlock::Text(TextContent::new(render_prompt(spec)))];
+    blocks.extend(spec.prompt.iter().filter_map(structured_block));
+    blocks
+}
+
+/// A non-text content block, or `None` for anything `render_prompt` covered.
+fn structured_block(value: &Value) -> Option<ContentBlock> {
+    let kind = value.as_object()?.get("type")?.as_str()?;
+    if kind == "text" {
+        return None;
+    }
+    match serde_json::from_value::<ContentBlock>(value.clone()) {
+        Ok(block) => Some(block),
+        Err(error) => {
+            tracing::warn!(
+                %error,
+                kind,
+                "dropping a prompt content block this Agent Host cannot represent"
+            );
+            None
+        }
+    }
 }
 
 fn render_prompt(spec: &RunSpec) -> String {
@@ -822,6 +986,128 @@ mod tests {
     };
 
     use super::*;
+
+    /// ACP names five ways a turn can end. Three of them used to arrive as an
+    /// undifferentiated `FAILED` with no detail, so a run that merely ran out
+    /// of context told the user only that it had failed.
+    #[test]
+    fn every_acp_stop_reason_is_reported_distinguishably() {
+        assert_eq!(outcome_for("end_turn"), (RunState::Succeeded, None));
+        assert_eq!(outcome_for("cancelled"), (RunState::Cancelled, None));
+
+        for reason in ["max_tokens", "max_turn_requests", "refusal"] {
+            let (state, message) = outcome_for(reason);
+            assert_eq!(state, RunState::Failed, "{reason} did not fail");
+            assert!(
+                message.is_some_and(|message| !message.is_empty()),
+                "{reason} gave the user nothing to act on"
+            );
+        }
+    }
+
+    /// A cancelled run is cancelled, whatever the agent calls it.
+    ///
+    /// `OpenCode` ends a turn stopped by `session/cancel` with `end_turn`
+    /// rather than the `cancelled` ACP requires — observed against the real
+    /// agent. Mapping that literally recorded a run the user had stopped as
+    /// SUCCEEDED, with a truncated answer standing in for the whole one.
+    #[test]
+    fn a_run_we_asked_to_stop_is_cancelled_whatever_the_agent_reports() {
+        for reported in ["cancelled", "end_turn", "max_tokens", "unknown"] {
+            assert_eq!(
+                run_outcome(true, reported),
+                (RunState::Cancelled, None),
+                "a cancelled run reported as {reported:?} was not recorded as cancelled"
+            );
+        }
+    }
+
+    /// The override must not reach a turn nobody interrupted, or an ordinary
+    /// failure would be filed as a user cancellation.
+    #[test]
+    fn a_run_nobody_stopped_keeps_its_own_stop_reason() {
+        assert_eq!(run_outcome(false, "end_turn"), (RunState::Succeeded, None));
+        assert_eq!(run_outcome(false, "max_tokens").0, RunState::Failed);
+    }
+
+    /// A reason this build has never heard of must still say something, and
+    /// must name what it saw rather than swallowing it.
+    #[test]
+    fn an_unknown_stop_reason_still_explains_itself() {
+        let (state, message) = outcome_for("some_future_reason");
+        assert_eq!(state, RunState::Failed);
+        assert!(message.is_some_and(|message| message.contains("some_future_reason")));
+    }
+
+    /// `PromptRequest` takes a `Vec<ContentBlock>` so that non-text content can
+    /// travel. Flattening the whole prompt to one string meant an image or an
+    /// embedded resource was not degraded but discarded.
+    #[test]
+    fn a_non_text_prompt_block_survives_into_the_request() {
+        let mut spec = spec_resuming(None);
+        spec.system_prompt = "Be brief.".to_owned();
+        spec.prompt = vec![
+            serde_json::json!({"type": "text", "text": "What is in this picture?"}),
+            serde_json::json!({
+                "type": "image",
+                "data": "aGk=",
+                "mimeType": "image/png",
+            }),
+        ];
+
+        let blocks = prompt_blocks(&spec);
+
+        assert_eq!(blocks.len(), 2, "expected the text block and the image");
+        assert!(matches!(blocks[0], ContentBlock::Text(_)));
+        assert!(
+            matches!(blocks[1], ContentBlock::Image(_)),
+            "the image was dropped rather than sent"
+        );
+    }
+
+    /// The text half must keep behaving exactly as it did, since every
+    /// certified adapter has been reading that one assembled block.
+    #[test]
+    fn text_blocks_are_still_assembled_into_one_leading_block() {
+        let mut spec = spec_resuming(None);
+        spec.system_prompt = "Be brief.".to_owned();
+        spec.prompt = vec![serde_json::json!({"type": "text", "text": "Hello."})];
+
+        let blocks = prompt_blocks(&spec);
+
+        assert_eq!(blocks.len(), 1);
+        let ContentBlock::Text(text) = &blocks[0] else {
+            panic!("expected a text block");
+        };
+        assert!(text.text.contains("Be brief."));
+        assert!(text.text.contains("Hello."));
+    }
+
+    /// A block shape this build cannot parse must not take the turn down with
+    /// it, and must be visible in the logs rather than vanishing quietly.
+    #[test]
+    fn an_unparseable_block_is_skipped_not_fatal() {
+        let mut spec = spec_resuming(None);
+        spec.prompt = vec![
+            serde_json::json!({"type": "text", "text": "Hello."}),
+            serde_json::json!({"type": "something_new", "payload": 1}),
+        ];
+
+        let blocks = prompt_blocks(&spec);
+
+        assert_eq!(blocks.len(), 1);
+    }
+
+    /// The three explained failures must not read alike, or the distinction
+    /// exists only in the code.
+    #[test]
+    fn the_explanations_differ_from_each_other() {
+        let messages = ["max_tokens", "max_turn_requests", "refusal"]
+            .map(|reason| outcome_for(reason).1.unwrap());
+        assert_ne!(messages[0], messages[1]);
+        assert_ne!(messages[1], messages[2]);
+        assert_ne!(messages[0], messages[2]);
+    }
 
     fn spec_resuming(resume_session_id: Option<&str>) -> RunSpec {
         RunSpec {

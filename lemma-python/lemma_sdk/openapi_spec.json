@@ -640,7 +640,8 @@
         "enum": [
           "START_RUN",
           "CANCEL_RUN",
-          "RESOLVE_PERMISSION"
+          "RESOLVE_PERMISSION",
+          "REFRESH_CREDENTIAL"
         ],
         "title": "AgentHostCommandKind",
         "type": "string"

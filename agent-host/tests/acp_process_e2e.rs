@@ -126,6 +126,8 @@ async fn official_sdk_negotiates_probes_config_and_streams_a_prompt() {
                 can_load_session: false,
                 permissions: PermissionGate::new(),
                 permission_timeout: Duration::ZERO,
+                cancel: lemma_agent_host::acp::never_cancelled(),
+                cancel_grace: Duration::from_secs(5),
             },
             callbacks.clone(),
         )

@@ -21,7 +21,6 @@ from app.modules.agent.domain.prompts import build_agent_instructions
 from app.modules.agent.domain.runtime_notes import prepend_runtime_notes
 from app.modules.agent.domain.value_objects import (
     ConversationType,
-    HarnessKind,
     HarnessOptions,
     JsonObject,
     MessageKind,
@@ -43,25 +42,28 @@ def run_start_payload(
     conversation: Conversation,
     messages: Sequence[Message],
     ctx: AgentContext,
-    options: HarnessOptions,
     agent_run_id: UUID,
-    harness_kind: HarnessKind,
     runtime_instructions: str,
+    carries_history: bool,
 ) -> JsonObject:
+    """Everything one dispatched run needs, and nothing it does not.
+
+    ``carries_history`` is set when the run is not even going to try to resume a
+    provider session, so the prompt has to bring the conversation with it. See
+    :func:`_turn_messages`.
+
+    Deliberately does not carry ``runtime_credentials``. They were assembled
+    here and then dropped by the only caller, on the one code path whose
+    destination is a third-party machine — a leak waiting for someone to widen
+    the spec it feeds.
+    """
     return {
         "agent_run_id": str(agent_run_id),
         "conversation_id": str(conversation.id),
-        "harness_kind": harness_kind.value,
-        "model_name": options.model_name,
-        "runtime": {
-            "profile_id": _runtime_profile_value(options, "profile_id"),
-            "harness_kind": harness_kind.value,
-            "model_name": options.model_name,
-        },
         "prompt": _prompt_payload(
             agent=agent,
             conversation=conversation,
-            messages=_current_turn_messages(messages),
+            messages=_turn_messages(messages, carries_history=carries_history),
             ctx=ctx,
             runtime_instructions=runtime_instructions,
         ),
@@ -70,9 +72,6 @@ def run_start_payload(
             mode="json", exclude={"messages", "agent_runs"}
         ),
         "context": ctx.model_dump(mode="json"),
-        "runtime_profile": options.extra.get("runtime_profile"),
-        "runtime_credentials": options.extra.get("runtime_credentials"),
-        "mcp": {},
     }
 
 
@@ -237,12 +236,35 @@ def _prompt_payload(
     }
 
 
-def _current_turn_messages(messages: Sequence[Message]) -> list[Message]:
+def _turn_messages(
+    messages: Sequence[Message],
+    *,
+    carries_history: bool,
+) -> list[Message]:
+    """The messages this prompt has to carry.
+
+    Normally just the latest user message. A Lemma conversation maps to one
+    provider session, kept in one working directory, and the agent loads it back
+    on every turn — so the rest is already on the other side and resending it
+    would only duplicate the conversation in its context.
+
+    The exception is a run that is not going to try: a harness that never
+    advertised ``loadSession`` has no session to resume, ever. Sending one lone
+    message there leaves the agent answering a follow-up it has never seen the
+    start of. This costs nothing in the usual case, because a resumable harness
+    only lacks a stored session on a conversation's first turn, where there is
+    no history to send.
+    """
     ordered = sorted(messages, key=lambda item: item.sequence)
+    if carries_history:
+        return ordered
     for message in reversed(ordered):
         if message.role == MessageRole.USER:
             return [message]
     return ordered[-1:]
+
+
+
 
 
 def _runtime_profile_value(options: HarnessOptions, key: str) -> object | None:

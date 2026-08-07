@@ -174,6 +174,12 @@ class AgentHostCommandKind(str, Enum):
     # Carries a human's answer back to a permission request the host is
     # holding open for a running agent.
     RESOLVE_PERMISSION = "RESOLVE_PERMISSION"
+    # Carries a replacement Lemma MCP credential for a run still in flight.
+    # The one minted at dispatch lasts an hour and nothing renewed it, so a
+    # long turn had to be cut short at that expiry or carry on with every
+    # Lemma tool call returning 401 — which the agent experiences as its tools
+    # quietly disappearing part-way through the task.
+    REFRESH_CREDENTIAL = "REFRESH_CREDENTIAL"
 
 
 class AgentHostCommandState(str, Enum):
@@ -335,6 +341,7 @@ class AgentHostCommand(BaseModel):
             AgentHostCommandKind.START_RUN,
             AgentHostCommandKind.CANCEL_RUN,
             AgentHostCommandKind.RESOLVE_PERMISSION,
+            AgentHostCommandKind.REFRESH_CREDENTIAL,
         } and (self.run_id is None or self.lease_epoch is None):
             raise ValueError(f"{self.kind.value} requires run_id and lease_epoch")
         return self
