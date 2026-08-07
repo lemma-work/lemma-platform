@@ -6,6 +6,24 @@
         "bot_user": {
             "display_name": "Lemma",
             "always_online": true
+        },
+        "app_home": {
+            "home_tab_enabled": true,
+            "messages_tab_enabled": true,
+            "messages_tab_read_only_enabled": false
+        },
+        "agent_view": {
+            "agent_description": "Ask Lemma to run your pods — query your data, kick off workflows, and get answers where your team already works.",
+            "suggested_prompts": [
+                {
+                    "title": "What can you do here?",
+                    "message": "What can you help me with in this workspace?"
+                },
+                {
+                    "title": "Show me my data",
+                    "message": "What tables and records can you see?"
+                }
+            ]
         }
     },
     "oauth_config": {
@@ -72,6 +90,8 @@
                 "chat:write.public",
                 "files:read",
                 "files:write",
+                "groups:history",
+                "groups:read",
                 "groups:write",
                 "im:history",
                 "im:read",
@@ -97,9 +117,11 @@
                 "message.channels"
             ],
             "bot_events": [
+                "app_home_opened",
                 "app_mention",
-                "assistant_thread_started",
+                "member_joined_channel",
                 "message.channels",
+                "message.groups",
                 "message.im"
             ]
         },

@@ -1,7 +1,7 @@
 """Agent surfaces module configuration (native messaging platforms).
 
 Field names are unchanged from the former monolithic ``Settings`` so the
-environment variables resolve identically (``SLACK_BOT_TOKEN``,
+environment variables resolve identically (``SLACK_SIGNING_SECRET``,
 ``TELEGRAM_BOT_TOKEN``, ``MICROSOFT_BOT_APP_ID``, ``SURFACE_*``, …).
 
 Note: ``microsoft_tenant_id`` and ``microsoft_client_*`` are the *login* OAuth
@@ -65,13 +65,17 @@ class SurfaceSettings(BaseSettings):
         default=None,
         description="Slack signing secret for verifying native Slack webhook requests",
     )
+    slack_home_logo_url: Optional[str] = Field(
+        default=None,
+        description=(
+            "Public https URL of the logo shown on the Slack App Home. Slack "
+            "fetches this from its own servers, so a localhost or private URL "
+            "silently renders nothing — leave unset rather than pointing at one."
+        ),
+    )
     slack_app_token: Optional[str] = Field(
         default=None,
         description="Slack Socket Mode app-level token for local surface receivers",
-    )
-    slack_bot_token: Optional[str] = Field(
-        default=None,
-        description="Slack bot token for Lemma-managed native Slack surfaces",
     )
 
     # WhatsApp Business API
