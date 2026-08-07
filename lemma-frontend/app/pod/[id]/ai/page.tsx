@@ -1,6 +1,6 @@
 'use client';
 
-import { use, useMemo, useState } from 'react';
+import { use, useCallback, useMemo, useState } from 'react';
 import Link from 'next/link';
 import {
     Bot,
@@ -37,6 +37,7 @@ import type { Agent, UpdateAgentData, Workflow } from '@/lib/types';
 import { NodeType } from '@/lib/types';
 import { formatAgentName } from '@/lib/utils/agents';
 import { getAgentNodeName } from '@/lib/utils/flow-node-config';
+import { surfaceReaches } from '@/lib/utils/surfaces';
 
 type AgentFilter = 'all' | 'workflows' | 'scheduled';
 
@@ -73,7 +74,23 @@ export default function AgentsPage({
     const { data: flowsData, isPending: flowsPending } = useFlows(canReadWorkflows ? podId : undefined);
     // Surfaces that fall to the pod default assistant (the virtual Super Agent).
     const automation = usePodAutomation(podId, { schedules: false, surfaces: canUseSurfaces });
-    const defaultSurfaceCount = automation.defaultSurfaces.length;
+    // Reach is counted in *places*, not installs: one Slack workspace can reach
+    // an agent in its DMs and in five channels, and "1 surface" would say the
+    // opposite of what is true.
+    const reachFor = useCallback(
+        (agentName: string | null) => {
+            const surfaces = agentName === null
+                ? automation.defaultSurfaces
+                : automation.surfacesForAgent(agentName);
+            const reaches = surfaces.flatMap((surface) => surfaceReaches(surface, agentName));
+            return {
+                count: reaches.length,
+                label: reaches.map((reach) => reach.label).join(' · '),
+            };
+        },
+        [automation],
+    );
+    const defaultReach = reachFor(null);
     const { mutate: deleteAgent, isPending: isDeletingAgent } = useDeleteAgent();
     const updateAgent = useUpdateAgent();
     const [agentFilter, setAgentFilter] = useState<AgentFilter>('all');
@@ -179,7 +196,7 @@ export default function AgentsPage({
                 label="Loading agents"
                 skeleton={(
                     <section className="resource-index-grid resource-index-grid-md-2 resource-index-grid-xl-3 sm:grid-cols-2 xl:grid-cols-3">
-                        {canUseSurfaces ? <PodAssistantCard podId={podId} surfaceCount={defaultSurfaceCount} /> : null}
+                        {canUseSurfaces ? <PodAssistantCard podId={podId} reachCount={defaultReach.count} reachLabel={defaultReach.label} /> : null}
                         <ResourceCardSkeleton />
                         <ResourceCardSkeleton />
                         {canUseSurfaces ? null : <ResourceCardSkeleton />}
@@ -187,7 +204,7 @@ export default function AgentsPage({
                 )}
                 empty={(
                     <section className="resource-index-grid resource-index-grid-md-2 resource-index-grid-xl-3 sm:grid-cols-2 xl:grid-cols-3">
-                        {canUseSurfaces ? <PodAssistantCard podId={podId} surfaceCount={defaultSurfaceCount} /> : null}
+                        {canUseSurfaces ? <PodAssistantCard podId={podId} reachCount={defaultReach.count} reachLabel={defaultReach.label} /> : null}
                         <EmptyState
                             variant="region"
                             className="col-span-full"
@@ -210,7 +227,7 @@ export default function AgentsPage({
             >
                 <section className="resource-index-grid resource-index-grid-md-2 resource-index-grid-xl-3 sm:grid-cols-2 xl:grid-cols-3">
                     {canUseSurfaces && agentFilter === 'all' ? (
-                        <PodAssistantCard podId={podId} surfaceCount={defaultSurfaceCount} />
+                        <PodAssistantCard podId={podId} reachCount={defaultReach.count} reachLabel={defaultReach.label} />
                     ) : null}
                     {filteredAgents.map((agent) => (
                         <AgentProfileCard
@@ -219,6 +236,7 @@ export default function AgentsPage({
                             podId={podId}
                             activeScheduleCount={schedules.filter((schedule) => schedule.agent_name === agent.name && schedule.is_active !== false).length}
                             workflowCount={agentUsage.get(agent.name)?.size || 0}
+                            reach={reachFor(agent.name)}
                             onDelete={setAgentPendingDelete}
                             canUpdate={resourceAllows(agent, 'agent.update', canUpdateAgent)}
                             canDelete={resourceAllows(agent, 'agent.delete', canDeleteAgent)}
@@ -308,8 +326,13 @@ function AgentStat({ icon: Icon, value, label }: { icon: LemmaIcon; value: numbe
 }
 
 // The pod's default responder, rendered as a first-class card even though it
-// has no agent row. Its surfaces are the ones not assigned to any agent.
-function PodAssistantCard({ podId, surfaceCount }: { podId: string; surfaceCount: number }) {
+// has no agent row. What falls to it is anything nobody else claimed — a surface
+// with no responder, or a channel routed to no agent in particular.
+function PodAssistantCard({ podId, reachCount, reachLabel }: {
+    podId: string;
+    reachCount: number;
+    reachLabel: string;
+}) {
     return (
         <Link
             href={`/pod/${podId}/ai/assistant`}
@@ -330,10 +353,10 @@ function PodAssistantCard({ podId, surfaceCount }: { podId: string; surfaceCount
             </div>
 
             <div className="mt-3 flex items-center justify-between gap-2 text-xs text-[var(--text-tertiary)]">
-                {surfaceCount > 0 ? (
-                    <span className="inline-flex items-center gap-1" title={`${surfaceCount} unassigned surface${surfaceCount === 1 ? '' : 's'}`}>
+                {reachCount > 0 ? (
+                    <span className="inline-flex items-center gap-1" title={reachLabel}>
                         <MessageCircle className="h-3.5 w-3.5" aria-hidden />
-                        {surfaceCount} surface{surfaceCount === 1 ? '' : 's'}
+                        {reachCount} place{reachCount === 1 ? '' : 's'}
                     </span>
                 ) : null}
                 <span className="inline-flex items-center gap-1 font-medium text-[var(--text-secondary)] transition-gentle group-hover:translate-x-0.5">
@@ -350,6 +373,7 @@ function AgentProfileCard({
     podId,
     activeScheduleCount,
     workflowCount,
+    reach,
     onDelete,
     canUpdate,
     canDelete,
@@ -359,6 +383,8 @@ function AgentProfileCard({
     podId: string;
     activeScheduleCount: number;
     workflowCount: number;
+    /** Places this agent answers — DMs and channels, named in the tooltip. */
+    reach: { count: number; label: string };
     onDelete: (agent: Agent) => void;
     canUpdate: boolean;
     canDelete: boolean;
@@ -418,7 +444,12 @@ function AgentProfileCard({
                     {activeScheduleCount > 0 ? (
                         <AgentStat icon={CalendarClock} value={activeScheduleCount} label={`${activeScheduleCount} active schedule${activeScheduleCount === 1 ? '' : 's'}`} />
                     ) : null}
-                    {connectionCount === 0 && workflowCount === 0 && activeScheduleCount === 0 ? (
+                    {reach.count > 0 ? (
+                        // Named rather than counted in the tooltip: "3 places" is
+                        // only useful once you can see it means #sales and #deals.
+                        <AgentStat icon={MessageCircle} value={reach.count} label={`Reachable in ${reach.label}`} />
+                    ) : null}
+                    {connectionCount === 0 && workflowCount === 0 && activeScheduleCount === 0 && reach.count === 0 ? (
                         <span>Ready to set up</span>
                     ) : null}
                 </div>
