@@ -17,6 +17,14 @@ dependencies = [
     "uvicorn[standard]>=0.42.0",
 ]
 
+[project.optional-dependencies]
+# For `templates/e2b/build_templates.py`, which builds the E2B sandbox
+# templates. Opt-in, so it never reaches a sandbox image or the backend's
+# `local` extra -- both of which ask for this package without extras.
+e2b = [
+    "e2b==2.34.0",
+]
+
 [dependency-groups]
 dev = [
     "agentbox-client",
