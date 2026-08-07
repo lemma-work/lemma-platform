@@ -15,7 +15,7 @@ import termios
 from uuid import UUID
 
 from agentbox.domain import ProcessState, StartProcessRequest
-from agentbox.observability import create_inherited_task
+from agentbox.tasks import create_inherited_task
 
 from .models import OutputChannel, RuntimeProcessResponse
 

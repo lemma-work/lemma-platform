@@ -9,7 +9,7 @@ import signal
 import sys
 from uuid import UUID
 
-from agentbox.observability import create_background_task, create_inherited_task
+from agentbox.tasks import create_background_task, create_inherited_task
 
 from .runtime_models import (
     FunctionSchemaSet,

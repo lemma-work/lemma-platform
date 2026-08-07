@@ -17,7 +17,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
-from agentbox.observability import create_inherited_task
+from agentbox.tasks import create_inherited_task
 
 from .runner import (
     GatewayClient,

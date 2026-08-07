@@ -122,18 +122,16 @@ def test_selinux_adds_z_to_rw_binds_only(config, paths, manifest):
     assert not socket_mount.endswith(":z")  # sockets must not be relabeled
 
 
-def test_embedded_agentbox_podman_wiring(config, paths, manifest):
+def test_sandbox_provisioning_podman_wiring(config, paths, manifest):
     spec = by_name(build(config, paths, manifest, provider="podman"), "backend")
-    assert spec.env["AGENTBOX_PROVIDER"] == "docker"
-    assert spec.env["AGENTBOX_API_URL"] == "http://backend:8000/internal/agentbox"
+    assert spec.env["WORKSPACE_PROVIDER"] == "docker"
     assert spec.env["AGENTBOX_DOCKER_SOCKET_PATH"] == "/var/run/docker.sock"
     assert spec.env["AGENTBOX_DOCKER_PRIVATE_NETWORK"] == "lemma-local-net"
-    assert spec.env["AGENTBOX_STATE_DATABASE_URL"].startswith(
-        "postgresql+asyncpg://"
-    )
-    assert spec.env["AGENTBOX_STATE_DATABASE_URL"].endswith("/agentbox")
+    # No manager means no second database and no URL to reach it on.
+    assert "AGENTBOX_STATE_DATABASE_URL" not in spec.env
+    assert "AGENTBOX_API_URL" not in spec.env
     assert "FUNCTION_RUNTIME_SECRET" not in spec.env
-    assert len(spec.env["AGENTBOX_RUNTIME_CREDENTIAL_KEY"]) == 44
+    assert len(spec.env["WORKSPACE_RUNTIME_CREDENTIAL_KEY"]) == 44
     assert spec.env["AGENTBOX_ADD_HOST_GATEWAY"] == "false"
     assert spec.env["AGENTBOX_LOCAL_RUNTIME_TIMEOUT_SECONDS"] == "600"
     assert spec.user == "root"
@@ -141,9 +139,9 @@ def test_embedded_agentbox_podman_wiring(config, paths, manifest):
     assert mounts["/var/run/docker.sock"] == "/run/user/501/podman/podman.sock"
 
 
-def test_embedded_agentbox_docker_wiring(config, paths, manifest):
+def test_sandbox_provisioning_docker_wiring(config, paths, manifest):
     spec = by_name(build(config, paths, manifest, provider="docker"), "backend")
-    assert spec.env["AGENTBOX_PROVIDER"] == "docker"
+    assert spec.env["WORKSPACE_PROVIDER"] == "docker"
     # Sandboxes and the backend share this private network. lemma-cli inside a
     # sandbox reaches the all-in-one API through the backend DNS alias.
     assert spec.env["AGENTBOX_DOCKER_SOCKET_PATH"] == "/var/run/docker.sock"
@@ -214,7 +212,6 @@ def test_backend_env_golden(config, paths, manifest):
     assert env["DATABASE_URL"] == "postgresql+asyncpg://postgres:postgres@db:5432/lemma"
     assert env["REDIS_URL"] == "redis://redis:6379"
     assert env["SUPERTOKENS_CORE_URL"] == "http://supertokens:3567"
-    assert env["AGENTBOX_API_URL"] == "http://backend:8000/internal/agentbox"
     assert env["WORKSPACE_CALLBACK_API_URL"] == "http://backend:8000"
     assert env["FUNCTION_RUNTIME_GATEWAY_URL"] == "http://backend:8000"
     assert env["SCHEDULER_API_URL"] == "http://backend:8000"
@@ -233,10 +230,7 @@ def test_backend_env_golden(config, paths, manifest):
     assert env["AUTH_ABUSE_PROTECTION_ENABLED"] == "false"
     assert env["AUTH_ALTCHA_ENABLED"] == "false"
     assert env["DESKTOP_AUTH_CREATE_LIMIT"] == "0"
-    assert env["AGENTBOX_API_KEY"] == store.agentbox_api_key(config)
-    assert env["AGENTBOX_PUBLIC_URL"] == (
-        "http://app.lemma.localhost:8711/internal/agentbox"
-    )
+    assert env["WORKSPACE_PROVIDER"] == "docker"
     # chat surfaces default to no-public-URL receive modes
     assert env["ENABLE_TELEGRAM_POLLING_MODE"] == "true"
     assert env["ENABLE_SLACK_SOCKET_MODE"] == "true"
@@ -261,7 +255,7 @@ def test_backend_runs_the_all_in_one_local_entrypoint(config, paths, manifest):
     backend = by_name(build(config, paths, manifest), "backend")
 
     assert backend.command[:2] == ("uvicorn", "local_app:app")
-    assert backend.wait_http == (
-        "http://app.lemma.localhost:8711/internal/agentbox/health/ready"
-    )
+    # Readiness is the backend's own, not a mounted manager's. Provisioning is
+    # part of this process, so there is nothing else to wait for.
+    assert backend.wait_http == "http://app.lemma.localhost:8711/health/ready"
     assert "agentbox" not in [spec.name for spec in build(config, paths, manifest)]

@@ -8,7 +8,11 @@ from uuid import UUID, uuid7
 
 import pytest
 
-from agentbox_client import AgentBoxClient, WorkloadKind
+from agentbox_client import WorkloadKind
+
+from app.modules.workspace.services.local_sandbox_client import (
+    LocalSandboxClient,
+)
 
 from app.core.config import settings
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
@@ -184,23 +188,12 @@ async def test_api_and_job_execute_through_one_per_pod_docker_sandbox(
             kind=FunctionType.JOB,
             value=21,
         )
-        def client_factory() -> AgentBoxClient:
-            # Follows the cutover flag, so this exercises whichever path is
-            # actually live. Without it the test would keep proving the
-            # AgentBox manager works no matter which provisioner production is
-            # configured to use.
+        def client_factory() -> LocalSandboxClient:
             from app.modules.workspace.services.sandbox_composition import (
                 build_local_client,
-                workspace_owns_sandboxes,
             )
 
-            if workspace_owns_sandboxes():
-                return build_local_client()  # type: ignore[return-value]
-            return AgentBoxClient(
-                base_url=local_agentbox_server["manager_base_url"],
-                api_key=local_agentbox_server["api_key"],
-                timeout_seconds=60,
-            )
+            return build_local_client()
 
         runtime_http_clients = FunctionRuntimeHttpClientPool()
         dispatcher = FunctionDispatcher(

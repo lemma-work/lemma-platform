@@ -12,7 +12,7 @@ import socket
 from urllib.parse import urlparse
 from uuid import UUID, uuid4
 
-from agentbox_client import AgentBoxApiError, AgentBoxClient, WorkloadKind
+from agentbox_client import AgentBoxApiError, WorkloadKind
 from dotenv import dotenv_values
 import httpx
 import pytest
@@ -106,8 +106,6 @@ def _available_port() -> int:
 @dataclass(slots=True)
 class FunctionBenchmarkRuntime:
     provider: str
-    manager_base_url: str
-    manager_api_key: str
     gateway_url: str
     tracked_sandboxes: list[tuple[WorkloadKind, UUID]] = field(default_factory=list)
 
@@ -361,135 +359,6 @@ async def _curl_health_with_resolved_ip(
         return 0
 
 
-def _agentbox_log_tail(log_path: Path, *, lines: int = 80) -> str:
-    try:
-        return "".join(
-            log_path.read_text(errors="replace").splitlines(keepends=True)[-lines:]
-        )
-    except OSError:
-        return "<AgentBox log unavailable>"
-
-
-@asynccontextmanager
-async def _agentbox_service(
-    *,
-    provider: str,
-    manager_url: str,
-    api_key: str,
-    state_path: Path,
-    workspace_image_name: str,
-    function_image_name: str,
-    gateway_host: str,
-    log_path: Path,
-) -> AsyncIterator[None]:
-    """Run the real AgentBox service boundary in AgentBox's own environment."""
-
-    agentbox_root = Path(__file__).resolve().parents[6] / "agentbox"
-    uvicorn_executable = agentbox_root / ".venv" / "bin" / "uvicorn"
-    if not uvicorn_executable.is_file():
-        raise RuntimeError(
-            f"AgentBox environment is missing {uvicorn_executable}; run uv sync in agentbox"
-        )
-    parsed_manager = urlparse(manager_url)
-    if parsed_manager.port is None:
-        raise RuntimeError("AgentBox benchmark URL must contain an explicit port")
-
-    environment = {
-        **os.environ,
-        "AGENTBOX_PROVIDER": provider,
-        "AGENTBOX_API_KEY": api_key,
-        "AGENTBOX_API_URL": manager_url,
-        "AGENTBOX_RUNTIME_CREDENTIAL_KEY": ("function-benchmark-runtime-key-0001"),
-        "AGENTBOX_STATE_DB_PATH": str(state_path),
-        "AGENTBOX_AUTO_CREATE_SCHEMA": "true",
-        "AGENTBOX_WORKSPACE_IMAGE": workspace_image_name,
-        "AGENTBOX_FUNCTION_IMAGE": function_image_name,
-        "AGENTBOX_ADD_HOST_GATEWAY": "true",
-        "AGENTBOX_HOST_ALIAS": gateway_host,
-        "AGENTBOX_WORKSPACE_IDLE_SECONDS": "300",
-        "AGENTBOX_FUNCTION_IDLE_SECONDS": "300",
-        "AGENTBOX_CLEANUP_INTERVAL_SECONDS": "30",
-        "AGENTBOX_LOG_LEVEL": "INFO",
-    }
-    if provider == "e2b":
-        # These are the aliases declared by AgentBox Settings. Keep the backend's
-        # benchmark-facing names out of the AgentBox process contract.
-        environment.update(
-            {
-                "E2B_API_KEY": _benchmark_environment("E2B_API_KEY") or "",
-                "E2B_WORKSPACE_TEMPLATE": (
-                    _benchmark_environment("AGENTBOX_E2B_WORKSPACE_TEMPLATE") or ""
-                ),
-                "E2B_WORKSPACE_TEMPLATE_BUILD_ID": (
-                    _benchmark_environment("AGENTBOX_E2B_WORKSPACE_BUILD_ID") or ""
-                ),
-                "E2B_FUNCTION_TEMPLATE": (
-                    _benchmark_environment("AGENTBOX_E2B_FUNCTION_TEMPLATE") or ""
-                ),
-                "E2B_FUNCTION_TEMPLATE_BUILD_ID": (
-                    _benchmark_environment("AGENTBOX_E2B_FUNCTION_BUILD_ID") or ""
-                ),
-                "AGENTBOX_E2B_SCOPE": f"e2b:function-bench:{uuid4()}",
-                "AGENTBOX_E2B_FUNCTION_ALLOW_OUT": gateway_host,
-                "AGENTBOX_E2B_REQUEST_TIMEOUT_SECONDS": "60",
-            }
-        )
-
-    log_path.parent.mkdir(parents=True, exist_ok=True)
-    with log_path.open("w", encoding="utf-8") as log_writer:
-        process = await asyncio.create_subprocess_exec(
-            str(uvicorn_executable),
-            "agentbox.server:app",
-            "--host",
-            "127.0.0.1",
-            "--port",
-            str(parsed_manager.port),
-            "--log-level",
-            "warning",
-            "--no-access-log",
-            cwd=agentbox_root,
-            env=environment,
-            stdout=log_writer,
-            stderr=asyncio.subprocess.STDOUT,
-        )
-        try:
-            last_result = "no response"
-            async with httpx.AsyncClient(timeout=2) as client:
-                for _ in range(300):
-                    if process.returncode is not None:
-                        raise RuntimeError(
-                            f"AgentBox exited with status {process.returncode} during startup"
-                        )
-                    try:
-                        response = await client.get(f"{manager_url}/health/ready")
-                        last_result = (
-                            f"HTTP {response.status_code}: {response.text[:500]}"
-                        )
-                        if response.status_code == 200:
-                            break
-                    except httpx.HTTPError as exc:
-                        last_result = f"{type(exc).__name__}: {exc}"
-                    await asyncio.sleep(0.1)
-                else:
-                    raise RuntimeError(
-                        f"AgentBox readiness timed out; last result: {last_result}"
-                    )
-            yield
-        except BaseException as exc:
-            log_writer.flush()
-            raise RuntimeError(
-                f"{exc}\nAgentBox log tail:\n{_agentbox_log_tail(log_path)}"
-            ) from exc
-        finally:
-            if process.returncode is None:
-                process.terminate()
-                try:
-                    await asyncio.wait_for(process.wait(), timeout=15)
-                except TimeoutError:
-                    process.kill()
-                    await process.wait()
-
-
 @pytest_asyncio.fixture
 async def test_pod(authenticated_client, fixed_test_org):
     response = await authenticated_client.post(
@@ -539,9 +408,6 @@ async def function_benchmark_runtime(
         gateway_host = urlparse(gateway_url).hostname
         if gateway_host is None:
             raise RuntimeError("benchmark gateway URL has no hostname")
-        port = _available_port()
-        manager_url = f"http://127.0.0.1:{port}"
-        api_key = e2e_settings.agentbox_api_key
         if provider == "docker":
             selected_function_image = request.getfixturevalue("function_image")
             selected_workspace_image = request.getfixturevalue("workspace_image")
@@ -550,92 +416,92 @@ async def function_benchmark_runtime(
             selected_workspace_image = "agentbox-workspace:unused-by-e2b"
         original_backend = {
             "api_url": settings.api_url,
-            "agentbox_api_url": settings.agentbox_api_url,
-            "agentbox_api_key": settings.agentbox_api_key,
             "function_runtime_gateway_url": settings.function_runtime_gateway_url,
+            "workspace_provider": settings.workspace_provider,
+            "agentbox_workspace_image": settings.agentbox_workspace_image,
+            "agentbox_function_image": settings.agentbox_function_image,
         }
         runtime: FunctionBenchmarkRuntime | None = None
         benchmark_error: BaseException | None = None
         try:
             settings.api_url = gateway_url
-            settings.agentbox_api_url = manager_url
-            settings.agentbox_api_key = api_key
             settings.function_runtime_gateway_url = gateway_url
+            settings.workspace_provider = provider
+            settings.agentbox_workspace_image = selected_workspace_image
+            settings.agentbox_function_image = selected_function_image
 
-            async with _agentbox_service(
+            # Provisioning is in-process now: what used to be a manager
+            # subprocess in agentbox's own virtualenv is the same code path the
+            # benchmark's own backend runs, so the measurement no longer
+            # includes a loopback HTTP hop that production does not have.
+            from app.modules.workspace.services.sandbox_composition import (
+                reset_sandbox_service,
+            )
+
+            await reset_sandbox_service()
+            runtime = FunctionBenchmarkRuntime(
                 provider=provider,
-                manager_url=manager_url,
-                api_key=api_key,
-                state_path=tmp_path / "agentbox-state.db",
-                workspace_image_name=selected_workspace_image,
-                function_image_name=selected_function_image,
-                gateway_host=gateway_host,
-                log_path=tmp_path / f"agentbox-{provider}.log",
-            ):
-                runtime = FunctionBenchmarkRuntime(
-                    provider=provider,
-                    manager_base_url=manager_url,
-                    manager_api_key=api_key,
-                    gateway_url=gateway_url,
+                gateway_url=gateway_url,
+            )
+            worker_environment = {
+                "API_URL": gateway_url,
+                "FUNCTION_RUNTIME_GATEWAY_URL": gateway_url,
+                "WORKSPACE_PROVIDER": provider,
+                "AGENTBOX_WORKSPACE_IMAGE": selected_workspace_image,
+                "AGENTBOX_FUNCTION_IMAGE": selected_function_image,
+                "DEBUG": "false",
+                "LOG_LEVEL": "INFO",
+            }
+            try:
+                async with production_worker_process(
+                    e2e_settings,
+                    log_prefix=f"function_benchmark_{provider}",
+                    extra_env=worker_environment,
+                    readiness_markers=('"event": "service.started"',),
+                ) as worker:
+                    try:
+                        yield runtime
+                    except BaseException as exc:
+                        benchmark_error = exc
+                        print(worker.read_log_tail())
+                        raise
+            finally:
+                cleanup_errors: list[str] = []
+                from app.modules.workspace.services.sandbox_composition import (
+                    build_local_client,
                 )
-                worker_environment = {
-                    "AGENTBOX_API_URL": manager_url,
-                    "AGENTBOX_API_KEY": api_key,
-                    "API_URL": gateway_url,
-                    "FUNCTION_RUNTIME_GATEWAY_URL": gateway_url,
-                    "DEBUG": "false",
-                    "LOG_LEVEL": "INFO",
-                }
-                try:
-                    async with production_worker_process(
-                        e2e_settings,
-                        log_prefix=f"function_benchmark_{provider}",
-                        extra_env=worker_environment,
-                        readiness_markers=('"event": "service.started"',),
-                    ) as worker:
+
+                async with build_local_client() as client:
+                    for workload_kind, logical_id in runtime.tracked_sandboxes:
                         try:
-                            yield runtime
-                        except BaseException as exc:
-                            benchmark_error = exc
-                            print(worker.read_log_tail())
-                            raise
-                finally:
-                    cleanup_errors: list[str] = []
-                    async with AgentBoxClient(
-                        base_url=manager_url,
-                        api_key=api_key,
-                        timeout_seconds=60,
-                    ) as client:
-                        for workload_kind, logical_id in runtime.tracked_sandboxes:
-                            try:
-                                await client.destroy_sandbox(
-                                    workload_kind,
-                                    logical_id,
-                                    deadline_at=(
-                                        datetime.now(UTC) + timedelta(seconds=60)
-                                    ),
-                                )
-                            except AgentBoxApiError as exc:
-                                if exc.code == "SANDBOX_NOT_FOUND":
-                                    continue
-                                cleanup_errors.append(
-                                    f"{workload_kind.value}/{logical_id}: "
-                                    f"{type(exc).__name__}: {exc}"
-                                )
-                            except Exception as exc:
-                                cleanup_errors.append(
-                                    f"{workload_kind.value}/{logical_id}: "
-                                    f"{type(exc).__name__}: {exc}"
-                                )
-                    if cleanup_errors:
-                        message = (
-                            "AgentBox benchmark sandbox cleanup failed:\n"
-                            + "\n".join(cleanup_errors)
-                        )
-                        if benchmark_error is not None:
-                            benchmark_error.add_note(message)
-                        else:
-                            raise RuntimeError(message)
+                            await client.destroy_sandbox(
+                                workload_kind,
+                                logical_id,
+                                deadline_at=(
+                                    datetime.now(UTC) + timedelta(seconds=60)
+                                ),
+                            )
+                        except AgentBoxApiError as exc:
+                            if exc.code == "SANDBOX_NOT_FOUND":
+                                continue
+                            cleanup_errors.append(
+                                f"{workload_kind.value}/{logical_id}: "
+                                f"{type(exc).__name__}: {exc}"
+                            )
+                        except Exception as exc:
+                            cleanup_errors.append(
+                                f"{workload_kind.value}/{logical_id}: "
+                                f"{type(exc).__name__}: {exc}"
+                            )
+                if cleanup_errors:
+                    message = (
+                        "benchmark sandbox cleanup failed:\n"
+                        + "\n".join(cleanup_errors)
+                    )
+                    if benchmark_error is not None:
+                        benchmark_error.add_note(message)
+                    else:
+                        raise RuntimeError(message)
         finally:
             for name, value in original_backend.items():
                 setattr(settings, name, value)

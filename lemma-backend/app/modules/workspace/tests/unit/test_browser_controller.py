@@ -33,7 +33,9 @@ async def test_workspace_browser_access_uses_canonical_signed_port_grant(
                 expires_at=expires_at,
             )
 
-    monkeypatch.setattr(settings, "agentbox_api_key", "test-key")
+    monkeypatch.setattr(
+        settings, "workspace_runtime_credential_key", "k" * 32
+    )
     monkeypatch.setattr(browser_controller, "WorkspaceSandboxService", FakeService)
     app = FastAPI()
     app.include_router(router)

@@ -51,10 +51,8 @@ def test_builds_exact_backend_frontend_native_contract(paths, tmp_path):
         "backend",
         "frontend",
     ]
-    assert [setup["id"] for setup in manifest["setup"]] == [
-        "migrations",
-        "agentbox-migrations",
-    ]
+    # One chain: AgentBox's own database and alembic history are gone.
+    assert [setup["id"] for setup in manifest["setup"]] == ["migrations"]
     assert manifest["setup"][0]["max_attempts"] == 3
     assert manifest["setup"][0]["retry_backoff_seconds"] == 2
     assert manifest["setup"][0]["command"][1:] == [
@@ -66,25 +64,9 @@ def test_builds_exact_backend_frontend_native_contract(paths, tmp_path):
         "head",
     ]
     assert manifest["setup"][0]["env"]["DATABASE_URL"].endswith(":55432/lemma")
-    assert manifest["setup"][1]["command"][1:] == [
-        "-m",
-        "alembic",
-        "-c",
-        "agentbox-alembic.ini",
-        "upgrade",
-        "head",
-    ]
-    assert manifest["setup"][1]["env"]["AGENTBOX_STATE_DATABASE_URL"].endswith(
-        ":55432/agentbox"
-    )
     backend, frontend = manifest["services"]
     assert backend["command"][1:4] == ["-m", "uvicorn", "local_app:app"]
     assert "--no-access-log" not in backend["command"]
-    assert backend["env"]["DATABASE_URL"].endswith(":55432/lemma")
-    assert backend["env"]["AGENTBOX_STATE_DATABASE_URL"].startswith(
-        "postgresql+asyncpg://"
-    )
-    assert backend["env"]["AGENTBOX_STATE_DATABASE_URL"].endswith(":55432/agentbox")
     assert "FUNCTION_RUNTIME_SECRET" not in backend["env"]
     assert backend["env"]["WORKSPACE_CALLBACK_API_URL"] == ("http://host.lemma.internal:8711")
     assert backend["env"]["FUNCTION_RUNTIME_GATEWAY_URL"] == (
@@ -150,7 +132,7 @@ def test_managed_runtime_contract_is_explicit(paths, tmp_path, monkeypatch):
         "frontend": 3711,
     }
     backend = manifest["services"][0]
-    assert backend["env"]["AGENTBOX_PROVIDER"] == "lemma_local"
+    assert backend["env"]["WORKSPACE_PROVIDER"] == "lemma_local"
     assert backend["env"]["AGENTBOX_LOCAL_RUNTIME_CLI"] == "/signed/lemma-runtime"
     assert backend["env"]["AGENTBOX_LOCAL_CALLBACK_REQUIRED"] == "true"
     assert backend["env"]["AGENTBOX_LOCAL_CALLBACK_URL"] == (

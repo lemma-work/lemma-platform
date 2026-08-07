@@ -57,11 +57,14 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Managed/local composition: embeds the AgentBox manager and document
-# conversion into the single backend process. Cloud/split deployments do not
-# need to install this extra.
+# Managed/local composition: document conversion in the single backend
+# process. Cloud/split deployments do not need to install this extra.
+#
+# This used to embed the AgentBox manager, which is why it wanted agentbox with
+# its Postgres extra. agentbox is still here for the domain types the workspace
+# module speaks, but it no longer carries a database of its own.
 local = [
-    "agentbox[postgres]",
+    "agentbox",
     "markitdown[docx,pptx,xlsx,xls,pdf,outlook]>=0.1.0",
 ]
 # Cloud key backends for app/core/crypto. Optional so OSS/local stays lean; the

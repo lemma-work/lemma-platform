@@ -164,7 +164,7 @@ def test_runtime_does_not_create_framework_owned_application_loggers() -> None:
 def test_runtime_async_tasks_choose_inherited_or_clean_context_explicitly() -> None:
     allowed_helpers = {
         REPO_ROOT / "lemma-backend" / "app" / "core" / "request_context.py",
-        REPO_ROOT / "agentbox" / "agentbox" / "observability.py",
+        REPO_ROOT / "agentbox" / "agentbox" / "tasks.py",
     }
     failures: list[str] = []
     for root in (

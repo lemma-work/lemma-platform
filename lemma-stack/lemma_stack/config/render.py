@@ -68,7 +68,13 @@ def app_base_domain(doc: TOMLDocument) -> str:
 
 
 def _agentbox_runtime_key(doc: TOMLDocument) -> str:
-    """Derive a stable local-only runtime credential key."""
+    """Derive a stable local-only runtime credential key.
+
+    The stored ``agentbox_api_key`` is now only seed material -- there is no
+    manager left to authenticate to. It keeps its name because renaming it
+    would change this derivation, and with it the credential every already
+    installed local stack has handed to its running sandboxes.
+    """
 
     digest = hmac.digest(
         store.agentbox_api_key(doc).encode("utf-8"),
@@ -104,19 +110,11 @@ def backend_env(
         "LOCAL_KREUZBERG_ENABLED": "false",
         "KREUZBERG_URL": "",
         "DOCUMENT_PROCESSOR": "markitdown",
-        # AgentBox manager is mounted inside this backend process.
-        "AGENTBOX_ENVIRONMENT": "local",
-        "AGENTBOX_API_URL": "http://backend:8000/internal/agentbox",
-        "AGENTBOX_PUBLIC_URL": f"{backend_origin(doc)}/internal/agentbox",
-        "AGENTBOX_API_KEY": store.agentbox_api_key(doc),
-        "AGENTBOX_PROVIDER": adapter_provider,
-        "AGENTBOX_RUNTIME_CREDENTIAL_KEY": _agentbox_runtime_key(doc),
+        # Sandboxes are provisioned by the backend itself.
+        "WORKSPACE_PROVIDER": adapter_provider,
+        "WORKSPACE_RUNTIME_CREDENTIAL_KEY": _agentbox_runtime_key(doc),
         "AGENTBOX_WORKSPACE_IMAGE": workspace_image,
         "AGENTBOX_FUNCTION_IMAGE": function_image,
-        "AGENTBOX_STATE_DATABASE_URL": (
-            "postgresql+asyncpg://postgres:postgres@db:5432/agentbox"
-        ),
-        "AGENTBOX_AUTO_CREATE_SCHEMA": "false",
         "AGENTBOX_DOCKER_SOCKET_PATH": container_socket,
         "AGENTBOX_DOCKER_SCOPE": f"{provider}:local",
         "AGENTBOX_DOCKER_ALLOW_MUTABLE_IMAGES": "false",
@@ -226,14 +224,6 @@ def host_backend_env(
             ),
             "REDIS_URL": redis_url,
             "SUPERTOKENS_CORE_URL": (f"http://127.0.0.1:{store.port(doc, 'supertokens')}"),
-            "AGENTBOX_API_URL": f"http://127.0.0.1:{backend_port}/internal/agentbox",
-            "AGENTBOX_PUBLIC_URL": (
-                f"{backend_origin(doc)}/internal/agentbox"
-            ),
-            "AGENTBOX_STATE_DATABASE_URL": (
-                f"postgresql+asyncpg://postgres:{postgres_password}@127.0.0.1:"
-                f"{store.port(doc, 'postgres')}/agentbox"
-            ),
             "AGENTBOX_DOCKER_PRIVATE_NETWORK": "",
             "AGENTBOX_ADD_HOST_GATEWAY": "true",
             "WORKSPACE_CALLBACK_API_URL": (f"http://host.lemma.internal:{backend_port}"),

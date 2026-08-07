@@ -541,10 +541,7 @@ async def configure_workspace_api_url(
     # environment: the two disagreed the moment the cutover default flipped,
     # and the harness would then have decided the old path was live while the
     # backend it started was running the new one.
-    needs_public_backend = local_agentbox_server["provider"] == "e2b" or (
-        settings.workspace_owns_sandboxes
-        and settings.workspace_provider.lower() == "e2b"
-    )
+    needs_public_backend = local_agentbox_server["provider"] == "e2b"
     # A session-scoped tunnel may already be published for the worker, which
     # cannot see a per-test one. Reuse it: a second tunnel to the same port
     # would work but costs a process and a startup wait per test.

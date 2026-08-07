@@ -819,13 +819,6 @@ class Settings(BaseSettings):
             "single shared Kreuzberg under parallel load. Production leaves False."
         ),
     )
-    agentbox_api_url: Optional[str] = Field(
-        description="AgentBox manager API base URL used by workspace execution",
-        default=None,
-    )
-    agentbox_api_key: Optional[str] = Field(
-        description="Bearer API key for the AgentBox manager", default=None
-    )
     agentbox_workspace_profile_name: str = Field(
         default="workspace-python-v1",
         description="Immutable AgentBox workspace profile name",
@@ -863,14 +856,6 @@ class Settings(BaseSettings):
     )
     # Selects who provisions sandboxes while both paths exist. Flipping this to
     # True moves provisioning from the AgentBox manager into this module.
-    workspace_owns_sandboxes: bool = Field(
-        default=True,
-        description=(
-            "Provision sandboxes in the workspace module, not AgentBox. The "
-            "AgentBox manager remains reachable by setting this false, which is "
-            "the rollback; it is deleted once this default has soaked."
-        ),
-    )
     workspace_port_access_url: Optional[str] = Field(
         default=None,
         description=(

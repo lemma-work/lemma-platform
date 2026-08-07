@@ -34,11 +34,14 @@ async def create_workspace_browser_access(
     request: WorkspaceAppAccessRequest,
     user: CurrentUser,
 ) -> WorkspaceAppAccessResponse:
-    api_key = settings.agentbox_api_key
-    if not api_key:
+    # The URL handed back is a signed grant, so without the signing key there
+    # is nothing to hand back. This used to check the manager's API key, which
+    # stopped being what makes this endpoint work some time before the manager
+    # itself was deleted.
+    if not settings.workspace_runtime_credential_key:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Workspace sandbox manager API key is not configured",
+            detail="Workspace port access signing key is not configured",
         )
 
     access = await WorkspaceSandboxService().create_browser_access(

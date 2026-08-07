@@ -17,7 +17,7 @@ SHELL := /bin/bash
 
 .PHONY: help init dev dev-public agent-host verify-agent-host stop-agent-host stop stop-all logs otel-up otel-down otel-tail otel-smoke \
         observability-up observability-down observability-open \
-        _prepare-dev _start-public-api-tunnel _ensure-databases _ensure-agentbox-images \
+        _prepare-dev _start-public-api-tunnel _ensure-databases _ensure-agentbox-images _wait-backend \
         _ensure-native-connectors \
         test-dev-workflow \
         test test-backend test-backend-unit test-backend-e2e \
@@ -56,7 +56,7 @@ DEV_LOG_DIR                  := .dev-logs
 CLOUDFLARED_API_LOG_FILE     := $(abspath $(DEV_LOG_DIR)/cloudflared-api.log)
 CLOUDFLARED_CONFIG_FILE      := $(abspath $(DEV_LOG_DIR)/cloudflared-quick-tunnel.yml)
 PUBLIC_API_URL_FILE          := $(abspath $(DEV_LOG_DIR)/public-api-url)
-AGENTBOX_READY_TIMEOUT       ?= 30
+BACKEND_READY_TIMEOUT        ?= 30
 PUBLIC_TUNNEL_READY_TIMEOUT  ?= 30
 
 # ── Canonical dev ports + URLs ───────────────────────────────────────────────
@@ -83,10 +83,8 @@ DEV_DATASTORE_DATABASE_URL := postgresql+asyncpg://postgres:postgres@localhost:$
 DEV_AGENTBOX_DATABASE_URL  := postgresql+psycopg://postgres:postgres@localhost:$(DEV_POSTGRES_PORT)/agentbox
 DEV_REDIS_URL         := redis://localhost:$(DEV_REDIS_PORT)/0
 DEV_SUPERTOKENS_URL   := http://localhost:$(DEV_SUPERTOKENS_PORT)
-DEV_AGENTBOX_URL      := http://127.0.0.1:$(DEV_BACKEND_PORT)/internal/agentbox
 DEV_SANDBOX_BACKEND_URL := http://host.lemma.internal:$(DEV_BACKEND_PORT)
 DEV_SANDBOX_FRONTEND_URL := http://host.lemma.internal:$(DEV_FRONTEND_PORT)
-DEV_AGENTBOX_API_KEY  ?= dev-agentbox-key
 DEV_AGENTBOX_RUNTIME_CREDENTIAL_KEY ?= dev-agentbox-runtime-credential-key-0001
 DEV_CORS_ORIGIN_REGEX := https?://(localhost|127\.0\.0\.\d+|127\.\d+\.\d+\.\d+|127-0-0-\d+\.sslip\.io|[\w-]+\.nip\.io)(:\d+)?
 DEV_LOG_LEVEL         ?= DEBUG
@@ -230,47 +228,24 @@ FRONTEND_DEV_ENV := \
 
 AGENTBOX_ENV_FILE := $(AGENTBOX_DIR)/.env
 
-# AgentBox manager — embedded in the all-in-one local backend and mounted at
-# /internal/agentbox. The Docker provider remains the transitional developer
-# sandbox runtime while desktop-native providers are introduced.
-AGENTBOX_DEV_ENV := \
-	AGENTBOX_ENVIRONMENT=local \
-	AGENTBOX_LOG_LEVEL=$(DEV_LOG_LEVEL) \
-	AGENTBOX_PROVIDER=docker \
-	AGENTBOX_API_KEY=$(DEV_AGENTBOX_API_KEY) \
-	AGENTBOX_RUNTIME_CREDENTIAL_KEY=$(DEV_AGENTBOX_RUNTIME_CREDENTIAL_KEY) \
-	AGENTBOX_API_URL=$(DEV_AGENTBOX_URL) \
-	AGENTBOX_PUBLIC_URL=$(DEV_AGENTBOX_URL) \
-	AGENTBOX_WORKSPACE_IMAGE=$(AGENTBOX_WORKSPACE_IMAGE) \
-	AGENTBOX_FUNCTION_IMAGE=$(AGENTBOX_FUNCTION_IMAGE) \
-	AGENTBOX_STATE_DATABASE_URL=$(DEV_AGENTBOX_DATABASE_URL) \
-	AGENTBOX_AUTO_CREATE_SCHEMA=true \
-	AGENTBOX_DOCKER_SOCKET_PATH=/var/run/docker.sock \
-	AGENTBOX_DOCKER_SCOPE=docker:development \
-	AGENTBOX_DOCKER_ALLOW_MUTABLE_IMAGES=true \
-	AGENTBOX_DOCKER_PRIVATE_NETWORK= \
-	AGENTBOX_ADD_HOST_GATEWAY=true \
-	AGENTBOX_HOST_ALIAS=host.lemma.internal \
-	AGENTBOX_WORKSPACE_IDLE_SECONDS=300 \
-	AGENTBOX_FUNCTION_IDLE_SECONDS=300 \
-	AGENTBOX_CLEANUP_INTERVAL_SECONDS=30
-
 # ── Workspace sandbox provisioning ────────────────────────────────────────────
-# The workspace module provisions sandboxes itself. The AgentBox manager is
-# still present as the rollback, so this is a switch rather than a rebuild:
+# The workspace module provisions sandboxes in-process. Choosing a provider is
+# the only decision left:
 #
-#   make dev                                  workspace module, Docker
-#   make dev WORKSPACE_PROVIDER=e2b           workspace module, E2B
-#   make dev WORKSPACE_OWNS_SANDBOXES=false   AgentBox manager (rollback)
+#   make dev                         Docker (developer default)
+#   make dev WORKSPACE_PROVIDER=e2b  E2B
 #
 # E2B needs E2B_API_KEY and the two template ids in lemma-backend/.env.
-WORKSPACE_OWNS_SANDBOXES ?= true
 WORKSPACE_PROVIDER ?= docker
 
 WORKSPACE_DEV_ENV := \
-	WORKSPACE_OWNS_SANDBOXES=$(WORKSPACE_OWNS_SANDBOXES) \
 	WORKSPACE_PROVIDER=$(WORKSPACE_PROVIDER) \
-	WORKSPACE_RUNTIME_CREDENTIAL_KEY=$(DEV_AGENTBOX_RUNTIME_CREDENTIAL_KEY)
+	WORKSPACE_RUNTIME_CREDENTIAL_KEY=$(DEV_AGENTBOX_RUNTIME_CREDENTIAL_KEY) \
+	AGENTBOX_WORKSPACE_IMAGE=$(AGENTBOX_WORKSPACE_IMAGE) \
+	AGENTBOX_FUNCTION_IMAGE=$(AGENTBOX_FUNCTION_IMAGE) \
+	AGENTBOX_DOCKER_ALLOW_MUTABLE_IMAGES=true \
+	AGENTBOX_ADD_HOST_GATEWAY=true \
+	AGENTBOX_HOST_ALIAS=host.lemma.internal
 
 # ── Help ──────────────────────────────────────────────────────────────────────
 
@@ -410,8 +385,6 @@ _init-backend-env:
 			echo 'CORS_ORIGINS=["http://localhost:$(DEV_FRONTEND_PORT)","http://127.0.0.1:$(DEV_FRONTEND_PORT)"]'; \
 			echo 'CORS_ORIGIN_REGEX=$(DEV_CORS_ORIGIN_REGEX)'; \
 			echo "# AgentBox sandbox manager — embedded in the local backend"; \
-			echo "AGENTBOX_API_URL=$(DEV_AGENTBOX_URL)"; \
-			echo "AGENTBOX_API_KEY=$(DEV_AGENTBOX_API_KEY)"; \
 			echo "# Model provider — set a key and the exact model names available to it."; \
 			echo "LEMMA_DEFAULT_MODEL_TYPE=openai_compat"; \
 			echo "LEMMA_OPENAI_API_KEY="; \
@@ -431,7 +404,7 @@ _init-backend-env:
 
 _ensure-backend-env-keys:
 	@set -e; missing=""; \
-	for k in ENVIRONMENT DEBUG LOG_LEVEL JSON_LOGS_ENABLED API_URL FRONTEND_URL AUTH_FRONTEND_URL CLI_API_URL CLI_AUTH_FRONTEND_URL APP_BASE_DOMAIN AUTH_WEBSITE_BASE_PATH SUPERTOKENS_API_BASE_PATH SUPERTOKENS_API_GATEWAY_PATH SUPERTOKENS_CORE_URL DATABASE_URL DATASTORE_DATABASE_URL REDIS_URL DOCUMENT_PROCESSOR STORAGE_BACKEND LOCAL_OBJECT_STORAGE_ROOT LOCAL_FILE_STORAGE_ROOT EMAIL_TRANSPORT EMAIL_OUTPUT_DIR AUTH_EMAIL_VERIFICATION_REQUIRED ENABLE_TELEGRAM_POLLING_MODE ENABLE_SLACK_SOCKET_MODE CORS_ORIGINS CORS_ORIGIN_REGEX AGENTBOX_API_URL AGENTBOX_API_KEY; do \
+	for k in ENVIRONMENT DEBUG LOG_LEVEL JSON_LOGS_ENABLED API_URL FRONTEND_URL AUTH_FRONTEND_URL CLI_API_URL CLI_AUTH_FRONTEND_URL APP_BASE_DOMAIN AUTH_WEBSITE_BASE_PATH SUPERTOKENS_API_BASE_PATH SUPERTOKENS_API_GATEWAY_PATH SUPERTOKENS_CORE_URL DATABASE_URL DATASTORE_DATABASE_URL REDIS_URL DOCUMENT_PROCESSOR STORAGE_BACKEND LOCAL_OBJECT_STORAGE_ROOT LOCAL_FILE_STORAGE_ROOT EMAIL_TRANSPORT EMAIL_OUTPUT_DIR AUTH_EMAIL_VERIFICATION_REQUIRED ENABLE_TELEGRAM_POLLING_MODE ENABLE_SLACK_SOCKET_MODE CORS_ORIGINS CORS_ORIGIN_REGEX; do \
 		if ! grep -qE "^$$k=" $(BACKEND_DIR)/.env; then missing="$$missing $$k"; fi; \
 	done; \
 	if [ -z "$$missing" ]; then \
@@ -468,8 +441,6 @@ _ensure-backend-env-keys:
 		append ENABLE_SLACK_SOCKET_MODE true; \
 		append CORS_ORIGINS '["http://localhost:$(DEV_FRONTEND_PORT)","http://127.0.0.1:$(DEV_FRONTEND_PORT)"]'; \
 		append CORS_ORIGIN_REGEX '$(DEV_CORS_ORIGIN_REGEX)'; \
-		append AGENTBOX_API_URL '$(DEV_AGENTBOX_URL)'; \
-		append AGENTBOX_API_KEY '$(DEV_AGENTBOX_API_KEY)'; \
 	fi
 
 _init-frontend-env:
@@ -525,7 +496,6 @@ dev:
 	@echo "  Auth UI   →  $(DEV_AUTH_FRONTEND_URL)/auth"
 	@echo "  API       →  $(DEV_BACKEND_URL)"
 	@echo "  API docs  →  $(DEV_BACKEND_URL)/scalar"
-	@echo "  AgentBox  →  $(DEV_AGENTBOX_URL)"
 	@echo ""
 	@echo "  Run local Codex/Claude Code/OpenCode/Cursor against this stack:"
 	@echo "    make agent-host        (one-time pairing, then it keeps running)"
@@ -533,12 +503,12 @@ dev:
 	@echo "  Debug and safe request-access logs are enabled."
 	@echo "  Press Ctrl-C or run 'make stop' to stop."
 	@echo ""
-	@# AgentBox is mounted inside the backend; its readiness check therefore also
-	@# verifies that the unified application completed startup.
+	@# The readiness check is what confirms the unified application finished
+	@# starting; sandbox provisioning is part of it rather than a second service.
 	@trap '$(MAKE) --no-print-directory stop; exit 0' INT TERM; \
 		$(MAKE) --no-print-directory _run-backend & \
 		$(MAKE) --no-print-directory _run-frontend & \
-		$(MAKE) --no-print-directory _wait-agentbox || { \
+		$(MAKE) --no-print-directory _wait-backend || { \
 			status=$$?; $(MAKE) --no-print-directory stop; wait 2>/dev/null || true; exit $$status; \
 		}; \
 		wait
@@ -553,7 +523,6 @@ dev-public:
 	echo "  Auth UI         →  $(DEV_AUTH_FRONTEND_URL)/auth"; \
 	echo "  Public API      →  $$public_api_url"; \
 	echo "  Public API docs →  $$public_api_url/scalar"; \
-	echo "  AgentBox        →  $(DEV_AGENTBOX_URL)"; \
 	echo ""; \
 	echo "  Webhook callbacks and generated links use the public API URL."; \
 	echo "  Public URLs are ephemeral and change each time this command starts."; \
@@ -571,7 +540,7 @@ dev-public:
 	$(MAKE) --no-print-directory _run-frontend \
 		FRONTEND_API_URL="$$public_api_url" \
 		FRONTEND_SESSION_TOKEN_DOMAIN= & \
-	$(MAKE) --no-print-directory _wait-agentbox || { \
+	$(MAKE) --no-print-directory _wait-backend || { \
 		status=$$?; $(MAKE) --no-print-directory stop; wait 2>/dev/null || true; exit $$status; \
 	}; \
 	wait
@@ -745,10 +714,10 @@ _ensure-databases:
 	@echo "  ✓ Databases ready"
 
 _run-backend:
-	@echo "  Starting unified backend ($(BACKEND_API_URL), AgentBox=$(DEV_AGENTBOX_URL))…"
+	@echo "  Starting unified backend ($(BACKEND_API_URL))…"
 	@mkdir -p $(BACKEND_DIR)
 	@cd $(BACKEND_DIR) && rm -f $(notdir $(BACKEND_PID_FILE)) && \
-		$(COMMON_DEV_ENV) $(BACKEND_DEV_ENV) $(AGENTBOX_DEV_ENV) $(WORKSPACE_DEV_ENV) $(OTEL_DEV_ENV) $(LLM_OTEL_DEV_ENV) \
+		$(COMMON_DEV_ENV) $(BACKEND_DEV_ENV) $(WORKSPACE_DEV_ENV) $(OTEL_DEV_ENV) $(LLM_OTEL_DEV_ENV) \
 		bash -c "if [ '$(RELOAD)' = '1' ]; then \
 			uv run --extra local uvicorn local_app:app --host 0.0.0.0 --port $(DEV_BACKEND_PORT) --reload & echo \$$! > $(notdir $(BACKEND_PID_FILE)); \
 		else \
@@ -762,15 +731,15 @@ _run-frontend:
 		$(COMMON_DEV_ENV) $(FRONTEND_DEV_ENV) \
 		bash -c "npm run dev -- --port $(DEV_FRONTEND_PORT) & echo \$$! > $(notdir $(FRONTEND_PID_FILE)); wait"
 
-_wait-agentbox:
-	@echo "  Waiting for embedded AgentBox on $(DEV_AGENTBOX_URL)…"
+_wait-backend:
+	@echo "  Waiting for the backend on $(DEV_BACKEND_URL)…"
 	@ready=0; \
-	for i in $$(seq 1 $(AGENTBOX_READY_TIMEOUT)); do \
-		if curl -fsS $(DEV_AGENTBOX_URL)/health/ready >/dev/null 2>&1; then ready=1; break; fi; \
+	for i in $$(seq 1 $(BACKEND_READY_TIMEOUT)); do \
+		if curl -fsS $(DEV_BACKEND_URL)/health/ready >/dev/null 2>&1; then ready=1; break; fi; \
 		if [ -f $(BACKEND_PID_FILE) ]; then \
 			pid=$$(cat $(BACKEND_PID_FILE)); \
 			if [ -n "$$pid" ] && ! kill -0 "$$pid" 2>/dev/null; then \
-				echo "  ✗ Unified backend exited before embedded AgentBox became ready (PID $$pid)"; \
+				echo "  ✗ Backend exited before becoming ready (PID $$pid)"; \
 				exit 1; \
 			fi; \
 		fi; \
@@ -779,10 +748,10 @@ _wait-agentbox:
 	if [ "$$ready" != "1" ]; then \
 		pid=$$(cat $(BACKEND_PID_FILE) 2>/dev/null || true); \
 		if [ -n "$$pid" ] && kill -0 "$$pid" 2>/dev/null; then state="PID $$pid is still running"; else state="process is not running"; fi; \
-		echo "  ✗ Embedded AgentBox did not become ready within $(AGENTBOX_READY_TIMEOUT)s (unified backend $$state)"; \
+		echo "  ✗ Backend did not become ready within $(BACKEND_READY_TIMEOUT)s ($$state)"; \
 		exit 1; \
 	fi; \
-	echo "  ✓ Embedded AgentBox ready"
+	echo "  ✓ Backend ready"
 
 stop:
 	@echo "→ Stopping dev processes…"

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import base64
 from datetime import datetime
-from typing import TYPE_CHECKING, Annotated, Literal
+from typing import Annotated, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -38,8 +38,6 @@ from agentbox.domain import (
     PortAccessGrant,
     PortProtocol,
 )
-if TYPE_CHECKING:
-    from agentbox.port_access import FunctionRuntimeEndpointLease
 
 
 class StrictApiModel(BaseModel):
@@ -420,33 +418,6 @@ class RuntimeRequestHeaderResponse(StrictApiModel):
         if "\r" in value or "\n" in value or "\x00" in value:
             raise ValueError("runtime request header value contains control characters")
         return value
-
-
-class FunctionRuntimeLeaseResponse(StrictApiModel):
-    logical_id: UUID
-    allocation_id: UUID
-    allocation_epoch: int = Field(ge=1)
-    profile: ProfileRefModel
-    url: str
-    request_headers: tuple[RuntimeRequestHeaderResponse, ...] = Field(repr=False)
-    expires_at: datetime
-
-    @classmethod
-    def from_domain(
-        cls, lease: FunctionRuntimeEndpointLease
-    ) -> FunctionRuntimeLeaseResponse:
-        return cls(
-            logical_id=lease.key.logical_id,
-            allocation_id=lease.allocation_id,
-            allocation_epoch=lease.allocation_epoch,
-            profile=ProfileRefModel.from_domain(lease.profile),
-            url=lease.url,
-            request_headers=tuple(
-                RuntimeRequestHeaderResponse(name=item.name, value=item.value)
-                for item in lease.request_headers
-            ),
-            expires_at=lease.expires_at,
-        )
 
 
 class CapacityErrorContextModel(StrictApiModel):

@@ -90,60 +90,33 @@ jobs:
               - '.github/workflows/ci.yml'
 
   agentbox:
-    name: AgentBox providers, state, and runtime
-    timeout-minutes: 30
+    name: AgentBox sandbox runtimes
+    timeout-minutes: 20
     needs: changes
     if: needs.changes.outputs.agentbox == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: agentbox
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_USER: agentbox
-          POSTGRES_PASSWORD: agentbox
-          POSTGRES_DB: agentbox_test
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U agentbox -d agentbox_test"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
           cache-dependency-glob: agentbox/uv.lock
-      - name: Install AgentBox with every provider and state backend
+      # What is left of this package ships inside the sandbox images: the two
+      # runtimes, the domain types and the wire contracts. The manager, its
+      # providers and its state backends are gone, so the Postgres service and
+      # the real-Docker provider contract went with them -- those behaviours are
+      # covered by the workspace module's own provider tests now.
+      - name: Install
         run: uv sync --all-extras --locked
       - name: Ruff
         run: uv run ruff check agentbox tests ../agentbox-client/agentbox_client ../agentbox-client/tests
-      - name: AgentBox OpenAPI contract drift
-        run: uv run python ../agentbox-client/scripts/generate.py --check
-      - name: AgentBox non-e2e tests with real PostgreSQL parity
+      - name: Runtime tests
         run: uv run python -m pytest tests -m "not e2e"
-        env:
-          AGENTBOX_TEST_POSTGRES_URL: postgresql://agentbox:agentbox@localhost:5432/agentbox_test
       - name: AgentBox client tests
         run: uv run python -m pytest ../agentbox-client/tests
-      - name: Docker daemon smoke
-        run: |
-          docker version
-          docker info
-      - name: Build canonical Docker conformance images
-        run: make build-test-images
-      - name: Real Docker provider contract
-        timeout-minutes: 20
-        run: >-
-          uv run python -m pytest
-          tests/adapters/test_docker_real.py
-          --junitxml=agentbox-docker-e2e.xml
-        env:
-          AGENTBOX_RUN_DOCKER_TESTS: "1"
 
   backend-unit:
     name: lemma-backend unit

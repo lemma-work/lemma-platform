@@ -504,10 +504,7 @@ async def sandbox_reachable_backend(e2e_settings):
     from app.core.config import settings
     from app.modules.test_support.e2e.runtime import _temporary_workspace_tunnel
 
-    off_box = (
-        settings.workspace_owns_sandboxes
-        and settings.workspace_provider.lower() == "e2b"
-    ) or os.getenv("AGENTBOX_PROVIDER", "").lower() == "e2b"
+    off_box = settings.workspace_provider.lower() == "e2b"
     if not off_box:
         yield None
         return
