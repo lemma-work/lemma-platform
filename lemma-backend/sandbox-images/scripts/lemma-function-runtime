@@ -3,7 +3,7 @@ import sys
 
 sys.path.insert(0, "/app")
 
-from agentbox.function_runtime.runner import main
+from sandbox_runtime.function.runner import main
 
 
 if __name__ == "__main__":

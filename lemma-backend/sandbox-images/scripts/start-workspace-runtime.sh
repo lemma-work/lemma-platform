@@ -11,7 +11,7 @@ while [ ! -s "$token_file" ]; do
   sleep 0.02
 done
 
-exec python -m uvicorn agentbox.workspace_runtime.server:app \
+exec python -m uvicorn sandbox_runtime.workspace.server:app \
   --host 0.0.0.0 \
   --port "${AGENTBOX_WORKSPACE_RUNTIME_PORT:-8080}" \
   --no-access-log

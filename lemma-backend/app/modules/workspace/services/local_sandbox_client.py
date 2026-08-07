@@ -53,7 +53,7 @@ from app.modules.workspace.services.sandbox_service import SandboxService
 class LocalProcessRef:
     """What the session actually reads off a started process.
 
-    Deliberately not ``agentbox.domain.ProcessRef``: that type requires an
+    Deliberately not ``sandbox_runtime.protocol.ProcessRef``: that type requires an
     allocation id, an allocation epoch, and a sandbox key, which are the exact
     concepts this module replaced with an epoch in the container name.
     Reusing it would have meant fabricating three fields to satisfy a shape

@@ -23,7 +23,11 @@ from uuid import uuid4
 import pytest
 import pytest_asyncio
 
-from sandbox_runtime.protocol import EnvironmentVariable, StartProcessRequest
+from sandbox_runtime.protocol import (
+    ByteRange,
+    EnvironmentVariable,
+    StartProcessRequest,
+)
 
 from app.modules.workspace.domain.sandbox import SandboxKind
 from app.modules.workspace.providers import naming
@@ -155,9 +159,7 @@ async def test_real_files_round_trip(provider: E2BSandboxProvider) -> None:
         async for chunk in provider.open_file(
             instance,
             path="/workspace/conformance.txt",
-            byte_range=__import__(
-                "agentbox.domain", fromlist=["ByteRange"]
-            ).ByteRange(offset=0, length=None),
+            byte_range=ByteRange(offset=0, length=None),
             deadline_at=_deadline(),
         )
     ]
@@ -213,9 +215,7 @@ async def test_a_real_paused_sandbox_keeps_its_files_and_is_adopted(
         async for chunk in provider.open_file(
             resumed,
             path="/workspace/keep.txt",
-            byte_range=__import__(
-                "agentbox.domain", fromlist=["ByteRange"]
-            ).ByteRange(offset=0, length=None),
+            byte_range=ByteRange(offset=0, length=None),
             deadline_at=_deadline(),
         )
     ]
