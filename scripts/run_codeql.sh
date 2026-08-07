@@ -64,9 +64,14 @@ if [[ "$scope" == "diff" ]]; then
     exit 2
   fi
   # Three-dot: what this branch changed, not what the base moved on to.
-  git -C "$repo_root" diff --name-only --diff-filter=d "$base_ref...HEAD" \
+  # Recorded as `path:start-end` line ranges rather than filenames, because a
+  # file-level scope reports every pre-existing finding in any file you touched
+  # -- renaming one import in a 600-line module made it look like the module had
+  # sprouted seven new problems.
+  git -C "$repo_root" diff -U0 --diff-filter=d "$base_ref...HEAD" \
+    | awk '/^\+\+\+ b\//{f=substr($0,7)} /^@@/{split($3,a,","); s=substr(a[1],2)+0; n=(a[2]==""?1:a[2]+0); if(n>0) print f":"s"-"(s+n-1)}' \
     > "$changed_files"
-  echo "Scope: $(wc -l < "$changed_files" | tr -d ' ') file(s) changed against $base_ref"
+  echo "Scope: $(cut -d: -f1 "$changed_files" | sort -u | wc -l | tr -d ' ') file(s) changed against $base_ref"
 else
   : > "$changed_files"
   echo "Scope: the whole repository"

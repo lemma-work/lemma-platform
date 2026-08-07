@@ -113,7 +113,7 @@ def _run(
 def _dispatcher(runtime_client) -> FunctionDispatcher:
     return FunctionDispatcher(
         uow_factory=_UowFactory(),
-        sandbox_client_factory=lambda: AsyncMock(),
+        sandbox_client_factory=AsyncMock,
         token_minter=_token_minter,
         token_cache=FunctionSessionTokenCache(),
         endpoint_cache=FunctionRuntimeEndpointCache(),

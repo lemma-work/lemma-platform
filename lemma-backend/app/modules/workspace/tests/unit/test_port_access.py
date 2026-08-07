@@ -38,12 +38,11 @@ def test_the_signature_covers_the_sandbox_so_a_port_cannot_be_repointed() -> Non
     """Otherwise a grant for your own workspace would open anyone else's."""
     signer = PortAccessSigner(key=KEY)
     mine = signer.sign(_grant(sandbox_id=uuid4()))
-    payload, _, signature = mine.partition(".")
+    _, _, signature = mine.partition(".")
 
     forged_payload = PortAccessSigner(key=KEY).sign(_grant(sandbox_id=uuid4())).split(".")[0]
     with pytest.raises(PortAccessInvalid):
         signer.verify(f"{forged_payload}.{signature}")
-    del payload
 
 
 def test_the_signature_covers_the_port() -> None:

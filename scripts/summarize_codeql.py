@@ -67,13 +67,24 @@ def main() -> int:
         print(f"no SARIF at {args.sarif}", file=sys.stderr)
         return 2
 
-    changed: set[str] = set()
+    # path -> the line ranges this branch actually touched. Scoping to lines
+    # rather than files is what keeps a rename from surfacing every pre-existing
+    # finding in the module it renamed something in.
+    changed: dict[str, list[tuple[int, int]]] = {}
     if args.scope == "diff" and args.changed_files.is_file():
-        changed = {
-            line.strip()
-            for line in args.changed_files.read_text().splitlines()
-            if line.strip()
-        }
+        for entry in args.changed_files.read_text().splitlines():
+            entry = entry.strip()
+            if not entry or ":" not in entry:
+                continue
+            path, _, span = entry.rpartition(":")
+            start, _, end = span.partition("-")
+            try:
+                changed.setdefault(path, []).append((int(start), int(end)))
+            except ValueError:
+                continue
+
+    def touched(uri: str, line: int) -> bool:
+        return any(start <= line <= end for start, end in changed.get(uri, ()))
 
     allowed = load_allowlist(args.allow)
     sarif = json.loads(args.sarif.read_text())
@@ -90,7 +101,7 @@ def main() -> int:
                 physical = location.get("physicalLocation") or {}
                 uri = (physical.get("artifactLocation") or {}).get("uri", "")
                 line = (physical.get("region") or {}).get("startLine", 0)
-                if args.scope == "diff" and uri not in changed:
+                if args.scope == "diff" and not touched(uri, line):
                     continue
                 if any(
                     rule_id == rule and uri.startswith(prefix)
