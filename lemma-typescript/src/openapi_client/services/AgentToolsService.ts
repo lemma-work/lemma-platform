@@ -12,7 +12,7 @@ import { request as __request } from '../core/request.js';
 export class AgentToolsService {
     /**
      * Agent Report Feedback
-     * Record a maintainer-facing feedback report about system issues, skill issues, incorrect knowledge, or other unexpected behavior.
+     * Record a maintainer-facing feedback report about the CLI, a skill, the platform, or the docs.
      * @param requestBody
      * @returns ReportFeedbackResponse Successful Response
      * @throws ApiError
