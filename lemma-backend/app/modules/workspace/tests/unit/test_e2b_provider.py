@@ -5,13 +5,14 @@ from uuid import uuid4
 
 import pytest
 
-from agentbox.domain import (
+from sandbox_runtime.protocol import (
+    ByteRange,
     EnvironmentVariable,
     StartProcessRequest,
     TerminalSize,
 )
 
-from app.modules.workspace.domain.errors import (
+from sandbox_runtime.errors import (
     SandboxPathNotFound,
     SandboxUnavailable,
 )
@@ -416,9 +417,7 @@ async def test_files_round_trip(provider: E2BSandboxProvider) -> None:
         async for chunk in provider.open_file(
             instance,
             path="/workspace/a.txt",
-            byte_range=__import__(
-                "agentbox.domain", fromlist=["ByteRange"]
-            ).ByteRange(offset=0, length=None),
+            byte_range=ByteRange(offset=0, length=None),
             deadline_at=_deadline(),
         )
     ]
@@ -460,7 +459,7 @@ async def test_a_mismatched_digest_is_refused_before_writing(
     async def payload():
         yield b"contents"
 
-    from app.modules.workspace.domain.errors import SandboxRejected
+    from sandbox_runtime.errors import SandboxRejected
 
     with pytest.raises(SandboxRejected, match="digest"):
         await provider.write_file(

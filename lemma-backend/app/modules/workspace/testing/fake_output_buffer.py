@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from agentbox.domain import (
+from sandbox_runtime.protocol import (
     ProcessOutputChannel,
     ProcessOutputChunk,
     ProcessOutputSnapshot,

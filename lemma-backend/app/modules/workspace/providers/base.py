@@ -27,7 +27,7 @@ from enum import StrEnum
 from typing import Protocol
 from uuid import UUID
 
-from agentbox.domain import (
+from sandbox_runtime.protocol import (
     ByteRange,
     CreatePythonSessionRequest,
     ExecutePythonRequest,

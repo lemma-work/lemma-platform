@@ -10,7 +10,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterable, AsyncIterator
 from datetime import datetime
 
-from agentbox.domain import (
+from sandbox_runtime.protocol import (
     ByteRange,
     CreatePythonSessionRequest,
     ExecutePythonRequest,

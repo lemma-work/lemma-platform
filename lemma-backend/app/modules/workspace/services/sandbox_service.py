@@ -27,7 +27,7 @@ from uuid import UUID
 
 from app.core.log.log import get_logger
 from app.core.request_context import create_inherited_task
-from app.modules.workspace.domain.errors import (
+from sandbox_runtime.errors import (
     SandboxNotFound,
     SandboxNotReady,
     SandboxRejected,

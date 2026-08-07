@@ -8,7 +8,7 @@ from uuid import UUID, uuid7
 
 import pytest
 
-from agentbox_client import WorkloadKind
+from sandbox_runtime.protocol import WorkloadKind
 
 from app.modules.workspace.services.local_sandbox_client import (
     LocalSandboxClient,
@@ -198,7 +198,7 @@ async def test_api_and_job_execute_through_one_per_pod_docker_sandbox(
         runtime_http_clients = FunctionRuntimeHttpClientPool()
         dispatcher = FunctionDispatcher(
             uow_factory=SessionUnitOfWorkFactory(db_manager.session_factory),
-            agentbox_client_factory=client_factory,
+            sandbox_client_factory=client_factory,
             token_minter=mint_function_session_token,
             token_cache=FunctionSessionTokenCache(),
             endpoint_cache=FunctionRuntimeEndpointCache(),

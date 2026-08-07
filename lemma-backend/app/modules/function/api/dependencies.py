@@ -53,7 +53,9 @@ from app.modules.function.application.function_runtime_http_client import (
 from app.modules.function.infrastructure.function_run_queue import (
     StreaqFunctionRunQueue,
 )
-from agentbox_client import AgentBoxClient
+from app.modules.workspace.services.local_sandbox_client import (
+    LocalSandboxClient,
+)
 
 
 _function_session_token_cache = FunctionSessionTokenCache(
@@ -132,7 +134,7 @@ def build_function_definition_compiler(
     )
 
 
-def _function_agentbox_client() -> AgentBoxClient:
+def _function_sandbox_client() -> LocalSandboxClient:
     """The client the function runtime is reached through.
 
     Function sandboxes are provisioned by the same machinery as workspaces --
@@ -148,7 +150,7 @@ def _function_agentbox_client() -> AgentBoxClient:
 def build_function_dispatcher(uow_factory: UnitOfWorkFactory) -> FunctionDispatcher:
     return FunctionDispatcher(
         uow_factory=uow_factory,
-        agentbox_client_factory=_function_agentbox_client,
+        sandbox_client_factory=_function_sandbox_client,
         token_minter=mint_function_session_token,
         token_cache=_function_session_token_cache,
         endpoint_cache=_function_runtime_endpoint_cache,
@@ -160,7 +162,7 @@ def build_function_dispatcher(uow_factory: UnitOfWorkFactory) -> FunctionDispatc
 
 def build_function_schema_dispatcher() -> FunctionSchemaDispatcher:
     return FunctionSchemaDispatcher(
-        agentbox_client_factory=_function_agentbox_client,
+        sandbox_client_factory=_function_sandbox_client,
         token_minter=mint_function_session_token,
         token_cache=_function_session_token_cache,
         endpoint_cache=_function_runtime_endpoint_cache,

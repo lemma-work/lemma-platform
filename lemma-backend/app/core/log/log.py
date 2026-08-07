@@ -252,7 +252,7 @@ def _exception_info(
 
 def _safe_module_name(filename: str) -> str:
     normalized = filename.replace("\\", "/")
-    for marker in ("/lemma-backend/app/", "/agentbox/agentbox/"):
+    for marker in ("/lemma-backend/app/", "/lemma-backend/sandbox_runtime/"):
         if marker in normalized:
             relative = normalized.split(marker, 1)[1].rsplit(".", 1)[0]
             prefix = "app" if "lemma-backend" in marker else "agentbox"
@@ -285,7 +285,7 @@ def _safe_exception_fields(exc_type: type[BaseException], tb: Any) -> dict[str, 
         frame
         for frame in extracted
         if "/lemma-backend/app/" in frame.filename.replace("\\", "/")
-        or "/agentbox/agentbox/" in frame.filename.replace("\\", "/")
+        or "/lemma-backend/sandbox_runtime/" in frame.filename.replace("\\", "/")
     ]
     selected = (application or extracted)[-8:]
     frames = [

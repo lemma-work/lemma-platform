@@ -7,60 +7,6 @@ resolution-markers = [
 ]
 
 [[package]]
-name = "agentbox"
-version = "0.7.0"
-source = { editable = "../agentbox" }
-dependencies = [
-    { name = "fastapi", extra = ["standard"] },
-    { name = "httpx" },
-    { name = "opentelemetry-api" },
-    { name = "pydantic" },
-    { name = "uvicorn", extra = ["standard"] },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "e2b", marker = "extra == 'e2b'", specifier = "==2.34.0" },
-    { name = "fastapi", extras = ["standard"], specifier = ">=0.128.0" },
-    { name = "httpx", specifier = ">=0.28.1" },
-    { name = "opentelemetry-api", specifier = ">=1.42.0" },
-    { name = "pydantic", specifier = ">=2.11.0" },
-    { name = "uvicorn", extras = ["standard"], specifier = ">=0.42.0" },
-]
-provides-extras = ["e2b"]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "agentbox-client", editable = "../agentbox-client" },
-    { name = "lemma-sdk", editable = "../lemma-python" },
-    { name = "pytest", specifier = ">=8.4.0" },
-    { name = "pytest-asyncio", specifier = ">=1.2.0" },
-    { name = "ruff", specifier = ">=0.15.0,<0.16.0" },
-]
-
-[[package]]
-name = "agentbox-client"
-version = "0.7.0"
-source = { editable = "../agentbox-client" }
-dependencies = [
-    { name = "httpx" },
-    { name = "pydantic" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "httpx", specifier = ">=0.28.0" },
-    { name = "pydantic", specifier = ">=2.11.0" },
-]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "pytest", specifier = ">=8.4.0" },
-    { name = "pytest-asyncio", specifier = ">=1.2.0" },
-    { name = "ruff", specifier = ">=0.15.0,<0.16.0" },
-]
-
-[[package]]
 name = "aiofile"
 version = "3.11.1"
 source = { registry = "https://pypi.org/simple" }
@@ -1785,7 +1731,6 @@ name = "lemma-backend"
 version = "0.7.0"
 source = { editable = "." }
 dependencies = [
-    { name = "agentbox-client" },
     { name = "aiofiles" },
     { name = "aiohttp" },
     { name = "aiosmtplib" },
@@ -1848,7 +1793,6 @@ keychain = [
     { name = "keyring" },
 ]
 local = [
-    { name = "agentbox" },
     { name = "markitdown", extra = ["docx", "outlook", "pdf", "pptx", "xls", "xlsx"] },
 ]
 markitdown = [
@@ -1857,10 +1801,10 @@ markitdown = [
 
 [package.dev-dependencies]
 dev = [
-    { name = "agentbox" },
     { name = "basedpyright" },
     { name = "diff-cover" },
     { name = "kubernetes" },
+    { name = "lemma-sdk" },
     { name = "nest-asyncio" },
     { name = "pip-audit" },
     { name = "pytest" },
@@ -1873,8 +1817,6 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "agentbox", marker = "extra == 'local'", editable = "../agentbox" },
-    { name = "agentbox-client", editable = "../agentbox-client" },
     { name = "aiofiles", specifier = ">=25.1.0" },
     { name = "aiohttp", specifier = ">=3.14.3" },
     { name = "aiosmtplib", specifier = ">=5.1.1" },
@@ -1934,10 +1876,10 @@ provides-extras = ["local", "gcp-kms", "e2b", "keychain", "markitdown"]
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "agentbox", editable = "../agentbox" },
     { name = "basedpyright", specifier = ">=1.39.9" },
     { name = "diff-cover", specifier = ">=9.7.1" },
     { name = "kubernetes", specifier = ">=34.1.0" },
+    { name = "lemma-sdk", editable = "../lemma-python" },
     { name = "nest-asyncio", specifier = ">=1.6.0" },
     { name = "pip-audit", specifier = ">=2.9.0" },
     { name = "pytest", specifier = ">=8.4.2" },
@@ -1979,6 +1921,27 @@ dev = [
 name = "lemma-pod-bundle"
 version = "0.7.0"
 source = { editable = "../lemma-pod-bundle" }
+
+[[package]]
+name = "lemma-sdk"
+version = "0.7.0"
+source = { editable = "../lemma-python" }
+dependencies = [
+    { name = "attrs" },
+    { name = "httpx" },
+    { name = "pydantic" },
+    { name = "python-dateutil" },
+    { name = "requests" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "attrs", specifier = ">=23.2.0" },
+    { name = "httpx", specifier = ">=0.28.0" },
+    { name = "pydantic", specifier = ">=2.11.0" },
+    { name = "python-dateutil", specifier = ">=2.9.0.post0" },
+    { name = "requests", specifier = ">=2.31.0" },
+]
 
 [[package]]
 name = "license-expression"

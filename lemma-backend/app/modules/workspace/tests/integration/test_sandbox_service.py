@@ -11,7 +11,7 @@ from uuid import UUID, uuid4
 
 import pytest
 
-from app.modules.workspace.domain.errors import SandboxNotFound, SandboxRejected
+from sandbox_runtime.errors import SandboxNotFound, SandboxRejected
 from app.modules.workspace.domain.sandbox import (
     SandboxCapability,
     SandboxDesiredState,

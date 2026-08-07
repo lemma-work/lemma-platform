@@ -1,4 +1,4 @@
-"""A drop-in replacement for ``AgentBoxClient``, backed by this module.
+"""A drop-in replacement for ``LocalSandboxClient``, backed by this module.
 
 Deliberately shaped as a client rather than a new session type. The session
 above it -- its output cursor, its backpressure handling, its process
@@ -18,7 +18,8 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
-from agentbox.domain import (
+from sandbox_runtime.protocol import (
+    SandboxProfileRef,
     EnvironmentVariable,
     ProcessOutputSnapshot,
     ProcessState,
@@ -26,11 +27,10 @@ from agentbox.domain import (
     TerminalSize,
 )
 
-from agentbox_client import (
+from sandbox_runtime.protocol import (
     FunctionRuntimeLease,
     PortAccessGrant,
     PortProtocol,
-    ProfileRef,
     WorkloadKind,
 )
 
@@ -359,7 +359,7 @@ class LocalSandboxClient(LocalSandboxFilesMixin):
             logical_id=logical_id,
             allocation_id=logical_id,
             allocation_epoch=handle.epoch,
-            profile=ProfileRef(
+            profile=SandboxProfileRef(
                 name=settings.agentbox_function_profile_name,
                 digest=settings.agentbox_function_profile_digest,
             ),

@@ -11,7 +11,7 @@ import asyncio
 from collections.abc import AsyncIterable, AsyncIterator
 from datetime import datetime, timezone
 
-from agentbox.domain import (
+from sandbox_runtime.protocol import (
     ByteRange,
     CreatePythonSessionRequest,
     ExecutePythonRequest,
@@ -27,7 +27,7 @@ from agentbox.domain import (
 )
 
 from app.core.request_context import create_inherited_task
-from app.modules.workspace.domain.errors import (
+from sandbox_runtime.errors import (
     SandboxPathNotFound,
     SandboxRejected,
 )

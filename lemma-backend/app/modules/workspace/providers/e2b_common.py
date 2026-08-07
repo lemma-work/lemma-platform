@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 
-from app.modules.workspace.domain.errors import (
+from sandbox_runtime.errors import (
     SandboxPathNotFound,
     SandboxUnavailable,
 )

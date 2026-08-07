@@ -4,20 +4,18 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 from uuid import uuid4
 
-from agentbox_client import AgentBoxApiError
-from agentbox_client.models import (
-    AgentBoxErrorBody,
-    AgentBoxErrorResponse,
-    RetryDisposition,
+from sandbox_runtime.errors import (
+    SandboxError,
+    SandboxPathNotFound,
+    SandboxUnavailable,
 )
-import httpx
 import pytest
 
 from app.modules.workspace.services.workspace_file_manager import WorkspaceFileManager
 
 
 class _FakeWorkspaceSession:
-    def __init__(self, failures: dict[str, AgentBoxApiError] | None = None):
+    def __init__(self, failures: dict[str, SandboxError] | None = None):
         self.operations: list[tuple] = []
         self.content = b"test"
         self.failures = failures or {}
@@ -75,20 +73,20 @@ class _FakeWorkspaceService:
         return self.session
 
 
-def _api_error(*, status_code: int, code: str) -> AgentBoxApiError:
-    response = httpx.Response(status_code, request=httpx.Request("GET", "http://test"))
-    error = AgentBoxErrorResponse(
-        error=AgentBoxErrorBody(
-            code=code,
-            message=code,
-            retry=(
-                RetryDisposition.WAIT
-                if status_code >= 500
-                else RetryDisposition.DO_NOT_RETRY
-            ),
-        )
-    )
-    return AgentBoxApiError(response, error)
+def _api_error(*, status_code: int, code: str) -> SandboxError:
+    """Raise what a provider actually raises, not what the manager used to.
+
+    This helper previously built an `AgentBoxApiError`, which agreed with the
+    manager's catch clauses and kept passing after the only thing that raised
+    it was deleted. The providers translate a missing path to
+    `SandboxPathNotFound` and an outage to `SandboxUnavailable`, so those are
+    what a fake has to raise for these tests to mean anything.
+    """
+
+    del status_code
+    if code == "FILE_NOT_FOUND":
+        return SandboxPathNotFound(code)
+    return SandboxUnavailable(code, retry_after_ms=250)
 
 
 def _configure_remote_manager(
@@ -139,7 +137,7 @@ async def test_workspace_file_manager_does_not_hide_provider_outage(
         "delete": lambda: manager.delete_file("note.txt"),
     }
 
-    with pytest.raises(AgentBoxApiError) as raised:
+    with pytest.raises(SandboxUnavailable) as raised:
         await calls[operation]()
 
     assert raised.value is outage

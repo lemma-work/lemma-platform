@@ -6,12 +6,16 @@ from uuid import uuid4
 import httpx
 import pytest
 
-from agentbox_client import (
+from sandbox_runtime.protocol import (
+    AllocationState,
+    SandboxDesiredState,
+    SandboxKey,
+    SandboxProfileRef,
     FunctionRuntimeLease,
     RuntimeRequestHeader,
     SandboxHandle,
 )
-from agentbox_client.models import ProfileRef, WorkloadKind
+from sandbox_runtime.protocol import WorkloadKind
 
 from app.modules.function.application.function_session_token_cache import (
     FunctionSessionToken,
@@ -36,18 +40,17 @@ async def test_schema_inspection_uses_pod_function_runtime_without_workspace(
     user_id = uuid4()
     observed: dict[str, object] = {}
 
-    class _AgentBoxClient:
+    class _LocalSandboxClient:
         async def ensure_sandbox(self, kind, logical_id, **_kwargs):
             observed["sandbox_key"] = (kind, logical_id)
             return SandboxHandle(
-                workload_kind=kind,
-                logical_id=logical_id,
-                desired_state="present",
-                profile=ProfileRef(
+                key=SandboxKey(workload_kind=kind, logical_id=logical_id),
+                desired_state=SandboxDesiredState.PRESENT,
+                profile=SandboxProfileRef(
                     name="function-python-v1",
                     digest=f"sha256:{'2' * 64}",
                 ),
-                allocation_state="active",
+                allocation_state=AllocationState.ACTIVE,
                 allocation_id=uuid4(),
                 allocation_epoch=1,
                 ready=True,
@@ -67,7 +70,7 @@ async def test_schema_inspection_uses_pod_function_runtime_without_workspace(
                 logical_id=logical_id,
                 allocation_id=uuid4(),
                 allocation_epoch=1,
-                profile=ProfileRef(
+                profile=SandboxProfileRef(
                     name="function-python-v1",
                     digest=f"sha256:{'2' * 64}",
                 ),
@@ -114,7 +117,7 @@ async def test_schema_inspection_uses_pod_function_runtime_without_workspace(
         )
 
     dispatcher = FunctionSchemaDispatcher(
-        agentbox_client_factory=_AgentBoxClient,
+        sandbox_client_factory=_LocalSandboxClient,
         token_minter=mint_token,
         token_cache=FunctionSessionTokenCache(),
         endpoint_cache=FunctionRuntimeEndpointCache(),

@@ -15,7 +15,7 @@ from uuid import uuid4
 import pytest
 import pytest_asyncio
 
-from app.modules.workspace.agentbox_session import AgentBoxWorkspaceSession
+from app.modules.workspace.sandbox_session import SandboxWorkspaceSession
 from app.modules.workspace.domain.sandbox import SandboxKind, SandboxOwnerKind
 from app.modules.workspace.providers.docker import (
     DockerProviderConfig,
@@ -65,8 +65,8 @@ async def sandbox_stack(sandbox_uow_factory, monkeypatch) -> AsyncIterator[tuple
         await engine.close()
 
 
-def _session(client: LocalSandboxClient, sandbox_id) -> AgentBoxWorkspaceSession:
-    return AgentBoxWorkspaceSession(
+def _session(client: LocalSandboxClient, sandbox_id) -> SandboxWorkspaceSession:
+    return SandboxWorkspaceSession(
         client=client,  # type: ignore[arg-type]
         sandbox_id=str(sandbox_id),
         session_id="e2e",

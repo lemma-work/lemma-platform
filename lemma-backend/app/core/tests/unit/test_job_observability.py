@@ -6,7 +6,6 @@ import json
 from uuid import uuid4
 
 import pytest
-from agentbox_client import AgentBoxClient
 from unittest.mock import AsyncMock
 
 from app.core.domain.events import DomainEvent
@@ -202,19 +201,16 @@ async def test_full_correlation_journey_changes_only_boundary_identifiers() -> N
         attempt=1,
         inherited=inherited,
     ):
-        client = AgentBoxClient(
-            base_url="https://agentbox.test",
-            api_key="manager-key",
-            context_headers_provider=correlation_headers,
-        )
-        agentbox_headers = client._context_headers()
-        await client.close()
+        # The manager client used to be constructed here to prove it carried
+        # correlation headers over HTTP. Sandbox calls are in-process now, so
+        # the context propagates directly and there is no header to inspect.
+        sandbox_headers = correlation_headers()
 
     assert event.request_id == request_id
     assert event.correlation_id == correlation_id
     assert claimed.id == event.event_id
     assert inherited["event_id"] == str(event.event_id)
-    assert agentbox_headers == {
+    assert sandbox_headers == {
         "x-request-id": request_id,
         "x-lemma-correlation-id": str(correlation_id),
         "x-lemma-event-id": str(event.event_id),

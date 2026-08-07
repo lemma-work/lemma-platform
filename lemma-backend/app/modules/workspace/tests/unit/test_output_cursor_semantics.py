@@ -16,7 +16,7 @@ from uuid import uuid4
 
 import pytest
 
-from agentbox.domain import ProcessOutputChannel
+from sandbox_runtime.protocol import ProcessOutputChannel
 
 from app.modules.workspace.testing.fake_output_buffer import InMemoryOutputBuffer
 

@@ -50,7 +50,6 @@ dependencies = [
     "cryptography>=50.0.0",  # CVE-2026-69247 (HIGH) is fixed in 50.0.0.
     "pyjwt[crypto]>=2.10.1",
     "fastembed>=0.7.4",
-    "agentbox-client",
     "pypdfium2>=5.10.1",
     "pillow>=12.3.0",
     "lemma-pod-bundle",
@@ -59,12 +58,7 @@ dependencies = [
 [project.optional-dependencies]
 # Managed/local composition: document conversion in the single backend
 # process. Cloud/split deployments do not need to install this extra.
-#
-# This used to embed the AgentBox manager, which is why it wanted agentbox with
-# its Postgres extra. agentbox is still here for the domain types the workspace
-# module speaks, but it no longer carries a database of its own.
 local = [
-    "agentbox",
     "markitdown[docx,pptx,xlsx,xls,pdf,outlook]>=0.1.0",
 ]
 # Cloud key backends for app/core/crypto. Optional so OSS/local stays lean; the
@@ -93,7 +87,9 @@ markitdown = [
 
 [dependency-groups]
 dev = [
-    "agentbox",
+    # The function runtime's worker subprocess imports the SDK a function is
+    # written against; its tests spawn that worker for real.
+    "lemma-sdk",
     "basedpyright>=1.39.9",
     "diff-cover>=9.7.1",
     "kubernetes>=34.1.0",
@@ -114,7 +110,7 @@ build-backend = "hatchling.build"
 # lemma-backend is the open-source library. lemma-cloud installs it (editable
 # path locally, pinned version/hash for deploys) and composes extra modules.
 [tool.hatch.build.targets.wheel]
-packages = ["app"]
+packages = ["app", "sandbox_runtime"]
 
 [tool.hatch.build.targets.wheel.force-include]
 "standalone_app.py" = "standalone_app.py"
@@ -125,9 +121,8 @@ allow-direct-references = true
 
 [tool.uv.sources]
 lemma-connectors = { path = "lemma-connectors", editable = true }
-agentbox-client = { path = "../agentbox-client", editable = true }
-agentbox = { path = "../agentbox", editable = true }
 lemma-pod-bundle = { path = "../lemma-pod-bundle", editable = true }
+lemma-sdk = { path = "../lemma-python", editable = true }
 
 # Ruff config. The full default ruleset is not yet enforced repo-wide (generated
 # connector clients + migrations carry many pre-existing findings), so CI runs a
@@ -144,7 +139,6 @@ lemma-pod-bundle = { path = "../lemma-pod-bundle", editable = true }
 [tool.basedpyright]
 pythonVersion = "3.14"
 typeCheckingMode = "standard"
-extraPaths = ["../agentbox-client"]
 exclude = [
     "app/**/tests/**",
     "app/modules/test_support/**",

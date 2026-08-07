@@ -7,12 +7,12 @@ import struct
 
 import httpx
 
-from agentbox.api.contracts import (
+from sandbox_runtime.contracts import (
     EnvironmentVariableModel,
     StartProcessModel,
     TerminalSizeModel,
 )
-from agentbox.domain import (
+from sandbox_runtime.protocol import (
     ByteRange,
     CreatePythonSessionRequest,
     ExecutePythonRequest,
@@ -26,7 +26,7 @@ from agentbox.domain import (
     StartProcessRequest,
     TerminalSize,
 )
-from agentbox.workspace_runtime.models import (
+from sandbox_runtime.workspace.models import (
     RuntimeCreatePythonSessionRequest,
     RuntimeExecutePythonRequest,
     RuntimeFileListResponse,

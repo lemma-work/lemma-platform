@@ -27,7 +27,6 @@ jobs:
       codegen: ${{ steps.filter.outputs.codegen }}
       desktop: ${{ steps.filter.outputs.desktop }}
       locald: ${{ steps.filter.outputs.locald }}
-      agentbox: ${{ steps.filter.outputs.agentbox }}
       agent_host: ${{ steps.filter.outputs.agent_host }}
     steps:
       - uses: actions/checkout@v7
@@ -79,45 +78,6 @@ jobs:
               - 'locald/**'
               - 'local-runtime/manager/**'
               - '.github/workflows/ci.yml'
-            agentbox:
-              - 'agentbox/**'
-              - 'agentbox-client/**'
-              # agentbox/uv.lock pins lemma-sdk as an editable path dependency on
-              # ../lemma-python, so a version bump there makes the lock stale and
-              # `uv sync --locked` fail. Without this the job would not run on
-              # that change and the rot would surface on some later, unrelated PR.
-              - 'lemma-python/**'
-              - '.github/workflows/ci.yml'
-
-  agentbox:
-    name: AgentBox sandbox runtimes
-    timeout-minutes: 20
-    needs: changes
-    if: needs.changes.outputs.agentbox == 'true'
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: agentbox
-    steps:
-      - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v5
-        with:
-          enable-cache: true
-          cache-dependency-glob: agentbox/uv.lock
-      # What is left of this package ships inside the sandbox images: the two
-      # runtimes, the domain types and the wire contracts. The manager, its
-      # providers and its state backends are gone, so the Postgres service and
-      # the real-Docker provider contract went with them -- those behaviours are
-      # covered by the workspace module's own provider tests now.
-      - name: Install
-        run: uv sync --all-extras --locked
-      - name: Ruff
-        run: uv run ruff check agentbox tests ../agentbox-client/agentbox_client ../agentbox-client/tests
-      - name: Runtime tests
-        run: uv run python -m pytest tests -m "not e2e"
-      - name: AgentBox client tests
-        run: uv run python -m pytest ../agentbox-client/tests
-
   backend-unit:
     name: lemma-backend unit
     timeout-minutes: 30
@@ -743,7 +703,6 @@ jobs:
       - install-experience
       - windows-cli
       - desktop
-      - agentbox
       - agent-host
       - locald
     runs-on: ubuntu-latest

@@ -14,16 +14,15 @@ from uuid import UUID, uuid4
 
 from app.core.config import settings
 from app.core.request_context import create_inherited_task
-from agentbox_client import (
-    AgentBoxApiError,
+from sandbox_runtime.protocol import (
     PortAccessGrant,
     PortProtocol,
-    RetryDisposition,
     WorkloadKind,
 )
 from app.modules.workspace.contracts import SandboxInfo
-from app.modules.workspace.agentbox_session import (
-    AgentBoxWorkspaceSession,
+from sandbox_runtime.errors import SandboxUnavailable
+from app.modules.workspace.sandbox_session import (
+    SandboxWorkspaceSession,
     canonical_workspace_cwd,
 )
 from app.modules.workspace.services.interfaces import ISandbox, IWorkspaceSession
@@ -338,7 +337,7 @@ class WorkspaceSandboxService:
                 # A missing notice is far better than a failed tool call.
                 workspace_recreated = False
 
-        return AgentBoxWorkspaceSession(
+        return SandboxWorkspaceSession(
             client=self._get_manager_client(),
             sandbox_id=str(user_id),
             session_id=session_id,
@@ -410,12 +409,7 @@ class WorkspaceSandboxService:
                     path,
                     deadline_at=deadline_at,
                 )
-            except AgentBoxApiError as exc:
-                if exc.retry not in (
-                    RetryDisposition.WAIT,
-                    RetryDisposition.SAFE_SAME_OPERATION,
-                ):
-                    raise
+            except SandboxUnavailable as exc:
                 remaining = (
                     deadline_at - datetime.now(timezone.utc)
                 ).total_seconds()

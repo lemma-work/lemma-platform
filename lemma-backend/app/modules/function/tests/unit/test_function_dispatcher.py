@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from sandbox_runtime.errors import SandboxUnavailable
+
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock
@@ -8,12 +10,6 @@ from uuid import uuid4
 import httpx
 import pytest
 
-from agentbox_client import AgentBoxApiError
-from agentbox_client.models import (
-    AgentBoxErrorBody,
-    AgentBoxErrorResponse,
-    RetryDisposition,
-)
 
 from app.modules.function.application.function_dispatcher import (
     FunctionDispatcher,
@@ -117,7 +113,7 @@ def _run(
 def _dispatcher(runtime_client) -> FunctionDispatcher:
     return FunctionDispatcher(
         uow_factory=_UowFactory(),
-        agentbox_client_factory=lambda: AsyncMock(),
+        sandbox_client_factory=lambda: AsyncMock(),
         token_minter=_token_minter,
         token_cache=FunctionSessionTokenCache(),
         endpoint_cache=FunctionRuntimeEndpointCache(),
@@ -365,18 +361,15 @@ def test_timeout_keeps_stable_user_facing_error() -> None:
 
 
 def test_capacity_exhaustion_reports_pre_execution_failure() -> None:
-    error = AgentBoxApiError(
-        httpx.Response(429),
-        AgentBoxErrorResponse(
-            error=AgentBoxErrorBody(
-                code="CAPACITY_EXHAUSTED",
-                message="provider active sandbox capacity is exhausted",
-                retry=RetryDisposition.WAIT,
-                retry_after_ms=1_000,
-            )
-        ),
+    error = SandboxUnavailable(
+        "provider active sandbox capacity is exhausted",
+        retry_after_ms=1_000,
     )
 
+    # The provider's own words reach the run. The manager used to map an error
+    # code onto a fixed sentence, which lost whatever the provider said about
+    # why it was full.
     assert FunctionDispatcher._execution_error(error) == (
-        "Function sandbox capacity exhausted before execution"
+        "Function sandbox unavailable "
+        "(provider active sandbox capacity is exhausted)"
     )

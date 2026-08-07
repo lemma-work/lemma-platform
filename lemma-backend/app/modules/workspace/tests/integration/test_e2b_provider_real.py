@@ -23,7 +23,7 @@ from uuid import uuid4
 import pytest
 import pytest_asyncio
 
-from agentbox.domain import EnvironmentVariable, StartProcessRequest
+from sandbox_runtime.protocol import EnvironmentVariable, StartProcessRequest
 
 from app.modules.workspace.domain.sandbox import SandboxKind
 from app.modules.workspace.providers import naming
@@ -295,7 +295,7 @@ async def test_real_python_keeps_state_across_executions(
 ) -> None:
     """E2B has no resident interpreter, so continuity comes from restoring and
     re-saving the namespace. That is only worth claiming if it actually works."""
-    from agentbox.domain import ExecutePythonRequest
+    from sandbox_runtime.protocol import ExecutePythonRequest
 
     instance = await _create(provider, uuid4())
     await provider.wait_ready(

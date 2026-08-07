@@ -13,10 +13,10 @@ from datetime import datetime
 from collections.abc import AsyncIterable, AsyncIterator
 from uuid import UUID
 
-from app.modules.workspace.domain.errors import SandboxUnavailable
+from sandbox_runtime.errors import SandboxUnavailable
 from app.modules.workspace.providers.base import ProviderGone
 
-from agentbox.domain import (
+from sandbox_runtime.protocol import (
     ByteRange,
     EnvironmentVariable,
     CreatePythonSessionRequest,

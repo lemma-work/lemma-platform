@@ -10,12 +10,15 @@ from uuid import UUID
 
 import httpx
 
-from agentbox_client import AgentBoxApiError
 
 from app.core.config import settings
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.core.redaction import redact_text
+from sandbox_runtime.errors import (
+    SandboxError,
+    SandboxUnavailable,
+)
 from app.core.request_context import create_inherited_task
 from app.modules.function.application.function_session_token_cache import (
     FunctionSessionToken,
@@ -30,7 +33,7 @@ from app.modules.function.application.function_runtime_endpoint_cache import (
     FunctionRuntimeEndpointCache,
 )
 from app.modules.function.application.function_runtime_route_resolver import (
-    AgentBoxClientFactory,
+    SandboxClientFactory,
     FunctionRuntimeRouteResolver,
 )
 from app.modules.function.contracts.runtime import (
@@ -71,7 +74,7 @@ class FunctionDispatcher:
         self,
         *,
         uow_factory: UnitOfWorkFactory,
-        agentbox_client_factory: AgentBoxClientFactory,
+        sandbox_client_factory: SandboxClientFactory,
         token_minter: TokenMinter,
         token_cache: FunctionSessionTokenCache,
         endpoint_cache: FunctionRuntimeEndpointCache,
@@ -83,7 +86,7 @@ class FunctionDispatcher:
         self._token_minter = token_minter
         self._token_cache = token_cache
         self._routes = FunctionRuntimeRouteResolver(
-            agentbox_client_factory=agentbox_client_factory,
+            sandbox_client_factory=sandbox_client_factory,
             endpoint_cache=endpoint_cache,
         )
         self._runtime_http_client_factory = runtime_http_client_factory
@@ -475,13 +478,12 @@ class FunctionDispatcher:
             )
         if isinstance(exc, TimeoutError):
             return "Function execution timed out (deadline exceeded)"
-        if isinstance(exc, AgentBoxApiError):
-            code = str(getattr(exc, "code", "PROVIDER_UNAVAILABLE"))
-            if code.upper() == "DEADLINE_EXCEEDED":
-                return "Function execution timed out (deadline exceeded)"
-            if code.upper() == "CAPACITY_EXHAUSTED":
-                return "Function sandbox capacity exhausted before execution"
-            return f"Function sandbox error ({redact_text(code)})"
+        if isinstance(exc, SandboxError):
+            # The type says whether waiting could have helped; the message says
+            # what happened. Both go to a user reading a failed run.
+            if isinstance(exc, SandboxUnavailable):
+                return f"Function sandbox unavailable ({redact_text(str(exc))})"
+            return f"Function sandbox refused the request ({redact_text(str(exc))})"
         if isinstance(exc, ValueError) and "token expires" in str(exc):
             return "Function execution exceeds delegated token lifetime"
         return "Function execution failed"

@@ -9,7 +9,7 @@ from uuid import UUID
 
 import httpx
 
-from agentbox_client import AdmissionClass
+from sandbox_runtime.protocol import AdmissionClass
 
 from app.core.config import settings
 from app.modules.function.application.function_session_token_cache import (
@@ -22,7 +22,7 @@ from app.modules.function.application.function_runtime_endpoint_cache import (
     FunctionRuntimeEndpointCache,
 )
 from app.modules.function.application.function_runtime_route_resolver import (
-    AgentBoxClientFactory,
+    SandboxClientFactory,
     FunctionRuntimeRouteResolver,
 )
 from app.modules.function.contracts.runtime import RuntimeSchemaInspection
@@ -43,7 +43,7 @@ class FunctionSchemaDispatcher:
     def __init__(
         self,
         *,
-        agentbox_client_factory: AgentBoxClientFactory,
+        sandbox_client_factory: SandboxClientFactory,
         token_minter: TokenMinter,
         token_cache: FunctionSessionTokenCache,
         endpoint_cache: FunctionRuntimeEndpointCache,
@@ -53,7 +53,7 @@ class FunctionSchemaDispatcher:
         self._token_minter = token_minter
         self._token_cache = token_cache
         self._routes = FunctionRuntimeRouteResolver(
-            agentbox_client_factory=agentbox_client_factory,
+            sandbox_client_factory=sandbox_client_factory,
             endpoint_cache=endpoint_cache,
         )
         self._runtime_http_client_factory = runtime_http_client_factory

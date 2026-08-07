@@ -18,7 +18,7 @@ from io import BytesIO
 
 import httpx
 
-from agentbox.domain import (
+from sandbox_runtime.protocol import (
     ByteRange,
     CreatePythonSessionRequest,
     ExecutePythonRequest,
@@ -255,7 +255,7 @@ class DockerOpsMixin:
     async def _ops_client(
         self, instance: ProviderInstance, *, deadline_at: datetime
     ) -> AsyncIterator[WorkspaceRuntimeClient]:
-        from app.modules.workspace.domain.errors import (
+        from sandbox_runtime.errors import (
             SandboxPathConflict,
             SandboxPathNotFound,
             SandboxRejected,

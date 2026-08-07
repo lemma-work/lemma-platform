@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+from sandbox_runtime.errors import (
+    SandboxError,
+    SandboxNotFound,
+)
+
 import asyncio
 from collections.abc import AsyncGenerator, AsyncIterator, Generator
 from contextlib import asynccontextmanager
@@ -12,7 +17,7 @@ import socket
 from urllib.parse import urlparse
 from uuid import UUID, uuid4
 
-from agentbox_client import AgentBoxApiError, WorkloadKind
+from sandbox_runtime.protocol import WorkloadKind
 from dotenv import dotenv_values
 import httpx
 import pytest
@@ -481,9 +486,9 @@ async def function_benchmark_runtime(
                                     datetime.now(UTC) + timedelta(seconds=60)
                                 ),
                             )
-                        except AgentBoxApiError as exc:
-                            if exc.code == "SANDBOX_NOT_FOUND":
-                                continue
+                        except SandboxNotFound:
+                            continue
+                        except SandboxError as exc:
                             cleanup_errors.append(
                                 f"{workload_kind.value}/{logical_id}: "
                                 f"{type(exc).__name__}: {exc}"

@@ -365,7 +365,7 @@ class LemmaLocalSandboxProvider(LemmaLocalOpsMixin):
     def _ops(self, instance: ProviderInstance, deadline_at: datetime):
         from contextlib import asynccontextmanager
 
-        from app.modules.workspace.domain.errors import (
+        from sandbox_runtime.errors import (
             SandboxPathConflict,
             SandboxPathNotFound,
             SandboxUnavailable,

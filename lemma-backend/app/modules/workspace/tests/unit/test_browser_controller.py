@@ -5,7 +5,7 @@ from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 import pytest
 
-from agentbox_client import PortAccessGrant, PortProtocol, WorkloadKind
+from sandbox_runtime.protocol import SandboxKey, PortAccessGrant, PortProtocol, WorkloadKind
 from app.core.api.dependencies import get_current_user
 from app.core.config import settings
 from app.modules.identity.domain.user_entities import UserEntity
@@ -25,8 +25,9 @@ async def test_workspace_browser_access_uses_canonical_signed_port_grant(
         async def create_browser_access(self, logical_id, *, ttl_seconds):
             calls.append((logical_id, ttl_seconds))
             return PortAccessGrant(
-                workload_kind=WorkloadKind.WORKSPACE,
-                logical_id=logical_id,
+                key=SandboxKey(
+                    workload_kind=WorkloadKind.WORKSPACE, logical_id=logical_id
+                ),
                 port=4848,
                 protocol=PortProtocol.HTTP,
                 url="https://agentbox.test/port-access/signed/",

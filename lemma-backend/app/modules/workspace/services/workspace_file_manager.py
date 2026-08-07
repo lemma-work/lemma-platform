@@ -4,7 +4,7 @@ import posixpath
 from typing import Optional, Union
 from uuid import UUID
 
-from agentbox_client import AgentBoxApiError
+from sandbox_runtime.errors import SandboxPathNotFound
 
 from app.modules.workspace.domain.file_types import FileInfo
 from app.core.log.log import get_logger
@@ -29,10 +29,6 @@ class WorkspaceFileManager:
         if root != "/workspace" and not root.startswith("/workspace/"):
             raise ValueError("workspace cwd escapes /workspace")
         return "" if root == "/workspace" else posixpath.relpath(root, "/workspace")
-
-    @staticmethod
-    def _is_missing_error(error: AgentBoxApiError) -> bool:
-        return error.status_code == 404 and error.code == "FILE_NOT_FOUND"
 
     def _workspace_path(self, path: str) -> str:
         root = posixpath.normpath(
@@ -68,10 +64,8 @@ class WorkspaceFileManager:
         async with session:
             try:
                 entries = await session.list_files(runtime_path, timeout=30)
-            except AgentBoxApiError as exc:
-                if self._is_missing_error(exc):
-                    return []
-                raise
+            except SandboxPathNotFound:
+                return []
         if not entries:
             return []
 
@@ -95,10 +89,8 @@ class WorkspaceFileManager:
                     self._workspace_path(path),
                     timeout=30,
                 )
-        except AgentBoxApiError as exc:
-            if self._is_missing_error(exc):
-                return None
-            raise
+        except SandboxPathNotFound:
+            return None
         return FileInfo(
             name=posixpath.basename(item.path),
             path=self._relative_workspace_path(item.path),
@@ -116,10 +108,8 @@ class WorkspaceFileManager:
                     self._workspace_path(path),
                     timeout=60,
                 )
-        except AgentBoxApiError as exc:
-            if self._is_missing_error(exc):
-                raise FileNotFoundError(f"File {path} not found") from exc
-            raise
+        except SandboxPathNotFound as exc:
+            raise FileNotFoundError(f"File {path} not found") from exc
         try:
             return bytes_data.decode("utf-8")
         except UnicodeDecodeError:
@@ -152,7 +142,5 @@ class WorkspaceFileManager:
                     recursive=True,
                     timeout=30,
                 )
-        except AgentBoxApiError as exc:
-            if self._is_missing_error(exc):
-                return
-            raise
+        except SandboxPathNotFound:
+            return

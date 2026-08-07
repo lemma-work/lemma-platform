@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from uuid import uuid4
 
-from app.modules.workspace.domain.errors import (
+from sandbox_runtime.errors import (
     SandboxCapabilityUnsupported,
     SandboxNotReady,
     SandboxRejected,
