@@ -718,7 +718,7 @@ async def test_slack_final_answer_closes_the_live_stream():
     together, so nothing is cleared and nothing is sent separately.
     """
     service = _SurfaceService()
-    conversation = await _run_with_progress_then_answer(service, "SLACK")
+    await _run_with_progress_then_answer(service, "SLACK")
 
     assert len(service.finished) == 1
     assert service.finished[0]["already_streamed"] is True
