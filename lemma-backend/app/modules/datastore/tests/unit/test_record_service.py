@@ -342,11 +342,32 @@ async def test_delete_event_carries_the_row_that_was_removed():
     assert staged_events[-1].payload == removed_row
 
 
-async def test_bulk_create_emits_one_insert_event_per_row():
+async def test_bulk_create_emits_one_insert_event_per_written_row():
+    """Bulk events are built from the rows written, like every other write.
+
+    The service used to build them from the submitted data and guess each
+    record id from it, so a bulk-inserted row carried neither its generated id
+    nor anything the database defaulted — and a condition on such a column
+    silently never matched.
+    """
     ctx = _events_enabled_context()
     user_id = uuid4()
     record_repository = AsyncMock()
-    record_repository.bulk_create_records.return_value = 2
+    written_rows = [
+        {"id": str(uuid4()), "merchant": "Hotel", "status": "new"},
+        {"id": str(uuid4()), "merchant": "Cafe", "status": "new"},
+    ]
+    staged_events = []
+
+    async def bulk_create_records(_ctx, _records, _user_id, *, event_factory):
+        for row in written_rows:
+            stored = type(
+                "StoredRecord", (), {"user_id": uuid4(), "id": row["id"], "data": row}
+            )()
+            staged_events.append(event_factory(stored))
+        return len(written_rows)
+
+    record_repository.bulk_create_records.side_effect = bulk_create_records
     service = RecordService(record_repository=record_repository)
 
     await service.bulk_create_records(
@@ -355,11 +376,24 @@ async def test_bulk_create_emits_one_insert_event_per_row():
         user_id,
     )
 
-    events = record_repository.bulk_create_records.await_args.kwargs["events"]
-    assert len(events) == 2
-    for event in events:
+    assert len(staged_events) == 2
+    for event, row in zip(staged_events, written_rows):
         assert event.operation == DatastoreRecordOperation.INSERT
         assert event.actor_id == user_id
+        assert event.record_id == row["id"]
+        assert event.payload == row  # the stored row, defaults and all
+
+
+async def test_bulk_create_passes_no_event_factory_when_events_disabled():
+    ctx = _table_context()  # events_enabled defaults to False
+    record_repository = AsyncMock()
+    record_repository.bulk_create_records.return_value = 1
+    service = RecordService(record_repository=record_repository)
+
+    await service.bulk_create_records(ctx, [{"merchant": "Hotel"}], uuid4())
+
+    kwargs = record_repository.bulk_create_records.await_args.kwargs
+    assert kwargs["event_factory"] is None
 
 
 async def test_record_event_carries_row_owner_for_rls_table():

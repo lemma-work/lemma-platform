@@ -17,6 +17,8 @@ from app.modules.datastore.domain.datastore_entities import (
     DatastoreTableEntity,
 )
 from app.modules.datastore.infrastructure.record_update_sql import (
+    bulk_returning_statement,
+    chunk_for_parameter_limit,
     extract_previous_image,
     previous_image_alias,
 )
@@ -87,3 +89,52 @@ def test_unusable_pre_image_degrades_to_none_rather_than_raising():
     assert (
         extract_previous_image("not json", ["status"]) is None
     )
+
+
+def test_chunking_keeps_every_statement_under_the_parameter_limit():
+    """Postgres binds at most 65535 parameters per statement."""
+    rows = [{"a": 1} for _ in range(50_000)]
+    chunks = chunk_for_parameter_limit(rows, columns_per_row=4)
+
+    assert sum(len(chunk) for chunk in chunks) == len(rows)  # nothing dropped
+    for chunk in chunks:
+        assert len(chunk) * 4 <= 65_535
+
+
+def test_a_very_wide_row_still_yields_at_least_one_row_per_chunk():
+    chunks = chunk_for_parameter_limit([{"a": 1}, {"a": 2}], columns_per_row=100_000)
+    assert [len(chunk) for chunk in chunks] == [1, 1]
+
+
+def test_no_rows_means_no_statements():
+    assert chunk_for_parameter_limit([], columns_per_row=3) == []
+
+
+def test_multi_row_insert_binds_each_row_under_its_own_parameter_names():
+    ctx = _context("status")
+    sql, params = bulk_returning_statement(
+        ctx,
+        ["id", "status"],
+        [{"id": "a", "status": "new"}, {"id": "b", "status": "open"}],
+        "",
+    )
+
+    assert sql.count("(:r0_id, :r0_status)") == 1
+    assert sql.count("(:r1_id, :r1_status)") == 1
+    assert sql.endswith("RETURNING *")
+    # Distinct names per row: a shared name would silently write one row twice.
+    assert params == {
+        "r0_id": "a",
+        "r0_status": "new",
+        "r1_id": "b",
+        "r1_status": "open",
+    }
+
+
+def test_the_conflict_clause_lands_before_returning():
+    """RETURNING after ON CONFLICT is what makes upserted rows come back."""
+    ctx = _context("status")
+    sql, _ = bulk_returning_statement(
+        ctx, ["id"], [{"id": "a"}], ' ON CONFLICT ("id") DO UPDATE SET "x" = 1'
+    )
+    assert sql.index("ON CONFLICT") < sql.index("RETURNING")

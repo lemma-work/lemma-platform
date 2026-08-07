@@ -30,10 +30,21 @@ describe("applyDatastoreChange", () => {
     expect(rows).toHaveLength(2); // unchanged
   });
 
-  it("updates in place, shallow-merging a partial payload over the existing row", () => {
+  it("updates in place, keeping fields the frame does not carry", () => {
+    // The server sends the whole row, so this merge is usually a replace. It
+    // stays a merge so a client holding its own fields — a local annotation, a
+    // joined label — does not lose them to an update.
     const next = applyDatastoreChange(rows, frame({ operation: "update", record_id: "a", payload: { status: "done" } }));
     expect(next).toHaveLength(2);
     expect(next.find((r) => r.id === "a")).toEqual({ id: "a", title: "Alpha", status: "done" });
+  });
+
+  it("takes every column of a whole-row update, including ones it had not seen", () => {
+    const next = applyDatastoreChange(
+      rows,
+      frame({ operation: "update", record_id: "a", payload: { id: "a", title: "Alpha", status: "done", assignee: "kim" } }),
+    );
+    expect(next.find((r) => r.id === "a")).toEqual({ id: "a", title: "Alpha", status: "done", assignee: "kim" });
   });
 
   it("deletes by id", () => {

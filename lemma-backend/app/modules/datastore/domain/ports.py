@@ -241,7 +241,7 @@ class DatastoreRecordRepositoryPort(Protocol):
         records: list[dict],
         user_id: UUID,
         *,
-        events: list["DomainEvent"] | None = None,
+        event_factory: RecordEventFactory | None = None,
     ) -> int: ...
 
     async def bulk_upsert_records(
@@ -250,7 +250,7 @@ class DatastoreRecordRepositoryPort(Protocol):
         records: list[dict],
         user_id: UUID,
         *,
-        events: list["DomainEvent"] | None = None,
+        event_factory: RecordEventFactory | None = None,
     ) -> int: ...
 
     async def get_record(

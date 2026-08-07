@@ -28,6 +28,10 @@ from app.modules.datastore.infrastructure.record_errors import (
 from app.modules.datastore.infrastructure.record_update_sql import (
     build_assignments,
     build_update_statement,
+    bulk_conflict_clause,
+    bulk_insert_statement,
+    bulk_returning_statement,
+    chunk_for_parameter_limit,
     split_previous_image,
 )
 from app.modules.datastore.infrastructure.sql_identifiers import sanitize_identifier
@@ -113,7 +117,7 @@ class DatastoreRecordRepository(DatastoreRecordRepositoryPort):
         user_id: UUID,
         *,
         upsert: bool,
-        events: list[DomainEvent] | None = None,
+        event_factory: RecordEventFactory | None = None,
     ) -> int:
         if not records:
             return 0
@@ -133,35 +137,42 @@ class DatastoreRecordRepository(DatastoreRecordRepositoryPort):
             ordered_keys.append(pk)
         ordered_keys.extend(sorted(key for key in all_keys if key != pk))
 
-        columns_sql = ", ".join(f'"{key}"' for key in ordered_keys)
-        placeholders_sql = ", ".join(f":{key}" for key in ordered_keys)
-        sql = (
-            f'INSERT INTO "{ctx.schema_name}"."{ctx.table_name}" '
-            f"({columns_sql}) VALUES ({placeholders_sql})"
+        conflict_sql = (
+            bulk_conflict_clause(ctx, ordered_keys)
+            if upsert
+            else ""
         )
-
-        if upsert:
-            update_columns = [
-                key
-                for key in ordered_keys
-                if key not in {ctx.primary_key_column, "created_at"}
-            ]
-            set_clauses = [f'"{key}" = EXCLUDED."{key}"' for key in update_columns]
-            set_clauses.append('"updated_at" = CURRENT_TIMESTAMP')
-            sql += (
-                f' ON CONFLICT ("{ctx.primary_key_column}") DO UPDATE SET '
-                f"{', '.join(set_clauses)}"
-            )
-
-        statement = text(sql)
-        params_list = [{key: record.get(key) for key in ordered_keys} for record in prepared_records]
 
         try:
             async with self.schema_manager.session_factory() as session:
                 if ctx.enable_rls:
                     await self.schema_manager.set_rls_context(session, user_id)
-                await session.execute(statement, params_list)
-                await stage_domain_events(session, events or [])
+
+                if event_factory is None:
+                    # No subscriber, so nothing needs the written rows back and
+                    # executemany stays the cheapest way to land them.
+                    await session.execute(
+                        text(bulk_insert_statement(ctx, ordered_keys) + conflict_sql),
+                        [
+                            {key: record.get(key) for key in ordered_keys}
+                            for record in prepared_records
+                        ],
+                    )
+                else:
+                    events: list[DomainEvent] = []
+                    for chunk in chunk_for_parameter_limit(
+                        prepared_records, len(ordered_keys)
+                    ):
+                        sql, params = bulk_returning_statement(
+                            ctx, ordered_keys, chunk, conflict_sql
+                        )
+                        result = await session.execute(text(sql), params)
+                        events.extend(
+                            event_factory(self._row_to_entity(dict(row._mapping), ctx))
+                            for row in result.fetchall()
+                        )
+                    await stage_domain_events(session, events)
+
                 await session.commit()
                 return len(prepared_records)
         except DBAPIError as exc:
@@ -218,10 +229,10 @@ class DatastoreRecordRepository(DatastoreRecordRepositoryPort):
         records: list[dict[str, Any]],
         user_id: UUID,
         *,
-        events: list[DomainEvent] | None = None,
+        event_factory: RecordEventFactory | None = None,
     ) -> int:
         return await self._bulk_write_records(
-            ctx, records, user_id, upsert=False, events=events
+            ctx, records, user_id, upsert=False, event_factory=event_factory
         )
 
     async def bulk_upsert_records(
@@ -230,10 +241,10 @@ class DatastoreRecordRepository(DatastoreRecordRepositoryPort):
         records: list[dict[str, Any]],
         user_id: UUID,
         *,
-        events: list[DomainEvent] | None = None,
+        event_factory: RecordEventFactory | None = None,
     ) -> int:
         return await self._bulk_write_records(
-            ctx, records, user_id, upsert=True, events=events
+            ctx, records, user_id, upsert=True, event_factory=event_factory
         )
 
     async def get_record(

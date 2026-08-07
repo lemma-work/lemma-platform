@@ -141,10 +141,8 @@ no `start`). JMESPath expressions in workflow nodes reference it:
   `start.payload`** — a common mistake. Bind your first node's input to
   `start.metadata.record_id`.
 
-  ⚠️ **Bulk writes are the exception**: `bulk_create_records` /
-  `bulk_upsert_records` emit a payload of only the submitted columns, not the
-  stored row, so a condition on a database-defaulted column will not match rows
-  inserted that way.
+  Bulk writes are no exception: a row inserted by `bulk_create` carries the same
+  whole-row payload as one created on its own.
 - `start.llm_output.*` — the structured output of the LLM filter, if you set one
   (below).
 
