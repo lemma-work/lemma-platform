@@ -23,6 +23,15 @@ from app.modules.agent.domain.value_objects import (
     JsonObject,
     MessageDraft,
 )
+from app.modules.agent.infrastructure.harnesses.agent_host_event_text import (
+    _Segment,
+    _integer,
+    _number,
+    error_event,
+    event_text,
+    is_terminal_event,
+    terminal_event,
+)
 from app.modules.agent.infrastructure.harnesses.streaming import TextStreamBuffer
 from app.modules.agent.infrastructure.harnesses.tool_returns import (
     missing_tool_return_events,
@@ -46,6 +55,18 @@ from app.modules.agent.tools.final_answer.final_answer_toolset import (
 )
 from app.modules.usage.contracts import AgentRunUsage
 
+# Re-exported: the harness imports the whole event vocabulary from this
+# module, and moving where a helper lives should not move where it is
+# imported from.
+__all__ = [
+    "AgentHostEventEnvelope",
+    "AgentHostEventNormalizer",
+    "error_event",
+    "event_text",
+    "is_terminal_event",
+    "terminal_event",
+]
+
 @dataclass(frozen=True, slots=True)
 class AgentHostEventEnvelope:
     """One canonical host event read off the run's stream."""
@@ -54,38 +75,6 @@ class AgentHostEventEnvelope:
     type: str
     object_id: str | None
     payload: JsonObject
-
-
-@dataclass(slots=True)
-class _Segment:
-    """Accumulated text for one stream kind.
-
-    ``object_id`` is the host's identifier for the current segment, carried so
-    the emitted message metadata refers to something real rather than to the
-    internal stream name.
-    """
-
-    kind: str
-    text: str = ""
-    object_id: str | None = None
-
-    def append(self, chunk: str, object_id: str | None) -> None:
-        self.text += chunk
-        if object_id is not None:
-            self.object_id = object_id
-
-    def replace(self, full_text: str, object_id: str | None) -> str:
-        """Apply an authoritative full-text upsert, returning the new tail."""
-        delta = full_text[len(self.text) :] if full_text.startswith(self.text) else ""
-        self.text = full_text
-        if object_id is not None:
-            self.object_id = object_id
-        return delta
-
-    def take(self) -> tuple[str, str | None]:
-        text, object_id = self.text, self.object_id
-        self.text, self.object_id = "", None
-        return text, object_id
 
 
 class AgentHostEventNormalizer:
@@ -109,6 +98,11 @@ class AgentHostEventNormalizer:
         self._token_kind: str | None = None
         self.tool_calls: dict[str, str] = {}
         self.closed_tool_calls: set[str] = set()
+        # ACP's ToolCall has no required id field, so an adapter is free to
+        # report a call and its completion with nothing tying them together.
+        # See :meth:`_tool_object_id`.
+        self._anonymous_tool_calls = 0
+        self._open_anonymous_tool_call: str | None = None
         # Whether this run owes a structured final answer, and against what.
         # Gates the text fallback: scraping JSON out of an ordinary chat reply
         # would invent structured results that were never claimed.
@@ -155,9 +149,15 @@ class AgentHostEventNormalizer:
         if event_type is AgentHostEventType.AGENT_THOUGHT_UPSERT:
             return self._upsert(self._thought, row, payload)
         if event_type is AgentHostEventType.TOOL_CALL_UPSERT:
-            return self._tool_call_upsert(row, object_id, payload, metadata)
+            call_id = self._tool_object_id(row, opening=True)
+            return self._tool_call_upsert(
+                row, call_id, payload, {**metadata, "agent_host_object_id": call_id}
+            )
         if event_type is AgentHostEventType.TOOL_CALL_UPDATE:
-            return self._tool_call_update(row, object_id, payload, metadata)
+            call_id = self._tool_object_id(row, opening=False)
+            return self._tool_call_update(
+                row, call_id, payload, {**metadata, "agent_host_object_id": call_id}
+            )
         if event_type is AgentHostEventType.USAGE_UPDATE:
             return [*self._drain_tokens(), self._usage_update(row, payload, metadata)]
         if event_type in {
@@ -197,14 +197,13 @@ class AgentHostEventNormalizer:
         row: AgentHostEventEnvelope,
         payload: JsonObject,
     ) -> list[AgentEvent]:
-        """Apply a full-text upsert.
+        """Apply one sealed segment.
 
         The host sends these at every segment boundary so the durable lane
-        alone rebuilds the transcript. Because the lane is ordered, the upsert
-        can only ever extend what this normalizer already accumulated, so the
-        delta is the tail.
+        alone rebuilds the transcript, which means a message that contains a
+        tool call arrives as several. See :class:`_Segment`.
         """
-        delta = segment.replace(event_text(payload), row.object_id)
+        delta = segment.seal(event_text(payload), row.object_id)
         return self._stream_delta(delta, kind=segment.kind)
 
     def _stream_delta(self, text: str, *, kind: str) -> list[AgentEvent]:
@@ -299,6 +298,35 @@ class AgentHostEventNormalizer:
 
     # ------------------------------------------------------------- tool calls
 
+    def _tool_object_id(self, row: AgentHostEventEnvelope, *, opening: bool) -> str:
+        """The id a tool call and its later update must agree on.
+
+        ACP's ``ToolCall`` carries no required identifier, so an adapter can
+        report a call and its completion with nothing linking them. The old
+        fallback was the event sequence, which is different for the two events
+        by definition: the call was therefore never closed — it was swept at
+        the end as an abandoned call — and the update emitted a result for an
+        id nobody held.
+
+        With no id on the wire the only correlation available is order, so an
+        untagged update is attributed to the untagged call still open. That is
+        a heuristic, and it is exactly as good as the information the adapter
+        gave us; ``acp.rs`` reaches for the same one when a permission request
+        arrives without a tool-call id.
+        """
+        if row.object_id:
+            return row.object_id
+        if opening:
+            self._anonymous_tool_calls += 1
+            self._open_anonymous_tool_call = (
+                f"anonymous-tool-call-{self._anonymous_tool_calls}"
+            )
+            return self._open_anonymous_tool_call
+        return (
+            self._open_anonymous_tool_call
+            or f"anonymous-tool-call-{max(self._anonymous_tool_calls, 1)}"
+        )
+
     def _tool_call_upsert(
         self,
         row: AgentHostEventEnvelope,
@@ -341,6 +369,8 @@ class AgentHostEventNormalizer:
             return []
         tool_name = self.tool_calls.get(object_id, tool_name_from_payload(payload))
         self.closed_tool_calls.add(object_id)
+        if object_id == self._open_anonymous_tool_call:
+            self._open_anonymous_tool_call = None
         raw_result = first_present(payload, "result", "rawOutput")
         if status == "COMPLETED":
             # Read the RAW value, before bounding. `_bounded_tool_value` truncates
@@ -478,85 +508,3 @@ class AgentHostEventNormalizer:
         events.extend(self.close_outstanding(terminal))
         events.append(terminal)
         return events
-
-
-def event_text(payload: JsonObject) -> str:
-    for key in ("text", "delta"):
-        value = payload.get(key)
-        if isinstance(value, str):
-            return value
-    content = payload.get("content")
-    if isinstance(content, str):
-        return content
-    if isinstance(content, dict):
-        text = content.get("text")
-        return text if isinstance(text, str) else ""
-    return ""
-
-
-def _integer(value: object, *, default: int = 0) -> int:
-    if isinstance(value, bool) or not isinstance(value, int | float | str):
-        return default
-    try:
-        return int(value)
-    except ValueError:
-        return default
-
-
-def _number(value: object, *, default: float = 0.0) -> float:
-    if isinstance(value, bool) or not isinstance(value, int | float | str):
-        return default
-    try:
-        return float(value)
-    except ValueError:
-        return default
-
-
-def error_event(agent_run_id: UUID, message: str) -> AgentEvent:
-    return AgentEvent(
-        type=AgentEventType.ERROR,
-        data=message,
-        agent_run_id=agent_run_id,
-    )
-
-
-def terminal_event(
-    *,
-    agent_run_id: UUID,
-    state: str,
-    payload: JsonObject,
-    sequence: int | None = None,
-) -> AgentEvent:
-    normalized = state.upper()
-    if normalized == AgentHostRunState.SUCCEEDED.value:
-        event_type = AgentEventType.COMPLETED
-        data: object = payload
-    elif normalized == AgentHostRunState.WAITING_INPUT.value:
-        event_type = AgentEventType.WAITING
-        data = payload
-    elif normalized == AgentHostRunState.CANCELLED.value:
-        event_type = AgentEventType.STOPPED
-        data = payload
-    else:
-        event_type = AgentEventType.ERROR
-        data = str(
-            payload.get("error")
-            or payload.get("message")
-            or f"Agent Host run ended in {normalized}"
-        )
-    return AgentEvent(
-        type=event_type,
-        data=data,
-        agent_run_id=agent_run_id,
-        sequence=sequence,
-    )
-
-
-def is_terminal_event(event: AgentEvent) -> bool:
-    return event.type in {
-        AgentEventType.COMPLETED,
-        AgentEventType.STOPPED,
-        AgentEventType.ERROR,
-        AgentEventType.REJECTED,
-        AgentEventType.WAITING,
-    }

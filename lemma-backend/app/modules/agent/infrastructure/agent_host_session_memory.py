@@ -31,7 +31,7 @@ from app.modules.agent.infrastructure.runtime_models import AgentHostRunLeaseMod
 async def remember_provider_session(
     uow: SqlAlchemyUnitOfWork,
     checkpoint: AgentHostRunCheckpoint,
-) -> None:
+) -> bool:
     """Bind the conversation to the provider session the host opened.
 
     Deliberately outside ``apply_checkpoint``'s state machine. That machine
@@ -39,10 +39,16 @@ async def remember_provider_session(
     right for a lease and wrong here — a re-sent or late checkpoint still names
     the same session, and the cost of dropping it is the conversation silently
     losing its memory.
+
+    Returns whether the binding actually changed. The host puts the session id
+    on *every* checkpoint, and a non-terminal checkpoint is the lease heartbeat
+    it resends on every poll, so writing unconditionally meant one ``jsonb_set``
+    per poll per active run to store a value that had not moved since the run
+    began.
     """
     session_id = checkpoint.detail.get("provider_session_id")
     if not isinstance(session_id, str) or not session_id:
-        return
+        return False
     binding = (
         await uow.session.execute(
             select(AgentRunModel.conversation_id, AgentHostRunLeaseModel.harness_id)
@@ -54,16 +60,25 @@ async def remember_provider_session(
         )
     ).one_or_none()
     if binding is None:
-        return
+        return False
     conversation_id, harness_id = binding
     # Stored with the harness that opened it. A Codex rollout id means nothing
     # to Claude Code, so a conversation moved to another harness starts a fresh
     # session there instead of failing a load every turn.
-    await ConversationRepository(uow).set_conversation_metadata_key(
+    binding_value = {"harness_id": str(harness_id), "session_id": session_id}
+    repository = ConversationRepository(uow)
+    stored = await repository.get_conversation_metadata_key(
         conversation_id,
         AGENT_HOST_SESSION_METADATA_KEY,
-        {"harness_id": str(harness_id), "session_id": session_id},
     )
+    if stored == binding_value:
+        return False
+    await repository.set_conversation_metadata_key(
+        conversation_id,
+        AGENT_HOST_SESSION_METADATA_KEY,
+        binding_value,
+    )
+    return True
 
 
 async def resume_session_id(

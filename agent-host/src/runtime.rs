@@ -49,6 +49,18 @@ const SHUTDOWN_GRACE: Duration = Duration::from_secs(30);
 // Long enough for someone to actually see and answer the prompt; bounded so a
 // forgotten one cannot pin an adapter open for the run's whole deadline.
 const PERMISSION_DECISION_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+// How long the agent has to honour `session/cancel` and end its turn cleanly.
+const CANCEL_GRACE: Duration = Duration::from_secs(10);
+// How long the supervisor waits for a signalled run to terminalize itself
+// before killing its process tree. Comfortably past CANCEL_GRACE so the ACP
+// path is what normally resolves a cancellation, and the kill is the backstop
+// for an adapter that ignores the notification altogether.
+const CANCEL_KILL_AFTER: Duration = Duration::from_secs(15);
+// How many polls a run whose liveness checkpoint Lemma refused waits before
+// trying again. A refusal is usually transient (a deploy, a blip); giving up on
+// the heartbeat permanently sentences a healthy run to lease expiry, so the
+// host backs off rather than stopping.
+const REFUSED_HEARTBEAT_RETRY_POLLS: u32 = 20;
 // How many times one run's event batch may be rejected outright before the
 // host stops trying to deliver that run's transcript. The first rejection is
 // answered with a full replay, so this allows exactly one repair attempt.
@@ -330,15 +342,16 @@ struct TargetWorker {
     /// told the same thing, but a run needs it locally and synchronously to
     /// decide whether resuming a session is even on the table.
     capabilities: HashMap<String, HarnessCapabilities>,
-    active_runs: HashMap<Uuid, JoinHandle<anyhow::Result<()>>>,
+    active_runs: HashMap<Uuid, ActiveRun>,
     permissions: PermissionGate,
     /// Runs whose event batches Lemma has rejected, and how often. Kept per
     /// run so one unhappy run cannot stop the target's poll loop.
     event_rejections: HashMap<Uuid, u32>,
-    /// Runs whose liveness checkpoints Lemma refuses. Their leases are left to
-    /// the server's own expiry recovery; their terminal states are not given up
-    /// on, so a run is never abandoned mid-flight by this.
-    refused_heartbeats: HashSet<Uuid>,
+    /// Runs whose liveness checkpoints Lemma refuses, and how many more polls
+    /// they sit out before trying again. Their leases meanwhile fall to the
+    /// server's own expiry recovery; their terminal states are never given up
+    /// on, so a run is not abandoned mid-flight by this.
+    refused_heartbeats: HashMap<Uuid, u32>,
     draining: bool,
     refresh_due: std::time::Instant,
     events_ready: Arc<tokio::sync::Notify>,
@@ -348,6 +361,18 @@ struct TargetWorker {
         mpsc::UnboundedSender<Option<ProbedHarnesses>>,
         mpsc::UnboundedReceiver<Option<ProbedHarnesses>>,
     ),
+}
+
+/// One run in flight, and the two ways it can be stopped.
+///
+/// `cancel` is the ACP path: the driver sends `session/cancel` and the agent
+/// ends its own turn, which is what lets the provider flush the session file
+/// the next turn resumes from. `kill_at` is the backstop for an adapter that
+/// ignores it, and is only set once a cancellation has actually been asked for.
+struct ActiveRun {
+    handle: JoinHandle<anyhow::Result<()>>,
+    cancel: watch::Sender<bool>,
+    kill_at: Option<tokio::time::Instant>,
 }
 
 /// One completed refresh: what Lemma accepted, and what the probes learned.
@@ -389,7 +414,7 @@ impl TargetWorker {
             active_runs: HashMap::new(),
             permissions: PermissionGate::new(),
             event_rejections: HashMap::new(),
-            refused_heartbeats: HashSet::new(),
+            refused_heartbeats: HashMap::new(),
             draining,
             refresh_due: std::time::Instant::now(),
             events_ready: Arc::new(tokio::sync::Notify::new()),
@@ -405,6 +430,7 @@ impl TargetWorker {
                 return self.graceful_shutdown().await;
             }
             self.reap_finished().await;
+            self.enforce_cancellations()?;
             self.apply_local_controls()?;
             while let Ok(outcome) = self.probed.1.try_recv() {
                 match outcome {
@@ -562,7 +588,36 @@ impl TargetWorker {
             CommandKind::StartRun => self.handle_start(command),
             CommandKind::CancelRun => self.handle_cancel(command),
             CommandKind::ResolvePermission => self.handle_resolve_permission(command),
+            CommandKind::RefreshCredential => self.handle_refresh_credential(command),
         }
+    }
+
+    /// Take a replacement Lemma MCP credential for a run still in flight.
+    ///
+    /// Journaled rather than signalled: the MCP bridge is a separate process
+    /// that re-reads its endpoint from the journal on every request, so writing
+    /// it here *is* the delivery. Nothing needs to interrupt the run.
+    fn handle_refresh_credential(&mut self, command: &Command) -> anyhow::Result<()> {
+        self.journal
+            .record_simple_command(self.target.target_id, command)?;
+        let run_id = command
+            .run_id
+            .ok_or_else(|| anyhow::anyhow!("credential refresh has no run ID"))?;
+        let lease_epoch = command
+            .lease_epoch
+            .ok_or_else(|| anyhow::anyhow!("credential refresh has no lease epoch"))?;
+        let mcp = command
+            .payload
+            .get("mcp")
+            .filter(|value| value.is_object())
+            .ok_or_else(|| anyhow::anyhow!("credential refresh carries no MCP object"))?;
+        if self
+            .journal
+            .refresh_run_mcp(self.target.target_id, run_id, lease_epoch, mcp)?
+        {
+            tracing::debug!(%run_id, "refreshed the run's Lemma MCP credential");
+        }
+        Ok(())
     }
 
     fn handle_start(&mut self, command: &Command) -> anyhow::Result<()> {
@@ -635,6 +690,7 @@ impl TargetWorker {
         // Captured before the task takes ownership of `adapter`, so a failure
         // can name the agent rather than describing it as an internal error.
         let adapter_name = adapter.spec.display_name.clone();
+        let (cancel_tx, cancel_rx) = watch::channel(false);
         let handle = tokio::spawn(async move {
             let _permit = permit;
             let lease_epoch = journal
@@ -702,6 +758,8 @@ impl TargetWorker {
                 can_load_session,
                 permissions: permissions.clone(),
                 permission_timeout: PERMISSION_DECISION_TIMEOUT,
+                cancel: cancel_rx,
+                cancel_grace: CANCEL_GRACE,
             };
             let outcome =
                 tokio::time::timeout(remaining, driver.run(request, Arc::clone(&callbacks))).await;
@@ -722,6 +780,11 @@ impl TargetWorker {
                     let mut payload = JsonMap::new();
                     payload.insert("state".to_owned(), serde_json::to_value(outcome.state)?);
                     payload.insert("stop_reason".to_owned(), Value::String(outcome.stop_reason));
+                    // Lemma renders a failed run from `message`, so a turn that
+                    // ended on a ceiling rather than a fault has to say which.
+                    if let Some(message) = outcome.message {
+                        payload.insert("message".to_owned(), Value::String(message));
+                    }
                     journal.append_event(
                         target_id,
                         run_id,
@@ -770,23 +833,47 @@ impl TargetWorker {
             events_ready.notify_one();
             Ok(())
         });
-        self.active_runs.insert(run_id, handle);
+        self.active_runs.insert(
+            run_id,
+            ActiveRun {
+                handle,
+                cancel: cancel_tx,
+                kill_at: None,
+            },
+        );
     }
 
+    /// Ask a run to stop, through ACP where that is possible.
+    ///
+    /// Signalling rather than aborting is the whole point. `abort` kills the
+    /// adapter mid-turn, and the provider has not yet written the session file
+    /// that the conversation's *next* turn loads — so stopping one message used
+    /// to silently cost the conversation its history. Raising the flag lets the
+    /// driver send `session/cancel`, take the agent's own `cancelled` stop
+    /// reason, and terminalize the run itself.
+    ///
+    /// The kill is still there, just deferred: a run that has not resolved by
+    /// `kill_at` is torn down by `enforce_cancellations` exactly as before, so
+    /// an adapter that ignores the notification cannot outlive its cancel.
     fn handle_cancel(&mut self, command: &Command) -> anyhow::Result<()> {
         self.journal
             .record_simple_command(self.target.target_id, command)?;
         let run_id = command
             .run_id
             .ok_or_else(|| anyhow::anyhow!("cancel command has no run ID"))?;
-        // Abort, but keep the handle: `abort` only requests cancellation, and
-        // the task can still finish its current poll -- which is long enough to
-        // park a permission request. `reap_finished` abandons the run again
-        // once the task is provably gone, which is what closes that window.
-        if let Some(handle) = self.active_runs.get(&run_id) {
-            handle.abort();
+        if let Some(active) = self.active_runs.get_mut(&run_id) {
+            // `send_replace`, not `send`: a run whose task has already dropped
+            // its receiver has no listener, and `send` reports that as an error
+            // without storing the value — which would leave the run looking
+            // uncancelled to everything that reads the flag afterwards.
+            active.cancel.send_replace(true);
+            if active.kill_at.is_none() {
+                active.kill_at = Some(tokio::time::Instant::now() + CANCEL_KILL_AFTER);
+            }
+            return Ok(());
         }
-        // Anything the run left parked is now unanswerable.
+        // No task to ask: the run is already gone, so its terminal state is
+        // this host's to write.
         self.permissions.abandon_run(run_id);
         if let Some(run) = self.journal.get_run(self.target.target_id, run_id)?
             && !run.state.is_terminal()
@@ -799,6 +886,53 @@ impl TargetWorker {
                 RunState::Cancelled,
                 "run cancelled by Lemma",
             )?;
+        }
+        Ok(())
+    }
+
+    /// Kill any run that was asked to stop and did not.
+    ///
+    /// This is the old `handle_cancel` behaviour, moved behind a deadline so it
+    /// is the fallback rather than the first resort.
+    fn enforce_cancellations(&mut self) -> anyhow::Result<()> {
+        let now = tokio::time::Instant::now();
+        let overdue = self
+            .active_runs
+            .iter()
+            .filter_map(|(run_id, active)| {
+                active
+                    .kill_at
+                    .is_some_and(|deadline| now >= deadline)
+                    .then_some(*run_id)
+            })
+            .collect::<Vec<_>>();
+        for run_id in overdue {
+            // Abort, but keep the handle: `abort` only requests cancellation,
+            // and the task can still finish its current poll -- which is long
+            // enough to park a permission request. `reap_finished` abandons the
+            // run again once the task is provably gone, which closes that
+            // window.
+            if let Some(active) = self.active_runs.get_mut(&run_id) {
+                active.handle.abort();
+                active.kill_at = None;
+            }
+            self.permissions.abandon_run(run_id);
+            if let Some(run) = self.journal.get_run(self.target.target_id, run_id)?
+                && !run.state.is_terminal()
+            {
+                tracing::warn!(
+                    %run_id,
+                    "the agent ignored session/cancel; terminating its process tree"
+                );
+                terminal_failure(
+                    &self.journal,
+                    self.target.target_id,
+                    run_id,
+                    run.lease_epoch,
+                    RunState::Cancelled,
+                    "run cancelled by Lemma; the agent did not stop on request",
+                )?;
+            }
         }
         Ok(())
     }
@@ -975,11 +1109,22 @@ impl TargetWorker {
     ///
     /// A refused run keeps its *terminal* checkpoint in the batch: giving up on
     /// a run's last word is the one thing that would leave it unresolved.
-    fn control_batch(&self) -> anyhow::Result<ControlBatch> {
+    ///
+    /// A refused *liveness* checkpoint is held back for a bounded number of
+    /// polls and then tried again. Holding one back forever meant a single
+    /// transient refusal — a deploy, a blip — permanently stopped heartbeating
+    /// a run the host was still healthily executing, so its lease expired and
+    /// Lemma recovered a live run to `DISPATCH_UNKNOWN`.
+    fn control_batch(&mut self) -> anyhow::Result<ControlBatch> {
         let (command_ids, mut checkpoints, rejections) =
             self.journal.pending_control(self.target.target_id)?;
+        self.refused_heartbeats.retain(|_, polls| {
+            *polls = polls.saturating_sub(1);
+            *polls > 0
+        });
         checkpoints.retain(|checkpoint| {
-            checkpoint.state.is_terminal() || !self.refused_heartbeats.contains(&checkpoint.run_id)
+            checkpoint.state.is_terminal()
+                || !self.refused_heartbeats.contains_key(&checkpoint.run_id)
         });
         Ok(ControlBatch {
             command_ids,
@@ -1106,13 +1251,15 @@ impl TargetWorker {
                 );
                 continue;
             }
-            self.refused_heartbeats.insert(checkpoint.run_id);
+            self.refused_heartbeats
+                .insert(checkpoint.run_id, REFUSED_HEARTBEAT_RETRY_POLLS);
             settled.checkpoints.push(checkpoint.clone());
             tracing::error!(
                 run_id = %checkpoint.run_id,
                 state = ?checkpoint.state,
                 error = %detail,
-                "Lemma refused this run's heartbeat; leaving its lease to server-side recovery"
+                retry_after_polls = REFUSED_HEARTBEAT_RETRY_POLLS,
+                "Lemma refused this run's heartbeat; backing off before trying again"
             );
         }
         for command_id in &batch.command_ids {
@@ -1219,11 +1366,11 @@ impl TargetWorker {
         let finished = self
             .active_runs
             .iter()
-            .filter_map(|(run_id, handle)| handle.is_finished().then_some(*run_id))
+            .filter_map(|(run_id, active)| active.handle.is_finished().then_some(*run_id))
             .collect::<Vec<_>>();
         for run_id in finished {
-            if let Some(handle) = self.active_runs.remove(&run_id)
-                && let Err(error) = handle.await
+            if let Some(active) = self.active_runs.remove(&run_id)
+                && let Err(error) = active.handle.await
                 && !error.is_cancelled()
             {
                 tracing::error!(%run_id, %error, "agent run task terminated unexpectedly");
@@ -1239,6 +1386,7 @@ impl TargetWorker {
         let deadline = tokio::time::Instant::now() + SHUTDOWN_GRACE;
         loop {
             self.reap_finished().await;
+            self.enforce_cancellations()?;
             if let Err(error) = self.flush_events().await {
                 tracing::warn!(%error, "could not flush Agent Host events during shutdown");
             }
@@ -1272,8 +1420,8 @@ impl TargetWorker {
     fn cancel_all(&mut self, reason: &str) -> anyhow::Result<()> {
         let run_ids = self.active_runs.keys().copied().collect::<Vec<_>>();
         for run_id in run_ids {
-            if let Some(handle) = self.active_runs.remove(&run_id) {
-                handle.abort();
+            if let Some(active) = self.active_runs.remove(&run_id) {
+                active.handle.abort();
             }
             self.permissions.abandon_run(run_id);
             if let Some(run) = self.journal.get_run(self.target.target_id, run_id)?
@@ -1306,6 +1454,19 @@ impl TargetWorker {
             () = tokio::time::sleep(duration) => {}
             _ = self.shutdown.changed() => {}
         }
+    }
+
+    /// Register a task as an active run, as `spawn_run` does.
+    #[cfg(test)]
+    fn track_run(&mut self, run_id: Uuid, handle: JoinHandle<anyhow::Result<()>>) {
+        self.active_runs.insert(
+            run_id,
+            ActiveRun {
+                handle,
+                cancel: watch::channel(false).0,
+                kill_at: None,
+            },
+        );
     }
 }
 
@@ -1490,7 +1651,13 @@ impl AcpCallbacks for JournalCallbacks {
 }
 
 /// Extract streamed text the same way the backend normalizer does.
-fn chunk_text(payload: &JsonMap) -> String {
+///
+/// Public so `tests/wire_contract.rs` can hold it to the same shared fixture
+/// the backend's `event_text` is held to. The two accumulate the same stream
+/// into separate buffers that are reconciled at every segment boundary, so a
+/// disagreement between them does not raise anything — it silently truncates a
+/// persisted message.
+pub fn chunk_text(payload: &JsonMap) -> String {
     for key in ["text", "delta"] {
         if let Some(text) = payload.get(key).and_then(Value::as_str) {
             return text.to_owned();
@@ -1804,6 +1971,18 @@ mod target_worker_tests {
             max_runs: 2,
             active_runs: 0,
             available_runs: 2,
+        }
+    }
+
+    fn cancel_command(run_id: Uuid) -> Command {
+        Command {
+            command_id: Uuid::new_v4(),
+            kind: CommandKind::CancelRun,
+            created_at: Utc::now(),
+            expires_at: Utc::now() + chrono::Duration::minutes(1),
+            run_id: Some(run_id),
+            lease_epoch: Some(1),
+            payload: serde_json::Value::Null,
         }
     }
 
@@ -2208,8 +2387,142 @@ mod target_worker_tests {
         );
         assert!(applied.iter().all(|(run_id, _)| *run_id != poisoned));
         assert!(
-            harness.worker.refused_heartbeats.contains(&poisoned),
+            harness.worker.refused_heartbeats.contains_key(&poisoned),
             "the refused run must be named, not left to poison every later poll"
+        );
+    }
+
+    /// Every turn of a conversation must run in the same working directory.
+    ///
+    /// `session/load` takes a cwd, and a provider is entitled to refuse to load
+    /// a session into a different one — Claude Code does. So a directory keyed
+    /// on anything but the conversation makes every resume fail: each turn
+    /// silently opens a new session and the agent meets the user again, with no
+    /// error anywhere to say why. Nothing else in the system notices.
+    #[test]
+    fn a_conversation_always_gets_the_same_working_directory() {
+        let paths = HostPaths::under(std::path::Path::new("/tmp/agent-host-test"));
+        let target = Uuid::new_v4();
+        let conversation = Uuid::new_v4();
+
+        assert_eq!(
+            super::scratch_directory(&paths, target, conversation),
+            super::scratch_directory(&paths, target, conversation),
+            "two turns of one conversation must share a cwd, or every \
+             session/load is refused"
+        );
+        assert_ne!(
+            super::scratch_directory(&paths, target, conversation),
+            super::scratch_directory(&paths, target, Uuid::new_v4()),
+            "two conversations must not share a workspace"
+        );
+    }
+
+    /// The Lemma credential a run is dispatched with expires in an hour, and
+    /// the bridge is a separate process that reads its endpoint from the
+    /// journal. Writing the replacement there *is* the delivery.
+    #[tokio::test]
+    async fn a_refreshed_credential_reaches_the_runs_journal() {
+        let mut harness = Harness::new().await;
+        let run_id = harness.seed_run(0);
+        let refreshed = serde_json::json!({
+            "url": "https://lemma.example/mcp",
+            "authorization": "Bearer refreshed",
+        });
+
+        harness
+            .worker
+            .handle_command(&Command {
+                command_id: Uuid::new_v4(),
+                kind: CommandKind::RefreshCredential,
+                created_at: Utc::now(),
+                expires_at: Utc::now() + chrono::Duration::minutes(1),
+                run_id: Some(run_id),
+                lease_epoch: Some(1),
+                payload: serde_json::json!({"mcp": refreshed.clone()}),
+            })
+            .unwrap();
+
+        let run = harness
+            .journal
+            .get_run(harness.target_id, run_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(run.spec.mcp, refreshed);
+    }
+
+    /// Fenced like everything else a host is told about a run: a credential
+    /// minted for a dispatch that has been superseded must not land on the one
+    /// executing now.
+    #[tokio::test]
+    async fn a_refresh_for_a_superseded_lease_is_ignored() {
+        let mut harness = Harness::new().await;
+        let run_id = harness.seed_run(0);
+        let before = harness
+            .journal
+            .get_run(harness.target_id, run_id)
+            .unwrap()
+            .unwrap()
+            .spec
+            .mcp;
+
+        harness
+            .worker
+            .handle_command(&Command {
+                command_id: Uuid::new_v4(),
+                kind: CommandKind::RefreshCredential,
+                created_at: Utc::now(),
+                expires_at: Utc::now() + chrono::Duration::minutes(1),
+                run_id: Some(run_id),
+                lease_epoch: Some(9),
+                payload: serde_json::json!({
+                    "mcp": {"url": "https://elsewhere.example/mcp", "token": "x"}
+                }),
+            })
+            .unwrap();
+
+        assert_eq!(
+            harness
+                .journal
+                .get_run(harness.target_id, run_id)
+                .unwrap()
+                .unwrap()
+                .spec
+                .mcp,
+            before
+        );
+    }
+
+    /// A refusal is usually transient. Holding the heartbeat back forever meant
+    /// one blip sentenced a healthy run to lease expiry and `DISPATCH_UNKNOWN`,
+    /// so the hold has to lapse on its own.
+    #[tokio::test]
+    async fn a_refused_heartbeat_is_retried_after_backing_off() {
+        let mut harness = Harness::new().await;
+        let poisoned = harness.seed_run(0);
+        harness
+            .stub
+            .refused_checkpoints
+            .lock()
+            .unwrap()
+            .push(poisoned);
+        harness.worker.poll_target(capacity()).await.unwrap();
+        assert!(harness.worker.refused_heartbeats.contains_key(&poisoned));
+
+        // The server recovers; the host must eventually offer the run again.
+        harness.stub.refused_checkpoints.lock().unwrap().clear();
+        for _ in 0..super::REFUSED_HEARTBEAT_RETRY_POLLS {
+            harness.worker.poll_target(capacity()).await.unwrap();
+        }
+
+        assert!(
+            !harness.worker.refused_heartbeats.contains_key(&poisoned),
+            "the hold must lapse, or the run's lease expires under a healthy host"
+        );
+        let applied = harness.stub.applied_checkpoints.lock().unwrap().clone();
+        assert!(
+            applied.iter().any(|(run_id, _)| *run_id == poisoned),
+            "the run's heartbeat must resume once the refusal passes"
         );
     }
 
@@ -2360,8 +2673,8 @@ mod target_worker_tests {
             .await;
             Ok(())
         });
-        harness.worker.active_runs.insert(run_id, handle);
-        while !harness.worker.active_runs[&run_id].is_finished() {
+        harness.worker.track_run(run_id, handle);
+        while !harness.worker.active_runs[&run_id].handle.is_finished() {
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
         assert_eq!(
@@ -2375,8 +2688,61 @@ mod target_worker_tests {
         assert_eq!(harness.worker.permissions.parked(), 0);
     }
 
+    /// A cancel asks first and kills second, so an adapter that ignores
+    /// `session/cancel` still cannot outlive its cancellation.
+    #[tokio::test]
+    async fn a_cancel_asks_the_run_to_stop_before_killing_it() {
+        let mut harness = Harness::new().await;
+        let run_id = harness.seed_run(0);
+        let handle = tokio::spawn(async move {
+            std::future::pending::<()>().await;
+            Ok(())
+        });
+        harness.worker.track_run(run_id, handle);
+
+        harness
+            .worker
+            .handle_cancel(&cancel_command(run_id))
+            .unwrap();
+
+        let active = &harness.worker.active_runs[&run_id];
+        assert!(
+            *active.cancel.borrow(),
+            "the run must be asked to stop through ACP first"
+        );
+        assert!(
+            !active.handle.is_finished(),
+            "it must not be killed outright"
+        );
+        assert!(
+            !harness
+                .journal
+                .get_run(harness.target_id, run_id)
+                .unwrap()
+                .unwrap()
+                .state
+                .is_terminal(),
+            "the run terminalizes itself once the agent honours the cancel"
+        );
+
+        // The grace elapses without the agent stopping.
+        harness.worker.active_runs.get_mut(&run_id).unwrap().kill_at =
+            Some(tokio::time::Instant::now());
+        harness.worker.enforce_cancellations().unwrap();
+
+        assert_eq!(
+            harness
+                .journal
+                .get_run(harness.target_id, run_id)
+                .unwrap()
+                .unwrap()
+                .state,
+            RunState::Cancelled
+        );
+    }
+
     /// `abort` only requests cancellation, so the run task can still park one
-    /// more request after `handle_cancel` has swept the gate. Keeping the
+    /// more request after the kill fallback has swept the gate. Keeping the
     /// handle until it is reaped is what closes that window.
     #[tokio::test]
     async fn cancelling_a_run_sweeps_a_request_parked_on_the_way_out() {
@@ -2386,18 +2752,16 @@ mod target_worker_tests {
             std::future::pending::<()>().await;
             Ok(())
         });
-        harness.worker.active_runs.insert(run_id, handle);
+        harness.worker.track_run(run_id, handle);
 
-        let cancel = Command {
-            command_id: Uuid::new_v4(),
-            kind: CommandKind::CancelRun,
-            created_at: Utc::now(),
-            expires_at: Utc::now() + chrono::Duration::minutes(1),
-            run_id: Some(run_id),
-            lease_epoch: Some(1),
-            payload: serde_json::Value::Null,
-        };
-        harness.worker.handle_cancel(&cancel).unwrap();
+        harness
+            .worker
+            .handle_cancel(&cancel_command(run_id))
+            .unwrap();
+        // Skip the grace: this test is about the kill path, not its delay.
+        harness.worker.active_runs.get_mut(&run_id).unwrap().kill_at =
+            Some(tokio::time::Instant::now());
+        harness.worker.enforce_cancellations().unwrap();
 
         // The aborted task gets one more poll before the runtime drops it,
         // which is long enough to register a request nobody will answer.

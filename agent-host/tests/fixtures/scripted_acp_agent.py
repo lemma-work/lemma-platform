@@ -14,6 +14,10 @@ uses what the Agent Host actually hands it:
 * ``parallel-permission`` and ``parallel-permission-empty-id`` hold two
   permission requests open at once, the way Claude Code's parallel tool calls
   do, with distinct and with colliding tool-call ids respectively.
+* ``cancel`` streams a little and then works until it is told to stop, ending
+  its turn with ``stopReason: cancelled`` the way ACP specifies. A host that
+  kills the process instead never gets that far, which is how the test tells
+  the two apart.
 
 Usage: ``scripted_acp_agent.py <log-path> <mode>``. The log is JSONL; each line
 is ``{"direction": ..., "message": ...}`` so a test can assert on both the ACP
@@ -25,6 +29,7 @@ import os
 import pathlib
 import subprocess
 import sys
+import time
 
 LOG_PATH = pathlib.Path(sys.argv[1])
 MODE = sys.argv[2] if len(sys.argv) > 2 else "mcp"
@@ -283,6 +288,61 @@ def run_parallel_permission_turn(tool_call_ids):
         report_outcome(f"LEMMA_PARALLEL_{'AB'[index]}", answers[request_id])
 
 
+def run_mcp_refresh_turn(mcp_servers):
+    """Keep calling a Lemma tool while the credential is replaced underneath.
+
+    The bridge re-reads its endpoint from the journal before every request, so
+    a REFRESH_CREDENTIAL that lands mid-turn has to change which bearer the
+    *next* call carries — without the agent knowing anything happened.
+    """
+    server = stdio_server(mcp_servers)
+    if server is None:
+        chunk("agent_message_chunk", "LEMMA_MCP_MISSING_STDIO_SERVER")
+        return
+    client = StdioMcpClient(server)
+    try:
+        client.request(
+            "initialize",
+            {
+                "protocolVersion": "2025-06-18",
+                "capabilities": {},
+                "clientInfo": {"name": "scripted-acp-agent", "version": "1.0.0"},
+            },
+        )
+        client.notify("notifications/initialized")
+        client.request("tools/list")
+        # Tells the control plane the bridge is live, which is its cue to send
+        # the replacement credential.
+        chunk("agent_message_chunk", "LEMMA_MCP_READY")
+        for index in range(12):
+            client.request(
+                "tools/call",
+                {"name": "lemma_echo", "arguments": {"text": f"call-{index}"}},
+            )
+            time.sleep(0.25)
+        chunk("agent_message_chunk", "LEMMA_MCP_REFRESH_DONE")
+    finally:
+        client.close()
+
+
+def run_cancel_turn():
+    """Work until asked to stop, then stop the way ACP says to.
+
+    The reply only reaches Lemma if the host asked over the wire and waited for
+    the answer. Killing the process tree — which is what the host falls back to
+    — loses both the acknowledgement and the ``cancelled`` stop reason, and in
+    a real provider loses the session file the next turn resumes from.
+    """
+    chunk("agent_message_chunk", "LEMMA_CANCEL_WORKING")
+    while True:
+        message = read_client_message()
+        if message is None:
+            return "end_turn"
+        if message.get("method") == "session/cancel":
+            chunk("agent_message_chunk", "LEMMA_CANCEL_ACKED")
+            return "cancelled"
+
+
 def main():
     mcp_servers = []
     while True:
@@ -309,15 +369,20 @@ def main():
             mcp_servers = (message.get("params") or {}).get("mcpServers") or []
             result(request_id, {"sessionId": SESSION_ID, "configOptions": []})
         elif method == "session/prompt":
+            stop_reason = "end_turn"
             if MODE == "mcp":
                 run_mcp_turn(mcp_servers)
+            elif MODE == "mcp-refresh":
+                run_mcp_refresh_turn(mcp_servers)
             elif MODE == "parallel-permission":
                 run_parallel_permission_turn(("call-a", "call-b"))
             elif MODE == "parallel-permission-empty-id":
                 run_parallel_permission_turn(("", ""))
+            elif MODE == "cancel":
+                stop_reason = run_cancel_turn()
             else:
                 run_permission_turn()
-            result(request_id, {"stopReason": "end_turn"})
+            result(request_id, {"stopReason": stop_reason})
         elif method == "session/cancel":
             continue
         elif request_id is not None:

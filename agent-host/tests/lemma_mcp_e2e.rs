@@ -448,3 +448,75 @@ async fn an_agent_run_discovers_and_calls_a_lemma_tool_through_the_host() {
     );
     host.shutdown().await;
 }
+
+#[tokio::test]
+async fn a_refreshed_credential_reaches_the_bridge_without_restarting_the_run() {
+    // The credential a run is dispatched with expires in an hour and nothing
+    // used to renew it, so a long turn either had to be cut short at that
+    // expiry or carry on with every Lemma tool call returning 401 — which the
+    // agent experiences as its tools quietly vanishing part-way through a task.
+    //
+    // Renewal has no channel of its own: Lemma sends a REFRESH_CREDENTIAL
+    // command, the supervisor journals it onto the run, and the bridge — a
+    // separate process — picks it up because it re-reads its endpoint before
+    // every request. This asserts the whole of that, at the only place it can
+    // be observed: which bearer the Lemma endpoint actually receives.
+    let endpoint = LemmaMcpEndpoint::start(McpTransport::StatelessJson).await;
+    let directory = TempDir::new().unwrap();
+    let shims = ShimmedAgents::install(directory.path(), "mcp-refresh");
+    let control = ControlPlane::start(
+        &shims.harness_key,
+        "Use the Lemma tools repeatedly.",
+        endpoint.run_configuration(),
+        PermissionAnswer::Ignore,
+    )
+    .await;
+
+    let mut renewed = endpoint.run_configuration();
+    renewed["authorization"] = json!("Bearer renewed-run-scoped-token");
+    renewed["token"] = json!("renewed-run-scoped-token");
+    // Lemma serves the replacement it just issued alongside the one still
+    // in use, because a call already in flight carries the old one.
+    endpoint.also_accept("Bearer renewed-run-scoped-token");
+    control.refresh_credential_when_text_contains("LEMMA_MCP_READY", renewed);
+
+    let host = HostProcess::start(directory.path(), &control, &shims).await;
+    control
+        .wait_for(
+            "the run to reach a terminal event",
+            Duration::from_secs(90),
+            ControlPlane::saw_terminal,
+        )
+        .await;
+
+    let bearers = endpoint
+        .requests()
+        .into_iter()
+        .filter(|record| record.method == "tools/call")
+        .filter_map(|record| record.authorization)
+        .collect::<Vec<_>>();
+    assert!(
+        bearers.len() >= 2,
+        "the agent should have made several tool calls, got {bearers:?}"
+    );
+    assert_eq!(
+        bearers.first().map(String::as_str),
+        Some("Bearer hermetic-run-scoped-mcp-token"),
+        "the run must start on the credential it was dispatched with"
+    );
+    assert_eq!(
+        bearers.last().map(String::as_str),
+        Some("Bearer renewed-run-scoped-token"),
+        "the bridge never picked up the replacement credential; a long run \
+         would keep 401ing until it died. host stderr={}",
+        host.stderr()
+    );
+    // And the agent noticed nothing: it kept working across the change.
+    let answer = control.assistant_text();
+    assert!(
+        answer.contains("LEMMA_MCP_REFRESH_DONE"),
+        "the turn should have finished normally, got {answer:?}; bearers={bearers:?}"
+    );
+
+    host.shutdown().await;
+}

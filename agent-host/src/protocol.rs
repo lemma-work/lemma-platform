@@ -148,6 +148,13 @@ pub enum CommandKind {
     CancelRun,
     /// Carries a human's answer to a parked native permission request.
     ResolvePermission,
+    /// Carries a replacement Lemma MCP credential for a run still in flight.
+    ///
+    /// The one minted at dispatch is valid for an hour and nothing used to
+    /// renew it, so a long turn either had to be cut short at that expiry or
+    /// carry on with every Lemma tool call returning 401 — which the agent
+    /// experiences as its tools quietly vanishing mid-task.
+    RefreshCredential,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

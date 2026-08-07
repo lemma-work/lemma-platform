@@ -465,6 +465,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'agent.infrastructure.agent_host_event_intake.stream_resynced': EventSpec('warning', frozenset({'agent_run_id', 'from_sequence'})),
     'agent.infrastructure.agent_host_dispatch_repository.control_update_dropped': EventSpec('warning', frozenset({'host_id', 'agent_run_id', 'update_kind', 'error_type'})),
     'agent.harnesses.agent_host.event_stream_read.degraded': EventSpec('warning', frozenset({'agent_run_id', 'attempt', 'error_type'})),
+    'agent.harnesses.agent_host.credential_refresh_failed.degraded': EventSpec('warning', frozenset({'agent_run_id', 'error_type'})),
     'agent.harnesses.agent_host.run_deadline_capped_by_credential.degraded': EventSpec('warning', frozenset({'agent_run_id', 'timeout_seconds'})),
     'agent.handlers.reconcile_agent_host_dispatch_cron.failed': EventSpec('error', frozenset()),
     'agent.handlers.cleanup_agent_host_retained_state_cron.failed': EventSpec('error', frozenset()),
