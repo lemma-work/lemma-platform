@@ -98,25 +98,31 @@ Expect a reply. Before this batch the event never arrived at all. Also confirm t
 | It carries a **"Choose who answers"** button |
 | Nobody else in the channel sees anything |
 
-**Then click the button.** ⚠️ **Nothing will happen** — the modal is not built (Gap G1). Confirming the ephemeral appears at all is the goal here.
+**Then click the button.** A modal opens listing **Pod assistant** first, then every agent in the pod. Save, and an ephemeral confirms what was set. Mention the bot in that channel and the chosen agent should answer.
 
 **Also:** invite the bot to a channel that **already has a route**. No prompt should appear — that is a re-add, not setup.
 
 ---
 
-## 7. Per-person DM agent (backend only)
+## 7. Per-person DM agent
 
-No UI writes this yet (Gap G2), so set it by hand:
+**Do:** open the app's **Home** tab → *Your direct messages* → **Change**. Pick an agent, save.
 
-```bash
-docker compose exec -T postgres psql -U postgres -d lemma -c "UPDATE agent_surfaces SET config = jsonb_set(config, '{slack,dm_agent_by_user}', '{\"U_YOUR_SLACK_ID\":\"some-agent-name\"}') WHERE surface_type='SLACK';"
-```
+The tab republishes immediately with the new name, and your next DM should reach that agent. A colleague's DM still reaches the workspace default — the choice is per person.
 
-DM the bot and confirm **that** agent answers, while a colleague's DM still reaches the workspace default. Then point it at a **nonexistent** agent name — you must still get a reply from the default agent, not silence.
+**Then pick "Pod assistant."** It must *stay* on the pod assistant. Storing that as an empty value made it indistinguishable from "never chose", which silently resolved back to the default agent — a bug fixed three times in three places, so it is worth re-checking.
 
 ---
 
-## 8. Regression sweep — things that must still work
+## 8. Your own Slack app (self-hosted / custom OAuth)
+
+**Do:** `GET /pods/{pod_id}/surfaces/{name}/slack-manifest` returns a manifest with **this surface's** webhook URL and this deployment's redirect URL already filled in. Create a Slack app from it, then store that app's signing secret as the surface's `webhook_secret`.
+
+Expect events from your own app to verify. A surface with no stored secret keeps using the deployment's app, unchanged. There is **no UI for this yet** — that is the next workstream.
+
+---
+
+## 9. Regression sweep — things that must still work
 
 Nothing here is new, but the shared egress path changed underneath all of it.
 
@@ -139,14 +145,15 @@ Four bugs only a real workspace could have found: `streaming_mode_mismatch`, `ex
 
 | # | Gap |
 |---|---|
-| G1 | No handler records feedback-button clicks; the buttons render only when a `feedback_callback_id` is passed, and nothing passes one. |
-| G2 | Nothing prevents two surfaces claiming the same Slack workspace. Found live: routing was decided by row order across two orgs. |
-| G3 | All of F: no link unfurling, no `assistant.search.context` (channel search is still the substring scan), no Slack DM cold-open. |
-| G4 | The App Home logo needs `SLACK_HOME_LOGO_URL` set to a **public** https URL — Slack fetches it server-side, so localhost renders nothing. |
-| G5 | Starter-prompt buttons show the prompt to send rather than posting as the user; Slack has no API to speak as a user. |
+| G1 | **The whole web UI is stale.** It still presents Slack as "pick a workspace, edit a routing table" — nothing mentions streaming, the App Home, per-person DM agents, or running your own Slack app. This is the next workstream. |
+| G2 | No handler records feedback-button clicks; the buttons render only when a `feedback_callback_id` is passed, and nothing passes one. |
+| G3 | Nothing prevents two surfaces claiming the same Slack workspace. Found live: routing was decided by row order across two orgs. |
+| G4 | All of F: no link unfurling, no `assistant.search.context` (channel search is still the substring scan), no Slack DM cold-open. |
+| G5 | The App Home logo needs `SLACK_HOME_LOGO_URL` set to a **public** https URL — Slack fetches it server-side, so localhost renders nothing. |
+| G6 | Starter-prompt buttons show the prompt to send rather than posting as the user; Slack has no API to speak as a user. |
 
 ---
 
 ## Unit test baseline
 
-`make test-backend-unit` → **3559 passed**. A different count means something regressed.
+`make test-backend-unit` → **3563 passed**. A different count means something regressed.
