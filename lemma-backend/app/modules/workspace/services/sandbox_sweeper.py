@@ -23,6 +23,14 @@ from datetime import datetime, timedelta, timezone
 from app.core.log.log import get_logger
 from app.modules.workspace.domain.sandbox import SandboxDesiredState
 from app.modules.workspace.infrastructure.sandbox_repository import SandboxRepository
+from app.modules.workspace.providers.base import (
+    ProviderFailed,
+    ProviderGone,
+    ProviderInstance,
+    ProviderNotReady,
+    ProviderRejected,
+)
+from sandbox_runtime.errors import SandboxError
 
 logger = get_logger(__name__)
 
@@ -47,6 +55,8 @@ class SandboxSweeper:
         released = 0
         for sandbox in stale:
             try:
+                if await self._is_busy(sandbox):
+                    continue
                 await self._service.release(sandbox.id)
             except Exception as exc:
                 # One unreachable sandbox must not stop the others being
@@ -59,6 +69,33 @@ class SandboxSweeper:
                 continue
             released += 1
         return released
+
+    async def _is_busy(self, sandbox) -> bool:
+        """Is something still running inside this sandbox?
+
+        Idle is measured from the last time a caller asked for the sandbox, not
+        from the last thing it did -- so a single long tool call or function
+        invocation looks idle the whole time it runs. Without this check the
+        sweep would stop compute underneath live work.
+        """
+
+        handle = await self._service.describe(sandbox.id)
+        if handle is None:
+            return False
+        instance = ProviderInstance(
+            provider_id=handle.name, name=handle.name, running=True
+        )
+        deadline_at = datetime.now(timezone.utc) + timedelta(seconds=15)
+        try:
+            processes = await self._provider.list_processes(
+                instance, deadline_at=deadline_at
+            )
+        except (SandboxError, ProviderFailed, ProviderGone, ProviderNotReady,
+                ProviderRejected):
+            # An unreachable sandbox is not evidence that it is idle, and
+            # releasing on a failed probe is the mistake this guards against.
+            return True
+        return any(p.exit_code is None for p in processes)
 
     async def reclaim_orphans(self, *, dry_run: bool = False) -> tuple[str, ...]:
         """Destroy provider objects no live sandbox row accounts for.

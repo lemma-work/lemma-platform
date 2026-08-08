@@ -267,7 +267,7 @@ class FunctionRuntimeRouteResolver:
         deadline_at: datetime,
     ) -> None:
         attempt = 0
-        capacity_error: SandboxUnavailable | None = None
+        last_failure: SandboxUnavailable | None = None
         while self._now() < deadline_at:
             try:
                 handle = await client.ensure_sandbox(
@@ -279,10 +279,10 @@ class FunctionRuntimeRouteResolver:
                     verify_ready=True,
                 )
             except SandboxUnavailable as exc:
-                # Retryable by type; anything definitive propagates. Capacity
-                # is worth remembering separately so the eventual timeout can
-                # say the platform was full rather than merely slow.
-                capacity_error = exc if "capacity" in str(exc).lower() else None
+                # Retryable by type; anything definitive propagates. Keep the
+                # last one so a timeout can say why the sandbox never came up
+                # instead of only that it did not.
+                last_failure = exc
                 await self._wait_retry(
                     exc.retry_after_ms,
                     deadline_at,
@@ -302,8 +302,8 @@ class FunctionRuntimeRouteResolver:
                 attempt=attempt,
             )
             attempt += 1
-        if capacity_error is not None:
-            raise capacity_error
+        if last_failure is not None:
+            raise last_failure
         raise TimeoutError("function sandbox was not ready before the deadline")
 
     def _key(

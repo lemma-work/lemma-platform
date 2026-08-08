@@ -119,7 +119,8 @@ async def test_control_endpoint_leases_existing_allocation_without_ensure() -> N
 
 
 @pytest.mark.asyncio
-async def test_capacity_exhaustion_survives_ensure_deadline() -> None:
+async def test_the_last_failure_survives_the_ensure_deadline() -> None:
+    """A timeout says why the sandbox never came up, not just that it did not."""
     dispatch = _dispatch(FunctionDispatchMode.ASYNCHRONOUS)
     error = SandboxUnavailable(
         "provider active sandbox capacity is exhausted",

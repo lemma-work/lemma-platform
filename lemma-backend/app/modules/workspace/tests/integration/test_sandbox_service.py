@@ -21,6 +21,7 @@ from app.modules.workspace.domain.sandbox import (
 from app.modules.workspace.infrastructure.sandbox_repository import SandboxRepository
 from app.modules.workspace.providers import naming
 from app.modules.workspace.providers.base import (
+    ProcessDescriptor,
     ProviderCreateSpec,
     ProviderInstance,
     ProviderRejected,
@@ -40,6 +41,12 @@ class FakeProvider:
     destroyed: list[str] = field(default_factory=list)
     destroyed_volumes: list[str] = field(default_factory=list)
     fail_create: Exception | None = None
+    # What `list_processes` reports; a None exit code means still running.
+    processes: list[ProcessDescriptor] = field(default_factory=list)
+
+    async def list_processes(self, instance, *, deadline_at):
+        del instance, deadline_at
+        return tuple(self.processes)
 
     async def create(self, spec: ProviderCreateSpec) -> ProviderInstance:
         if self.fail_create is not None:

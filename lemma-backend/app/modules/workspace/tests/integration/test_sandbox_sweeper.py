@@ -8,7 +8,11 @@ from uuid import UUID, uuid4
 import pytest
 
 from app.modules.workspace.domain.sandbox import SandboxKind, SandboxOwnerKind
-from app.modules.workspace.providers.base import ProviderObject
+from app.modules.workspace.providers.base import (
+    ProcessDescriptor,
+    ProviderGone,
+    ProviderObject,
+)
 from app.modules.workspace.services.sandbox_service import SandboxService
 from app.modules.workspace.services.sandbox_sweeper import SandboxSweeper
 from app.modules.workspace.tests.integration.test_sandbox_service import FakeProvider
@@ -218,3 +222,51 @@ async def test_recently_used_sandboxes_are_not_released(
     await service.ensure(sandbox.id)
 
     assert await sweeper.release_idle(idle_after_seconds=3600) == 0
+
+
+async def test_a_sandbox_with_running_work_is_not_released(
+    sweeper: SandboxSweeper, provider: SweepableProvider, service: SandboxService
+) -> None:
+    """Idle is measured from the last ensure, not the last thing the sandbox did.
+
+    A single long tool call or function invocation therefore looks idle for its
+    whole duration, and without a liveness check the sweep would stop compute
+    underneath work that is still running.
+    """
+    sandbox = await _workspace(service)
+    handle = await service.ensure(sandbox.id)
+    provider.processes = [
+        ProcessDescriptor(process_id="op-1", state="running", exit_code=None)
+    ]
+
+    assert await sweeper.release_idle(idle_after_seconds=0) == 0
+    assert handle.provider_id not in provider.released
+
+
+async def test_a_sandbox_whose_work_has_finished_is_released(
+    sweeper: SandboxSweeper, provider: SweepableProvider, service: SandboxService
+) -> None:
+    sandbox = await _workspace(service)
+    handle = await service.ensure(sandbox.id)
+    provider.processes = [
+        ProcessDescriptor(process_id="op-1", state="exited", exit_code=0)
+    ]
+
+    assert await sweeper.release_idle(idle_after_seconds=0) >= 1
+    assert handle.provider_id in provider.released
+
+
+async def test_a_sandbox_that_cannot_be_probed_is_left_alone(
+    sweeper: SandboxSweeper, provider: SweepableProvider, service: SandboxService
+) -> None:
+    """A failed probe is not evidence of idleness."""
+
+    sandbox = await _workspace(service)
+    await service.ensure(sandbox.id)
+
+    async def _unreachable(instance, *, deadline_at):
+        raise ProviderGone("sandbox is unreachable")
+
+    provider.list_processes = _unreachable  # type: ignore[method-assign]
+
+    assert await sweeper.release_idle(idle_after_seconds=0) == 0
