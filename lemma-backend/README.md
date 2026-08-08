@@ -37,7 +37,8 @@ The repository does not use submodules. Backend code depends on sibling packages
 | `../lemma-typescript/` | TypeScript SDK used by apps |
 | `../lemma-skills/` | Built-in agent skills loaded by the backend and workspace containers |
 | `lemma-connectors/` | Backend-local editable Python connector package |
-| `../agentbox/` | Workspace sandbox manager + runtime image |
+| `sandbox_runtime/` | The runtime inside sandbox images, and its protocol (Apache-2.0) |
+| `sandbox-images/` | Dockerfiles and templates for the sandbox images (Apache-2.0) |
 
 ## Development
 
@@ -230,7 +231,7 @@ widen `agent_surfaces.webhook_secret` to Text for the v2 envelope.
 
 ```bash
 make docker-build         # backend image (from the monorepo root context)
-make agentbox-build       # local AgentBox manager + runtime images
+make sandbox-images       # local workspace + function sandbox images
 ```
 
 Release images are published to GitHub Container Registry (`ghcr.io/lemma-work/*`)

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from sandbox_runtime.errors import SandboxUnavailable
+
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -7,19 +9,12 @@ from uuid import uuid4
 
 import pytest
 
-import httpx
-from agentbox_client import (
+from sandbox_runtime.protocol import (
+    SandboxProfileRef,
     AdmissionClass,
-    AgentBoxApiError,
     FunctionRuntimeLease,
-    ProfileRef,
     RuntimeRequestHeader,
     WorkloadKind,
-)
-from agentbox_client.models import (
-    AgentBoxErrorBody,
-    AgentBoxErrorResponse,
-    RetryDisposition,
 )
 
 from app.modules.function.application.function_runtime_endpoint_cache import (
@@ -57,7 +52,7 @@ def _lease(pod_id, *, hours: int = 5) -> FunctionRuntimeLease:
         logical_id=pod_id,
         allocation_id=uuid4(),
         allocation_epoch=3,
-        profile=ProfileRef(
+        profile=SandboxProfileRef(
             name="function-python-v1",
             digest=f"sha256:{'2' * 64}",
         ),
@@ -83,7 +78,7 @@ async def test_execution_endpoint_ensures_leases_and_caches_direct_route() -> No
         close=AsyncMock(),
     )
     resolver = FunctionRuntimeRouteResolver(
-        agentbox_client_factory=lambda: client,
+        sandbox_client_factory=lambda: client,
         endpoint_cache=FunctionRuntimeEndpointCache(),
     )
 
@@ -111,7 +106,7 @@ async def test_control_endpoint_leases_existing_allocation_without_ensure() -> N
         close=AsyncMock(),
     )
     resolver = FunctionRuntimeRouteResolver(
-        agentbox_client_factory=lambda: client,
+        sandbox_client_factory=lambda: client,
         endpoint_cache=FunctionRuntimeEndpointCache(),
     )
 
@@ -124,29 +119,23 @@ async def test_control_endpoint_leases_existing_allocation_without_ensure() -> N
 
 
 @pytest.mark.asyncio
-async def test_capacity_exhaustion_survives_ensure_deadline() -> None:
+async def test_the_last_failure_survives_the_ensure_deadline() -> None:
+    """A timeout says why the sandbox never came up, not just that it did not."""
     dispatch = _dispatch(FunctionDispatchMode.ASYNCHRONOUS)
-    error = AgentBoxApiError(
-        httpx.Response(429),
-        AgentBoxErrorResponse(
-            error=AgentBoxErrorBody(
-                code="CAPACITY_EXHAUSTED",
-                message="provider active sandbox capacity is exhausted",
-                retry=RetryDisposition.WAIT,
-                retry_after_ms=1,
-            )
-        ),
+    error = SandboxUnavailable(
+        "provider active sandbox capacity is exhausted",
+        retry_after_ms=1,
     )
     client = SimpleNamespace(
         ensure_sandbox=AsyncMock(side_effect=error),
         close=AsyncMock(),
     )
     resolver = FunctionRuntimeRouteResolver(
-        agentbox_client_factory=lambda: client,
+        sandbox_client_factory=lambda: client,
         endpoint_cache=FunctionRuntimeEndpointCache(),
     )
 
-    with pytest.raises(AgentBoxApiError) as raised:
+    with pytest.raises(SandboxUnavailable) as raised:
         await resolver._ensure_sandbox(
             client,
             dispatch.pod_id,
@@ -154,4 +143,4 @@ async def test_capacity_exhaustion_survives_ensure_deadline() -> None:
             deadline_at=datetime.now(timezone.utc) + timedelta(milliseconds=5),
         )
 
-    assert raised.value.code == "CAPACITY_EXHAUSTED"
+    assert "capacity is exhausted" in str(raised.value)

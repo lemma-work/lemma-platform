@@ -8,7 +8,11 @@ from uuid import UUID, uuid7
 
 import pytest
 
-from agentbox_client import AgentBoxClient, WorkloadKind
+from sandbox_runtime.protocol import WorkloadKind
+
+from app.modules.workspace.services.local_sandbox_client import (
+    LocalSandboxClient,
+)
 
 from app.core.config import settings
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
@@ -151,6 +155,7 @@ async def _wait_for_terminal(db_manager, run_id: UUID) -> FunctionRunModel:
 async def test_api_and_job_execute_through_one_per_pod_docker_sandbox(
     local_agentbox_server,
     backend_server,
+    configure_workspace_api_url,
     db_manager,
     db_session,
     test_pod,
@@ -161,7 +166,13 @@ async def test_api_and_job_execute_through_one_per_pod_docker_sandbox(
     pod_id = UUID(test_pod["id"])
     user_id = UUID(fixed_test_user["id"])
     original_gateway_url = settings.function_runtime_gateway_url
-    settings.function_runtime_gateway_url = backend_server["docker_base_url"]
+    # The URL the *sandbox* uses to fetch its artifact, which is not always the
+    # one this process would use. A local container reaches the host gateway; a
+    # sandbox in E2B's cloud needs a publicly resolvable address, and the
+    # fixture publishes whichever applies (starting a tunnel when it must).
+    settings.function_runtime_gateway_url = configure_workspace_api_url[
+        "workspace_callback_url"
+    ]
     try:
         api_run_id = await _create_run(
             db_session,
@@ -177,17 +188,17 @@ async def test_api_and_job_execute_through_one_per_pod_docker_sandbox(
             kind=FunctionType.JOB,
             value=21,
         )
-        def client_factory() -> AgentBoxClient:
-            return AgentBoxClient(
-                base_url=local_agentbox_server["manager_base_url"],
-                api_key=local_agentbox_server["api_key"],
-                timeout_seconds=60,
+        def client_factory() -> LocalSandboxClient:
+            from app.modules.workspace.services.sandbox_composition import (
+                build_local_client,
             )
+
+            return build_local_client()
 
         runtime_http_clients = FunctionRuntimeHttpClientPool()
         dispatcher = FunctionDispatcher(
             uow_factory=SessionUnitOfWorkFactory(db_manager.session_factory),
-            agentbox_client_factory=client_factory,
+            sandbox_client_factory=client_factory,
             token_minter=mint_function_session_token,
             token_cache=FunctionSessionTokenCache(),
             endpoint_cache=FunctionRuntimeEndpointCache(),

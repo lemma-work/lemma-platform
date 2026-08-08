@@ -105,8 +105,6 @@ async def cancellable_worker(e2e_settings):
             "DATASTORE_DATABASE_URL": e2e_settings.datastore_database_url,
             "REDIS_URL": e2e_settings.redis_url,
             "API_URL": os.environ.get("API_URL", e2e_settings.api_url),
-            "AGENTBOX_API_URL": e2e_settings.agentbox_api_url,
-            "AGENTBOX_API_KEY": e2e_settings.agentbox_api_key,
             "SUPERTOKENS_CORE_URL": e2e_settings.supertokens_core_url,
             "ENVIRONMENT": "testing",
             "DEBUG": "true",

@@ -7,6 +7,11 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse
 
+from app.core.api.callback_page import (
+    message_html,
+    render_callback_page,
+    safe_provider_error,
+)
 from app.modules.agent_surfaces.config import surface_settings
 from app.core.infrastructure.events.inbox import stable_event_id
 from app.core.infrastructure.events.publisher import EventPublisher
@@ -252,9 +257,7 @@ async def handle_telegram_manager_webhook(
     service: TelegramManagerServiceDep,
 ):
     expected = str(surface_settings.telegram_manager_webhook_secret or "").strip()
-    provided = str(
-        request.headers.get("x-telegram-bot-api-secret-token") or ""
-    ).strip()
+    provided = str(request.headers.get("x-telegram-bot-api-secret-token") or "").strip()
     if not expected:
         raise HTTPException(
             status_code=503,
@@ -509,6 +512,24 @@ async def verify_direct_surface_webhook(
     )
 
 
+_TEAMS_LABEL = "Microsoft Teams"
+# Teams is a natively supported app, so it carries no catalog icon; the
+# frontend ships its mark under /connector-logos.
+_TEAMS_LOGO = "teams.svg"
+
+
+def _consent_failed(message: str, *, status_code: int = 400) -> HTMLResponse:
+    return render_callback_page(
+        succeeded=False,
+        app_label=_TEAMS_LABEL,
+        icon=None,
+        logo_asset=_TEAMS_LOGO,
+        title=f"{_TEAMS_LABEL} wasn’t connected",
+        body_html=message_html(message),
+        status_code=status_code,
+    )
+
+
 @router.get(
     "/teams/admin-consent/callback",
     operation_id="agent.surface.teams_admin_consent_callback",
@@ -522,32 +543,29 @@ async def teams_admin_consent_callback(
     service: AgentSurfaceService = Depends(get_surface_service),
 ) -> HTMLResponse:
     if error:
-        html = f"""
-        <html><body style="font-family:sans-serif;padding:2rem">
-        <h2>&#10060; Admin consent failed</h2>
-        <p><strong>{error}</strong>: {error_description or ""}</p>
-        <p>Please contact your administrator or try again.</p>
-        </body></html>
-        """
-        return HTMLResponse(content=html, status_code=400)
+        # Microsoft hands these back as query parameters on a public endpoint,
+        # so neither the code nor its description may be reflected as written.
+        # The code is reduced to its bounded vocabulary; the description is
+        # dropped entirely, since it is prose we cannot vouch for.
+        return _consent_failed(
+            f"Microsoft ended the consent request with "
+            f"“{safe_provider_error(error)}”, so the bot was not installed. "
+            "You can start the consent flow again from Lemma."
+        )
 
     if not tenant or admin_consent != "True" or not state:
-        html = """
-        <html><body style="font-family:sans-serif;padding:2rem">
-        <h2>&#9888;&#65039; Invalid callback</h2>
-        <p>Missing required parameters. Please retry the consent flow.</p>
-        </body></html>
-        """
-        return HTMLResponse(content=html, status_code=400)
+        return _consent_failed(
+            "The consent request came back without the details Lemma needs to "
+            "finish it. You can start the consent flow again from Lemma."
+        )
 
     try:
-        from uuid import UUID
-
         surface_id = UUID(state)
     except ValueError:
-        return HTMLResponse(
-            content="<html><body>Invalid state parameter.</body></html>",
-            status_code=400,
+        return _consent_failed(
+            "The consent request came back with an identifier Lemma could not "
+            "read, so nothing was changed. You can start the consent flow again "
+            "from Lemma."
         )
 
     surface = await service.activate_after_consent(
@@ -555,19 +573,19 @@ async def teams_admin_consent_callback(
     )
 
     if surface is None:
-        html = """
-        <html><body style="font-family:sans-serif;padding:2rem">
-        <h2>&#9888;&#65039; Surface not found</h2>
-        <p>The Teams surface could not be located. It may have been deleted.</p>
-        </body></html>
-        """
-        return HTMLResponse(content=html, status_code=404)
+        return _consent_failed(
+            "Lemma could not find the Teams surface this consent was for — it "
+            "may have been deleted since the request was sent.",
+            status_code=404,
+        )
 
-    html = """
-    <html><body style="font-family:sans-serif;padding:2rem;max-width:480px;margin:auto">
-    <h2>&#9989; Admin consent granted</h2>
-    <p>The Lemma Teams bot is now active and ready to use.</p>
-    <p>You can close this window and return to the Lemma dashboard.</p>
-    </body></html>
-    """
-    return HTMLResponse(content=html)
+    return render_callback_page(
+        succeeded=True,
+        app_label=_TEAMS_LABEL,
+        icon=None,
+        logo_asset=_TEAMS_LOGO,
+        title=f"{_TEAMS_LABEL} is connected",
+        body_html=message_html(
+            "The Lemma bot is installed and ready to use in your workspace."
+        ),
+    )

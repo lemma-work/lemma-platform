@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 from uuid import UUID
 
-from agentbox_client import WorkloadKind
+from sandbox_runtime.protocol import WorkloadKind
 import pytest
 
 from load_tests.function_execution import (

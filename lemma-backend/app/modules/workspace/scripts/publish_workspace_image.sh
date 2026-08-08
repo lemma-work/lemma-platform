@@ -11,7 +11,7 @@ IMAGE_TAG="${1:-}"
 PLATFORM="${2:-linux/arm64/v8}"
 BACKEND_DIR="$(cd "$(dirname "$0")/../../../../" && pwd)"
 ROOT_DIR="$(cd "$BACKEND_DIR/.." && pwd)"
-DOCKERFILE_PATH="$ROOT_DIR/agentbox/Dockerfile.workspace"
+DOCKERFILE_PATH="$ROOT_DIR/lemma-backend/sandbox-images/Dockerfile.workspace"
 
 if [[ -z "$IMAGE_TAG" ]]; then
   echo "Usage: $0 <image-tag> [platform]"

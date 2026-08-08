@@ -1,4 +1,9 @@
-"""Workspace sandbox service for AgentBox and local Docker runtimes."""
+"""Sessions, environment and file access over a provisioned workspace.
+
+Sits above ``SandboxService``: that decides a sandbox exists, this decides
+what a caller is allowed to do with one and hands back a session bound to
+the right workspace, cwd and credentials.
+"""
 
 from __future__ import annotations
 
@@ -8,48 +13,35 @@ from typing import Optional
 from uuid import UUID, uuid4
 
 from app.core.config import settings
-from app.core.request_context import correlation_headers, create_inherited_task
-from agentbox_client import (
-    AgentBoxApiError,
-    AgentBoxClient,
+from app.core.request_context import create_inherited_task
+from sandbox_runtime.protocol import (
     PortAccessGrant,
     PortProtocol,
-    RetryDisposition,
     WorkloadKind,
 )
 from app.modules.workspace.contracts import SandboxInfo
-from app.modules.workspace.agentbox_session import (
-    AgentBoxWorkspaceSession,
+from sandbox_runtime.errors import SandboxUnavailable
+from app.modules.workspace.sandbox_session import (
+    SandboxWorkspaceSession,
     canonical_workspace_cwd,
 )
-from app.modules.workspace.services.agentbox_manager import (
-    AgentBoxSandbox,
-    agentbox_sandbox_id,
-)
 from app.modules.workspace.services.interfaces import ISandbox, IWorkspaceSession
-from app.modules.workspace.services.workspace_activity_store import (
-    WorkspaceActivityStore,
-)
+from app.modules.workspace.services.local_sandbox_client import LocalSandboxClient
 from app.modules.workspace.services.workspace_process_store import WorkspaceProcessStore
-from app.modules.workspace.services.workspace_state_store import WorkspaceStateStore
-_activity_store: WorkspaceActivityStore | None = None
-_state_store: WorkspaceStateStore | None = None
+from app.modules.workspace.services.workspace_storage_generation_store import (
+    WorkspaceStorageGenerationStore,
+)
+
+_storage_generation_store: WorkspaceStorageGenerationStore | None = None
 _process_store: WorkspaceProcessStore | None = None
 _SANDBOX_MANAGER_HTTP_TIMEOUT_SECONDS = 300.0
 
 
-def get_workspace_activity_store() -> WorkspaceActivityStore:
-    global _activity_store
-    if _activity_store is None:
-        _activity_store = WorkspaceActivityStore()
-    return _activity_store
-
-
-def get_workspace_state_store() -> WorkspaceStateStore:
-    global _state_store
-    if _state_store is None:
-        _state_store = WorkspaceStateStore()
-    return _state_store
+def get_workspace_storage_generation_store() -> WorkspaceStorageGenerationStore:
+    global _storage_generation_store
+    if _storage_generation_store is None:
+        _storage_generation_store = WorkspaceStorageGenerationStore()
+    return _storage_generation_store
 
 
 def get_workspace_process_store() -> WorkspaceProcessStore:
@@ -61,13 +53,10 @@ def get_workspace_process_store() -> WorkspaceProcessStore:
 
 async def reset_workspace_store_state() -> None:
     """Close and reset global workspace redis stores (used by tests)."""
-    global _activity_store, _state_store, _process_store
-    if _activity_store is not None:
-        await _activity_store.close()
-        _activity_store = None
-    if _state_store is not None:
-        await _state_store.close()
-        _state_store = None
+    global _storage_generation_store, _process_store
+    if _storage_generation_store is not None:
+        await _storage_generation_store.close()
+        _storage_generation_store = None
     if _process_store is not None:
         await _process_store.close()
         _process_store = None
@@ -76,39 +65,29 @@ async def reset_workspace_store_state() -> None:
 class WorkspaceSandboxService:
     """Service for user-scoped workspace sandbox lifecycle and sessions."""
 
-    # Process-shared manager client, keyed by (base_url, api_key). Reused across
-    # tool calls so each call doesn't open a fresh httpx connection pool.
-    _shared_manager_client: "tuple[tuple[str, str, int], AgentBoxClient] | None" = None
-    _inflight_ensures: dict[
-        tuple[int, str, UUID], asyncio.Task[SandboxInfo]
-    ] = {}
+    _inflight_ensures: dict[tuple[int, UUID], asyncio.Task[SandboxInfo]] = {}
     _inflight_directories: dict[
-        tuple[int, str, UUID, str, int, str], asyncio.Task[SandboxInfo]
+        tuple[int, UUID, str, int, str], asyncio.Task[SandboxInfo]
     ] = {}
-    _stopping: dict[tuple[int, str, UUID], asyncio.Event] = {}
+    _stopping: dict[tuple[int, UUID], asyncio.Event] = {}
 
     def __init__(
         self,
         *,
-        runtime: Optional[str] = None,
         sandbox: Optional[ISandbox] = None,
-        container_manager: Optional[ISandbox] = None,
-        activity_store: Optional[WorkspaceActivityStore] = None,
-        state_store: Optional[WorkspaceStateStore] = None,
+        storage_generation_store: Optional[WorkspaceStorageGenerationStore] = None,
         process_store: Optional[WorkspaceProcessStore] = None,
     ):
-        self.runtime = runtime or self._resolve_runtime()
-        self.sandbox = sandbox or container_manager or self._build_sandbox()
-        self.activity_store = activity_store or get_workspace_activity_store()
-        self.state_store = state_store or get_workspace_state_store()
+        self.sandbox = sandbox or self._build_sandbox()
+        self.storage_generation_store = (
+            storage_generation_store or get_workspace_storage_generation_store()
+        )
         self.process_store = process_store or get_workspace_process_store()
 
-    @staticmethod
-    def _resolve_runtime() -> str:
-        return "agentbox"
-
     def _build_sandbox(self) -> ISandbox:
-        return AgentBoxSandbox()
+        from app.modules.workspace.services.sandbox_composition import LocalSandbox
+
+        return LocalSandbox()
 
     async def close(self) -> None:
         close = getattr(self.sandbox, "close", None)
@@ -117,37 +96,27 @@ class WorkspaceSandboxService:
 
     @classmethod
     async def close_shared_manager_client(cls) -> None:
-        cached = cls._shared_manager_client
-        cls._shared_manager_client = None
+        """Cancel in-flight directory work at shutdown.
+
+        The name is from when this also disposed a pooled HTTP client to the
+        manager. The client is in-process now and owns no connection pool, so
+        only the tasks remain.
+        """
         directory_tasks = tuple(cls._inflight_directories.values())
         for task in directory_tasks:
             task.cancel()
         if directory_tasks:
             await asyncio.gather(*directory_tasks, return_exceptions=True)
         cls._inflight_directories.clear()
-        if cached is not None:
-            await cached[1].close()
 
     async def _get_sandbox_info(self, user_id: UUID) -> SandboxInfo | None:
         return await self.sandbox.get_sandbox(user_id)
 
     async def _ensure_sandbox_info(self, user_id: UUID) -> SandboxInfo:
-        return await self.sandbox.ensure_sandbox(
-            user_id,
-            env=self._get_sandbox_app_env(),
-        )
-
-    def _get_sandbox_app_env(self) -> dict[str, str]:
-        return {
-            "LEMMA_BASE_URL": self._resolve_workspace_api_url(),
-        }
-
-    def _resolve_workspace_api_url(self) -> str:
-        return self.resolve_workspace_api_url_for_runtime(self.runtime)
+        return await self.sandbox.ensure_sandbox(user_id)
 
     @staticmethod
-    def resolve_workspace_api_url_for_runtime(runtime: str) -> str:
-        del runtime
+    def _resolve_workspace_api_url() -> str:
         if settings.workspace_callback_api_url:
             return settings.workspace_callback_api_url
         return settings.cli_api_url or settings.api_url
@@ -164,24 +133,6 @@ class WorkspaceSandboxService:
         # non-destructive suspension became an optional capability.
         await self.sandbox.delete_sandbox(user_id)
 
-    async def _touch_workspace_activity(
-        self,
-        *,
-        user_id: UUID,
-        pod_id: Optional[UUID] = None,
-        session_id: Optional[str] = None,
-        sandbox_info: Optional[SandboxInfo] = None,
-    ) -> None:
-        await self.activity_store.mark_active(
-            runtime=self.runtime,
-            user_id=user_id,
-            pod_id=pod_id,
-            session_id=session_id,
-            container_name=sandbox_info.name if sandbox_info else None,
-            namespace=sandbox_info.namespace if sandbox_info else None,
-            workspace_url=sandbox_info.endpoint if sandbox_info else None,
-        )
-
     async def _get_or_create_sandbox_once(
         self,
         user_id: UUID,
@@ -192,42 +143,8 @@ class WorkspaceSandboxService:
         # idempotent PUT when AgentBox says the sandbox is absent/not ready.
         existing = None if force_reconcile else await self._get_sandbox_info(user_id)
         if existing is not None and existing.status == "RUNNING":
-            await self.state_store.mark_running(
-                runtime=self.runtime,
-                user_id=user_id,
-                pod_name=None,
-                container_name=existing.sandbox_id,
-                namespace=existing.namespace,
-                workspace_url=existing.endpoint,
-            )
-            await self._touch_workspace_activity(
-                user_id=user_id,
-                sandbox_info=existing,
-            )
             return existing
-        await self.state_store.mark_creating(runtime=self.runtime, user_id=user_id)
-        try:
-            sandbox_info = await self._ensure_sandbox_info(user_id)
-        except Exception as exc:
-            await self.state_store.mark_error(
-                runtime=self.runtime,
-                user_id=user_id,
-                error=str(exc),
-            )
-            raise
-        await self.state_store.mark_running(
-            runtime=self.runtime,
-            user_id=user_id,
-            pod_name=None,
-            container_name=sandbox_info.sandbox_id,
-            namespace=None,
-            workspace_url=sandbox_info.endpoint,
-        )
-        await self._touch_workspace_activity(
-            user_id=user_id,
-            sandbox_info=sandbox_info,
-        )
-        return sandbox_info
+        return await self._ensure_sandbox_info(user_id)
 
     async def get_or_create_sandbox(
         self,
@@ -236,7 +153,7 @@ class WorkspaceSandboxService:
         force_reconcile: bool = False,
     ) -> SandboxInfo:
         """Ensure one ready sandbox per user without concurrent PUT herds."""
-        key = (id(asyncio.get_running_loop()), self.runtime, user_id)
+        key = (id(asyncio.get_running_loop()), user_id)
         while stopping := self._stopping.get(key):
             await stopping.wait()
         # There is deliberately no await between the stop-marker check and
@@ -261,7 +178,7 @@ class WorkspaceSandboxService:
         return await asyncio.shield(task)
 
     async def stop_sandbox(self, user_id: UUID) -> None:
-        key = (id(asyncio.get_running_loop()), self.runtime, user_id)
+        key = (id(asyncio.get_running_loop()), user_id)
         existing_stop = self._stopping.get(key)
         if existing_stop is not None:
             await existing_stop.wait()
@@ -273,7 +190,7 @@ class WorkspaceSandboxService:
             directory_tasks = tuple(
                 task
                 for cache_key, task in self._inflight_directories.items()
-                if cache_key[:3] == key
+                if cache_key[: len(key)] == key
             )
             for task in directory_tasks:
                 task.cancel()
@@ -288,11 +205,6 @@ class WorkspaceSandboxService:
                     pass
             sandbox_info = await self._get_sandbox_info(user_id)
             await self._delete_sandbox(user_id, sandbox_info)
-            await self.activity_store.remove(runtime=self.runtime, user_id=user_id)
-            await self.state_store.mark_stopped(
-                runtime=self.runtime,
-                user_id=user_id,
-            )
         finally:
             if self._stopping.get(key) is stopped:
                 self._stopping.pop(key, None)
@@ -309,7 +221,7 @@ class WorkspaceSandboxService:
             await self.get_or_create_sandbox(user_id)
         return await self._get_manager_client().create_port_access(
             WorkloadKind.WORKSPACE,
-            agentbox_sandbox_id(user_id),
+            user_id,
             4848,
             protocol=PortProtocol.HTTP,
             expires_at=datetime.now(timezone.utc) + timedelta(seconds=ttl_seconds),
@@ -409,14 +321,6 @@ class WorkspaceSandboxService:
                 session_id=session_id,
             )
 
-        async def _activity_callback(current_session_id: Optional[str]) -> None:
-            await self._touch_workspace_activity(
-                user_id=user_id,
-                pod_id=pod_id,
-                session_id=current_session_id or session_id,
-                sandbox_info=sandbox_info,
-            )
-
         # Tell this session, once, if the disk it is about to use is not the one
         # it saw last. Without it an agent cannot distinguish a recreated
         # workspace from an ordinary empty directory.
@@ -424,8 +328,7 @@ class WorkspaceSandboxService:
         if session_id and sandbox_info.storage_generation is not None:
             try:
                 workspace_recreated = (
-                    await self.state_store.observe_storage_generation(
-                        runtime=self.runtime,
+                    await self.storage_generation_store.observe_storage_generation(
                         session_id=session_id,
                         generation=sandbox_info.storage_generation,
                     )
@@ -434,14 +337,13 @@ class WorkspaceSandboxService:
                 # A missing notice is far better than a failed tool call.
                 workspace_recreated = False
 
-        return AgentBoxWorkspaceSession(
+        return SandboxWorkspaceSession(
             client=self._get_manager_client(),
-            sandbox_id=str(agentbox_sandbox_id(user_id)),
+            sandbox_id=str(user_id),
             session_id=session_id,
             env_vars=env_vars,
             initial_cwd=resolved_cwd,
             auto_close=close_on_exit,
-            activity_callback=_activity_callback,
             owns_client=False,
             output_cursor_store=self.process_store,
             workspace_recreated=workspace_recreated,
@@ -503,16 +405,11 @@ class WorkspaceSandboxService:
                 )
             try:
                 await self._get_manager_client().create_directory(
-                    agentbox_sandbox_id(user_id),
+                    user_id,
                     path,
                     deadline_at=deadline_at,
                 )
-            except AgentBoxApiError as exc:
-                if exc.retry not in (
-                    RetryDisposition.WAIT,
-                    RetryDisposition.SAFE_SAME_OPERATION,
-                ):
-                    raise
+            except SandboxUnavailable as exc:
                 remaining = (
                     deadline_at - datetime.now(timezone.utc)
                 ).total_seconds()
@@ -524,7 +421,7 @@ class WorkspaceSandboxService:
                 continue
             return sandbox_info
         raise TimeoutError(
-            f"workspace sandbox {agentbox_sandbox_id(user_id)} did not become usable"
+            f"workspace sandbox {user_id} did not become usable"
         )
 
     def _directory_cache_key(
@@ -532,42 +429,30 @@ class WorkspaceSandboxService:
         user_id: UUID,
         path: str,
         sandbox_info: SandboxInfo,
-    ) -> tuple[int, str, UUID, str, int, str] | None:
+    ) -> tuple[int, UUID, str, int, str] | None:
         if (
             sandbox_info.allocation_id is None
             or sandbox_info.allocation_epoch is None
         ):
             return None
+        # The leading (loop id, user id) must stay a prefix of the ensure key:
+        # stop_sandbox cancels directory tasks by matching that prefix.
         return (
             id(asyncio.get_running_loop()),
-            self.runtime,
             user_id,
             sandbox_info.allocation_id,
             sandbox_info.allocation_epoch,
             path,
         )
 
-    def _get_manager_client(self) -> AgentBoxClient:
-        """Return a process-shared AgentBox manager client.
+    def _get_manager_client(self) -> LocalSandboxClient:
+        """The client the session and file operations run through.
 
-        Pooled so parallel/sequential tool calls reuse one httpx connection pool
-        instead of paying a fresh TLS handshake to the manager on every call. The
-        cache key includes the running event loop id so a new client is created
-        when settings change or when a different loop is in play (e.g. tests),
-        since an httpx.AsyncClient is bound to the loop that created it.
+        In-process, with the surface the AgentBox HTTP client had -- which is
+        why the session above it never needed to know the difference.
         """
-        api_key = settings.agentbox_api_key
-        if not api_key:
-            raise RuntimeError("AGENTBOX_API_KEY is required for workspace sandboxes")
-        key = (settings.agentbox_api_url, api_key, id(asyncio.get_running_loop()))
-        cached = WorkspaceSandboxService._shared_manager_client
-        if cached is not None and cached[0] == key:
-            return cached[1]
-        client = AgentBoxClient(
-            base_url=settings.agentbox_api_url,
-            api_key=api_key,
-            timeout_seconds=_SANDBOX_MANAGER_HTTP_TIMEOUT_SECONDS,
-            context_headers_provider=correlation_headers,
+        from app.modules.workspace.services.sandbox_composition import (
+            build_local_client,
         )
-        WorkspaceSandboxService._shared_manager_client = (key, client)
-        return client
+
+        return build_local_client()

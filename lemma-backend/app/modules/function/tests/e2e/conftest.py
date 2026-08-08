@@ -26,6 +26,7 @@ redis_container = e2e_fixtures.redis_container
 test_database_url = e2e_fixtures.test_database_url
 test_redis_url = e2e_fixtures.test_redis_url
 e2e_settings = e2e_fixtures.e2e_settings
+sandbox_reachable_backend = e2e_fixtures.sandbox_reachable_backend
 worker = e2e_fixtures.worker
 db_manager = e2e_fixtures.db_manager
 test_app = e2e_fixtures.test_app
@@ -75,6 +76,7 @@ __all__ = [
     "test_network",
     "test_pod",
     "test_redis_url",
+    "sandbox_reachable_backend",
     "worker",
     "local_agentbox_server",
     "workspace_image",

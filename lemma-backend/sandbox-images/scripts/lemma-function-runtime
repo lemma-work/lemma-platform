@@ -1,0 +1,10 @@
+#!/opt/agentbox-function/bin/python
+import sys
+
+sys.path.insert(0, "/app")
+
+from sandbox_runtime.function.runner import main
+
+
+if __name__ == "__main__":
+    main()

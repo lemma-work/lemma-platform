@@ -29,6 +29,7 @@ from app.modules.test_support.e2e import fixtures as e2e_fixtures
 from app.modules.test_support.e2e.worker_process import production_worker_process
 
 # Re-export shared E2E fixtures so this module can run with --confcutdir.
+sandbox_reachable_backend = e2e_fixtures.sandbox_reachable_backend
 test_network = e2e_fixtures.test_network
 postgres_container = e2e_fixtures.postgres_container
 supertokens_container = e2e_fixtures.supertokens_container
@@ -96,7 +97,7 @@ async def fake_composio_server():
 
 
 @pytest_asyncio.fixture(scope="session")
-async def worker(e2e_settings, fake_composio_server, request):
+async def worker(e2e_settings, sandbox_reachable_backend, fake_composio_server, request):
     """Surface shard's production worker with a hermetic Composio transport.
 
     Default e2e mode uses the deterministic FunctionModel token source. When
@@ -179,5 +180,6 @@ __all__ = [
     "test_network",
     "test_pod",
     "test_redis_url",
+    "sandbox_reachable_backend",
     "worker",
 ]

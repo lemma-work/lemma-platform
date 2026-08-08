@@ -21,8 +21,12 @@ def test_transactional_email_has_shared_brand_and_plain_text_parity():
     )
 
     assert "A concise preview" in rendered.html
-    assert "background:#f5f5f3" in rendered.html
+    assert "background:#f7f6f1" in rendered.html
     assert "Lemma" in rendered.html
+    # The mark is drawn in ink on every surface. Indigo here is how email ended
+    # up shipping a second Lemma brand alongside the connect pages.
+    assert "#6366f1" not in rendered.html
+    assert "#5558d9" not in rendered.html
     assert "Button not working?" in rendered.html
     assert (
         "https://lemma.work/auth/verify-email?token=abc&amp;tenantId=public"

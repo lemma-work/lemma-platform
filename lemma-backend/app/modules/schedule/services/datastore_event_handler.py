@@ -7,8 +7,12 @@ from typing import List
 from uuid import UUID
 
 from app.modules.datastore.domain.events import DatastoreRecordEvent
+from app.modules.schedule.domain.match_conditions import evaluate_match_conditions
 from app.modules.schedule.domain.schedule import ScheduleFireStatus, ScheduleType
-from app.modules.schedule.domain.value_objects import parse_datastore_operation
+from app.modules.schedule.domain.value_objects import (
+    DatastoreOperation,
+    parse_datastore_operation,
+)
 from app.modules.schedule.repositories.schedule_repository import ScheduleRepository
 from app.modules.schedule.services.schedule_processor import ScheduleProcessor
 from app.core.log.log import get_logger
@@ -48,10 +52,20 @@ class DatastoreEventHandler:
             "record_id": event.record_id,
             "operation": operation.value,
             "event_occurred_at": event.occurred_at.isoformat(),
+            # Exposed so a workflow can bind to what the write actually did,
+            # not just to the row it left behind.
+            "changed": event.changed or [],
+            "previous": event.previous or {},
         }
 
         fired_schedule_ids: list[UUID] = []
         for schedule in schedules:
+            if not self._matches_conditions(schedule, event, operation):
+                await self._record_fire(
+                    schedule.id, status=ScheduleFireStatus.FILTERED
+                )
+                continue
+
             # One bad schedule must not drop the event for the rest.
             try:
                 fired = await self.schedule_processor.process_event(
@@ -92,6 +106,40 @@ class DatastoreEventHandler:
                 fired_schedule_ids.append(schedule.id)
 
         return fired_schedule_ids
+
+    def _matches_conditions(
+        self,
+        schedule,
+        event: DatastoreRecordEvent,
+        operation: DatastoreOperation,
+    ) -> bool:
+        """Decide the cheap part of "should this fire" before anything costly.
+
+        This runs ahead of the schedule's LLM filter deliberately: a condition
+        that rules the event out here saves a model call on every write to the
+        watched table, which is the whole reason to prefer one.
+        """
+        try:
+            config = schedule.datastore_config
+        except ValueError:
+            # A config that no longer parses cannot be matched against. The
+            # repository skips these when selecting, so reaching here means the
+            # row changed underneath us; dropping the event is safer than
+            # firing a schedule whose conditions are unreadable.
+            logger.debug(
+                "schedule.datastore_event_handler.unparsable_config.diagnostic",
+                schedule_id=str(schedule.id),
+            )
+            return False
+        if config is None or not config.when:
+            return True
+        return evaluate_match_conditions(
+            config.when,
+            operation=operation,
+            payload=event.payload,
+            changed=event.changed,
+            previous=event.previous,
+        )
 
     async def _record_fire(
         self,

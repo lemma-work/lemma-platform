@@ -4,21 +4,18 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 from uuid import uuid4
 
-from agentbox_client import AgentBoxApiError
-from agentbox_client.models import (
-    AgentBoxErrorBody,
-    AgentBoxErrorResponse,
-    RetryDisposition,
+from sandbox_runtime.errors import (
+    SandboxError,
+    SandboxPathNotFound,
+    SandboxUnavailable,
 )
-import httpx
 import pytest
 
-from app.core.config import settings
 from app.modules.workspace.services.workspace_file_manager import WorkspaceFileManager
 
 
 class _FakeWorkspaceSession:
-    def __init__(self, failures: dict[str, AgentBoxApiError] | None = None):
+    def __init__(self, failures: dict[str, SandboxError] | None = None):
         self.operations: list[tuple] = []
         self.content = b"test"
         self.failures = failures or {}
@@ -76,26 +73,22 @@ class _FakeWorkspaceService:
         return self.session
 
 
-def _api_error(*, status_code: int, code: str) -> AgentBoxApiError:
-    response = httpx.Response(status_code, request=httpx.Request("GET", "http://test"))
-    error = AgentBoxErrorResponse(
-        error=AgentBoxErrorBody(
-            code=code,
-            message=code,
-            retry=(
-                RetryDisposition.WAIT
-                if status_code >= 500
-                else RetryDisposition.DO_NOT_RETRY
-            ),
-        )
-    )
-    return AgentBoxApiError(response, error)
+def _api_error(*, status_code: int, code: str) -> SandboxError:
+    """The error a provider raises for this condition.
+
+    Providers translate a missing path to `SandboxPathNotFound` and an outage
+    to `SandboxUnavailable`; a fake that raises anything else tests nothing.
+    """
+
+    del status_code
+    if code == "FILE_NOT_FOUND":
+        return SandboxPathNotFound(code)
+    return SandboxUnavailable(code, retry_after_ms=250)
 
 
 def _configure_remote_manager(
     monkeypatch: pytest.MonkeyPatch, session: _FakeWorkspaceSession
 ) -> WorkspaceFileManager:
-    monkeypatch.setattr(settings, "environment", "development")
     monkeypatch.setattr(
         "app.modules.workspace.services.workspace_sandbox_service.WorkspaceSandboxService",
         lambda: _FakeWorkspaceService(session),
@@ -141,7 +134,7 @@ async def test_workspace_file_manager_does_not_hide_provider_outage(
         "delete": lambda: manager.delete_file("note.txt"),
     }
 
-    with pytest.raises(AgentBoxApiError) as raised:
+    with pytest.raises(SandboxUnavailable) as raised:
         await calls[operation]()
 
     assert raised.value is outage
@@ -164,7 +157,6 @@ async def test_workspace_file_manager_converts_only_typed_missing_error(
 def test_workspace_file_manager_rejects_escaping_cwd_and_paths(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(settings, "environment", "development")
 
     with pytest.raises(ValueError, match="cwd escapes"):
         WorkspaceFileManager(uuid4(), cwd="../../outside")
@@ -172,18 +164,3 @@ def test_workspace_file_manager_rejects_escaping_cwd_and_paths(
     manager = WorkspaceFileManager(uuid4(), cwd="conversations/abc")
     with pytest.raises(ValueError, match="escapes"):
         manager._workspace_path("../../outside")
-
-
-@pytest.mark.asyncio
-async def test_local_workspace_file_manager_bounds_paths_and_deletes_directories(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(settings, "environment", "testing")
-    manager = WorkspaceFileManager(uuid4(), cwd="conversations/abc")
-
-    await manager.write_file("nested/note.txt", "content")
-    await manager.delete_file("nested")
-
-    assert await manager.list_files("") == []
-    with pytest.raises(ValueError, match="escapes"):
-        await manager.write_file("../../outside.txt", "content")

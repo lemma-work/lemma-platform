@@ -30,7 +30,6 @@ from app.modules.function.services.function_file_manager import FunctionFileMana
 from app.modules.function.services.function_service import FunctionService
 from app.core.config import settings
 from app.core.object_storage import build_object_store, local_file_storage_path
-from app.core.request_context import correlation_headers
 from app.composition.workspace_identity import (
     mint_function_session_token,
     resolve_workspace_organization_id,
@@ -54,7 +53,9 @@ from app.modules.function.application.function_runtime_http_client import (
 from app.modules.function.infrastructure.function_run_queue import (
     StreaqFunctionRunQueue,
 )
-from agentbox_client import AgentBoxClient
+from app.modules.workspace.services.local_sandbox_client import (
+    LocalSandboxClient,
+)
 
 
 _function_session_token_cache = FunctionSessionTokenCache(
@@ -133,23 +134,23 @@ def build_function_definition_compiler(
     )
 
 
-def _function_agentbox_client() -> AgentBoxClient:
-    api_url = settings.agentbox_api_url
-    api_key = settings.agentbox_api_key
-    if not api_url or not api_key:
-        raise RuntimeError("AGENTBOX_API_URL and AGENTBOX_API_KEY are required")
-    return AgentBoxClient(
-        base_url=api_url,
-        api_key=api_key,
-        timeout_seconds=120,
-        context_headers_provider=correlation_headers,
+def _function_sandbox_client() -> LocalSandboxClient:
+    """The client the function runtime is reached through.
+
+    Function sandboxes are provisioned by the same machinery as workspaces --
+    one per pod, a different image, a narrower capability set.
+    """
+    from app.modules.workspace.services.sandbox_composition import (
+        build_local_client,
     )
+
+    return build_local_client()
 
 
 def build_function_dispatcher(uow_factory: UnitOfWorkFactory) -> FunctionDispatcher:
     return FunctionDispatcher(
         uow_factory=uow_factory,
-        agentbox_client_factory=_function_agentbox_client,
+        sandbox_client_factory=_function_sandbox_client,
         token_minter=mint_function_session_token,
         token_cache=_function_session_token_cache,
         endpoint_cache=_function_runtime_endpoint_cache,
@@ -161,7 +162,7 @@ def build_function_dispatcher(uow_factory: UnitOfWorkFactory) -> FunctionDispatc
 
 def build_function_schema_dispatcher() -> FunctionSchemaDispatcher:
     return FunctionSchemaDispatcher(
-        agentbox_client_factory=_function_agentbox_client,
+        sandbox_client_factory=_function_sandbox_client,
         token_minter=mint_function_session_token,
         token_cache=_function_session_token_cache,
         endpoint_cache=_function_runtime_endpoint_cache,

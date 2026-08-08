@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from contextlib import AsyncExitStack, asynccontextmanager
 import hashlib
 import json
@@ -59,7 +60,37 @@ pytestmark = [
 
 _AGENTBOX_ACCEPTANCE_MODEL = "accounts/fireworks/models/minimax-m3"
 
+# Some assertions here require the *sandbox* to call back into the backend this
+# test just started on 127.0.0.1 -- the workspace token check and anything
+# driving the `lemma` CLI. A local Docker sandbox reaches it over the host
+# gateway; a sandbox running in someone else's cloud cannot reach a laptop, so
+# those assertions are about the developer's network rather than about the
+# provider. Everything that runs *inside* the sandbox is still exercised in
+# every mode.
+def _sandbox_runs_locally() -> bool:
+    """Whether the sandbox shares a host with the backend under test.
 
+    Keyed off the provider actually in use rather than the harness's sandbox
+    mode, because the two can differ: the workspace module may be provisioning
+    on E2B while the harness still configures the AgentBox side for Docker.
+    """
+    if os.getenv("WORKSPACE_OWNS_SANDBOXES", "").lower() in {"1", "true", "yes"}:
+        return os.getenv("WORKSPACE_PROVIDER", "docker").lower() != "e2b"
+    return os.getenv("E2E_SANDBOX_MODE", "docker").lower() in {"", "docker"}
+
+
+_SANDBOX_CAN_REACH_TEST_BACKEND = _sandbox_runs_locally()
+
+requires_sandbox_callback = pytest.mark.skipif(
+    not _SANDBOX_CAN_REACH_TEST_BACKEND,
+    reason=(
+        "the sandbox must be able to reach the test backend on 127.0.0.1; "
+        "a cloud sandbox cannot"
+    ),
+)
+
+
+@requires_sandbox_callback
 async def test_fresh_workspace_token_authenticates_over_backend_http(
     authenticated_client,
     fixed_test_org,
@@ -321,6 +352,10 @@ async def test_agent_workspace_cli_tools_execute_through_real_agentbox(
     assert python_get.success is True, python_get
     assert python_get.result == "43"
 
+    # The cwd and the injected identity are provider behaviour and are checked
+    # everywhere. The `lemma` CLI call additionally needs the sandbox to reach
+    # the backend this test started on 127.0.0.1, which a cloud sandbox cannot,
+    # so only that part is conditional.
     shell = await exec_command_internal(
         ctx,
         ExecCommandRequest(
@@ -328,7 +363,11 @@ async def test_agent_workspace_cli_tools_execute_through_real_agentbox(
             cmd=(
                 "pwd; "
                 'printf \'pod=%s user=%s\\n\' "$LEMMA_POD_ID" "$LEMMA_USER_ID"; '
-                "lemma --output json profile get"
+                + (
+                    "lemma --output json profile get"
+                    if _SANDBOX_CAN_REACH_TEST_BACKEND
+                    else "true"
+                )
             ),
         ),
     )
@@ -337,7 +376,8 @@ async def test_agent_workspace_cli_tools_execute_through_real_agentbox(
     assert f"/workspace/conversations/{ctx.conversation_id}" in (shell.stdout or "")
     assert f"pod={pod['id']}" in (shell.stdout or "")
     assert f"user={fixed_test_user['id']}" in (shell.stdout or "")
-    assert fixed_test_user["email"] in (shell.stdout or "")
+    if _SANDBOX_CAN_REACH_TEST_BACKEND:
+        assert fixed_test_user["email"] in (shell.stdout or "")
 
     interactive = await exec_command_internal(
         ctx,

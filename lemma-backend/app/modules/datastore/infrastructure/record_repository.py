@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Callable
 from typing import Any
 from uuid import UUID
 
@@ -9,7 +8,6 @@ from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError, IntegrityError
 
 from app.modules.datastore.config import datastore_settings
-from app.modules.datastore.domain.datastore_entities import SYSTEM_COLUMNS
 from app.modules.datastore.domain.errors import (
     DatastoreConflictError,
     DatastoreInfrastructureError,
@@ -20,11 +18,21 @@ from app.modules.datastore.domain.errors import (
 from app.modules.datastore.domain.ports import (
     DatastoreRecordRepositoryPort,
     DatastoreSchemaPort,
+    RecordEventFactory,
 )
 from app.modules.datastore.domain.record_entities import RecordEntity
 from app.modules.datastore.infrastructure.record_errors import (
     raise_record_read_error,
     raise_record_write_error,
+)
+from app.modules.datastore.infrastructure.record_update_sql import (
+    build_assignments,
+    build_update_statement,
+    bulk_conflict_clause,
+    bulk_insert_statement,
+    bulk_returning_statement,
+    chunk_for_parameter_limit,
+    split_previous_image,
 )
 from app.modules.datastore.infrastructure.sql_identifiers import sanitize_identifier
 from app.modules.datastore.services.record_validator import convert_record
@@ -109,7 +117,7 @@ class DatastoreRecordRepository(DatastoreRecordRepositoryPort):
         user_id: UUID,
         *,
         upsert: bool,
-        events: list[DomainEvent] | None = None,
+        event_factory: RecordEventFactory | None = None,
     ) -> int:
         if not records:
             return 0
@@ -129,35 +137,42 @@ class DatastoreRecordRepository(DatastoreRecordRepositoryPort):
             ordered_keys.append(pk)
         ordered_keys.extend(sorted(key for key in all_keys if key != pk))
 
-        columns_sql = ", ".join(f'"{key}"' for key in ordered_keys)
-        placeholders_sql = ", ".join(f":{key}" for key in ordered_keys)
-        sql = (
-            f'INSERT INTO "{ctx.schema_name}"."{ctx.table_name}" '
-            f"({columns_sql}) VALUES ({placeholders_sql})"
+        conflict_sql = (
+            bulk_conflict_clause(ctx, ordered_keys)
+            if upsert
+            else ""
         )
-
-        if upsert:
-            update_columns = [
-                key
-                for key in ordered_keys
-                if key not in {ctx.primary_key_column, "created_at"}
-            ]
-            set_clauses = [f'"{key}" = EXCLUDED."{key}"' for key in update_columns]
-            set_clauses.append('"updated_at" = CURRENT_TIMESTAMP')
-            sql += (
-                f' ON CONFLICT ("{ctx.primary_key_column}") DO UPDATE SET '
-                f"{', '.join(set_clauses)}"
-            )
-
-        statement = text(sql)
-        params_list = [{key: record.get(key) for key in ordered_keys} for record in prepared_records]
 
         try:
             async with self.schema_manager.session_factory() as session:
                 if ctx.enable_rls:
                     await self.schema_manager.set_rls_context(session, user_id)
-                await session.execute(statement, params_list)
-                await stage_domain_events(session, events or [])
+
+                if event_factory is None:
+                    # No subscriber, so nothing needs the written rows back and
+                    # executemany stays the cheapest way to land them.
+                    await session.execute(
+                        text(bulk_insert_statement(ctx, ordered_keys) + conflict_sql),
+                        [
+                            {key: record.get(key) for key in ordered_keys}
+                            for record in prepared_records
+                        ],
+                    )
+                else:
+                    events: list[DomainEvent] = []
+                    for chunk in chunk_for_parameter_limit(
+                        prepared_records, len(ordered_keys)
+                    ):
+                        sql, params = bulk_returning_statement(
+                            ctx, ordered_keys, chunk, conflict_sql
+                        )
+                        result = await session.execute(text(sql), params)
+                        events.extend(
+                            event_factory(self._row_to_entity(dict(row._mapping), ctx))
+                            for row in result.fetchall()
+                        )
+                    await stage_domain_events(session, events)
+
                 await session.commit()
                 return len(prepared_records)
         except DBAPIError as exc:
@@ -170,7 +185,7 @@ class DatastoreRecordRepository(DatastoreRecordRepositoryPort):
         data: dict[str, Any],
         user_id: UUID,
         *,
-        event_factory: Callable[[RecordEntity], DomainEvent] | None = None,
+        event_factory: RecordEventFactory | None = None,
     ) -> RecordEntity:
         converted_data = convert_record(ctx.columns, data, skip_auto=False)
         if event_factory is not None:
@@ -214,10 +229,10 @@ class DatastoreRecordRepository(DatastoreRecordRepositoryPort):
         records: list[dict[str, Any]],
         user_id: UUID,
         *,
-        events: list[DomainEvent] | None = None,
+        event_factory: RecordEventFactory | None = None,
     ) -> int:
         return await self._bulk_write_records(
-            ctx, records, user_id, upsert=False, events=events
+            ctx, records, user_id, upsert=False, event_factory=event_factory
         )
 
     async def bulk_upsert_records(
@@ -226,10 +241,10 @@ class DatastoreRecordRepository(DatastoreRecordRepositoryPort):
         records: list[dict[str, Any]],
         user_id: UUID,
         *,
-        events: list[DomainEvent] | None = None,
+        event_factory: RecordEventFactory | None = None,
     ) -> int:
         return await self._bulk_write_records(
-            ctx, records, user_id, upsert=True, events=events
+            ctx, records, user_id, upsert=True, event_factory=event_factory
         )
 
     async def get_record(
@@ -483,17 +498,14 @@ class DatastoreRecordRepository(DatastoreRecordRepositoryPort):
         user_id: UUID,
         *,
         enforce_user_scope: bool = True,
-        event_factory: Callable[[RecordEntity], DomainEvent] | None = None,
+        event_factory: RecordEventFactory | None = None,
     ) -> RecordEntity:
         if event_factory is not None:
             await ensure_datastore_event_outbox()
         parsed_id = ctx.parse_primary_key(record_id)
-        converted_data = convert_record(ctx.columns, data)
-        mutable_data = {
-            key: value
-            for key, value in converted_data.items()
-            if key not in SYSTEM_COLUMNS and key != ctx.primary_key_column
-        }
+        mutable_data, set_clauses, params = build_assignments(
+            ctx, convert_record(ctx.columns, data), parsed_id
+        )
 
         if not mutable_data:
             return await self.get_record(
@@ -502,23 +514,6 @@ class DatastoreRecordRepository(DatastoreRecordRepositoryPort):
                 user_id,
                 enforce_user_scope=enforce_user_scope,
             )
-
-        set_clauses: list[str] = []
-        params: dict[str, Any] = {"id": parsed_id}
-        column_map = {col.name: col for col in ctx.columns}
-
-        for key, value in mutable_data.items():
-            self._sanitize_identifier(key)
-            param_name = f"u_{key}"
-            set_clauses.append(f'"{key}" = :{param_name}')
-            if key in column_map:
-                params[param_name] = ValueConverter.serialize_for_sql(
-                    value, column_map[key]
-                )
-            else:
-                params[param_name] = value
-
-        set_clauses.append('"updated_at" = CURRENT_TIMESTAMP')
 
         where_clauses = [f'"{ctx.primary_key_column}" = :id']
         self._apply_current_user_scope(
@@ -529,9 +524,12 @@ class DatastoreRecordRepository(DatastoreRecordRepositoryPort):
             enforce_user_scope=enforce_user_scope,
         )
 
-        sql = (
-            f'UPDATE "{ctx.schema_name}"."{ctx.table_name}" SET {", ".join(set_clauses)} '
-            f"WHERE {' AND '.join(where_clauses)} RETURNING *"
+        changed_columns = sorted(mutable_data.keys())
+        sql, previous_alias = build_update_statement(
+            ctx,
+            set_clauses=set_clauses,
+            where_clauses=where_clauses,
+            capture_previous=event_factory is not None,
         )
 
         try:
@@ -548,9 +546,15 @@ class DatastoreRecordRepository(DatastoreRecordRepositoryPort):
                 if not row:
                     raise DatastoreRecordNotFoundError("Record not found or update failed")
 
-                entity = self._row_to_entity(dict(row._mapping), ctx)
+                row_mapping = dict(row._mapping)
+                previous = split_previous_image(
+                    row_mapping, previous_alias, changed_columns
+                )
+                entity = self._row_to_entity(row_mapping, ctx)
                 if event_factory is not None:
-                    await stage_domain_events(session, [event_factory(entity)])
+                    await stage_domain_events(
+                        session, [event_factory(entity, changed_columns, previous)]
+                    )
                 await session.commit()
                 return entity
         except DBAPIError as exc:
@@ -563,7 +567,7 @@ class DatastoreRecordRepository(DatastoreRecordRepositoryPort):
         user_id: UUID,
         *,
         enforce_user_scope: bool = True,
-        event_factory: Callable[[RecordEntity], DomainEvent] | None = None,
+        event_factory: RecordEventFactory | None = None,
     ) -> RecordEntity:
         if event_factory is not None:
             await ensure_datastore_event_outbox()

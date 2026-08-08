@@ -263,8 +263,11 @@ if (failures.length > 0) {
       `    ${kb(row.value)} against a budget of ${kb(row.budget)} (+${kb(row.tolerance)} tolerance) — over by ${kb(row.overBy)}.\n`,
     );
   }
+  // `--silent` is load-bearing, not tidiness: npm prints its run banner on
+  // stdout, so without it the redirect writes those two lines into the file
+  // ahead of the JSON and the next run fails parsing its own baseline.
   console.log(
-    'If the growth is intended, re-record the baseline:\n  npm run bundle:budget:baseline > scripts/bundle-budget-baseline.json\n',
+    'If the growth is intended, re-record the baseline:\n  npm run --silent bundle:budget:baseline > scripts/bundle-budget-baseline.json\n',
   );
   process.exit(strict ? 1 : 0);
 }
@@ -272,7 +275,7 @@ if (failures.length > 0) {
 if (baseline) console.log('\nEvery metric is within budget.\n');
 else
   console.log(
-    '\nNo baseline given. Record one with:\n  npm run bundle:budget:baseline > scripts/bundle-budget-baseline.json\n',
+    '\nNo baseline given. Record one with:\n  npm run --silent bundle:budget:baseline > scripts/bundle-budget-baseline.json\n',
   );
 
 // ------------------------------------------------------------------- helpers

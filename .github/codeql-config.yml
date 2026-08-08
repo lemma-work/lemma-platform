@@ -1,0 +1,21 @@
+# Shared by CI and `make codeql`, so a local run and a PR run see the same code.
+#
+# CI checks out a clean tree, but a developer's does not: virtualenvs, build
+# outputs and the CodeQL cache itself hold roughly 24k Python files against the
+# repository's own 6.4k. Extracting them was five sixths of a ten-minute local
+# run and could never produce an actionable finding, since none of it is ours.
+name: lemma-platform
+
+paths-ignore:
+  - "**/.venv"
+  - "**/venv"
+  - "**/node_modules"
+  - "**/build"
+  - "**/dist"
+  - "**/.next"
+  - "**/__pycache__"
+  - ".codeql"
+  # Generated SDK clients: regenerating is the fix for anything found here, not
+  # editing, so findings would be noise no one can act on.
+  - "lemma-python/lemma_sdk/openapi_client"
+  - "lemma-typescript/src/openapi_client"

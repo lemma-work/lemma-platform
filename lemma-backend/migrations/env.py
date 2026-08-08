@@ -46,6 +46,33 @@ from app.modules.agent_surfaces.infrastructure import models as surface_models  
 from app.modules.usage.infrastructure import models as usage_models  # noqa: F401
 from app.modules.pod_bundle.infrastructure import models as pod_bundle_models  # noqa: F401
 
+# Workspace sandboxes (sandboxes, sandbox_instances)
+from app.modules.workspace.infrastructure import models as workspace_models  # noqa: F401
+
+# Every import above exists for its side effect: importing a models module is
+# what registers its tables on Base.metadata, which is the whole input to
+# autogenerate. Naming them here makes that dependency something the reader and
+# the checker can both see -- otherwise each one looks like an unused import,
+# which is exactly what static analysis reports it as, and what an editor's
+# "remove unused imports" would silently delete along with those tables.
+REGISTERED_MODEL_MODULES = (
+    event_models,
+    datastore_models,
+    identity_models,
+    pod_models,
+    agent_models,
+    agent_runtime_models,
+    trigger_models,
+    connector_models,
+    function_models,
+    app_models,
+    workflow_models,
+    surface_models,
+    usage_models,
+    pod_bundle_models,
+    workspace_models,
+)
+
 config = context.config
 
 # Interpret the config file for Python logging.
