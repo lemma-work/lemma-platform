@@ -19,6 +19,7 @@ from app.modules.identity.domain.organization_entities import (
     OrganizationEntity,
     OrganizationInvitationEntity,
     OrganizationInvitationStatus,
+    OrganizationJoinPolicy,
     OrganizationMemberEntity,
     OrganizationRole,
 )
@@ -142,6 +143,100 @@ async def test_create_organization_rejects_generated_slug_over_255_characters(
         await organization_service.create_organization(org, uuid4())
 
     organization_repository_mock.create.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_create_organization_conflicts_name_the_field_that_lost(
+    organization_service: OrganizationService,
+    organization_repository_mock: AsyncMock,
+):
+    """Onboarding retries a taken name but must not retry a taken domain."""
+    organization_repository_mock.get_by_name.return_value = OrganizationEntity(
+        name="Acme", slug="acme"
+    )
+
+    with pytest.raises(OrganizationConflictError) as name_conflict:
+        await organization_service.create_organization(
+            OrganizationEntity(name="Acme", slug="acme"), owner_user_id=uuid4()
+        )
+    assert name_conflict.value.code == OrganizationConflictError.NAME_TAKEN
+
+    organization_repository_mock.get_by_name.return_value = None
+    organization_repository_mock.get_by_slug.return_value = OrganizationEntity(
+        name="Other", slug="acme"
+    )
+
+    with pytest.raises(OrganizationConflictError) as slug_conflict:
+        await organization_service.create_organization(
+            OrganizationEntity(name="Acme", slug="acme"), owner_user_id=uuid4()
+        )
+    assert slug_conflict.value.code == OrganizationConflictError.SLUG_TAKEN
+
+
+@pytest.mark.asyncio
+async def test_is_name_available_answers_the_globally_unique_name(
+    organization_service: OrganizationService,
+    organization_repository_mock: AsyncMock,
+):
+    organization_repository_mock.get_by_name.return_value = None
+    assert await organization_service.is_name_available("  Acme  ") is True
+    assert organization_repository_mock.get_by_name.await_args.args[0] == "Acme"
+
+    organization_repository_mock.get_by_name.return_value = OrganizationEntity(
+        name="Acme", slug="acme"
+    )
+    assert await organization_service.is_name_available("Acme") is False
+
+    with pytest.raises(IdentityValidationError):
+        await organization_service.is_name_available("   ")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "email",
+    ["ada@yahoo.com", "ada@icloud.com", "ada@proton.me", "ada@gmail.com"],
+)
+async def test_public_provider_cannot_claim_an_email_domain_org(
+    organization_service: OrganizationService,
+    user_repository_mock: AsyncMock,
+    organization_repository_mock: AsyncMock,
+    email: str,
+):
+    """One consumer-mail user must not auto-join every other user of that host."""
+    user_repository_mock.get.return_value = UserEntity(email=email)
+
+    with pytest.raises(IdentityValidationError, match="work email domain"):
+        await organization_service.create_organization(
+            OrganizationEntity(
+                name="Acme",
+                slug="acme",
+                join_policy=OrganizationJoinPolicy.EMAIL_DOMAIN,
+            ),
+            owner_user_id=uuid4(),
+        )
+
+    organization_repository_mock.create.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_work_email_domain_org_still_claims_its_domain(
+    organization_service: OrganizationService,
+    user_repository_mock: AsyncMock,
+    organization_repository_mock: AsyncMock,
+):
+    user_repository_mock.get.return_value = UserEntity(email="ada@acme.io")
+    org = OrganizationEntity(
+        name="Acme",
+        slug="acme",
+        join_policy=OrganizationJoinPolicy.EMAIL_DOMAIN,
+    )
+    organization_repository_mock.create.return_value = org
+
+    await organization_service.create_organization(org, uuid4())
+
+    assert organization_repository_mock.create.await_args.args[0].email_domain == (
+        "acme.io"
+    )
 
 
 @pytest.mark.asyncio

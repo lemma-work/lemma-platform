@@ -106,10 +106,17 @@ class OrganizationListResponse(BaseSchema):
 
 
 class OrganizationSlugAvailabilityResponse(BaseSchema):
-    """Organization slug availability response."""
+    """Organization slug availability response.
+
+    ``available`` answers only for the slug. When the caller also passes a
+    candidate name, ``name_available`` answers for the globally-unique name; a
+    create succeeds only when both are true.
+    """
 
     slug: str
     available: bool
+    name: str | None = None
+    name_available: bool | None = None
 
 
 class OrganizationMemberListResponse(BaseSchema):

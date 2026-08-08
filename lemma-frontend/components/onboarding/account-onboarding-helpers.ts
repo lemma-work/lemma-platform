@@ -618,7 +618,8 @@ const COMMON_COUNTRY_CODE_SECOND_LEVEL_DOMAINS = new Set([
   "org",
 ]);
 
-export function workspaceNameFromWorkDomain(domain: string) {
+/** The company a work domain stands for: `research.acme.co.uk` -> `Acme`. */
+export function organizationNameFromWorkDomain(domain: string) {
   const labels = domain
     .trim()
     .toLowerCase()
@@ -635,25 +636,63 @@ export function workspaceNameFromWorkDomain(domain: string) {
     COMMON_COUNTRY_CODE_SECOND_LEVEL_DOMAINS.has(secondLevelDomain)
       ? labels.at(-3) || ""
       : secondLevelDomain;
-  const organizationName = toTitleCase(
-    organizationLabel.replace(/[-_]+/g, " "),
-  );
-  return organizationName ? `${organizationName} Workspace` : null;
+  return toTitleCase(organizationLabel.replace(/[-_]+/g, " ")) || null;
 }
 
-export function defaultWorkspaceName(name: string, workDomain = "") {
-  const domainWorkspaceName = workspaceNameFromWorkDomain(workDomain);
-  if (domainWorkspaceName) return domainWorkspaceName;
+const COMPANY_NAME_ATTEMPTS = 10;
 
-  const firstName = splitName(name).firstName || "My";
-  return `${firstName}'s Workspace`;
+/** How many names onboarding will try before giving up on creating an org. */
+export const MAX_ORGANIZATION_NAME_ATTEMPTS = 20;
+
+const RETRIABLE_ORGANIZATION_CONFLICT_CODES = new Set([
+  "ORGANIZATION_NAME_CONFLICT",
+  "ORGANIZATION_SLUG_CONFLICT",
+]);
+
+/**
+ * Whether a failed create can be retried under a different name.
+ *
+ * A taken name or slug is answered by the next candidate. A taken email domain
+ * is not — every candidate claims the same domain — so that one has to surface
+ * instead of burning the whole ladder on the same rejection.
+ */
+export function isRetriableOrganizationNameConflict(error: unknown) {
+  const code = (error as { code?: unknown } | null)?.code;
+  return typeof code === "string" &&
+    RETRIABLE_ORGANIZATION_CONFLICT_CODES.has(code);
 }
 
-// Solo users never name a workspace — we create one quietly so their pod has a
-// home. Keep it personal-sounding, not org-sounding.
-export function personalWorkspaceName(name: string) {
-  const firstName = splitName(name).firstName || "My";
-  return `${firstName}'s Space`;
+/**
+ * The name to try for this person's first organization, on the nth attempt.
+ *
+ * A work address names the company, because that org goes on to claim the
+ * domain — every later colleague is auto-joined into it and has to recognise
+ * it. A consumer address names nothing real, so an invented pair beats
+ * "Gmail" or a surname guess.
+ *
+ * Names are globally unique, so each rung has to be a name we would still be
+ * happy to show: the company, then its domain (unique by definition, so one
+ * squatter can't push us off it), then a counter. An exhausted company ladder
+ * falls back to an invented name rather than blocking signup.
+ */
+export function organizationNameCandidate({
+  email,
+  workDomain,
+  attempt = 0,
+}: {
+  email: string;
+  workDomain?: string;
+  attempt?: number;
+}) {
+  const companyName = workDomain
+    ? organizationNameFromWorkDomain(workDomain)
+    : null;
+  if (!companyName) return generatedOrganizationName(email, attempt);
+
+  if (attempt === 0) return companyName;
+  if (attempt === 1) return workDomain as string;
+  if (attempt < COMPANY_NAME_ATTEMPTS) return `${companyName} ${attempt}`;
+  return generatedOrganizationName(email, attempt - COMPANY_NAME_ATTEMPTS);
 }
 
 export function podNameForAudience(audience: Audience, teamName = "") {
