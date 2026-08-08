@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.modules.connectors.api.connect_request_controller import _safe_oauth_error
+from app.core.api.callback_page import safe_provider_error
 from app.modules.connectors.api.connector_controller import (
     SKILLS_DIR,
     _resolve_skill_file,
@@ -76,7 +76,7 @@ class TestOAuthErrorReflection:
     )
     def test_real_oauth_error_codes_are_passed_through(self, error):
         # Genuinely useful for the user, so it must survive.
-        assert _safe_oauth_error(error) == error
+        assert safe_provider_error(error) == error
 
     @pytest.mark.parametrize(
         "error",
@@ -91,7 +91,7 @@ class TestOAuthErrorReflection:
         ],
     )
     def test_anything_that_is_not_an_error_code_is_replaced(self, error):
-        assert _safe_oauth_error(error) == "unrecognized_error"
+        assert safe_provider_error(error) == "unrecognized_error"
 
     def test_the_replacement_carries_no_caller_input(self):
-        assert "script" not in _safe_oauth_error("<script>x</script>")
+        assert "script" not in safe_provider_error("<script>x</script>")
