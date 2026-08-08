@@ -29,9 +29,53 @@ export function getSurfaceStatus(surface: AssistantSurface): { label: string; to
     return { label: 'Paused', tone: 'muted' };
 }
 
+/**
+ * Stored when a person explicitly picks the pod assistant for their own DMs.
+ *
+ * Absence from the map means "never picked", which is a different answer — it
+ * falls to the surface default. Mirrors `SurfaceSlackConfig.POD_ASSISTANT`.
+ */
+export const POD_ASSISTANT_CHOICE = '__pod_assistant__';
+
+/** The surface's default responder — whoever answers where nothing else says.
+ * `null` = the pod assistant. */
+function surfaceDefaultAgent(surface: AssistantSurface): string | null {
+    return surfaceUsesDefaultAgent(surface) ? null : surface.agent_name ?? null;
+}
+
+/**
+ * Who actually answers in one routed channel. `null` = the pod assistant.
+ *
+ * Three states, and the order matters: the pod assistant is the *absence* of an
+ * agent, so an explicit pick has to short-circuit before the surface-default
+ * fallback — otherwise choosing it silently routes to whichever agent the
+ * surface happens to default to. Mirrors `_resolve_route_agent` in the backend.
+ */
+export function channelRouteAgent(
+    surface: AssistantSurface,
+    route: { agent_name?: string | null; use_pod_assistant?: boolean | null },
+): string | null {
+    if (route.use_pod_assistant) return null;
+    if (route.agent_name) return route.agent_name;
+    return surfaceDefaultAgent(surface);
+}
+
 /** Agent names a surface routes to via its per-channel routes (Slack/Teams). */
 export function surfaceChannelAgents(surface: AssistantSurface): Array<string | null> {
-    return (surface.config?.channels ?? []).map((route) => route.agent_name ?? null);
+    return (surface.config?.channels ?? []).map((route) => channelRouteAgent(surface, route));
+}
+
+/**
+ * Slack user ids that picked this agent for their own DMs. `reachFor === null`
+ * counts the people who picked the pod assistant, which is stored explicitly.
+ */
+export function surfaceDirectMessageChoosers(
+    surface: AssistantSurface,
+    reachFor: string | null,
+): string[] {
+    const chosen = surface.config?.slack?.dm_agent_by_user ?? {};
+    const wanted = reachFor ?? POD_ASSISTANT_CHOICE;
+    return Object.keys(chosen).filter((userId) => chosen[userId] === wanted);
 }
 
 /**
@@ -39,8 +83,7 @@ export function surfaceChannelAgents(surface: AssistantSurface): Array<string | 
  * responder or the explicit target of one of its channel routes.
  */
 export function surfaceReachesAgent(surface: AssistantSurface, agentName: string): boolean {
-    if (surface.agent_name === agentName) return true;
-    return surfaceChannelAgents(surface).some((name) => name === agentName);
+    return surfaceReaches(surface, agentName).length > 0;
 }
 
 /**
@@ -108,6 +151,9 @@ export interface SurfaceReach {
     label: string;
     /** Set when `kind` is `channel`. */
     channelId?: string;
+    /** Why this reach exists, when the label alone doesn't say — "3 people
+     * chose this agent" reads very differently from "answers everyone here". */
+    detail?: string;
 }
 
 /** Display form of a route's channel, or null when it names neither id nor name. */
@@ -129,13 +175,21 @@ export function surfaceReaches(
     reachFor: string | null,
 ): SurfaceReach[] {
     const reaches: SurfaceReach[] = [];
-    if (surfaceAnswersDirectMessages(surface, reachFor)) {
-        reaches.push({ key: 'dm', kind: 'dm', label: 'Direct messages' });
+    const isDefault = surfaceDefaultAgent(surface) === reachFor;
+    const chosenBy = surfaceDirectMessageChoosers(surface, reachFor).length;
+    if (isDefault || chosenBy > 0) {
+        reaches.push({
+            key: 'dm',
+            kind: 'dm',
+            label: 'Direct messages',
+            detail: isDefault
+                ? 'Answers anyone who hasn’t chosen'
+                : `${chosenBy} ${chosenBy === 1 ? 'person' : 'people'} chose this agent`,
+        });
     }
 
     for (const route of surface.config?.channels ?? []) {
-        const routed = reachFor === null ? !route.agent_name : route.agent_name === reachFor;
-        if (!routed) continue;
+        if (channelRouteAgent(surface, route) !== reachFor) continue;
         const label = channelLabel(route);
         if (!label) continue;
         reaches.push({
@@ -149,26 +203,21 @@ export function surfaceReaches(
     return reaches;
 }
 
-/** Whether this agent is the one that answers the surface's direct messages. */
+/**
+ * Whether this agent answers any of the surface's direct messages.
+ *
+ * Not "the one that does" — on Slack each person picks their own agent from the
+ * App Home, so several agents hold DMs at once. The surface default answers
+ * everyone who has never picked, which is why it counts even with no picks.
+ */
 export function surfaceAnswersDirectMessages(
     surface: AssistantSurface,
     reachFor: string | null,
 ): boolean {
-    return reachFor === null
-        ? surfaceUsesDefaultAgent(surface)
-        : surface.agent_name === reachFor;
-}
-
-/**
- * The agent that answers this surface's DMs, for naming the holder to everyone
- * else. `null` means the pod default assistant.
- *
- * A surface has exactly one — DMs carry no channel to route on, so they always
- * fall to `surface.agent_name`. That is the one hard limit on a Slack workspace,
- * and naming the holder is how it stops being invisible.
- */
-export function surfaceDirectMessageAgent(surface: AssistantSurface): string | null {
-    return surfaceUsesDefaultAgent(surface) ? null : surface.agent_name ?? null;
+    return (
+        surfaceDefaultAgent(surface) === reachFor
+        || surfaceDirectMessageChoosers(surface, reachFor).length > 0
+    );
 }
 
 /**
@@ -177,5 +226,5 @@ export function surfaceDirectMessageAgent(surface: AssistantSurface): string | n
  */
 export function describeReach(surface: AssistantSurface, reachFor: string | null): string {
     const parts = surfaceReaches(surface, reachFor).map((reach) => reach.label);
-    return parts.join(' · ') || 'Routed here';
+    return parts.join(' · ') || 'Reaches this agent';
 }

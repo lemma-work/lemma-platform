@@ -28,7 +28,7 @@
     },
     "oauth_config": {
         "redirect_urls": [
-            "https://api.lemma.work/integrations/connect-requests/oauth/callback"
+            "https://api.lemma.work/connectors/connect-requests/oauth/callback"
         ],
         "scopes": {
             "user": [

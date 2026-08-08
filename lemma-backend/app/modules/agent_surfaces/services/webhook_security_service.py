@@ -177,6 +177,50 @@ class SurfaceWebhookSecurityService:
             raw_body=raw_body,
         )
 
+    def verify_slack_request(
+        self,
+        *,
+        headers: dict[str, str],
+        raw_body: bytes,
+        candidate_secrets: list[str],
+    ) -> None:
+        """Verify a Slack request that may be signed by any of several apps.
+
+        One Slack workspace can front surfaces in several pods — that is the
+        supported multi-pod case, not a misconfiguration — and each of those
+        surfaces stores its own copy of the workspace's signing secret. They
+        are copies of one app's secret, so a signature valid for any candidate
+        proves the request came from that app; which *surface* it belongs to is
+        a routing question answered later, on verified content.
+
+        An empty list means no surface for this workspace runs its own app, so
+        the deployment's shared secret is the right one.
+        """
+        if not self.verification_enabled():
+            return
+        if not candidate_secrets:
+            self._verify_slack_signature(
+                headers=headers,
+                raw_body=raw_body,
+                signing_secret=surface_settings.slack_signing_secret,
+            )
+            return
+
+        last_error: SurfaceWebhookAuthenticationError | None = None
+        for secret in candidate_secrets:
+            try:
+                self._verify_slack_signature(
+                    headers=headers,
+                    raw_body=raw_body,
+                    signing_secret=secret,
+                )
+                return
+            except SurfaceWebhookAuthenticationError as exc:
+                last_error = exc
+        raise last_error or SurfaceWebhookAuthenticationError(
+            "Slack signature did not match any configured app for this workspace"
+        )
+
     async def verify_resend_request(
         self,
         *,

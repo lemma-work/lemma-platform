@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { Plus, Trash2 } from '@/components/ui/icons';
 
 import { SurfaceReachCard } from '@/components/surfaces/surface-reach-card';
@@ -13,10 +14,22 @@ import { StepLoader } from '@/components/brand/loader';
 
 export const DEFAULT_AGENT_VALUE = '__pod_default_agent__';
 
+/**
+ * "The pod's own assistant answers here" — an explicit choice, and not the same
+ * as leaving a route unset.
+ *
+ * Unset means nobody has said, which falls to whoever answers the surface's
+ * DMs. Collapsing the two is how an explicit pick made inside Slack came back
+ * as a different agent; the value matches Slack's own picker so a route set in
+ * either place reads the same in both.
+ */
+export const POD_ASSISTANT_VALUE = '__pod_assistant__';
+
 export interface ChannelDraft {
     channel_id: string;
     channel_name: string;
     agent_name: string | null;
+    use_pod_assistant: boolean;
 }
 
 export interface AvailableChannel {
@@ -51,6 +64,8 @@ export function SurfaceConfigureStep({
     availableChannels,
     isLoadingChannels,
     defaultRouteAgent = null,
+    customAppHref,
+    onOpenReference,
 }: {
     definition: SurfacePlatformDefinition;
     surface: AssistantSurface;
@@ -62,11 +77,23 @@ export function SurfaceConfigureStep({
     /** Agent a newly added route answers as — the one whose page opened this.
      * `null` falls to the pod default, which is right for the pod assistant. */
     defaultRouteAgent?: string | null;
+    /** Where an org sets up its own app for this platform. Passed only when it
+     * hasn't already — otherwise the offer is stale. */
+    customAppHref?: string;
+    /** Opens the reference card (delivery URL, what to check). Absent when
+     * there is nothing to reference. */
+    onOpenReference?: () => void;
 }) {
     const { channelRoutes, senderFilters } = definition.capabilities;
 
     const usedChannelIds = new Set(draft.channels.map((route) => route.channel_id).filter(Boolean));
     const remainingChannels = availableChannels.filter((channel) => !usedChannelIds.has(channel.id));
+    // A route only delivers where the bot is actually a member, and the API
+    // tells us — it returns every public channel, not only the joined ones.
+    // Adding a route defaults to one that will work rather than the first in
+    // the list, which was as likely as not a channel it has never been in.
+    const firstJoinable = remainingChannels.find((channel) => channel.is_member) ?? remainingChannels[0];
+    const anyJoined = availableChannels.some((channel) => channel.is_member);
 
     const updateRoute = (index: number, patch: Partial<ChannelDraft>) =>
         onDraftChange({
@@ -84,7 +111,9 @@ export function SurfaceConfigureStep({
                         <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                        <SelectItem value={DEFAULT_AGENT_VALUE}>Pod default agent</SelectItem>
+                        {/* Named the same as the route picker below, because it
+                            means the same thing to a person. */}
+                        <SelectItem value={DEFAULT_AGENT_VALUE}>Pod assistant</SelectItem>
                         {assistants.map((assistant) => (
                             <SelectItem key={assistant.id || assistant.name} value={assistant.name}>
                                 {assistant.name}
@@ -93,9 +122,15 @@ export function SurfaceConfigureStep({
                     </SelectContent>
                 </Select>
                 <p className="text-xs leading-5 text-[var(--text-tertiary)]">
-                    {channelRoutes
-                        ? 'Takes direct messages, plus any channel without a route of its own below.'
-                        : 'Takes everything that arrives here.'}
+                    {/* Slack is the one platform where this is not "answers every
+                        DM" — each person picks their own from the App Home, so
+                        this one answers whoever hasn't. Saying otherwise made it
+                        look like a setting that overrides everybody. */}
+                    {definition.platform === 'SLACK'
+                        ? 'Answers anyone who hasn’t picked their own, plus any channel you haven’t set separately.'
+                        : channelRoutes
+                            ? 'Answers direct messages, plus any channel you haven’t set separately.'
+                            : 'Answers everything that arrives here.'}
                 </p>
             </div>
 
@@ -137,16 +172,17 @@ export function SurfaceConfigureStep({
                     <div>
                         <p className="text-sm font-medium text-[var(--text-primary)]">Channel routing</p>
                         <p className="mt-1 text-xs leading-5 text-[var(--text-secondary)]">
-                            Point a channel at its own agent — several agents can answer in one
-                            workspace. In channels an agent speaks only when mentioned, or in a
-                            thread it already joined.
+                            When you invite Lemma to a channel, it asks who should answer. This is
+                            the same question, if you want to change your mind. In channels it
+                            only speaks when you mention it, or in a thread it already joined.
                         </p>
                         {/* The precondition belongs here, not in the empty state: someone
                             looking at a short list needs it just as much as someone
                             looking at none, and by then it reads as an explanation
                             rather than an instruction. */}
                         <p className="mt-1 text-xs leading-5 text-[var(--text-tertiary)]">
-                            Only channels the {definition.label} bot has been invited to appear here.
+                            Every channel is listed here, but Lemma only answers in the ones it’s
+                            been invited to.
                         </p>
                     </div>
 
@@ -154,10 +190,18 @@ export function SurfaceConfigureStep({
                         <div className="flex items-center gap-2 text-xs text-[var(--text-tertiary)]">
                             <StepLoader size="xs" /> Loading channels…
                         </div>
-                    ) : availableChannels.length === 0 && draft.channels.length === 0 ? (
-                        <p className="text-xs leading-5 text-[var(--text-tertiary)]">
-                            Invite it to a channel in {definition.label}, then reopen this.
-                        </p>
+                    ) : !anyJoined && draft.channels.length === 0 ? (
+                        <div className="grid gap-1">
+                            <p className="text-xs leading-5 text-[var(--text-secondary)]">
+                                Lemma isn’t in any channel yet. In {definition.label}, type{' '}
+                                <code className="rounded bg-[var(--field-bg)] px-1 py-0.5">/invite @Lemma</code>{' '}
+                                in the channel you want it to answer in.
+                            </p>
+                            <p className="text-xs leading-5 text-[var(--text-tertiary)]">
+                                It’ll ask who should answer, and the channel turns up here. Nothing to
+                                set up first.
+                            </p>
+                        </div>
                     ) : (
                         <>
                             {draft.channels.map((route, index) => {
@@ -190,14 +234,14 @@ export function SurfaceConfigureStep({
                                 className="w-fit"
                                 disabled={remainingChannels.length === 0}
                                 onClick={() => {
-                                    const next = remainingChannels[0];
                                     onDraftChange({
                                         channels: [
                                             ...draft.channels,
                                             {
-                                                channel_id: next?.id ?? '',
-                                                channel_name: next?.name ?? '',
+                                                channel_id: firstJoinable?.id ?? '',
+                                                channel_name: firstJoinable?.name ?? '',
                                                 agent_name: defaultRouteAgent,
+                                                use_pod_assistant: false,
                                             },
                                         ],
                                     });
@@ -229,6 +273,35 @@ export function SurfaceConfigureStep({
                     </SwitchTrack>
                 </Switch>
             </div>
+
+            {/* One quiet line, and only when it says something true.
+                Almost nobody needs their own Slack app, so a full panel gave it
+                the weight of a setting — and it kept offering the switch to
+                workspaces that had already made it, which reads as an
+                invitation to do something you have done. `customAppHref` is
+                passed only when the workspace is still on Lemma's app; once
+                it's on its own, the useful thing is where messages arrive. */}
+            {customAppHref || onOpenReference ? (
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-1 pt-1">
+                    {customAppHref ? (
+                        <Link
+                            href={customAppHref}
+                            className="lemma-quiet-text-button custom-focus-ring text-xs font-medium text-[var(--text-secondary)] underline-offset-2 hover:underline"
+                        >
+                            Use your own Slack app
+                        </Link>
+                    ) : null}
+                    {onOpenReference ? (
+                        <button
+                            type="button"
+                            onClick={onOpenReference}
+                            className="lemma-quiet-text-button custom-focus-ring text-xs font-medium text-[var(--text-secondary)] underline-offset-2 hover:underline"
+                        >
+                            Where Slack sends messages
+                        </button>
+                    ) : null}
+                </div>
+            ) : null}
         </div>
     );
 }
@@ -249,66 +322,101 @@ function ChannelRouteRow({
     // A route whose channel the API no longer lists (the bot left it) still has
     // to render its current selection, or saving would silently drop it.
     const missingSelected = Boolean(route.channel_id) && !options.some((channel) => channel.id === route.channel_id);
+    const selected = options.find((channel) => channel.id === route.channel_id);
+    // `is_member === false` is a real answer; `undefined` is a platform that
+    // doesn't report membership, and warning there would be a guess.
+    const notInvited = selected?.is_member === false;
 
     return (
-        <div className="grid items-end gap-2 sm:grid-cols-[1fr_1fr_auto]">
-            <div className="grid gap-1">
-                <label className="type-eyebrow-medium">Channel</label>
-                <Select
-                    value={route.channel_id}
-                    onValueChange={(id) => {
-                        const picked = options.find((channel) => channel.id === id);
-                        onChange({ channel_id: id, channel_name: picked?.name ?? '' });
-                    }}
+        <div className="grid gap-1">
+            <div className="grid items-end gap-2 sm:grid-cols-[1fr_1fr_auto]">
+                <div className="grid gap-1">
+                    <label className="type-eyebrow-medium">Channel</label>
+                    <Select
+                        value={route.channel_id}
+                        onValueChange={(id) => {
+                            const picked = options.find((channel) => channel.id === id);
+                            onChange({ channel_id: id, channel_name: picked?.name ?? '' });
+                        }}
+                    >
+                        <SelectTrigger className="h-9 bg-[var(--field-bg)]">
+                            <SelectValue placeholder="Select channel" />
+                        </SelectTrigger>
+                        <SelectContent>
+                            {missingSelected ? (
+                                <SelectItem value={route.channel_id}>
+                                    {route.channel_name ? `#${route.channel_name}` : route.channel_id}
+                                </SelectItem>
+                            ) : null}
+                            {options.map((channel) => (
+                                <SelectItem key={channel.id} value={channel.id}>
+                                    <span className="flex w-full items-center justify-between gap-2">
+                                        <span className="truncate">
+                                            {channel.name ? `#${channel.name}` : channel.id}
+                                        </span>
+                                        {channel.is_member === false ? (
+                                            <span className="shrink-0 text-[var(--text-tertiary)]">
+                                                not invited
+                                            </span>
+                                        ) : null}
+                                    </span>
+                                </SelectItem>
+                            ))}
+                        </SelectContent>
+                    </Select>
+                </div>
+                <div className="grid gap-1">
+                    <label className="type-eyebrow-medium">Agent</label>
+                    <Select
+                        value={
+                            route.use_pod_assistant
+                                ? POD_ASSISTANT_VALUE
+                                : route.agent_name ?? DEFAULT_AGENT_VALUE
+                        }
+                        onValueChange={(value) =>
+                            onChange({
+                                agent_name:
+                                    value === DEFAULT_AGENT_VALUE || value === POD_ASSISTANT_VALUE
+                                        ? null
+                                        : value,
+                                use_pod_assistant: value === POD_ASSISTANT_VALUE,
+                            })
+                        }
+                    >
+                        <SelectTrigger className="h-9 bg-[var(--field-bg)]">
+                            <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                            {/* Three answers, in the order they narrow: nobody has said,
+                                the pod's own assistant, one named agent. The middle one
+                                is a choice, not a fallback — see POD_ASSISTANT_VALUE. */}
+                            <SelectItem value={DEFAULT_AGENT_VALUE}>Whoever answers here by default</SelectItem>
+                            <SelectItem value={POD_ASSISTANT_VALUE}>Pod assistant</SelectItem>
+                            {assistants.map((assistant) => (
+                                <SelectItem key={assistant.id || assistant.name} value={assistant.name}>
+                                    {assistant.name}
+                                </SelectItem>
+                            ))}
+                        </SelectContent>
+                    </Select>
+                </div>
+                <Button
+                    type="button"
+                    variant="quiet"
+                    size="icon"
+                    onClick={onRemove}
+                    aria-label="Remove channel route"
+                    className="h-9 w-9"
                 >
-                    <SelectTrigger className="h-9 bg-[var(--field-bg)]">
-                        <SelectValue placeholder="Select channel" />
-                    </SelectTrigger>
-                    <SelectContent>
-                        {missingSelected ? (
-                            <SelectItem value={route.channel_id}>
-                                {route.channel_name ? `#${route.channel_name}` : route.channel_id}
-                            </SelectItem>
-                        ) : null}
-                        {options.map((channel) => (
-                            <SelectItem key={channel.id} value={channel.id}>
-                                {channel.name ? `#${channel.name}` : channel.id}
-                            </SelectItem>
-                        ))}
-                    </SelectContent>
-                </Select>
+                    <Trash2 className="h-4 w-4" />
+                </Button>
             </div>
-            <div className="grid gap-1">
-                <label className="type-eyebrow-medium">Agent</label>
-                <Select
-                    value={route.agent_name ?? DEFAULT_AGENT_VALUE}
-                    onValueChange={(value) =>
-                        onChange({ agent_name: value === DEFAULT_AGENT_VALUE ? null : value })
-                    }
-                >
-                    <SelectTrigger className="h-9 bg-[var(--field-bg)]">
-                        <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                        <SelectItem value={DEFAULT_AGENT_VALUE}>Pod default agent</SelectItem>
-                        {assistants.map((assistant) => (
-                            <SelectItem key={assistant.id || assistant.name} value={assistant.name}>
-                                {assistant.name}
-                            </SelectItem>
-                        ))}
-                    </SelectContent>
-                </Select>
-            </div>
-            <Button
-                type="button"
-                variant="quiet"
-                size="icon"
-                onClick={onRemove}
-                aria-label="Remove channel route"
-                className="h-9 w-9"
-            >
-                <Trash2 className="h-4 w-4" />
-            </Button>
+            {notInvited ? (
+                <p className="text-xs leading-5 text-[var(--state-warning)]">
+                    Lemma isn’t in {route.channel_name ? `#${route.channel_name}` : 'this channel'} yet.
+                    You can save this, but nothing will arrive until you invite it.
+                </p>
+            ) : null}
         </div>
     );
 }

@@ -460,7 +460,7 @@ class AgentSurfaceService(TelegramMiniAppSyncMixin):
             "platform": surface.surface_type,
             "exists": True,
             "status": surface.status,
-            "ready": not actions and not pending_consent,
+            "ready": not any(a.is_blocking for a in actions) and not pending_consent,
             "webhook_url": webhook_url,
             "admin_consent": admin_consent,
             "actions": actions,

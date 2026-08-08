@@ -35,7 +35,10 @@ describe('surface catalog', () => {
 
         it('blocks the shared identity when the deployment has none', () => {
             const blocked = blockedReason(entry({ supported_credential_modes: ['CUSTOM'] }), 'SYSTEM');
-            expect(blocked?.reason).toMatch(/deployment/i);
+            // Says it's unavailable without naming a "deployment" — the word is
+            // ours, not the reader's.
+            expect(blocked?.reason).toMatch(/not available/i);
+            expect(blocked?.reason).not.toMatch(/deployment|connector|credential mode/i);
         });
 
         it('names the pod that already claimed the shared identity', () => {
@@ -60,7 +63,7 @@ describe('surface catalog', () => {
 
         it('blocks bring-your-own when the connector is not configured here', () => {
             const blocked = blockedReason(entry({ connector_available: false }), 'CUSTOM');
-            expect(blocked?.reason).toMatch(/connector/i);
+            expect(blocked?.reason).toMatch(/isn’t set up here/i);
         });
 
         it('offers the managed hand-off only where a manager bot exists', () => {
@@ -68,7 +71,7 @@ describe('surface catalog', () => {
             // deployment; offering it otherwise dead-ends after they commit.
             expect(blockedReason(entry({ managed_setup_available: true }), 'MANAGED')).toBeNull();
             const blocked = blockedReason(entry({ managed_setup_available: false }), 'MANAGED');
-            expect(blocked?.reason).toMatch(/deployment/i);
+            expect(blocked?.reason).toMatch(/not available/i);
             // Only an explicit false blocks: a backend predating the field would
             // otherwise hide the primary way to connect Telegram.
             expect(blockedReason(entry(), 'MANAGED')).toBeNull();

@@ -14,24 +14,28 @@ from pathlib import Path
 from typing import Any
 
 from app.core.config import settings
-from app.modules.agent_surfaces.domain.entities import (
-    AgentSurfaceEntity,
-    SurfacePlatform,
-)
-from app.modules.agent_surfaces.domain.errors import AgentSurfaceValidationError
-from app.modules.agent_surfaces.platforms.common import computed_webhook_url
+from app.modules.agent_surfaces.domain.entities import SurfacePlatform
+from app.modules.agent_surfaces.platforms.common import platform_webhook_url
 
+# parents[5] is the backend root: .../app/modules/agent_surfaces/platforms/slack
+# → slack, platforms, agent_surfaces, modules, app, lemma-backend. Off by one
+# and this reads app/manifests/, which does not exist — every call 500s.
 MANIFEST_PATH = (
-    Path(__file__).resolve().parents[4] / "manifests" / "slack" / "manifest.json"
+    Path(__file__).resolve().parents[5] / "manifests" / "slack" / "manifest.json"
 )
 
 
-def build_slack_app_manifest(surface: AgentSurfaceEntity) -> dict[str, Any]:
-    """Return the manifest with this surface's URLs filled in."""
-    if surface.surface_type is not SurfacePlatform.SLACK:
-        raise AgentSurfaceValidationError("Only Slack surfaces have an app manifest.")
+def build_slack_app_manifest() -> dict[str, Any]:
+    """Return the manifest with this deployment's URLs filled in.
+
+    Takes no surface. Both URLs it substitutes are deployment-wide — the shared
+    Slack endpoint and the OAuth callback — so the manifest can be handed over
+    before any surface exists, which is the order people actually work in: you
+    need the app before you can supply the client id that creates the account
+    the surface is built on.
+    """
     manifest = json.loads(MANIFEST_PATH.read_text())
-    webhook_url = computed_webhook_url(surface)
+    webhook_url = platform_webhook_url(SurfacePlatform.SLACK)
     if webhook_url:
         manifest["settings"]["event_subscriptions"]["request_url"] = webhook_url
         manifest["settings"]["interactivity"]["request_url"] = webhook_url

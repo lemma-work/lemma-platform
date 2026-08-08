@@ -77,7 +77,7 @@ export function ConnectAccountDialog({
                         schema={schema}
                         values={values}
                         onChange={setValues}
-                        emptyMessage="No credential fields are required for this app."
+                        emptyMessage="Nothing to fill in for this one."
                         autoFocusFirst
                     />
                 </div>

@@ -6,7 +6,7 @@ import { Check, Copy, ExternalLink } from '@/components/ui/icons';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
-import { getSurfaceDeepLink, getSurfaceIdentity } from '@/lib/utils/surfaces';
+import { getSurfaceDeepLink, getSurfaceIdentity, getSurfacePlatformKey } from '@/lib/utils/surfaces';
 import type { AssistantSurface } from '@/lib/types';
 
 /**
@@ -17,12 +17,45 @@ import type { AssistantSurface } from '@/lib/types';
  * actually reachable. Platforms with no direct-open convention (Slack, Teams,
  * mailboxes) get the handle without the QR.
  */
+/**
+ * Platforms whose handle is a *name*, not an address.
+ *
+ * Slack and Teams resolve to the bot's display name. There is nothing to do
+ * with it: you reach the bot by typing `@` and letting the client autocomplete
+ * from its own directory, never by pasting a string from here. Rendered anyway
+ * it was one bare word above a Copy button that copied nothing useful — so the
+ * card sits this one out, and the states that showed it say something real
+ * instead (what happens next in Slack, or the routing below).
+ */
+const NAME_NOT_ADDRESS = new Set(['SLACK', 'TEAMS']);
+
+/** How to use the handle, where there is no link or QR to make it obvious. */
+function reachCaption(surface: AssistantSurface): string | null {
+    switch (getSurfacePlatformKey(surface)) {
+        case 'GMAIL':
+        case 'OUTLOOK':
+        case 'RESEND':
+            return 'Mail sent here becomes work:';
+        default:
+            return null;
+    }
+}
+
+/** Whether the card will render anything — callers that would otherwise show an
+ * empty state need to know before laying out around it. */
+export function hasReachCard(surface: AssistantSurface): boolean {
+    if (NAME_NOT_ADDRESS.has(getSurfacePlatformKey(surface))) return false;
+    const handle = surface.reach?.handle || getSurfaceIdentity(surface) || surface.reach?.email;
+    return Boolean(handle || getSurfaceDeepLink(surface));
+}
+
 export function SurfaceReachCard({ surface }: { surface: AssistantSurface }) {
     const [copied, setCopied] = useState(false);
     const handle = surface.reach?.handle || getSurfaceIdentity(surface) || surface.reach?.email || null;
     const deepLink = getSurfaceDeepLink(surface);
+    const caption = deepLink ? null : reachCaption(surface);
 
-    if (!handle && !deepLink) return null;
+    if (!hasReachCard(surface)) return null;
 
     const copy = async () => {
         try {
@@ -43,6 +76,13 @@ export function SurfaceReachCard({ surface }: { surface: AssistantSurface }) {
             ) : null}
 
             <div className="min-w-0 flex-1">
+                {/* A handle on its own is a mystery string. With a QR and a link
+                    beside it the shape gives it away, but Slack, Teams and email
+                    have neither — there it rendered as one bare word above a
+                    Copy button, and nothing said what it was for. */}
+                {caption ? (
+                    <p className="text-xs text-[var(--text-secondary)]">{caption}</p>
+                ) : null}
                 {handle ? (
                     <p className="truncate font-mono text-sm text-[var(--text-primary)]">{handle}</p>
                 ) : null}

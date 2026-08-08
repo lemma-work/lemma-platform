@@ -70,14 +70,14 @@ export function blockedReason(
 
     if (mode === 'SYSTEM') {
         if (!hasSystemIdentity(entry)) {
-            return { reason: 'Not available on this deployment.' };
+            return { reason: 'Not available here.' };
         }
         const claim = entry.system_claim;
         if (claim && claim.available === false) {
             return {
                 // Named rather than "another pod" — the holder is always in the
                 // caller's own org, so there is nothing to withhold.
-                reason: 'Another pod in this org is already using it.',
+                reason: 'Another pod is already using it.',
                 claimedByPodId: claim.claimed_by_pod_id ?? null,
             };
         }
@@ -85,11 +85,11 @@ export function blockedReason(
     }
 
     if (mode === 'MANAGED' && !hasManagedSetup(entry)) {
-        return { reason: 'Not available on this deployment.' };
+        return { reason: 'Not available here.' };
     }
 
     if (!entry.connector_available) {
-        return { reason: 'This connector isn’t configured on this deployment.' };
+        return { reason: 'This isn’t set up here yet.' };
     }
     return null;
 }

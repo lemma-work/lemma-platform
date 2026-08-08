@@ -21,6 +21,7 @@ from app.modules.agent_surfaces.api.dependencies import (
 from app.modules.agent_surfaces.domain.ingress_request import (
     SurfacePlatformWebhookIngress,
 )
+from app.modules.agent_surfaces.domain.entities import SurfacePlatform
 from app.modules.agent_surfaces.domain.events import SurfaceWebhookReceivedEvent
 from app.modules.identity.domain.events import WhatsAppMobileVerificationReceivedEvent
 from app.modules.identity.services.whatsapp_mobile_verification import (
@@ -108,6 +109,86 @@ def _decode_webhook_payload(raw_body: bytes, headers: dict[str, str]) -> dict:
         return json.loads(raw_body.decode("utf-8"))
     except Exception:
         return {}
+
+
+def _slack_team_id(payload: dict) -> str | None:
+    """The workspace a Slack request came from, across the shapes Slack uses.
+
+    Events put it at the top level; interactivity nests it under ``team``.
+    Read from an unverified body — see the caller for why that is safe.
+    """
+    team = payload.get("team")
+    if isinstance(team, dict):
+        nested = str(team.get("id") or "").strip()
+        if nested:
+            return nested
+    return str(payload.get("team_id") or "").strip() or None
+
+
+async def _slack_secrets_for_workspace(
+    *,
+    service: AgentSurfaceService,
+    team_id: str | None,
+) -> list[str]:
+    """Signing secrets configured for this Slack workspace.
+
+    Read from the org's connector auth config, where they sit beside the client
+    id and secret of the same app — not from the surface, which is downstream
+    of the app rather than the thing that owns it.
+
+    Empty when the workspace is unknown or runs on the deployment's Slack app,
+    both of which mean the shared secret is the one to use.
+    """
+    if not team_id:
+        return []
+    surfaces = await service.surface_repository.list_active_by_type(
+        SurfacePlatform.SLACK.value
+    )
+    secrets: list[str] = []
+    for surface in surfaces:
+        if str(surface.external_workspace_id or "").strip() != team_id:
+            continue
+        secret = await service._credential_resolver.slack_signing_secret(surface)
+        if secret and secret not in secrets:
+            secrets.append(secret)
+    return secrets
+
+
+async def _verify_inbound_request(
+    *,
+    platform: str,
+    headers: dict[str, str],
+    raw_body: bytes,
+    payload: dict,
+    security_service,
+    service: AgentSurfaceService,
+) -> None:
+    """Check a shared-endpoint request is really from the platform.
+
+    Slack is the one platform where the answer depends on *who* sent it: an org
+    running its own Slack app signs with its own secret. So the workspace has
+    to be read out of the body before the signature is checked. That is safe —
+    the only thing read is the team id, and the only thing it selects is which
+    secret to try. Nothing acts on the payload, and a request matching no
+    candidate is rejected exactly as an unsigned one would be.
+
+    This is what lets an org's own app deliver to the shared endpoint like
+    everyone else, rather than needing a URL of its own.
+    """
+    if platform == "slack":
+        security_service.verify_slack_request(
+            headers=headers,
+            raw_body=raw_body,
+            candidate_secrets=await _slack_secrets_for_workspace(
+                service=service, team_id=_slack_team_id(payload)
+            ),
+        )
+        return
+    await security_service.verify_platform_request(
+        platform=platform,
+        headers=headers,
+        raw_body=raw_body,
+    )
 
 
 def _email_address(value) -> str | None:
@@ -244,10 +325,13 @@ async def handle_platform_webhook(
     # Authenticity failures raise SurfaceWebhookAuthenticationError (a DomainError),
     # translated to the right status by the global handler.
     security_service.assert_platform_request_allowed(platform)
-    await security_service.verify_platform_request(
+    await _verify_inbound_request(
         platform=platform,
         headers=headers,
         raw_body=raw_body,
+        payload=payload,
+        security_service=security_service,
+        service=service,
     )
 
     # Verification commands are identity traffic, not agent messages. The

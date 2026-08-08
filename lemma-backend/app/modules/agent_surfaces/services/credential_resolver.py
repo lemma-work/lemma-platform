@@ -185,6 +185,31 @@ class SurfaceCredentialResolver:
             payload["provider"] = provider
         return payload
 
+    async def slack_signing_secret(self, surface: Any) -> str | None:
+        """The signing secret of the Slack app this surface's workspace runs on.
+
+        Stored on the org's auth config beside the client id and secret, because
+        all three belong to one Slack app — not to a surface. A surface is
+        downstream of the app: you need the app to get a client id, the client
+        id to connect the account, and the account before any surface exists.
+
+        None means this workspace uses the deployment's Slack app.
+        """
+        account_id = getattr(surface, "account_id", None)
+        if account_id is None:
+            return None
+        account = await self._connector_service.account_repository.get(account_id)
+        auth_config_id = getattr(account, "auth_config_id", None)
+        if auth_config_id is None:
+            return None
+        auth_config = await self._connector_service.auth_config_repository.get(
+            auth_config_id
+        )
+        if auth_config is None:
+            return None
+        secret = (auth_config.config or {}).get("signing_secret")
+        return str(secret).strip() or None if secret else None
+
     async def _provider_for_account(self, account: Any) -> str | None:
         auth_config_id = getattr(account, "auth_config_id", None)
         if auth_config_id is None:

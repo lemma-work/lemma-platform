@@ -116,9 +116,13 @@ The tab republishes immediately with the new name, and your next DM should reach
 
 ## 8. Your own Slack app (self-hosted / custom OAuth)
 
-**Do:** `GET /pods/{pod_id}/surfaces/{name}/slack-manifest` returns a manifest with **this surface's** webhook URL and this deployment's redirect URL already filled in. Create a Slack app from it, then store that app's signing secret as the surface's `webhook_secret`.
+**Do:** in a pod, open **Connectors → Slack → Advanced setup → Use custom config**. Click **Create your Slack app** — Slack should open with the name, scopes, event URL and OAuth callback already filled in. Create it, install it to your workspace, then paste the client ID, client secret and signing secret from Basic Information into that one screen.
 
-Expect events from your own app to verify. A surface with no stored secret keeps using the deployment's app, unchanged. There is **no UI for this yet** — that is the next workstream.
+Expect events from your own app to verify **on the shared `/surfaces/webhooks/slack` endpoint** — running your own app does not change where events arrive. Which secret verifies a request is chosen from the `team_id` in the payload, so one URL serves the deployment's app and every org's own app. A surface with no stored secret keeps using the deployment's app, unchanged. Disconnecting hands the surface back to Lemma's app.
+
+Worth testing specifically: a workspace whose surface holds its own secret must **not** accept a request signed with the deployment's secret. Falling back would let anyone holding the shared secret speak for that workspace.
+
+Also check the manifest is fetchable **before anything exists** (`GET /surface-setup/slack/manifest`, no pod or org in the path). That ordering is the whole point — you need the app to get a client id, the client id to connect the account, and the account before there is a surface at all.
 
 ---
 
@@ -147,7 +151,7 @@ Four bugs only a real workspace could have found: `streaming_mode_mismatch`, `ex
 |---|---|
 | G1 | **The whole web UI is stale.** It still presents Slack as "pick a workspace, edit a routing table" — nothing mentions streaming, the App Home, per-person DM agents, or running your own Slack app. This is the next workstream. |
 | G2 | No handler records feedback-button clicks; the buttons render only when a `feedback_callback_id` is passed, and nothing passes one. |
-| G3 | Nothing prevents two surfaces claiming the same Slack workspace. Found live: routing was decided by row order across two orgs. |
+| G3 | Two surfaces can claim the same Slack workspace. This is **supported** — one workspace fronting pods in several orgs — and `_select_surface` decides between them by pod membership, then the sender's saved default, then continuity. What was found live is narrower: when none of those discriminate, it falls to a `created_at` tiebreak, which reads as "row order". Signature verification is unaffected: a request is accepted if it matches *any* candidate surface's secret, and they are copies of one app's secret. |
 | G4 | All of F: no link unfurling, no `assistant.search.context` (channel search is still the substring scan), no Slack DM cold-open. |
 | G5 | The App Home logo needs `SLACK_HOME_LOGO_URL` set to a **public** https URL — Slack fetches it server-side, so localhost renders nothing. |
 | G6 | Starter-prompt buttons show the prompt to send rather than posting as the user; Slack has no API to speak as a user. |

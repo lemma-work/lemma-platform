@@ -57,6 +57,34 @@ from app.composition.surface_connectors import ConnectorServiceDep
 
 router = APIRouter(prefix="/pods/{pod_id}/surfaces", tags=["Agent Surfaces"])
 
+# Deployment-wide reads that belong to no pod. The Slack manifest is the whole
+# of it: it describes this *deployment* — its event URL, its OAuth callback, the
+# scopes its code reads — and is the same document for every pod and org. It is
+# also what you need *before* you have anything to scope it to, since the app it
+# creates is what issues the client id that connects the account a surface is
+# built on. Scoping it to a pod only made it unreadable until after the point
+# where it was needed.
+platform_router = APIRouter(prefix="/surface-setup", tags=["Agent Surfaces"])
+
+
+@platform_router.get(
+    "/slack/manifest",
+    operation_id="agent.surface.slack_manifest",
+)
+async def get_slack_app_manifest(user: CurrentUser) -> dict:
+    """The Slack app manifest to paste when running your own Slack app.
+
+    Served rather than copied out of the repo so the URLs always match the
+    deployment answering this request, and the scopes always match the code
+    that will consume the events.
+
+    Signed-in access is the only gate, and that is enough: every value in here
+    is already public — this deployment's URLs and the scopes its own code
+    asks for. It carries no credential and reveals nothing about a pod.
+    """
+    del user
+    return build_slack_app_manifest()
+
 # A surface's platform-level setup checklist (env/OAuth prerequisites) needs no
 # surface to exist yet, so it lives outside the surface-resource router.
 setup_guide_router = APIRouter(
@@ -475,28 +503,6 @@ async def get_surface_setup(
     del user
     setup = await service.get_surface_setup_by_name(pod_id=pod_id, name=surface_name)
     return SurfaceSetupResponse.model_validate(setup)
-
-
-@router.get(
-    "/{surface_name}/slack-manifest",
-    operation_id="agent.surface.slack_manifest",
-    dependencies=[require_action(Permissions.AGENT_READ)],
-)
-async def get_slack_app_manifest(
-    pod_id: UUID,
-    surface_name: str,
-    service: AgentSurfaceService = Depends(get_surface_service),
-) -> dict:
-    """The Slack app manifest to paste when running your own Slack app.
-
-    Served rather than copied out of the repo so the URLs always match the
-    deployment answering this request, and the scopes always match the code
-    that will consume the events.
-    """
-    surface = await service.get_surface_by_name_in_pod(
-        pod_id=pod_id, name=surface_name
-    )
-    return build_slack_app_manifest(surface)
 
 
 @router.get(

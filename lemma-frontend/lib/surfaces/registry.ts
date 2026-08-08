@@ -56,6 +56,15 @@ export interface SurfacePlatformDefinition {
         title: string;
         steps: SurfaceJourneyStep[];
     };
+    /**
+     * What a person does next, once the surface is live — shown in the proof
+     * state. Only for platforms where the remaining setup happens *there* and
+     * not here, which is why it reads as orientation rather than a checklist.
+     */
+    afterConnect?: {
+        title: string;
+        lines: string[];
+    };
     accountLabel: string;
     capabilities: {
         /**
@@ -162,16 +171,29 @@ const DEFINITIONS: SurfacePlatformDefinition[] = [
         label: 'Slack',
         logoSrc: '/surfaces/slack.png',
         promise: 'Let people reach {agent} in Slack',
-        connectHint: 'Install Lemma in your workspace, then route channels to agents.',
-        // No identity fork, because Slack has no second identity to offer. The
-        // catalog never reports a Lemma-managed Slack bot (`has_native_credentials`
-        // has no Slack branch), and a workspace's own app can't receive events
-        // while inbound signatures verify against one deployment-wide signing
-        // secret. What connecting actually does is install Lemma's Slack app into
-        // a workspace — asked once per workspace, so there is nothing to fork on.
-        // Reach is then per *channel*, not per bot: see `capabilities.channelRoutes`.
+        connectHint: 'Add Lemma to your workspace, then invite it to a channel.',
+        // No identity fork *at connect time*. Connecting installs a Slack app
+        // into a workspace — asked once per workspace, so there is nothing to
+        // fork on. An org that would rather run its own Slack app sets that up
+        // in Connectors, where the app's credentials live: it is one app for the
+        // org, not a choice each surface makes.
+        //
+        // Reach is per *channel*, not per bot (`capabilities.channelRoutes`),
+        // and DMs are per *person*: everyone picks the agent that answers them
+        // from the App Home, so no one agent holds a workspace's DMs.
         identityOptions: null,
         accountLabel: 'Slack workspace',
+        // The rest of setup happens in Slack, so this is where someone finds
+        // out that it does — the alternative is a settings page that looks like
+        // the only way in, which is what this screen used to imply.
+        afterConnect: {
+            title: 'The rest happens in Slack',
+            lines: [
+                'Invite Lemma to a channel and it’ll ask who should answer there.',
+                'Everyone picks who answers their own messages, from Lemma’s home tab in Slack.',
+                'Answers appear as they’re written, with tables, headings and code.',
+            ],
+        },
         capabilities: {
             channelRoutes: true,
             senderFilters: false,

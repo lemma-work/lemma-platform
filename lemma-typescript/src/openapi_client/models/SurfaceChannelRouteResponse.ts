@@ -6,4 +6,5 @@ export type SurfaceChannelRouteResponse = {
     agent_name?: (string | null);
     channel_id?: (string | null);
     channel_name?: (string | null);
+    use_pod_assistant?: boolean;
 };
