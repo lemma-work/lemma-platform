@@ -183,21 +183,50 @@ def _workspace_cwd(ctx: AgentContext, conversation: Conversation) -> str:
     return f"/workspace/conversations/{conversation.id}"
 
 
+def _workspace_repo(ctx: AgentContext):
+    """The repository this conversation works in, if it was started on one."""
+    return getattr(ctx, "workspace_repo", None)
+
+
+def _project_paragraph(repo) -> str:
+    """What an agent needs to know when its cwd is a real checkout."""
+    on_ref = f" on `{repo.ref}`" if repo.ref else ""
+    return (
+        f"This directory is a git checkout of **{repo.full_name}**{on_ref}, "
+        "cloned for you before this command ran. `git` and `gh` are already "
+        "authenticated as the connected account, and a commit identity is "
+        "already set — don't configure either.\n\n"
+        "The checkout is shared, not yours alone: another conversation may be "
+        "working in it right now. Run `git status` before you assume the tree "
+        "is clean, and never `reset --hard`, `clean`, or force-switch a branch "
+        "to tidy up — work on a branch of your own instead. An empty directory "
+        "here means the clone failed, and a notice will have said so."
+    )
+
+
 def _workspace_directory_section(
     *,
     ctx: AgentContext,
     conversation: Conversation,
 ) -> str:
     cwd = _workspace_cwd(ctx, conversation)
+    repo = _workspace_repo(ctx)
+    orientation = (
+        _project_paragraph(repo)
+        if repo is not None
+        else (
+            "An empty working directory means this is a **new conversation**, "
+            "not a reset sandbox. Earlier conversations' work is still on disk "
+            "under another `/workspace/c/<date>/<slug>`; list `/workspace/c/` "
+            "to find it. Treat prior files as gone only if a tool result says "
+            "the workspace was recreated."
+        )
+    )
     return (
         "# Working Directory\n"
         f"Your working directory is `{cwd}`. Files you write here are private "
         "to you until you upload them to pod files.\n\n"
-        "An empty working directory means this is a **new conversation**, not a "
-        "reset sandbox. Earlier conversations' work is still on disk under "
-        "another `/workspace/c/<date>/<slug>`; list `/workspace/c/` to find it. "
-        "Treat prior files as gone only if a tool result says the workspace was "
-        "recreated.\n\n"
+        f"{orientation}\n\n"
         "Files under `/workspace` survive an idle pause; running processes and "
         "your `execute_python` kernel do not, so don't plan around a background "
         "process living between turns. A `cd` in one `exec_command` does not "

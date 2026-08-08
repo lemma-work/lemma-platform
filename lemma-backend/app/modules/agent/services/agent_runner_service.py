@@ -256,6 +256,7 @@ class AgentRunnerService:
                 runtime_credentials=runtime_credentials,
                 workspace_id=workspace_location.workspace_id,
                 workspace_cwd=workspace_location.cwd,
+                workspace_repo=workspace_location.repo,
                 pod_cwd=pod_cwd,
                 # Only the in-process pydantic (LEMMA) harness catches the
                 # ask_user/request_approval pause signal; remote harnesses run the

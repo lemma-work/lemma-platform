@@ -18,6 +18,7 @@ from app.modules.agent.domain.subscription_models import SubscriptionModels
 from app.modules.agent.services.subscription_models_provider import (
     resolve_subscription_models,
 )
+from app.modules.agent.services.workspace_location import ProjectRepo
 from app.composition.agent_workspace import WorkspaceFileManager
 
 
@@ -39,6 +40,10 @@ class BaseAgentContext(AgentContext):
     runtime_credentials: dict[str, object] = Field(default_factory=dict)
     workspace_id: str = "default"
     workspace_cwd: str | None = None
+    # The GitHub repository this conversation works in, when it was started
+    # against a project rather than a scratchpad. Drives the clone-on-first-use
+    # step in the workspace CLI; None means the ordinary scratchpad cwd.
+    workspace_repo: ProjectRepo | None = None
     # Default pod-filesystem working directory for this conversation, e.g.
     # `/me/c/{date}/{slug}`. Relative pod tool paths resolve against this.
     pod_cwd: str | None = None
