@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+    availableConditionOperators,
     buildCronExpression,
+    buildMatchConditions,
     describeCron,
     describeScheduleConfig,
     getScheduleConfigDetails,
@@ -11,6 +13,7 @@ import {
     getScheduleTimeConfig,
     getScheduleWebhookConfig,
     parseCronExpression,
+    parseMatchConditions,
     type TimeCadence,
 } from '../schedules';
 
@@ -117,5 +120,96 @@ describe('typed schedule config readers', () => {
             schedule_type: 'WEBHOOK',
             config: { connector_id: 'slack', connector_trigger_id: 'SLACK_NEW_MESSAGE' },
         } as never)).toEqual({ connectorId: 'slack', triggerId: 'SLACK_NEW_MESSAGE' });
+    });
+});
+
+describe('match conditions on a data trigger', () => {
+    const scheduleWith = (when: unknown) =>
+        ({ schedule_type: 'DATASTORE', config: { table_name: 'tickets', operations: ['UPDATE'], when } }) as never;
+
+    it('builds the wire shape from builder rows', () => {
+        expect(
+            buildMatchConditions([
+                { column: 'status', operator: 'became', value: 'approved' },
+                { column: 'priority', operator: 'is', value: 'high' },
+            ]),
+        ).toEqual({ status: { to: 'approved' }, priority: { equals: 'high' } });
+    });
+
+    it('coerces a value to the type the stored row actually holds', () => {
+        // A number column holds 5, never "5" — sending the string would build a
+        // condition that silently never matches.
+        expect(
+            buildMatchConditions([{ column: 'count', operator: 'is', value: '5' }], { count: 'INTEGER' }),
+        ).toEqual({ count: { equals: 5 } });
+        expect(
+            buildMatchConditions([{ column: 'done', operator: 'is', value: 'true' }], { done: 'BOOLEAN' }),
+        ).toEqual({ done: { equals: true } });
+        expect(
+            buildMatchConditions([{ column: 'name', operator: 'is', value: '5' }], { name: 'TEXT' }),
+        ).toEqual({ name: { equals: '5' } });
+    });
+
+    it('leaves an unparseable number alone rather than sending NaN', () => {
+        expect(
+            buildMatchConditions([{ column: 'count', operator: 'is', value: 'lots' }], { count: 'INTEGER' }),
+        ).toEqual({ count: { equals: 'lots' } });
+    });
+
+    it('carries no value for a test that is about the change itself', () => {
+        expect(buildMatchConditions([{ column: 'owner', operator: 'changed', value: '' }])).toEqual({
+            owner: { changed: true },
+        });
+    });
+
+    it('is undefined when there is nothing to say', () => {
+        expect(buildMatchConditions([])).toBeUndefined();
+        // A half-finished row is dropped, not sent as an empty object.
+        expect(buildMatchConditions([{ column: 'status', operator: 'is', value: '  ' }])).toBeUndefined();
+    });
+
+    it('merges several tests on one column', () => {
+        expect(
+            buildMatchConditions([
+                { column: 'status', operator: 'was', value: 'pending' },
+                { column: 'status', operator: 'became', value: 'approved' },
+            ]),
+        ).toEqual({ status: { from: 'pending', to: 'approved' } });
+    });
+
+    it('round-trips through the wire shape', () => {
+        const rows = [
+            { column: 'status', operator: 'became' as const, value: 'approved' },
+            { column: 'owner', operator: 'changed' as const, value: '' },
+        ];
+        const parsed = parseMatchConditions(scheduleWith(buildMatchConditions(rows)));
+        expect(parsed.conditions).toEqual(rows);
+        expect(parsed.unsupported).toEqual([]);
+    });
+
+    it('names a test it cannot draw instead of dropping it', () => {
+        // `in` and `written` are reachable from a bundle or the CLI; editing a
+        // trigger in the modal must not silently discard them.
+        const parsed = parseMatchConditions(scheduleWith({ status: { in: ['a', 'b'] }, notes: { written: true } }));
+        expect(parsed.conditions).toEqual([]);
+        expect(parsed.unsupported).toEqual(['status in', 'notes written']);
+    });
+
+    it('treats changed:false as undrawable rather than as changed:true', () => {
+        const parsed = parseMatchConditions(scheduleWith({ status: { changed: false } }));
+        expect(parsed.conditions).toEqual([]);
+        expect(parsed.unsupported).toEqual(['status changed']);
+    });
+
+    it('offers only the operators the chosen change types can answer', () => {
+        // The API rejects a condition no operation could satisfy, so a trigger
+        // that can never fire should be unreachable in the builder.
+        expect(availableConditionOperators(['INSERT'])).toEqual(['is', 'is_not', 'became']);
+        expect(availableConditionOperators(['DELETE'])).toEqual(['is', 'is_not']);
+        expect(availableConditionOperators(['UPDATE'])).toEqual(['is', 'is_not', 'became', 'was', 'changed']);
+    });
+
+    it('has no conditions when the trigger carries none', () => {
+        expect(parseMatchConditions(scheduleWith(undefined)).conditions).toEqual([]);
     });
 });

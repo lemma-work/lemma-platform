@@ -96,6 +96,7 @@ export {
 export {
     WarningCircle as AlertCircle,
     Warning as AlertTriangle,
+    Bell,
     CurrencyDollar as BadgeDollarSign,
     ChartBar as BarChart3,
     BookOpenText as BookA,

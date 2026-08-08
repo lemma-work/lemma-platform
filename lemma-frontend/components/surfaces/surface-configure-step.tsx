@@ -50,6 +50,7 @@ export function SurfaceConfigureStep({
     onDraftChange,
     availableChannels,
     isLoadingChannels,
+    defaultRouteAgent = null,
 }: {
     definition: SurfacePlatformDefinition;
     surface: AssistantSurface;
@@ -58,6 +59,9 @@ export function SurfaceConfigureStep({
     onDraftChange: (patch: Partial<ConfigureDraft>) => void;
     availableChannels: AvailableChannel[];
     isLoadingChannels: boolean;
+    /** Agent a newly added route answers as — the one whose page opened this.
+     * `null` falls to the pod default, which is right for the pod assistant. */
+    defaultRouteAgent?: string | null;
 }) {
     const { channelRoutes, senderFilters } = definition.capabilities;
 
@@ -133,8 +137,16 @@ export function SurfaceConfigureStep({
                     <div>
                         <p className="text-sm font-medium text-[var(--text-primary)]">Channel routing</p>
                         <p className="mt-1 text-xs leading-5 text-[var(--text-secondary)]">
-                            Point a channel at a different agent. In channels an agent speaks only when
-                            mentioned, or in a thread it already joined.
+                            Point a channel at its own agent — several agents can answer in one
+                            workspace. In channels an agent speaks only when mentioned, or in a
+                            thread it already joined.
+                        </p>
+                        {/* The precondition belongs here, not in the empty state: someone
+                            looking at a short list needs it just as much as someone
+                            looking at none, and by then it reads as an explanation
+                            rather than an instruction. */}
+                        <p className="mt-1 text-xs leading-5 text-[var(--text-tertiary)]">
+                            Only channels the {definition.label} bot has been invited to appear here.
                         </p>
                     </div>
 
@@ -144,7 +156,7 @@ export function SurfaceConfigureStep({
                         </div>
                     ) : availableChannels.length === 0 && draft.channels.length === 0 ? (
                         <p className="text-xs leading-5 text-[var(--text-tertiary)]">
-                            No channels yet. Invite the {definition.label} bot to one, then reopen this.
+                            Invite it to a channel in {definition.label}, then reopen this.
                         </p>
                     ) : (
                         <>
@@ -185,7 +197,7 @@ export function SurfaceConfigureStep({
                                             {
                                                 channel_id: next?.id ?? '',
                                                 channel_name: next?.name ?? '',
-                                                agent_name: null,
+                                                agent_name: defaultRouteAgent,
                                             },
                                         ],
                                     });

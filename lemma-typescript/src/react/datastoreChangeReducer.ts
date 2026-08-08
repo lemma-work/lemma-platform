@@ -46,7 +46,9 @@ export interface ApplyDatastoreChangeOptions<TRecord extends Record<string, unkn
  *
  * - `delete` → drop the row by id.
  * - `insert` / `update` → upsert by id, shallow-merging the frame's `payload` over any
- *   existing row (the payload may be partial on update, so merge rather than replace).
+ *   existing row. The payload carries the whole row, so the merge is effectively a
+ *   replace; it stays a merge so a client holding fields the server does not send
+ *   (a local annotation, a joined label) keeps them.
  *   A row rejected by `accept` is removed (it left the filtered view).
  */
 export function applyDatastoreChange<TRecord extends Record<string, unknown>>(

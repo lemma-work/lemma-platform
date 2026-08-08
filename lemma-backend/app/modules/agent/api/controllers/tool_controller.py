@@ -51,8 +51,8 @@ async def web_search(
     operation_id="agent.tool.report_feedback",
     summary="Agent Report Feedback",
     description=(
-        "Record a maintainer-facing feedback report about system issues, skill "
-        "issues, incorrect knowledge, or other unexpected behavior."
+        "Record a maintainer-facing feedback report about the CLI, a skill, the "
+        "platform, or the docs."
     ),
 )
 async def report_feedback(

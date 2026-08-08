@@ -37,6 +37,9 @@ from app.modules.agent_surfaces.domain.models import (
     SurfaceSenderProfile,
 )
 from app.modules.agent.domain.value_objects import AgentRunApprovalDecision
+from app.modules.agent_surfaces.services.pending_interaction_resume import (
+    maybe_resume_pending_interaction,
+)
 from app.modules.agent_surfaces.services.ingress_service import (
     AgentSurfaceIngressService,
 )
@@ -2226,7 +2229,7 @@ async def test_maybe_resume_pending_interaction_handles_request_approval_approve
     }
 
     ctx = SimpleNamespace(conversation_id=conversation_id, user_id=uuid4(), pod_id=surface.pod_id)
-    resumed = await service._maybe_resume_pending_interaction(
+    resumed = await maybe_resume_pending_interaction(
         ctx, "approve", conversation_service=service.conversation_service
     )
     assert resumed is True
@@ -2254,7 +2257,7 @@ async def test_maybe_resume_pending_interaction_handles_request_approval_deny():
     }
 
     ctx = SimpleNamespace(conversation_id=conversation_id, user_id=uuid4(), pod_id=surface.pod_id)
-    resumed = await service._maybe_resume_pending_interaction(
+    resumed = await maybe_resume_pending_interaction(
         ctx, "no", conversation_service=service.conversation_service
     )
     assert resumed is True
@@ -2282,7 +2285,7 @@ async def test_maybe_resume_pending_interaction_parses_numbered_ask_user_option(
 
     ctx = SimpleNamespace(conversation_id=conversation_id, user_id=uuid4(), pod_id=surface.pod_id)
     # "2" → second option label "Blue"
-    resumed = await service._maybe_resume_pending_interaction(
+    resumed = await maybe_resume_pending_interaction(
         ctx, "2", conversation_service=service.conversation_service
     )
     assert resumed is True

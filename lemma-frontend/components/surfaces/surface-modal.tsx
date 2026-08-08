@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Image from 'next/image';
 import { useQueryClient } from '@tanstack/react-query';
 import {
@@ -94,6 +94,12 @@ export interface SurfaceModalTarget {
     platform: SurfacePlatformValue;
     /** Present when configuring an existing surface. */
     surfaceName?: string;
+    /**
+     * `add-channel` opens an installed workspace straight on its routing with a
+     * blank row waiting, so "add a channel" is one click from the agent page
+     * rather than a settings page you have to read first.
+     */
+    intent?: 'add-channel';
 }
 
 export function SurfaceModal({
@@ -147,6 +153,10 @@ export function SurfaceModal({
     const [draft, setDraft] = useState<ConfigureDraft>(emptyDraft());
     const [messageUserId, setMessageUserId] = useState('');
     const [messageBody, setMessageBody] = useState('');
+    // Set when the modal is opened on `add-channel`, cleared the moment the draft
+    // effect acts on it — a ref rather than state so seeding can't run twice as
+    // the surface resolves.
+    const pendingChannelRow = useRef(false);
 
     // Polls only while a hand-off is in flight; the hook stops itself on
     // COMPLETE/FAILED. Declared before `existingSurface` because a managed
@@ -195,7 +205,9 @@ export function SurfaceModal({
 
     // Entering the modal decides the starting state once: an existing surface
     // opens on whatever it still needs, a new one on its first question.
-    const targetKey = target ? `${target.platform}:${target.surfaceName ?? ''}` : null;
+    const targetKey = target
+        ? `${target.platform}:${target.surfaceName ?? ''}:${target.intent ?? ''}`
+        : null;
     useEffect(() => {
         if (!targetKey || !definition) return;
         setError(null);
@@ -205,6 +217,9 @@ export function SurfaceModal({
         setCreatedSurface(null);
 
         if (target?.surfaceName) {
+            // Consumed by the draft effect below, which is the only place that
+            // knows the surface's existing routes to append to.
+            pendingChannelRow.current = target.intent === 'add-channel';
             setStep('configure');
             return;
         }
@@ -225,7 +240,19 @@ export function SurfaceModal({
     }, [hasOutstandingSetup, target?.surfaceName]);
 
     useEffect(() => {
-        if (existingSurface) setDraft(draftFromSurface(existingSurface));
+        if (!existingSurface) return;
+        const base = draftFromSurface(existingSurface);
+        if (pendingChannelRow.current) {
+            pendingChannelRow.current = false;
+            // Routed to the agent whose page opened this, because that is the
+            // whole reason someone clicked "add channel" from there.
+            setDraft({ ...base, channels: [...base.channels, blankChannelRow(agentName)] });
+            return;
+        }
+        setDraft(base);
+        // `agentName` is fixed for the life of a modal target; re-reading it here
+        // would only rebuild the draft and discard edits in flight.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [existingSurface]);
 
     // The manager bot creates the surface server-side, so completion arrives by
@@ -602,6 +629,7 @@ export function SurfaceModal({
                                 onDraftChange={patchDraft}
                                 availableChannels={availableChannels}
                                 isLoadingChannels={isLoadingChannels}
+                                defaultRouteAgent={agentName}
                             />
                         </div>
                     ) : null}
@@ -734,6 +762,12 @@ function defaultMode(entry: Parameters<typeof hasSystemIdentity>[0]): SurfaceIde
     // No fork to offer: run on the Lemma-managed identity when this deployment
     // has one (Resend), otherwise an account is the only way in.
     return hasSystemIdentity(entry) ? 'SYSTEM' : 'CUSTOM';
+}
+
+/** An unfilled route row. The channel is picked in the modal; the agent is not,
+ * because the page that opened it already answered that. */
+function blankChannelRow(agentName: string | null) {
+    return { channel_id: '', channel_name: '', agent_name: agentName };
 }
 
 function emptyDraft(): ConfigureDraft {

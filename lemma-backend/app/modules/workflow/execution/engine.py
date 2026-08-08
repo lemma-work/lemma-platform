@@ -8,8 +8,6 @@ and stale completion events are conflicts/no-ops by construction.
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
-from jsonschema import Draft202012Validator
-from jsonschema.exceptions import SchemaError, best_match
 from sqlalchemy.exc import IntegrityError
 
 from app.core.authorization.context import Context, ResourceRef, ResourceType
@@ -19,9 +17,7 @@ from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.workflow.domain.context import TriggerContext, normalize_node_output
 from app.modules.workflow.domain.events import WorkflowRunTerminalEvent
 from app.modules.workflow.domain.errors import (
-    WorkflowAccessDeniedError,
     WorkflowConflictError,
-    WorkflowDomainError,
     WorkflowValidationError,
 )
 from app.modules.workflow.domain.schema_template import defaults_from_schema
@@ -36,9 +32,15 @@ from app.modules.workflow.domain.wait import (
     WorkflowRunWaitEntity,
     WorkflowRunWaitType,
 )
+from app.modules.workflow.execution.form_submission import (
+    FormNodeMismatchError,
+    check_assignee,
+    validate_form_inputs,
+)
 from app.modules.workflow.execution.stepper import RunStepper, StepResult
 from app.composition.workflow_agent import AgentControlAdapter
 from app.composition.workflow_function import FunctionControlAdapter
+from app.composition.workflow_notifications import WorkflowNotificationAdapter
 from app.composition.workflow_scheduler import ScheduleControlAdapter
 from app.modules.workflow.execution.underlying_work import (
     stop_underlying_work,
@@ -55,26 +57,6 @@ from app.core.log.log import get_logger
 logger = get_logger(__name__)
 
 
-class FormNodeMismatchError(WorkflowDomainError):
-    def __init__(self, message: str):
-        super().__init__(
-            message=message,
-            code="WORKFLOW_FORM_NODE_MISMATCH",
-            status_code=422,
-        )
-
-
-class FormValidationError(WorkflowDomainError):
-    """Submitted form inputs failed validation against the resolved schema."""
-
-    def __init__(self, message: str):
-        super().__init__(
-            message=message,
-            code="WORKFLOW_FORM_VALIDATION_FAILED",
-            status_code=422,
-        )
-
-
 class WorkflowEngine:
     def __init__(
         self,
@@ -82,6 +64,7 @@ class WorkflowEngine:
         agent_adapter=None,
         function_adapter=None,
         schedule_adapter=None,
+        notification_adapter=None,
     ):
         self.uow = uow
         self.flow_repo = SqlAlchemyWorkflowRepository(uow)
@@ -91,6 +74,9 @@ class WorkflowEngine:
         self.agent_adapter = agent_adapter or AgentControlAdapter(uow)
         self.function_adapter = function_adapter or FunctionControlAdapter(uow)
         self.schedule_adapter = schedule_adapter or ScheduleControlAdapter(uow)
+        self.notification_adapter = notification_adapter or WorkflowNotificationAdapter(
+            uow
+        )
 
     def _stepper(self, ctx: Context | None) -> RunStepper:
         return RunStepper(
@@ -268,17 +254,26 @@ class WorkflowEngine:
                 f"Form node mismatch: the active wait is on '{wait.node_id}', "
                 f"not '{node_id}'"
             )
-        await self._check_assignee(wait, run.pod_id, requester_user_id)
+        await check_assignee(self.uow, wait, run.pod_id, requester_user_id)
 
         # The resolved schema rides on the wait. Fill omitted fields from
         # schema defaults (user submission wins), then validate the merged
         # values against that schema so dynamic enums are enforced server-side.
         schema = wait.payload.get("input_schema")
         merged = {**defaults_from_schema(schema), **dict(inputs)}
-        self._validate_form_inputs(node_id, schema, merged)
+        validate_form_inputs(node_id, schema, merged)
 
         wait.complete(merged)
         await self.wait_repo.update(wait)
+        # Close the inbox entry in the same breath as the wait, so the two never
+        # disagree about whether this step is still owed.
+        await self.notification_adapter.close_form_notification(
+            pod_id=run.pod_id,
+            run_id=run.id,
+            node_id=node_id,
+            summary="Form submitted.",
+            data=merged,
+        )
 
         run.resume(node_id, merged)
         result = await self._stepper(ctx).continue_after(run, flow, node_id)
@@ -401,6 +396,9 @@ class WorkflowEngine:
                 agent_adapter=self.agent_adapter,
                 function_adapter=self.function_adapter,
             )
+        # A cancelled run must not leave a question sitting in someone's inbox
+        # waiting for an answer that nobody will ever read.
+        await self.notification_adapter.cancel_for_run(run_id=run.id)
         try:
             run.cancel()
         except ValueError as exc:
@@ -538,7 +536,37 @@ class WorkflowEngine:
         ):
             return
         assert run.current_node_id is not None
-        await self.wait_repo.create(self._wait_entity(run, result.wait))
+        wait = await self.wait_repo.create(self._wait_entity(run, result.wait))
+        await self._announce_human_wait(run, wait)
+
+    async def _announce_human_wait(
+        self, run: WorkflowRunEntity, wait: WorkflowRunWaitEntity
+    ) -> None:
+        """Tell the assignee a form is waiting on them.
+
+        Until this existed the wait was a pure pull queue: the row was written,
+        the "waiting for you" list rendered it, and nobody was ever told. A
+        workflow could sit for days on someone who had no idea it existed.
+
+        Unassigned waits are skipped on purpose — there is no one person to tell,
+        and broadcasting to the pod would make every form everyone's problem.
+        """
+        if (
+            wait.wait_type is not WorkflowRunWaitType.HUMAN
+            or wait.assigned_pod_member_id is None
+        ):
+            return
+        flow = await self.flow_repo.get(run.flow_id)
+        await self.notification_adapter.notify_form_assignee(
+            pod_id=run.pod_id,
+            run_id=run.id,
+            flow_id=run.flow_id,
+            node_id=wait.node_id,
+            assigned_pod_member_id=wait.assigned_pod_member_id,
+            flow_name=getattr(flow, "name", None),
+            schema=wait.payload.get("input_schema"),
+            actor_user_id=run.user_id,
+        )
 
     def _wait_entity(
         self, run: WorkflowRunEntity, request: WaitRequest
@@ -557,45 +585,3 @@ class WorkflowEngine:
             payload=payload,
         )
 
-    @staticmethod
-    def _validate_form_inputs(
-        node_id: str, schema: Any | None, data: Dict[str, Any]
-    ) -> None:
-        """Validate submitted form values against the resolved schema stored on
-        the wait. A malformed schema (already validated at suspend) is treated
-        as no-schema rather than blocking the user."""
-        if not isinstance(schema, dict) or not schema:
-            return
-        try:
-            validator = Draft202012Validator(schema)
-        except SchemaError:
-            logger.warning("workflow.form.invalid_schema", node_id=node_id)
-            return
-        error = best_match(validator.iter_errors(data))
-        if error is not None:
-            field = ".".join(str(part) for part in error.absolute_path) or "input"
-            raise FormValidationError(
-                f"Form input for node '{node_id}' is invalid at '{field}': "
-                f"{error.message}"
-            )
-
-    async def _check_assignee(
-        self,
-        wait: WorkflowRunWaitEntity,
-        pod_id: UUID,
-        requester_user_id: UUID | None,
-    ) -> None:
-        if wait.assigned_pod_member_id is None or requester_user_id is None:
-            return
-        from app.composition.workflow_pod import (
-            PodMemberRepository,
-        )
-
-        pod_member = await PodMemberRepository(self.uow).get_by_pod_and_user_id(
-            pod_id,
-            requester_user_id,
-        )
-        if pod_member is None or pod_member.id != wait.assigned_pod_member_id:
-            raise WorkflowAccessDeniedError(
-                "Workflow wait is assigned to another pod member"
-            )

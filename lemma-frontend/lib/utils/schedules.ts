@@ -394,3 +394,153 @@ export function getScheduleConfigDetails(schedule: Schedule): ScheduleConfigDeta
         .map(([label, value]) => ({ label, value: formatConfigValue(value) }))
         .filter((detail) => detail.value);
 }
+
+/* -- Match conditions on a data trigger ------------------------------------ */
+
+/**
+ * A row of the "Only run when" builder.
+ *
+ * The reader picks a column, how to test it, and what to test against. The
+ * wire format is an object per column keyed by operator; this flat shape is
+ * what a list of editable rows needs, so the two are translated at the edges.
+ */
+export type ConditionOperator = 'is' | 'is_not' | 'became' | 'was' | 'changed';
+
+export interface MatchCondition {
+    column: string;
+    operator: ConditionOperator;
+    value: string;
+}
+
+/** Wire operator per UI operator. `changed` carries no value of its own. */
+const CONDITION_WIRE_KEY: Record<ConditionOperator, string> = {
+    is: 'equals',
+    is_not: 'not_equals',
+    became: 'to',
+    was: 'from',
+    changed: 'changed',
+};
+
+/**
+ * Which change types each operator can ever be satisfied by. The API rejects a
+ * condition no declared operation could satisfy, so the builder offers only the
+ * operators the chosen operations can actually answer — a trigger that can
+ * never fire should be unreachable, not a failed save.
+ */
+const CONDITION_OPERATOR_NEEDS: Record<ConditionOperator, DataOperation[]> = {
+    is: ['INSERT', 'UPDATE', 'DELETE'],
+    is_not: ['INSERT', 'UPDATE', 'DELETE'],
+    became: ['INSERT', 'UPDATE'],
+    was: ['UPDATE'],
+    changed: ['UPDATE'],
+};
+
+export const CONDITION_OPERATOR_LABEL: Record<ConditionOperator, string> = {
+    is: 'is',
+    is_not: 'is not',
+    became: 'became',
+    was: 'was',
+    changed: 'changed',
+};
+
+/** Operators that take no value — the test is the change itself. */
+export function conditionTakesValue(operator: ConditionOperator): boolean {
+    return operator !== 'changed';
+}
+
+export function availableConditionOperators(operations: DataOperation[]): ConditionOperator[] {
+    return (Object.keys(CONDITION_OPERATOR_NEEDS) as ConditionOperator[]).filter((operator) =>
+        CONDITION_OPERATOR_NEEDS[operator].some((operation) => operations.includes(operation)),
+    );
+}
+
+/**
+ * Coerce a typed-in value to the shape the stored row actually holds.
+ *
+ * Conditions compare against the row as JSON, so a number column holds `5` and
+ * never `"5"`. Sending the string would produce a condition that silently never
+ * matches — the failure this whole feature exists to remove.
+ */
+function coerceConditionValue(raw: string, columnType?: string): unknown {
+    const value = raw.trim();
+    if (columnType === 'INTEGER' || columnType === 'FLOAT' || columnType === 'SERIAL') {
+        const parsed = Number(value);
+        return value !== '' && Number.isFinite(parsed) ? parsed : value;
+    }
+    if (columnType === 'BOOLEAN') {
+        if (/^true$/i.test(value)) return true;
+        if (/^false$/i.test(value)) return false;
+    }
+    return value;
+}
+
+/** Build the `when` block, or `undefined` when there is nothing to say. */
+export function buildMatchConditions(
+    conditions: MatchCondition[],
+    columnTypes: Record<string, string> = {},
+): Record<string, Record<string, unknown>> | undefined {
+    const when: Record<string, Record<string, unknown>> = {};
+    for (const condition of conditions) {
+        const column = condition.column.trim();
+        if (!column) continue;
+        if (condition.operator === 'changed') {
+            when[column] = { ...(when[column] || {}), changed: true };
+            continue;
+        }
+        if (!condition.value.trim()) continue;
+        when[column] = {
+            ...(when[column] || {}),
+            [CONDITION_WIRE_KEY[condition.operator]]: coerceConditionValue(
+                condition.value,
+                columnTypes[column],
+            ),
+        };
+    }
+    return Object.keys(when).length ? when : undefined;
+}
+
+/**
+ * Read stored conditions back into rows.
+ *
+ * Operators this builder does not offer (`in`, `not_in`, `written`) are skipped
+ * rather than mangled — a trigger authored through the CLI or a bundle keeps
+ * them, and `unsupported` says so instead of the editor quietly dropping them.
+ */
+export function parseMatchConditions(schedule: Schedule): {
+    conditions: MatchCondition[];
+    unsupported: string[];
+} {
+    const config = getScheduleConfig(schedule);
+    const when = config.when;
+    const conditions: MatchCondition[] = [];
+    const unsupported: string[] = [];
+    if (!when || typeof when !== 'object' || Array.isArray(when)) {
+        return { conditions, unsupported };
+    }
+
+    const wireToOperator = new Map<string, ConditionOperator>(
+        (Object.keys(CONDITION_WIRE_KEY) as ConditionOperator[]).map((operator) => [
+            CONDITION_WIRE_KEY[operator],
+            operator,
+        ]),
+    );
+
+    for (const [column, raw] of Object.entries(when as Record<string, unknown>)) {
+        if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue;
+        for (const [wireKey, value] of Object.entries(raw as Record<string, unknown>)) {
+            const operator = wireToOperator.get(wireKey);
+            if (!operator) {
+                unsupported.push(`${column} ${wireKey}`);
+                continue;
+            }
+            if (operator === 'changed') {
+                // `changed: false` is a real condition this builder cannot draw.
+                if (value !== true) unsupported.push(`${column} ${wireKey}`);
+                else conditions.push({ column, operator, value: '' });
+                continue;
+            }
+            conditions.push({ column, operator, value: value === null ? '' : String(value) });
+        }
+    }
+    return { conditions, unsupported };
+}
