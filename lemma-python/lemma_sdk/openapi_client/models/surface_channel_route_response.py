@@ -18,11 +18,13 @@ class SurfaceChannelRouteResponse:
         agent_name (None | str | Unset):
         channel_id (None | str | Unset):
         channel_name (None | str | Unset):
+        use_pod_assistant (bool | Unset):  Default: False.
     """
 
     agent_name: None | str | Unset = UNSET
     channel_id: None | str | Unset = UNSET
     channel_name: None | str | Unset = UNSET
+    use_pod_assistant: bool | Unset = False
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -44,6 +46,8 @@ class SurfaceChannelRouteResponse:
         else:
             channel_name = self.channel_name
 
+        use_pod_assistant = self.use_pod_assistant
+
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update({})
@@ -53,6 +57,8 @@ class SurfaceChannelRouteResponse:
             field_dict["channel_id"] = channel_id
         if channel_name is not UNSET:
             field_dict["channel_name"] = channel_name
+        if use_pod_assistant is not UNSET:
+            field_dict["use_pod_assistant"] = use_pod_assistant
 
         return field_dict
 
@@ -87,10 +93,13 @@ class SurfaceChannelRouteResponse:
 
         channel_name = _parse_channel_name(d.pop("channel_name", UNSET))
 
+        use_pod_assistant = d.pop("use_pod_assistant", UNSET)
+
         surface_channel_route_response = cls(
             agent_name=agent_name,
             channel_id=channel_id,
             channel_name=channel_name,
+            use_pod_assistant=use_pod_assistant,
         )
 
         surface_channel_route_response.additional_properties = d
