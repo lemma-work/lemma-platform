@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from uuid import UUID
 
+from fastapi import HTTPException
+
 from app.core.authorization.context import ResourceRef, ResourceType
 from app.core.authorization.permissions import Permissions
 from app.modules.agent_surfaces.api.schemas import (
@@ -18,6 +20,7 @@ from app.modules.agent_surfaces.domain.entities import (
 )
 from app.modules.agent_surfaces.domain.errors import AgentSurfaceValidationError
 from app.modules.apps.contracts import get_ready_pod_app_by_name
+from app.modules.connectors.contracts import ConnectorNotFoundError
 
 
 async def require_surface_agent_action(
@@ -37,6 +40,34 @@ async def require_surface_agent_action(
             pod_id=pod_id,
         ),
     )
+
+
+async def require_own_account(
+    account_id: UUID | None,
+    *,
+    user_id: UUID,
+    organization_id: UUID | None,
+    connector_service,
+) -> None:
+    """A caller may only point a surface at an account they own.
+
+    Accounts are personal, so binding someone else's is not a permission an
+    editor has — it would hand the pod a credential its owner never offered.
+    Rebinding to *your own* account is the supported repair when the account a
+    surface runs on expires or its owner leaves, and that path passes this check.
+    """
+    if account_id is None:
+        return
+    try:
+        await connector_service.get_account(account_id, user_id, organization_id)
+    except ConnectorNotFoundError as exc:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "That account belongs to someone else. Connect your own account "
+                "for this platform, then bind the surface to it."
+            ),
+        ) from exc
 
 
 async def _resolve_channel_routes(

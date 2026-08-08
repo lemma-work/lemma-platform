@@ -233,6 +233,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'agent_surfaces.surface_display_delivery.surface_voice_note_delivery_conversation.diagnostic': EventSpec('debug', frozenset({'conversation_id'})),
     'agent_surfaces.surface_file_ingest_service.surface_attachment_download_platform_s.diagnostic': EventSpec('debug', frozenset()),
     'agent_surfaces.surface_file_ingest_service.surface_attachment_persist_platform_s.diagnostic': EventSpec('debug', frozenset()),
+    'agent_surfaces.surface_connection_resolver.connection_lookup_failed.diagnostic': EventSpec('debug', frozenset({'pod_id'})),
     'agent_surfaces.surface_reach_resolver.surface_reach_account_fallback_surface.observed': EventSpec('debug', frozenset()),
     'agent_surfaces.surface_reach_resolver.surface_reach_live_handle_surface.observed': EventSpec('debug', frozenset({'surface_type'})),
     'agent_surfaces.surface_reach_resolver.surface_reach_write_through_surface.observed': EventSpec('debug', frozenset()),

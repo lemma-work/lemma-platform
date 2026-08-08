@@ -12,6 +12,7 @@ import { useAvailableSurfaces } from '@/lib/hooks/use-pod-surfaces';
 import type { SurfacePlatformValue } from '@/lib/hooks/use-pod-surfaces';
 import { getSurfaceDefinition, SURFACE_PLATFORM_ORDER } from '@/lib/surfaces/registry';
 import {
+    describeConnection,
     describeReach,
     getSurfaceDeepLink,
     getSurfaceIdentity,
@@ -192,6 +193,11 @@ function ReachChip({
     const status = getSurfaceStatus(surface);
     const identity = surface.reach?.handle || getSurfaceIdentity(surface);
     const deepLink = getSurfaceDeepLink(surface);
+    // The account underneath can be in trouble while the surface itself still
+    // reads ACTIVE — an expired token, or an owner who has left. Worth a dot on
+    // the chip, because otherwise you only find out when it stops answering.
+    const connection = describeConnection(surface);
+    const tone = connection?.problem && status.tone === 'success' ? 'warning' : status.tone;
 
     return (
         <Tooltip>
@@ -204,9 +210,9 @@ function ReachChip({
                     <span
                         className={cn(
                             'h-1.5 w-1.5 shrink-0 rounded-full',
-                            status.tone === 'success'
+                            tone === 'success'
                                 ? 'bg-[var(--state-success)]'
-                                : status.tone === 'warning' || status.tone === 'danger'
+                                : tone === 'warning' || tone === 'danger'
                                     ? 'bg-[var(--state-warning)]'
                                     : 'bg-[var(--text-tertiary)]',
                         )}
@@ -222,6 +228,11 @@ function ReachChip({
                     ? identity || definition?.label || platform
                     : describeReach(surface, reachFor)}
                 {deepLink ? ` · ${deepLink.replace(/^https?:\/\//, '')}` : ''}
+                {connection ? (
+                    <span className="mt-1 block text-[var(--text-tertiary)]">
+                        {connection.problem || connection.attribution}
+                    </span>
+                ) : null}
             </TooltipContent>
         </Tooltip>
     );
