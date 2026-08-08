@@ -6,6 +6,10 @@ from uuid import UUID
 from pydantic import BaseModel, Field, field_validator, model_validator
 from app.core.authorization.context import ResourceType
 from app.core.domain.entity import Entity
+from app.modules.schedule.domain.match_conditions import (
+    ColumnCondition,
+    parse_match_conditions,
+)
 from app.modules.schedule.domain.value_objects import (
     DatastoreOperation,
     normalize_datastore_operations,
@@ -47,6 +51,13 @@ class DatastoreScheduleConfig(BaseModel):
         default=None,
         description="Operations to watch. One or more of INSERT, UPDATE, DELETE.",
     )
+    when: dict[str, ColumnCondition] | None = Field(
+        default=None,
+        description=(
+            "Optional match conditions keyed by column name. Every condition "
+            "must hold for the trigger to fire. Omit to fire on every row."
+        ),
+    )
 
     @field_validator("table_name")
     @classmethod
@@ -65,6 +76,52 @@ class DatastoreScheduleConfig(BaseModel):
             raise ValueError("operations must be a list")
         return normalize_datastore_operations(value)
 
+    @field_validator("when", mode="before")
+    @classmethod
+    def normalize_when(cls, value):
+        if value is None:
+            return None
+        return parse_match_conditions(value)
+
+    @model_validator(mode="after")
+    def _reject_undecidable_conditions(self) -> "DatastoreScheduleConfig":
+        """Refuse a condition no declared operation could ever satisfy.
+
+        A trigger that can never fire is the exact failure this feature exists
+        to prevent, so it is rejected at save time rather than discovered by
+        waiting for a run that does not come.
+        """
+        if not self.when or not self.operations:
+            return self
+
+        declared = set(self.operations)
+        if DatastoreOperation.UPDATE not in declared:
+            needs_update = sorted(
+                column
+                for column, condition in self.when.items()
+                if condition.needs_prior_image
+            )
+            if needs_update:
+                raise ValueError(
+                    f"Conditions on {', '.join(needs_update)} use `changed`, "
+                    "`written` or `from`, which only an UPDATE can satisfy. "
+                    "Add UPDATE to operations, or match on the value instead."
+                )
+
+        if not declared & {DatastoreOperation.INSERT, DatastoreOperation.UPDATE}:
+            needs_write = sorted(
+                column
+                for column, condition in self.when.items()
+                if condition.needs_a_written_row
+            )
+            if needs_write:
+                raise ValueError(
+                    f"Conditions on {', '.join(needs_write)} use `to`, which "
+                    "only an INSERT or UPDATE can satisfy. Add one of those to "
+                    "operations, or match on the value instead."
+                )
+        return self
+
 
 def normalize_datastore_schedule_config(
     config: dict[str, Any],
@@ -82,11 +139,21 @@ def normalize_datastore_schedule_config(
             "DATASTORE schedules must declare operations explicitly. "
             "Valid values: INSERT, UPDATE, DELETE."
         )
-    return {
+    normalized = {
         **config,
         "table_name": cfg.table_name,
         "operations": [op.value for op in cfg.operations],
     }
+    if cfg.when is not None:
+        # Store the expanded form so the saved config reads the same whether
+        # the author wrote the `{"status": "approved"}` shorthand or spelled
+        # the operator out, and `exclude_unset` keeps the operators nobody
+        # supplied out of the blob.
+        normalized["when"] = {
+            column: condition.model_dump(by_alias=True, exclude_unset=True)
+            for column, condition in cfg.when.items()
+        }
+    return normalized
 
 
 class ScheduleFireStatus(str, Enum):
