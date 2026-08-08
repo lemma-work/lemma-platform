@@ -6,6 +6,8 @@ import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { ArrowRight, ArrowUp, ChevronDown, ChevronUp, Plus, UserPlus, X } from '@/components/ui/icons';
 
 import { useAIAssistant } from '@/components/ai/ai-assistant-context';
+import { ProjectPicker } from '@/components/lemma/assistant/project-picker';
+import { useGithubProjects } from '@/lib/hooks/use-github-projects';
 import { ProtectedRoute } from '@/components/auth/protected-route';
 import { resolveDefaultAgentRuntime } from '@/components/agents/agent-runtime-helpers';
 import { RuntimeModelPicker } from '@/components/lemma/assistant/model-picker';
@@ -88,6 +90,7 @@ function PodBlankChatHome({ podId }: { podId: string }) {
     const { data: pod } = usePod(podId);
     const { data: runtimeCatalog } = useAgentRuntimes(pod?.organization_id);
     const canWriteConversations = podAccess.can('conversation.write');
+    const githubProjects = useGithubProjects({ enabled: canWriteConversations });
     const canReadAgents = podAccess.can('agent.read');
     const canReadWorkflows = podAccess.can('workflow.read');
     const canReadSurfaces = podAccess.canAccessRoute('surfaces');
@@ -429,6 +432,18 @@ function PodBlankChatHome({ podId }: { podId: string }) {
                             scopeHint="Just for this chat"
                             manageHref={pod?.organization_id ? `/organizations/${pod.organization_id}/settings/agent-runtimes` : undefined}
                         />
+                        {canWriteConversations ? (
+                            <ProjectPicker
+                                value={assistant.pendingProject}
+                                onChange={assistant.setPendingProject}
+                                projects={githubProjects.projects}
+                                isConnected={githubProjects.isConnected}
+                                isLoadingProjects={githubProjects.isLoadingProjects}
+                                error={githubProjects.error}
+                                accountId={githubProjects.accountId}
+                                connectHref={`/pod/${encodeURIComponent(podId)}/connectors`}
+                            />
+                        ) : null}
                         <button
                             type="submit"
                             aria-label="Send"
