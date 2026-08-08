@@ -57,6 +57,12 @@ def computed_webhook_url(surface: AgentSurfaceEntity) -> str | None:
         and surface.account_id is not None
     ):
         return f"{base}/surfaces/{surface.id}/webhook"
+    # A Slack surface holding its own signing secret is running the org's own
+    # Slack app, which must deliver to a URL only that app uses — the shared
+    # platform endpoint verifies against the deployment's secret and would
+    # reject it.
+    if surface.surface_type is SurfacePlatform.SLACK and surface.webhook_secret:
+        return f"{base}/surfaces/{surface.id}/webhook"
     if surface.surface_type in _PLATFORM_WEBHOOK_TYPES:
         return f"{base}/surfaces/webhooks/{surface.surface_type.value.lower()}"
     return None

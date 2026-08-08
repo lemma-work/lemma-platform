@@ -41,6 +41,9 @@ from app.modules.agent_surfaces.api.surface_config_resolver import (
 )
 from app.modules.agent_surfaces.domain.setup_guides import SurfacePlatformSetupGuide
 from app.modules.agent_surfaces.platforms.common import computed_webhook_url
+from app.modules.agent_surfaces.platforms.slack.manifest import (
+    build_slack_app_manifest,
+)
 from app.modules.agent_surfaces.services.available_surfaces_builder import (
     build_available_surfaces,
 )
@@ -472,6 +475,28 @@ async def get_surface_setup(
     del user
     setup = await service.get_surface_setup_by_name(pod_id=pod_id, name=surface_name)
     return SurfaceSetupResponse.model_validate(setup)
+
+
+@router.get(
+    "/{surface_name}/slack-manifest",
+    operation_id="agent.surface.slack_manifest",
+    dependencies=[require_action(Permissions.AGENT_READ)],
+)
+async def get_slack_app_manifest(
+    pod_id: UUID,
+    surface_name: str,
+    service: AgentSurfaceService = Depends(get_surface_service),
+) -> dict:
+    """The Slack app manifest to paste when running your own Slack app.
+
+    Served rather than copied out of the repo so the URLs always match the
+    deployment answering this request, and the scopes always match the code
+    that will consume the events.
+    """
+    surface = await service.get_surface_by_name_in_pod(
+        pod_id=pod_id, name=surface_name
+    )
+    return build_slack_app_manifest(surface)
 
 
 @router.get(

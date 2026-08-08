@@ -158,6 +158,19 @@ class SurfaceWebhookSecurityService:
                 app_secret=app_secret,
             )
             return
+        if surface.surface_type is SurfacePlatform.SLACK and surface.webhook_secret:
+            # A workspace running its *own* Slack app signs with its own secret,
+            # so the deployment-wide one cannot verify it. Falling through to the
+            # platform check would reject every event from that app — which is
+            # why bring-your-own-app looked impossible rather than unfinished.
+            # No secret stored means this surface uses the deployment's app, so
+            # the shared check below is still the right one.
+            self._verify_slack_signature(
+                headers=headers,
+                raw_body=raw_body,
+                signing_secret=surface.webhook_secret,
+            )
+            return
         await self.verify_platform_request(
             platform=surface.surface_type.value,
             headers=headers,

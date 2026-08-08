@@ -259,7 +259,9 @@ Both of these answer "you can add apps" literally, and both are held for now. Th
 
 ## Out of scope, still
 
-Bring-your-own Slack app and a second bot identity per workspace, both still blocked on the deployment-wide `SLACK_SIGNING_SECRET` in [`_verify_slack_signature`](../../lemma-backend/app/modules/agent_surfaces/services/webhook_security_service.py:279). Nothing here depends on unblocking them.
+**Correction: bring-your-own Slack app was never blocked.** This doc inherited that claim from the earlier one and repeated it without checking. The per-surface webhook URL (`POST /surfaces/{id}/webhook`), the encrypted per-surface `webhook_secret` column, and the per-platform dispatch in `verify_surface_request` all already existed — Telegram and WhatsApp use them. Slack simply had no branch, so it fell through to the deployment-wide secret. That branch now exists, and a workspace can run its own Slack app.
+
+A *second* bot identity in one workspace is still out of scope, and needs an addressing mechanism that does not exist for any 1:1 platform.
 
 ## Verification status
 
