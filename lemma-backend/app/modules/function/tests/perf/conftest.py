@@ -431,6 +431,11 @@ async def function_benchmark_runtime(
             "provider": workspace_settings.provider,
             "workspace_image": workspace_settings.workspace_image,
             "function_image": workspace_settings.function_image,
+            "docker_allow_mutable_images": (
+                workspace_settings.docker_allow_mutable_images
+            ),
+            "add_host_gateway": workspace_settings.add_host_gateway,
+            "host_alias": workspace_settings.host_alias,
         }
         runtime: FunctionBenchmarkRuntime | None = None
         benchmark_error: BaseException | None = None
@@ -440,6 +445,14 @@ async def function_benchmark_runtime(
             workspace_settings.provider = provider
             workspace_settings.workspace_image = selected_workspace_image
             workspace_settings.function_image = selected_function_image
+            if provider == "docker":
+                # The benchmark images are content-addressed tags, not digests,
+                # and the sandboxes have to reach this process to fetch their
+                # artifact -- both are the provisioner's business now that it
+                # runs here rather than in a manager process.
+                workspace_settings.docker_allow_mutable_images = True
+                workspace_settings.add_host_gateway = True
+                workspace_settings.host_alias = "host.docker.internal"
 
             # Provisioning runs in this process, so the measurement covers
             # the same code path production does.
@@ -456,11 +469,19 @@ async def function_benchmark_runtime(
                 "API_URL": gateway_url,
                 "FUNCTION_RUNTIME_GATEWAY_URL": gateway_url,
                 "WORKSPACE_PROVIDER": provider,
-                "AGENTBOX_WORKSPACE_IMAGE": selected_workspace_image,
-                "AGENTBOX_FUNCTION_IMAGE": selected_function_image,
+                "WORKSPACE_IMAGE": selected_workspace_image,
+                "FUNCTION_IMAGE": selected_function_image,
                 "DEBUG": "false",
                 "LOG_LEVEL": "INFO",
             }
+            if provider == "docker":
+                worker_environment.update(
+                    {
+                        "WORKSPACE_DOCKER_ALLOW_MUTABLE_IMAGES": "true",
+                        "WORKSPACE_ADD_HOST_GATEWAY": "true",
+                        "WORKSPACE_HOST_ALIAS": "host.docker.internal",
+                    }
+                )
             try:
                 async with production_worker_process(
                     e2e_settings,
