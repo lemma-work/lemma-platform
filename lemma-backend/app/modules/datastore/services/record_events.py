@@ -29,6 +29,8 @@ class RecordEventCoordinator:
         payload: dict[str, Any],
         user_id: UUID,
         owner_user_id: UUID | None = None,
+        changed: list[str] | None = None,
+        previous: dict[str, Any] | None = None,
     ) -> DatastoreRecordEvent | None:
         if not ctx.events_enabled:
             return None
@@ -39,6 +41,8 @@ class RecordEventCoordinator:
             record_id=str(record_id),
             operation=operation,
             payload=payload,
+            changed=changed,
+            previous=previous,
             actor_id=user_id,
             owner_user_id=event_owner,
         )
@@ -46,19 +50,30 @@ class RecordEventCoordinator:
     def required_for_record(
         self,
         record,
+        changed: list[str] | None = None,
+        previous: dict[str, Any] | None = None,
         *,
         ctx: TableContext,
         operation: DatastoreRecordOperation,
-        payload: dict[str, Any],
         user_id: UUID,
     ) -> DatastoreRecordEvent:
+        """Build the event for a row the repository has just written.
+
+        The payload is the row itself rather than what the caller submitted, so
+        a subscriber can read a column the writer never mentioned — a default
+        that the database filled in, or a field left alone by an update. The
+        repository supplies ``changed`` and ``previous`` because only it knows
+        which columns the statement actually wrote.
+        """
         event = self.build(
             ctx,
             str(record.id),
             operation,
-            payload,
+            record.data,
             user_id,
             owner_user_id=record.user_id,
+            changed=changed,
+            previous=previous,
         )
         assert event is not None
         return event

@@ -110,7 +110,20 @@ class DatastoreRecordEvent(DatastoreDomainEvent):
     table_name: str
     record_id: str
     operation: DatastoreRecordOperation
+    # The row as it stands after the write; for DELETE, the row as it stood
+    # before it was removed. Always the whole row, so a subscriber can read a
+    # column the writer did not happen to submit.
     payload: dict
+    # Columns this write actually set. ``payload`` alone cannot answer "did
+    # this field change" — every column is present on every event — so the
+    # written set is carried separately. ``None`` for DELETE, where nothing
+    # was written.
+    changed: list[str] | None = None
+    # Prior values, restricted to ``changed``: the whole previous row would
+    # double the size of every event to answer a question nobody asks about
+    # untouched columns. ``None`` when there is no prior image (INSERT,
+    # DELETE), which is what distinguishes "became X" from "was already X".
+    previous: dict | None = None
     # Row owner for RLS-enabled tables; ``None`` for non-RLS tables. This lets
     # change subscribers (e.g. the datastore changes websocket) scope per-user
     # rows without a database read: a ``None`` owner fans out to every member
@@ -126,6 +139,8 @@ class DatastoreRecordEvent(DatastoreDomainEvent):
         record_id: str,
         operation: DatastoreRecordOperation,
         payload: dict,
+        changed: list[str] | None = None,
+        previous: dict | None = None,
         actor_id: UUID | None = None,
         owner_user_id: UUID | None = None,
     ) -> "DatastoreRecordEvent":
@@ -138,6 +153,8 @@ class DatastoreRecordEvent(DatastoreDomainEvent):
             record_id=record_id,
             operation=operation,
             payload=payload,
+            changed=changed,
+            previous=previous,
             actor_id=actor_id,
             owner_user_id=owner_user_id,
         )

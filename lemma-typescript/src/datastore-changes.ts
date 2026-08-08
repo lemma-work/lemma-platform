@@ -21,7 +21,11 @@ export interface DatastoreChangeFrame {
   table_name: string;
   record_id: string;
   operation: "insert" | "update" | "delete";
-  /** The written fields (delete carries `{}`). */
+  /**
+   * The whole row as it stands after the write — including columns this write
+   * never touched and defaults the database filled in. On `delete` it is the
+   * row as it stood before removal, not `{}`.
+   */
   payload: Record<string, unknown>;
   occurred_at?: string;
   /** Redis stream id — pass back as `since` to resume after this change. */
