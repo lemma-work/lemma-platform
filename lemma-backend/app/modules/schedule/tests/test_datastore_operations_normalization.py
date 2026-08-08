@@ -56,6 +56,83 @@ def test_normalize_rejects_unknown_operations(op):
         )
 
 
+def test_normalize_stores_conditions_in_their_expanded_form():
+    """The saved blob reads the same however the author wrote it."""
+    config = normalize_datastore_schedule_config(
+        {
+            "table_name": "tickets",
+            "operations": ["UPDATE"],
+            "when": {"status": "approved", "owner": {"changed": True}},
+        }
+    )
+    assert config["when"] == {
+        "status": {"equals": "approved"},
+        "owner": {"changed": True},
+    }
+
+
+def test_normalize_keeps_operator_aliases_readable():
+    config = normalize_datastore_schedule_config(
+        {
+            "table_name": "tickets",
+            "operations": ["UPDATE"],
+            "when": {"status": {"from": "pending", "in": ["a", "b"]}},
+        }
+    )
+    assert config["when"]["status"] == {"from": "pending", "in": ["a", "b"]}
+
+
+def test_normalize_rejects_a_condition_no_declared_operation_can_satisfy():
+    """A trigger that can never fire should fail loudly at save time."""
+    with pytest.raises(ValueError, match="only an UPDATE can satisfy"):
+        normalize_datastore_schedule_config(
+            {
+                "table_name": "tickets",
+                "operations": ["INSERT"],
+                "when": {"status": {"changed": True}},
+            }
+        )
+    with pytest.raises(ValueError, match="only an INSERT or UPDATE can satisfy"):
+        normalize_datastore_schedule_config(
+            {
+                "table_name": "tickets",
+                "operations": ["DELETE"],
+                "when": {"status": {"to": "approved"}},
+            }
+        )
+
+
+def test_normalize_rejects_a_misspelled_operator():
+    with pytest.raises(ValueError):
+        normalize_datastore_schedule_config(
+            {
+                "table_name": "tickets",
+                "operations": ["UPDATE"],
+                "when": {"status": {"equal": "approved"}},
+            }
+        )
+
+
+def test_conditions_are_optional():
+    config = normalize_datastore_schedule_config(
+        {"table_name": "tickets", "operations": ["INSERT"]}
+    )
+    assert "when" not in config
+
+
+def test_create_schedule_request_validates_conditions():
+    with pytest.raises(ValidationError, match="only an UPDATE can satisfy"):
+        CreateScheduleRequest(
+            schedule_type=ScheduleType.DATASTORE,
+            workflow_name="my-flow",
+            config={
+                "table_name": "tickets",
+                "operations": ["INSERT"],
+                "when": {"status": {"from": "pending"}},
+            },
+        )
+
+
 def test_schedule_create_entity_canonicalizes_case():
     entity = ScheduleCreateEntity(
         user_id=uuid4(),

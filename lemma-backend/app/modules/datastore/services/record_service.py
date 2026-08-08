@@ -186,7 +186,6 @@ class RecordService:
                 self.events.required_for_record,
                 ctx=ctx,
                 operation=DatastoreRecordOperation.INSERT,
-                payload=sanitized_data,
                 user_id=user_id,
             )
         else:
@@ -341,7 +340,6 @@ class RecordService:
                 self.events.required_for_record,
                 ctx=ctx,
                 operation=DatastoreRecordOperation.UPDATE,
-                payload=sanitized_data,
                 user_id=user_id,
             )
         else:
@@ -378,7 +376,6 @@ class RecordService:
                 self.events.required_for_record,
                 ctx=ctx,
                 operation=DatastoreRecordOperation.DELETE,
-                payload={},
                 user_id=user_id,
             )
 
@@ -419,22 +416,19 @@ class RecordService:
                 )
             await self._validate_user_reference_columns(ctx, record)
 
-        # The bulk repository methods return only a count, not the created rows,
-        # so emit one INSERT event per submitted record using its primary key
-        # when present. Schedules match on pod/table/operation, so this is
-        # sufficient to fire on bulk inserts.
-        events = []
-        for record in sanitized_records:
-            record_id = record.get(ctx.primary_key_column) or record.get("id")
-            event = self.events.build(
-                ctx,
-                str(record_id) if record_id is not None else "",
-                DatastoreRecordOperation.INSERT,
-                record,
-                user_id,
+        # One INSERT event per written row, built by the repository from the row
+        # it actually wrote — the same contract as a single create. Building
+        # them here from the submitted data would leave out the generated id and
+        # anything the database defaulted, which a match condition may test.
+        if ctx.events_enabled:
+            event_factory = partial(
+                self.events.required_for_record,
+                ctx=ctx,
+                operation=DatastoreRecordOperation.INSERT,
+                user_id=user_id,
             )
-            if event is not None:
-                events.append(event)
+        else:
+            event_factory = None
 
         write_records = (
             self.record_repository.bulk_upsert_records
@@ -445,10 +439,10 @@ class RecordService:
             ctx,
             sanitized_records,
             user_id,
-            events=events,
+            event_factory=event_factory,
         )
 
-        if events:
+        if event_factory is not None:
             await self.events.dispatch()
 
         return written

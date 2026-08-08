@@ -289,7 +289,7 @@ export const TEAM_OPTIONS: Array<{
   {
     id: "support",
     title: "Support",
-    description: "Tickets, inboxes, triage, and customer replies.",
+    description: "Shared inboxes, triage, and replies your team approves.",
     icon: Headphones,
   },
   {
@@ -387,7 +387,7 @@ const PERSONAL_START_RECIPE_IDS = [
 
 const TEAM_START_RECIPE_IDS = [
   "crm-pipeline-app",
-  "whatsapp-support-desk",
+  "email-support-desk",
   "slack-knowledge-teammate",
   "email-agent",
   "inbox-review-queue",

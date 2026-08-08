@@ -52,7 +52,7 @@ const PREVIEW_NAV_ITEMS: Array<{ label: string; icon: LemmaIcon }> = [
 // workspace, not a folder per project — so personal renders as one card with
 // items accumulating inside it instead of three standalone cards.
 const TEAM_EXAMPLE_PODS: Array<{ name: string; icon: LemmaIcon; blurb: string }> = [
-  { name: "Support", icon: LifeBuoy, blurb: "Answers the common questions, hands you the rest." },
+  { name: "Support", icon: LifeBuoy, blurb: "Drafts the reply to every new email, waits for you to send." },
   { name: "Sales", icon: Handshake, blurb: "Drafts a follow-up after every call." },
   { name: "Engineering", icon: Bug, blurb: "Turns a bug report in Slack into a tracked ticket." },
 ];

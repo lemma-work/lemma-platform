@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { Pause, Play, Sparkles } from '@/components/ui/icons';
+import { Pause, Play, Sparkles, X } from '@/components/ui/icons';
 import { toast } from 'sonner';
 
 import { ProductIcon } from '@/components/pod/product-icon';
@@ -22,22 +22,29 @@ import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { useAccounts, useConnectors, useTriggers } from '@/lib/hooks/use-connectors';
-import { useTables } from '@/lib/hooks/use-datastores';
+import { useTable, useTables } from '@/lib/hooks/use-datastores';
 import { useFlow } from '@/lib/hooks/use-flows';
 import { usePod } from '@/lib/hooks/use-pods';
 import { useCreateSchedule, useDeleteSchedule, useUpdateSchedule } from '@/lib/hooks/use-schedules';
 import {
+    availableConditionOperators,
     buildCronExpression,
+    buildMatchConditions,
+    conditionTakesValue,
+    CONDITION_OPERATOR_LABEL,
     describeCron,
     getScheduleDatastoreConfig,
     getScheduleTimeConfig,
     getScheduleWebhookConfig,
     parseCronExpression,
+    parseMatchConditions,
+    type ConditionOperator,
     type DataOperation,
+    type MatchCondition,
     type TimeCadence,
 } from '@/lib/utils/schedules';
 import { formatAgentName } from '@/lib/utils/agents';
-import { ScheduleType, type Account, type CreateScheduleRequest, type Schedule, type Workflow } from '@/lib/types';
+import { ScheduleType, type Account, type Column, type CreateScheduleRequest, type Schedule, type Workflow } from '@/lib/types';
 import { cn } from '@/lib/utils';
 import { StepLoader } from '@/components/brand/loader';
 
@@ -174,6 +181,11 @@ export function TriggerModal({
     const [triggerId, setTriggerId] = useState('');
     const [accountId, setAccountId] = useState('');
     const [condition, setCondition] = useState('');
+    const [conditions, setConditions] = useState<MatchCondition[]>([]);
+    // Operators the builder cannot draw (`in`, `written`, `changed: false`) are
+    // kept on the trigger and named, so editing one authored in a bundle or on
+    // the CLI does not quietly throw it away.
+    const [unsupportedConditions, setUnsupportedConditions] = useState<string[]>([]);
     const [visibility, setVisibility] = useState('POD');
     const [confirmDelete, setConfirmDelete] = useState(false);
 
@@ -203,6 +215,8 @@ export function TriggerModal({
             setTriggerId('');
             setAccountId('');
             setCondition('');
+            setConditions([]);
+            setUnsupportedConditions([]);
             setVisibility('POD');
             return;
         }
@@ -225,6 +239,9 @@ export function TriggerModal({
             const { tableName: storedTable, operations } = getScheduleDatastoreConfig(schedule);
             setTableName(storedTable);
             setDataOperations(operations.length ? operations : ['INSERT']);
+            const parsed = parseMatchConditions(schedule);
+            setConditions(parsed.conditions);
+            setUnsupportedConditions(parsed.unsupported);
         } else {
             const { connectorId: storedConnector, triggerId: storedTrigger } = getScheduleWebhookConfig(schedule);
             setConnectorId(storedConnector);
@@ -265,6 +282,22 @@ export function TriggerModal({
         ? triggerId
         : connectorTriggers[0]?.id ?? '';
     const selectedTable = tableName || tables[0]?.name || '';
+    // The list endpoint returns summaries — a `column_count`, not the columns —
+    // so the picker reads the selected table's own schema. Only fetched while a
+    // data trigger is actually being configured.
+    const { data: selectedTableDetail } = useTable(
+        open && kind === ScheduleType.DATASTORE ? podId : undefined,
+        undefined,
+        selectedTable || undefined,
+    );
+    const selectedTableColumns = useMemo(
+        () => selectedTableDetail?.columns ?? [],
+        [selectedTableDetail],
+    );
+    const selectedTableColumnTypes = useMemo(
+        () => Object.fromEntries(selectedTableColumns.map((column) => [column.name, String(column.type)])),
+        [selectedTableColumns],
+    );
     const cron = buildCronExpression({ cadence, timeOfDay, weeklyDays, monthDay, customCron });
 
     const createSchedule = useCreateSchedule(podId);
@@ -289,10 +322,20 @@ export function TriggerModal({
         return null;
     };
 
+    // A half-typed condition row would either be dropped on save or rejected by
+    // the API; blocking the button says so while it can still be fixed.
+    const conditionsIncomplete = conditions.some((entry) =>
+        !entry.column.trim() || (conditionTakesValue(entry.operator) && !entry.value.trim()),
+    );
+    const conditionsUnanswerable = conditions.some(
+        (entry) => !availableConditionOperators(dataOperations).includes(entry.operator),
+    );
+
     const detailsReady = kind === ScheduleType.TIME
         ? Boolean(cron.trim())
         : kind === ScheduleType.DATASTORE
             ? Boolean(selectedTable) && dataOperations.length > 0
+                && !conditionsIncomplete && !conditionsUnanswerable
             : isEditing
                 ? true
                 : target.kind === 'agent'
@@ -304,7 +347,14 @@ export function TriggerModal({
             return { schedule_type: 'CRON', cron_expression: cron.trim(), timezone: timezone.trim() || 'UTC' };
         }
         if (kind === ScheduleType.DATASTORE) {
-            return { table_name: selectedTable, operations: dataOperations };
+            const when = buildMatchConditions(conditions, selectedTableColumnTypes);
+            return {
+                table_name: selectedTable,
+                operations: dataOperations,
+                // Omitted rather than sent empty: `when: {}` is rejected, and
+                // "no conditions" is the absence of the block, not an empty one.
+                ...(when ? { when } : {}),
+            };
         }
         if (target.kind === 'agent') {
             return { connector_id: connectorId, connector_trigger_id: selectedTriggerId, trigger_config: {} };
@@ -534,22 +584,38 @@ export function TriggerModal({
                                     />
                                 ) : null}
 
-                                <div className="space-y-1.5">
-                                    {/* "Optional" in the label carries what a
-                                        helper line used to say — blank means
-                                        every time — so the field is two
-                                        elements, not three. */}
-                                    <Label className="text-xs">
-                                        Only run when
-                                        <span className="ml-1.5 font-normal text-[var(--text-tertiary)]">optional</span>
-                                    </Label>
-                                    <Textarea
-                                        value={condition}
-                                        onChange={(event) => setCondition(event.target.value)}
-                                        placeholder="e.g. only if the record is high priority and has an owner"
-                                        className="min-h-16 resize-y"
+                                {/* A data trigger can answer "only run when" from
+                                    the row itself, for nothing. Everything else
+                                    has to ask a model, so there the words are
+                                    the only field there is. */}
+                                {kind === ScheduleType.DATASTORE ? (
+                                    <ConditionFields
+                                        columns={selectedTableColumns}
+                                        operations={dataOperations}
+                                        conditions={conditions}
+                                        onConditionsChange={setConditions}
+                                        unsupported={unsupportedConditions}
+                                        instruction={condition}
+                                        onInstructionChange={setCondition}
                                     />
-                                </div>
+                                ) : (
+                                    <div className="space-y-1.5">
+                                        {/* "Optional" in the label carries what a
+                                            helper line used to say — blank means
+                                            every time — so the field is two
+                                            elements, not three. */}
+                                        <Label className="text-xs">
+                                            Only run when
+                                            <span className="ml-1.5 font-normal text-[var(--text-tertiary)]">optional</span>
+                                        </Label>
+                                        <Textarea
+                                            value={condition}
+                                            onChange={(event) => setCondition(event.target.value)}
+                                            placeholder="e.g. only if the record is high priority and has an owner"
+                                            className="min-h-16 resize-y"
+                                        />
+                                    </div>
+                                )}
 
                                 <RunsAsField
                                     kind={kind}
@@ -820,6 +886,171 @@ function TimeFields({
             <p className="text-xs text-[var(--text-tertiary)]">
                 {describeCron(cron)}{timezone ? ` · ${timezone}` : ''}
             </p>
+        </div>
+    );
+}
+
+/**
+ * "Only run when", for a data trigger.
+ *
+ * A row change can be judged from the row itself — is it approved, did the
+ * owner change — and that costs nothing. Asking a model the same question costs
+ * a call on every write to the table, so the comparison is the field you meet
+ * and the words are folded away behind it. Both still apply: rows first, and
+ * only what survives them reaches the model.
+ */
+function ConditionFields({
+    columns,
+    operations,
+    conditions,
+    onConditionsChange,
+    unsupported,
+    instruction,
+    onInstructionChange,
+}: {
+    columns: Column[];
+    operations: DataOperation[];
+    conditions: MatchCondition[];
+    onConditionsChange: (next: MatchCondition[]) => void;
+    unsupported: string[];
+    instruction: string;
+    onInstructionChange: (value: string) => void;
+}) {
+    // Derived, not stored: an instruction that arrives with the trigger opens
+    // the field without an effect, so what was written is never hidden from the
+    // person who wrote it. `opened` covers the two cases text alone cannot —
+    // asking for an empty field, and clearing one without it vanishing mid-edit.
+    const [instructionOpened, setInstructionOpened] = useState(false);
+    const showInstruction = instructionOpened || Boolean(instruction.trim());
+
+    const operators = availableConditionOperators(operations);
+    const update = (index: number, patch: Partial<MatchCondition>) => {
+        onConditionsChange(conditions.map((entry, i) => (i === index ? { ...entry, ...patch } : entry)));
+    };
+
+    return (
+        <div className="space-y-3">
+            <div className="space-y-1.5">
+                <Label className="text-xs">
+                    Only run when
+                    <span className="ml-1.5 font-normal text-[var(--text-tertiary)]">optional</span>
+                </Label>
+
+                {conditions.length ? (
+                    <div className="space-y-1.5">
+                        {conditions.map((entry, index) => {
+                            // An operator the chosen change types cannot answer
+                            // is named where it sits, not at save time.
+                            const unanswerable = !operators.includes(entry.operator);
+                            return (
+                                <div key={index} className="space-y-1">
+                                    <div className="flex items-center gap-1.5">
+                                        <Select value={entry.column} onValueChange={(value) => update(index, { column: value })}>
+                                            <SelectTrigger className="h-8 flex-1 text-xs">
+                                                <SelectValue placeholder="Column" />
+                                            </SelectTrigger>
+                                            <SelectContent>
+                                                {columns.map((column) => (
+                                                    <SelectItem key={column.name} value={column.name}>{column.name}</SelectItem>
+                                                ))}
+                                            </SelectContent>
+                                        </Select>
+                                        <Select
+                                            value={entry.operator}
+                                            onValueChange={(value) => update(index, { operator: value as ConditionOperator })}
+                                        >
+                                            <SelectTrigger className="h-8 w-28 shrink-0 text-xs">
+                                                <SelectValue />
+                                            </SelectTrigger>
+                                            <SelectContent>
+                                                {operators.map((operator) => (
+                                                    <SelectItem key={operator} value={operator}>
+                                                        {CONDITION_OPERATOR_LABEL[operator]}
+                                                    </SelectItem>
+                                                ))}
+                                            </SelectContent>
+                                        </Select>
+                                        {conditionTakesValue(entry.operator) ? (
+                                            <Input
+                                                value={entry.value}
+                                                onChange={(event) => update(index, { value: event.target.value })}
+                                                placeholder="value"
+                                                className="h-8 flex-1 text-xs"
+                                            />
+                                        ) : (
+                                            <div className="flex-1" />
+                                        )}
+                                        <button
+                                            type="button"
+                                            className="resource-remove-button custom-focus-ring"
+                                            aria-label="Remove condition"
+                                            onClick={() => onConditionsChange(conditions.filter((_, i) => i !== index))}
+                                        >
+                                            <X className="h-3.5 w-3.5" />
+                                        </button>
+                                    </div>
+                                    {unanswerable ? (
+                                        <p className="text-xs leading-5 text-[var(--text-tertiary)]">
+                                            “{CONDITION_OPERATOR_LABEL[entry.operator]}” needs a change type this trigger
+                                            does not watch, so it would never fire. Add it above, or pick another test.
+                                        </p>
+                                    ) : null}
+                                </div>
+                            );
+                        })}
+                    </div>
+                ) : null}
+
+                <button
+                    type="button"
+                    className="resource-add-trigger custom-focus-ring"
+                    onClick={() => onConditionsChange([
+                        ...conditions,
+                        { column: columns[0]?.name ?? '', operator: operators[0] ?? 'is', value: '' },
+                    ])}
+                >
+                    + Add condition
+                </button>
+
+                {unsupported.length ? (
+                    <p className="text-xs leading-5 text-[var(--text-tertiary)]">
+                        Kept as written: {unsupported.join(', ')}. This trigger uses a test that has no control here,
+                        so it stays on the trigger and is not shown above.
+                    </p>
+                ) : null}
+            </div>
+
+            <div className="space-y-1.5">
+                {showInstruction ? (
+                    <>
+                        <Label className="text-xs">
+                            …and a model agrees
+                            <span className="ml-1.5 font-normal text-[var(--text-tertiary)]">optional</span>
+                        </Label>
+                        <Textarea
+                            value={instruction}
+                            onChange={(event) => {
+                                setInstructionOpened(true);
+                                onInstructionChange(event.target.value);
+                            }}
+                            placeholder="e.g. the customer sounds unhappy about the delay"
+                            className="min-h-16 resize-y"
+                        />
+                        <p className="text-xs leading-5 text-[var(--text-tertiary)]">
+                            Read once per change that gets past the conditions above. Use it for judgement a
+                            comparison cannot make.
+                        </p>
+                    </>
+                ) : (
+                    <button
+                        type="button"
+                        className="resource-add-trigger custom-focus-ring"
+                        onClick={() => setInstructionOpened(true)}
+                    >
+                        Need judgement a comparison cannot make?
+                    </button>
+                )}
+            </div>
         </div>
     );
 }

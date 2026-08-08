@@ -98,6 +98,20 @@ export const RECIPE_CATEGORIES: RecipeCategoryMeta[] = [
     { id: 'published', label: 'Published kits', blurb: 'Install a complete, source-backed setup into this pod.', accent: 'success', order: 4 },
 ];
 
+// The membership boundary, stated once and carried by every starter.
+//
+// Only a pod member can message a surface or open an app — everyone else gets a
+// signup or request-access link back instead of an answer. So anything that
+// needs an outsider to sign in or chat with a bot dead-ends, and the assistant
+// must not build one. Outsiders are reached through connectors: read their mail
+// or records from the source system, and send what goes back from there once a
+// member approves it.
+export const REACH_RULE = [
+    'Only members of this pod can message its surfaces or open its apps — anyone else gets a signup or request-access link instead of an answer.',
+    'So build the working experience for the people inside the pod.',
+    'Reach anyone outside it through a connector instead: read their mail or records from the source system, and send whatever goes back out from there, once a pod member has approved it.',
+].join(' ');
+
 function starterPrompt(
     recipeId: string,
     title: string,
@@ -114,6 +128,7 @@ function starterPrompt(
             `Ask the user for the missing details needed to shape it, especially ${askAbout}. Ask only one or two concise questions at a time, do not repeat anything already clear from the pod, and do not turn discovery into a long questionnaire.`,
             `Once you have enough context, build the smallest useful working version. ${finishedVersion}`,
             'Use believable sample data where it helps the user understand the result, show one realistic flow working end to end, and keep consequential external actions behind explicit approval.',
+            REACH_RULE,
         ].join('\n\n'),
     };
 }
@@ -138,14 +153,13 @@ export const STARTER_THEMES: StarterTheme[] = [
     {
         id: 'whatsapp',
         name: 'WhatsApp agents',
-        kicker: 'Serve, qualify, and coordinate in WhatsApp',
-        description: 'Give this pod a WhatsApp presence with structured memory and a human handoff.',
+        kicker: 'Reach the teammates who work from a phone',
+        description: 'Give this pod a WhatsApp presence for the people in it who are rarely at a desk.',
         preview: 'whatsapp',
-        examples: ['Customer support', 'Lead qualification', 'Field operations'],
-        recipeIds: ['whatsapp-agent', 'whatsapp-support-desk', 'whatsapp-lead-qualifier', 'whatsapp-field-ops'],
+        examples: ['Field operations', 'Site updates', 'Capture on the move'],
+        recipeIds: ['whatsapp-agent', 'whatsapp-field-ops'],
         promptExamples: [
-            starterPrompt('whatsapp-support-desk', 'A WhatsApp support agent with clean human handoff', 'a WhatsApp customer support agent with clean human handoff', 'the customers it serves, common requests, approved knowledge sources, tone, business hours, data to capture, escalation rules, and who takes over', 'Create the agent, support records, WhatsApp surface, and a human review and handoff path.'),
-            starterPrompt('whatsapp-lead-qualifier', 'A WhatsApp agent that qualifies and routes inbound leads', 'a WhatsApp lead qualification agent', 'the ideal customer, qualification questions, disqualifiers, routing rules, ownership, CRM fields, response expectations, and when a salesperson should take over', 'Create the agent, lead records, WhatsApp surface, and a prepared handoff with the next sales action.'),
+            starterPrompt('whatsapp-agent', 'A WhatsApp agent for the teammates who are never at a desk', 'a WhatsApp agent for this pod\'s members', 'which teammates will message it, what they need to ask or record from a phone, the data to capture, and what should reach someone else', 'Create the agent, the WhatsApp surface, the records behind it, and a small view where the rest of the team sees what came in.'),
             starterPrompt('whatsapp-field-ops', 'A WhatsApp field-ops agent for updates, photos, and escalation', 'a WhatsApp field operations agent', 'who reports from the field, the jobs or locations involved, required updates and photos, validation rules, escalation conditions, and how coordinators review progress', 'Create the agent, structured field records, WhatsApp surface, and a clear operations review view.'),
         ],
     },
@@ -155,10 +169,10 @@ export const STARTER_THEMES: StarterTheme[] = [
         kicker: 'Combine a fast bot with a visual companion',
         description: 'Use Telegram for the conversation and a mini app for records, decisions, and review.',
         preview: 'telegram',
-        examples: ['Community', 'Personal logging', 'Approvals'],
-        recipeIds: ['telegram-agent-app', 'telegram-community-concierge', 'telegram-personal-logger', 'telegram-approval-bot'],
+        examples: ['Team intake', 'Personal logging', 'Approvals'],
+        recipeIds: ['telegram-agent-app', 'telegram-personal-logger', 'telegram-approval-bot'],
         promptExamples: [
-            starterPrompt('telegram-community-concierge', 'A Telegram concierge for community questions and routing', 'a Telegram community concierge', 'the community, membership rules, common questions, trusted sources, moderation boundaries, escalation path, and what context should be retained', 'Create the Telegram agent, usable community memory, and a small companion view for reviewing activity and unresolved questions.'),
+            starterPrompt('telegram-agent-app', 'A Telegram bot for the team, with a mini app behind it', 'a Telegram bot and companion mini app', 'which teammates will use it, what they will send it, the records it should keep, and what the mini app needs to show', 'Create the Telegram agent, the shared data behind it, and a mini app for browsing and correcting what the bot captured.'),
             starterPrompt('telegram-personal-logger', 'A Telegram capture bot with an organized personal logbook', 'a Telegram capture bot and personal logbook', 'what the user wants to capture, useful fields and tags, how entries should be organized, search and review habits, reminders, and privacy expectations', 'Create the Telegram bot, structured logbook, and a mini app for browsing, editing, and revisiting entries.'),
             starterPrompt('telegram-approval-bot', 'A Telegram approval agent with a focused mini app', 'a Telegram approval agent with a mini app', 'the requests being approved, submitters, required context, approvers, decision states, deadlines, delegation, notifications, and audit requirements', 'Create the Telegram agent, approval records and workflow, and a mini app that makes each decision quick and well informed.'),
         ],
@@ -179,16 +193,16 @@ export const STARTER_THEMES: StarterTheme[] = [
     },
     {
         id: 'email',
-        name: 'Email agents',
-        kicker: 'Turn a mailbox into an operating queue',
-        description: 'Triage incoming mail, prepare replies, and keep outbound work behind human review.',
+        name: 'Email desks',
+        kicker: 'The one place people outside the pod reach you',
+        description: 'Read a shared mailbox through the connector, prepare the work, and let a person send what goes back.',
         preview: 'email',
-        examples: ['Support', 'Vendor requests', 'Executive inbox'],
-        recipeIds: ['email-agent'],
+        examples: ['Customer support', 'Inbound leads', 'Vendor requests'],
+        recipeIds: ['email-support-desk', 'email-lead-desk', 'email-agent'],
         promptExamples: [
-            starterPrompt('email-agent', 'An email agent that triages support and drafts replies', 'a support inbox agent with human-reviewed drafts', 'the mailbox, support categories, urgency rules, customer context, approved knowledge, ownership, service expectations, escalation rules, and reply approval policy', 'Create the email agent, triage and review queue, support records, and safe draft-reply workflow.'),
-            starterPrompt('email-agent', 'An owned email queue for reviewing vendor requests', 'a vendor request email queue', 'the request types, required vendor information, reviewers, ownership, risk and urgency rules, decision states, response templates, and approval boundaries', 'Create the email agent, structured vendor requests, an owned review queue, and prepared responses that remain behind approval.'),
-            starterPrompt('email-agent', 'A daily executive inbox briefing with decisions and follow-ups', 'an executive inbox briefing agent', 'the mailbox, priority people and topics, what can be summarized or ignored, sensitive-message handling, preferred briefing format, cadence, and follow-up boundaries', 'Create the email agent and a concise briefing that separates decisions, replies, follow-ups, and information while keeping all outbound actions under human control.'),
+            starterPrompt('email-support-desk', 'A support desk that drafts the reply and waits for a person', 'a customer support desk fed by a shared mailbox', 'the mailbox, support categories, urgency rules, the customer context worth keeping, approved knowledge to answer from, ownership, and who signs off on a reply before it sends', 'Read the mailbox through the Gmail or Outlook connector on a schedule, keep customer and case records in the pod, draft the reply, and send it only after a pod member approves.'),
+            starterPrompt('email-lead-desk', 'An inbound lead desk that qualifies and hands over', 'an inbound lead desk fed by a shared address', 'how the team defines fit, the qualifying and disqualifying signals, routing and ownership, the CRM fields that matter, and what a useful handoff contains', 'Read the enquiries through the connector, keep lead records in the pod, prepare the first reply and the next sales action, and leave the send with the owner.'),
+            starterPrompt('email-support-desk', 'A vendor request queue with owners and approved responses', 'a vendor request queue fed by a shared mailbox', 'the request types, the vendor information you need, reviewers and ownership, risk and urgency rules, decision states, and approval boundaries', 'Read the requests through the connector, keep them as structured records with an owner, prepare the response, and keep the send behind an explicit decision.'),
         ],
     },
     {
@@ -226,9 +240,9 @@ export const STARTER_THEMES: StarterTheme[] = [
         description: 'Capture requests, prepare context, route ownership, and make the next decision clear.',
         preview: 'triage',
         examples: ['Requests', 'Approvals', 'Human handoff'],
-        recipeIds: ['portal-intake', 'inbox-review-queue', 'intake-triage', 'approval-review'],
+        recipeIds: ['intake-desk', 'inbox-review-queue', 'intake-triage', 'approval-review'],
         promptExamples: [
-            starterPrompt('portal-intake', 'A client request portal with routing and clear status', 'a client request portal', 'the clients and request types, required information and files, authentication, routing, service expectations, status visibility, notifications, and ownership', 'Create the portal, request records, routing workflow, and a clear operator view with the right next actions.'),
+            starterPrompt('intake-desk', 'A request desk that takes work from teammates and from outside', 'a request intake desk', 'who submits and what they need to provide, which requests arrive by mail from outside the pod, routing and ownership, service expectations, status visibility, and notifications', 'Create the submission form for pod members, pull outside requests in from a shared mailbox through the connector, and give the people handling them one queue with the right next actions.'),
             starterPrompt('inbox-review-queue', 'A review queue with prepared context and next actions', 'a queue where incoming work is prepared for human review', 'the incoming sources and item types, enrichment needed, urgency and ordering, reviewers, legal states, allowed actions, escalation rules, and approval boundaries', 'Create the queue, underlying records and workflow, and agent-prepared context and next actions for every item.'),
             starterPrompt('approval-review', 'An approval workflow with owners, evidence, and audit history', 'an approval workflow with clear context and audit history', 'the request types, submitters, required evidence, approvers and delegation, decision rules, deadlines, reminders, notifications, and audit requirements', 'Create the approval records, workflow, review experience, and durable decision history.'),
         ],
@@ -324,38 +338,22 @@ const PROMPT_RECIPES: Recipe[] = [
         source: { kind: 'prompt', prompt: `Build a knowledge workspace for this pod.\nCreate a calm app for browsing the pod's important files and documents, plus an agent that answers from those sources and links back to evidence. Establish a small, believable information structure and seed example knowledge so search and Q&A work immediately.\nKeep the experience closer to a focused knowledge product than a dashboard.` },
     },
     {
-        id: 'portal-intake', name: 'Portal & intake', kicker: 'A clean front door for requests, submissions, and status.',
+        id: 'intake-desk', name: 'Request intake desk', kicker: 'A clean front door for requests, and one place to work them.',
         category: 'app-shapes', builds: 'app', outputs: ['app', 'table', 'workflow', 'agent'], preview: 'portal',
-        blurb: 'Collect structured requests, route them to the right people, and give submitters a clear next step.',
+        blurb: 'Collect structured requests from teammates and from outside by mail, then route, own, and resolve them in one queue.',
         examples: ['Client requests', 'Hiring intake', 'Service desk'],
-        highlights: ['A focused submission experience with the right fields', 'Automatic validation, enrichment, and routing', 'A review view for the people handling each request'],
-        source: { kind: 'prompt', prompt: `Build a portal and intake app for this pod.\nCreate a polished submission experience, the table that stores requests, and a workflow that validates, enriches, and routes each one. Add an internal review view and use an agent only where drafting or classification genuinely helps.\n${SEED}\nDemonstrate one submission arriving and being routed.` },
+        highlights: ['A focused submission form for the people in this pod', 'Requests from outside pulled in from a shared mailbox', 'One review queue with validation, routing, and ownership'],
+        source: { kind: 'prompt', prompt: `Build a request intake desk for this pod.\nCreate a polished submission experience for pod members, the table that stores requests, and a workflow that validates, enriches, and routes each one. Where requests come from people outside the pod, pull them in from a shared mailbox through the Gmail or Outlook connector rather than asking those people to sign in — they cannot. Add the review view for whoever handles the queue and use an agent only where drafting or classification genuinely helps.\n${SEED}\nDemonstrate one submission arriving and being routed.` },
     },
 
     // ── Agents in the surfaces people already use ─────────────────
     {
-        id: 'whatsapp-agent', name: 'Custom WhatsApp agent', kicker: 'Define the job; keep the conversation and handoff in one pod.',
+        id: 'whatsapp-agent', name: 'Custom WhatsApp agent', kicker: 'Define the job; keep the conversation and the records in one pod.',
         category: 'agent-channels', builds: 'surface', outputs: ['agent', 'surface', 'app', 'table'], preview: 'whatsapp', platforms: ['WHATSAPP'], featured: true,
-        blurb: 'A useful WhatsApp agent for customers, plus an inbox where your team reviews context and takes over.',
-        examples: ['Customer support', 'Lead capture', 'Field updates'],
+        blurb: 'A WhatsApp agent for the teammates who work from a phone, plus an inbox where the rest of the team picks it up.',
+        examples: ['Field updates', 'Quick capture', 'On-call questions'],
         highlights: ['A WhatsApp identity connected to a focused agent', 'A companion inbox for history, escalation, and handoff', 'Structured records created from every useful conversation'],
-        source: { kind: 'prompt', prompt: `Set up a WhatsApp agent and companion operator inbox for this pod.\nAsk what the agent should handle, then create the agent, the WhatsApp surface, a table for the important records, and a small app where a human can review conversations, see context, and take over. Use Lemma's managed identity or help connect the user's account, and confirm before external actions.\n${SEED}\nFinish with one safe test conversation and show it in the inbox.` },
-    },
-    {
-        id: 'whatsapp-support-desk', name: 'WhatsApp support & handoff', kicker: 'Resolve the routine; prepare the rest for a person.',
-        category: 'agent-channels', builds: 'surface', outputs: ['agent', 'surface', 'app', 'table'], preview: 'whatsapp', platforms: ['WHATSAPP'],
-        blurb: 'A customer support agent with grounded answers, case history, urgency, and a clean human takeover path.',
-        examples: ['Order questions', 'Service requests', 'Customer care'],
-        highlights: ['Grounded answers from approved knowledge', 'A durable customer and case history', 'Urgent and uncertain conversations routed to people'],
-        source: { kind: 'prompt', prompt: `Build a WhatsApp customer support desk for this pod.\nCreate a support agent grounded in the pod's approved knowledge, a WhatsApp surface, customer and case records, and an operator inbox for context, urgency, and human takeover. The agent may answer routine questions but must escalate uncertainty and confirm before any consequential action.\n${SEED}\nRun a safe test that demonstrates both resolution and handoff.` },
-    },
-    {
-        id: 'whatsapp-lead-qualifier', name: 'WhatsApp lead qualifier', kicker: 'Respond quickly, learn what matters, and hand over a prepared lead.',
-        category: 'agent-channels', builds: 'surface', outputs: ['agent', 'surface', 'table', 'workflow'], preview: 'whatsapp', platforms: ['WHATSAPP'],
-        blurb: 'A conversational front door that captures intent, qualifies fit, and prepares the next sales action.',
-        examples: ['Inbound enquiries', 'Property leads', 'Service sales'],
-        highlights: ['Natural qualification around the team’s real criteria', 'Structured lead and conversation records', 'A clear handoff with context and suggested next step'],
-        source: { kind: 'prompt', prompt: `Build a WhatsApp lead qualification agent for this pod.\nAsk how the team defines fit and what a useful handoff contains, then create the agent, WhatsApp surface, lead data, and routing workflow. Keep the conversation natural, capture only useful information, and never invent pricing or commitments.\n${SEED}\nDemonstrate one lead moving from first message to a prepared handoff.` },
+        source: { kind: 'prompt', prompt: `Set up a WhatsApp agent and companion operator inbox for this pod.\nAsk what the agent should handle, then create the agent, the WhatsApp surface, a table for the important records, and a small app where a human can review conversations, see context, and take over. Use Lemma's managed identity or help connect the user's account, and confirm before external actions.\nThe people who message it must be members of this pod — anyone else gets a signup link instead of an answer — so confirm who will be messaging and invite them.\n${SEED}\nFinish with one safe test conversation and show it in the inbox.` },
     },
     {
         id: 'whatsapp-field-ops', name: 'WhatsApp field operations', kicker: 'Let people report work from the field without learning another system.',
@@ -372,14 +370,6 @@ const PROMPT_RECIPES: Recipe[] = [
         examples: ['Personal logging', 'Team intake', 'Ask my data'],
         highlights: ['A Telegram bot people can use immediately', 'A companion app for records, trends, and review', 'One shared data model across chat and the app'],
         source: { kind: 'prompt', prompt: `Set up a Telegram agent with a companion app for this pod.\nAsk what people should message the bot, then create the agent, Telegram surface, structured data, and a small app for browsing records, seeing useful summaries, and reviewing anything the agent could not resolve. Use Lemma's bot or help connect the user's own bot, and confirm before external actions.\n${SEED}\nFinish by showing a test Telegram interaction reflected inside the app.` },
-    },
-    {
-        id: 'telegram-community-concierge', name: 'Telegram community concierge', kicker: 'Welcome, answer, route, and keep the community context usable.',
-        category: 'agent-channels', builds: 'surface', outputs: ['agent', 'surface', 'app', 'table'], preview: 'telegram', platforms: ['TELEGRAM'],
-        blurb: 'A community bot for grounded answers and intake, with a companion app for topics, people, and unresolved needs.',
-        examples: ['Member community', 'Cohort support', 'Customer group'],
-        highlights: ['A helpful bot for DMs and selected groups', 'Source-grounded answers and topic capture', 'A companion view for unresolved questions and member needs'],
-        source: { kind: 'prompt', prompt: `Build a Telegram community concierge for this pod.\nCreate a bot grounded in approved community knowledge, route the right groups and DMs, capture useful topics and unresolved needs, and build a companion app for human review. Avoid noisy proactive posting and confirm before inviting or messaging people.\n${SEED}\nShow one answered question and one escalated need.` },
     },
     {
         id: 'telegram-personal-logger', name: 'Telegram capture & logbook', kicker: 'Message the bot in seconds; organize and revisit it in the mini app.',
@@ -417,7 +407,7 @@ const PROMPT_RECIPES: Recipe[] = [
         id: 'slack-incident-coordinator', name: 'Slack incident coordinator', kicker: 'Capture the signal, organize the response, and keep the channel current.',
         category: 'agent-channels', builds: 'surface', outputs: ['agent', 'surface', 'workflow', 'table'], preview: 'slack', platforms: ['SLACK'],
         blurb: 'An incident-room agent that structures reports, tracks owners and decisions, and prepares status updates.',
-        examples: ['Service incidents', 'Customer escalations', 'Operations exceptions'],
+        examples: ['Service incidents', 'Escalations', 'Operations exceptions'],
         highlights: ['Structured incident intake from Slack', 'Owners, decisions, and timeline captured durably', 'Prepared status updates held for human review'],
         source: { kind: 'prompt', prompt: `Build a Slack incident coordinator for this pod.\nAsk what counts as an incident and how response is run, then create the agent, Slack routing, incident records, and workflow for severity, owners, decisions, and status. It may prepare updates but must confirm before posting broadly or closing an incident.\n${SEED}\nDemonstrate one test incident from report to prepared update.` },
     },
@@ -430,12 +420,12 @@ const PROMPT_RECIPES: Recipe[] = [
         source: { kind: 'prompt', prompt: `Build a Slack standup and digest loop for this pod.\nAsk who the ritual serves, what questions matter, and the right cadence, then create the schedule, Slack surface, response workflow, and agent-written digest. Optimize for a useful team picture rather than repetitive status prose. Confirm before sending prompts or publishing the digest.\n${SEED}` },
     },
     {
-        id: 'email-agent', name: 'Gmail or Outlook agent', kicker: 'Turn a mailbox into a calm, reviewable work queue.',
+        id: 'email-agent', name: 'Email your agent', kicker: 'Reach the pod from your own inbox, and get the work back there.',
         category: 'agent-channels', builds: 'surface', outputs: ['agent', 'surface', 'app', 'workflow'], preview: 'email', platforms: ['GMAIL', 'OUTLOOK'],
-        blurb: 'Classify incoming mail, prepare replies, and bring only the decisions that need a person into one queue.',
-        examples: ['Support triage', 'Vendor requests', 'Executive inbox'],
-        highlights: ['A connected Gmail or Outlook mailbox with safe filters', 'Agent-drafted replies held for review', 'A queue for urgency, ownership, and escalation'],
-        source: { kind: 'prompt', prompt: `Set up an email agent for this pod using Gmail or Outlook.\nAsk which mailbox and messages matter, then create the agent, connect the email surface with safe sender filters, store the useful work, and build a small review queue for drafted replies, urgency, ownership, and escalation. Keep every outbound reply behind explicit approval.\n${SEED}` },
+        blurb: 'Mail the pod from your work address — forward a thread, ask a question, approve a draft — and get the answer in the same thread.',
+        examples: ['Forward to file', 'Ask by email', 'Reply to approve'],
+        highlights: ['A connected Gmail or Outlook mailbox your teammates can write to', 'Forwarded threads become records the pod can act on', 'The agent answers in the same thread, from the same permissions'],
+        source: { kind: 'prompt', prompt: `Set up an email surface for this pod using Gmail or Outlook, so its members can reach the pod from their own inboxes.\nAsk which mailbox and messages matter, then create the agent, connect the email surface with safe sender filters, store the useful work, and build a small review queue for drafted replies, urgency, ownership, and escalation. Keep every outbound reply behind explicit approval.\nThis surface answers pod members only: mail from anyone else gets a signup link back, not an answer. If the user actually wants to handle mail from customers, vendors, or applicants, build the support desk shape instead — read the shared mailbox through the Gmail or Outlook connector and send the reply from there once a member approves it.\n${SEED}` },
     },
     {
         id: 'teams-agent', name: 'Microsoft Teams agent', kicker: 'Bring the pod into Teams chats and channels.',
@@ -444,6 +434,27 @@ const PROMPT_RECIPES: Recipe[] = [
         examples: ['Policy Q&A', 'IT intake', 'Project updates'],
         highlights: ['An agent available in Teams DMs and selected channels', 'Channel routing to the right pod capability', 'Clear escalation when a person needs to step in'],
         source: { kind: 'prompt', prompt: `Set up a Microsoft Teams agent for this pod.\nAsk what job it should own, then create the agent, connect the Teams surface, route relevant channels, and add only the workflow needed to answer, capture, or escalate that work. Seed believable context and confirm before connecting accounts or sending external messages.` },
+    },
+
+    // ── Serving people outside the pod ────────────────────────────
+    // These never put an outsider in front of a surface or an app — they cannot
+    // reach either. The mailbox is read through the connector, the work lives in
+    // the pod, and a member sends what goes back.
+    {
+        id: 'email-support-desk', name: 'Customer support desk', kicker: 'Their mail arrives. Your team sends the answer.',
+        category: 'operating-loops', builds: 'workflow', outputs: ['workflow', 'schedule', 'table', 'agent', 'app'], preview: 'inbox', featured: true,
+        blurb: 'Read a shared support mailbox on a schedule, ground the answer in your knowledge, and send the reply once a person approves it.',
+        examples: ['Support inbox', 'Order questions', 'Service requests'],
+        highlights: ['A shared mailbox read through the Gmail or Outlook connector', 'Customer, case, and message history kept in the pod', 'Every reply drafted by the agent and sent by a person'],
+        source: { kind: 'prompt', prompt: `Build a customer support desk for this pod.\nCustomers are not members of this pod and cannot message a surface or open an app — so read the shared support mailbox through the Gmail or Outlook connector on a schedule instead. Ask which mailbox, what the common requests are, and which knowledge the answers must come from.\nCreate the customer and case records, the classification and drafting workflow, and a review app where the team sees each thread with its history, its urgency, and the drafted reply. Send the reply through the connector only after a pod member approves it.\n${SEED}\nDemonstrate one message arriving, being drafted, and waiting on a person.` },
+    },
+    {
+        id: 'email-lead-desk', name: 'Inbound lead desk', kicker: 'Answer fast, qualify honestly, hand over a prepared lead.',
+        category: 'operating-loops', builds: 'workflow', outputs: ['workflow', 'schedule', 'table', 'agent', 'app'], preview: 'triage',
+        blurb: 'Pull enquiries from a shared address, qualify them against your real criteria, and prepare the first reply for the owner to send.',
+        examples: ['Inbound enquiries', 'Partner requests', 'Service sales'],
+        highlights: ['Enquiries read from a shared address through the connector', 'Structured lead records with owner and next action', 'A prepared first reply that a salesperson sends'],
+        source: { kind: 'prompt', prompt: `Build an inbound lead desk for this pod.\nLeads are not members of this pod and cannot message a surface or open an app — so read the shared enquiry address through the Gmail or Outlook connector on a schedule instead. Ask how the team defines fit, what disqualifies a lead, and what a useful handoff contains.\nCreate the lead records, the qualification and routing workflow, and a small app where owners see each lead with its context and next action. Prepare the first reply but leave the send with the owner, and never invent pricing or commitments.\n${SEED}\nDemonstrate one enquiry arriving and reaching a prepared handoff.` },
     },
 
     // ── Durable operating loops ───────────────────────────────────
@@ -461,7 +472,7 @@ const PROMPT_RECIPES: Recipe[] = [
         blurb: 'Capture requests from the right source, classify them, assign ownership, and prepare the next action.',
         examples: ['Support requests', 'Sales leads', 'Internal requests'],
         highlights: ['One structured queue across the chosen intake source', 'Automatic urgency, classification, and ownership suggestions', 'A human-ready next action on every item'],
-        source: { kind: 'prompt', prompt: `Build an intake-and-triage loop for this pod.\nAsk where requests arrive and how they should be owned, then create the structured queue, agent classification, routing workflow, and a focused app for the people handling the work. Preserve human control over irreversible or outbound actions.\n${SEED}` },
+        source: { kind: 'prompt', prompt: `Build an intake-and-triage loop for this pod.\nAsk where requests arrive and how they should be owned, then create the structured queue, agent classification, routing workflow, and a focused app for the people handling the work. Where requests come from people outside the pod, read them from the source system through a connector — those people cannot message a surface or open an app. Preserve human control over irreversible or outbound actions.\n${SEED}` },
     },
     {
         id: 'approval-review', name: 'Approvals & reviews', kicker: 'Bring the context. Let a person make the call.',
@@ -545,7 +556,7 @@ export function getRecipeHighlights(recipe: Recipe): string[] {
     switch (recipe.builds) {
         case 'surface':
             return [
-                'A bot people message — nothing new to open',
+                'A bot your teammates message — nothing new to open',
                 'An agent responds, stores, and acts; you approve anything outbound',
                 'You pick the surface and who’s involved — the assistant connects it',
             ];
@@ -616,10 +627,11 @@ function buildRecipePromptInstructions(recipe: Recipe): string {
         '- Who works on this with them, so you can invite those people to the workspace.',
         '- Where this work actually happens and which tools or inboxes are involved (for example Gmail or Outlook for mail, Slack for chat, a website). Offer to initiate the connection yourself and proceed only once they approve.',
         '- Wire the surfaces and connectors that fit the use case so the result plugs into how they already work.',
+        REACH_RULE,
     ];
 
     if (recipe.builds === 'surface') {
-        lines.push('This recipe is reached as a bot people message: create the agent, connect the surface it runs on, and confirm before any external action.');
+        lines.push('This recipe is reached as a bot pod members message: create the agent, connect the surface it runs on, confirm who will be using it so they can be invited, and confirm before any external action.');
     }
 
     lines.push('After it is built, summarize what was created, what was connected, and who was invited; display or link the resource.');

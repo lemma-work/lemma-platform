@@ -16,6 +16,12 @@ import type { AssistantSurface } from '@/lib/types';
  * a link to it are the only things that let someone confirm the agent is
  * actually reachable. Platforms with no direct-open convention (Slack, Teams,
  * mailboxes) get the handle without the QR.
+ *
+ * The reach line states who the handle actually works for. This is the moment
+ * someone copies it to share, and inbound events are gated on pod membership —
+ * a non-member gets a signup or request-access link instead of an answer. Said
+ * here, that is a fact about who to invite; found out later, it reads as the
+ * agent being broken.
  */
 export function SurfaceReachCard({ surface }: { surface: AssistantSurface }) {
     const [copied, setCopied] = useState(false);
@@ -51,6 +57,10 @@ export function SurfaceReachCard({ surface }: { surface: AssistantSurface }) {
                         {deepLink.replace(/^https?:\/\//, '')}
                     </p>
                 ) : null}
+
+                <p className="mt-1.5 text-xs text-[var(--text-tertiary)]">
+                    Works for members of this pod. Anyone else gets a link to request access.
+                </p>
 
                 <div className="mt-2 flex flex-wrap items-center gap-2">
                     <Button type="button" size="xs" variant="secondary" onClick={() => void copy()}>
