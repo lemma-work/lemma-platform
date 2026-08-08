@@ -834,7 +834,7 @@ function blankChannelRow(agentName: string | null) {
         channel_id: '',
         channel_name: '',
         agent_name: agentName,
-        use_pod_assistant: false,
+        use_pod_assistant: agentName === null,
     };
 }
 

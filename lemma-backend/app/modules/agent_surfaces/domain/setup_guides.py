@@ -99,6 +99,8 @@ def build_surface_setup_actions(
     is_custom_app: bool,
     webhook_url: str | None,
     slack_socket_mode: bool = False,
+    slack_signing_secret_missing: bool = False,
+    slack_repair_url: str | None = None,
     whatsapp_verify_token: str | None = None,
 ) -> list[SurfaceSetupAction]:
     """The manual steps a user must complete for this surface — usually none.
@@ -115,8 +117,27 @@ def build_surface_setup_actions(
         return []
 
     if platform is SurfacePlatform.SLACK:
+        actions: list[SurfaceSetupAction] = []
+        if slack_signing_secret_missing:
+            actions.append(
+                SurfaceSetupAction(
+                    key="slack_signing_secret",
+                    title="Add the Slack signing secret",
+                    description=(
+                        "This workspace uses its own Slack app, but its signing "
+                        "secret is missing. Lemma rejects every event until the "
+                        "secret from Slack's Basic Information page is saved."
+                    ),
+                    link=slack_repair_url,
+                    link_label="Edit Slack credentials",
+                    steps=[
+                        "Open the Slack app's Basic Information page and copy its signing secret.",
+                        "Edit this Slack connector in Lemma and save the signing secret.",
+                    ],
+                )
+            )
         if slack_socket_mode or not webhook_url:
-            return []
+            return actions
         # Reference, not instructions. An app made from Lemma's manifest already
         # has this URL and every event Lemma listens for — so telling someone to
         # set them by hand is at best noise, and at worst wrong: the list used to
@@ -126,7 +147,7 @@ def build_surface_setup_actions(
         # Kept for the app that was *not* made from the manifest, where this is
         # the only place the URL appears. Nothing here restates the events; that
         # list lives in the manifest, which is the thing that can't drift.
-        return [
+        actions.append(
             SurfaceSetupAction(
                 key="slack_event_subscriptions",
                 title="Where Slack sends messages",
@@ -146,7 +167,8 @@ def build_surface_setup_actions(
                     "app to your workspace.",
                 ],
             )
-        ]
+        )
+        return actions
 
     if platform is SurfacePlatform.TEAMS:
         if not webhook_url:

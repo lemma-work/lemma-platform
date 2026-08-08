@@ -5,7 +5,9 @@ import hashlib
 import hmac
 import json
 import time
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
+from uuid import UUID
 
 import httpx
 import jwt
@@ -48,6 +50,19 @@ _OIDC_CACHE_TTL_SECONDS = 60 * 10
 # Shared Redis cache of OIDC/JWKS documents used to verify Teams webhook JWTs, so
 # the metadata is fetched once across replicas. Redis unavailable -> refetch.
 _oidc_cache: RedisJsonCache | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class SlackWebhookVerificationCandidate:
+    app_id: str
+    signing_secret: str
+    receiver_surface_ids: tuple[UUID, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class VerifiedSlackIngress:
+    app_id: str
+    receiver_surface_ids: tuple[UUID, ...]
 
 
 def _get_oidc_cache() -> RedisJsonCache:
@@ -158,17 +173,19 @@ class SurfaceWebhookSecurityService:
                 app_secret=app_secret,
             )
             return
-        if surface.surface_type is SurfacePlatform.SLACK and surface.webhook_secret:
-            # A workspace running its *own* Slack app signs with its own secret,
-            # so the deployment-wide one cannot verify it. Falling through to the
-            # platform check would reject every event from that app — which is
-            # why bring-your-own-app looked impossible rather than unfinished.
-            # No secret stored means this surface uses the deployment's app, so
-            # the shared check below is still the right one.
+        if surface.surface_type is SurfacePlatform.SLACK:
+            signing_secret = (
+                surface.webhook_secret or surface_settings.slack_signing_secret
+            )
+            if self._credential_resolver is not None:
+                credentials = (
+                    await self._credential_resolver.slack_webhook_credentials(surface)
+                )
+                signing_secret = credentials.signing_secret
             self._verify_slack_signature(
                 headers=headers,
                 raw_body=raw_body,
-                signing_secret=surface.webhook_secret,
+                signing_secret=signing_secret,
             )
             return
         await self.verify_platform_request(
@@ -182,43 +199,50 @@ class SurfaceWebhookSecurityService:
         *,
         headers: dict[str, str],
         raw_body: bytes,
-        candidate_secrets: list[str],
-    ) -> None:
-        """Verify a Slack request that may be signed by any of several apps.
-
-        One Slack workspace can front surfaces in several pods — that is the
-        supported multi-pod case, not a misconfiguration — and each of those
-        surfaces stores its own copy of the workspace's signing secret. They
-        are copies of one app's secret, so a signature valid for any candidate
-        proves the request came from that app; which *surface* it belongs to is
-        a routing question answered later, on verified content.
-
-        An empty list means no surface for this workspace runs its own app, so
-        the deployment's shared secret is the right one.
-        """
+        api_app_id: str | None,
+        candidates: list[SlackWebhookVerificationCandidate],
+    ) -> VerifiedSlackIngress:
+        normalized_app_id = str(api_app_id or "").strip()
         if not self.verification_enabled():
-            return
-        if not candidate_secrets:
-            self._verify_slack_signature(
-                headers=headers,
-                raw_body=raw_body,
-                signing_secret=surface_settings.slack_signing_secret,
+            return VerifiedSlackIngress(
+                app_id=normalized_app_id or "security-disabled",
+                receiver_surface_ids=tuple(
+                    dict.fromkeys(
+                        surface_id
+                        for candidate in candidates
+                        for surface_id in candidate.receiver_surface_ids
+                    )
+                ),
             )
-            return
-
+        if not normalized_app_id:
+            raise SurfaceWebhookAuthenticationError(
+                "Slack request is missing api_app_id"
+            )
+        matching = [
+            candidate
+            for candidate in candidates
+            if hmac.compare_digest(candidate.app_id, normalized_app_id)
+        ]
+        if not matching:
+            raise SurfaceWebhookAuthenticationError(
+                "Slack request targets an unknown app for this workspace"
+            )
         last_error: SurfaceWebhookAuthenticationError | None = None
-        for secret in candidate_secrets:
+        for candidate in matching:
             try:
                 self._verify_slack_signature(
                     headers=headers,
                     raw_body=raw_body,
-                    signing_secret=secret,
+                    signing_secret=candidate.signing_secret,
                 )
-                return
+                return VerifiedSlackIngress(
+                    app_id=normalized_app_id,
+                    receiver_surface_ids=candidate.receiver_surface_ids,
+                )
             except SurfaceWebhookAuthenticationError as exc:
                 last_error = exc
         raise last_error or SurfaceWebhookAuthenticationError(
-            "Slack signature did not match any configured app for this workspace"
+            "Slack signature did not match the targeted app for this workspace"
         )
 
     async def verify_resend_request(

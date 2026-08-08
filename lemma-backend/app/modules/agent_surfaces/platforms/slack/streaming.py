@@ -13,6 +13,7 @@ from slack_sdk.errors import SlackApiError
 
 from app.core.log.log import get_logger
 from app.modules.agent_surfaces.domain.entities import ParsedInboundSurfaceEvent
+from app.modules.agent_surfaces.domain.models import StreamAppendResult
 from app.modules.agent_surfaces.platforms.rendering import chunk_text
 from app.modules.agent_surfaces.platforms.slack.blocks import (
     MARKDOWN_BLOCK_CHAR_LIMIT,
@@ -143,7 +144,7 @@ class SlackStreamSurface:
         progress_handle: dict[str, Any] | None,
         text: str,
         metadata: dict[str, Any] | None = None,
-    ) -> dict[str, Any] | None:
+    ) -> StreamAppendResult:
         """Append model text to a live stream, opening one if needed.
 
         This is what makes the answer *appear as it is written* rather than
@@ -157,9 +158,9 @@ class SlackStreamSurface:
         # An empty text is a request to *open* the stream (run start); only a
         # missing channel/thread makes it impossible.
         if not token or not channel or not thread_ts:
-            return progress_handle
+            return StreamAppendResult(handle=progress_handle, appended=False)
         if not text and progress_handle:
-            return progress_handle
+            return StreamAppendResult(handle=progress_handle, appended=False)
         client = build_slack_client(self.credentials)
         try:
             if not (progress_handle and progress_handle.get("ts")):
@@ -187,19 +188,22 @@ class SlackStreamSurface:
                     "streamed_text": True,
                 }
             if not text:
-                return progress_handle
+                return StreamAppendResult(handle=progress_handle, appended=False)
             await client.chat_appendStream(
                 channel=str(progress_handle.get("channel") or channel),
                 ts=str(progress_handle["ts"]),
                 chunks=[_markdown_chunk(text)],
             )
-            return {**progress_handle, "streamed_text": True}
+            return StreamAppendResult(
+                handle={**progress_handle, "streamed_text": True},
+                appended=True,
+            )
         except SlackApiError as exc:
             logger.debug(
                 'agent_surfaces.service.slack_append_stream_text.diagnostic',
                 error_code=str((exc.response or {}).get("error") or "unknown"),
             )
-            return progress_handle
+            return StreamAppendResult(handle=progress_handle, appended=False)
 
     async def finish_progress(
         self,
@@ -330,4 +334,3 @@ class SlackStreamSurface:
             logger.debug(
                 'agent_surfaces.service.slack_end_progress_delete_channel.diagnostic'
             )
-

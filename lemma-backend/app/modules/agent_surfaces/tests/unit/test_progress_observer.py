@@ -15,6 +15,7 @@ from app.modules.agent_surfaces.services import progress_observer
 from app.modules.agent_surfaces.services.progress_observer import (
     SurfaceAgentRunProgressObserver,
 )
+from app.modules.agent_surfaces.domain.models import StreamAppendResult
 
 pytestmark = pytest.mark.asyncio
 
@@ -55,7 +56,7 @@ class _SurfaceService:
 
     async def append_stream_text_for_conversation(self, **kwargs):
         self.streamed.append(kwargs)
-        return {"message_id": 1}
+        return StreamAppendResult(handle={"message_id": 1}, appended=True)
 
     async def finish_progress_for_conversation(self, **kwargs):
         self.finished.append(kwargs)
@@ -883,6 +884,57 @@ async def test_slack_opens_the_stream_at_run_start_so_channels_show_something():
     await observer.on_run_started(conversation, SimpleNamespace())
 
     assert [c["text"] for c in service.streamed] == [""]
+
+
+async def test_failed_token_append_stays_buffered_until_confirmed():
+    service = _SurfaceService()
+    observer = _observer(service)
+    conversation = SimpleNamespace(id=uuid4(), metadata={"surface_platform": "SLACK"})
+    attempts = 0
+
+    async def append(**kwargs):
+        nonlocal attempts
+        attempts += 1
+        service.streamed.append(kwargs)
+        return StreamAppendResult(
+            handle={"message_id": 1}, appended=attempts > 1
+        )
+
+    service.append_stream_text_for_conversation = append
+    observer._token_buffer = "must survive"
+
+    await observer._flush_tokens(conversation)
+    assert observer._token_buffer == "must survive"
+    assert observer._streamed_text == ""
+
+    await observer._flush_tokens(conversation)
+    assert observer._token_buffer == ""
+    assert observer._streamed_text == "must survive"
+    assert [call["text"] for call in service.streamed] == [
+        "must survive",
+        "must survive",
+    ]
+
+
+async def test_final_answer_sends_unsent_text_after_append_failure():
+    service = _SurfaceService()
+    observer = _observer(service)
+    conversation = SimpleNamespace(id=uuid4(), metadata={"surface_platform": "SLACK"})
+
+    async def reject_append(**kwargs):
+        service.streamed.append(kwargs)
+        return StreamAppendResult(
+            handle={"message_id": 1}, appended=False
+        )
+
+    service.append_stream_text_for_conversation = reject_append
+    observer._progress_handle = {"message_id": 1}
+    observer._token_buffer = "complete answer"
+    observer._final_answer_text = "complete answer"
+
+    assert await observer._finish_stream_with_answer(conversation) is True
+    assert service.finished[-1]["message"] == "complete answer"
+    assert service.finished[-1]["already_streamed"] is False
 
 
 async def test_non_streaming_platforms_do_not_open_a_stream_at_run_start():

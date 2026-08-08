@@ -242,7 +242,7 @@ class AgentSurfaceIngressService(SurfaceConfigurationMixin, SurfaceProgressMixin
         # socket). This prevents a custom bot's update from being attributed to a
         # different bot's surface. A shared system-bot platform webhook leaves
         # this unset → platform-wide fan-in (disambiguated per-sender below).
-        if request.receiver_surface_ids:
+        if request.receiver_surface_ids is not None:
             allowed_ids = set(request.receiver_surface_ids)
             surfaces = [surface for surface in surfaces if surface.id in allowed_ids]
             if not surfaces:
@@ -1696,7 +1696,7 @@ class AgentSurfaceIngressService(SurfaceConfigurationMixin, SurfaceProgressMixin
         request: SurfacePlatformWebhookIngress,
         surfaces: list[AgentSurfaceEntity],
     ) -> AgentSurfaceEntity | None:
-        if request.receiver_surface_ids and surfaces:
+        if request.receiver_surface_ids is not None and surfaces:
             return surfaces[0]
         return None
 
@@ -2315,5 +2315,4 @@ class AgentSurfaceIngressService(SurfaceConfigurationMixin, SurfaceProgressMixin
         if len(title) <= _CONVERSATION_TITLE_MAX_LENGTH:
             return title
         return f"{title[: _CONVERSATION_TITLE_MAX_LENGTH - 3].rstrip()}..."
-
 

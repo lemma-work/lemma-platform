@@ -44,6 +44,8 @@ class SlackHomeSurface:
         user_id: str,
         channel_name: str | None = None,
         confirmed_agent: str | None = None,
+        surface_choices: list[tuple[str, str]] | None = None,
+        configuration_error: str | None = None,
     ) -> bool:
         """Ask the person who just added Lemma who should answer here.
 
@@ -59,17 +61,24 @@ class SlackHomeSurface:
                 channel=str(channel_id),
                 user=str(user_id),
                 text=(
-                    f"{confirmed_agent} now answers in this channel."
-                    if confirmed_agent
-                    else "Choose which agent answers in this channel."
+                    configuration_error
+                    or (
+                        f"{confirmed_agent} now answers in this channel."
+                        if confirmed_agent
+                        else "Choose which agent answers in this channel."
+                    )
                 ),
                 blocks=(
-                    channel_setup_confirmation_blocks(
+                    [{"type": "markdown", "text": configuration_error}]
+                    if configuration_error
+                    else channel_setup_confirmation_blocks(
                         channel_name=channel_name, agent_label=confirmed_agent
                     )
                     if confirmed_agent
                     else channel_setup_prompt_blocks(
-                        channel_id=str(channel_id), channel_name=channel_name
+                        channel_id=str(channel_id),
+                        channel_name=channel_name,
+                        surface_choices=surface_choices,
                     )
                 ),
             )
@@ -87,6 +96,7 @@ class SlackHomeSurface:
         channel_id: str,
         channel_label: str | None,
         agent_names: list[str],
+        surface_id: str | None = None,
     ) -> bool:
         """Open the "who answers here?" modal.
 
@@ -103,6 +113,7 @@ class SlackHomeSurface:
                     channel_id=channel_id,
                     channel_label=channel_label,
                     agent_names=agent_names,
+                    surface_id=surface_id,
                 ),
             )
             return True
@@ -150,7 +161,12 @@ class SlackHomeSurface:
             return False
 
     async def open_dm_agent_modal(
-        self, *, trigger_id: str, agent_names: list[str], current: str | None
+        self,
+        *,
+        trigger_id: str,
+        agent_names: list[str],
+        current: str | None,
+        surface_id: str | None = None,
     ) -> bool:
         token = slack_access_token(self.credentials)
         if not token or not trigger_id:
@@ -158,7 +174,11 @@ class SlackHomeSurface:
         try:
             await build_slack_client(self.credentials).views_open(
                 trigger_id=trigger_id,
-                view=dm_agent_modal(agent_names=agent_names, current=current),
+                view=dm_agent_modal(
+                    agent_names=agent_names,
+                    current=current,
+                    surface_id=surface_id,
+                ),
             )
             return True
         except SlackApiError as exc:
@@ -179,6 +199,8 @@ class SlackHomeSurface:
         apps: list | None = None,
         workspace_url: str | None = None,
         logo_url: str | None = None,
+        surface_choices: list[tuple[str, str]] | None = None,
+        access_message: str | None = None,
     ) -> bool:
         """Publish the Home tab for one person."""
         token = slack_access_token(self.credentials)
@@ -195,6 +217,8 @@ class SlackHomeSurface:
                     apps=apps,
                     workspace_url=workspace_url,
                     logo_url=logo_url,
+                    surface_choices=surface_choices,
+                    access_message=access_message,
                 ),
             )
             return True
@@ -303,4 +327,3 @@ class SlackHomeSurface:
                 'agent_surfaces.service.slack_set_suggested_prompts.diagnostic'
             )
             return False
-

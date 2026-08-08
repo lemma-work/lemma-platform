@@ -123,8 +123,10 @@ async def test_slack_identity_policy_blocks_then_allows_sender_domain(
     assert isinstance(allowed_context, SurfaceChatContext)
     assert allowed_context.surface_id == UUID(surface["id"])
 
-    slack_messages = await wait_for_messages(message_store, "SLACK", min_count=1)
-    assert "E2E agent reply [SLACK]" in slack_messages[-1]["text"]
+    stream_chunks = await wait_for_messages(
+        message_store, "SLACK_STREAM_APPEND", min_count=1
+    )
+    assert any("E2E agent reply [SLACK]" in json.dumps(item) for item in stream_chunks)
 
 
 async def test_slack_dm_and_channel_surfaces_route_through_shared_webhook(
@@ -242,10 +244,15 @@ async def test_slack_dm_and_channel_surfaces_route_through_shared_webhook(
     )
     assert "E2E agent reply [SLACK]" in channel_messages[-1]["text"]
 
-    slack_messages = await wait_for_messages(message_store, "SLACK", min_count=2)
-    assert slack_messages[-2]["channel"] == "D0123456"
-    assert slack_messages[-1]["channel"] == "C-SUPPORT"
-    assert "E2E agent reply [SLACK]" in slack_messages[-1]["text"]
+    stream_starts = await wait_for_messages(
+        message_store, "SLACK_STREAM_START", min_count=2
+    )
+    assert stream_starts[-2]["channel"] == "D0123456"
+    assert stream_starts[-1]["channel"] == "C-SUPPORT"
+    stream_chunks = await wait_for_messages(
+        message_store, "SLACK_STREAM_APPEND", min_count=2
+    )
+    assert any("E2E agent reply [SLACK]" in json.dumps(item) for item in stream_chunks)
 
 
 async def test_slack_channel_mention_injects_recent_thread_context(

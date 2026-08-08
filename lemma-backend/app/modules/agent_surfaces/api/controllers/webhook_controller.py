@@ -26,7 +26,6 @@ from app.modules.agent_surfaces.api.dependencies import (
 from app.modules.agent_surfaces.domain.ingress_request import (
     SurfacePlatformWebhookIngress,
 )
-from app.modules.agent_surfaces.domain.entities import SurfacePlatform
 from app.modules.agent_surfaces.domain.events import SurfaceWebhookReceivedEvent
 from app.modules.identity.domain.events import WhatsAppMobileVerificationReceivedEvent
 from app.modules.identity.services.whatsapp_mobile_verification import (
@@ -35,6 +34,11 @@ from app.modules.identity.services.whatsapp_mobile_verification import (
 )
 from app.modules.agent_surfaces.services.surface_service import (
     AgentSurfaceService,
+)
+from app.modules.agent_surfaces.api.controllers.slack_webhook_verification import (
+    slack_api_app_id,
+    slack_candidates_for_workspace,
+    slack_team_id,
 )
 from app.modules.agent_surfaces.services.telegram_manager_service import (
     TelegramManagedBotProvisioningInProgressError,
@@ -116,49 +120,6 @@ def _decode_webhook_payload(raw_body: bytes, headers: dict[str, str]) -> dict:
         return {}
 
 
-def _slack_team_id(payload: dict) -> str | None:
-    """The workspace a Slack request came from, across the shapes Slack uses.
-
-    Events put it at the top level; interactivity nests it under ``team``.
-    Read from an unverified body — see the caller for why that is safe.
-    """
-    team = payload.get("team")
-    if isinstance(team, dict):
-        nested = str(team.get("id") or "").strip()
-        if nested:
-            return nested
-    return str(payload.get("team_id") or "").strip() or None
-
-
-async def _slack_secrets_for_workspace(
-    *,
-    service: AgentSurfaceService,
-    team_id: str | None,
-) -> list[str]:
-    """Signing secrets configured for this Slack workspace.
-
-    Read from the org's connector auth config, where they sit beside the client
-    id and secret of the same app — not from the surface, which is downstream
-    of the app rather than the thing that owns it.
-
-    Empty when the workspace is unknown or runs on the deployment's Slack app,
-    both of which mean the shared secret is the one to use.
-    """
-    if not team_id:
-        return []
-    surfaces = await service.surface_repository.list_active_by_type(
-        SurfacePlatform.SLACK.value
-    )
-    secrets: list[str] = []
-    for surface in surfaces:
-        if str(surface.external_workspace_id or "").strip() != team_id:
-            continue
-        secret = await service._credential_resolver.slack_signing_secret(surface)
-        if secret and secret not in secrets:
-            secrets.append(secret)
-    return secrets
-
-
 async def _verify_inbound_request(
     *,
     platform: str,
@@ -167,7 +128,7 @@ async def _verify_inbound_request(
     payload: dict,
     security_service,
     service: AgentSurfaceService,
-) -> None:
+) -> list[UUID] | None:
     """Check a shared-endpoint request is really from the platform.
 
     Slack is the one platform where the answer depends on *who* sent it: an org
@@ -181,19 +142,21 @@ async def _verify_inbound_request(
     everyone else, rather than needing a URL of its own.
     """
     if platform == "slack":
-        security_service.verify_slack_request(
+        verified = security_service.verify_slack_request(
             headers=headers,
             raw_body=raw_body,
-            candidate_secrets=await _slack_secrets_for_workspace(
-                service=service, team_id=_slack_team_id(payload)
+            api_app_id=slack_api_app_id(payload),
+            candidates=await slack_candidates_for_workspace(
+                service=service, team_id=slack_team_id(payload)
             ),
         )
-        return
+        return list(verified.receiver_surface_ids) or None
     await security_service.verify_platform_request(
         platform=platform,
         headers=headers,
         raw_body=raw_body,
     )
+    return None
 
 
 def _email_address(value) -> str | None:
@@ -328,7 +291,7 @@ async def handle_platform_webhook(
     # Authenticity failures raise SurfaceWebhookAuthenticationError (a DomainError),
     # translated to the right status by the global handler.
     security_service.assert_platform_request_allowed(platform)
-    await _verify_inbound_request(
+    receiver_surface_ids = await _verify_inbound_request(
         platform=platform,
         headers=headers,
         raw_body=raw_body,
@@ -374,6 +337,7 @@ async def handle_platform_webhook(
                     source=platform,
                     payload=payload,
                     headers=_redacted_headers(headers),
+                    receiver_surface_ids=receiver_surface_ids,
                 )
             )
         if handled:
@@ -386,6 +350,7 @@ async def handle_platform_webhook(
         payload=payload,
         headers=_redacted_headers(headers),
         source_event_id=source_event_id,
+        receiver_surface_ids=receiver_surface_ids,
     )
     await EventPublisher.publish(event.stream_name(), event)
 

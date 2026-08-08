@@ -14,6 +14,7 @@ pipeline and the agent tool factory:
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
 
@@ -27,6 +28,7 @@ from app.modules.agent_surfaces.domain.surface_connectors import (
     SELF_MANAGED_CREDENTIAL_CONNECTOR_IDS,
 )
 from app.composition.surface_connectors import Account, ConnectorService
+from app.modules.connectors.domain.auth_config import AuthConfigSource
 
 logger = get_logger(__name__)
 
@@ -41,6 +43,13 @@ _SELF_MANAGED_CREDENTIAL_APPS = SELF_MANAGED_CREDENTIAL_CONNECTOR_IDS
 
 # Non-secret keys platform adapters read for identity/routing context.
 _CONTEXT_KEYS = ("scope", "scopes", "api_base_url", "raw_response", "user_data")
+
+
+@dataclass(frozen=True, slots=True)
+class SlackWebhookCredentials:
+    app_id: str | None
+    signing_secret: str | None
+    uses_custom_app: bool
 
 
 def native_credentials(platform: str | SurfacePlatform | None) -> dict[str, Any]:
@@ -209,6 +218,69 @@ class SurfaceCredentialResolver:
             return None
         secret = (auth_config.config or {}).get("signing_secret")
         return str(secret).strip() or None if secret else None
+
+    async def slack_webhook_credentials(
+        self, surface: AgentSurfaceEntity
+    ) -> SlackWebhookCredentials:
+        account_id = surface.account_id
+        if account_id is None:
+            return SlackWebhookCredentials(
+                app_id=None,
+                signing_secret=surface_settings.slack_signing_secret,
+                uses_custom_app=False,
+            )
+        account = await self._connector_service.account_repository.get(account_id)
+        if account is None:
+            return SlackWebhookCredentials(
+                app_id=None,
+                signing_secret=None,
+                uses_custom_app=False,
+            )
+        app_id = self._slack_app_id(account.credentials)
+        auth_config = await self._slack_auth_config(account.auth_config_id)
+        uses_custom_app = self._is_org_custom_auth_config(auth_config)
+        signing_secret = self._slack_secret_for_auth_config(
+            auth_config, uses_custom_app=uses_custom_app
+        )
+        return SlackWebhookCredentials(
+            app_id=app_id,
+            signing_secret=signing_secret,
+            uses_custom_app=uses_custom_app,
+        )
+
+    @staticmethod
+    def _slack_app_id(credentials: Any) -> str | None:
+        stored = credentials or {}
+        if hasattr(stored, "model_dump"):
+            stored = stored.model_dump(exclude_none=True)
+        raw_response = (
+            stored.get("raw_response") if isinstance(stored, dict) else None
+        ) or {}
+        return str(
+            raw_response.get("app_id") or raw_response.get("api_app_id") or ""
+        ).strip() or None
+
+    async def _slack_auth_config(self, auth_config_id):
+        if auth_config_id is None:
+            return None
+        return await self._connector_service.auth_config_repository.get(auth_config_id)
+
+    @staticmethod
+    def _is_org_custom_auth_config(auth_config) -> bool:
+        source = getattr(auth_config, "config_source", None)
+        source_value = str(getattr(source, "value", source) or "").upper()
+        return source_value == AuthConfigSource.ORG_CUSTOM.value
+
+    @staticmethod
+    def _slack_secret_for_auth_config(
+        auth_config, *, uses_custom_app: bool
+    ) -> str | None:
+        if uses_custom_app:
+            configured = (getattr(auth_config, "config", None) or {}).get(
+                "signing_secret"
+            )
+            return str(configured).strip() or None if configured else None
+        return surface_settings.slack_signing_secret
 
     async def _provider_for_account(self, account: Any) -> str | None:
         auth_config_id = getattr(account, "auth_config_id", None)

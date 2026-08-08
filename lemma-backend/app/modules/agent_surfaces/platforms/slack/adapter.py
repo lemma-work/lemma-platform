@@ -8,6 +8,7 @@ from app.modules.agent_surfaces.domain.entities import (
     ParsedSurfaceLifecycleEvent,
 )
 from app.modules.agent_surfaces.domain.models import (
+    StreamAppendResult,
     SurfaceApprovalRenderPlan,
     SurfaceChannelInfo,
     SurfaceDisplayRenderPlan,
@@ -107,7 +108,7 @@ class SlackSurfaceAdapter(BaseSurfaceAdapter):
         progress_handle: dict[str, Any] | None,
         text: str,
         metadata: dict[str, Any] | None = None,
-    ) -> dict[str, Any] | None:
+    ) -> StreamAppendResult:
         return await self._stream(credentials).append_stream_text(
             event, progress_handle, text, metadata
         )
@@ -162,12 +163,16 @@ class SlackSurfaceAdapter(BaseSurfaceAdapter):
         user_id: str,
         channel_name: str | None = None,
         confirmed_agent: str | None = None,
+        surface_choices: list[tuple[str, str]] | None = None,
+        configuration_error: str | None = None,
     ) -> bool:
         return await self._home(credentials).send_channel_setup_prompt(
             channel_id=channel_id,
             user_id=user_id,
             channel_name=channel_name,
             confirmed_agent=confirmed_agent,
+            surface_choices=surface_choices,
+            configuration_error=configuration_error,
         )
 
     async def parse_channel_setup(
@@ -183,12 +188,14 @@ class SlackSurfaceAdapter(BaseSurfaceAdapter):
         channel_id: str,
         channel_label: str | None,
         agent_names: list[str],
+        surface_id: str | None = None,
     ) -> bool:
         return await self._home(credentials).open_channel_setup_modal(
             trigger_id=trigger_id,
             channel_id=channel_id,
             channel_label=channel_label,
             agent_names=agent_names,
+            surface_id=surface_id,
         )
 
     async def send_starter_prompt(
@@ -205,9 +212,13 @@ class SlackSurfaceAdapter(BaseSurfaceAdapter):
         trigger_id: str,
         agent_names: list,
         current: str | None,
+        surface_id: str | None = None,
     ) -> bool:
         return await self._home(credentials).open_dm_agent_modal(
-            trigger_id=trigger_id, agent_names=list(agent_names), current=current
+            trigger_id=trigger_id,
+            agent_names=list(agent_names),
+            current=current,
+            surface_id=surface_id,
         )
 
     async def publish_home_view(
@@ -222,6 +233,8 @@ class SlackSurfaceAdapter(BaseSurfaceAdapter):
         apps: list | None = None,
         workspace_url: str | None = None,
         logo_url: str | None = None,
+        surface_choices: list[tuple[str, str]] | None = None,
+        access_message: str | None = None,
     ) -> bool:
         return await self._home(credentials).publish_home_view(
             user_id=user_id,
@@ -232,6 +245,8 @@ class SlackSurfaceAdapter(BaseSurfaceAdapter):
             apps=apps,
             workspace_url=workspace_url,
             logo_url=logo_url,
+            surface_choices=surface_choices,
+            access_message=access_message,
         )
 
     async def channel_name(

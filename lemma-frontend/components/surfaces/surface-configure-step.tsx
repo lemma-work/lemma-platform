@@ -75,7 +75,7 @@ export function SurfaceConfigureStep({
     availableChannels: AvailableChannel[];
     isLoadingChannels: boolean;
     /** Agent a newly added route answers as — the one whose page opened this.
-     * `null` falls to the pod default, which is right for the pod assistant. */
+     * `null` is an explicit pod-assistant choice. */
     defaultRouteAgent?: string | null;
     /** Where an org sets up its own app for this platform. Passed only when it
      * hasn't already — otherwise the offer is stale. */
@@ -241,7 +241,7 @@ export function SurfaceConfigureStep({
                                                 channel_id: firstJoinable?.id ?? '',
                                                 channel_name: firstJoinable?.name ?? '',
                                                 agent_name: defaultRouteAgent,
-                                                use_pod_assistant: false,
+                                                use_pod_assistant: defaultRouteAgent === null,
                                             },
                                         ],
                                     });

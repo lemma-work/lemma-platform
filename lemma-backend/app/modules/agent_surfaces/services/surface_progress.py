@@ -15,6 +15,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.log.log import get_logger
 from app.modules.agent_surfaces.platforms.rendering import sanitize_user_visible_text
+from app.modules.agent_surfaces.domain.models import StreamAppendResult
 
 logger = get_logger(__name__)
 
@@ -62,7 +63,7 @@ class SurfaceProgressMixin:
         conversation_id: UUID,
         progress_handle: dict[str, Any] | None,
         text: str,
-    ) -> dict[str, Any] | None:
+    ) -> StreamAppendResult:
         """Append streamed model text; returns the (possibly new) handle.
 
         Best-effort by construction — a dropped delta must never take down a
@@ -70,7 +71,7 @@ class SurfaceProgressMixin:
         """
         target = await self._resolve_egress_target(conversation_id)
         if target is None:
-            return progress_handle
+            return StreamAppendResult(handle=progress_handle, appended=False)
         try:
             metadata = await self._egress_metadata_with_agent_name(target, None)
             return await target.adapter.append_stream_text(
@@ -85,7 +86,7 @@ class SurfaceProgressMixin:
                 'agent_surfaces.ingress_service.surface_stream_text_conversation_s.diagnostic',
                 conversation_id=conversation_id,
             )
-            return progress_handle
+            return StreamAppendResult(handle=progress_handle, appended=False)
 
     async def finish_progress_for_conversation(
         self,
@@ -151,4 +152,3 @@ class SurfaceProgressMixin:
                 'agent_surfaces.ingress_service.surface_progress_clear_conversation_s.diagnostic',
                 conversation_id=conversation_id,
             )
-

@@ -30,7 +30,12 @@ async def test_slack_binding_populates_bot_user_id_from_account_credentials():
             id=account_id,
             user_id=uuid4(),
             connector_id="slack",
-            credentials={"raw_response": {"bot_user_id": "U0AGSSTQZLH"}},
+            credentials={
+                "raw_response": {
+                    "bot_user_id": "U0AGSSTQZLH",
+                    "app_id": "A0LEMMA",
+                }
+            },
         )
     )
     resolver = SurfaceAccountBindingResolver(account_port)
@@ -57,6 +62,22 @@ async def test_slack_binding_raises_when_bot_user_id_missing():
     resolver = SurfaceAccountBindingResolver(account_port)
 
     with pytest.raises(AgentSurfaceValidationError):
+        await resolver.resolve_binding(SurfacePlatform.SLACK, account_id=account_id)
+
+
+async def test_slack_binding_requires_the_oauth_app_id_for_ingress_routing():
+    account_id = uuid4()
+    account_port = _make_account_port(
+        SurfaceAccountInfo(
+            id=account_id,
+            user_id=uuid4(),
+            connector_id="slack",
+            credentials={"raw_response": {"bot_user_id": "U0AGSSTQZLH"}},
+        )
+    )
+    resolver = SurfaceAccountBindingResolver(account_port)
+
+    with pytest.raises(AgentSurfaceValidationError, match="raw_response.app_id"):
         await resolver.resolve_binding(SurfacePlatform.SLACK, account_id=account_id)
 
 

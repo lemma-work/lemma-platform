@@ -36,7 +36,7 @@ class TokenStreamMixin:
         try:
             async with self.uow_factory() as uow:
                 service = self.service_factory(uow)
-                handle = await service.append_stream_text_for_conversation(
+                result = await service.append_stream_text_for_conversation(
                     conversation_id=conversation.id,
                     progress_handle=None,
                     text="",
@@ -46,8 +46,8 @@ class TokenStreamMixin:
                 'agent_surfaces.progress_observer.surface_token_flush_conversation.diagnostic'
             )
             return
-        if handle is not None:
-            self._progress_handle = handle
+        if result.handle is not None:
+            self._progress_handle = result.handle
 
     async def _on_token(self, event: AgentEvent, conversation: Conversation) -> None:
         """Stream the answer as it is written, on platforms that can show it.
@@ -85,12 +85,11 @@ class TokenStreamMixin:
         pending = self._token_buffer
         if not pending:
             return
-        self._token_buffer = ""
         self._last_token_flush = time.monotonic()
         try:
             async with self.uow_factory() as uow:
                 service = self.service_factory(uow)
-                handle = await service.append_stream_text_for_conversation(
+                result = await service.append_stream_text_for_conversation(
                     conversation_id=conversation.id,
                     progress_handle=self._progress_handle,
                     text=pending,
@@ -100,7 +99,10 @@ class TokenStreamMixin:
                 'agent_surfaces.progress_observer.surface_token_flush_conversation.diagnostic'
             )
             return
-        if handle is not None:
-            self._progress_handle = handle
+        if result.handle is not None:
+            self._progress_handle = result.handle
+        if not result.appended:
+            return
+        if self._token_buffer.startswith(pending):
+            self._token_buffer = self._token_buffer[len(pending) :]
         self._streamed_text += pending
-

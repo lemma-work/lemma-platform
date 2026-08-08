@@ -355,6 +355,12 @@ class SurfacePodMembershipPort(Protocol):
         member of (a stale default), so routing stops silently honoring it."""
         ...
 
+    async def set_user_default_surface_id(
+        self, user_id: UUID, platform: str, surface_id: UUID
+    ) -> None:
+        """Persist the user's explicit platform-to-surface choice."""
+        ...
+
     async def get_user_default_surface_ids(self, user_id: UUID) -> list[UUID]:
         """Every surface the user has chosen as a default, across platforms.
 

@@ -13,6 +13,7 @@ separate messages rather than separate blocks in one message.
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 # Slack caps all markdown blocks in one payload at 12,000 characters. One
@@ -84,7 +85,10 @@ def channel_setup_confirmation_blocks(
 
 
 def channel_setup_prompt_blocks(
-    *, channel_id: str, channel_name: str | None = None
+    *,
+    channel_id: str,
+    channel_name: str | None = None,
+    surface_choices: list[tuple[str, str]] | None = None,
 ) -> list[dict[str, Any]]:
     """The ephemeral nudge shown to whoever just added Lemma to a channel.
 
@@ -95,6 +99,29 @@ def channel_setup_prompt_blocks(
     real interaction.
     """
     where = f"*#{channel_name}*" if channel_name else "this channel"
+    choices = list(surface_choices or [])
+    if choices:
+        return [
+            {
+                "type": "markdown",
+                "text": f"I'm in {where}. Choose which pod should answer here.",
+            },
+            {
+                "type": "actions",
+                "elements": [
+                    {
+                        "type": "button",
+                        "action_id": CHANNEL_SETUP_ACTION_ID,
+                        "text": {"type": "plain_text", "text": _truncate(label, 74)},
+                        "value": json.dumps(
+                            {"channel_id": channel_id, "surface_id": surface_id},
+                            separators=(",", ":"),
+                        ),
+                    }
+                    for label, surface_id in choices[:5]
+                ],
+            },
+        ]
     return [
         {
             "type": "markdown",
@@ -134,6 +161,7 @@ def channel_setup_modal(
     channel_id: str,
     channel_label: str | None,
     agent_names: list[str],
+    surface_id: str | None = None,
 ) -> dict[str, Any]:
     """The "who answers here?" modal.
 
@@ -163,7 +191,10 @@ def channel_setup_modal(
         "callback_id": CHANNEL_SETUP_VIEW_CALLBACK_ID,
         # A view_submission tells us nothing about where it came from, so the
         # channel rides along here.
-        "private_metadata": channel_id,
+        "private_metadata": json.dumps(
+            {"channel_id": channel_id, "surface_id": surface_id},
+            separators=(",", ":"),
+        ),
         "title": {"type": "plain_text", "text": "Who answers here?"},
         "submit": {"type": "plain_text", "text": "Save"},
         "close": {"type": "plain_text", "text": "Cancel"},
@@ -218,7 +249,9 @@ DM_AGENT_SELECT_ACTION_ID = "lemma_dm_agent_select"
 CHANNEL_ROUTE_EDIT_ACTION_ID = "lemma_channel_route_edit"
 
 
-def dm_agent_modal(*, agent_names: list[str], current: str | None) -> dict[str, Any]:
+def dm_agent_modal(
+    *, agent_names: list[str], current: str | None, surface_id: str | None = None
+) -> dict[str, Any]:
     """Pick who answers *your* DMs.
 
     Per person, not per workspace: two people in the same Slack can talk to
@@ -247,6 +280,7 @@ def dm_agent_modal(*, agent_names: list[str], current: str | None) -> dict[str, 
     return {
         "type": "modal",
         "callback_id": DM_AGENT_VIEW_CALLBACK_ID,
+        "private_metadata": surface_id or "",
         "title": {"type": "plain_text", "text": "Who answers you?"},
         "submit": {"type": "plain_text", "text": "Save"},
         "close": {"type": "plain_text", "text": "Cancel"},
@@ -269,6 +303,7 @@ def dm_agent_modal(*, agent_names: list[str], current: str | None) -> dict[str, 
 
 
 AGENT_DM_ACTION_ID = "lemma_agent_dm"
+SURFACE_SELECT_ACTION_ID = "lemma_surface_select"
 
 
 def app_home_view(
@@ -280,6 +315,8 @@ def app_home_view(
     apps: list | None = None,
     workspace_url: str | None = None,
     logo_url: str | None = None,
+    surface_choices: list[tuple[str, str]] | None = None,
+    access_message: str | None = None,
 ) -> dict[str, Any]:
     """The App Home — the one screen that has to explain and sell Lemma.
 
@@ -294,6 +331,44 @@ def app_home_view(
     """
     agents = list(agents or [])
     apps = list(apps or [])
+    choices = list(surface_choices or [])
+    if access_message:
+        return {
+            "type": "home",
+            "blocks": [
+                {"type": "header", "text": {"type": "plain_text", "text": "Lemma"}},
+                {"type": "section", "text": {"type": "mrkdwn", "text": access_message}},
+            ],
+        }
+    if choices:
+        return {
+            "type": "home",
+            "blocks": [
+                {
+                    "type": "header",
+                    "text": {"type": "plain_text", "text": "Choose a Lemma pod"},
+                },
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": "This Slack workspace is connected to more than one pod. Pick the one this app should show you.",
+                    },
+                },
+                {
+                    "type": "actions",
+                    "elements": [
+                        {
+                            "type": "button",
+                            "action_id": SURFACE_SELECT_ACTION_ID,
+                            "text": {"type": "plain_text", "text": _truncate(label, 74)},
+                            "value": surface_id,
+                        }
+                        for label, surface_id in choices[:5]
+                    ],
+                },
+            ],
+        }
     blocks: list[dict[str, Any]] = []
 
     # Masthead. The logo is skipped unless it is publicly fetchable: Slack

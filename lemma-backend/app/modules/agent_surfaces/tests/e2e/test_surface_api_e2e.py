@@ -296,6 +296,7 @@ async def test_surface_config_round_trips_and_supports_partial_updates(
         "channels",
         "dm_conversation_reset_after_hours",
         "send_policy",
+        "slack",
         "telegram",
     }
     assert config["dm_conversation_reset_after_hours"] == 6
@@ -304,7 +305,12 @@ async def test_surface_config_round_trips_and_supports_partial_updates(
     route = config["channels"][0]
     # Routes mirror the input exactly: agent referenced by name, presence means active.
     # Channels are always mention-gated (no per-route requires_mention toggle).
-    assert set(route) == {"channel_id", "channel_name", "agent_name"}
+    assert set(route) == {
+        "channel_id",
+        "channel_name",
+        "agent_name",
+        "use_pod_assistant",
+    }
     assert route["channel_id"] == "C-ROUTED"
     assert route["agent_name"] == route_agent["name"]
 
@@ -326,6 +332,7 @@ async def test_surface_config_round_trips_and_supports_partial_updates(
         "channels",
         "dm_conversation_reset_after_hours",
         "send_policy",
+        "slack",
         "telegram",
     }
     assert set(schemas["SurfaceBehaviorConfigInput"]["properties"]) == {
@@ -333,6 +340,7 @@ async def test_surface_config_round_trips_and_supports_partial_updates(
         "channels",
         "dm_conversation_reset_after_hours",
         "send_policy",
+        "slack",
         "telegram",
     }
 
@@ -681,12 +689,34 @@ async def test_surface_setup_actions_depend_on_auth_config_source(
 
     custom_setup = (await authenticated_client.get(f"/pods/{pod_id}/surfaces/slack/setup")).json()
     assert custom_setup["ready"] is False
-    assert len(custom_setup["actions"]) == 1
-    action = custom_setup["actions"][0]
+    assert custom_setup["status"] == "NEEDS_SETUP"
+    assert {action["key"] for action in custom_setup["actions"]} == {
+        "slack_signing_secret",
+        "slack_event_subscriptions",
+    }
+    action = next(
+        action
+        for action in custom_setup["actions"]
+        if action["key"] == "slack_event_subscriptions"
+    )
     assert action["key"] == "slack_event_subscriptions"
     assert action["steps"]
     assert action["link"] == "https://api.slack.com/apps"
     assert any(field["value"].endswith("/surfaces/webhooks/slack") for field in action["fields"])
+
+    auth_config.config = {
+        **(auth_config.config or {}),
+        "signing_secret": "custom-signing-secret",
+    }
+    await db_session.commit()
+    repaired = (
+        await authenticated_client.get(f"/pods/{pod_id}/surfaces/slack/setup")
+    ).json()
+    assert repaired["status"] == "ACTIVE"
+    assert repaired["ready"] is True
+    assert [action["key"] for action in repaired["actions"]] == [
+        "slack_event_subscriptions"
+    ]
 
 
 async def test_surface_send_endpoint_and_send_policy_config(

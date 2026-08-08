@@ -13,6 +13,7 @@ from app.modules.agent_surfaces.domain.entities import (
     ParsedSurfaceInteraction,
 )
 from app.modules.agent_surfaces.domain.models import (
+    StreamAppendResult,
     SurfaceApprovalRenderPlan,
     SurfaceChannelInfo,
     SurfaceContextMessage,
@@ -174,9 +175,19 @@ class BaseSurfaceAdapter:
         user_id: str,
         channel_name: str | None = None,
         confirmed_agent: str | None = None,
+        surface_choices: list[tuple[str, str]] | None = None,
+        configuration_error: str | None = None,
     ) -> bool:
         """Offer to configure a freshly joined channel. Default: unsupported."""
-        del credentials, channel_id, user_id, channel_name, confirmed_agent
+        del (
+            credentials,
+            channel_id,
+            user_id,
+            channel_name,
+            confirmed_agent,
+            surface_choices,
+            configuration_error,
+        )
         return False
 
     async def set_thread_title(
@@ -198,10 +209,10 @@ class BaseSurfaceAdapter:
         progress_handle: dict[str, Any] | None,
         text: str,
         metadata: dict[str, Any] | None = None,
-    ) -> dict[str, Any] | None:
+    ) -> StreamAppendResult:
         """Append model text to a live stream. Default: platform cannot stream."""
         del credentials, event, text, metadata
-        return progress_handle
+        return StreamAppendResult(handle=progress_handle, appended=False)
 
     async def finish_progress(
         self,

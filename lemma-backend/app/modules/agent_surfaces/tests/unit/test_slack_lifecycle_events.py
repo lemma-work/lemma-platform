@@ -192,6 +192,7 @@ async def test_setup_button_yields_the_trigger_needed_to_open_a_modal():
         "channel_id": "C_SALES",
         "tenant_id": "T1",
         "actor_external_user_id": "U_HUMAN",
+        "surface_id": None,
     }
 
 
@@ -234,10 +235,66 @@ async def test_modal_offers_the_pod_assistant_first_then_agents():
 
     assert view["callback_id"] == "lemma_channel_setup_view"
     # A view_submission carries no channel of its own — it rides private_metadata.
-    assert view["private_metadata"] == "C_SALES"
+    assert '"channel_id":"C_SALES"' in view["private_metadata"]
     options = view["blocks"][1]["element"]["options"]
     assert [o["value"] for o in options] == ["__pod_assistant__", "a1", "a2"]
     assert "#sales" in view["blocks"][0]["text"]["text"]
+
+
+async def test_multi_pod_channel_choice_carries_the_surface_through_the_modal():
+    from app.modules.agent_surfaces.platforms.slack.blocks import (
+        channel_setup_modal,
+        channel_setup_prompt_blocks,
+    )
+
+    prompt = channel_setup_prompt_blocks(
+        channel_id="C_SALES",
+        surface_choices=[("Sales pod", "00000000-0000-0000-0000-000000000001")],
+    )
+    click = _setup_button_payload()
+    click["actions"][0]["value"] = prompt[1]["elements"][0]["value"]
+    opened = SlackMessageParser().parse_channel_setup(click)
+    assert opened["surface_id"] == "00000000-0000-0000-0000-000000000001"
+
+    view = channel_setup_modal(
+        channel_id="C_SALES",
+        channel_label="sales",
+        agent_names=["sales-agent"],
+        surface_id=opened["surface_id"],
+    )
+    submitted_payload = _submit_payload("sales-agent")
+    submitted_payload["view"]["private_metadata"] = view["private_metadata"]
+    submitted = SlackMessageParser().parse_channel_setup(submitted_payload)
+    assert submitted["channel_id"] == "C_SALES"
+    assert submitted["surface_id"] == opened["surface_id"]
+
+
+async def test_app_home_surface_selector_parses_an_explicit_choice():
+    from app.modules.agent_surfaces.platforms.slack.blocks import app_home_view
+
+    view = app_home_view(
+        pod_name=None,
+        dm_agent_name=None,
+        channel_routes=[],
+        surface_choices=[
+            ("Sales pod", "00000000-0000-0000-0000-000000000001")
+        ],
+    )
+    button = view["blocks"][2]["elements"][0]
+    parsed = SlackMessageParser().parse_channel_setup(
+        {
+            "type": "block_actions",
+            "team": {"id": "T1"},
+            "user": {"id": "U_HUMAN"},
+            "actions": [button],
+        }
+    )
+    assert parsed == {
+        "kind": "select_surface",
+        "surface_id": "00000000-0000-0000-0000-000000000001",
+        "tenant_id": "T1",
+        "actor_external_user_id": "U_HUMAN",
+    }
 
 
 async def test_pod_assistant_route_is_not_the_surface_default():

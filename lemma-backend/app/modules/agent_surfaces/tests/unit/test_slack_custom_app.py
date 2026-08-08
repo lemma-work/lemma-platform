@@ -16,6 +16,7 @@ from app.modules.agent_surfaces.domain.entities import (
 )
 from app.modules.agent_surfaces.platforms.common import computed_webhook_url
 from app.modules.agent_surfaces.services.webhook_security_service import (
+    SlackWebhookVerificationCandidate,
     SurfaceWebhookSecurityService,
 )
 
@@ -192,11 +193,20 @@ async def test_the_shared_endpoint_accepts_a_workspaces_own_app(monkeypatch):
     monkeypatch.setattr(surface_settings, "slack_signing_secret", DEPLOYMENT_SECRET)
     body = b'{"type":"event_callback","team_id":"T1"}'
 
-    SurfaceWebhookSecurityService().verify_slack_request(
+    surface_id = uuid4()
+    verified = SurfaceWebhookSecurityService().verify_slack_request(
         headers=_signed(OWN_SECRET, body),
         raw_body=body,
-        candidate_secrets=[OWN_SECRET],
+        api_app_id="A_CUSTOM",
+        candidates=[
+            SlackWebhookVerificationCandidate(
+                app_id="A_CUSTOM",
+                signing_secret=OWN_SECRET,
+                receiver_surface_ids=(surface_id,),
+            )
+        ],
     )
+    assert verified.receiver_surface_ids == (surface_id,)
 
 
 async def test_one_workspace_may_front_several_pods(monkeypatch):
@@ -207,11 +217,26 @@ async def test_one_workspace_may_front_several_pods(monkeypatch):
     monkeypatch.setattr(surface_settings, "slack_signing_secret", DEPLOYMENT_SECRET)
     body = b'{"type":"event_callback","team_id":"T1"}'
 
-    SurfaceWebhookSecurityService().verify_slack_request(
+    current_surface = uuid4()
+    stale_surface = uuid4()
+    verified = SurfaceWebhookSecurityService().verify_slack_request(
         headers=_signed(OWN_SECRET, body),
         raw_body=body,
-        candidate_secrets=["a-stale-copy", OWN_SECRET],
+        api_app_id="A_CUSTOM",
+        candidates=[
+            SlackWebhookVerificationCandidate(
+                app_id="A_CUSTOM",
+                signing_secret="a-stale-copy",
+                receiver_surface_ids=(stale_surface,),
+            ),
+            SlackWebhookVerificationCandidate(
+                app_id="A_CUSTOM",
+                signing_secret=OWN_SECRET,
+                receiver_surface_ids=(current_surface,),
+            ),
+        ],
     )
+    assert verified.receiver_surface_ids == (current_surface,)
 
 
 async def test_a_workspace_with_no_custom_app_still_uses_the_deployments(monkeypatch):
@@ -219,11 +244,20 @@ async def test_a_workspace_with_no_custom_app_still_uses_the_deployments(monkeyp
     monkeypatch.setattr(surface_settings, "slack_signing_secret", DEPLOYMENT_SECRET)
     body = b'{"type":"event_callback","team_id":"T1"}'
 
-    SurfaceWebhookSecurityService().verify_slack_request(
+    surface_id = uuid4()
+    verified = SurfaceWebhookSecurityService().verify_slack_request(
         headers=_signed(DEPLOYMENT_SECRET, body),
         raw_body=body,
-        candidate_secrets=[],
+        api_app_id="A_MANAGED",
+        candidates=[
+            SlackWebhookVerificationCandidate(
+                app_id="A_MANAGED",
+                signing_secret=DEPLOYMENT_SECRET,
+                receiver_surface_ids=(surface_id,),
+            )
+        ],
     )
+    assert verified.receiver_surface_ids == (surface_id,)
 
 
 async def test_a_signature_matching_no_candidate_is_rejected(monkeypatch):
@@ -237,5 +271,36 @@ async def test_a_signature_matching_no_candidate_is_rejected(monkeypatch):
         SurfaceWebhookSecurityService().verify_slack_request(
             headers=_signed(DEPLOYMENT_SECRET, body),
             raw_body=body,
-            candidate_secrets=[OWN_SECRET],
+            api_app_id="A_CUSTOM",
+            candidates=[
+                SlackWebhookVerificationCandidate(
+                    app_id="A_CUSTOM",
+                    signing_secret=OWN_SECRET,
+                    receiver_surface_ids=(uuid4(),),
+                )
+            ],
+        )
+
+
+async def test_a_valid_signature_for_one_app_cannot_target_another_app(monkeypatch):
+    monkeypatch.setattr(surface_settings, "surface_webhook_security_enabled", True)
+    body = b'{"type":"event_callback","team_id":"T1","api_app_id":"A_B"}'
+
+    with pytest.raises(Exception):
+        SurfaceWebhookSecurityService().verify_slack_request(
+            headers=_signed(OWN_SECRET, body),
+            raw_body=body,
+            api_app_id="A_B",
+            candidates=[
+                SlackWebhookVerificationCandidate(
+                    app_id="A_A",
+                    signing_secret=OWN_SECRET,
+                    receiver_surface_ids=(uuid4(),),
+                ),
+                SlackWebhookVerificationCandidate(
+                    app_id="A_B",
+                    signing_secret="different-app-secret",
+                    receiver_surface_ids=(uuid4(),),
+                ),
+            ],
         )

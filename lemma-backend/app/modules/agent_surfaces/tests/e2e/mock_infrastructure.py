@@ -177,6 +177,9 @@ class FakeSlackServer:
         app.router.add_route("*", "/api/chat.postMessage", self._chat_post_message)
         app.router.add_route("*", "/api/chat.update", self._chat_update)
         app.router.add_route("*", "/api/chat.delete", self._chat_delete)
+        app.router.add_route("*", "/api/chat.startStream", self._chat_start_stream)
+        app.router.add_route("*", "/api/chat.appendStream", self._chat_append_stream)
+        app.router.add_route("*", "/api/chat.stopStream", self._chat_stop_stream)
         app.router.add_route("*", "/api/reactions.add", self._reactions_add)
         app.router.add_route("*", "/api/files.info", self._files_info)
         app.router.add_route(
@@ -338,6 +341,28 @@ class FakeSlackServer:
         params = await self._collect_params(request)
         self._store.add("SLACK_DELETE", params)
         return web.json_response({"ok": True, "ts": params.get("ts")})
+
+    async def _chat_start_stream(self, request: web.Request) -> web.Response:
+        params = await self._collect_params(request)
+        self._store.add("SLACK_STREAM_START", params)
+        ts = f"1700000001.{len(self._store.get_all('SLACK_STREAM_START')):06d}"
+        return web.json_response(
+            {"ok": True, "ts": ts, "channel": params.get("channel")}
+        )
+
+    async def _chat_append_stream(self, request: web.Request) -> web.Response:
+        params = await self._collect_params(request)
+        self._store.add("SLACK_STREAM_APPEND", params)
+        return web.json_response(
+            {"ok": True, "ts": params.get("ts"), "channel": params.get("channel")}
+        )
+
+    async def _chat_stop_stream(self, request: web.Request) -> web.Response:
+        params = await self._collect_params(request)
+        self._store.add("SLACK_STREAM_STOP", params)
+        return web.json_response(
+            {"ok": True, "ts": params.get("ts"), "channel": params.get("channel")}
+        )
 
     async def _reactions_add(self, request: web.Request) -> web.Response:
         params = await self._collect_params(request)

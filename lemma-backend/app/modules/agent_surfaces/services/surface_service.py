@@ -10,7 +10,6 @@ import httpx
 from app.core.config import settings
 from app.modules.agent_surfaces.config import surface_settings
 from app.modules.agent_surfaces.platforms.common import (
-    computed_webhook_url,
     public_https_api_url_available,
 )
 from app.modules.agent_surfaces.platforms.delivery import RetryPolicy, with_retry
@@ -49,7 +48,6 @@ from app.modules.agent_surfaces.domain.ports import (
 from app.modules.connectors.contracts import AuthConfigSource, ConnectorKind
 from app.modules.agent_surfaces.domain.setup_guides import (
     SurfacePlatformSetupGuide,
-    build_surface_setup_actions,
     build_surface_setup_guide,
 )
 from app.composition.surface_connectors import (
@@ -74,6 +72,9 @@ from app.modules.agent_surfaces.services.event_receiver_service import (
 )
 from app.modules.agent_surfaces.services.telegram_mini_app_mixin import (
     TelegramMiniAppSyncMixin,
+)
+from app.modules.agent_surfaces.services.surface_setup_read import (
+    SurfaceSetupReadMixin,
 )
 from app.core.log.log import get_logger
 
@@ -113,7 +114,7 @@ _EMAIL_TRIGGER_EVENT_TYPES: dict[str, tuple[str, ...]] = {
 _WEBHOOK_RETRY_POLICY = RetryPolicy(max_attempts=3, base_delay=0.5)
 
 
-class AgentSurfaceService(TelegramMiniAppSyncMixin):
+class AgentSurfaceService(SurfaceSetupReadMixin, TelegramMiniAppSyncMixin):
     def __init__(
         self,
         *,
@@ -428,44 +429,6 @@ class AgentSurfaceService(TelegramMiniAppSyncMixin):
                     f"Unsupported surface platform '{platform}'"
                 ) from exc
         return build_surface_setup_guide(resolved_platform)
-
-    async def get_surface_setup_by_name(
-        self,
-        *,
-        pod_id: UUID,
-        name: str,
-    ) -> dict[str, Any]:
-        """Everything needed to finish setting up an existing surface, in one read.
-
-        Merges the static platform checklist with the live webhook and
-        admin-consent state. Raises ``AgentSurfaceNotFoundError`` if no surface
-        has this name — use ``get_platform_setup_guide`` for the pre-creation
-        checklist, which needs no surface to exist yet.
-        """
-        surface = await self.get_surface_by_name_in_pod(pod_id=pod_id, name=name)
-        guide = self.get_platform_setup_guide(surface.surface_type.value)
-        webhook_url = computed_webhook_url(surface)
-        admin_consent = await self._surface_admin_consent(surface)
-        actions = build_surface_setup_actions(
-            platform=surface.surface_type,
-            is_custom_app=await self._surface_uses_org_custom_app(surface),
-            webhook_url=webhook_url,
-            slack_socket_mode=surface_settings.enable_slack_socket_mode,
-            whatsapp_verify_token=await self._whatsapp_verify_token_for_setup(surface),
-        )
-        pending_consent = bool(
-            admin_consent and admin_consent["required"] and not admin_consent["granted"]
-        )
-        return {
-            "platform": surface.surface_type,
-            "exists": True,
-            "status": surface.status,
-            "ready": not any(a.is_blocking for a in actions) and not pending_consent,
-            "webhook_url": webhook_url,
-            "admin_consent": admin_consent,
-            "actions": actions,
-            "guide": guide,
-        }
 
     async def _surface_uses_org_custom_app(self, surface: AgentSurfaceEntity) -> bool:
         """True when the org must manually point a platform app's webhook at Lemma.

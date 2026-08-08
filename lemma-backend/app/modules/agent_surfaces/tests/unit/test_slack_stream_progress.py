@@ -272,8 +272,8 @@ async def test_streamed_text_is_a_chunk_not_top_level_markdown(monkeypatch):
     stream = SlackStreamSurface(credentials={"access_token": "xoxb-test"})
     event = _event()
 
-    handle = await stream.append_stream_text(event, None, "Hello ")
-    handle = await stream.append_stream_text(event, handle, "world")
+    first = await stream.append_stream_text(event, None, "Hello ")
+    second = await stream.append_stream_text(event, first.handle, "world")
 
     # Opened in the same mode the step timeline uses.
     assert calls["start"][0]["task_display_mode"] == "timeline"
@@ -283,4 +283,41 @@ async def test_streamed_text_is_a_chunk_not_top_level_markdown(monkeypatch):
         [{"type": "markdown_text", "text": "Hello "}],
         [{"type": "markdown_text", "text": "world"}],
     ]
-    assert handle["streamed_text"] is True
+    assert first.appended is True
+    assert second.appended is True
+    assert second.handle["streamed_text"] is True
+
+
+async def test_failed_stream_append_is_reported_and_can_be_retried(monkeypatch):
+    calls = _stream_fakes(monkeypatch)
+    attempts = 0
+
+    async def flaky_append(self, **kwargs):
+        nonlocal attempts
+        attempts += 1
+        calls["append"].append(kwargs)
+        if attempts == 1:
+            raise SlackApiError(
+                "rate limited", {"ok": False, "error": "ratelimited"}
+            )
+        return {"ok": True}
+
+    monkeypatch.setattr(AsyncWebClient, "chat_appendStream", flaky_append)
+    stream = SlackStreamSurface(credentials={"access_token": "xoxb-test"})
+    handle = {
+        "ts": "200.5",
+        "channel": "C1",
+        "stream": True,
+        "task_seq": 0,
+    }
+
+    failed = await stream.append_stream_text(_event(), handle, "kept")
+    retried = await stream.append_stream_text(_event(), failed.handle, "kept")
+
+    assert failed.appended is False
+    assert failed.handle == handle
+    assert retried.appended is True
+    assert [call["chunks"][0]["text"] for call in calls["append"]] == [
+        "kept",
+        "kept",
+    ]

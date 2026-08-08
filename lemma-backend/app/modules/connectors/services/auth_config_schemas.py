@@ -34,8 +34,6 @@ _OAUTH2_BASE: dict[str, Any] = {
 # into two — which is exactly what it used to be, with the signing secret
 # living on a surface that does not exist until after this screen.
 #
-# Optional: an org may bring its own OAuth app and still let events arrive
-# through the deployment's Slack app.
 _SLACK_SIGNING_SECRET: dict[str, Any] = {
     "type": "string",
     "title": "Signing secret",
@@ -60,4 +58,5 @@ def default_auth_config_schema(
     }
     if str(connector_id or "").lower() == "slack":
         schema["properties"]["signing_secret"] = _SLACK_SIGNING_SECRET
+        schema["required"] = [*_OAUTH2_BASE["required"], "signing_secret"]
     return schema
