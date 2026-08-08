@@ -435,10 +435,8 @@ async def function_benchmark_runtime(
             settings.agentbox_workspace_image = selected_workspace_image
             settings.agentbox_function_image = selected_function_image
 
-            # Provisioning is in-process now: what used to be a manager
-            # subprocess in agentbox's own virtualenv is the same code path the
-            # benchmark's own backend runs, so the measurement no longer
-            # includes a loopback HTTP hop that production does not have.
+            # Provisioning runs in this process, so the measurement covers
+            # the same code path production does.
             from app.modules.workspace.services.sandbox_composition import (
                 reset_sandbox_service,
             )

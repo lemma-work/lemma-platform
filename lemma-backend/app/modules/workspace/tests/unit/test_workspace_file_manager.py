@@ -74,13 +74,10 @@ class _FakeWorkspaceService:
 
 
 def _api_error(*, status_code: int, code: str) -> SandboxError:
-    """Raise what a provider actually raises, not what the manager used to.
+    """The error a provider raises for this condition.
 
-    This helper previously built an `AgentBoxApiError`, which agreed with the
-    manager's catch clauses and kept passing after the only thing that raised
-    it was deleted. The providers translate a missing path to
-    `SandboxPathNotFound` and an outage to `SandboxUnavailable`, so those are
-    what a fake has to raise for these tests to mean anything.
+    Providers translate a missing path to `SandboxPathNotFound` and an outage
+    to `SandboxUnavailable`; a fake that raises anything else tests nothing.
     """
 
     del status_code

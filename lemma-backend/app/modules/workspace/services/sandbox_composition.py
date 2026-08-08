@@ -1,9 +1,4 @@
-"""Builds the sandbox service and the adapters that sit on it.
-
-There is one provisioning path now. This used to hold the cutover switch that
-chose between it and the AgentBox manager; the manager is gone, so what remains
-is composition rather than choice.
-"""
+"""Builds the sandbox service and the adapters that sit on it."""
 
 from __future__ import annotations
 

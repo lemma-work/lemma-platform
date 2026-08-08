@@ -201,9 +201,6 @@ async def test_full_correlation_journey_changes_only_boundary_identifiers() -> N
         attempt=1,
         inherited=inherited,
     ):
-        # The manager client used to be constructed here to prove it carried
-        # correlation headers over HTTP. Sandbox calls are in-process now, so
-        # the context propagates directly and there is no header to inspect.
         sandbox_headers = correlation_headers()
 
     assert event.request_id == request_id

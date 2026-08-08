@@ -366,9 +366,8 @@ def test_capacity_exhaustion_reports_pre_execution_failure() -> None:
         retry_after_ms=1_000,
     )
 
-    # The provider's own words reach the run. The manager used to map an error
-    # code onto a fixed sentence, which lost whatever the provider said about
-    # why it was full.
+    # The provider's own words reach the run, rather than a fixed sentence
+    # keyed off an error code.
     assert FunctionDispatcher._execution_error(error) == (
         "Function sandbox unavailable "
         "(provider active sandbox capacity is exhausted)"

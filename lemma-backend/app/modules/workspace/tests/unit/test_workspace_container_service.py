@@ -8,7 +8,6 @@ from uuid import UUID, uuid4
 
 import pytest
 
-from sandbox_runtime.protocol import RetryDisposition
 from app.core.config import settings
 from app.modules.workspace.contracts import SandboxInfo
 from app.modules.workspace.services.workspace_sandbox_service import (
@@ -70,15 +69,9 @@ class _FakeManagerClient:
         self.directories.append((logical_id, path))
 
 
-def _api_error(retry=None, *, status_code: int = 503, code: str = "PROVIDER_UNAVAILABLE"):
-    """What a provider actually raises.
+def _retryable_failure(code: str = "PROVIDER_UNAVAILABLE") -> SandboxUnavailable:
+    """A failure the caller is expected to wait out and retry."""
 
-    Previously an `SandboxUnavailable`, which only the deleted HTTP client ever
-    produced -- so these fakes agreed with catch clauses that had stopped
-    matching anything real.
-    """
-
-    del retry, status_code
     return SandboxUnavailable(code, retry_after_ms=250)
 
 
@@ -321,7 +314,7 @@ async def test_get_session_reensures_after_missing_provider_allocation(
                 deadline_at=deadline_at,
             )
             if len(self.directories) == 1:
-                raise _api_error(RetryDisposition.SAFE_SAME_OPERATION)
+                raise _retryable_failure()
 
     manager_client = _RecoveringManagerClient()
 

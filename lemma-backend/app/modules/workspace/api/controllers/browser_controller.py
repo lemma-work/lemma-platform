@@ -35,9 +35,7 @@ async def create_workspace_browser_access(
     user: CurrentUser,
 ) -> WorkspaceAppAccessResponse:
     # The URL handed back is a signed grant, so without the signing key there
-    # is nothing to hand back. This used to check the manager's API key, which
-    # stopped being what makes this endpoint work some time before the manager
-    # itself was deleted.
+    # is nothing to hand back.
     if not settings.workspace_runtime_credential_key:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

@@ -430,15 +430,9 @@ async def local_agentbox_server(
 ) -> AsyncGenerator[dict[str, str], None]:
     """Point the workspace module at the provider this run is exercising.
 
-    This used to start an AgentBox manager -- a uvicorn server, a state
-    database, a settings snapshot to restore, and for E2B a second process in
-    another virtualenv. None of that exists now: the workspace module
-    provisions in-process, so all that is left of a 260-line fixture is
-    choosing a provider and telling it which images or templates to use.
-
-    The name survives because a dozen tests request it, and its dict keeps the
-    ``provider`` key for the same reason. The manager URL and key are gone,
-    because there is no manager to address.
+    Selects Docker or E2B and supplies the images or templates it needs. The
+    name is historical -- a dozen tests request it -- and its dict keeps the
+    ``provider`` key those tests read.
     """
 
     provider_name = e2e_settings.e2e_sandbox_mode

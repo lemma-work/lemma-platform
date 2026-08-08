@@ -236,11 +236,10 @@ class ProcessInfo(BaseModel):
     # going. Everything below is descriptive.
     completed: bool = False
     exit_code: Optional[int] = None
-    # Defaulted because the sandbox runtime is the only thing that still knows
-    # what is running, and it does not report the command line or the working
-    # directory a process was started in -- those used to be held by a control
-    # plane that no longer exists. Reporting them as blank is honest; inventing
-    # them would tell an agent a process is somewhere it is not.
+    # Blank because the sandbox runtime is the only thing that knows what is
+    # running, and it does not report a process's command line or working
+    # directory. Inventing them would tell an agent a process is somewhere it
+    # is not.
     cmd: str = ""
     cwd: str = ""
     tty: bool = False

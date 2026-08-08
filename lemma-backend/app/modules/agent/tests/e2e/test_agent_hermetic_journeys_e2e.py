@@ -20,10 +20,8 @@ from app.modules.test_support.e2e.scripted_model import (
 pytestmark = pytest.mark.e2e
 
 _RUNTIME_SECRET = "CANARY_AGENT_RUNTIME_SECRET_93a5"
-# These journeys run against a mock model, so the profile's base URL is
-# never dialled -- it only has to be a well-formed URL the API accepts. It
-# used to borrow the AgentBox manager's, which read like a real dependency
-# and was only ever a convenient string.
+# Never dialled: these journeys run against a mock model, so the profile only
+# needs a well-formed URL the API will accept.
 _UNUSED_MODEL_BASE_URL = "http://127.0.0.1:9"
 
 

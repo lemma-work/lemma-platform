@@ -1,14 +1,9 @@
 """Managed-local Lemma application entrypoint.
 
-This is the two-process desktop/backend topology: one Python process owns the
-API, Streaq worker and scheduler, while the Next frontend is the only other
-Lemma application process. Infrastructure and sandbox compute remain outside
-this process.
-
-Sandbox provisioning used to be a fourth thing here -- the AgentBox manager,
-mounted at /internal/agentbox and dialled over loopback by the same process
-that served it. The workspace module owns provisioning now, so the mount and
-the HTTP round trip between two objects in one process are both gone.
+The two-process desktop/backend topology: one Python process owns the API,
+Streaq worker, scheduler and sandbox provisioning, while the Next frontend is
+the only other Lemma application process. Infrastructure and sandbox compute
+remain outside this process.
 """
 
 from __future__ import annotations
