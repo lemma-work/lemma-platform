@@ -49,8 +49,8 @@ const BUILD_TILES: BuildTile[] = [
   },
   {
     key: "portal",
-    title: "Client portals",
-    philosophy: "Give clients a window into the work, not a seat in the mess.",
+    title: "Account consoles",
+    philosophy: "Open one client and see everything the team knows.",
     examples: ["Project health", "Request tracker", "Milestone map"],
   },
   {
