@@ -24,6 +24,7 @@ import pytest
 import pytest_asyncio
 
 from app.core.config import settings
+from app.modules.workspace.config import workspace_settings
 from app.modules.test_support import e2e_base
 from app.modules.test_support.e2e import fixtures as e2e_fixtures
 from app.modules.test_support.e2e.runtime import (
@@ -422,18 +423,18 @@ async def function_benchmark_runtime(
         original_backend = {
             "api_url": settings.api_url,
             "function_runtime_gateway_url": settings.function_runtime_gateway_url,
-            "workspace_provider": settings.workspace_provider,
-            "agentbox_workspace_image": settings.agentbox_workspace_image,
-            "agentbox_function_image": settings.agentbox_function_image,
+            "workspace_provider": workspace_settings.provider,
+            "agentbox_workspace_image": workspace_settings.workspace_image,
+            "agentbox_function_image": workspace_settings.function_image,
         }
         runtime: FunctionBenchmarkRuntime | None = None
         benchmark_error: BaseException | None = None
         try:
             settings.api_url = gateway_url
             settings.function_runtime_gateway_url = gateway_url
-            settings.workspace_provider = provider
-            settings.agentbox_workspace_image = selected_workspace_image
-            settings.agentbox_function_image = selected_function_image
+            workspace_settings.provider = provider
+            workspace_settings.workspace_image = selected_workspace_image
+            workspace_settings.function_image = selected_function_image
 
             # Provisioning runs in this process, so the measurement covers
             # the same code path production does.

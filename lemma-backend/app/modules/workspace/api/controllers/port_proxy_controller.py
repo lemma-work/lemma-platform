@@ -19,7 +19,7 @@ import httpx
 from fastapi import APIRouter, Request, Response, status
 from fastapi.responses import StreamingResponse
 
-from app.core.config import settings
+from app.modules.workspace.config import workspace_settings
 from app.modules.workspace.providers.base import ProviderGone, ProviderInstance
 from app.modules.workspace.services.port_access import (
     PortAccessInvalid,
@@ -54,7 +54,7 @@ _STRIPPED_RESPONSE_HEADERS = frozenset(
     include_in_schema=False,
 )
 async def proxy_sandbox_port(token: str, path: str, request: Request) -> Response:
-    key = settings.workspace_runtime_credential_key
+    key = workspace_settings.runtime_credential_key
     if not key:
         return Response(status_code=status.HTTP_503_SERVICE_UNAVAILABLE)
 

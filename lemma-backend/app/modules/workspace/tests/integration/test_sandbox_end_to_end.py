@@ -15,6 +15,7 @@ from uuid import uuid4
 import pytest
 import pytest_asyncio
 
+from app.modules.workspace.config import workspace_settings
 from app.modules.workspace.sandbox_session import SandboxWorkspaceSession
 from app.modules.workspace.domain.sandbox import SandboxKind, SandboxOwnerKind
 from app.modules.workspace.providers.docker import (
@@ -39,9 +40,8 @@ async def sandbox_stack(sandbox_uow_factory, monkeypatch) -> AsyncIterator[tuple
     if not os.path.exists(_SOCKET):
         pytest.skip(f"no docker socket at {_SOCKET}")
 
-    from app.core.config import settings
 
-    monkeypatch.setattr(settings, "agentbox_workspace_image", _IMAGE)
+    monkeypatch.setattr(workspace_settings, "workspace_image", _IMAGE)
 
     engine = DockerEngineClient(socket_path=_SOCKET)
     provider = DockerSandboxProvider(

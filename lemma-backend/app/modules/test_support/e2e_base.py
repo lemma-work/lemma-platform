@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from app.modules.workspace.config import workspace_settings
+
 import os
 import json
 import socket
@@ -504,7 +506,7 @@ async def sandbox_reachable_backend(e2e_settings):
     from app.core.config import settings
     from app.modules.test_support.e2e.runtime import _temporary_workspace_tunnel
 
-    off_box = settings.workspace_provider.lower() == "e2b"
+    off_box = workspace_settings.provider.lower() == "e2b"
     if not off_box:
         yield None
         return

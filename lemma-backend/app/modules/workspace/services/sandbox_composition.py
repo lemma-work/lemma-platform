@@ -6,7 +6,7 @@ import asyncio
 from typing import Optional
 from uuid import UUID
 
-from app.core.config import settings
+from app.modules.workspace.config import workspace_settings
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.modules.workspace.contracts import SandboxInfo
@@ -30,7 +30,7 @@ def get_sandbox_service() -> SandboxService:
     an httpx.AsyncClient, which is bound to the loop that created it.
     """
     global _service, _service_key
-    key = (id(asyncio.get_running_loop()), settings.workspace_provider)
+    key = (id(asyncio.get_running_loop()), workspace_settings.provider)
     if _service is not None and _service_key == key:
         return _service
     _service = SandboxService(

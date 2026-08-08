@@ -8,7 +8,7 @@ the ones a given deployment will never install.
 
 from __future__ import annotations
 
-from app.core.config import settings
+from app.modules.workspace.config import workspace_settings
 
 def build_provider(name: str | None = None):
     """Construct the configured sandbox provider.
@@ -17,7 +17,7 @@ def build_provider(name: str | None = None):
     move between fabrics without a different build, and so exactly one place
     has to be read to know which one is live.
     """
-    chosen = name or settings.workspace_provider
+    chosen = name or workspace_settings.provider
     if chosen == "e2b":
         return _build_e2b_provider()
     if chosen == "lemma_local":
@@ -34,13 +34,13 @@ def _build_lemma_local_provider():
         LemmaLocalSandboxProvider,
     )
 
-    executable = settings.workspace_local_runtime_cli
+    executable = workspace_settings.local_runtime_cli
     if not executable:
         raise RuntimeError(
             "WORKSPACE_LOCAL_RUNTIME_CLI is required when workspace_provider "
             "is lemma_local"
         )
-    key = settings.workspace_runtime_credential_key
+    key = workspace_settings.runtime_credential_key
     if not key:
         raise RuntimeError(
             "WORKSPACE_RUNTIME_CREDENTIAL_KEY is required to provision sandboxes"
@@ -48,8 +48,8 @@ def _build_lemma_local_provider():
     return LemmaLocalSandboxProvider(
         LemmaLocalProviderConfig(
             executable=executable,
-            callback_required=settings.workspace_local_callback_required,
-            callback_url=settings.workspace_local_callback_url,
+            callback_required=workspace_settings.local_callback_required,
+            callback_url=workspace_settings.local_callback_url,
         ),
         RuntimeCredentialSigner(key=key.encode()),
     )
@@ -63,21 +63,21 @@ def _build_docker_provider():
     )
     from app.modules.workspace.providers.docker_engine import DockerEngineClient
 
-    key = settings.workspace_runtime_credential_key
+    key = workspace_settings.runtime_credential_key
     if not key:
         raise RuntimeError(
             "WORKSPACE_RUNTIME_CREDENTIAL_KEY is required to provision sandboxes"
         )
     return DockerSandboxProvider(
-        DockerEngineClient(socket_path=settings.agentbox_docker_socket_path),
+        DockerEngineClient(socket_path=workspace_settings.docker_socket_path),
         DockerProviderConfig(
-            allow_mutable_images=settings.agentbox_docker_allow_mutable_images,
+            allow_mutable_images=workspace_settings.docker_allow_mutable_images,
             # Without the host gateway a sandbox cannot reach the backend, so
             # a function never fetches its artifact and a workspace never
             # calls back -- both fail well after provisioning looks healthy.
-            add_host_gateway=settings.agentbox_add_host_gateway,
-            host_alias=settings.agentbox_host_alias,
-            private_network=settings.agentbox_docker_private_network,
+            add_host_gateway=workspace_settings.add_host_gateway,
+            host_alias=workspace_settings.host_alias,
+            private_network=workspace_settings.docker_private_network,
         ),
         RuntimeCredentialSigner(key=key.encode()),
     )
@@ -90,14 +90,14 @@ def _build_e2b_provider():
         E2BSandboxProvider,
     )
 
-    api_key = reveal_secret(settings.e2b_api_key)
+    api_key = reveal_secret(workspace_settings.e2b_api_key)
     if not api_key:
         raise RuntimeError("E2B_API_KEY is required when workspace_provider is e2b")
     return E2BSandboxProvider(
         E2BProviderConfig(
             api_key=api_key,
-            workspace_template=settings.e2b_workspace_template,
-            function_template=settings.e2b_function_template,
-            domain=settings.e2b_domain,
+            workspace_template=workspace_settings.e2b_workspace_template,
+            function_template=workspace_settings.e2b_function_template,
+            domain=workspace_settings.e2b_domain,
         )
     )

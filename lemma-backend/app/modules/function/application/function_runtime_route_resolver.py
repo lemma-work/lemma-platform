@@ -23,6 +23,7 @@ from app.modules.workspace.services.local_sandbox_client import (
 )
 
 from app.core.config import settings
+from app.modules.workspace.config import workspace_settings
 from app.modules.function.application.function_runtime_endpoint_cache import (
     FunctionRuntimeEndpoint,
     FunctionRuntimeEndpointCache,
@@ -63,8 +64,8 @@ class FunctionRuntimeRouteResolver:
         self._sandbox_client_factory = sandbox_client_factory
         self._endpoint_cache = endpoint_cache
         self._profile = SandboxProfileRef(
-            name=settings.agentbox_function_profile_name,
-            digest=settings.agentbox_function_profile_digest,
+            name=workspace_settings.function_profile_name,
+            digest=workspace_settings.function_profile_digest,
         )
 
     async def endpoint(

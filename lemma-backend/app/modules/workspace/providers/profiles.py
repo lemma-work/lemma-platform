@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from app.core.config import settings
+from app.modules.workspace.config import workspace_settings
 from app.modules.workspace.domain.sandbox import SandboxKind
 
 WORKSPACE_RUNTIME_PORT = 8080
@@ -36,9 +36,9 @@ class SandboxProfile:
 
 def workspace_profile(*, image: str | None = None) -> SandboxProfile:
     return SandboxProfile(
-        name=settings.agentbox_workspace_profile_name,
-        digest=settings.agentbox_workspace_profile_digest,
-        image=image or settings.agentbox_workspace_image,
+        name=workspace_settings.workspace_profile_name,
+        digest=workspace_settings.workspace_profile_digest,
+        image=image or workspace_settings.workspace_image,
         kind=SandboxKind.WORKSPACE,
         runtime_port=WORKSPACE_RUNTIME_PORT,
         published_ports=(WORKSPACE_RUNTIME_PORT, WORKSPACE_BROWSER_PORT),
@@ -48,9 +48,9 @@ def workspace_profile(*, image: str | None = None) -> SandboxProfile:
 
 def function_profile(*, image: str | None = None) -> SandboxProfile:
     return SandboxProfile(
-        name=settings.agentbox_function_profile_name,
-        digest=settings.agentbox_function_profile_digest,
-        image=image or settings.agentbox_function_image,
+        name=workspace_settings.function_profile_name,
+        digest=workspace_settings.function_profile_digest,
+        image=image or workspace_settings.function_image,
         kind=SandboxKind.FUNCTION,
         runtime_port=FUNCTION_RUNTIME_PORT,
         published_ports=(FUNCTION_RUNTIME_PORT,),

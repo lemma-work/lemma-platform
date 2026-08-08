@@ -5,7 +5,7 @@ from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field
 
 from app.core.api.dependencies import CurrentUser
-from app.core.config import settings
+from app.modules.workspace.config import workspace_settings
 from app.modules.workspace.services.workspace_sandbox_service import (
     WorkspaceSandboxService,
 )
@@ -36,7 +36,7 @@ async def create_workspace_browser_access(
 ) -> WorkspaceAppAccessResponse:
     # The URL handed back is a signed grant, so without the signing key there
     # is nothing to hand back.
-    if not settings.workspace_runtime_credential_key:
+    if not workspace_settings.runtime_credential_key:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Workspace port access signing key is not configured",

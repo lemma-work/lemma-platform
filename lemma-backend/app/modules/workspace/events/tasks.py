@@ -11,7 +11,7 @@ not compete with a user waiting on a tool call.
 
 from __future__ import annotations
 
-from app.core.config import settings
+from app.modules.workspace.config import workspace_settings
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.core.infrastructure.jobs.streaq_runtime import streaq_cron
@@ -20,7 +20,7 @@ from app.core.log.log import get_logger
 logger = get_logger(__name__)
 
 
-@streaq_cron(settings.workspace_sweep_cron, name="sweep_workspace_sandboxes")
+@streaq_cron(workspace_settings.sweep_cron, name="sweep_workspace_sandboxes")
 async def sweep_workspace_sandboxes_task() -> None:
     from app.modules.workspace.services.sandbox_composition import get_sandbox_service
     from app.modules.workspace.services.sandbox_sweeper import SandboxSweeper
@@ -30,7 +30,7 @@ async def sweep_workspace_sandboxes_task() -> None:
         uow_factory=SessionUnitOfWorkFactory(async_session_maker),
     )
 
-    idle_after = settings.workspace_idle_release_seconds
+    idle_after = workspace_settings.idle_release_seconds
     if idle_after > 0:
         released = await sweeper.release_idle(idle_after_seconds=idle_after)
         if released:

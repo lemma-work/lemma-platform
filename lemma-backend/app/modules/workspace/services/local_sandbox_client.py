@@ -35,6 +35,7 @@ from sandbox_runtime.protocol import (
 )
 
 from app.core.config import settings
+from app.modules.workspace.config import workspace_settings
 from app.modules.workspace.domain.sandbox import (
     SandboxHandle,
     SandboxKind,
@@ -318,7 +319,7 @@ class LocalSandboxClient(LocalSandboxFilesMixin):
         token = self._signer().sign(
             PortGrant(sandbox_id=logical_id, port=port, expires_at=expires_at)
         )
-        base = (settings.workspace_port_access_url or settings.api_url).rstrip("/")
+        base = (workspace_settings.port_access_url or settings.api_url).rstrip("/")
         return PortAccessGrant(
             workload_kind=WorkloadKind.WORKSPACE,
             logical_id=logical_id,
@@ -360,8 +361,8 @@ class LocalSandboxClient(LocalSandboxFilesMixin):
             allocation_id=logical_id,
             allocation_epoch=handle.epoch,
             profile=SandboxProfileRef(
-                name=settings.agentbox_function_profile_name,
-                digest=settings.agentbox_function_profile_digest,
+                name=workspace_settings.function_profile_name,
+                digest=workspace_settings.function_profile_digest,
             ),
             url=url.rstrip("/") + "/",
             request_headers=(),
@@ -372,7 +373,7 @@ class LocalSandboxClient(LocalSandboxFilesMixin):
         )
 
     def _signer(self) -> PortAccessSigner:
-        key = settings.workspace_runtime_credential_key
+        key = workspace_settings.runtime_credential_key
         if not key:
             raise RuntimeError(
                 "WORKSPACE_RUNTIME_CREDENTIAL_KEY is required to sign port access"
