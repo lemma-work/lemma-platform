@@ -58,8 +58,15 @@ export interface SurfacePlatformDefinition {
     };
     accountLabel: string;
     capabilities: {
-        /** Slack/Teams: per-channel routes, configurable only once the surface
-         * exists (channel enumeration needs the connected account). */
+        /**
+         * Slack/Teams: reach is a *channel*, not the bot.
+         *
+         * One workspace install carries many channels, each routable to its own
+         * agent, so the agent page shows a chip per channel and keeps offering
+         * "add another" — where an identity platform shows one chip and stops.
+         * Routes are configurable only once the surface exists, because
+         * enumerating channels needs the connected account.
+         */
         channelRoutes: boolean;
         /** Gmail/Outlook/Resend: sender filters decide what becomes pod work. */
         senderFilters: boolean;
@@ -155,21 +162,15 @@ const DEFINITIONS: SurfacePlatformDefinition[] = [
         label: 'Slack',
         logoSrc: '/surfaces/slack.png',
         promise: 'Let people reach {agent} in Slack',
-        connectHint: 'Answers DMs, plus any Slack channel you route here.',
-        identityOptions: [
-            {
-                mode: 'SYSTEM',
-                title: 'Lemma’s Slack app',
-                detail: 'Install Lemma into your workspace. Nothing to register yourself.',
-                hint: 'Fastest',
-            },
-            {
-                mode: 'CUSTOM',
-                title: 'Your workspace’s own app',
-                detail: 'Your Slack app and branding. You’ll point its events at Lemma.',
-                hint: '~10 min',
-            },
-        ],
+        connectHint: 'Install Lemma in your workspace, then route channels to agents.',
+        // No identity fork, because Slack has no second identity to offer. The
+        // catalog never reports a Lemma-managed Slack bot (`has_native_credentials`
+        // has no Slack branch), and a workspace's own app can't receive events
+        // while inbound signatures verify against one deployment-wide signing
+        // secret. What connecting actually does is install Lemma's Slack app into
+        // a workspace — asked once per workspace, so there is nothing to fork on.
+        // Reach is then per *channel*, not per bot: see `capabilities.channelRoutes`.
+        identityOptions: null,
         accountLabel: 'Slack workspace',
         capabilities: {
             channelRoutes: true,

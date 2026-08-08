@@ -18,7 +18,7 @@ class ReportFeedbackRequest:
 
     Attributes:
         actual_behavior (str): What actually happened.
-        category (FeedbackCategory):
+        category (FeedbackCategory): Which part of Lemma the report is about.
         expected_behavior (str): What the caller expected to happen instead.
         issue_encountered (str): What issue, problem, or incorrect information was encountered.
         subject (str): Short subject line summarizing the report.

@@ -70,7 +70,7 @@ async def test_agent_report_feedback_links_delegated_agent():
     response = await tool_controller.report_feedback(
         request=request,
         data=ReportFeedbackRequest(
-            category=FeedbackCategory.TOOLING_ISSUE,
+            category=FeedbackCategory.CLI,
             subject=" Tool failed ",
             issue_encountered="The helper endpoint returned stale data.",
             expected_behavior="It should return fresh results.",

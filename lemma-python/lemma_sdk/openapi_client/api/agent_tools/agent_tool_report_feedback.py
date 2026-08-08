@@ -67,8 +67,7 @@ def sync_detailed(
 ) -> Response[ErrorResponse | ReportFeedbackResponse]:
     """Agent Report Feedback
 
-     Record a maintainer-facing feedback report about system issues, skill issues, incorrect knowledge,
-    or other unexpected behavior.
+     Record a maintainer-facing feedback report about the CLI, a skill, the platform, or the docs.
 
     Args:
         body (ReportFeedbackRequest): Request payload for maintainer feedback reports.
@@ -99,8 +98,7 @@ def sync(
 ) -> ErrorResponse | ReportFeedbackResponse | None:
     """Agent Report Feedback
 
-     Record a maintainer-facing feedback report about system issues, skill issues, incorrect knowledge,
-    or other unexpected behavior.
+     Record a maintainer-facing feedback report about the CLI, a skill, the platform, or the docs.
 
     Args:
         body (ReportFeedbackRequest): Request payload for maintainer feedback reports.
@@ -126,8 +124,7 @@ async def asyncio_detailed(
 ) -> Response[ErrorResponse | ReportFeedbackResponse]:
     """Agent Report Feedback
 
-     Record a maintainer-facing feedback report about system issues, skill issues, incorrect knowledge,
-    or other unexpected behavior.
+     Record a maintainer-facing feedback report about the CLI, a skill, the platform, or the docs.
 
     Args:
         body (ReportFeedbackRequest): Request payload for maintainer feedback reports.
@@ -156,8 +153,7 @@ async def asyncio(
 ) -> ErrorResponse | ReportFeedbackResponse | None:
     """Agent Report Feedback
 
-     Record a maintainer-facing feedback report about system issues, skill issues, incorrect knowledge,
-    or other unexpected behavior.
+     Record a maintainer-facing feedback report about the CLI, a skill, the platform, or the docs.
 
     Args:
         body (ReportFeedbackRequest): Request payload for maintainer feedback reports.

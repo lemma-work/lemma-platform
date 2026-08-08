@@ -59,6 +59,18 @@ describe('surface registry', () => {
         expect(telegram.journey).toBeUndefined();
     });
 
+    it('offers no identity fork where reach is a channel', () => {
+        // A workspace is installed once and then carries many channels, so the
+        // question "whose bot is this" has one answer and does not belong in the
+        // journey. Slack's fork used to render a permanently disabled "Fastest"
+        // option, because the catalog never reports a Lemma-managed Slack bot.
+        for (const platform of SURFACE_PLATFORM_ORDER) {
+            const definition = getSurfaceDefinition(platform)!;
+            if (!definition.capabilities.channelRoutes) continue;
+            expect(definition.identityOptions, platform).toBeNull();
+        }
+    });
+
     it('names the agent in second-person copy, and the pod assistant otherwise', () => {
         expect(forAgent('Make {agent} reachable', 'Ops')).toBe('Make Ops reachable');
         expect(forAgent('Make {agent} reachable', null)).toBe('Make the pod assistant reachable');

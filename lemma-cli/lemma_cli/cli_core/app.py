@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from enum import Enum
 from pathlib import Path
 
 import typer
@@ -210,10 +211,35 @@ def version_cmd(ctx: typer.Context) -> None:
     system.run_version(ctx)
 
 
+class FeedbackCategory(str, Enum):
+    """Which part of Lemma a feedback report is about.
+
+    Mirrors the API's `FeedbackCategory`, spelled out rather than imported:
+    this module is the startup path for every command including
+    `lemma --help`, and LAZY_GROUPS exists so nothing pulls the SDK in before
+    a command actually runs. tests/test_cli_v2.py pins these to the generated
+    enum, so the two cannot drift apart again.
+
+    Typing the flag with this enum is the fix for the original bug: the help
+    advertised `cli, skill, platform, docs` while the wire accepted only
+    SCREAMING_SNAKE names, so every advertised value failed deep in the SDK
+    with `'cli' is not a valid FeedbackCategory` and no list of what would
+    work. A wrong value is now a parse-time error that names the choices.
+    """
+
+    CLI = "cli"
+    SKILL = "skill"
+    PLATFORM = "platform"
+    DOCS = "docs"
+    OTHER = "other"
+
+
 @app.command("feedback")
 def feedback_cmd(
     ctx: typer.Context,
-    category: str = typer.Option(..., "--category", help="cli, skill, platform, docs, …"),
+    category: FeedbackCategory = typer.Option(
+        ..., "--category", help="Which part of Lemma the report is about."
+    ),
     subject: str = typer.Option(..., "--subject", help="One-line summary."),
     issue_encountered: str = typer.Option(..., "--issue-encountered"),
     expected_behavior: str = typer.Option(..., "--expected-behavior"),
@@ -225,7 +251,7 @@ def feedback_cmd(
 
     system.run_feedback(
         ctx,
-        category=category,
+        category=category.value,
         subject=subject,
         issue_encountered=issue_encountered,
         expected_behavior=expected_behavior,

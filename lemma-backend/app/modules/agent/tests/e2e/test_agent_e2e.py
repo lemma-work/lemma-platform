@@ -2603,7 +2603,7 @@ class TestAgentToolApis:
         feedback = await authenticated_client.post(
             "/tools/report-feedback",
             json={
-                "category": "TOOLING_ISSUE",
+                "category": "cli",
                 "subject": "Tool e2e feedback",
                 "issue_encountered": "The test needs to record feedback.",
                 "expected_behavior": "Feedback is stored.",
