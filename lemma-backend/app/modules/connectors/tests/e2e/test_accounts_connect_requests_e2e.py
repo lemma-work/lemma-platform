@@ -412,7 +412,7 @@ async def test_oauth_callback_renders_html_for_browser(authenticated_client):
     )
     assert response.status_code == 400
     assert "text/html" in response.headers["content-type"]
-    assert "We could not connect your account" in response.text
+    assert "The account wasn’t connected" in response.text
     assert "State parameter is required" in response.text
 
 

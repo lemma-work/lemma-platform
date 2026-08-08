@@ -893,6 +893,25 @@ async def test_available_catalog_channel_discovery_and_teams_consent_journey(
         params={"error": "access_denied", "error_description": "Denied"},
     )
     assert provider_error.status_code == 400
+    assert "access_denied" in provider_error.text
+
+    # The callback is public, so its query parameters are attacker-controlled:
+    # neither the code nor the description may reach the page as written.
+    injected = await authenticated_client.get(
+        "/surfaces/teams/admin-consent/callback",
+        params={
+            "error": "<script>alert(1)</script>",
+            "error_description": "<img src=x onerror=alert(2)>",
+        },
+    )
+    assert injected.status_code == 400
+    # Assert on the payloads themselves: the page legitimately carries a
+    # <script> block and an onerror fallback of its own.
+    assert "alert(1)" not in injected.text
+    assert "alert(2)" not in injected.text
+    assert "src=x" not in injected.text
+    assert "unrecognized_error" in injected.text
+
     missing = await authenticated_client.get(
         "/surfaces/teams/admin-consent/callback",
         params={"tenant": tenant_id, "admin_consent": "False"},
@@ -913,7 +932,7 @@ async def test_available_catalog_channel_discovery_and_teams_consent_journey(
         },
     )
     assert activated.status_code == 200, activated.text
-    assert "Admin consent granted" in activated.text
+    assert "Microsoft Teams is connected" in activated.text
 
     ready = await authenticated_client.get(f"/pods/{pod_id}/surfaces/teams/setup")
     assert ready.status_code == 200, ready.text
