@@ -57,13 +57,6 @@ struct Bindings {
     /// Argv prefix that runs the backend's Python.
     python: Vec<String>,
     backend_dir: PathBuf,
-    /// Where AgentBox's own Alembic history is rooted, and what its config is
-    /// called there. A pack flattens both projects into `backend/` and renames
-    /// the config to `agentbox-alembic.ini`; a checkout keeps AgentBox in its
-    /// own directory under its own `alembic.ini`, whose `script_location` is
-    /// relative to that directory.
-    agentbox_dir: PathBuf,
-    agentbox_config: &'static str,
     frontend_command: Vec<String>,
     frontend_dir: PathBuf,
     /// Assets that are baked into a pack but live in sibling projects in a
@@ -172,8 +165,6 @@ fn packaged_bindings(root: &Path) -> io::Result<Bindings> {
         browser_sdk: backend_dir.join("assets/browser-sdk/lemma-client.js"),
         browser_ui: backend_dir.join("assets/browser-sdk/lemma-ui.js"),
         skills: backend_dir.join("assets/lemma-skills"),
-        agentbox_dir: backend_dir.clone(),
-        agentbox_config: "agentbox-alembic.ini",
         backend_dir,
         frontend_dir: root.join("frontend"),
         node_env: "production",
@@ -195,7 +186,6 @@ fn source_bindings_with(root: &Path, uv: &Path, node: &Path) -> io::Result<Bindi
     let frontend_dir = required_dir(root, "the frontend project", "lemma-frontend")?;
     // The backend depends on AgentBox, so its interpreter can run AgentBox's
     // migrations; only the working directory and config name differ.
-    let agentbox_dir = required_dir(root, "the AgentBox project", "agentbox")?;
     let launcher = required_file(
         root,
         "frontend launcher",
@@ -221,8 +211,6 @@ fn source_bindings_with(root: &Path, uv: &Path, node: &Path) -> io::Result<Bindi
         browser_sdk: root.join("lemma-typescript/public/lemma-client.js"),
         browser_ui: root.join("lemma-typescript/public/lemma-ui.js"),
         skills: root.join("lemma-skills"),
-        agentbox_dir,
-        agentbox_config: "alembic.ini",
         backend_dir,
         frontend_dir,
         node_env: "development",
@@ -416,31 +404,12 @@ fn build(
         ("LOCAL_KREUZBERG_ENABLED", "false".to_owned()),
         ("KREUZBERG_URL", String::new()),
         ("DOCUMENT_PROCESSOR", "markitdown".to_owned()),
-        ("AGENTBOX_ENVIRONMENT", "local".to_owned()),
-        (
-            "AGENTBOX_API_URL",
-            format!("http://127.0.0.1:{backend_port}/internal/agentbox"),
-        ),
-        (
-            "AGENTBOX_PUBLIC_URL",
-            format!("{backend_origin}/internal/agentbox"),
-        ),
-        ("AGENTBOX_API_KEY", secrets.agentbox_api_key),
-        ("AGENTBOX_PROVIDER", "lemma_local".to_owned()),
-        ("AGENTBOX_RUNTIME_CREDENTIAL_KEY", runtime_key),
+        // Sandboxes are provisioned in-process by the workspace module, so
+        // there is no manager URL, key or database of its own here.
+        ("WORKSPACE_PROVIDER", "lemma_local".to_owned()),
+        ("WORKSPACE_RUNTIME_CREDENTIAL_KEY", runtime_key),
         ("AGENTBOX_WORKSPACE_IMAGE", workspace_image),
         ("AGENTBOX_FUNCTION_IMAGE", function_image),
-        (
-            "AGENTBOX_STATE_DATABASE_URL",
-            format!(
-                "postgresql+asyncpg://postgres:{}@127.0.0.1:{POSTGRES_PORT}/agentbox",
-                material.postgres_password
-            ),
-        ),
-        // AgentBox owns an independent Alembic history. The setup steps below
-        // migrate it before the embedded API starts; create_all cannot upgrade
-        // an existing Desktop database.
-        ("AGENTBOX_AUTO_CREATE_SCHEMA", "false".to_owned()),
         ("AGENTBOX_ADD_HOST_GATEWAY", "false".to_owned()),
         ("AGENTBOX_HOST_ALIAS", "host.lemma.internal".to_owned()),
         ("AGENTBOX_LOCAL_SCOPE", "lemma-local:managed".to_owned()),
@@ -602,15 +571,6 @@ fn build(
                 "max_attempts": 5,
                 "retry_backoff_seconds": 3,
             },
-            {
-                "id": "agentbox-migrations",
-                "command": argv(&bindings.python, &["-m", "alembic", "-c", bindings.agentbox_config, "upgrade", "head"]),
-                "cwd": path_text(&bindings.agentbox_dir)?,
-                "env": backend_env,
-                "timeout_seconds": 300,
-                "max_attempts": 5,
-                "retry_backoff_seconds": 3,
-            }
         ],
         "services": [
             {
@@ -903,13 +863,12 @@ mod tests {
 
         assert_eq!(manifest["release"], "6.2.0");
         assert_eq!(manifest["services"].as_array().unwrap().len(), 2);
-        assert_eq!(manifest["setup"].as_array().unwrap().len(), 2);
+        // One migration chain: AgentBox's own database is gone.
+        assert_eq!(manifest["setup"].as_array().unwrap().len(), 1);
         assert_eq!(manifest["setup"][0]["id"], "migrations");
-        assert_eq!(manifest["setup"][1]["id"], "agentbox-migrations");
-        assert_eq!(manifest["setup"][1]["command"][4], "agentbox-alembic.ini");
         assert_eq!(
-            manifest["services"][0]["env"]["AGENTBOX_AUTO_CREATE_SCHEMA"],
-            "false"
+            manifest["services"][0]["env"]["WORKSPACE_PROVIDER"],
+            "lemma_local"
         );
         assert!(!manifest["services"][0]["command"]
             .as_array()
@@ -920,16 +879,9 @@ mod tests {
             manifest["services"][0]["env"]["WORKSPACE_CALLBACK_API_URL"],
             format!("http://host.lemma.internal:{backend_port}")
         );
-        assert_eq!(
-            manifest["services"][0]["env"]["AGENTBOX_PROVIDER"],
-            "lemma_local"
-        );
-        assert!(
-            manifest["services"][0]["env"]["AGENTBOX_STATE_DATABASE_URL"]
-                .as_str()
-                .unwrap()
-                .starts_with("postgresql+asyncpg://")
-        );
+        assert!(manifest["services"][0]["env"]
+            .get("AGENTBOX_STATE_DATABASE_URL")
+            .is_none());
         assert!(manifest["services"][0]["env"]
             .get("FUNCTION_RUNTIME_SECRET")
             .is_none());

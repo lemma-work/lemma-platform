@@ -303,5 +303,4 @@ run `uv run python scripts/generate_route_inventory.py`.
 
 | Method | Path | Operation ID | Summary |
 | --- | --- | --- | --- |
-| GET | `/workspace/me` | `workspace.me` | Get current workspace state |
 | POST | `/workspace/apps/browser/access` | `workspace.browser.access` | Create workspace browser access URL |

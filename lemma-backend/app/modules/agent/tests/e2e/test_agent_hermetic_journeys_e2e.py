@@ -20,6 +20,9 @@ from app.modules.test_support.e2e.scripted_model import (
 pytestmark = pytest.mark.e2e
 
 _RUNTIME_SECRET = "CANARY_AGENT_RUNTIME_SECRET_93a5"
+# Never dialled: these journeys run against a mock model, so the profile only
+# needs a well-formed URL the API will accept.
+_UNUSED_MODEL_BASE_URL = "http://127.0.0.1:9"
 
 
 async def _create_runtime_profile(
@@ -32,7 +35,7 @@ async def _create_runtime_profile(
         json={
             "source": "OPENAI_COMPATIBLE",
             "name": f"Hermetic FunctionModel {uuid4().hex[:8]}",
-            "base_url": f"{e2e_settings.agentbox_api_url}/v1",
+            "base_url": f"{_UNUSED_MODEL_BASE_URL}/v1",
             "api_key": _RUNTIME_SECRET,
             "default_model_name": "mock-safe-model",
             "model_names": ["mock-safe-model"],
@@ -383,7 +386,7 @@ async def test_public_runtime_profile_anthropic_discovery_and_validation_matrix(
         json={
             "source": "ANTHROPIC_COMPATIBLE",
             "name": f"Anthropic compatible {uuid4().hex[:8]}",
-            "base_url": f"{e2e_settings.agentbox_api_url}/v1",
+            "base_url": f"{_UNUSED_MODEL_BASE_URL}/v1",
             "api_key": canary,
             "default_model_name": "mock-safe-model",
             "headers": {"X-E2E-Tenant": "runtime-profile"},
@@ -413,7 +416,7 @@ async def test_public_runtime_profile_anthropic_discovery_and_validation_matrix(
         json={
             "source": "OPENAI_COMPATIBLE",
             "name": "Missing default model",
-            "base_url": f"{e2e_settings.agentbox_api_url}/v1",
+            "base_url": f"{_UNUSED_MODEL_BASE_URL}/v1",
             "api_key": "not-persisted",
             "default_model_name": "model-that-was-not-discovered",
         },
@@ -426,7 +429,7 @@ async def test_public_runtime_profile_anthropic_discovery_and_validation_matrix(
         json={
             "source": "OPENAI_COMPATIBLE",
             "name": "Empty provider catalog",
-            "base_url": f"{e2e_settings.agentbox_api_url}/missing",
+            "base_url": f"{_UNUSED_MODEL_BASE_URL}/missing",
             "api_key": "not-persisted",
         },
     )
@@ -1307,7 +1310,7 @@ async def test_public_runtime_profile_edit_archive_and_restore(
         json={
             "source": "OPENAI_COMPATIBLE",
             "name": f"Editable {suffix}",
-            "base_url": f"{e2e_settings.agentbox_api_url}/v1",
+            "base_url": f"{_UNUSED_MODEL_BASE_URL}/v1",
             "api_key": canary,
             "default_model_name": "mock-safe-model",
         },
@@ -1338,7 +1341,7 @@ async def test_public_runtime_profile_edit_archive_and_restore(
         json={
             "source": "OPENAI_COMPATIBLE",
             "name": f"Occupied {suffix}",
-            "base_url": f"{e2e_settings.agentbox_api_url}/v1",
+            "base_url": f"{_UNUSED_MODEL_BASE_URL}/v1",
             "api_key": "second-key",
             "default_model_name": "mock-safe-model",
         },

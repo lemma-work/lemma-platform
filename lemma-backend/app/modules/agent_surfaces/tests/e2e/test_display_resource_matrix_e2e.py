@@ -35,7 +35,12 @@ from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
 import pytest
-from agentbox_client import PortAccessGrant, PortProtocol, WorkloadKind
+from sandbox_runtime.protocol import (
+    PortAccessGrant,
+    PortProtocol,
+    SandboxKey,
+    WorkloadKind,
+)
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -264,8 +269,9 @@ async def test_display_resource_slack_routes_pod_resource_catalog_to_deep_links(
         ) -> PortAccessGrant:
             browser_access_calls.append((user_id, ttl_seconds))
             return PortAccessGrant(
-                workload_kind=WorkloadKind.WORKSPACE,
-                logical_id=user_id,
+                key=SandboxKey(
+                    workload_kind=WorkloadKind.WORKSPACE, logical_id=user_id
+                ),
                 port=4848,
                 protocol=PortProtocol.HTTP,
                 url="https://agentbox.example.test/port-access/browser-token",

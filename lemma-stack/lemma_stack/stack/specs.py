@@ -232,12 +232,12 @@ def build_specs(
                 (str(paths.object_storage_dir), render.OBJECT_STORAGE_MOUNT, ""),
                 (host_socket, socket_mount, ""),
             ),
-            # The embedded manager needs access to the host runtime socket.
+            # The workspace module drives the host runtime socket directly.
             user="root",
             security_opts=("label=disable",)
             if agentbox_socket_requires_label_disable(provider)
             else (),
-            wait_http=f"{render.backend_origin(doc)}/internal/agentbox/health/ready",
+            wait_http=f"{render.backend_origin(doc)}/health/ready",
         )
     )
 

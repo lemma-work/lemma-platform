@@ -120,6 +120,7 @@ jobs:
         with:
           languages: python
           build-mode: none
+          config-file: .github/codeql-config.yml
       - uses: github/codeql-action/analyze@v4
 
   codeql-javascript:
@@ -136,6 +137,7 @@ jobs:
         with:
           languages: javascript-typescript
           build-mode: none
+          config-file: .github/codeql-config.yml
       - uses: github/codeql-action/analyze@v4
 
   secrets:

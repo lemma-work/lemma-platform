@@ -54,3 +54,6 @@ __pycache__/
 /output/
 /tmp/
 .claude/launch.json
+
+# CodeQL databases and SARIF output from `make codeql`.
+.codeql/

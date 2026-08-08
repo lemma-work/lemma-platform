@@ -51,13 +51,6 @@ class _Bindings:
     # or ``uv run --project …``.
     python: list[str]
     backend_dir: Path
-    # Where AgentBox's own Alembic history is rooted, and what its config is
-    # called there. A pack flattens both projects into `backend/` and renames
-    # the config to `agentbox-alembic.ini`; a checkout keeps AgentBox in its own
-    # directory under its own `alembic.ini`, whose `script_location` is relative
-    # to that directory.
-    agentbox_dir: Path
-    agentbox_config: str
     frontend_command: list[str]
     frontend_dir: Path
     # Where the backend finds assets that are baked into a pack but scattered
@@ -113,8 +106,6 @@ def _packaged_bindings(root: Path) -> _Bindings:
         browser_sdk=backend_dir / "assets/browser-sdk/lemma-client.js",
         browser_ui=backend_dir / "assets/browser-sdk/lemma-ui.js",
         skills=backend_dir / "assets/lemma-skills",
-        agentbox_dir=backend_dir,
-        agentbox_config="agentbox-alembic.ini",
         secret_key_provider="keychain",
     )
 
@@ -145,8 +136,6 @@ def _source_bindings(root: Path) -> _Bindings:
         skills=root / "lemma-skills",
         # The backend depends on AgentBox, so its interpreter can run AgentBox's
         # migrations; only the working directory and config name differ.
-        agentbox_dir=_required_dir(root, "the AgentBox project", "agentbox"),
-        agentbox_config="alembic.ini",
         secret_key_provider="static",
     )
 
@@ -240,23 +229,6 @@ def build_manifest(
                     "head",
                 ],
                 "cwd": str(backend_dir),
-                "env": backend_env,
-                "timeout_seconds": 300,
-                "max_attempts": 3,
-                "retry_backoff_seconds": 2,
-            },
-            {
-                "id": "agentbox-migrations",
-                "command": [
-                    *python,
-                    "-m",
-                    "alembic",
-                    "-c",
-                    bindings.agentbox_config,
-                    "upgrade",
-                    "head",
-                ],
-                "cwd": str(bindings.agentbox_dir),
                 "env": backend_env,
                 "timeout_seconds": 300,
                 "max_attempts": 3,

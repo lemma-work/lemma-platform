@@ -1,0 +1,10 @@
+# Findings we have looked at and accepted, so `make codeql` stays actionable.
+#
+# One per line: <rule-id> <path> # why
+#
+# A path matches by prefix, so a directory covers everything under it. Nothing
+# belongs here that has not actually been read -- an entry is a claim that a
+# human checked it, and it should carry the reason that check reached.
+
+py/unused-global-variable lemma-backend/app/modules/workspace/services/sandbox_composition.py  # Read on a later call at line 46 via `global`; the query does not follow reads across calls.
+py/partial-ssrf lemma-backend/app/modules/workspace/api/controllers/port_proxy_controller.py  # The host comes only from the provider's base URL; the caller controls the path component alone, set via copy_with(path=...).

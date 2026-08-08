@@ -36,12 +36,14 @@ def result(returncode: int = 0, *, stderr: str = "") -> subprocess.CompletedProc
     )
 
 
-def test_runs_lemma_then_agentbox_migrations() -> None:
-    runtime = FakeRuntime([result(), result()])
+def test_runs_one_migration_chain() -> None:
+    """AgentBox had its own database and alembic chain; there is one now."""
+
+    runtime = FakeRuntime([result()])
 
     run_migrations(runtime, manifest())
 
-    assert len(runtime.calls) == 2
+    assert len(runtime.calls) == 1
     assert runtime.calls[0][-4:] == (
         "ghcr.io/lemma-work/backend:test",
         "alembic",
@@ -49,33 +51,12 @@ def test_runs_lemma_then_agentbox_migrations() -> None:
         "head",
     )
     assert "DATABASE_URL=postgresql+asyncpg://postgres:postgres@db:5432/lemma" in runtime.calls[0]
-    assert runtime.calls[1][-6:] == (
-        "ghcr.io/lemma-work/backend:test",
-        "alembic",
-        "-c",
-        "/agentbox/alembic.ini",
-        "upgrade",
-        "head",
-    )
-    assert (
-        "AGENTBOX_STATE_DATABASE_URL=postgresql+asyncpg://postgres:postgres@db:5432/agentbox"
-        in runtime.calls[1]
-    )
 
 
-def test_lemma_migration_failure_prevents_agentbox_migration() -> None:
+def test_lemma_migration_failure_is_reported_exactly() -> None:
     runtime = FakeRuntime([result(1, stderr="lemma migration failed")])
 
     with pytest.raises(AdminError, match="Lemma database migration failed"):
         run_migrations(runtime, manifest())
 
     assert len(runtime.calls) == 1
-
-
-def test_agentbox_migration_failure_is_reported_exactly() -> None:
-    runtime = FakeRuntime([result(), result(1, stderr="agentbox migration failed")])
-
-    with pytest.raises(AdminError, match="AgentBox database migration failed"):
-        run_migrations(runtime, manifest())
-
-    assert len(runtime.calls) == 2

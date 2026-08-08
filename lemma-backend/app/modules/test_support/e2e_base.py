@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from app.modules.workspace.config import workspace_settings
+
 import os
 import json
 import socket
@@ -63,15 +65,15 @@ def _cleanup_e2e_workspace_containers(*, sandboxes_only: bool = False) -> None:
     """Remove leftover Docker containers created by e2e runs.
 
     The shared session testcontainers (postgres/redis/supertokens/kreuzberg) and
-    the AgentBox sandbox pods BOTH carry ``lemma.e2e=true``, so a broad sweep by
-    that label would tear down the live session containers mid-run. AgentBox
-    sandbox pods additionally carry ``app.kubernetes.io/name=agentbox-sandbox``
-    (set unconditionally in ``agentbox/providers/docker.py``).
+    the sandboxes BOTH carry ``lemma.e2e=true``, so a broad sweep by that label
+    would tear down the live session containers mid-run. Sandboxes are
+    identifiable on their own: the workspace module labels its containers
+    ``managed-by=lemma-workspace``, and pre-cutover ones carry
+    ``app.kubernetes.io/name=agentbox-sandbox``.
 
-    - ``sandboxes_only=True`` (per-test cleanup): remove ONLY agentbox sandbox
-      pods, sparing the shared session containers — otherwise the workspace
-      teardown after the first test kills postgres/redis and every later test
-      fails to connect.
+    - ``sandboxes_only=True`` (per-test cleanup): remove ONLY sandboxes, sparing
+      the shared session containers — otherwise the workspace teardown after the
+      first test kills postgres/redis and every later test fails to connect.
     - default (session boundaries): remove ALL e2e-labeled containers for a clean
       slate, which is safe because the session containers aren't up yet (start)
       or are being torn down anyway (finish).
@@ -79,18 +81,37 @@ def _cleanup_e2e_workspace_containers(*, sandboxes_only: bool = False) -> None:
     if not shutil.which("docker"):
         return
 
-    label_filters = ["--filter", "label=lemma.e2e=true"]
+    # Docker's filters are conjunctive, so each way of labelling a sandbox has
+    # to be swept separately.
+    #
+    # Note this sweep is machine-wide, not run-scoped: two e2e runs sharing a
+    # Docker daemon will destroy each other's sandboxes, which surfaces as
+    # "container is marked for removal and cannot be started" in whichever one
+    # loses. That is fine for a single run and for CI's one-runner-per-job
+    # layout; it is a trap for anyone running two suites side by side.
+    filter_sets = [["--filter", "label=lemma.e2e=true"]]
     if sandboxes_only:
-        label_filters += ["--filter", "label=app.kubernetes.io/name=agentbox-sandbox"]
-    ps = subprocess.run(
-        ["docker", "ps", "-aq", *label_filters],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    container_ids = [line.strip() for line in ps.stdout.splitlines() if line.strip()]
+        filter_sets = [
+            ["--filter", "label=lemma.e2e=true",
+             "--filter", "label=app.kubernetes.io/name=agentbox-sandbox"],
+            ["--filter", "label=managed-by=lemma-workspace"],
+        ]
+    else:
+        filter_sets.append(["--filter", "label=managed-by=lemma-workspace"])
+
+    container_ids: list[str] = []
+    for label_filters in filter_sets:
+        ps = subprocess.run(
+            ["docker", "ps", "-aq", *label_filters],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        container_ids += [
+            line.strip() for line in ps.stdout.splitlines() if line.strip()
+        ]
     if container_ids:
-        subprocess.run(["docker", "rm", "-f", *container_ids], check=False)
+        subprocess.run(["docker", "rm", "-f", *sorted(set(container_ids))], check=False)
 
     if sandboxes_only:
         return
@@ -332,29 +353,13 @@ def e2e_settings(test_database_url, test_redis_url, supertokens_container):
         f"/tmp/lemma-object-storage-tests{worker_suffix}"
     )
 
-    # Pin a stable, session-wide AgentBox manager endpoint. The worker subprocess
-    # is session-scoped and captures os.environ once at spawn, while the manager
-    # (``local_agentbox_server``) is recreated per test -- if its port changed per
-    # test the worker would point at a dead port and every worker-driven job would
-    # fail with ConnectError. Fixing the port here (set before the worker spawns,
-    # since the worker depends on this fixture) lets the manager rebind to it each
-    # test and keeps the worker's captured URL valid for the whole run.
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.bind(("127.0.0.1", 0))
-        agentbox_port = int(sock.getsockname()[1])
-    agentbox_url = f"http://127.0.0.1:{agentbox_port}"
-    agentbox_key = settings.agentbox_api_key or "e2e-agentbox-key"
-    settings.agentbox_api_url = agentbox_url
-    settings.agentbox_api_key = agentbox_key
-    os.environ["AGENTBOX_API_URL"] = agentbox_url
-    os.environ["AGENTBOX_API_KEY"] = agentbox_key
-
-    # Pin the callback server to one session-wide port for the same reason as
-    # AgentBox above. Queued functions are dispatched by the session-scoped
-    # worker, whose settings are loaded once when its subprocess starts. The
-    # function-scoped backend server rebinds this port for each test, so both
-    # API- and worker-driven sandboxes receive the same explicit, reachable URL.
-    # Production code intentionally performs no localhost/container rewriting.
+    # Pin the callback server to one session-wide port. Queued functions are
+    # dispatched by the session-scoped worker, whose settings load once when its
+    # subprocess starts, so a port that changed per test would leave it pointing
+    # at a dead one. The function-scoped backend server rebinds this port for
+    # each test, so both API- and worker-driven sandboxes get the same explicit,
+    # reachable URL. Production code intentionally performs no localhost or
+    # container-hostname rewriting.
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.bind(("127.0.0.1", 0))
         callback_port = int(sock.getsockname()[1])
@@ -461,8 +466,10 @@ def _import_e2e_models() -> None:
     from app.modules.schedule.infrastructure import models as schedule_models
     from app.modules.usage.infrastructure import models as usage_models
     from app.modules.workflow.infrastructure import models as workflow_models
+    from app.modules.workspace.infrastructure import models as workspace_models
 
     _ = (
+        workspace_models,
         event_models,
         user_models,
         organization_models,
@@ -482,7 +489,57 @@ def _import_e2e_models() -> None:
 
 
 @pytest_asyncio.fixture(scope="session")
-async def worker(e2e_settings):
+async def sandbox_reachable_backend(e2e_settings):
+    """A backend URL the *live* provisioner's sandboxes can actually reach.
+
+    `e2e_settings` pins the session-wide gateway to `host.docker.internal`,
+    which is right for a sandbox on this machine and unresolvable for one in
+    E2B's cloud. Queued functions are dispatched by the session-scoped worker,
+    which captures its environment once at spawn, so the per-test tunnel in
+    `configure_workspace_api_url` comes far too late for it -- which is exactly
+    why every JOB function test failed on E2B while the API ones passed.
+
+    Session-scoped for the same reason the port beneath it is: one tunnel, held
+    for the whole run, pointed at the port each test's backend rebinds.
+    """
+
+    from app.core.config import settings
+    from app.modules.test_support.e2e.runtime import _temporary_workspace_tunnel
+
+    off_box = workspace_settings.provider.lower() == "e2b"
+    if not off_box:
+        yield None
+        return
+
+    port = os.environ["WORKSPACE_E2E_BACKEND_PORT"]
+    previous = {
+        key: os.environ.get(key)
+        for key in ("WORKSPACE_CALLBACK_API_URL", "FUNCTION_RUNTIME_GATEWAY_URL")
+    }
+    original_callback = settings.workspace_callback_api_url
+    original_gateway = settings.function_runtime_gateway_url
+
+    async with _temporary_workspace_tunnel(
+        f"http://127.0.0.1:{port}", wait_for_backend=False
+    ) as public_url:
+        settings.workspace_callback_api_url = public_url
+        settings.function_runtime_gateway_url = public_url
+        os.environ["WORKSPACE_CALLBACK_API_URL"] = public_url
+        os.environ["FUNCTION_RUNTIME_GATEWAY_URL"] = public_url
+        try:
+            yield public_url
+        finally:
+            settings.workspace_callback_api_url = original_callback
+            settings.function_runtime_gateway_url = original_gateway
+            for key, value in previous.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+
+
+@pytest_asyncio.fixture(scope="session")
+async def worker(e2e_settings, sandbox_reachable_backend):
     """Run the real streaq worker process used in production.
 
     Session-scoped: one worker subprocess for the whole run instead of spawning
@@ -522,6 +579,7 @@ async def worker(e2e_settings):
         from app.modules.agent.tests.e2e.system_lemma_helpers import (
             system_lemma_env_overlay,
         )
+        from app.modules.test_support.e2e.runtime import workspace_provisioning_env
 
         proc = subprocess.Popen(
             [
@@ -533,6 +591,10 @@ async def worker(e2e_settings):
             env={
                 **os.environ,
                 **system_lemma_env_overlay(),  # LEMMA_OPENAI_* from .env
+                # The worker provisions its own sandboxes now, so it needs the
+                # provider configuration at spawn -- see
+                # workspace_provisioning_env().
+                **workspace_provisioning_env(),
                 # Prepend rather than replace: overwriting it silently drops an
                 # inherited PYTHONPATH, so a sibling package resolved from
                 # somewhere else (a git worktree checked out beside the venv)
@@ -554,8 +616,6 @@ async def worker(e2e_settings):
                 ),
                 # The manager rebinds to this stable port each test; keep the
                 # worker pointed at it so worker-driven function jobs reach it.
-                "AGENTBOX_API_URL": e2e_settings.agentbox_api_url,
-                "AGENTBOX_API_KEY": e2e_settings.agentbox_api_key,
                 "SUPERTOKENS_CORE_URL": e2e_settings.supertokens_core_url,
                 "ENVIRONMENT": "testing",
                 "DEBUG": "true",

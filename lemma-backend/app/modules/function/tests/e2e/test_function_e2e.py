@@ -1807,15 +1807,17 @@ async def test_job_function_long_run_is_not_destroyed_while_active(
     test_pod,
     worker,
 ):
-    """An active run prevents function-sandbox idle cleanup without heartbeats."""
-    import agentbox.config as agentbox_config
+    """An active run prevents function-sandbox idle release without heartbeats.
 
-    original = {
-        "function_idle": agentbox_config.settings.agentbox_function_idle_seconds,
-        "cleanup": agentbox_config.settings.agentbox_cleanup_interval_seconds,
-    }
-    agentbox_config.settings.agentbox_function_idle_seconds = 5
-    agentbox_config.settings.agentbox_cleanup_interval_seconds = 5
+    The idle window is squeezed to five seconds so a sixty-second run is many
+    times longer than it, which is what makes the assertion mean something:
+    the run finishing proves activity held the sandbox, not that the sweep
+    simply never came round.
+    """
+    from app.modules.workspace.config import workspace_settings
+
+    original_idle = workspace_settings.idle_release_seconds
+    workspace_settings.idle_release_seconds = 5
     try:
         pod_id = test_pod["id"]
         suffix = uuid4().hex[:8]
@@ -1867,10 +1869,7 @@ async def {function_name}(ctx: FunctionContext, data: JobInput) -> JobResult:
         assert final_run["status"] == "COMPLETED", final_run
         assert final_run["output_data"]["slept"] == 60
     finally:
-        agentbox_config.settings.agentbox_function_idle_seconds = original[
-            "function_idle"
-        ]
-        agentbox_config.settings.agentbox_cleanup_interval_seconds = original["cleanup"]
+        workspace_settings.idle_release_seconds = original_idle
 
 
 @pytest.mark.asyncio

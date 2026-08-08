@@ -21,8 +21,6 @@ RUN apt-get update && apt-get install -y git
 COPY lemma-backend/pyproject.toml lemma-backend/uv.lock ./
 
 # Copy local path dependencies and repo-native skills.
-COPY agentbox-client /agentbox-client
-COPY agentbox /agentbox
 COPY lemma-pod-bundle /lemma-pod-bundle
 COPY lemma-backend/lemma-connectors ./lemma-connectors
 COPY lemma-skills ./lemma-skills
@@ -50,6 +48,15 @@ WORKDIR /app
 # sandboxes never contain a package manager.
 COPY --from=builder /usr/local/bin/uv /usr/local/bin/uv
 
+# Remove the base image's pip. Function dependency resolution goes through
+# `uv pip`, which is uv's own implementation and needs nothing here; the system
+# pip exists only because python:slim ships it. Its *vendored* msgpack and
+# setuptools are the only HIGH findings left in this image, and no dependency
+# of ours can move them -- they are pip's, not the application's.
+RUN rm -rf /usr/local/lib/python3.14/site-packages/pip \
+           /usr/local/lib/python3.14/site-packages/pip-*.dist-info \
+           /usr/local/bin/pip /usr/local/bin/pip3 /usr/local/bin/pip3.14
+
 # Create non-root user for security
 # -d /home/appuser: explicitly set home directory
 # -m: create the home directory
@@ -60,11 +67,10 @@ RUN mkdir -p /app/.composio && chown -R appuser:appuser /app/.composio
 
 # Copy virtual environment from builder
 COPY --from=builder --chown=appuser:appuser /app/.venv /app/.venv
-COPY --from=builder --chown=appuser:appuser /agentbox-client /agentbox-client
-COPY --from=builder --chown=appuser:appuser /agentbox /agentbox
-# uv installs monorepo path dependencies as editable links. Keep the linked
-# source in the runtime image (as we already do for agentbox-client), otherwise
-# importing lemma_pod_bundle fails after the builder stage is discarded.
+# uv installs monorepo path dependencies as editable links, so the linked
+# source has to survive into the runtime image or importing lemma_pod_bundle
+# fails once the builder stage is discarded. `sandbox_runtime` needs no such
+# line: it lives inside lemma-backend/, which is copied wholesale below.
 COPY --from=builder --chown=appuser:appuser /lemma-pod-bundle /lemma-pod-bundle
 # Copy skills from the builder stage explicitly instead of relying on the blanket repo copy.
 COPY --from=builder --chown=appuser:appuser /app/lemma-skills /app/lemma-skills

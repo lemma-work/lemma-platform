@@ -256,14 +256,6 @@ def copy_backend_assets(output: Path) -> None:
     shutil.copytree(REPO_ROOT / "lemma-skills", backend / "assets/lemma-skills")
     shutil.copytree(REPO_ROOT / "lemma-backend/migrations", backend / "migrations")
     shutil.copy2(REPO_ROOT / "lemma-backend/alembic.ini", backend / "alembic.ini")
-    shutil.copytree(
-        REPO_ROOT / "agentbox/agentbox/persistence/alembic",
-        backend / "agentbox/persistence/alembic",
-    )
-    shutil.copy2(
-        REPO_ROOT / "agentbox/alembic.ini",
-        backend / "agentbox-alembic.ini",
-    )
 
 
 def node_root(explicit: Path | None) -> Path:

@@ -15,7 +15,7 @@ dependencies = [
     "obstore>=0.8.2",
     "streaq>=6.3.4",
     "jsonpath-ng>=1.6.0",
-    "aiohttp>=3.13.0",
+    "aiohttp>=3.14.3",  # CVE-2026-69244 (HIGH) is fixed in 3.14.3.
     "aiofiles>=25.1.0",
     "tiktoken>=0.12.0",
     "faststream[cli,redis]>=0.6.4",
@@ -47,21 +47,18 @@ dependencies = [
     "supertokens-python==0.31.3",
     "greenlet>=3.3.2",
     "markdown>=3.8.2",
-    "cryptography>=46.0.6",
+    "cryptography>=50.0.0",  # CVE-2026-69247 (HIGH) is fixed in 50.0.0.
     "pyjwt[crypto]>=2.10.1",
     "fastembed>=0.7.4",
-    "agentbox-client",
     "pypdfium2>=5.10.1",
     "pillow>=12.3.0",
     "lemma-pod-bundle",
 ]
 
 [project.optional-dependencies]
-# Managed/local composition: embeds the AgentBox manager and document
-# conversion into the single backend process. Cloud/split deployments do not
-# need to install this extra.
+# Managed/local composition: document conversion in the single backend
+# process. Cloud/split deployments do not need to install this extra.
 local = [
-    "agentbox[postgres]",
     "markitdown[docx,pptx,xlsx,xls,pdf,outlook]>=0.1.0",
 ]
 # Cloud key backends for app/core/crypto. Optional so OSS/local stays lean; the
@@ -69,6 +66,12 @@ local = [
 gcp-kms = [
     "google-cloud-kms>=3.0.0",
     "google-cloud-secret-manager>=2.20.0",
+]
+# E2B cloud sandboxes. Optional and lazily imported, so a Docker-only or
+# Kubernetes deployment never loads the SDK. This is the only heavy dependency
+# in sandbox provisioning: Docker is spoken directly over its REST API.
+e2b = [
+    "e2b>=2.37.0",
 ]
 # OS keychain backend for local dev (secret_key_provider=keychain).
 keychain = [
@@ -84,7 +87,9 @@ markitdown = [
 
 [dependency-groups]
 dev = [
-    "agentbox",
+    # The function runtime's worker subprocess imports the SDK a function is
+    # written against; its tests spawn that worker for real.
+    "lemma-sdk",
     "basedpyright>=1.39.9",
     "diff-cover>=9.7.1",
     "kubernetes>=34.1.0",
@@ -105,7 +110,7 @@ build-backend = "hatchling.build"
 # lemma-backend is the open-source library. lemma-cloud installs it (editable
 # path locally, pinned version/hash for deploys) and composes extra modules.
 [tool.hatch.build.targets.wheel]
-packages = ["app"]
+packages = ["app", "sandbox_runtime"]
 
 [tool.hatch.build.targets.wheel.force-include]
 "standalone_app.py" = "standalone_app.py"
@@ -116,9 +121,8 @@ allow-direct-references = true
 
 [tool.uv.sources]
 lemma-connectors = { path = "lemma-connectors", editable = true }
-agentbox-client = { path = "../agentbox-client", editable = true }
-agentbox = { path = "../agentbox", editable = true }
 lemma-pod-bundle = { path = "../lemma-pod-bundle", editable = true }
+lemma-sdk = { path = "../lemma-python", editable = true }
 
 # Ruff config. The full default ruleset is not yet enforced repo-wide (generated
 # connector clients + migrations carry many pre-existing findings), so CI runs a
@@ -135,7 +139,6 @@ lemma-pod-bundle = { path = "../lemma-pod-bundle", editable = true }
 [tool.basedpyright]
 pythonVersion = "3.14"
 typeCheckingMode = "standard"
-extraPaths = ["../agentbox-client"]
 exclude = [
     "app/**/tests/**",
     "app/modules/test_support/**",

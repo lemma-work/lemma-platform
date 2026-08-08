@@ -17,12 +17,7 @@ class ISandbox(ABC):
     """Interface for managing a user-scoped code sandbox."""
 
     @abstractmethod
-    async def ensure_sandbox(
-        self,
-        user_id: UUID,
-        *,
-        env: dict[str, str] | None = None,
-    ) -> SandboxInfo:
+    async def ensure_sandbox(self, user_id: UUID) -> SandboxInfo:
         """Create or resume a sandbox for a user."""
         pass
 

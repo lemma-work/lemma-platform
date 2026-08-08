@@ -22,7 +22,6 @@ from app.modules.workspace.services.workspace_process_store import WorkspaceProc
 from app.modules.workspace.services.interfaces import IWorkspaceSession
 
 _workspace_tool_runtime: "WorkspaceToolRuntime | None" = None
-_function_workspace_runtime: "WorkspaceToolRuntime | None" = None
 _DEFAULT_SCOPE = "default"
 
 
@@ -227,33 +226,18 @@ def get_workspace_tool_runtime() -> WorkspaceToolRuntime:
     return _workspace_tool_runtime
 
 
-def get_function_workspace_runtime() -> WorkspaceToolRuntime:
-    global _function_workspace_runtime
-    if _function_workspace_runtime is None:
-        _function_workspace_runtime = WorkspaceToolRuntime(
-            default_env_ttl_seconds=5 * 60
-        )
-    return _function_workspace_runtime
-
-
 def reset_workspace_tool_runtimes() -> None:
     """Reset cached workspace runtimes so tests can swap AgentBox endpoints."""
-    global _workspace_tool_runtime, _function_workspace_runtime
+    global _workspace_tool_runtime
     _workspace_tool_runtime = None
-    _function_workspace_runtime = None
 
 
 async def close_workspace_tool_runtimes() -> None:
     """Close and reset cached workspace runtimes."""
-    global _workspace_tool_runtime, _function_workspace_runtime
-    runtimes = [
-        runtime
-        for runtime in (_workspace_tool_runtime, _function_workspace_runtime)
-        if runtime is not None
-    ]
+    global _workspace_tool_runtime
+    runtime = _workspace_tool_runtime
     _workspace_tool_runtime = None
-    _function_workspace_runtime = None
-    for runtime in runtimes:
+    if runtime is not None:
         await runtime.close()
     await WorkspaceSandboxService.close_shared_manager_client()
 

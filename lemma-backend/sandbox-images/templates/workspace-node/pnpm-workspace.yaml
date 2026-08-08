@@ -1,0 +1,11 @@
+# undici arrives transitively through jsdom. 7.28.0 carries
+# GHSA-4cwx-7wf7-3272 (cross-user information disclosure via degenerate
+# private cache directives), fixed in 7.29.0, and jsdom has not moved yet.
+overrides:
+  undici: "^7.29.0"
+
+allowBuilds:
+  agent-browser: true
+
+engineStrict: true
+strictDepBuilds: true

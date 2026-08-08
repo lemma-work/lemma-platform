@@ -10,7 +10,6 @@ from pydantic import BaseModel
 @dataclass
 class SandboxInfo:
     sandbox_id: str
-    namespace: str
     status: str
     image: str
     created_at: str | None = None
@@ -40,15 +39,6 @@ class WorkspaceStatus(str, Enum):
     STOPPING = "STOPPING"
     STOPPED = "STOPPED"
     ERROR = "ERROR"
-
-
-@dataclass
-class ExecutionResult:
-    success: bool
-    output: str
-    error: str | None = None
-    execution_count: int | None = None
-    data: dict[str, Any] | None = None
 
 
 class ShellCommandResult(BaseModel):

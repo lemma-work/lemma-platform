@@ -12,10 +12,9 @@ from lemma_stack.runtime.base import Runtime
 from lemma_stack.stack.specs import CONTAINER_PREFIX, NETWORK_NAME
 
 DB_CONTAINER = f"{CONTAINER_PREFIX}-db"
-EXTRA_DATABASES = ("supertokens", "lemma_datastore", "agentbox")
+EXTRA_DATABASES = ("supertokens", "lemma_datastore")
 VECTOR_DATABASES = ("lemma", "lemma_datastore")
 DATABASE_URL = "postgresql+asyncpg://postgres:postgres@db:5432/lemma"
-AGENTBOX_DATABASE_URL = "postgresql+asyncpg://postgres:postgres@db:5432/agentbox"
 
 
 def _psql(runtime: Runtime, database: str, sql: str) -> str:
@@ -55,11 +54,6 @@ def run_migrations(runtime: Runtime, manifest: ReleaseManifest) -> None:
             "Lemma",
             ("-e", f"DATABASE_URL={DATABASE_URL}"),
             ("alembic", "upgrade", "head"),
-        ),
-        (
-            "AgentBox",
-            ("-e", f"AGENTBOX_STATE_DATABASE_URL={AGENTBOX_DATABASE_URL}"),
-            ("alembic", "-c", "/agentbox/alembic.ini", "upgrade", "head"),
         ),
     )
     for label, environment, command in migration_steps:

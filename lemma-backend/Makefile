@@ -44,10 +44,15 @@ FUNCTION_BENCH_BATCH_ROWS ?= 1000
 FUNCTION_BENCH_POLL_INTERVAL_SECONDS ?= 0.5
 FUNCTION_BENCH_TERMINAL_TIMEOUT_SECONDS ?= 300
 FUNCTION_BENCH_TUNNEL ?= ngrok
+# Signs the per-sandbox runtime credential. The backend provisions sandboxes
+# itself, so the benchmark process needs this key; override it to match a
+# deployment you are pointing at.
+FUNCTION_BENCH_RUNTIME_CREDENTIAL_KEY ?= benchmark-runtime-credential-key-32-bytes
 FUNCTION_BENCH_ENV = \
 	E2E_REAL=1 \
 	DEBUG=false \
 	LOG_LEVEL=WARNING \
+	WORKSPACE_RUNTIME_CREDENTIAL_KEY=$(FUNCTION_BENCH_RUNTIME_CREDENTIAL_KEY) \
 	FUNCTION_BENCH_CONCURRENCY=$(FUNCTION_BENCH_CONCURRENCY) \
 	FUNCTION_BENCH_INVOCATIONS=$(FUNCTION_BENCH_INVOCATIONS) \
 	FUNCTION_BENCH_BATCH_ROWS=$(FUNCTION_BENCH_BATCH_ROWS) \
@@ -55,7 +60,7 @@ FUNCTION_BENCH_ENV = \
 	FUNCTION_BENCH_TERMINAL_TIMEOUT_SECONDS=$(FUNCTION_BENCH_TERMINAL_TIMEOUT_SECONDS)
 FUNCTION_BENCH_TEST = app/modules/function/tests/perf/test_function_execution_benchmark.py
 
-.PHONY: help test test-unit test-e2e test-e2e-real test-e2e-fast test-e2e-runtime test-module coverage coverage-unit coverage-e2e coverage-backend-unit coverage-backend-e2e-shard coverage-backend-report coverage-backend-gate test-collect lint lint-async typecheck-critical architecture migrate docker-build docker-build-cloud docker-build-arm64 docker-build-amd64 agentbox-build benchmark-functions-docker benchmark-functions-e2b teams-manifest-zip load-test-build load-test-up load-test-migrate load-test-setup load-test-run load-test-sse load-test-journey load-test-datastore-up load-test-datastore-setup load-test-datastore-files load-test-datastore-stats load-test-datastore-down load-test-monitor load-test-down load-test
+.PHONY: help test test-unit test-e2e test-e2e-real test-e2e-fast test-e2e-runtime test-module coverage coverage-unit coverage-e2e coverage-backend-unit coverage-backend-e2e-shard coverage-backend-report coverage-backend-gate test-collect lint lint-async typecheck-critical architecture migrate docker-build docker-build-cloud docker-build-arm64 docker-build-amd64 benchmark-functions-docker benchmark-functions-e2b teams-manifest-zip load-test-build load-test-up load-test-migrate load-test-setup load-test-run load-test-sse load-test-journey load-test-datastore-up load-test-datastore-setup load-test-datastore-files load-test-datastore-stats load-test-datastore-down load-test-monitor load-test-down load-test
 
 help:
 	@echo "Lemma backend:"
@@ -79,7 +84,7 @@ help:
 	@echo "  make teams-manifest-zip OUTPUT=path"
 	@echo "                         # package Teams manifest zip"
 	@echo "  make docker-build      # build backend image from monorepo root"
-	@echo "  make agentbox-build # build local AgentBox runtime images"
+	@echo "  make # build local AgentBox runtime images"
 	@echo "  make benchmark-functions-docker # no-op + single/batch API/JOB benchmark on Docker"
 	@echo "  make benchmark-functions-e2b    # same benchmark on pinned E2B builds"
 	@echo ""
@@ -227,10 +232,15 @@ typecheck-critical:
 		app/modules/pod/domain \
 		app/modules/pod_bundle/domain \
 		app/modules/schedule/domain \
-		app/modules/usage/domain
+		app/modules/usage/domain \
+		app/modules/workspace/services/local_sandbox_client.py \
+		app/modules/workspace/services/port_access.py \
+		app/modules/workspace/services/sandbox_service.py \
+		app/modules/workspace/services/sandbox_sweeper.py
 
 architecture:
 	uv run python scripts/check_architecture.py
+	uv run python scripts/check_settings_attrs.py
 	uv run python scripts/generate_route_inventory.py --check
 
 # Async-safety gate (enforced in CI). Catches blocking calls newly introduced
@@ -261,9 +271,6 @@ docker-build-arm64:
 
 docker-build-amd64:
 	cd .. && docker buildx build --platform linux/amd64 -f lemma-backend/Dockerfile -t lemma-backend:local .
-
-agentbox-build:
-	$(MAKE) -C ../agentbox build
 
 benchmark-functions-docker:
 	$(FUNCTION_BENCH_ENV) \
@@ -394,3 +401,77 @@ load-test-down:
 load-test: load-test-build load-test-up load-test-migrate load-test-setup load-test-run
 	@echo ""
 	@echo "Done. Run 'make load-test-down' to remove containers and credentials."
+
+# ── Sandbox images ────────────────────────────────────────────────────────────
+# The two images the workspace module provisions. They live here because the
+# module owns them: the runtime inside them is `sandbox_runtime/`, and its
+# protocol is the one this backend speaks.
+#
+# The build context is the monorepo root -- the images embed lemma-python,
+# lemma-cli and lemma-skills, which are siblings of this directory.
+
+SANDBOX_REGISTRY  ?= ghcr.io/lemma-work
+SANDBOX_TAG       ?= dev
+SANDBOX_PLATFORM  ?= linux/amd64
+SANDBOX_PLATFORMS ?= linux/amd64,linux/arm64
+# Function artifacts target the canonical x86-64 runtime ABI. Do not publish an
+# arm64 function image until the artifact builder emits an arm64 ABI.
+SANDBOX_FUNCTION_PLATFORMS ?= linux/amd64
+SANDBOX_PYTHON_IMAGE ?= python:3.14.6-slim
+SANDBOX_NODE_IMAGE   ?= node:24.18.0-slim
+
+WORKSPACE_IMAGE := $(SANDBOX_REGISTRY)/lemma-agentbox-workspace
+FUNCTION_IMAGE  := $(SANDBOX_REGISTRY)/lemma-agentbox-function
+# Published names keep "agentbox" because they are pinned by digest in
+# lemma-local.json and referenced by already-installed releases. Renaming a
+# published image is a release concern, not a refactor.
+
+IMAGES_DIR := sandbox-images
+
+.PHONY: sandbox-images sandbox-image-workspace sandbox-image-function \
+        push-sandbox-images push-sandbox-workspace push-sandbox-function \
+        print-sandbox-images
+
+print-sandbox-images:
+	@echo "workspace: $(WORKSPACE_IMAGE):$(SANDBOX_TAG)"
+	@echo "function:  $(FUNCTION_IMAGE):$(SANDBOX_TAG)"
+
+sandbox-images: sandbox-image-workspace sandbox-image-function
+
+sandbox-image-workspace:
+	docker build \
+		--platform $(SANDBOX_PLATFORM) \
+		-f $(IMAGES_DIR)/Dockerfile.workspace \
+		--build-arg PYTHON_IMAGE=$(SANDBOX_PYTHON_IMAGE) \
+		--build-arg NODE_IMAGE=$(SANDBOX_NODE_IMAGE) \
+		-t $(WORKSPACE_IMAGE):$(SANDBOX_TAG) \
+		..
+
+sandbox-image-function:
+	docker build \
+		--platform $(SANDBOX_PLATFORM) \
+		-f $(IMAGES_DIR)/Dockerfile.function \
+		--build-arg PYTHON_IMAGE=$(SANDBOX_PYTHON_IMAGE) \
+		-t $(FUNCTION_IMAGE):$(SANDBOX_TAG) \
+		..
+
+push-sandbox-images: push-sandbox-workspace push-sandbox-function
+
+push-sandbox-workspace:
+	docker buildx build \
+		--platform $(SANDBOX_PLATFORMS) \
+		-f $(IMAGES_DIR)/Dockerfile.workspace \
+		--build-arg PYTHON_IMAGE=$(SANDBOX_PYTHON_IMAGE) \
+		--build-arg NODE_IMAGE=$(SANDBOX_NODE_IMAGE) \
+		-t $(WORKSPACE_IMAGE):$(SANDBOX_TAG) \
+		--push \
+		..
+
+push-sandbox-function:
+	docker buildx build \
+		--platform $(SANDBOX_FUNCTION_PLATFORMS) \
+		-f $(IMAGES_DIR)/Dockerfile.function \
+		--build-arg PYTHON_IMAGE=$(SANDBOX_PYTHON_IMAGE) \
+		-t $(FUNCTION_IMAGE):$(SANDBOX_TAG) \
+		--push \
+		..

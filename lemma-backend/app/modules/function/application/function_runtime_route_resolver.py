@@ -11,17 +11,19 @@ from uuid import UUID
 
 import httpx
 
-from agentbox_client import (
+from sandbox_runtime.protocol import (
+    SandboxProfileRef,
     AdmissionClass,
-    AgentBoxApiError,
-    AgentBoxClient,
     FunctionRuntimeLease,
-    ProfileRef,
-    RetryDisposition,
     WorkloadKind,
+)
+from sandbox_runtime.errors import SandboxUnavailable
+from app.modules.workspace.services.local_sandbox_client import (
+    LocalSandboxClient,
 )
 
 from app.core.config import settings
+from app.modules.workspace.config import workspace_settings
 from app.modules.function.application.function_runtime_endpoint_cache import (
     FunctionRuntimeEndpoint,
     FunctionRuntimeEndpointCache,
@@ -36,7 +38,7 @@ from app.modules.function.domain.entities import (
 )
 
 
-AgentBoxClientFactory = Callable[[], AgentBoxClient]
+SandboxClientFactory = Callable[[], LocalSandboxClient]
 _RESERVED_APPLICATION_HEADERS = frozenset(
     {
         "authorization",
@@ -56,14 +58,14 @@ class FunctionRuntimeRouteResolver:
     def __init__(
         self,
         *,
-        agentbox_client_factory: AgentBoxClientFactory,
+        sandbox_client_factory: SandboxClientFactory,
         endpoint_cache: FunctionRuntimeEndpointCache,
     ) -> None:
-        self._agentbox_client_factory = agentbox_client_factory
+        self._sandbox_client_factory = sandbox_client_factory
         self._endpoint_cache = endpoint_cache
-        self._profile = ProfileRef(
-            name=settings.agentbox_function_profile_name,
-            digest=settings.agentbox_function_profile_digest,
+        self._profile = SandboxProfileRef(
+            name=workspace_settings.function_profile_name,
+            digest=workspace_settings.function_profile_digest,
         )
 
     async def endpoint(
@@ -124,7 +126,7 @@ class FunctionRuntimeRouteResolver:
 
         now = self._now()
         deadline_at = now + timedelta(seconds=5)
-        client = self._agentbox_client_factory()
+        client = self._sandbox_client_factory()
         try:
             lease = await client.lease_function_runtime(
                 dispatch.pod_id,
@@ -164,7 +166,7 @@ class FunctionRuntimeRouteResolver:
         deadline_at: datetime,
         required_valid_until: datetime,
     ) -> FunctionRuntimeEndpoint:
-        client = self._agentbox_client_factory()
+        client = self._sandbox_client_factory()
         try:
             await self._ensure_sandbox(
                 client,
@@ -258,14 +260,14 @@ class FunctionRuntimeRouteResolver:
 
     async def _ensure_sandbox(
         self,
-        client: AgentBoxClient,
+        client: LocalSandboxClient,
         pod_id: UUID,
         *,
         admission_class: AdmissionClass,
         deadline_at: datetime,
     ) -> None:
         attempt = 0
-        capacity_error: AgentBoxApiError | None = None
+        last_failure: SandboxUnavailable | None = None
         while self._now() < deadline_at:
             try:
                 handle = await client.ensure_sandbox(
@@ -276,16 +278,11 @@ class FunctionRuntimeRouteResolver:
                     deadline_at=deadline_at,
                     verify_ready=True,
                 )
-            except AgentBoxApiError as exc:
-                if str(getattr(exc, "code", "")).upper() == "CAPACITY_EXHAUSTED":
-                    capacity_error = exc
-                else:
-                    capacity_error = None
-                if exc.retry not in {
-                    RetryDisposition.WAIT,
-                    RetryDisposition.SAFE_SAME_OPERATION,
-                }:
-                    raise
+            except SandboxUnavailable as exc:
+                # Retryable by type; anything definitive propagates. Keep the
+                # last one so a timeout can say why the sandbox never came up
+                # instead of only that it did not.
+                last_failure = exc
                 await self._wait_retry(
                     exc.retry_after_ms,
                     deadline_at,
@@ -305,8 +302,8 @@ class FunctionRuntimeRouteResolver:
                 attempt=attempt,
             )
             attempt += 1
-        if capacity_error is not None:
-            raise capacity_error
+        if last_failure is not None:
+            raise last_failure
         raise TimeoutError("function sandbox was not ready before the deadline")
 
     def _key(

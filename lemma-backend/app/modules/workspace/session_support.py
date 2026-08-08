@@ -17,8 +17,12 @@ from uuid import UUID
 import httpx
 from redis.exceptions import RedisError
 
-from agentbox_client import AgentBoxApiError, TerminalSize, WorkloadKind
+from sandbox_runtime.protocol import TerminalSize, WorkloadKind
 from app.core.log.log import get_logger
+from sandbox_runtime.errors import (
+    SandboxError,
+    SandboxUnavailable,
+)
 
 
 logger = get_logger(__name__)
@@ -48,7 +52,35 @@ def canonical_workspace_cwd(value: str) -> str:
     return canonical_runtime_path(value)
 
 
-def agentbox_command_failure(
+def describe_sandbox_failure(exc: BaseException) -> tuple[str, bool]:
+    """Normalise either provisioning path's failure into (message, retryable).
+
+    Reduces any sandbox failure to the two facts a tool call needs: what to
+    tell the agent, and whether trying again could help. The type carries the
+    second one, which is why there is no retry flag to consult.
+    """
+
+    from sandbox_runtime.errors import (
+        SandboxRejected,
+        SandboxUnavailable,
+    )
+
+    if isinstance(exc, SandboxUnavailable):
+        return (f"Workspace unavailable: {exc}", True)
+    if isinstance(exc, SandboxRejected):
+        return (f"Workspace refused the operation: {exc}", False)
+    return (f"Workspace transport failed: {type(exc).__name__}: {exc}", True)
+
+
+def sandbox_failure_types() -> tuple[type[BaseException], ...]:
+    """Every failure a sandbox operation may raise."""
+
+    from sandbox_runtime.errors import SandboxError
+
+    return (SandboxError,)
+
+
+def sandbox_command_failure(
     *,
     error: str,
     retryable: bool,
@@ -82,9 +114,12 @@ async def with_backpressure(operation, deadline: datetime):
     while True:
         try:
             return await operation()
-        except AgentBoxApiError as exc:
+        except SandboxUnavailable as exc:
+            # Retryable by type. `SandboxRejected` and its subclasses are
+            # definitive and propagate untouched, which is the same two-way
+            # split the manager expressed as a `retry` field on every error.
             remaining = (deadline - datetime.now(timezone.utc)).total_seconds()
-            if exc.retry.value != "wait" or remaining <= 0:
+            if remaining <= 0:
                 raise
             delay = max(0.05, (exc.retry_after_ms or 250) / 1000)
             # Back off so a burst of waiting callers does not resynchronise.
@@ -150,15 +185,13 @@ async def await_python_session_ready(create, deadline: datetime) -> None:
     the whole deadline on something that will never succeed.
     """
 
-    last_error: AgentBoxApiError | None = None
+    last_error: SandboxUnavailable | None = None
     while datetime.now(timezone.utc) < deadline:
         try:
             await create()
             return
-        except AgentBoxApiError as exc:
+        except SandboxUnavailable as exc:
             last_error = exc
-            if exc.retry.value == "do_not_retry":
-                raise
             remaining = (deadline - datetime.now(timezone.utc)).total_seconds()
             if remaining <= 0:
                 break
@@ -199,15 +232,15 @@ async def resize_process_terminal(
             TerminalSize(cols=cols, rows=rows),
             deadline_at=deadline_at,
         )
-    except AgentBoxApiError as exc:
-        return agentbox_command_failure(
-            error=f"AgentBox {exc.code}: {exc}",
-            retryable=exc.retry.value != "do_not_retry",
+    except SandboxError as exc:
+        return sandbox_command_failure(
+            error=f"{type(exc).__name__}: {exc}",
+            retryable=isinstance(exc, SandboxUnavailable),
             process_id=process_id,
             completed=False,
         )
     except (httpx.HTTPError, OSError, ValueError) as exc:
-        return agentbox_command_failure(
+        return sandbox_command_failure(
             error=f"AgentBox terminal resize failed: {type(exc).__name__}: {exc}",
             retryable=True,
             process_id=process_id,

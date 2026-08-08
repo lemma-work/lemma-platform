@@ -26,15 +26,15 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: agentbox
+        working-directory: lemma-backend
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
-          cache-dependency-glob: agentbox/uv.lock
-      - name: Install AgentBox with every provider and state backend
-        run: uv sync --all-extras --locked
+          cache-dependency-glob: lemma-backend/uv.lock
+      - name: Install with the E2B extra
+        run: uv sync --extra local --extra e2b --locked
       - name: Verify E2B configuration is present
         # Fail loudly rather than letting the suite skip itself into a green
         # tick, which is exactly how this provider went unverified before.
@@ -68,12 +68,15 @@ jobs:
           AGENTBOX_E2B_FUNCTION_BUILD_ID: ${{ vars.AGENTBOX_E2B_FUNCTION_BUILD_ID }}
         run: >-
           uv run python -m pytest
-          tests/adapters/test_e2b_real.py
-          --junitxml=agentbox-e2b-e2e.xml
+          app/modules/workspace/tests/integration/test_e2b_provider_real.py
+          sandbox_runtime/tests/test_e2b_templates.py
+          sandbox_runtime/tests/test_e2b_template_build_config.py
+          -m ""
+          --junitxml=e2b-e2e.xml
       - name: Upload results
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: agentbox-e2b-e2e
-          path: agentbox/agentbox-e2b-e2e.xml
+          path: lemma-backend/e2b-e2e.xml
           if-no-files-found: ignore

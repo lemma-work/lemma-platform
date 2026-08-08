@@ -1,0 +1,179 @@
+# Build context is the monorepo root:
+#   docker build -f lemma-backend/sandbox-images/Dockerfile.workspace -t agentbox-workspace:dev .
+# NOTE ON NAMING: paths and env vars inside the image still say "agentbox"
+# (/opt/agentbox-python, /run/agentbox-bootstrap, AGENTBOX_RUNTIME_TOKEN_FILE).
+# They are not cosmetic: they are the contract between a *running* sandbox and
+# the backend that delivers its credential. Workspaces on E2B are adopted
+# rather than replaced, so a sandbox created from an older template outlives a
+# backend deploy -- renaming these would leave the backend writing a token to a
+# path that sandbox does not read. They change when there is a reason to
+# recreate every sandbox, not before.
+
+ARG PYTHON_IMAGE=python:3.14.6-slim
+ARG NODE_IMAGE=node:24.18.0-slim
+ARG UV_VERSION=0.11.31
+ARG PNPM_VERSION=11.15.1
+
+FROM ghcr.io/astral-sh/uv:${UV_VERSION} AS uv-runtime
+
+FROM ${NODE_IMAGE} AS node-runtime
+ARG PNPM_VERSION
+ARG TARGETARCH
+WORKDIR /opt/agentbox-node
+RUN corepack enable pnpm \
+    && corepack prepare "pnpm@${PNPM_VERSION}" --activate
+COPY lemma-backend/sandbox-images/templates/workspace-node/package.json ./package.json
+COPY lemma-backend/sandbox-images/templates/workspace-node/pnpm-lock.yaml ./pnpm-lock.yaml
+COPY lemma-backend/sandbox-images/templates/workspace-node/pnpm-workspace.yaml ./pnpm-workspace.yaml
+RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
+    pnpm install --prod --frozen-lockfile \
+    && runtime_arch="${TARGETARCH:-$(dpkg --print-architecture)}" \
+    && case "${runtime_arch}" in \
+        amd64) browser_binary=agent-browser-linux-x64 ;; \
+        arm64) browser_binary=agent-browser-linux-arm64 ;; \
+        *) echo "unsupported Agent Browser architecture: ${runtime_arch}" >&2; exit 1 ;; \
+       esac \
+    && browser_bin_dir="$(find node_modules/.pnpm -type d -path '*/node_modules/agent-browser/bin' -print -quit)" \
+    && test -n "${browser_bin_dir}" \
+    && find "${browser_bin_dir}" -maxdepth 1 -type f -name 'agent-browser-*' \
+        ! -name "${browser_binary}" -delete \
+    && chmod 0755 "${browser_bin_dir}/${browser_binary}" \
+    && pnpm store prune
+
+FROM ${PYTHON_IMAGE} AS python-runtime
+ENV UV_PROJECT_ENVIRONMENT=/opt/agentbox-python \
+    UV_COMPILE_BYTECODE=1 \
+    UV_LINK_MODE=copy
+COPY --from=uv-runtime /uv /usr/local/bin/uv
+COPY lemma-backend/sandbox-images/templates/workspace-python/pyproject.toml /build/lemma-backend/sandbox-images/templates/workspace-python/pyproject.toml
+COPY lemma-backend/sandbox-images/templates/workspace-python/uv.lock /build/lemma-backend/sandbox-images/templates/workspace-python/uv.lock
+COPY lemma-python /build/lemma-python
+COPY lemma-pod-bundle /build/lemma-pod-bundle
+COPY lemma-cli /build/lemma-cli
+COPY lemma-skills /build/lemma-skills
+RUN uv sync \
+        --project /build/lemma-backend/sandbox-images/templates/workspace-python \
+        --locked \
+        --no-dev \
+        --no-editable \
+    && printf '%s\n' \
+        'import sys; p="/workspace/.python/lib/python3.14/site-packages"; sys.path.insert(0, p) if p not in sys.path else None' \
+        > /opt/agentbox-python/lib/python3.14/site-packages/agentbox-workspace-overlay.pth \
+    && uv cache clean
+
+FROM ${PYTHON_IMAGE}
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_PREFIX=/workspace/.python \
+    PYTHONPATH=/app:/workspace/.python/lib/python3.14/site-packages:/opt/agentbox-python/lib/python3.14/site-packages \
+    HOME=/home/appuser \
+    DISPLAY=:99 \
+    XDG_RUNTIME_DIR=/tmp/agentbox-browser/runtime \
+    WORKSPACE_XVFB_SCREEN=1440x960x24 \
+    AGENT_BROWSER_CONFIG=/tmp/agentbox-browser/config.json \
+    AGENT_BROWSER_DASHBOARD_PORT=4848 \
+    AGENT_BROWSER_DASHBOARD_INTERNAL_PORT=4849 \
+    AGENT_BROWSER_EXECUTABLE_PATH=/usr/local/bin/workspace-chrome \
+    AGENT_BROWSER_PROFILE=/tmp/agentbox-browser/profile \
+    AGENT_BROWSER_SESSION=workspace \
+    AGENT_BROWSER_HEADED=true \
+    AGENTBOX_RUNTIME_TOKEN_FILE=/run/agentbox-bootstrap/token \
+    AGENTBOX_SANDBOX_PROCESS_NAMESPACE=isolated \
+    NODE_PATH=/opt/agentbox-node/node_modules \
+    PNPM_HOME=/home/appuser/.local/share/pnpm \
+    PATH=/workspace/.python/bin:/opt/agentbox-python/bin:/opt/agentbox-node/node_modules/.bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin \
+    MPLBACKEND=Agg
+
+RUN apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        bash \
+        ca-certificates \
+        chromium \
+        curl \
+        fonts-dejavu-core \
+        fonts-liberation \
+        git \
+        libasound2t64 \
+        libatk-bridge2.0-0t64 \
+        libatk1.0-0t64 \
+        libatomic1 \
+        libatspi2.0-0t64 \
+        libcairo2 \
+        libcups2t64 \
+        libnspr4 \
+        libnss3 \
+        libpango-1.0-0 \
+        libxcomposite1 \
+        libxdamage1 \
+        libxkbcommon0 \
+        procps \
+        ripgrep \
+        socat \
+        tini \
+        xvfb \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=node-runtime /usr/local/bin/node /usr/local/bin/node
+COPY --from=node-runtime /opt/agentbox-node /opt/agentbox-node
+COPY --from=python-runtime /opt/agentbox-python /opt/agentbox-python
+COPY --from=uv-runtime /uv /usr/local/bin/uv
+COPY --from=uv-runtime /uvx /usr/local/bin/uvx
+COPY lemma-backend/sandbox-images/scripts/agentbox-node-tool /usr/local/lib/agentbox-node-tool
+RUN ln -sf "$(command -v chromium)" /usr/local/bin/workspace-chrome \
+    && ln -sf /opt/agentbox-python/bin/lemma /usr/local/bin/lemma \
+    && chmod 0755 /usr/local/lib/agentbox-node-tool \
+    && ln -sf /usr/local/lib/agentbox-node-tool /usr/local/bin/agent-browser \
+    && ln -sf /usr/local/lib/agentbox-node-tool /usr/local/bin/lit \
+    && ln -sf /usr/local/lib/agentbox-node-tool /usr/local/bin/liteparse \
+    && ln -sf /usr/local/lib/agentbox-node-tool /usr/local/bin/pnpm
+
+RUN groupadd --gid 10001 appuser \
+    && useradd --uid 10001 --gid 10001 --home-dir /home/appuser --create-home appuser \
+    && mkdir -p \
+        /app/sandbox_runtime/api \
+        /app/sandbox_runtime/workspace \
+        /workspace \
+        /run/agentbox-bootstrap \
+        /tmp/.X11-unix \
+        /tmp/agentbox-browser/runtime \
+    && chmod 1777 /tmp/.X11-unix \
+    && chown -R 10001:10001 \
+        /app \
+        /workspace \
+        /home/appuser \
+        /run/agentbox-bootstrap \
+        /tmp/agentbox-browser \
+    && chmod 0700 /run/agentbox-bootstrap
+
+COPY lemma-python /sdk/lemma-python
+COPY lemma-pod-bundle /sdk/lemma-pod-bundle
+COPY lemma-cli /sdk/lemma-cli
+COPY lemma-typescript /sdk/lemma-typescript
+COPY lemma-skills /sdk/lemma-skills
+COPY lemma-backend/sandbox-images/templates/workspace-python/agentbox-profile.sh /etc/profile.d/agentbox-python.sh
+RUN chmod -R a+rX /sdk
+
+COPY --chown=10001:10001 lemma-backend/sandbox_runtime/__init__.py /app/sandbox_runtime/__init__.py
+COPY --chown=10001:10001 lemma-backend/sandbox_runtime/protocol.py /app/sandbox_runtime/protocol.py
+COPY --chown=10001:10001 lemma-backend/sandbox_runtime/tasks.py /app/sandbox_runtime/tasks.py
+COPY --chown=10001:10001 lemma-backend/sandbox_runtime/contracts.py /app/sandbox_runtime/contracts.py
+COPY --chown=10001:10001 lemma-backend/sandbox_runtime/workspace /app/sandbox_runtime/workspace
+COPY lemma-backend/sandbox-images/scripts/start-workspace-runtime.sh /usr/local/bin/start-workspace-runtime
+COPY lemma-backend/sandbox-images/scripts/start-browser.sh /usr/local/bin/start-browser
+COPY lemma-backend/sandbox-images/scripts/save-webpage.sh /usr/local/bin/save-webpage
+COPY lemma-backend/sandbox-images/scripts/webpage-to-markdown.mjs /opt/agentbox-node/webpage-to-markdown.mjs
+RUN ln -sf /opt/agentbox-node/webpage-to-markdown.mjs /usr/local/lib/webpage-to-markdown.mjs
+RUN chmod 0755 \
+        /usr/local/bin/start-workspace-runtime \
+        /usr/local/bin/start-browser \
+        /usr/local/bin/save-webpage \
+        /usr/local/lib/webpage-to-markdown.mjs \
+    && python -m compileall -q /app/sandbox_runtime
+
+WORKDIR /workspace
+USER 10001:10001
+EXPOSE 8080 4848
+
+ENTRYPOINT ["tini", "--"]
+CMD ["start-workspace-runtime"]
