@@ -10,7 +10,6 @@ from pydantic import BaseModel
 @dataclass
 class SandboxInfo:
     sandbox_id: str
-    namespace: str
     status: str
     image: str
     created_at: str | None = None

@@ -420,12 +420,17 @@ async def function_benchmark_runtime(
         else:
             selected_function_image = "agentbox-function:unused-by-e2b"
             selected_workspace_image = "agentbox-workspace:unused-by-e2b"
+        # Two settings objects, restored separately: writing a workspace field
+        # back onto the core settings would silently create an attribute there
+        # and leave the real one overridden for the rest of the session.
         original_backend = {
             "api_url": settings.api_url,
             "function_runtime_gateway_url": settings.function_runtime_gateway_url,
-            "workspace_provider": workspace_settings.provider,
-            "agentbox_workspace_image": workspace_settings.workspace_image,
-            "agentbox_function_image": workspace_settings.function_image,
+        }
+        original_workspace = {
+            "provider": workspace_settings.provider,
+            "workspace_image": workspace_settings.workspace_image,
+            "function_image": workspace_settings.function_image,
         }
         runtime: FunctionBenchmarkRuntime | None = None
         benchmark_error: BaseException | None = None
@@ -509,6 +514,8 @@ async def function_benchmark_runtime(
         finally:
             for name, value in original_backend.items():
                 setattr(settings, name, value)
+            for name, value in original_workspace.items():
+                setattr(workspace_settings, name, value)
 
 
 @asynccontextmanager

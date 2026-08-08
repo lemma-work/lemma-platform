@@ -31,6 +31,7 @@ from sandbox_runtime.protocol import (
     FunctionRuntimeLease,
     PortAccessGrant,
     PortProtocol,
+    SandboxKey,
     WorkloadKind,
 )
 
@@ -288,16 +289,6 @@ class LocalSandboxClient(LocalSandboxFilesMixin):
         del logical_id
         return str(operation_id)
 
-    async def inspect_process(
-        self, workload_kind, logical_id: UUID, operation_id: UUID
-    ) -> LocalProcessRef:
-        del workload_kind
-        return LocalProcessRef(
-            operation_id=operation_id,
-            provider_process_id=self._processes.get((logical_id, operation_id)),
-            state=ProcessState.RUNNING,
-        )
-
     # ------------------------------------------------------------------
     # Ports
     # ------------------------------------------------------------------
@@ -311,7 +302,6 @@ class LocalSandboxClient(LocalSandboxFilesMixin):
         protocol=None,
         expires_at: datetime,
     ) -> PortAccessGrant:
-        del workload_kind
         # Ensuring first is deliberate: a grant for a sandbox that is not
         # running would hand back a URL that 502s until something else
         # happens to start it.
@@ -321,8 +311,10 @@ class LocalSandboxClient(LocalSandboxFilesMixin):
         )
         base = (workspace_settings.port_access_url or settings.api_url).rstrip("/")
         return PortAccessGrant(
-            workload_kind=WorkloadKind.WORKSPACE,
-            logical_id=logical_id,
+            key=SandboxKey(
+                workload_kind=workload_kind or WorkloadKind.WORKSPACE,
+                logical_id=logical_id,
+            ),
             port=port,
             protocol=protocol or PortProtocol.HTTP,
             url=f"{base}/workspace-ports/{token}/",

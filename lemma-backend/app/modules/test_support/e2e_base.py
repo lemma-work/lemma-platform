@@ -579,6 +579,7 @@ async def worker(e2e_settings, sandbox_reachable_backend):
         from app.modules.agent.tests.e2e.system_lemma_helpers import (
             system_lemma_env_overlay,
         )
+        from app.modules.test_support.e2e.runtime import workspace_provisioning_env
 
         proc = subprocess.Popen(
             [
@@ -590,6 +591,10 @@ async def worker(e2e_settings, sandbox_reachable_backend):
             env={
                 **os.environ,
                 **system_lemma_env_overlay(),  # LEMMA_OPENAI_* from .env
+                # The worker provisions its own sandboxes now, so it needs the
+                # provider configuration at spawn -- see
+                # workspace_provisioning_env().
+                **workspace_provisioning_env(),
                 # Prepend rather than replace: overwriting it silently drops an
                 # inherited PYTHONPATH, so a sibling package resolved from
                 # somewhere else (a git worktree checked out beside the venv)

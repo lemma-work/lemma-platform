@@ -1814,10 +1814,10 @@ async def test_job_function_long_run_is_not_destroyed_while_active(
     the run finishing proves activity held the sandbox, not that the sweep
     simply never came round.
     """
-    from app.core.config import settings as app_settings
+    from app.modules.workspace.config import workspace_settings
 
-    original_idle = app_settings.workspace_idle_release_seconds
-    app_settings.workspace_idle_release_seconds = 5
+    original_idle = workspace_settings.idle_release_seconds
+    workspace_settings.idle_release_seconds = 5
     try:
         pod_id = test_pod["id"]
         suffix = uuid4().hex[:8]
@@ -1869,7 +1869,7 @@ async def {function_name}(ctx: FunctionContext, data: JobInput) -> JobResult:
         assert final_run["status"] == "COMPLETED", final_run
         assert final_run["output_data"]["slept"] == 60
     finally:
-        app_settings.workspace_idle_release_seconds = original_idle
+        workspace_settings.idle_release_seconds = original_idle
 
 
 @pytest.mark.asyncio

@@ -20,6 +20,7 @@ import httpx
 import uvicorn
 
 from app.core.config import settings
+from app.modules.workspace.config import workspace_settings
 from app.modules.schedule.config import schedule_settings
 from app.modules.agent.tests.e2e.system_lemma_helpers import (
     skip_unless_system_lemma,
@@ -195,9 +196,14 @@ async def _temporary_workspace_tunnel(
         await asyncio.gather(output_task, return_exceptions=True)
 
 
-# Source paths used by the canonical workspace and function images.
+# Source paths the workspace and function images are built from -- the union of
+# what their Dockerfiles COPY. Keep this in step with those COPY lines: a path
+# missing here caches a stale image, and a path that no longer exists makes the
+# fingerprint unresolvable, which silently rebuilds the image for every test
+# module.
 _AGENTBOX_BUILD_INPUTS = (
-    "agentbox",
+    "lemma-backend/sandbox-images",
+    "lemma-backend/sandbox_runtime",
     "lemma-python",
     "lemma-pod-bundle",
     "lemma-cli",
@@ -259,6 +265,62 @@ def _agentbox_image_fingerprint(repo_root: Path) -> str | None:
     return digest.hexdigest()[:12]
 
 
+def _workspace_image_name() -> str:
+    """The workspace image tag, without building it.
+
+    Content-addressed, so naming the image is pure and the (slow) build stays
+    in the fixture. The worker subprocess needs the *name* at spawn, long
+    before any module-scoped fixture has run.
+    """
+    configured_image = os.getenv("WORKSPACE_E2E_IMAGE")
+    if configured_image:
+        return configured_image
+    fingerprint = _agentbox_image_fingerprint(Path(__file__).resolve().parents[5])
+    return (
+        f"agentbox-workspace:e2e-{fingerprint}"
+        if fingerprint
+        else "agentbox-workspace:e2e"
+    )
+
+
+def _function_image_name() -> str:
+    """The function-runner image tag, without building it."""
+    configured_image = os.getenv("FUNCTION_E2E_IMAGE")
+    if configured_image:
+        return configured_image
+    platform = os.getenv("FUNCTION_E2E_PLATFORM", "linux/amd64")
+    fingerprint = _agentbox_image_fingerprint(Path(__file__).resolve().parents[5])
+    platform_tag = platform.rsplit("/", 1)[-1].replace("_", "-")
+    return (
+        f"agentbox-function:e2e-{platform_tag}-{fingerprint}"
+        if fingerprint
+        else f"agentbox-function:e2e-{platform_tag}"
+    )
+
+
+def workspace_provisioning_env() -> dict[str, str]:
+    """Workspace settings the session-scoped worker subprocess must be born with.
+
+    Sandboxes are provisioned in-process now, so the worker provisions its own
+    -- it is no longer a client of a separate manager process that held this
+    configuration. It captures its environment once at spawn, and
+    ``local_agentbox_server`` is function-scoped, so anything set there arrives
+    far too late: the worker would reject the tag-pinned E2E images for not
+    being digest-pinned, and its sandboxes could not reach the host.
+    """
+    if workspace_settings.provider.lower() != "docker":
+        return {}
+    return {
+        "WORKSPACE_PROVIDER": "docker",
+        "WORKSPACE_IMAGE": _workspace_image_name(),
+        "FUNCTION_IMAGE": _function_image_name(),
+        "WORKSPACE_DOCKER_ALLOW_MUTABLE_IMAGES": "true",
+        "WORKSPACE_ADD_HOST_GATEWAY": "true",
+        "WORKSPACE_HOST_ALIAS": "host.docker.internal",
+        "WORKSPACE_RUNTIME_CREDENTIAL_KEY": "test-runtime-credential-key-32-bytes",
+    }
+
+
 @pytest.fixture(scope="module")
 def workspace_image(e2e_settings) -> Generator[str, None, None]:
     """Ensure the docker workspace runtime image exists locally.
@@ -271,15 +333,7 @@ def workspace_image(e2e_settings) -> Generator[str, None, None]:
     """
     repo_root = Path(__file__).resolve().parents[5]
     configured_image = os.getenv("WORKSPACE_E2E_IMAGE")
-    if configured_image:
-        image = configured_image
-    else:
-        fingerprint = _agentbox_image_fingerprint(repo_root)
-        image = (
-            f"agentbox-workspace:e2e-{fingerprint}"
-            if fingerprint
-            else "agentbox-workspace:e2e"
-        )
+    image = _workspace_image_name()
 
     inspect = subprocess.run(
         ["docker", "image", "inspect", image],
@@ -330,18 +384,8 @@ def function_image(e2e_settings) -> Generator[str, None, None]:
 
     del e2e_settings
     repo_root = Path(__file__).resolve().parents[5]
-    configured_image = os.getenv("FUNCTION_E2E_IMAGE")
     platform = os.getenv("FUNCTION_E2E_PLATFORM", "linux/amd64")
-    if configured_image:
-        image = configured_image
-    else:
-        fingerprint = _agentbox_image_fingerprint(repo_root)
-        platform_tag = platform.rsplit("/", 1)[-1].replace("_", "-")
-        image = (
-            f"agentbox-function:e2e-{platform_tag}-{fingerprint}"
-            if fingerprint
-            else f"agentbox-function:e2e-{platform_tag}"
-        )
+    image = _function_image_name()
     inspect = subprocess.run(
         ["docker", "image", "inspect", image],
         check=False,
@@ -436,7 +480,8 @@ async def local_agentbox_server(
     """
 
     provider_name = e2e_settings.e2e_sandbox_mode
-    overrides: dict[str, object] = {"workspace_provider": provider_name}
+    # Attribute names on WorkspaceSettings, not the env names below.
+    overrides: dict[str, object] = {"provider": provider_name}
     env_updates: dict[str, str] = {
         "WORKSPACE_PROVIDER": provider_name,
         "WORKSPACE_RUNTIME_CREDENTIAL_KEY": "test-runtime-credential-key-32-bytes",
@@ -447,11 +492,11 @@ async def local_agentbox_server(
         function_image = request.getfixturevalue("function_image")
         overrides.update(
             {
-                "agentbox_workspace_image": workspace_image,
-                "agentbox_function_image": function_image,
-                "agentbox_docker_allow_mutable_images": True,
-                "agentbox_add_host_gateway": True,
-                "agentbox_host_alias": "host.docker.internal",
+                "workspace_image": workspace_image,
+                "function_image": function_image,
+                "docker_allow_mutable_images": True,
+                "add_host_gateway": True,
+                "host_alias": "host.docker.internal",
             }
         )
         env_updates.update(
@@ -485,10 +530,12 @@ async def local_agentbox_server(
         )
         env_updates.update({k: v for k, v in required.items() if v})
 
-    original_settings = {key: getattr(settings, key) for key in overrides}
+    original_settings = {
+        key: getattr(workspace_settings, key) for key in overrides
+    }
     original_env = {key: os.environ.get(key) for key in env_updates}
     for key, value in overrides.items():
-        setattr(settings, key, value)
+        setattr(workspace_settings, key, value)
     os.environ.update(env_updates)
 
     from app.modules.workspace.services.sandbox_composition import (
@@ -501,7 +548,7 @@ async def local_agentbox_server(
     finally:
         await reset_sandbox_service()
         for key, value in original_settings.items():
-            setattr(settings, key, value)
+            setattr(workspace_settings, key, value)
         for key, value in original_env.items():
             if value is None:
                 os.environ.pop(key, None)

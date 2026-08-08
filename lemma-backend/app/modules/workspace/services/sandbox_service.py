@@ -136,7 +136,6 @@ class SandboxService:
         return SandboxInfo(
             sandbox_id=str(sandbox.id),
             name=instance.provider_id if instance else str(sandbox.id),
-            namespace=None,
             status="RUNNING" if running else "STOPPED",
             image="",
             created_at=None,

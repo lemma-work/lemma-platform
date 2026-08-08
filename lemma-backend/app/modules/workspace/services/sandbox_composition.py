@@ -104,7 +104,6 @@ def _to_info(handle) -> SandboxInfo:
     return SandboxInfo(
         sandbox_id=str(handle.sandbox_id),
         name=handle.provider_id,
-        namespace=None,
         status="RUNNING",
         image="",
         created_at=None,

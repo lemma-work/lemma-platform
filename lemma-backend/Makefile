@@ -227,10 +227,15 @@ typecheck-critical:
 		app/modules/pod/domain \
 		app/modules/pod_bundle/domain \
 		app/modules/schedule/domain \
-		app/modules/usage/domain
+		app/modules/usage/domain \
+		app/modules/workspace/services/local_sandbox_client.py \
+		app/modules/workspace/services/port_access.py \
+		app/modules/workspace/services/sandbox_service.py \
+		app/modules/workspace/services/sandbox_sweeper.py
 
 architecture:
 	uv run python scripts/check_architecture.py
+	uv run python scripts/check_settings_attrs.py
 	uv run python scripts/generate_route_inventory.py --check
 
 # Async-safety gate (enforced in CI). Catches blocking calls newly introduced

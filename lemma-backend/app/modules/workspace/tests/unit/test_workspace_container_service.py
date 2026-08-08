@@ -24,7 +24,6 @@ def _sandbox_info(
     return SandboxInfo(
         sandbox_id=str(user_id),
         name=str(user_id),
-        namespace=None,
         status="RUNNING",
         image="",
         endpoint=f"agentbox://{user_id}",
