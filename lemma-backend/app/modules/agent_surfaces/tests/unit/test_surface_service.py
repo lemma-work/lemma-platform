@@ -5,6 +5,7 @@ from uuid import uuid4
 
 import pytest
 
+from app.modules.agent_surfaces.services import teams_consent
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
     AgentSurfaceStatus,
@@ -1114,29 +1115,26 @@ async def test_teams_consent_callback_requires_the_nonce_it_issued(monkeypatch):
     """
     cache = _FakeNonceCache()
     monkeypatch.setattr(
-        "app.modules.agent_surfaces.services.surface_service._get_consent_nonce_cache",
+        "app.modules.agent_surfaces.services.teams_consent._get_cache",
         lambda: cache,
     )
     monkeypatch.setattr(
-        "app.modules.agent_surfaces.services.surface_service.settings.api_url",
+        "app.modules.agent_surfaces.services.teams_consent.settings.api_url",
         "https://api.example.test",
-    )
-    service = AgentSurfaceService(
-        surface_repository=AsyncMock(), account_binding_resolver=AsyncMock()
     )
     surface_id = uuid4()
 
-    assert not await service.consume_consent_nonce(surface_id, "guessed")
-    assert not await service.consume_consent_nonce(surface_id, "")
+    assert not await teams_consent.consume_nonce(surface_id, "guessed")
+    assert not await teams_consent.consume_nonce(surface_id, "")
 
-    url = await service._build_consent_url(surface_id, "tenant-123")
+    url = await teams_consent.build_consent_url(surface_id, "tenant-123")
     state = url.split("state=")[1].split("&")[0]
     issued_id, _, nonce = state.partition("%3A")
     assert issued_id == str(surface_id)
     assert nonce
 
     # Wrong nonce for a real surface is still refused.
-    assert not await service.consume_consent_nonce(surface_id, "wrong")
+    assert not await teams_consent.consume_nonce(surface_id, "wrong")
     # The issued one works exactly once, so a replayed callback loses.
-    assert await service.consume_consent_nonce(surface_id, nonce)
-    assert not await service.consume_consent_nonce(surface_id, nonce)
+    assert await teams_consent.consume_nonce(surface_id, nonce)
+    assert not await teams_consent.consume_nonce(surface_id, nonce)

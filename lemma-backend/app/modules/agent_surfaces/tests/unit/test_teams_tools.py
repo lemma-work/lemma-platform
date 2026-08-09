@@ -353,10 +353,12 @@ async def test_teams_get_recent_thread_messages_include_files(
 
 
 def test_teams_download_helper_classifies_urls_and_credentials():
+    from app.modules.agent_surfaces.platforms.teams.attachment_urls import (
+        is_raw_sharepoint_document_url as _is_raw_sharepoint_document_url,
+        looks_like_bot_attachment_url as _looks_like_bot_attachment_url,
+        split_sharepoint_site_and_item_path as _split_sharepoint_site_and_item_path,
+    )
     from app.modules.agent_surfaces.platforms.teams.service import (
-        _is_raw_sharepoint_document_url,
-        _looks_like_bot_attachment_url,
-        _split_sharepoint_site_and_item_path,
         _tenant_id_from_credentials,
     )
 

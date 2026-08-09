@@ -34,6 +34,7 @@ from app.modules.datastore.infrastructure.record_update_sql import (
     chunk_for_parameter_limit,
     split_previous_image,
 )
+from app.modules.datastore.infrastructure.rls_context import verify_rls_context
 from app.modules.datastore.infrastructure.sql_identifiers import sanitize_identifier
 from app.modules.datastore.services.record_validator import convert_record
 from app.modules.datastore.services.table_context import TableContext
@@ -342,40 +343,11 @@ class DatastoreRecordRepository(DatastoreRecordRepositoryPort):
                 if len(rows) > max_rows:
                     rows = rows[:max_rows]
                 if enable_rls:
-                    await self._reject_if_rls_context_moved(
-                        session, user_id, is_pod_admin=is_pod_admin
-                    )
+                    await verify_rls_context(session, user_id, is_pod_admin=is_pod_admin)
                 return rows, len(rows)
         except DBAPIError as exc:
             logger.debug("datastore.record.query.propagated", exc_info=True)
             raise_record_read_error(exc, operation="query execution")
-
-    async def _reject_if_rls_context_moved(
-        self, session, user_id, *, is_pod_admin: bool
-    ) -> None:
-        """Refuse the results if the query rewrote the GUCs that RLS reads.
-
-        The parser rejects ``set_config`` before we get here, so this should
-        never fire. It exists because it does not depend on the parser being
-        exhaustive: RLS is enforced through session settings any role may
-        overwrite, and a call the parser failed to recognise would otherwise
-        silently return every user's rows. The settings are transaction-local
-        and do not revert on their own, so tampering is still visible now.
-        """
-        observed = (
-            await session.execute(
-                text(
-                    "SELECT current_setting('app.current_user_id', TRUE), "
-                    "current_setting('app.current_user_is_pod_admin', TRUE)"
-                )
-            )
-        ).one()
-        expected = (str(user_id), "true" if is_pod_admin else "false")
-        if (str(observed[0] or ""), str(observed[1] or "").lower()) != expected:
-            logger.warning("datastore.record.query.rls_context_tampered.degraded")
-            raise DatastoreQueryError(
-                "Query altered the row-level security context and was discarded"
-            )
 
     async def _reject_if_too_expensive(self, session, query: str) -> None:
         """Reject a query whose planned cost or row estimate exceeds the ceiling.
