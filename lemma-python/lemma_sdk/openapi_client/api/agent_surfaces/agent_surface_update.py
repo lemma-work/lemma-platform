@@ -79,6 +79,10 @@ def sync_detailed(
      Partially update a surface. Only fields present in the request are
     applied; the surface's platform and name are immutable.
 
+    Passing ``account_id`` rebinds the surface to a different connected account
+    — the repair when the account it runs on expires, or its owner leaves the
+    pod. It must be an account the caller owns.
+
     Args:
         pod_id (UUID):
         surface_name (str):
@@ -121,6 +125,10 @@ def sync(
      Partially update a surface. Only fields present in the request are
     applied; the surface's platform and name are immutable.
 
+    Passing ``account_id`` rebinds the surface to a different connected account
+    — the repair when the account it runs on expires, or its owner leaves the
+    pod. It must be an account the caller owns.
+
     Args:
         pod_id (UUID):
         surface_name (str):
@@ -157,6 +165,10 @@ async def asyncio_detailed(
 
      Partially update a surface. Only fields present in the request are
     applied; the surface's platform and name are immutable.
+
+    Passing ``account_id`` rebinds the surface to a different connected account
+    — the repair when the account it runs on expires, or its owner leaves the
+    pod. It must be an account the caller owns.
 
     Args:
         pod_id (UUID):
@@ -197,6 +209,10 @@ async def asyncio(
 
      Partially update a surface. Only fields present in the request are
     applied; the surface's platform and name are immutable.
+
+    Passing ``account_id`` rebinds the surface to a different connected account
+    — the repair when the account it runs on expires, or its owner leaves the
+    pod. It must be an account the caller owns.
 
     Args:
         pod_id (UUID):

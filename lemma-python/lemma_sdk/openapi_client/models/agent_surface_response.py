@@ -14,6 +14,7 @@ from ..types import UNSET, Unset
 
 if TYPE_CHECKING:
     from ..models.surface_config_response import SurfaceConfigResponse
+    from ..models.surface_connection import SurfaceConnection
     from ..models.surface_reach import SurfaceReach
 
 
@@ -32,6 +33,7 @@ class AgentSurfaceResponse:
         account_id (None | Unset | UUID):
         agent_id (None | Unset | UUID):
         agent_name (None | str | Unset):
+        connection (None | SurfaceConnection | Unset):
         credential_mode (SurfaceCredentialMode | Unset):
         reach (None | SurfaceReach | Unset):
         status (AgentSurfaceStatus | Unset):
@@ -50,6 +52,7 @@ class AgentSurfaceResponse:
     account_id: None | Unset | UUID = UNSET
     agent_id: None | Unset | UUID = UNSET
     agent_name: None | str | Unset = UNSET
+    connection: None | SurfaceConnection | Unset = UNSET
     credential_mode: SurfaceCredentialMode | Unset = UNSET
     reach: None | SurfaceReach | Unset = UNSET
     status: AgentSurfaceStatus | Unset = UNSET
@@ -61,6 +64,7 @@ class AgentSurfaceResponse:
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
+        from ..models.surface_connection import SurfaceConnection
         from ..models.surface_reach import SurfaceReach
 
         config = self.config.to_dict()
@@ -94,6 +98,14 @@ class AgentSurfaceResponse:
             agent_name = UNSET
         else:
             agent_name = self.agent_name
+
+        connection: dict[str, Any] | None | Unset
+        if isinstance(self.connection, Unset):
+            connection = UNSET
+        elif isinstance(self.connection, SurfaceConnection):
+            connection = self.connection.to_dict()
+        else:
+            connection = self.connection
 
         credential_mode: str | Unset = UNSET
         if not isinstance(self.credential_mode, Unset):
@@ -154,6 +166,8 @@ class AgentSurfaceResponse:
             field_dict["agent_id"] = agent_id
         if agent_name is not UNSET:
             field_dict["agent_name"] = agent_name
+        if connection is not UNSET:
+            field_dict["connection"] = connection
         if credential_mode is not UNSET:
             field_dict["credential_mode"] = credential_mode
         if reach is not UNSET:
@@ -176,6 +190,7 @@ class AgentSurfaceResponse:
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
         from ..models.surface_config_response import SurfaceConfigResponse
+        from ..models.surface_connection import SurfaceConnection
         from ..models.surface_reach import SurfaceReach
 
         d = dict(src_dict)
@@ -231,6 +246,23 @@ class AgentSurfaceResponse:
             return cast(None | str | Unset, data)
 
         agent_name = _parse_agent_name(d.pop("agent_name", UNSET))
+
+        def _parse_connection(data: object) -> None | SurfaceConnection | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            try:
+                if not isinstance(data, dict):
+                    raise TypeError()
+                connection_type_0 = SurfaceConnection.from_dict(data)
+
+                return connection_type_0
+            except TypeError, ValueError, AttributeError, KeyError:
+                pass
+            return cast(None | SurfaceConnection | Unset, data)
+
+        connection = _parse_connection(d.pop("connection", UNSET))
 
         _credential_mode = d.pop("credential_mode", UNSET)
         credential_mode: SurfaceCredentialMode | Unset
@@ -316,6 +348,7 @@ class AgentSurfaceResponse:
             account_id=account_id,
             agent_id=agent_id,
             agent_name=agent_name,
+            connection=connection,
             credential_mode=credential_mode,
             reach=reach,
             status=status,

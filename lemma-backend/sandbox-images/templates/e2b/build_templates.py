@@ -8,7 +8,7 @@ from pathlib import Path
 from e2b import Template, default_build_logger, wait_for_port
 
 
-REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
+REPOSITORY_ROOT = Path(__file__).resolve().parents[4]
 UV_VERSION = "0.11.31"
 UV_LINUX_X64_SHA256 = "8cc1cd82d434ec565376f98bd938d4b715b5791a80ff2d3aa78821cf85091b4b"
 NODE_VERSION = "24.18.0"
@@ -117,15 +117,15 @@ def workspace_template():
         .copy("lemma-cli", "/build/lemma-cli")
         .copy("lemma-skills", "/build/lemma-skills")
         .copy(
-            "agentbox/templates/workspace-python",
-            "/build/agentbox/templates/workspace-python",
+            "lemma-backend/sandbox-images/templates/workspace-python",
+            "/build/lemma-backend/sandbox-images/templates/workspace-python",
         )
         .run_cmd(
             "UV_PYTHON_INSTALL_DIR=/opt/python uv python install 3.14 && "
             "UV_PYTHON_INSTALL_DIR=/opt/python "
             "UV_PROJECT_ENVIRONMENT=/opt/agentbox-python "
             "UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy "
-            "uv sync --project /build/agentbox/templates/workspace-python "
+            "uv sync --project /build/lemma-backend/sandbox-images/templates/workspace-python "
             "--python 3.14 "
             "--locked --no-dev --no-editable && "
             "printf '%s\\n' "
@@ -152,11 +152,11 @@ def workspace_template():
             "> /root/.local/share/jupyter/kernels/python3/kernel.json && "
             "uv cache clean && "
             "rm -rf /build/lemma-python /build/lemma-pod-bundle "
-            "/build/lemma-cli /build/lemma-skills /build/agentbox",
+            "/build/lemma-cli /build/lemma-skills /build/lemma-backend",
             user="root",
         )
         .copy(
-            "agentbox/templates/workspace-node",
+            "lemma-backend/sandbox-images/templates/workspace-node",
             "/opt/agentbox-node",
         )
         .run_cmd(
@@ -174,7 +174,7 @@ def workspace_template():
             user="root",
         )
         .copy(
-            "agentbox/scripts/agentbox-node-tool",
+            "lemma-backend/sandbox-images/scripts/agentbox-node-tool",
             "/usr/local/lib/agentbox-node-tool",
             mode=0o755,
         )
@@ -192,27 +192,27 @@ def workspace_template():
             user="user",
         )
         .copy(
-            "agentbox/templates/workspace-node/agentbox-profile.sh",
+            "lemma-backend/sandbox-images/templates/workspace-node/agentbox-profile.sh",
             "/etc/profile.d/agentbox-node.sh",
             mode=0o644,
         )
         .copy(
-            "agentbox/templates/workspace-python/agentbox-profile.sh",
+            "lemma-backend/sandbox-images/templates/workspace-python/agentbox-profile.sh",
             "/etc/profile.d/agentbox-python.sh",
             mode=0o644,
         )
         .copy(
-            "agentbox/scripts/start-browser.sh",
+            "lemma-backend/sandbox-images/scripts/start-browser.sh",
             "/usr/local/bin/start-browser",
             mode=0o755,
         )
         .copy(
-            "agentbox/scripts/save-webpage.sh",
+            "lemma-backend/sandbox-images/scripts/save-webpage.sh",
             "/usr/local/bin/save-webpage",
             mode=0o755,
         )
         .copy(
-            "agentbox/scripts/webpage-to-markdown.mjs",
+            "lemma-backend/sandbox-images/scripts/webpage-to-markdown.mjs",
             "/opt/agentbox-node/webpage-to-markdown.mjs",
             mode=0o755,
         )
@@ -273,38 +273,37 @@ def function_template():
         )
         .copy("lemma-python", "/build/lemma-python")
         .copy(
-            "agentbox/templates/function-python",
-            "/build/agentbox/templates/function-python",
+            "lemma-backend/sandbox-images/templates/function-python",
+            "/build/lemma-backend/sandbox-images/templates/function-python",
         )
         .run_cmd(
             f"{_install_uv_command()} && "
             "UV_PROJECT_ENVIRONMENT=/opt/agentbox-function "
             "UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy "
-            "uv sync --project /build/agentbox/templates/function-python "
+            "uv sync --project /build/lemma-backend/sandbox-images/templates/function-python "
             "--locked --no-dev --no-editable && "
             "uv cache clean && "
-            "rm -rf /build/lemma-python /build/agentbox",
+            "rm -rf /build/lemma-python /build/lemma-backend",
             user="root",
         )
-        .copy("agentbox/agentbox/__init__.py", "/app/agentbox/__init__.py")
         .copy(
-            "agentbox/agentbox/event_catalog.py",
-            "/app/agentbox/event_catalog.py",
+            "lemma-backend/sandbox_runtime/__init__.py",
+            "/app/sandbox_runtime/__init__.py",
         )
         .copy(
-            "agentbox/agentbox/observability.py",
-            "/app/agentbox/observability.py",
+            "lemma-backend/sandbox_runtime/tasks.py",
+            "/app/sandbox_runtime/tasks.py",
         )
         .copy(
-            "agentbox/agentbox/function_runtime",
-            "/app/agentbox/function_runtime",
+            "lemma-backend/sandbox_runtime/function",
+            "/app/sandbox_runtime/function",
         )
         .copy(
-            "agentbox/scripts/lemma-function-runtime",
+            "lemma-backend/sandbox-images/scripts/lemma-function-runtime",
             "/usr/local/bin/lemma-function-runtime",
             mode=0o755,
         )
-        .run_cmd("python -m compileall -q /app/agentbox", user="root")
+        .run_cmd("python -m compileall -q /app/sandbox_runtime", user="root")
         .set_envs(
             {
                 "PYTHONUNBUFFERED": "1",

@@ -13514,17 +13514,19 @@ var LemmaClient = (() => {
     }
     /**
      * Check Organization Slug Availability
-     * Check whether an organization slug is available
+     * Check whether an organization slug is available, and optionally whether a candidate name is still free
      * @param slug
+     * @param name
      * @returns OrganizationSlugAvailabilityResponse Successful Response
      * @throws ApiError
      */
-    static orgSlugAvailability(slug) {
+    static orgSlugAvailability(slug, name) {
       return request(OpenAPI, {
         method: "GET",
         url: "/organizations/slug-availability",
         query: {
-          "slug": slug
+          "slug": slug,
+          "name": name
         },
         errors: {
           422: `Validation Error`
@@ -14678,6 +14680,10 @@ var LemmaClient = (() => {
      * Update Surface
      * Partially update a surface. Only fields present in the request are
      * applied; the surface's platform and name are immutable.
+     *
+     * Passing ``account_id`` rebinds the surface to a different connected account
+     * — the repair when the account it runs on expires, or its owner leaves the
+     * pod. It must be an account the caller owns.
      * @param podId
      * @param surfaceName
      * @param requestBody

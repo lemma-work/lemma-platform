@@ -15,6 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.modules.schedule.scheduler.api.scheduler_controller import (
     router as scheduler_router,
 )
+from app.modules.schedule.scheduler.internal_auth import get_internal_token
 from app.modules.schedule.scheduler.scheduler_service import get_scheduler_service
 from app.core.config import settings
 from app.core.log.log import setup_logging, get_logger, validate_release_identity
@@ -54,6 +55,14 @@ async def lifespan(app: FastAPI):
         log_level=settings.log_level,
     )
     validate_release_identity(settings.environment)
+    # Split from the backend, the two processes cannot agree on a token minted
+    # at startup, so an operator has to supply one. Refuse to serve the job API
+    # without it rather than expose the control plane unauthenticated.
+    if not get_internal_token():
+        raise RuntimeError(
+            "SCHEDULER_INTERNAL_TOKEN must be set to run the scheduler service: "
+            "it is the only credential guarding the job API."
+        )
     scheduler = get_scheduler_service()
     await scheduler.start()
     logger.info("service.started")
@@ -159,7 +168,8 @@ async def health_ready():
     )
 
 
-app.include_router(scheduler_router)
+# Internal control plane: kept out of the schema, like the health routes above.
+app.include_router(scheduler_router, include_in_schema=False)
 
 
 if __name__ == "__main__":

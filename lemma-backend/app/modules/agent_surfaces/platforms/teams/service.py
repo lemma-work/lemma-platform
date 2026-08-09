@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-import base64
 import mimetypes
-from pathlib import Path
 from typing import Any
-from urllib.parse import quote, urlparse
+from urllib.parse import quote, urljoin, urlparse
 
 import aiohttp
 from pydantic_ai.tools import RunContext
@@ -23,6 +21,15 @@ from app.modules.agent_surfaces.platforms.common import (
     channel_author_label,
 )
 from app.modules.agent_surfaces.platforms.teams import client
+from app.modules.agent_surfaces.platforms.teams.attachment_urls import (
+    encode_share_url,
+    filename_from_url,
+    hostname_of,
+    is_raw_sharepoint_document_url,
+    is_sharepoint_url,
+    split_sharepoint_site_and_item_path,
+    looks_like_bot_attachment_url,
+)
 from app.modules.agent_surfaces.platforms.teams.client import GRAPH_BASE
 from app.modules.agent_surfaces.platforms.teams.parser import strip_html
 from app.modules.agent_surfaces.platforms.teams.models import (
@@ -34,6 +41,9 @@ from app.modules.agent_surfaces.platforms.teams.models import (
 from app.core.log.log import get_logger
 
 logger = get_logger(__name__)
+# Graph answers `/content` with a redirect to a pre-signed URL, so redirects have
+# to be followed -- but never with the credential still attached.
+_MAX_DOWNLOAD_REDIRECTS = 5
 
 
 class TeamsPlatformService:
@@ -42,6 +52,12 @@ class TeamsPlatformService:
         self._graph_base = str(
             credentials.get("graph_api_base_url") or GRAPH_BASE
         ).rstrip("/")
+        # Deployments that reach Bot Framework through a non-public host (the
+        # test doubles, an on-prem gateway) declare it here. It joins the hosts
+        # allowed to receive the bot token; it does not replace them.
+        self._bot_service_host = hostname_of(
+            str(credentials.get("bot_service_base_url") or "")
+        )
 
     async def download_attachment_bytes(
         self,
@@ -76,7 +92,7 @@ class TeamsPlatformService:
             return None
         file_name = (
             str(attachment.get("name") or "").strip()
-            or _filename_from_url(download_url)
+            or filename_from_url(download_url)
             or "teams_file"
         )
         mime_type = (
@@ -318,7 +334,9 @@ class TeamsPlatformService:
         if not normalized_url:
             return None
 
-        if _looks_like_bot_attachment_url(normalized_url):
+        if looks_like_bot_attachment_url(
+            normalized_url, extra_host=self._bot_service_host
+        ):
             bot_token = await client.get_bot_token()
             if not bot_token:
                 logger.debug(
@@ -345,7 +363,7 @@ class TeamsPlatformService:
             )
             return None
 
-        if _is_sharepoint_url(normalized_url):
+        if is_sharepoint_url(normalized_url):
             # Resolve SharePoint browser/share URLs via Graph shares first.
             shared_item = await _resolve_shared_item_content_request(
                 session=session,
@@ -355,7 +373,7 @@ class TeamsPlatformService:
             if shared_item:
                 return shared_item
 
-            if _is_raw_sharepoint_document_url(normalized_url):
+            if is_raw_sharepoint_document_url(normalized_url):
                 content_url = await _resolve_sharepoint_file_content_url(
                     session=session,
                     token=graph_token,
@@ -395,15 +413,36 @@ class TeamsPlatformService:
         headers: dict[str, str],
         mode: str,
     ) -> bytes | None:
-        async with session.get(url, headers=headers, allow_redirects=True) as response:
-            if response.status >= 400:
-                await response.text()
-                logger.debug(
-                    'agent_surfaces.service.teams_download_file_s_fetch.diagnostic',
-                    status=response.status,
-                )
-                return None
-            return await response.read()
+        """Fetch the planned URL, dropping the credential across redirects.
+
+        Graph redirects `/content` to a pre-signed URL that needs no header of
+        ours, so following by hand and clearing the headers is both what
+        Microsoft expects and what stops a redirect to an unvetted host from
+        collecting the token.
+        """
+        current_url = url
+        current_headers = headers
+        for _ in range(_MAX_DOWNLOAD_REDIRECTS + 1):
+            async with session.get(
+                current_url, headers=current_headers, allow_redirects=False
+            ) as response:
+                if response.status in {301, 302, 303, 307, 308}:
+                    location = response.headers.get("Location")
+                    if not location:
+                        return None
+                    current_url = urljoin(current_url, location)
+                    current_headers = {}
+                    continue
+                if response.status >= 400:
+                    await response.text()
+                    logger.debug(
+                        'agent_surfaces.service.teams_download_file_s_fetch.diagnostic',
+                        status=response.status,
+                    )
+                    return None
+                return await response.read()
+        logger.debug('agent_surfaces.service.teams_download_file_redirects.diagnostic')
+        return None
 
 
 def _tenant_id_from_credentials(credentials: dict[str, Any]) -> str | None:
@@ -419,44 +458,13 @@ def _tenant_id_from_credentials(credentials: dict[str, Any]) -> str | None:
     ) or None
 
 
-def _filename_from_url(url: str) -> str | None:
-    candidate = Path(str(url).split("?")[0]).name.strip()
-    return candidate or None
-
-
-def _is_raw_sharepoint_document_url(url: str) -> bool:
-    parsed = urlparse(url)
-    hostname = (parsed.hostname or "").lower()
-    path = parsed.path or ""
-    if "sharepoint.com" not in hostname:
-        return False
-    return "/shared documents/" in path.lower() or "/sites/" in path.lower()
-
-
-def _is_sharepoint_url(url: str) -> bool:
-    parsed = urlparse(url)
-    hostname = (parsed.hostname or "").lower()
-    return "sharepoint.com" in hostname
-
-
-def _looks_like_bot_attachment_url(url: str) -> bool:
-    parsed = urlparse(url)
-    hostname = (parsed.hostname or "").lower()
-    return "trafficmanager.net" in hostname or "/v3/attachments/" in (parsed.path or "")
-
-
-def _encode_share_url(url: str) -> str:
-    encoded = base64.b64encode(url.encode("utf-8")).decode("utf-8")
-    return "u!" + encoded.rstrip("=").replace("/", "_").replace("+", "-")
-
-
 async def _resolve_shared_item_content_request(
     *,
     session: aiohttp.ClientSession,
     token: str,
     url: str,
 ) -> dict[str, Any] | None:
-    share_token = _encode_share_url(url)
+    share_token = encode_share_url(url)
     endpoint = f"{GRAPH_BASE}/shares/{quote(share_token)}/driveItem"
     headers = client.auth_headers(token)
     headers["Prefer"] = "redeemSharingLinkIfNecessary"
@@ -497,7 +505,7 @@ async def _resolve_sharepoint_file_content_url(
     if not hostname or not raw_path or "sharepoint.com" not in hostname:
         return None
 
-    site_path, item_path = _split_sharepoint_site_and_item_path(raw_path)
+    site_path, item_path = split_sharepoint_site_and_item_path(raw_path)
     if not item_path:
         return None
 
@@ -514,18 +522,6 @@ async def _resolve_sharepoint_file_content_url(
         f"{GRAPH_BASE}/sites/{quote(site_id)}/drive/root:"
         f"{quote(item_path, safe='/')}:/content"
     )
-
-
-def _split_sharepoint_site_and_item_path(raw_path: str) -> tuple[str, str | None]:
-    path = "/" + str(raw_path).lstrip("/")
-    segments = [segment for segment in path.split("/") if segment]
-    if not segments:
-        return "/", None
-    if segments[0] in {"sites", "teams", "personal"} and len(segments) >= 3:
-        return "/" + "/".join(segments[:2]), "/" + "/".join(segments[2:])
-    if len(segments) >= 2:
-        return "/", "/" + "/".join(segments)
-    return "/", None
 
 
 async def _resolve_sharepoint_site_id(

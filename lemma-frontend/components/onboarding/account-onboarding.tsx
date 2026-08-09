@@ -37,7 +37,7 @@ import {
   useCreateOrganization,
   useJoinSuggestedOrganization,
   useMyOrganizationInvitations,
-  useOrganizationSlugAvailability,
+  useOrganizationNameAvailability,
   useSuggestedOrganizations,
 } from "@/lib/hooks/use-organizations";
 import { useAccessiblePods } from "@/lib/hooks/use-pods";
@@ -65,13 +65,14 @@ import {
 
 import { SetupChrome, SetupShell } from "./account-onboarding-chrome";
 import {
-  generatedOrganizationName,
   hasUsableProfileName,
   inferFullName,
+  isRetriableOrganizationNameConflict,
+  MAX_ORGANIZATION_NAME_ATTEMPTS,
   nextTeamSetupStep,
   normalizeOnboardingStep,
+  organizationNameCandidate,
   podNameForAudience,
-  personalWorkspaceName,
   setupStepsForAudience,
   splitName,
   startPathComposerLaunch,
@@ -310,7 +311,7 @@ function SetupAssistant({
   const [organizationNameAttempt, setOrganizationNameAttempt] = useState(0);
   const [workspaceName, setWorkspaceName] = useState(
     initialDraft?.workspaceName ||
-      generatedOrganizationName(email),
+      organizationNameCandidate({ email, workDomain: normalizedWorkDomain }),
   );
   const [audience, setAudience] = useState<Audience | null>(
     "personal",
@@ -334,13 +335,16 @@ function SetupAssistant({
     () => slugifyOrganizationName(workspaceName),
     [workspaceName],
   );
-  const slugAvailability = useOrganizationSlugAvailability(slug, {
-    enabled:
-      (step === "identity" || step === "workspace") &&
-      !suggestedOrganization &&
-      organizations.length === 0 &&
-      slug.length > 2,
-  });
+  const nameAvailability = useOrganizationNameAvailability(
+    { slug, name: workspaceName },
+    {
+      enabled:
+        (step === "identity" || step === "workspace") &&
+        !suggestedOrganization &&
+        organizations.length === 0 &&
+        slug.length > 2,
+    },
+  );
   const activeOrganization = createdOrganization || initialOrganization;
   // Only queried on a local install, and only to answer "is there exactly one
   // coding agent to adopt as this pod's default".
@@ -348,23 +352,33 @@ function SetupAssistant({
     isLocal ? activeOrganization?.id : null,
   );
 
+  // Keep the name we show on the identity step to one that is still free. This
+  // is for honest copy only — the create itself re-walks the ladder against the
+  // server, which is the authority.
   useEffect(() => {
     if (
       step !== "identity" ||
       suggestedOrganization ||
-      slugAvailability.data?.available !== false ||
-      organizationNameAttempt >= 20
+      nameAvailability.available !== false ||
+      organizationNameAttempt >= MAX_ORGANIZATION_NAME_ATTEMPTS
     ) {
       return;
     }
 
     const nextAttempt = organizationNameAttempt + 1;
     setOrganizationNameAttempt(nextAttempt);
-    setWorkspaceName(generatedOrganizationName(email, nextAttempt));
+    setWorkspaceName(
+      organizationNameCandidate({
+        email,
+        workDomain: normalizedWorkDomain,
+        attempt: nextAttempt,
+      }),
+    );
   }, [
     email,
+    nameAvailability.available,
+    normalizedWorkDomain,
     organizationNameAttempt,
-    slugAvailability.data?.available,
     step,
     suggestedOrganization,
   ]);
@@ -407,6 +421,47 @@ function SetupAssistant({
     goTo(startStep);
   };
 
+  /**
+   * Create this person's first organization, stepping through name candidates
+   * when the server says one is taken.
+   *
+   * The probe on the identity step cannot be what guarantees uniqueness: two
+   * colleagues signing up in the same minute both pass it and one still loses
+   * the race. So the ladder is walked here too, against the only authority
+   * there is, and setup survives a collision instead of dead-ending on it.
+   */
+  const createFirstOrganization = async (): Promise<Organization> => {
+    const useDomainJoin = Boolean(normalizedWorkDomain);
+    let lastError: unknown = null;
+
+    for (
+      let attempt = organizationNameAttempt;
+      attempt < organizationNameAttempt + MAX_ORGANIZATION_NAME_ATTEMPTS;
+      attempt += 1
+    ) {
+      try {
+        return await createOrganization.mutateAsync({
+          name: organizationNameCandidate({
+            email,
+            workDomain: normalizedWorkDomain,
+            attempt,
+          }),
+          join_policy: useDomainJoin
+            ? OrganizationJoinPolicy.EMAIL_DOMAIN
+            : OrganizationJoinPolicy.INVITE_ONLY,
+          email_domain: useDomainJoin ? normalizedWorkDomain : null,
+        });
+      } catch (error) {
+        if (!isRetriableOrganizationNameConflict(error)) throw error;
+        lastError = error;
+      }
+    }
+
+    throw lastError instanceof Error
+      ? lastError
+      : new Error("Could not find an available organization name");
+  };
+
   const handleIdentitySubmit = async (event: React.FormEvent) => {
     event.preventDefault();
     if (identitySubmissionRef.current) return;
@@ -442,22 +497,18 @@ function SetupAssistant({
         );
         toast.success(`Joined ${organization.name}`);
       } else if (!organization) {
-        const useDomainJoin = Boolean(normalizedWorkDomain);
-        organization = await createOrganization.mutateAsync({
-          name: workspaceName.trim(),
-          join_policy: useDomainJoin
-            ? OrganizationJoinPolicy.EMAIL_DOMAIN
-            : OrganizationJoinPolicy.INVITE_ONLY,
-          email_domain: useDomainJoin ? normalizedWorkDomain : null,
-        });
+        organization = await createFirstOrganization();
         toast.success(`${organization.name} created`);
       }
 
       setCreatedOrganization(organization);
       onOrganizationReady(organization);
+      // The name the server settled on, which a collision may have moved off
+      // the candidate we were showing.
+      setWorkspaceName(organization.name);
       saveOnboardingDraft({
         audience: "personal",
-        workspaceName,
+        workspaceName: organization.name,
         organizationId: organization.id,
       });
 
@@ -515,11 +566,10 @@ function SetupAssistant({
     // explicitly before a team pod can be created.
     if (audienceForPod === "team") return null;
 
-    const organization = await createOrganization.mutateAsync({
-      name: personalWorkspaceName(identityName),
-      join_policy: OrganizationJoinPolicy.INVITE_ONLY,
-      email_domain: null,
-    });
+    // Same ladder as the identity step. Two silent paths inventing two
+    // different names for the same person is how "Ada's Space" ended up beside
+    // "Cedar Harbor" — and the second Ada on the platform hit a hard conflict.
+    const organization = await createFirstOrganization();
     setCreatedOrganization(organization);
     onOrganizationReady(organization);
     saveOnboardingDraft({ organizationId: organization.id });
@@ -928,9 +978,9 @@ function SetupAssistant({
             suggestedOrganizations.isLoading ||
             (!activeOrganization &&
               !suggestedOrganization &&
-              (slugAvailability.isLoading ||
-                slugAvailability.isFetching ||
-                slugAvailability.data?.available === false))
+              (nameAvailability.isLoading ||
+                nameAvailability.isFetching ||
+                nameAvailability.available === false))
           }
           isSaving={
             updateProfile.isPending ||
@@ -973,7 +1023,7 @@ function SetupAssistant({
           domain={workDomain || null}
           suggestedOrganization={suggestedOrganization}
           workspaceName={workspaceName}
-          slugAvailable={slugAvailability.data?.available}
+          slugAvailable={nameAvailability.available}
           allowDomainJoin={allowDomainJoin}
           isJoining={joinSuggestedOrganization.isPending}
           isCreating={createOrganization.isPending || isCreatingPod}
