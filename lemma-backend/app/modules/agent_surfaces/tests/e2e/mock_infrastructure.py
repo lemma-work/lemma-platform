@@ -1323,14 +1323,48 @@ def slack_delivered(store: MockPlatformMessageStore) -> list[str]:
     """
     delivered: list[str] = []
     for platform, message in store.get_ordered("SLACK", "SLACK_STREAM_APPEND"):
-        if platform == "SLACK":
-            parts = [message.get("text"), message.get("blocks")]
-        else:
-            parts = [message.get("chunks")]
-        joined = "\n".join(str(part) for part in parts if part)
+        joined = _slack_reply_text(platform, message)
         if joined:
             delivered.append(joined)
     return delivered
+
+
+def _slack_reply_text(platform: str, message: dict) -> str:
+    parts = (
+        [message.get("text"), message.get("blocks")]
+        if platform == "SLACK"
+        else [message.get("chunks")]
+    )
+    return "\n".join(str(part) for part in parts if part)
+
+
+def slack_delivered_calls(store: MockPlatformMessageStore) -> list[dict]:
+    """The raw Slack calls that carried a reply, in arrival order.
+
+    ``slack_delivered`` is the text; this is for the handful of assertions
+    that need the call itself — which channel it went to, or how many replies
+    there were. Both posted messages and stream appends carry ``channel``.
+    """
+    return [
+        message
+        for platform, message in store.get_ordered("SLACK", "SLACK_STREAM_APPEND")
+        if _slack_reply_text(platform, message)
+    ]
+
+
+async def wait_for_slack_replies(
+    store: MockPlatformMessageStore,
+    min_count: int = 1,
+    timeout_seconds: float = 30.0,
+) -> list[dict]:
+    """Wait until at least ``min_count`` replies reach Slack by any transport."""
+    deadline = asyncio.get_running_loop().time() + timeout_seconds
+    while asyncio.get_running_loop().time() < deadline:
+        calls = slack_delivered_calls(store)
+        if len(calls) >= min_count:
+            return calls
+        await asyncio.sleep(0.2)
+    return slack_delivered_calls(store)
 
 
 async def wait_for_slack_text(
