@@ -4,6 +4,7 @@
 /* eslint-disable */
 import type { AgentSurfaceStatus } from './AgentSurfaceStatus.js';
 import type { SurfaceConfigResponse } from './SurfaceConfigResponse.js';
+import type { SurfaceConnection } from './SurfaceConnection.js';
 import type { SurfaceCredentialMode } from './SurfaceCredentialMode.js';
 import type { SurfacePlatform } from './SurfacePlatform.js';
 import type { SurfaceReach } from './SurfaceReach.js';
@@ -12,6 +13,7 @@ export type AgentSurfaceResponse = {
     agent_id?: (string | null);
     agent_name?: (string | null);
     config: SurfaceConfigResponse;
+    connection?: (SurfaceConnection | null);
     credential_mode?: SurfaceCredentialMode;
     id: string;
     name: string;
