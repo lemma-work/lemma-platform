@@ -93,6 +93,27 @@ _GRAPH_SCOPE = "https://graph.microsoft.com/.default"
 _consent_check_cache: RedisJsonCache | None = None
 
 
+# Single-use nonces proving an admin-consent callback belongs to a consent flow
+# this server actually started. One hour is well past a real consent round-trip
+# and short enough that an observed URL stops being useful quickly.
+_CONSENT_NONCE_TTL_SECONDS = 3600
+_consent_nonce_cache: RedisJsonCache | None = None
+
+
+def _get_consent_nonce_cache() -> RedisJsonCache:
+    global _consent_nonce_cache
+    if (
+        _consent_nonce_cache is None
+        or _consent_nonce_cache._redis_url != settings.redis_url
+    ):
+        _consent_nonce_cache = RedisJsonCache(
+            redis_url=settings.redis_url,
+            key_prefix="surface:teams-consent-nonce",
+            ttl_seconds=_CONSENT_NONCE_TTL_SECONDS,
+        )
+    return _consent_nonce_cache
+
+
 def _get_consent_cache() -> RedisJsonCache:
     global _consent_check_cache
     if (
@@ -533,6 +554,18 @@ class AgentSurfaceService(TelegramMiniAppSyncMixin):
             "consent_url": info.get("consent_url"),
         }
 
+    async def consume_consent_nonce(self, surface_id: UUID, nonce: str) -> bool:
+        """Spend the nonce issued with this surface's consent URL.
+
+        Compare-and-delete in one step, so a replayed callback loses the race
+        rather than being accepted twice.
+        """
+        if not nonce:
+            return False
+        return await _get_consent_nonce_cache().delete_if_value(
+            str(surface_id), nonce
+        )
+
     async def activate_after_consent(
         self,
         *,
@@ -543,6 +576,10 @@ class AgentSurfaceService(TelegramMiniAppSyncMixin):
         if surface is None:
             return None
 
+        # `external_tenant_id` is the inbound-message tenant gate, and this
+        # write is first-wins, so a wrong value here would both reject the real
+        # tenant's messages and let the writer's own tenant through -- and then
+        # persist, because later legitimate activations skip the overwrite.
         if not surface.external_tenant_id:
             surface.external_tenant_id = tenant_id
 
@@ -568,18 +605,27 @@ class AgentSurfaceService(TelegramMiniAppSyncMixin):
             await self.surface_repository.update(surface)
             return {"status": AgentSurfaceStatus.ACTIVE}
 
-        consent_url = self._build_consent_url(surface.id, tenant_id)
+        consent_url = await self._build_consent_url(surface.id, tenant_id)
         return {
             "status": AgentSurfaceStatus.PENDING_ADMIN_CONSENT,
             "consent_url": consent_url,
         }
 
-    def _build_consent_url(self, surface_id: UUID, tenant_id: str) -> str:
+    async def _build_consent_url(self, surface_id: UUID, tenant_id: str) -> str:
+        """Build the Microsoft consent URL, binding it to a single-use nonce.
+
+        The callback is unauthenticated, so `state` is the only thing tying a
+        callback to a flow we started. A bare surface id cannot do that: it is
+        shown to every pod member who opens Teams setup and never rotates, so
+        anyone who saw it could call the callback directly.
+        """
+        nonce = secrets.token_urlsafe(32)
+        await _get_consent_nonce_cache().set_raw(str(surface_id), nonce)
         callback_base = settings.api_url.rstrip("/")
         params = urlencode({
             "client_id": surface_settings.microsoft_bot_app_id or "",
             "redirect_uri": f"{callback_base}/surfaces/teams/admin-consent/callback",
-            "state": str(surface_id),
+            "state": f"{surface_id}:{nonce}",
         })
         return f"https://login.microsoftonline.com/{tenant_id}/adminconsent?{params}"
 
