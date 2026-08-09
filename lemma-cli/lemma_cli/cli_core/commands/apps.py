@@ -119,7 +119,7 @@ def _run_agent_browser(commands: list[list[str]], *, best_effort: bool = False) 
     sequence as JSON on stdin, so nothing sensitive reaches the process table.
     """
     result = subprocess.run(
-        ["agent-browser", "batch", "--bail", "--json"],
+        ["agent-browser", "batch", "--bail"],
         input=json.dumps(commands),
         capture_output=True,
         text=True,
@@ -127,14 +127,10 @@ def _run_agent_browser(commands: list[list[str]], *, best_effort: bool = False) 
     if result.returncode == 0 or best_effort:
         return
 
-    detail = ""
-    try:
-        for entry in json.loads(result.stdout):
-            if not entry.get("success") and entry.get("error"):
-                detail = f": {entry['error']}"
-                break
-    except (ValueError, TypeError, AttributeError):
-        pass
+    # `--bail` stops at the first failure, so the tail of its own output is the
+    # reason. Relaying it beats the bare exit code the previous loop reported.
+    reason = (result.stderr or result.stdout or "").strip().splitlines()
+    detail = f": {reason[-1]}" if reason else ""
     fail(f"agent-browser exited with code {result.returncode}{detail}.")
 
 
