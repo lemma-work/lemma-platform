@@ -887,8 +887,10 @@ function parsePlanTextStep(entry: string, inferTextStatus = false): PlanStepStat
   const normalizedEntry = stripDuplicatePlanCheckboxPrefix(entry);
   // `\s*[-*]?\s*` gave two runs of optional whitespace either side of an
   // optional bullet, so a line of spaces could be split between them countless
-  // ways. Binding the whitespace to the bullet leaves one reading.
-  const match = /^\s*(?:[-*]\s*)?\[([ xX*~-])\]\s*(.*)$/.exec(normalizedEntry);
+  // ways. Binding the whitespace to the bullet leaves one reading. The trailing
+  // `\s*` is gone for the same reason -- it and `(.*)` competed for the spaces
+  // after the checkbox -- and the capture is trimmed below regardless.
+  const match = /^\s*(?:[-*]\s*)?\[([ xX*~-])\](.*)$/.exec(normalizedEntry);
   if (match) {
     const textStatus = parseTextPlanStatus(match[2].trim(), {
       inferStatus: inferTextStatus,
