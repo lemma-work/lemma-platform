@@ -19,6 +19,7 @@ from app.modules.agent.domain.value_objects import (
 )
 from app.modules.agent.infrastructure.harnesses.history import build_history_processors
 from app.modules.agent.infrastructure.harnesses.pydantic_ai import PydanticAIHarness
+from app.modules.agent.services.workspace_location import ProjectRepo
 from app.modules.agent.services.agent_runner_service import (
     FULL_HISTORY_AGENT_RUN_COUNT,
     AgentRunnerService,
@@ -808,6 +809,41 @@ def test_workspace_agent_prompt_states_working_directory():
     assert "pip install" in prompt  # on-demand package guidance
     # The non-root sandbox can't write the system env, so steer away from uv --system.
     assert "uv pip install --system" not in prompt
+
+
+def test_project_agent_prompt_describes_the_checkout_not_the_scratchpad():
+    """On a repo, the scratchpad orientation is not just unhelpful but wrong:
+    there is no sibling `/workspace/c/<date>/<slug>` holding earlier work, and
+    an empty directory means a failed clone rather than a new conversation."""
+
+    conversation = Conversation(pod_id=uuid4(), user_id=uuid4(), agent_id=uuid4())
+    agent = Agent(
+        pod_id=conversation.pod_id,
+        user_id=conversation.user_id,
+        name="builder",
+        instruction="Do the task.",
+        toolsets=[AgentToolset.WORKSPACE_CLI],
+    )
+
+    prompt = build_agent_instructions(
+        agent=agent,
+        conversation=conversation,
+        ctx=SimpleNamespace(
+            workspace_cwd="/workspace/repos/acme/web",
+            workspace_repo=ProjectRepo(owner="acme", repo="web", ref="main"),
+            surface_platform=None,
+        ),
+    )
+
+    assert "/workspace/repos/acme/web" in prompt
+    assert "acme/web" in prompt
+    assert "`main`" in prompt
+    # It must not go on to configure what the credential bridge already set.
+    assert "already authenticated" in prompt
+    # A shared checkout: warn before it tidies up someone else's work.
+    assert "git status" in prompt
+    assert "reset --hard" in prompt
+    assert "list `/workspace/c/`" not in prompt
 
 
 def test_workspace_directory_falls_back_to_conversation_path():

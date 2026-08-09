@@ -5,6 +5,9 @@ import type { Connector } from '@/lib/types';
 import {
     canConnectWithDefaults,
     describeInstallTarget,
+    getKindDescription,
+    getKindLabel,
+    getManagedConfigCopy,
     getTenantConfiguredConnectors,
     getTenantConfiguredKindSpec,
     isTenantConfigured,
@@ -79,6 +82,54 @@ const oauthKind = {
         properties: { client_id: { type: 'string' }, client_secret: { type: 'string' } },
     },
 } satisfies Partial<KindSpec> as Partial<KindSpec>;
+
+/**
+ * GitHub: the first first-party OAuth connector served over the `http` kind.
+ * Lemma owns the OAuth client, and the operations carry their own server_url,
+ * so there is nothing for an org to fill in — despite `http` being one of the
+ * kinds an org normally has to address itself.
+ */
+const githubKind = {
+    kind: ConnectorKind.HTTP,
+    auth_scheme: AuthScheme.OAUTH2,
+    system_default_available: true,
+    supports_org_custom_oauth: true,
+    config_schema: {
+        type: 'object',
+        required: ['client_id', 'client_secret'],
+        properties: { client_id: { type: 'string' }, client_secret: { type: 'string' } },
+    },
+} satisfies Partial<KindSpec> as Partial<KindSpec>;
+
+describe('an OAuth connector served over http', () => {
+    it('connects in one click instead of demanding an OAuth app', () => {
+        // The regression this guards: `http` is a tenant-configured kind, and
+        // that check ran first — so GitHub asked every org for a client id and
+        // secret that Lemma already has.
+        expect(requiresInstallConfig(githubKind as KindSpec)).toBe(false);
+        expect(canConnectWithDefaults(githubKind as KindSpec)).toBe(true);
+    });
+
+    it('still asks for an OAuth app when the platform has no client', () => {
+        const noSystemClient = { ...githubKind, system_default_available: false };
+        expect(requiresInstallConfig(noSystemClient as KindSpec)).toBe(true);
+        expect(canConnectWithDefaults(noSystemClient as KindSpec)).toBe(false);
+    });
+
+    it('is described as OAuth, not as a spec to point at', () => {
+        expect(getKindLabel(ConnectorKind.HTTP, githubKind as KindSpec)).toBe('Native OAuth');
+        expect(getKindDescription(ConnectorKind.HTTP, githubKind as KindSpec))
+            .not.toContain('OpenAPI');
+        expect(getManagedConfigCopy(ConnectorKind.HTTP, githubKind as KindSpec))
+            .not.toContain('needs an address');
+    });
+
+    it('leaves a bring-your-own http install describing a spec', () => {
+        const byoApi = { ...githubKind, auth_scheme: AuthScheme.API_KEY };
+        expect(getKindDescription(ConnectorKind.HTTP, byoApi as KindSpec)).toContain('OpenAPI');
+        expect(requiresInstallConfig(byoApi as KindSpec)).toBe(true);
+    });
+});
 
 describe('tenant-configured kinds', () => {
     it('recognises the three kinds whose address the org supplies', () => {

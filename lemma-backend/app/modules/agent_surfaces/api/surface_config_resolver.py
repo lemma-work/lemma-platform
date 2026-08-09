@@ -20,7 +20,7 @@ from app.modules.agent_surfaces.domain.entities import (
 )
 from app.modules.agent_surfaces.domain.errors import AgentSurfaceValidationError
 from app.modules.apps.contracts import get_ready_pod_app_by_name
-from app.modules.connectors.contracts import ConnectorNotFoundError
+from app.modules.connectors.contracts import AccountNotFoundError
 
 
 async def require_surface_agent_action(
@@ -60,7 +60,12 @@ async def require_own_account(
         return
     try:
         await connector_service.get_account(account_id, user_id, organization_id)
-    except ConnectorNotFoundError as exc:
+    # `get_account` answers "not yours" and "no such account" with the same
+    # AccountNotFoundError, which is the whole point: the caller learns nothing
+    # about accounts they do not own. Caught by its own name rather than through
+    # a base class, because which 404 base it carries is exactly what this
+    # branch changes.
+    except AccountNotFoundError as exc:
         raise HTTPException(
             status_code=403,
             detail=(

@@ -29,6 +29,9 @@ from app.modules.agent.tools.workspace_cli.github_credential_bridge import (
     ensure_github_credentials,
     looks_like_git_command,
 )
+from app.modules.agent.tools.workspace_cli.github_project import (
+    ensure_project_checkout,
+)
 from app.modules.agent.tools.workspace_cli.helper import (
     CHARACTER_LIMIT_STDOUT,
     normalize_terminal_output,
@@ -166,6 +169,14 @@ def _with_recreation_notice(text: str | None, *, recreated: bool) -> str | None:
     return f"{WORKSPACE_RECREATED_NOTICE}\n{text or ''}"
 
 
+def _with_notice(text: str | None, *, notice: str | None) -> str | None:
+    """Prepend a one-off notice, on the same principle as the one above."""
+
+    if not notice:
+        return text
+    return f"{notice}\n{text or ''}"
+
+
 def _render_terminal_result(
     result: dict[str, Any], *, tty: bool
 ) -> tuple[str | None, str | None]:
@@ -261,10 +272,18 @@ async def exec_command_internal(
             session_id=runtime_context.default_shell_session_id,
             close_on_exit=False,
         )
+        project_notice: str | None = None
         async with workspace_session:
-            if looks_like_git_command(request.cmd):
+            # A repo-backed conversation needs credentials for every command,
+            # not just git-looking ones: the clone that puts the project on disk
+            # has to happen before whatever the agent actually asked for, even
+            # when that is `ls`.
+            if ctx.workspace_repo is not None or looks_like_git_command(request.cmd):
                 try:
                     await ensure_github_credentials(ctx, workspace_session)
+                    project_notice = await ensure_project_checkout(
+                        ctx, workspace_session
+                    )
                 except Exception:
                     # A broken credential bridge (DB/Redis hiccup, sandbox
                     # write failure) should not block the command itself --
@@ -309,6 +328,7 @@ async def exec_command_internal(
         stdout = _with_recreation_notice(
             stdout, recreated=workspace_session.workspace_recreated
         )
+        stdout = _with_notice(stdout, notice=project_notice)
         return ExecCommandResult(
             success=bool(result.get("success")),
             stdout=stdout,

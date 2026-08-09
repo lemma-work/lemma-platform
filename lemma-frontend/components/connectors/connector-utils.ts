@@ -117,14 +117,22 @@ export const isTenantConfigured = (capability: ConnectorKindSpec | null): boolea
  */
 export const requiresInstallConfig = (capability: ConnectorKindSpec | null): boolean => {
     if (!capability) return false;
-    // A tenant-configured kind is nothing without its address, so any config
-    // field at all is worth asking for before the install is created.
-    if (isTenantConfigured(capability)) return schemaHasFields(getConfigSchema(capability));
     // For an OAuth kind the config schema describes the org's own OAuth app —
     // opt-in, and unnecessary when the platform's client is available. This
     // mirrors the backend, which validates an OAuth system-default install
     // against an empty schema rather than this one.
+    //
+    // Checked before the tenant-configured kinds, not after. Those kinds are
+    // "nothing without an address" only because every one of them used to be a
+    // database, an MCP server, or a spec URL the org had to name. A first-party
+    // OAuth connector that happens to be served over http (GitHub) carries its
+    // own server_url in its operations and has a Lemma-owned client — asking
+    // that org for a client id and secret is asking for something it should
+    // never have to produce.
     if (capability.auth_scheme === 'OAUTH2' && hasSystemDefault(capability)) return false;
+    // A tenant-configured kind is nothing without its address, so any config
+    // field at all is worth asking for before the install is created.
+    if (isTenantConfigured(capability)) return schemaHasFields(getConfigSchema(capability));
     return buildSchemaFormFields(getConfigSchema(capability)).some((field) => field.required);
 };
 
@@ -182,16 +190,28 @@ export const formatKindName = (kind: string): string => {
         .join(' ');
 };
 
+/**
+ * A kind alone stopped being enough to describe an install once a first-party
+ * OAuth connector shipped over the http kind. GitHub is `http`, but nobody
+ * points Lemma at a GitHub spec — they sign in.
+ */
+const isOAuthOverHttp = (kind: string, capability: ConnectorKindSpec | null): boolean =>
+    kind === KIND.HTTP && capability?.auth_scheme === 'OAUTH2';
+
 export const getKindLabel = (kind: string, capability: ConnectorKindSpec | null): string => {
     if (kind === KIND.COMPOSIO) return 'Composio (recommended)';
     if (kind === KIND.PACKAGE && usesDirectCredentials(capability)) return 'Native credentials';
     if (kind === KIND.PACKAGE) return 'Native OAuth';
+    if (isOAuthOverHttp(kind, capability)) return 'Native OAuth';
     return formatKindName(kind);
 };
 
 export const getKindDescription = (kind: string, capability: ConnectorKindSpec | null): string => {
     if (kind === KIND.COMPOSIO) return 'Composio-managed auth with trigger-backed workflows. Recommended.';
     if (kind === KIND.SQL) return 'Point Lemma at a PostgreSQL database and run read-only queries against it.';
+    if (isOAuthOverHttp(kind, capability)) {
+        return 'Use OAuth with Lemma-managed or organization-managed credentials.';
+    }
     if (kind === KIND.HTTP) return 'Point Lemma at an OpenAPI spec; its endpoints become operations.';
     if (kind === KIND.MCP) return 'Point Lemma at an MCP server; its tools become operations.';
     if (usesDirectCredentials(capability)) return 'Connect with credentials from this app, such as an API key or bot token.';
@@ -214,6 +234,9 @@ export const getKindTagline = (kind: string): string => {
 };
 
 export const getManagedConfigCopy = (kind: string, capability: ConnectorKindSpec | null): string => {
+    // Before the tenant-configured line, for the same reason as in
+    // `requiresInstallConfig`: this connector has no address to ask for.
+    if (isOAuthOverHttp(kind, capability)) return 'Use the system default OAuth configuration for this app.';
     if (isTenantConfigured(capability)) return 'This connection needs an address. Fill in the fields below.';
     if (usesDirectCredentials(capability)) return 'Use the default credential setup for this app. Account credentials are added after enabling it.';
     if (kind === KIND.COMPOSIO) return 'Composio uses the system default configuration and supports triggers.';

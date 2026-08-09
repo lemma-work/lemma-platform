@@ -22,6 +22,10 @@ import {
 } from '@/lib/assistant/display-resource';
 import { buildConversationPresentationHref } from '@/lib/assistant/conversation-presentation';
 import { resolveAssistantControllerGates } from '@/lib/assistant/controller-gates';
+import {
+    projectConversationMetadata,
+    type ProjectSelection,
+} from '@/lib/assistant/project-selection';
 
 interface ConversationScope {
     podId?: string | null;
@@ -148,6 +152,12 @@ interface AIAssistantContextType {
     conversationModel: ConversationModel | null;
     conversationRuntime?: AgentRuntimeConfig | null;
     setConversationModel: (model: ConversationModel | null, runtime?: AgentRuntimeConfig | null) => Promise<void>;
+    // The project the *next* conversation starts in. It lives here rather than
+    // in a composer because every composer in the app shares one assistant, and
+    // the choice has to survive the composer being unmounted and remounted on
+    // the way from pod home into the conversation it creates.
+    pendingProject: ProjectSelection | null;
+    setPendingProject: (project: ProjectSelection | null) => void;
     isOpenedConversationRunning: boolean;
     isActiveConversationRunning: boolean;
     openConversation: (conversationId: string) => void;
@@ -263,6 +273,14 @@ export function AIAssistantProvider({
     const [lastCreatedResource, setLastCreatedResource] = useState<{ type: string; id: string } | null>(null);
     const [sideViewMessageLoadGeneration, setSideViewMessageLoadGeneration] = useState(0);
     const [readySideViewMessageLoadGeneration, setReadySideViewMessageLoadGeneration] = useState(-1);
+    const [pendingProject, setPendingProjectState] = useState<ProjectSelection | null>(null);
+    // Mirrored into a ref so `sendMessage` can read the current selection
+    // without taking it as a dependency and changing identity on every pick.
+    const pendingProjectRef = useRef<ProjectSelection | null>(null);
+    const setPendingProject = useCallback((project: ProjectSelection | null) => {
+        pendingProjectRef.current = project;
+        setPendingProjectState(project);
+    }, []);
     const isOpenRef = useRef(isOpen);
     const seenAutoNavigationToolCallIds = useRef<Set<string>>(new Set());
     const allowAutoNavigationRef = useRef(false);
@@ -726,7 +744,15 @@ export function AIAssistantProvider({
         try {
             await controllerRef.current.sendMessage(trimmed, {
                 instructions: options?.instructions,
-                conversationMetadata: options?.conversationMetadata,
+                // Merged, not chosen between: a start path or remix link says
+                // what the conversation is *for*, the composer's chip says
+                // where it runs, and those are different questions. Explicit
+                // metadata still wins key-for-key, so a launch that names its
+                // own repo is not overridden by a stale chip.
+                conversationMetadata: {
+                    ...projectConversationMetadata(pendingProjectRef.current),
+                    ...(options?.conversationMetadata ?? {}),
+                },
                 metadata: options?.metadata
                     ? {
                         source: 'lemma_frontend',
@@ -776,6 +802,8 @@ export function AIAssistantProvider({
         conversationModel: controller.conversationModel as ConversationModel | null,
         conversationRuntime: controller.conversationRuntime,
         setConversationModel: controller.setConversationModel as (model: ConversationModel | null, runtime?: AgentRuntimeConfig | null) => Promise<void>,
+        pendingProject,
+        setPendingProject,
         isOpenedConversationRunning: controller.isOpenedConversationRunning,
         isActiveConversationRunning: controller.isOpenedConversationRunning,
         openConversation,
@@ -811,6 +839,8 @@ export function AIAssistantProvider({
         closeAssistant,
         completedActions,
         closeConversation,
+        pendingProject,
+        setPendingProject,
         controller.openedConversationId,
         controller.availableModels,
         controller.canRetryFailedMessage,
