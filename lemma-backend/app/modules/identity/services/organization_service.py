@@ -5,6 +5,7 @@ from typing import Optional, Sequence, Tuple
 from uuid import UUID
 
 from app.core.helpers.slug import slugify
+from app.modules.identity.domain.email_domains import work_domain_from_email
 from app.modules.identity.domain.errors import (
     IdentityAccessDeniedError,
     IdentityValidationError,
@@ -32,15 +33,6 @@ from app.modules.identity.domain.ports import (
 
 
 class OrganizationService:
-    PERSONAL_EMAIL_DOMAINS = {
-        "gmail.com",
-        "googlemail.com",
-        "outlook.com",
-        "hotmail.com",
-        "live.com",
-        "msn.com",
-    }
-
     def __init__(
         self,
         organization_repository: OrganizationRepositoryPort,
@@ -55,15 +47,6 @@ class OrganizationService:
 
     def _build_invitation_accept_url(self, invitation_id: UUID) -> str:
         return f"{self.invitation_accept_base_url}/invitations/{invitation_id}/accept"
-
-    def _email_domain(self, email: str) -> str:
-        return email.rsplit("@", 1)[-1].strip().lower()
-
-    def _normalizable_email_domain(self, email: str) -> str | None:
-        domain = self._email_domain(email)
-        if not domain or domain in self.PERSONAL_EMAIL_DOMAINS:
-            return None
-        return domain
 
     async def _mark_invitation_expired_if_needed(
         self, invitation: OrganizationInvitationEntity
@@ -132,7 +115,7 @@ class OrganizationService:
         if join_policy != OrganizationJoinPolicy.EMAIL_DOMAIN:
             return None
 
-        owner_domain = self._normalizable_email_domain(str(owner.email))
+        owner_domain = work_domain_from_email(str(owner.email))
         if owner_domain is None:
             raise IdentityValidationError(
                 "The EMAIL_DOMAIN join policy requires a work email domain"
@@ -163,14 +146,18 @@ class OrganizationService:
         existing_name = await self.organization_repository.get_by_name(entity.name)
         if existing_name:
             raise OrganizationConflictError(
-                "Organization with this name already exists"
+                "Organization with this name already exists",
+                code=OrganizationConflictError.NAME_TAKEN,
             )
 
         entity.slug = normalize_organization_slug(entity.slug, entity.name)
 
         existing_slug = await self.organization_repository.get_by_slug(entity.slug)
         if existing_slug:
-            raise OrganizationConflictError("Organization slug already exists")
+            raise OrganizationConflictError(
+                "Organization slug already exists",
+                code=OrganizationConflictError.SLUG_TAKEN,
+            )
 
         entity.email_domain = await self._resolve_email_domain_for_policy(
             owner=owner,
@@ -241,6 +228,19 @@ class OrganizationService:
             raise IdentityValidationError("Slug is required")
         return await self.organization_repository.get_by_slug(normalized_slug) is None
 
+    async def is_name_available(self, name: str) -> bool:
+        """Whether ``create_organization`` would accept this name.
+
+        Organization names are globally unique, so a caller that can only probe
+        the slug still gets a surprise 409 on the name. Probing both is what
+        lets onboarding pick its next candidate before the user waits on a
+        failed create.
+        """
+        normalized_name = name.strip()
+        if not normalized_name:
+            raise IdentityValidationError("Name is required")
+        return await self.organization_repository.get_by_name(normalized_name) is None
+
     async def get_organization(
         self,
         org_id: UUID,
@@ -278,7 +278,7 @@ class OrganizationService:
         if not user:
             raise UserNotFoundError()
 
-        domain = self._normalizable_email_domain(str(user.email))
+        domain = work_domain_from_email(str(user.email))
         if domain is None:
             return [], None
 
@@ -328,7 +328,7 @@ class OrganizationService:
         if organization.join_policy == OrganizationJoinPolicy.PUBLIC:
             return True
         if organization.join_policy == OrganizationJoinPolicy.EMAIL_DOMAIN:
-            user_domain = self._normalizable_email_domain(str(user.email))
+            user_domain = work_domain_from_email(str(user.email))
             return bool(organization.email_domain) and (
                 user_domain == organization.email_domain
             )

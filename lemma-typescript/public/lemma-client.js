@@ -13514,17 +13514,19 @@ var LemmaClient = (() => {
     }
     /**
      * Check Organization Slug Availability
-     * Check whether an organization slug is available
+     * Check whether an organization slug is available, and optionally whether a candidate name is still free
      * @param slug
+     * @param name
      * @returns OrganizationSlugAvailabilityResponse Successful Response
      * @throws ApiError
      */
-    static orgSlugAvailability(slug) {
+    static orgSlugAvailability(slug, name) {
       return request(OpenAPI, {
         method: "GET",
         url: "/organizations/slug-availability",
         query: {
-          "slug": slug
+          "slug": slug,
+          "name": name
         },
         errors: {
           422: `Validation Error`

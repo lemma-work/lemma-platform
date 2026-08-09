@@ -4,7 +4,7 @@ import { useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { ArrowRight, Building2, Sparkles } from '@/components/ui/icons';
-import { useCreateOrganization } from '@/lib/hooks/use-organizations';
+import { useCreateOrganization, useOrganizationNameAvailability } from '@/lib/hooks/use-organizations';
 import { PlainPageShell } from '@/components/dashboard/plain-page-shell';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
@@ -30,6 +30,13 @@ function OrgCreatePageContent() {
     const slugPreview = useMemo(() => slugifyOrganizationName(name), [name]);
     const isEmailDomain = joinPolicy === OrganizationJoinPolicy.EMAIL_DOMAIN;
     const missingDomain = isEmailDomain && !normalizedDomain;
+    // Names and slugs are both globally unique, so say so while the person is
+    // still typing rather than after they submit.
+    const availability = useOrganizationNameAvailability(
+        { slug: slugPreview, name },
+        { enabled: slugPreview.length > 2 }
+    );
+    const nameTaken = availability.available === false;
 
     const handleSubmit = (e: React.FormEvent) => {
         e.preventDefault();
@@ -101,7 +108,11 @@ function OrgCreatePageContent() {
                                     className="inline-edit-field min-w-0 flex-1 border-0 bg-transparent p-0 text-base text-[var(--text-primary)] outline-none placeholder:text-[var(--text-soft)]"
                                 />
                             </div>
-                            {slugPreview ? (
+                            {nameTaken ? (
+                                <p className="text-xs text-[var(--text-danger)]">
+                                    That name is taken. Try another.
+                                </p>
+                            ) : slugPreview ? (
                                 <p className="text-xs text-[var(--text-tertiary)]">
                                     URL slug: <span className="font-medium text-[var(--text-secondary)]">{slugPreview}</span>
                                 </p>
@@ -139,7 +150,7 @@ function OrgCreatePageContent() {
                         <div className="flex flex-col gap-3 pt-2 sm:flex-row sm:items-center">
                             <Button variant="primary"
                                 type="submit"
-                                disabled={!name.trim() || missingDomain}
+                                disabled={!name.trim() || missingDomain || nameTaken}
                                 loading={isPending}
                                 loadingLabel="Creating organization"
                                 className="office-primary-action h-12 gap-2 px-5 text-sm font-medium"

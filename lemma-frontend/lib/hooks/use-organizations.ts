@@ -43,19 +43,40 @@ export const useSuggestedOrganizations = (options?: { enabled?: boolean }) => {
     });
 };
 
-export const useOrganizationSlugAvailability = (slug: string, options?: { enabled?: boolean }) => {
+/**
+ * Whether an organization can be created under this slug — and, when a
+ * candidate name is passed, under that name too. Names are globally unique, so
+ * a slug-only check still leaves a 409 waiting on create.
+ */
+export const useOrganizationNameAvailability = (
+    { slug, name }: { slug: string; name?: string },
+    options?: { enabled?: boolean }
+) => {
     const normalizedSlug = slug.trim().toLowerCase();
+    const normalizedName = name?.trim() || '';
 
-    return useQuery({
-        queryKey: ['organizations', 'slug-availability', normalizedSlug],
+    const query = useQuery({
+        queryKey: ['organizations', 'slug-availability', normalizedSlug, normalizedName],
         queryFn: () =>
             getLemmaClient().request<OrganizationSlugAvailability>(
                 'GET',
                 '/organizations/slug-availability',
-                { params: { slug: normalizedSlug } }
+                {
+                    params: normalizedName
+                        ? { slug: normalizedSlug, name: normalizedName }
+                        : { slug: normalizedSlug },
+                }
             ),
         enabled: Boolean(normalizedSlug) && (options?.enabled ?? true),
     });
+
+    // Undefined while the probe is in flight — callers must not read "not yet
+    // answered" as "taken".
+    const available = query.data
+        ? query.data.available && query.data.name_available !== false
+        : undefined;
+
+    return { ...query, available };
 };
 
 export const useCreateOrganization = () => {
