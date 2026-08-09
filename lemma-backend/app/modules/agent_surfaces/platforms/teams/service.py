@@ -6,7 +6,7 @@ import base64
 import mimetypes
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote, urlparse
+from urllib.parse import quote, urljoin, urlparse
 
 import aiohttp
 from pydantic_ai.tools import RunContext
@@ -35,6 +35,14 @@ from app.core.log.log import get_logger
 
 logger = get_logger(__name__)
 
+# Bot Framework serves attachments from regional hosts under these domains, and
+# they are the only hosts the bot token may be sent to.
+_BOT_ATTACHMENT_DOMAINS = ("trafficmanager.net", "botframework.com")
+_SHAREPOINT_DOMAIN = "sharepoint.com"
+# Graph answers `/content` with a redirect to a pre-signed URL, so redirects have
+# to be followed -- but never with the credential still attached.
+_MAX_DOWNLOAD_REDIRECTS = 5
+
 
 class TeamsPlatformService:
     def __init__(self, *, credentials: dict[str, Any]) -> None:
@@ -42,6 +50,12 @@ class TeamsPlatformService:
         self._graph_base = str(
             credentials.get("graph_api_base_url") or GRAPH_BASE
         ).rstrip("/")
+        # Deployments that reach Bot Framework through a non-public host (the
+        # test doubles, an on-prem gateway) declare it here. It joins the hosts
+        # allowed to receive the bot token; it does not replace them.
+        self._bot_service_host = _hostname_of(
+            str(credentials.get("bot_service_base_url") or "")
+        )
 
     async def download_attachment_bytes(
         self,
@@ -318,7 +332,9 @@ class TeamsPlatformService:
         if not normalized_url:
             return None
 
-        if _looks_like_bot_attachment_url(normalized_url):
+        if _looks_like_bot_attachment_url(
+            normalized_url, extra_host=self._bot_service_host
+        ):
             bot_token = await client.get_bot_token()
             if not bot_token:
                 logger.debug(
@@ -395,15 +411,36 @@ class TeamsPlatformService:
         headers: dict[str, str],
         mode: str,
     ) -> bytes | None:
-        async with session.get(url, headers=headers, allow_redirects=True) as response:
-            if response.status >= 400:
-                await response.text()
-                logger.debug(
-                    'agent_surfaces.service.teams_download_file_s_fetch.diagnostic',
-                    status=response.status,
-                )
-                return None
-            return await response.read()
+        """Fetch the planned URL, dropping the credential across redirects.
+
+        Graph redirects `/content` to a pre-signed URL that needs no header of
+        ours, so following by hand and clearing the headers is both what
+        Microsoft expects and what stops a redirect to an unvetted host from
+        collecting the token.
+        """
+        current_url = url
+        current_headers = headers
+        for _ in range(_MAX_DOWNLOAD_REDIRECTS + 1):
+            async with session.get(
+                current_url, headers=current_headers, allow_redirects=False
+            ) as response:
+                if response.status in {301, 302, 303, 307, 308}:
+                    location = response.headers.get("Location")
+                    if not location:
+                        return None
+                    current_url = urljoin(current_url, location)
+                    current_headers = {}
+                    continue
+                if response.status >= 400:
+                    await response.text()
+                    logger.debug(
+                        'agent_surfaces.service.teams_download_file_s_fetch.diagnostic',
+                        status=response.status,
+                    )
+                    return None
+                return await response.read()
+        logger.debug('agent_surfaces.service.teams_download_file_redirects.diagnostic')
+        return None
 
 
 def _tenant_id_from_credentials(credentials: dict[str, Any]) -> str | None:
@@ -424,25 +461,45 @@ def _filename_from_url(url: str) -> str | None:
     return candidate or None
 
 
+def _hostname_of(url: str) -> str:
+    return (urlparse(url).hostname or "").lower()
+
+
+def _host_is_within(hostname: str, domain: str) -> bool:
+    """True for ``domain`` itself or a real subdomain of it.
+
+    Matching a bare substring is what lets ``sharepoint.com.evil.test`` pass as
+    SharePoint, so anchor on the label boundary instead.
+    """
+    return hostname == domain or hostname.endswith(f".{domain}")
+
+
 def _is_raw_sharepoint_document_url(url: str) -> bool:
-    parsed = urlparse(url)
-    hostname = (parsed.hostname or "").lower()
-    path = parsed.path or ""
-    if "sharepoint.com" not in hostname:
+    if not _is_sharepoint_url(url):
         return False
-    return "/shared documents/" in path.lower() or "/sites/" in path.lower()
+    path = (urlparse(url).path or "").lower()
+    return "/shared documents/" in path or "/sites/" in path
 
 
 def _is_sharepoint_url(url: str) -> bool:
-    parsed = urlparse(url)
-    hostname = (parsed.hostname or "").lower()
-    return "sharepoint.com" in hostname
+    return _host_is_within(_hostname_of(url), _SHAREPOINT_DOMAIN)
 
 
-def _looks_like_bot_attachment_url(url: str) -> bool:
+def _looks_like_bot_attachment_url(url: str, *, extra_host: str = "") -> bool:
+    """Whether this URL is a Bot Framework attachment the bot token may reach.
+
+    The host is the security boundary here, not the path. The bot token is a
+    tenant-wide credential and ``download_url`` arrives from an inbound message
+    or an agent tool call, so a caller-chosen host that merely carries a
+    ``/v3/attachments/`` path must not be enough to be handed the credential.
+    """
     parsed = urlparse(url)
     hostname = (parsed.hostname or "").lower()
-    return "trafficmanager.net" in hostname or "/v3/attachments/" in (parsed.path or "")
+    if not hostname or "/v3/attachments/" not in (parsed.path or ""):
+        return False
+    if extra_host and hostname == extra_host:
+        return True
+    return any(_host_is_within(hostname, domain) for domain in _BOT_ATTACHMENT_DOMAINS)
 
 
 def _encode_share_url(url: str) -> str:
