@@ -6,6 +6,7 @@ import { useState, type ReactNode } from 'react';
 import { usePathname } from 'next/navigation';
 import { Toaster } from 'sonner';
 import { OrganizationProvider } from '@/components/dashboard/org-context';
+import { AnalyticsProvider } from '@/components/analytics/analytics-provider';
 
 export function Providers({ children }: { children: ReactNode }) {
     const [queryClient] = useState(
@@ -53,6 +54,10 @@ export function Providers({ children }: { children: ReactNode }) {
             disableTransitionOnChange
         >
             <QueryClientProvider client={queryClient}>
+                {/* Outside the auth-route skip: the landing and auth pages are
+                    the top of the funnel, and dropping them there would lose
+                    exactly the steps this measures. */}
+                <AnalyticsProvider />
                 {appTree}
                 <Toaster
                     position="bottom-right"

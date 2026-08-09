@@ -9,11 +9,22 @@ from opentelemetry.context import Context
 from opentelemetry.propagate import extract, inject
 from pydantic import BaseModel, Field, model_validator
 
+from app.core.origin import current_origin
 from app.core.request_context import (
     get_causation_id,
     get_correlation_id,
     get_request_id,
 )
+
+
+def _current_origin_value() -> str | None:
+    origin = current_origin()
+    return origin.kind.value if origin else None
+
+
+def _current_origin_platform() -> str | None:
+    origin = current_origin()
+    return origin.platform if origin else None
 
 
 class DomainEvent(BaseModel):
@@ -25,6 +36,14 @@ class DomainEvent(BaseModel):
     correlation_id: UUID | None = None
     causation_id: UUID | None = None
     request_id: str | None = Field(default_factory=get_request_id)
+    # How the work that produced this event arrived. Captured here, at
+    # construction, because the consumer runs in a worker long after the
+    # request context is gone -- and a consumer guessing the origin from its
+    # own surroundings is how an origin dimension turns quietly wrong.
+    origin: str | None = Field(default_factory=lambda: _current_origin_value())
+    origin_platform: str | None = Field(
+        default_factory=lambda: _current_origin_platform()
+    )
     traceparent: str | None = Field(
         default=None, exclude_if=lambda value: value is None
     )

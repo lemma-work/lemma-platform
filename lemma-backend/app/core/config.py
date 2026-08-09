@@ -1274,6 +1274,31 @@ class Settings(BaseSettings):
             "``OTEL_TRACES_SAMPLER_ARG``."
         ),
     )
+    analytics_write_key: Optional[str] = Field(
+        default=None,
+        description=(
+            "PostHog project write key. Absent -- the default, and the case for "
+            "every self-hosted and Desktop-local deployment -- installs a null "
+            "sink, so no product-analytics event leaves the process. This is the "
+            "switch, and there is deliberately no separate `analytics_enabled` "
+            "boolean that could turn a local deployment into a reporting one."
+        ),
+    )
+    analytics_host: str = Field(
+        default="https://eu.i.posthog.com",
+        description=(
+            "Analytics ingestion host. EU by default: data stays in the EU, "
+            "which is the simplest GDPR posture and no obstacle for US customers."
+        ),
+    )
+    analytics_strict: bool = Field(
+        default=False,
+        description=(
+            "Raise on analytics contract violations instead of dropping them. "
+            "On in dev and CI, off in production -- matching the logging "
+            "contract's posture."
+        ),
+    )
     lemma_llm_caching_enabled: bool = Field(
         default=False,
         description=(

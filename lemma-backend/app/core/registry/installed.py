@@ -13,6 +13,7 @@ helpers.
 from __future__ import annotations
 
 from app.modules.agent.module import module as agent_module
+from app.modules.analytics.module import module as analytics_module
 from app.modules.agent_surfaces.module import module as agent_surfaces_module
 from app.modules.datastore.module import module as datastore_module
 from app.modules.apps.module import module as app_module
@@ -45,4 +46,7 @@ OSS_MODULES: tuple[LemmaModule, ...] = (
     icon_module,
     usage_module,
     workspace_module,
+    # Last: it only observes. Its consumers must never be the reason another
+    # module's handlers are late.
+    analytics_module,
 )

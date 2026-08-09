@@ -55,6 +55,22 @@ const nextConfig: NextConfig = {
       },
     ];
   },
+  async rewrites() {
+    // Same-origin analytics ingestion. Ad blockers drop a meaningful share of
+    // direct calls to an analytics vendor, and the share they drop skews toward
+    // the technical users Lemma sells to, so the loss is not random noise.
+    // Local deployments never initialise the client, so this proxies nothing
+    // there (see lib/analytics/client.ts).
+    const analyticsHost =
+      process.env.NEXT_PUBLIC_ANALYTICS_INGEST_HOST || "https://eu.i.posthog.com";
+    return [
+      {
+        source: "/ingest/static/:path*",
+        destination: `${analyticsHost}/static/:path*`,
+      },
+      { source: "/ingest/:path*", destination: `${analyticsHost}/:path*` },
+    ];
+  },
   serverExternalPackages: ["esbuild"],
   turbopack: {
     root: path.resolve(process.cwd(), ".."),
