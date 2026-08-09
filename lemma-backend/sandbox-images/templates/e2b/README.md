@@ -1,6 +1,6 @@
 # E2B templates
 
-AgentBox uses two immutable E2B template builds:
+Sandbox provisioning uses two immutable E2B template builds:
 
 - `lemma-agentbox-workspace` extends E2B Code Interpreter with a locked authoring
   environment (including the Lemma SDK), Node 24, pnpm, uv, LiteParse, and
@@ -18,15 +18,20 @@ ephemeral because the provider allocation is destroyed after the configured idle
 period.
 
 The returned template and build IDs must both be configured outside this source
-repository. AgentBox combines them as
-`<template_id>:<build_id>` so a mutable tag can never change a running profile.
+repository. The deployment combines them as `<template_id>:<build_id>` so a
+mutable tag can never change a running profile -- the workspace settings take a
+single template string (`E2B_WORKSPACE_TEMPLATE` / `E2B_FUNCTION_TEMPLATE`), so
+whatever sets them is what does the pinning.
+
+Run it from `lemma-backend`; the builder copies from the monorepo root, which it
+resolves from its own location.
 
 ```bash
-cd agentbox
+cd lemma-backend
 set -a
-source ../lemma-backend/.env
+source .env
 set +a
-.venv/bin/python templates/e2b/build_templates.py --target all
+.venv/bin/python sandbox-images/templates/e2b/build_templates.py --target all
 ```
 
 The script prints identifiers and effective resource values only. It does not
