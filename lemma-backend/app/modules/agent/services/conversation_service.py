@@ -68,7 +68,10 @@ from app.modules.agent.services.realtime import (
     publish_conversation_event,
 )
 from app.modules.agent.services.serialization import message_to_payload
-from app.modules.agent.services.workspace_location import new_workspace_cwd, resolve_workspace_location
+from app.modules.agent.services.workspace_location import (
+    apply_location_metadata,
+    resolve_workspace_location,
+)
 from app.modules.pod.contracts import PodConfig
 from app.composition.agent_pod import create_agent_pod_repository
 from app.composition.agent_usage import UsageLimitExceededError, UsageService
@@ -222,35 +225,20 @@ class ConversationService(PauseResumeMixin):
         *,
         parent_id: UUID | None,
     ) -> None:
-        """Always record the conversation's workspace cwd in metadata.
+        """Record where this conversation works, once, at creation.
 
-        A child (``parent_id`` set — a sub-agent OR a conversation pinned under a
-        PROJECT) inherits the parent's resolved cwd + workspace selection, so it
-        shares the parent's directory instead of getting its own. A root
-        conversation gets its own ``/workspace/c/{date}/{slug}`` cwd. An explicit
-        ``cwd`` already in metadata always wins.
-
-        The cwd is the single source of truth for both filesystems: the pod
-        working directory (``/me/{suffix}``) is derived from it at read time
-        (``resolve_pod_cwd``), so nothing pod-specific is persisted here.
+        The rules — inheritance, an explicit cwd, a project repo — all live in
+        ``workspace_location.apply_location_metadata``, which is also what reads
+        the result back. The parent is fetched lazily because most conversations
+        settle their location without ever needing one.
         """
-        metadata = conversation.metadata if isinstance(conversation.metadata, dict) else {}
-        if metadata.get("cwd"):
-            return
-        parent = (
-            await self.conversation_repository.get_conversation(parent_id)
-            if parent_id is not None
-            else None
-        )
-        if parent is not None:
-            parent_meta = parent.metadata if isinstance(parent.metadata, dict) else {}
-            metadata["cwd"] = resolve_workspace_location(parent).cwd
-            for key in ("workspace", "workspace_id", "workspace_name"):
-                if key in parent_meta:
-                    metadata.setdefault(key, parent_meta[key])
-        else:
-            metadata["cwd"] = new_workspace_cwd(conversation)
-        conversation.metadata = metadata
+
+        async def _parent() -> Conversation | None:
+            if parent_id is None:
+                return None
+            return await self.conversation_repository.get_conversation(parent_id)
+
+        await apply_location_metadata(conversation, fetch_parent=_parent)
 
     async def list_conversations(
         self,
@@ -912,6 +900,7 @@ class ConversationService(PauseResumeMixin):
             runtime_credentials=resolved.credentials or {},
             workspace_id=workspace_location.workspace_id,
             workspace_cwd=workspace_location.cwd,
+            workspace_repo=workspace_location.repo,
             pod_cwd=resolve_pod_cwd(conversation),
         )
 

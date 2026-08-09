@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from enum import StrEnum
 from typing import Any
 from uuid import UUID
 
@@ -263,6 +264,51 @@ class SurfaceReach(BaseModel):
     email: str | None = None
 
 
+class SurfaceConnectionStatus(StrEnum):
+    """Health of the account a surface runs on.
+
+    Mirrors ``AccountStatus`` and adds ``MISSING`` for a surface pointing at an
+    account row that is no longer there. Whether the owner is still in the pod
+    is deliberately *not* folded in here: a departed owner's token keeps working
+    until it expires, so it is a separate fact (``connected_by.is_pod_member``),
+    not a rung on this ladder.
+    """
+
+    CONNECTED = "CONNECTED"
+    REAUTH_REQUIRED = "REAUTH_REQUIRED"
+    DISCONNECTED = "DISCONNECTED"
+    MISSING = "MISSING"
+
+
+class SurfaceConnectionOwner(BaseModel):
+    """The person whose connected account backs a surface."""
+
+    user_id: UUID
+    name: str | None = None
+    email: str | None = None
+    # False once they leave the pod: the surface keeps working, but no one left
+    # here can re-authorize it — they have to rebind it to their own account.
+    is_pod_member: bool = False
+    is_you: bool = False
+
+
+class SurfaceConnection(BaseModel):
+    """Which account a surface runs on, and who connected it.
+
+    Accounts are personal (``accounts.user_id``) while surfaces belong to the
+    pod, so ``account_id`` alone answers nothing for a teammate — they cannot
+    resolve an id they don't own. This block is the pod-visible *identity* of
+    that account: enough for any editor to see who to ask, never the credential.
+    """
+
+    account_id: UUID
+    connector_id: str
+    # The account's own label — a bot @username, mailbox, or workspace.
+    display_name: str | None = None
+    status: SurfaceConnectionStatus = SurfaceConnectionStatus.CONNECTED
+    connected_by: SurfaceConnectionOwner | None = None
+
+
 class AgentSurfaceResponse(BaseModel):
     id: UUID
     pod_id: UUID
@@ -272,7 +318,10 @@ class AgentSurfaceResponse(BaseModel):
     uses_default_agent: bool = False
     platform: SurfacePlatform
     credential_mode: SurfaceCredentialMode = SurfaceCredentialMode.SYSTEM
+    # Kept alongside ``connection`` because the write path (and pod bundles)
+    # address the account by id; ``connection`` is what a reader can act on.
     account_id: UUID | None = None
+    connection: SurfaceConnection | None = None
     surface_identity_id: str | None = None
     surface_identity_username: str | None = None
     surface_identity_email: str | None = None

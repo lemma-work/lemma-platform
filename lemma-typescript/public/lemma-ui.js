@@ -1007,7 +1007,7 @@ var LemmaUI = (() => {
   function extractJsonObject(text) {
     const trimmed = text.trim();
     if (!trimmed) return null;
-    const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
+    const fenced = trimmed.match(/```(?:json)?([\s\S]*?)```/i);
     const objectStart = trimmed.indexOf("{");
     const objectEnd = trimmed.lastIndexOf("}");
     const candidates = [

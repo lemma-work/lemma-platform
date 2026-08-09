@@ -142,19 +142,30 @@ async def get_suggested_orgs(
     status_code=status.HTTP_200_OK,
     operation_id="org.slug_availability",
     summary="Check Organization Slug Availability",
-    description="Check whether an organization slug is available",
+    description=(
+        "Check whether an organization slug is available, and optionally "
+        "whether a candidate name is still free"
+    ),
     response_model=OrganizationSlugAvailabilityResponse,
 )
 async def check_slug_availability(
     slug: str,
     org_service: OrganizationServiceDep,
+    name: str | None = None,
 ) -> OrganizationSlugAvailabilityResponse:
-    """Check organization slug availability."""
+    """Check organization slug availability, and the name when one is given."""
     normalized_slug = slugify(slug)
     available = await org_service.is_slug_available(normalized_slug)
+    normalized_name = (name or "").strip()
     return OrganizationSlugAvailabilityResponse(
         slug=normalized_slug,
         available=available,
+        name=normalized_name or None,
+        name_available=(
+            await org_service.is_name_available(normalized_name)
+            if normalized_name
+            else None
+        ),
     )
 
 

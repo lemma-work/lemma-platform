@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any, Protocol
 from uuid import UUID
 
@@ -29,8 +30,52 @@ class SurfaceAccountInfo(BaseModel):
     credentials: dict[str, Any] = {}
 
 
+class SurfaceAccountSummary(BaseModel):
+    """The non-secret half of a connected account.
+
+    Deliberately *not* :class:`SurfaceAccountInfo` minus a field: this is the
+    shape the pod-visible read path uses, and it carries no ``credentials`` at
+    all, so a connection can never leak one by omission. The read path also
+    skips the credential decryption that loading a full account would force.
+    """
+
+    id: UUID
+    user_id: UUID
+    connector_id: str
+    display_name: str | None = None
+    email: str | None = None
+    status: str | None = None
+
+
 class SurfaceAccountPort(Protocol):
     async def get_account(self, account_id: UUID) -> SurfaceAccountInfo | None: ...
+
+    async def list_account_summaries(
+        self, account_ids: Sequence[UUID]
+    ) -> dict[UUID, SurfaceAccountSummary]:
+        """Batch counterpart of :meth:`get_account` for the read path — one
+        query for a whole page of surfaces. Missing ids are simply absent."""
+        ...
+
+
+class SurfaceConnectionOwnerInfo(BaseModel):
+    """Who owns a connected account, and whether they are still in the pod.
+
+    ``is_pod_member`` is the fact the surfaces UI exists to surface: an account
+    whose owner has left still *works* (credentials resolve off the account row,
+    not the caller), but nobody left in the pod can re-authorize it.
+    """
+
+    user_id: UUID
+    name: str | None = None
+    email: str | None = None
+    is_pod_member: bool = False
+
+
+class SurfaceConnectionOwnerPort(Protocol):
+    async def list_pod_owners(
+        self, user_ids: Sequence[UUID], *, pod_id: UUID
+    ) -> dict[UUID, SurfaceConnectionOwnerInfo]: ...
 
 
 class SurfaceAuthConfigInfo(BaseModel):

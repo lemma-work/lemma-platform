@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+    describeConnection,
     describeReach,
     surfaceAnswersDirectMessages,
     surfaceReaches,
@@ -132,5 +133,104 @@ describe('surface reaches', () => {
 
         expect(describeReach(surface, 'sales-agent')).toBe('Direct messages · #sales');
         expect(describeReach(surface, 'nobody')).toBe('Reaches this agent');
+    });
+});
+
+/** A surface backed by someone's personal connected account. */
+function connected(connection: Record<string, unknown> | null): AssistantSurface {
+    return {
+        name: 'telegram',
+        surface_type: 'TELEGRAM',
+        agent_name: 'ops',
+        config: { channels: [] },
+        ...(connection ? { connection: { account_id: 'a1', connector_id: 'telegram', status: 'CONNECTED', ...connection } } : {}),
+    } as unknown as AssistantSurface;
+}
+
+describe('surface connection', () => {
+    it('names the owner so an editor knows who to ask', () => {
+        const summary = describeConnection(
+            connected({
+                display_name: '@acme_ops_bot',
+                connected_by: { user_id: 'u1', name: 'Priya Raman', is_pod_member: true, is_you: false },
+            }),
+        );
+
+        expect(summary).not.toBeNull();
+        expect(summary?.label).toBe('@acme_ops_bot');
+        expect(summary?.attribution).toBe('Connected by Priya Raman');
+        expect(summary?.problem).toBeNull();
+        expect(summary?.canRebind).toBe(false);
+    });
+
+    it('says nothing at all when the surface runs on Lemma’s own bot', () => {
+        expect(describeConnection(connected(null))).toBeNull();
+    });
+
+    it('warns while it still works when the owner has left the pod', () => {
+        const summary = describeConnection(
+            connected({
+                connected_by: { user_id: 'u1', name: 'Priya Raman', is_pod_member: false, is_you: false },
+            }),
+        );
+
+        expect(summary?.problem).toBe(
+            'Priya Raman has left this pod. It works until the account expires.',
+        );
+        expect(summary?.canRebind).toBe(true);
+    });
+
+    it('points at the owner when only they can reconnect', () => {
+        const summary = describeConnection(
+            connected({
+                status: 'REAUTH_REQUIRED',
+                connected_by: { user_id: 'u1', name: 'Priya Raman', is_pod_member: true, is_you: false },
+            }),
+        );
+
+        expect(summary?.problem).toBe('Only Priya Raman can reconnect it.');
+        expect(summary?.canRebind).toBe(true);
+    });
+
+    it('says nobody can reconnect it once the owner is gone', () => {
+        const summary = describeConnection(
+            connected({
+                status: 'REAUTH_REQUIRED',
+                connected_by: { user_id: 'u1', name: 'Priya Raman', is_pod_member: false, is_you: false },
+            }),
+        );
+
+        expect(summary?.problem).toBe(
+            'Priya Raman has left this pod, so nobody here can reconnect it.',
+        );
+    });
+
+    it('addresses the owner directly when it is you', () => {
+        const summary = describeConnection(
+            connected({
+                status: 'REAUTH_REQUIRED',
+                connected_by: { user_id: 'u1', name: 'Priya Raman', is_pod_member: true, is_you: true },
+            }),
+        );
+
+        expect(summary?.attribution).toBe('Connected by you');
+        expect(summary?.problem).toBe('Your account needs reconnecting — nothing arrives until it does.');
+    });
+
+    it('falls back to the email when the owner has no name', () => {
+        const summary = describeConnection(
+            connected({
+                connected_by: { user_id: 'u1', email: 'priya@acme.com', is_pod_member: true, is_you: false },
+            }),
+        );
+
+        expect(summary?.attribution).toBe('Connected by priya@acme.com');
+    });
+
+    it('reports a vanished account rather than staying silent', () => {
+        const summary = describeConnection(connected({ status: 'MISSING', connected_by: null }));
+
+        expect(summary?.problem).toBe('The account this ran on no longer exists.');
+        expect(summary?.canRebind).toBe(true);
     });
 });

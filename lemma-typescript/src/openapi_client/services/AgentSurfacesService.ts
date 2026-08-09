@@ -181,6 +181,10 @@ export class AgentSurfacesService {
      * Update Surface
      * Partially update a surface. Only fields present in the request are
      * applied; the surface's platform and name are immutable.
+     *
+     * Passing ``account_id`` rebinds the surface to a different connected account
+     * — the repair when the account it runs on expires, or its owner leaves the
+     * pod. It must be an account the caller owns.
      * @param podId
      * @param surfaceName
      * @param requestBody

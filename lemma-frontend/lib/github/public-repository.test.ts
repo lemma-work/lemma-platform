@@ -67,4 +67,21 @@ Useful detail.
         expect(result.body).not.toContain('href="https://example.com"');
         expect(result.body).toContain('<p>Keep this example.</p>');
     });
+
+    it('decodes each HTML entity once, so escaped markup stays escaped', () => {
+        // Decoding `&amp;` first re-creates entities that the later passes then
+        // decode a second time, turning text the author escaped on purpose back
+        // into markup. The intro comes from the `<p>` preamble, which is the
+        // path that decodes entities.
+        const result = extractReadmePresentation(
+            [
+                '# Entities',
+                '<p>To show a script tag in Markdown write &amp;lt;script&amp;gt; instead.</p>',
+            ].join('\n\n'),
+            'entities',
+        );
+
+        expect(result.intro).toContain('&lt;script&gt;');
+        expect(result.intro).not.toContain('<script>');
+    });
 });

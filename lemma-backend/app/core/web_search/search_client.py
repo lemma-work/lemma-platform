@@ -8,6 +8,7 @@ import httpx
 from pydantic import BaseModel
 
 from app.core.config import settings
+from app.core.net.domains import host_is_within, hostname_of
 
 
 class SearchResult(BaseModel):
@@ -89,9 +90,16 @@ class DuckDuckGoHTMLParser(HTMLParser):
 
     @staticmethod
     def _normalize_url(url: str) -> str:
+        """Unwrap DuckDuckGo's `/l/` redirector to the result's real URL.
+
+        Only for URLs actually on DuckDuckGo. The previous check was
+        ``netloc.endswith("duckduckgo.com")``, which a page served from
+        ``evil-duckduckgo.com`` satisfies -- and then whatever it put in `uddg`
+        became the URL we handed back as the search result.
+        """
         url = unescape(url)
         parsed = urlparse(url)
-        if parsed.netloc.endswith("duckduckgo.com") and parsed.path == "/l/":
+        if host_is_within(hostname_of(url), "duckduckgo.com") and parsed.path == "/l/":
             uddg = parse_qs(parsed.query).get("uddg")
             if uddg:
                 return unquote(uddg[0])

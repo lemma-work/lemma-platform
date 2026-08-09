@@ -4,10 +4,14 @@ from __future__ import annotations
 
 from uuid import uuid4
 
+import pytest
+
 from app.modules.agent.domain.entities import Conversation
 from app.modules.agent.services.conversation_service import ConversationService
 from app.modules.agent.services.workspace_location import (
+    ProjectRepo,
     generate_cwd_slug,
+    parse_project_repo,
     pod_cwd_from_workspace_cwd,
     resolve_pod_cwd,
     resolve_workspace_location,
@@ -203,3 +207,140 @@ def test_generate_cwd_slug_is_short_and_alphanumeric():
     assert len(slug) == 8
     assert slug.isalnum()
     assert slug == slug.lower()
+
+
+# --- project repos -----------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        # An owner/repo pair becomes a filesystem path, so anything that could
+        # climb out of /workspace/repos must not survive parsing.
+        {"owner": "../etc", "repo": "passwd"},
+        {"owner": "acme", "repo": ".."},
+        {"owner": "acme", "repo": "."},
+        {"owner": "acme", "repo": "nested/path"},
+        {"owner": "acme/other", "repo": "web"},
+        {"owner": "", "repo": "web"},
+        {"owner": "acme", "repo": ""},
+        # A leading dash would be read by git as an option, not a name.
+        {"owner": "-acme", "repo": "web"},
+        {"repo": "web"},
+        "acme/web",
+        None,
+    ],
+)
+def test_parse_project_repo_rejects_anything_unsafe(value):
+    assert parse_project_repo(value) is None
+
+
+def test_parse_project_repo_normalizes_a_pasted_repo_name():
+    repo = parse_project_repo({"owner": "acme", "repo": "web.git", "ref": "main"})
+
+    assert repo == ProjectRepo(owner="acme", repo="web", ref="main")
+    assert repo.full_name == "acme/web"
+    assert repo.cwd == "/workspace/repos/acme/web"
+
+
+def test_parse_project_repo_drops_a_ref_git_would_read_as_a_flag():
+    """A ref reaches `git clone --branch`, so `--upload-pack=...` is an exploit."""
+
+    repo = parse_project_repo(
+        {"owner": "acme", "repo": "web", "ref": "--upload-pack=touch /tmp/pwned"}
+    )
+
+    assert repo is not None
+    assert repo.ref is None
+
+
+def test_parse_project_repo_ignores_an_unparseable_account():
+    repo = parse_project_repo({"owner": "acme", "repo": "web", "account_id": "nope"})
+
+    assert repo is not None
+    assert repo.account_id is None
+
+
+def test_repo_metadata_derives_the_working_directory():
+    conversation = Conversation(
+        pod_id=uuid4(),
+        user_id=uuid4(),
+        metadata={"repo": {"owner": "acme", "repo": "web", "ref": "main"}},
+    )
+
+    location = resolve_workspace_location(conversation)
+
+    assert location.cwd == "/workspace/repos/acme/web"
+    assert location.repo is not None
+    assert location.repo.ref == "main"
+    # Both filesystems still line up, exactly as they do for a scratchpad.
+    assert resolve_pod_cwd(conversation) == "/me/repos/acme/web"
+
+
+def test_an_explicit_cwd_still_wins_over_the_repo_directory():
+    conversation = Conversation(
+        pod_id=uuid4(),
+        user_id=uuid4(),
+        metadata={
+            "repo": {"owner": "acme", "repo": "web"},
+            "cwd": "/workspace/somewhere-else",
+        },
+    )
+
+    location = resolve_workspace_location(conversation)
+
+    assert location.cwd == "/workspace/somewhere-else"
+    # The repo is still in effect — the checkout just lands where it was asked to.
+    assert location.repo is not None
+
+
+async def test_creating_against_a_repo_stamps_the_directory_and_a_filterable_name():
+    conversation = Conversation(
+        pod_id=uuid4(),
+        user_id=uuid4(),
+        metadata={"repo": {"owner": "acme", "repo": "web.git"}},
+    )
+    service = _service({})
+
+    await service._apply_inherited_cwd(conversation, parent_id=None)
+
+    assert conversation.metadata["cwd"] == "/workspace/repos/acme/web"
+    # Rewritten from the parsed form, not stored as the client sent it.
+    assert conversation.metadata["repo"] == {"owner": "acme", "repo": "web"}
+    # Flat, because conversation listing filters metadata by JSONB containment
+    # over string values only — a nested key cannot be queried.
+    assert conversation.metadata["repo_full_name"] == "acme/web"
+
+
+async def test_an_unusable_repo_leaves_the_conversation_on_a_scratchpad():
+    conversation = Conversation(
+        pod_id=uuid4(),
+        user_id=uuid4(),
+        metadata={"repo": {"owner": "../etc", "repo": "passwd"}},
+    )
+    service = _service({})
+
+    await service._apply_inherited_cwd(conversation, parent_id=None)
+
+    assert "repo" not in conversation.metadata
+    assert "repo_full_name" not in conversation.metadata
+    assert conversation.metadata["cwd"].startswith("/workspace/c/")
+
+
+async def test_a_subagent_inherits_the_parent_project():
+    parent = Conversation(
+        pod_id=uuid4(),
+        user_id=uuid4(),
+        metadata={"repo": {"owner": "acme", "repo": "web", "ref": "main"}},
+    )
+    service = _service({})
+    await service._apply_inherited_cwd(parent, parent_id=None)
+
+    child = Conversation(pod_id=parent.pod_id, user_id=parent.user_id)
+    service = _service({parent.id: parent})
+    await service._apply_inherited_cwd(child, parent_id=parent.id)
+
+    child_location = resolve_workspace_location(child)
+    assert child_location.cwd == "/workspace/repos/acme/web"
+    assert child_location.repo == resolve_workspace_location(parent).repo
+    assert child.metadata["repo_full_name"] == "acme/web"

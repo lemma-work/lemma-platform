@@ -63,6 +63,16 @@ class ConnectorUnauthorizedError(ConnectorDomainError):
 
 
 class _ConnectorNotFoundBase(ConnectorDomainError):
+    """Base for every 404 in this module.
+
+    Each subclass writes its own whole sentence, so they extend this rather than
+    ``ConnectorNotFoundError`` -- whose argument is a connector id it formats
+    into a template. Subclassing that one produced messages that wrapped a
+    finished sentence in another sentence ("Connector 'Operation 'x' not found'
+    not found") and, worse, made every 404 in the module read to a caller as a
+    missing *connector*, which is the one thing it usually was not.
+    """
+
     def __init__(self, message: str, details: object | None = None):
         super().__init__(
             message=message,
@@ -104,25 +114,19 @@ class ConnectorNotFoundError(_ConnectorNotFoundBase):
         self.code = "CONNECTOR_NOT_FOUND"
 
 
-# These stay subclasses of ConnectorNotFoundError so existing `except` clauses
-# keep catching them, but they build their message through the *base* rather
-# than through ConnectorNotFoundError.__init__ — that one formats its argument
-# as "Connector '{...}' not found", so passing it an already-formatted message
-# produced doubly-wrapped nonsense like:
-#     Connector 'Account '019f…' not found' not found
-class ConnectorTriggerNotFoundError(ConnectorNotFoundError):
+class ConnectorTriggerNotFoundError(_ConnectorNotFoundBase):
     def __init__(self, trigger_id: str):
         _ConnectorNotFoundBase.__init__(self, f"Trigger '{trigger_id}' not found")
         self.code = "CONNECTOR_TRIGGER_NOT_FOUND"
 
 
-class AccountNotFoundError(ConnectorNotFoundError):
+class AccountNotFoundError(_ConnectorNotFoundBase):
     def __init__(self, account_id: str):
         _ConnectorNotFoundBase.__init__(self, f"Account '{account_id}' not found")
         self.code = "ACCOUNT_NOT_FOUND"
 
 
-class CredentialsNotFoundError(ConnectorNotFoundError):
+class CredentialsNotFoundError(_ConnectorNotFoundBase):
     def __init__(self, account_id: str):
         _ConnectorNotFoundBase.__init__(
             self, f"Credentials not found for account '{account_id}'"
@@ -138,7 +142,7 @@ class AccountAlreadyConnectedError(ConnectorConflictError):
         self.code = "ACCOUNT_ALREADY_CONNECTED"
 
 
-class ConnectRequestNotFoundError(ConnectorNotFoundError):
+class ConnectRequestNotFoundError(_ConnectorNotFoundBase):
     def __init__(self):
         super().__init__("No pending connect request found for the provided state")
         self.code = "CONNECT_REQUEST_NOT_FOUND"
@@ -162,7 +166,7 @@ class OAuthWorkflowError(ConnectorValidationError):
         self.code = "OAUTH_FLOW_ERROR"
 
 
-class PodConnectorNotFoundError(ConnectorNotFoundError):
+class PodConnectorNotFoundError(_ConnectorNotFoundBase):
     def __init__(self, alias: str):
         super().__init__(f"Pod connector '{alias}' not found")
         self.code = "POD_CONNECTOR_NOT_FOUND"
@@ -176,13 +180,13 @@ class PodConnectorConflictError(ConnectorConflictError):
         self.code = "POD_CONNECTOR_CONFLICT"
 
 
-class PodAccountNotFoundError(ConnectorNotFoundError):
+class PodAccountNotFoundError(_ConnectorNotFoundBase):
     def __init__(self):
         super().__init__("Account not found or access denied")
         self.code = "POD_ACCOUNT_NOT_FOUND"
 
 
-class OperationNotFoundError(ConnectorNotFoundError):
+class OperationNotFoundError(_ConnectorNotFoundBase):
     def __init__(self, operation_name: str):
         super().__init__(f"Operation '{operation_name}' not found")
         self.code = "OPERATION_NOT_FOUND"

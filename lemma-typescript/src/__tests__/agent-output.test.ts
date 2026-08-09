@@ -106,3 +106,15 @@ describe("latestAssistantText", () => {
     expect(text).toBe("the answer");
   });
 });
+
+describe("extractJsonObject on adversarial text", () => {
+  it("does not degrade on a long run of spaces after an unclosed fence", () => {
+    // The fence marker's `\s*` and the lazy capture that followed could both
+    // claim these spaces, so rejecting this text cost quadratic time.
+    const hostile = "```json" + " ".repeat(60_000) + "{";
+    const started = Date.now();
+
+    expect(extractJsonObject(hostile)).toBeNull();
+    expect(Date.now() - started).toBeLessThan(1_000);
+  });
+});

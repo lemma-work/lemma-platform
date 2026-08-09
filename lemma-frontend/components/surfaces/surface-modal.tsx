@@ -150,6 +150,10 @@ export function SurfaceModal({
     const [identityMode, setIdentityMode] = useState<SurfaceIdentityMode | null>(null);
     const [credentials, setCredentials] = useState<CredentialValues>({});
     const [accountId, setAccountId] = useState('');
+    // True while the connect journey is repointing an *existing* surface at a
+    // different account, rather than creating one. Same states, different verb
+    // and a different mutation at the end.
+    const [rebinding, setRebinding] = useState(false);
     // The manager-bot hand-off. `launchUrl` is held locally rather than read off
     // the poll, so a transient failure can't strand someone mid-flow with no way
     // back into Telegram.
@@ -243,6 +247,7 @@ export function SurfaceModal({
         setSetupId(null);
         setLaunchUrl(null);
         setCreatedSurface(null);
+        setRebinding(false);
 
         if (target?.surfaceName) {
             // Consumed by the draft effect below, which is the only place that
@@ -415,6 +420,39 @@ export function SurfaceModal({
         }
     };
 
+    /** Point an existing surface at an account the current user owns.
+     *
+     * The repair when the account behind a surface expires or its owner leaves:
+     * the surface, its routes and its history stay exactly as they are — only
+     * the credential underneath changes hands. */
+    const handleRebind = async () => {
+        if (!existingSurface) return;
+        setError(null);
+        try {
+            const boundAccountId = usesJourney
+                ? await connectAccount({
+                      connectorId: catalogEntry?.connector_id ?? definition.platform.toLowerCase(),
+                      kind: catalogEntry?.kind,
+                      credentials,
+                  })
+                : accountId;
+
+            await updateSurface.mutateAsync({
+                podId,
+                surfaceName: existingSurface.name,
+                data: {
+                    account_id: boundAccountId,
+                    credential_mode: 'CUSTOM' as SurfaceCredentialMode,
+                },
+            });
+            toast.success(`${definition.label} now runs on your account`);
+            setRebinding(false);
+            setStep(definition.capabilities.autoWebhook ? 'live' : 'setup');
+        } catch (caught) {
+            setError(surfaceErrorMessage(caught, `Couldn’t move ${definition.label} to your account.`));
+        }
+    };
+
     const handleSave = async () => {
         if (!existingSurface) return;
         setError(null);
@@ -500,17 +538,18 @@ export function SurfaceModal({
     const primary = primaryAction({
         step,
         identityMode,
+        rebinding,
         onContinue: () => setStep('connect'),
         onCreate: handleCreate,
+        onRebind: handleRebind,
         onStartManaged: handleStartManagedSetup,
         onSave: handleSave,
         onSend: handleSend,
         onClose,
     });
     const canGoBack =
-        (step === 'connect' && Boolean(definition.identityOptions))
-        || step === 'message'
-;
+        (step === 'connect' && (rebinding || Boolean(definition.identityOptions)))
+        || step === 'message';
     const status = existingSurface ? getSurfaceStatus(existingSurface) : null;
 
     return (
@@ -567,7 +606,9 @@ export function SurfaceModal({
                         ) : null}
                     </div>
                     <DialogDescription className="surface-modal-promise">
-                        {stepPromise(step, definition.promise, agentName, definition.label, setupKind, definition.capabilities.senderFilters)}
+                        {rebinding && step === 'connect'
+                            ? `Keep ${definition.label} exactly as it is, running on an account you own.`
+                            : stepPromise(step, definition.promise, agentName, definition.label, setupKind, definition.capabilities.senderFilters)}
                     </DialogDescription>
                 </DialogHeader>
 
@@ -679,6 +720,14 @@ export function SurfaceModal({
                                 onOpenReference={
                                     hasSetupReference ? () => setStep('setup') : undefined
                                 }
+                                onRebind={() => {
+                                    setAccountId('');
+                                    setCredentials({});
+                                    setIdentityMode('CUSTOM');
+                                    setError(null);
+                                    setRebinding(true);
+                                    setStep('connect');
+                                }}
                             />
                         </div>
                     ) : null}
@@ -707,9 +756,17 @@ export function SurfaceModal({
                             type="button"
                             variant="quiet"
                             size="sm"
-                            onClick={() =>
-                                setStep(step === 'connect' ? 'identity' : 'configure')
-                            }
+                            onClick={() => {
+                                // A rebind entered `connect` from the settings
+                                // step, so Back belongs there — not in the
+                                // identity step this surface never revisits.
+                                if (rebinding) {
+                                    setRebinding(false);
+                                    setStep('configure');
+                                    return;
+                                }
+                                setStep(step === 'connect' ? 'identity' : 'configure');
+                            }}
                             disabled={isBusy}
                             className="mr-auto"
                         >
@@ -742,8 +799,10 @@ export function SurfaceModal({
 function primaryAction({
     step,
     identityMode,
+    rebinding,
     onContinue,
     onCreate,
+    onRebind,
     onStartManaged,
     onSave,
     onSend,
@@ -751,8 +810,10 @@ function primaryAction({
 }: {
     step: SurfaceModalStep;
     identityMode: SurfaceIdentityMode | null;
+    rebinding: boolean;
     onContinue: () => void;
     onCreate: () => Promise<void>;
+    onRebind: () => Promise<void>;
     onStartManaged: () => Promise<void>;
     onSave: () => Promise<void>;
     onSend: () => Promise<void>;
@@ -767,7 +828,11 @@ function primaryAction({
             if (identityMode === 'MANAGED') return { label: 'Create my bot', run: onStartManaged };
             return { label: 'Continue', run: onContinue };
         case 'connect':
-            return { label: 'Connect', run: onCreate };
+            // Same state, different promise: nothing is being created here, an
+            // existing surface is changing hands.
+            return rebinding
+                ? { label: 'Move to my account', run: onRebind }
+                : { label: 'Connect', run: onCreate };
         // The work is happening in Telegram; offering a verb here would only
         // invite someone to click something that does nothing.
         case 'provisioning':

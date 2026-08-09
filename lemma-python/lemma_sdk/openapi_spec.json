@@ -2290,6 +2290,16 @@
           "config": {
             "$ref": "#/components/schemas/SurfaceConfigResponse"
           },
+          "connection": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SurfaceConnection"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "credential_mode": {
             "$ref": "#/components/schemas/SurfaceCredentialMode",
             "default": "SYSTEM"
@@ -9731,11 +9741,33 @@
         "type": "string"
       },
       "OrganizationSlugAvailabilityResponse": {
-        "description": "Organization slug availability response.",
+        "description": "Organization slug availability response.\n\n``available`` answers only for the slug. When the caller also passes a\ncandidate name, ``name_available`` answers for the globally-unique name; a\ncreate succeeds only when both are true.",
         "properties": {
           "available": {
             "title": "Available",
             "type": "boolean"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "name_available": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name Available"
           },
           "slug": {
             "title": "Slug",
@@ -12518,6 +12550,109 @@
         ],
         "title": "SurfaceConnectDescriptor",
         "type": "object"
+      },
+      "SurfaceConnection": {
+        "description": "Which account a surface runs on, and who connected it.\n\nAccounts are personal (``accounts.user_id``) while surfaces belong to the\npod, so ``account_id`` alone answers nothing for a teammate \u2014 they cannot\nresolve an id they don't own. This block is the pod-visible *identity* of\nthat account: enough for any editor to see who to ask, never the credential.",
+        "properties": {
+          "account_id": {
+            "format": "uuid",
+            "title": "Account Id",
+            "type": "string"
+          },
+          "connected_by": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SurfaceConnectionOwner"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "connector_id": {
+            "title": "Connector Id",
+            "type": "string"
+          },
+          "display_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Name"
+          },
+          "status": {
+            "$ref": "#/components/schemas/SurfaceConnectionStatus",
+            "default": "CONNECTED"
+          }
+        },
+        "required": [
+          "account_id",
+          "connector_id"
+        ],
+        "title": "SurfaceConnection",
+        "type": "object"
+      },
+      "SurfaceConnectionOwner": {
+        "description": "The person whose connected account backs a surface.",
+        "properties": {
+          "email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Email"
+          },
+          "is_pod_member": {
+            "default": false,
+            "title": "Is Pod Member",
+            "type": "boolean"
+          },
+          "is_you": {
+            "default": false,
+            "title": "Is You",
+            "type": "boolean"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "user_id": {
+            "format": "uuid",
+            "title": "User Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "user_id"
+        ],
+        "title": "SurfaceConnectionOwner",
+        "type": "object"
+      },
+      "SurfaceConnectionStatus": {
+        "description": "Health of the account a surface runs on.\n\nMirrors ``AccountStatus`` and adds ``MISSING`` for a surface pointing at an\naccount row that is no longer there. Whether the owner is still in the pod\nis deliberately *not* folded in here: a departed owner's token keeps working\nuntil it expires, so it is a separate fact (``connected_by.is_pod_member``),\nnot a rung on this ladder.",
+        "enum": [
+          "CONNECTED",
+          "REAUTH_REQUIRED",
+          "DISCONNECTED",
+          "MISSING"
+        ],
+        "title": "SurfaceConnectionStatus",
+        "type": "string"
       },
       "SurfaceConnectorSetupGuide": {
         "properties": {
@@ -18092,7 +18227,7 @@
     },
     "/organizations/slug-availability": {
       "get": {
-        "description": "Check whether an organization slug is available",
+        "description": "Check whether an organization slug is available, and optionally whether a candidate name is still free",
         "operationId": "org.slug_availability",
         "parameters": [
           {
@@ -18102,6 +18237,22 @@
             "schema": {
               "title": "Slug",
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "name",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Name"
             }
           }
         ],
@@ -29710,7 +29861,7 @@
         }
       },
       "patch": {
-        "description": "Partially update a surface. Only fields present in the request are\napplied; the surface's platform and name are immutable.",
+        "description": "Partially update a surface. Only fields present in the request are\napplied; the surface's platform and name are immutable.\n\nPassing ``account_id`` rebinds the surface to a different connected account\n\u2014 the repair when the account it runs on expires, or its owner leaves the\npod. It must be an account the caller owns.",
         "operationId": "agent.surface.update",
         "parameters": [
           {

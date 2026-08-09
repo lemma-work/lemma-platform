@@ -100,7 +100,11 @@ async def ensure_github_credentials(ctx: BaseAgentContext, workspace_session) ->
         return
 
     redis = get_redis(url=settings.redis_url)
-    marker_key = f"{_MARKER_KEY_PREFIX}:{session_id}"
+    # The account is part of the marker: a conversation bound to a project names
+    # the account it works as, and two conversations in one session must not
+    # inherit each other's credential file.
+    account_id = ctx.workspace_repo.account_id if ctx.workspace_repo else None
+    marker_key = f"{_MARKER_KEY_PREFIX}:{session_id}:{account_id or 'default'}"
     if await redis.exists(marker_key):
         return
 
@@ -143,6 +147,10 @@ async def ensure_github_credentials(ctx: BaseAgentContext, workspace_session) ->
 async def _resolve_github_credential(ctx: BaseAgentContext) -> _GithubCredential | None:
     from app.modules.connectors.api.dependencies import get_account_resolution_service
 
+    # A project names the account it is worked as. Without one, resolution picks
+    # for a user who may have connected GitHub twice -- fine as a fallback, but
+    # never the right answer when the caller actually knows.
+    account_id = ctx.workspace_repo.account_id if ctx.workspace_repo else None
     async with SessionUnitOfWorkFactory(async_session_maker)() as uow:
         auth_ctx = await build_delegated_context(uow, ctx)
         token = set_current_context(auth_ctx)
@@ -153,6 +161,7 @@ async def _resolve_github_credential(ctx: BaseAgentContext) -> _GithubCredential
                     user_id=ctx.user_id,
                     connector_id=_CONNECTOR_ID,
                     auth_actor=auth_ctx,
+                    account_id=account_id,
                 )
             except (AccountResolutionError, ConnectorAccessDeniedError):
                 return None

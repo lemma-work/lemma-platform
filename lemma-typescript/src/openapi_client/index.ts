@@ -305,6 +305,9 @@ export type { SurfaceChannelRouteInput } from './models/SurfaceChannelRouteInput
 export type { SurfaceChannelRouteResponse } from './models/SurfaceChannelRouteResponse.js';
 export type { SurfaceConfigResponse } from './models/SurfaceConfigResponse.js';
 export type { SurfaceConnectDescriptor } from './models/SurfaceConnectDescriptor.js';
+export type { SurfaceConnection } from './models/SurfaceConnection.js';
+export type { SurfaceConnectionOwner } from './models/SurfaceConnectionOwner.js';
+export { SurfaceConnectionStatus } from './models/SurfaceConnectionStatus.js';
 export type { SurfaceConnectorSetupGuide } from './models/SurfaceConnectorSetupGuide.js';
 export type { SurfaceCreateRequest } from './models/SurfaceCreateRequest.js';
 export { SurfaceCredentialMode } from './models/SurfaceCredentialMode.js';

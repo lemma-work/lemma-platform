@@ -439,10 +439,36 @@ def _bootstrap_environment() -> str:
     return "production" if raw in {"prod", "production"} else "development"
 
 
+def _add_log_level(logger: Any, method_name: str, event_dict: Any) -> Any:
+    """Set ``level`` from the record's numeric level, not from its name.
+
+    ``structlog.stdlib.add_log_level`` takes the level from ``method_name``,
+    which for a foreign record is ``record.levelname.lower()``. That name is not
+    ours to trust: a handler that formats the record before we do can rewrite it
+    in place, and some do -- FastStream's colourising formatter replaces it with
+    an ANSI-wrapped, padded copy, so ``level`` would arrive in our JSON as
+    ``"\\u001b[31merror\\u001b[0m   "`` instead of ``"error"``. Anything
+    consuming these logs by level (alerting, dashboards, log-level filters)
+    silently stops matching.
+
+    ``levelno`` is the field no formatter reformats, so derive the name from it
+    and leave the rest of the chain alone.
+    """
+    record = event_dict.get("_record") if isinstance(event_dict, dict) else None
+    if record is not None:
+        name = logging.getLevelName(record.levelno)
+        # Unregistered numeric levels stringify as "Level 25"; those have no
+        # canonical name, so fall back rather than emit the placeholder.
+        if isinstance(name, str) and not name.startswith("Level "):
+            event_dict["level"] = name.lower()
+            return event_dict
+    return structlog.stdlib.add_log_level(logger, method_name, event_dict)
+
+
 def _shared_processors() -> list[Any]:
     return [
         structlog.contextvars.merge_contextvars,
-        structlog.stdlib.add_log_level,
+        _add_log_level,
         structlog.processors.TimeStamper(fmt="iso", utc=True),
         _add_trace_context,
         _add_execution_context,
