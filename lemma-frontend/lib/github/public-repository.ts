@@ -45,14 +45,18 @@ async function fetchWithTimeout(input: string, init?: RequestInit): Promise<Resp
     }
 }
 
+// `&amp;` must be decoded last, not first. Decoding it first re-creates entities
+// that the later passes then decode a second time, so a README containing the
+// literal text `&amp;lt;script&amp;gt;` comes out as `<script>` — text the
+// author escaped on purpose, silently turned back into markup.
 function decodeHtmlEntities(value: string): string {
     return value
-        .replaceAll('&amp;', '&')
         .replaceAll('&lt;', '<')
         .replaceAll('&gt;', '>')
         .replaceAll('&quot;', '"')
         .replaceAll('&#39;', "'")
-        .replaceAll('&nbsp;', ' ');
+        .replaceAll('&nbsp;', ' ')
+        .replaceAll('&amp;', '&');
 }
 
 function stripHtml(value: string): string {

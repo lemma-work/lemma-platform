@@ -12,23 +12,12 @@ import base64
 from pathlib import Path
 from urllib.parse import urlparse
 
+from app.core.net.domains import host_is_within, hostname_of
+
 # Bot Framework serves attachments from regional hosts under these domains, and
 # they are the only hosts the bot token may be sent to.
 _BOT_ATTACHMENT_DOMAINS = ("trafficmanager.net", "botframework.com")
 _SHAREPOINT_DOMAIN = "sharepoint.com"
-
-
-def hostname_of(url: str) -> str:
-    return (urlparse(url).hostname or "").lower()
-
-
-def host_is_within(hostname: str, domain: str) -> bool:
-    """True for ``domain`` itself or a real subdomain of it.
-
-    Matching a bare substring is what lets ``sharepoint.com.evil.test`` pass as
-    SharePoint, so anchor on the label boundary instead.
-    """
-    return hostname == domain or hostname.endswith(f".{domain}")
 
 
 def filename_from_url(url: str) -> str | None:
