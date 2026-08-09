@@ -14,7 +14,7 @@ dependencies = [
 
 [dependency-groups]
 dev = [
-    "datamodel-code-generator>=0.56.1",
+    "datamodel-code-generator>=0.64.0",
     "openapi-python-client>=0.29.0",
 ]
 
