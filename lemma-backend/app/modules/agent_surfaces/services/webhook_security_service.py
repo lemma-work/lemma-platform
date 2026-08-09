@@ -178,8 +178,8 @@ class SurfaceWebhookSecurityService:
                 surface.webhook_secret or surface_settings.slack_signing_secret
             )
             if self._credential_resolver is not None:
-                credentials = (
-                    await self._credential_resolver.slack_webhook_credentials(surface)
+                credentials = await self._credential_resolver.slack_webhook_credentials(
+                    surface
                 )
                 signing_secret = credentials.signing_secret
             self._verify_slack_signature(
@@ -214,18 +214,31 @@ class SurfaceWebhookSecurityService:
                     )
                 ),
             )
-        if not normalized_app_id:
-            raise SurfaceWebhookAuthenticationError(
-                "Slack request is missing api_app_id"
-            )
-        matching = [
-            candidate
-            for candidate in candidates
-            if hmac.compare_digest(candidate.app_id, normalized_app_id)
-        ]
-        if not matching:
+        # The signature is the authentication: only the app holding the secret
+        # can produce one. The app id merely says *which* secret to try first,
+        # which matters when an org runs its own Slack app alongside ours in the
+        # same workspace. So a request that does not name an app is not
+        # rejected — every secret bound to the workspace is tried, and one has
+        # to verify. Narrowing by app id when we have it keeps the common case
+        # to a single HMAC and keeps the reported app honest.
+        matching = (
+            [
+                candidate
+                for candidate in candidates
+                if hmac.compare_digest(candidate.app_id, normalized_app_id)
+            ]
+            if normalized_app_id
+            else list(candidates)
+        )
+        if not matching and normalized_app_id:
+            # Named an app we hold no secret for. Falling back to every other
+            # candidate would be answering for an app we were not addressed as.
             raise SurfaceWebhookAuthenticationError(
                 "Slack request targets an unknown app for this workspace"
+            )
+        if not matching:
+            raise SurfaceWebhookAuthenticationError(
+                "No Slack app is configured for this workspace"
             )
         last_error: SurfaceWebhookAuthenticationError | None = None
         for candidate in matching:
@@ -236,7 +249,9 @@ class SurfaceWebhookSecurityService:
                     signing_secret=candidate.signing_secret,
                 )
                 return VerifiedSlackIngress(
-                    app_id=normalized_app_id,
+                    # Unnamed request: report the app whose secret verified it,
+                    # so downstream never sees an empty app id.
+                    app_id=normalized_app_id or candidate.app_id,
                     receiver_surface_ids=candidate.receiver_surface_ids,
                 )
             except SurfaceWebhookAuthenticationError as exc:
@@ -340,7 +355,7 @@ class SurfaceWebhookSecurityService:
                 )
             except Exception:
                 logger.debug(
-                    'agent_surfaces.webhook_security_service.could_not_resolve_whatsapp_credentials.diagnostic',
+                    "agent_surfaces.webhook_security_service.could_not_resolve_whatsapp_credentials.diagnostic",
                     account_id=surface.account_id,
                     exc_info=True,
                 )

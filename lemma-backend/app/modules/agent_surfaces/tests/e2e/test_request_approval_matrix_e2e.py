@@ -38,6 +38,7 @@ from app.modules.agent_surfaces.platforms.teams.parser import (
 )
 from app.modules.agent_surfaces.tests.e2e.helpers import (
     E2E_RUNTIME_MODEL_NAME,
+    E2E_SLACK_APP_ID,
     REAL_TEAMS_CHANNEL_ID,
     REAL_TEAMS_TENANT_ID,
     REAL_TEAMS_THREAD_ID,
@@ -166,6 +167,7 @@ def _slack_approval_submission_payload(
     """A Slack block_actions submission tapping a native approval button."""
     return {
         "type": "block_actions",
+        "api_app_id": E2E_SLACK_APP_ID,
         "user": {"id": user_id},
         "team": {"id": "T0123456"},
         "channel": {"id": channel_id},

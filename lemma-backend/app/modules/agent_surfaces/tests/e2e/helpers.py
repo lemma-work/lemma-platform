@@ -68,6 +68,12 @@ REAL_TEAMS_TENANT_ID = "1b5c589f-1718-42c8-8244-166fbe5dd8fc"
 REAL_TEAMS_THREAD_ID = "1776236638028"
 E2E_RUNTIME_PROFILE_NAME = "Surface E2E Runtime"
 E2E_RUNTIME_MODEL_NAME = "surface-e2e-model"
+# The Slack app every E2E account belongs to. Real Slack stamps this on both
+# sides — `app_id` on the OAuth response we store, `api_app_id` on every event
+# and interaction it sends — and verification matches one against the other.
+# One constant so a payload built here can never name a different app than the
+# account it is answering for.
+E2E_SLACK_APP_ID = "A0123456"
 
 
 @pytest_asyncio.fixture
@@ -352,7 +358,7 @@ async def _ensure_connector_account(
     if connector_id == "slack":
         credentials = dict(credentials)
         raw_response = dict(credentials.get("raw_response") or {})
-        raw_response.setdefault("app_id", "A0123456")
+        raw_response.setdefault("app_id", E2E_SLACK_APP_ID)
         credentials["raw_response"] = raw_response
     await _ensure_connector(db_session, connector_id, provider=provider)
     kind = provider_to_kind(provider).value

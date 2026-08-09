@@ -178,7 +178,7 @@ class SurfaceCredentialResolver:
                 )
             except Exception:
                 logger.debug(
-                    'agent_surfaces.credential_resolver.could_not_refresh_credentials_account.diagnostic',
+                    "agent_surfaces.credential_resolver.could_not_refresh_credentials_account.diagnostic",
                     account_id=account_id,
                 )
                 payload = dict(stored)
@@ -242,6 +242,14 @@ class SurfaceCredentialResolver:
         signing_secret = self._slack_secret_for_auth_config(
             auth_config, uses_custom_app=uses_custom_app
         )
+        if app_id is None and not uses_custom_app:
+            # An account on this deployment's own app that never stored an app id
+            # — connected before we recorded it, or through a broker that drops
+            # the field. We know which app it is: ours. Guessing is only safe
+            # here; a custom app's id is the org's and cannot be inferred, so it
+            # stays None and the surface is skipped as a verification candidate
+            # rather than answering to our app's events.
+            app_id = surface_settings.slack_app_id
         return SlackWebhookCredentials(
             app_id=app_id,
             signing_secret=signing_secret,
@@ -256,9 +264,12 @@ class SurfaceCredentialResolver:
         raw_response = (
             stored.get("raw_response") if isinstance(stored, dict) else None
         ) or {}
-        return str(
-            raw_response.get("app_id") or raw_response.get("api_app_id") or ""
-        ).strip() or None
+        return (
+            str(
+                raw_response.get("app_id") or raw_response.get("api_app_id") or ""
+            ).strip()
+            or None
+        )
 
     async def _slack_auth_config(self, auth_config_id):
         if auth_config_id is None:
@@ -292,7 +303,7 @@ class SurfaceCredentialResolver:
             )
         except Exception:
             logger.debug(
-                'agent_surfaces.credential_resolver.could_not_resolve_provider_account.diagnostic'
+                "agent_surfaces.credential_resolver.could_not_resolve_provider_account.diagnostic"
             )
             return None
         if auth_config is None:

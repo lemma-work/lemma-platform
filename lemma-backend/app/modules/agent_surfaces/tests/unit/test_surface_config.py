@@ -16,6 +16,7 @@ EXPECTED = [
     ("microsoft_bot_openid_config_url", "MICROSOFT_BOT_OPENID_CONFIG_URL", None),
     ("microsoft_bot_app_name", "MICROSOFT_BOT_APP_NAME", None),
     ("slack_signing_secret", "SLACK_SIGNING_SECRET", None),
+    ("slack_app_id", "SLACK_APP_ID", None),
     ("slack_app_token", "SLACK_APP_TOKEN", None),
     ("slack_home_logo_url", "SLACK_HOME_LOGO_URL", None),
     ("whatsapp_access_token", "WHATSAPP_ACCESS_TOKEN", None),

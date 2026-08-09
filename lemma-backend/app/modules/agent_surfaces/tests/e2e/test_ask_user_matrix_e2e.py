@@ -32,6 +32,7 @@ from app.modules.agent_surfaces.events.handlers import build_surface_event_handl
 from app.modules.agent_surfaces.infrastructure.models import AgentSurface
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent_surfaces.tests.e2e.helpers import (
+    E2E_SLACK_APP_ID,
     REAL_TEAMS_CHANNEL_ID,
     REAL_TEAMS_TENANT_ID,
     REAL_TEAMS_THREAD_ID,
@@ -128,6 +129,7 @@ def _slack_ask_user_submission_payload(
     """
     return {
         "type": "block_actions",
+        "api_app_id": E2E_SLACK_APP_ID,
         "user": {"id": user_id},
         "team": {"id": "T0123456"},
         "channel": {"id": channel_id},
