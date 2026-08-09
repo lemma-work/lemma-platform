@@ -207,16 +207,16 @@ export const getKindLabel = (kind: string, capability: ConnectorKindSpec | null)
 };
 
 export const getKindDescription = (kind: string, capability: ConnectorKindSpec | null): string => {
-    if (kind === KIND.COMPOSIO) return 'Composio-managed auth with trigger-backed workflows. Recommended.';
+    if (kind === KIND.COMPOSIO) return 'Composio handles signing in, and supports triggers. Recommended.';
     if (kind === KIND.SQL) return 'Point Lemma at a PostgreSQL database and run read-only queries against it.';
     if (isOAuthOverHttp(kind, capability)) {
         return 'Use OAuth with Lemma-managed or organization-managed credentials.';
     }
     if (kind === KIND.HTTP) return 'Point Lemma at an OpenAPI spec; its endpoints become operations.';
     if (kind === KIND.MCP) return 'Point Lemma at an MCP server; its tools become operations.';
-    if (usesDirectCredentials(capability)) return 'Connect with credentials from this app, such as an API key or bot token.';
-    if (kind === KIND.PACKAGE) return 'Use OAuth with Lemma-managed or organization-managed credentials.';
-    return 'Use this kind for the connector connection.';
+    if (usesDirectCredentials(capability)) return 'Connect with a key or token from the app itself.';
+    if (kind === KIND.PACKAGE) return 'Sign in with Lemma’s app, or with your own.';
+    return 'Another way to connect this.';
 };
 
 /**
@@ -236,12 +236,12 @@ export const getKindTagline = (kind: string): string => {
 export const getManagedConfigCopy = (kind: string, capability: ConnectorKindSpec | null): string => {
     // Before the tenant-configured line, for the same reason as in
     // `requiresInstallConfig`: this connector has no address to ask for.
-    if (isOAuthOverHttp(kind, capability)) return 'Use the system default OAuth configuration for this app.';
-    if (isTenantConfigured(capability)) return 'This connection needs an address. Fill in the fields below.';
-    if (usesDirectCredentials(capability)) return 'Use the default credential setup for this app. Account credentials are added after enabling it.';
-    if (kind === KIND.COMPOSIO) return 'Composio uses the system default configuration and supports triggers.';
-    if (kind === KIND.PACKAGE) return 'Use the system default OAuth configuration for this app.';
-    return `Use the default ${formatKindName(kind)} auth configuration for this app.`;
+    if (isOAuthOverHttp(kind, capability)) return 'Sign in with Lemma’s own app. Nothing to set up.';
+    if (isTenantConfigured(capability)) return 'This one needs an address. Fill in the fields below.';
+    if (usesDirectCredentials(capability)) return 'Nothing to set up here — you’ll add the account’s details next.';
+    if (kind === KIND.COMPOSIO) return 'Composio handles this one. Nothing to set up.';
+    if (kind === KIND.PACKAGE) return 'Sign in with Lemma’s own app. Nothing to set up.';
+    return 'Use Lemma’s default setup for this.';
 };
 
 /**

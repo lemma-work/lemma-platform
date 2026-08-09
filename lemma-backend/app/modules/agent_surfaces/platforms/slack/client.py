@@ -56,11 +56,26 @@ def slack_supports_customized_messages(credentials: dict[str, Any]) -> bool:
 def slack_customized_message_kwargs(
     credentials: dict[str, Any],
     agent_display_name: str | None,
+    agent_icon_url: str | None = None,
 ) -> dict[str, Any]:
-    normalized_name = str(agent_display_name or "").strip()
-    if not normalized_name or not slack_supports_customized_messages(credentials):
+    """Author a message as the agent rather than as the app.
+
+    Slack takes the name and the avatar together under ``chat:write.customize``;
+    sending a name without a face leaves the app's generic icon next to a
+    personal name, which reads as two different senders.
+    """
+    if not slack_supports_customized_messages(credentials):
         return {}
-    return {"username": normalized_name}
+    normalized_name = str(agent_display_name or "").strip()
+    if not normalized_name:
+        return {}
+    kwargs: dict[str, Any] = {"username": normalized_name}
+    icon = str(agent_icon_url or "").strip()
+    # Slack only accepts a publicly fetchable https icon; anything else would
+    # fail the whole send, so a local/relative path is simply left off.
+    if icon.startswith("https://"):
+        kwargs["icon_url"] = icon
+    return kwargs
 
 
 def _normalize_base_url(value: str) -> str:

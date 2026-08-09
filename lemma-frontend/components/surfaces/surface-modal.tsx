@@ -36,7 +36,7 @@ import {
     DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { useAssistants } from '@/lib/hooks/use-assistants';
-import { useAccounts } from '@/lib/hooks/use-connectors';
+import { useAccounts, useAuthConfigs } from '@/lib/hooks/use-connectors';
 import { usePod } from '@/lib/hooks/use-pods';
 import {
     useAvailableSurfaces,
@@ -51,6 +51,7 @@ import {
     useUpdatePodSurface,
     type SurfacePlatformValue,
 } from '@/lib/hooks/use-pod-surfaces';
+import { findAuthConfigForAccount } from '@/components/connectors/connector-utils';
 import { findCatalogSurface, hasSystemIdentity } from '@/lib/surfaces/catalog';
 import { deriveSurfaceName } from '@/lib/surfaces/naming';
 import { parseCredentialConflict, surfaceErrorMessage } from '@/lib/surfaces/errors';
@@ -126,6 +127,11 @@ export function SurfaceModal({
         limit: 200,
         enabled: Boolean(target && pod?.organization_id),
     });
+    const { data: authConfigs } = useAuthConfigs({
+        organizationId: pod?.organization_id,
+        limit: 200,
+        enabled: Boolean(target && pod?.organization_id),
+    });
 
     const createSurface = useCreatePodSurface();
     const updateSurface = useUpdatePodSurface();
@@ -193,7 +199,17 @@ export function SurfaceModal({
     const consentUrl = setup?.admin_consent?.required && !setup.admin_consent.granted
         ? setup.admin_consent.consent_url ?? null
         : null;
-    const hasOutstandingSetup = setupActions.length > 0 || Boolean(consentUrl);
+    // Reference material — a URL worth keeping to hand — is not something the
+    // surface is waiting on. Counting it made a live, delivering Slack surface
+    // warn that messages wouldn't arrive until setup was finished.
+    const hasOutstandingSetup =
+        setupActions.some((action) => !action.informational) || Boolean(consentUrl);
+    const hasSetupReference = setupActions.length > 0;
+    const setupKind: SetupKind = hasOutstandingSetup
+        ? 'blocking'
+        : hasSetupReference
+            ? 'reference'
+            : 'none';
 
     const { data: channelsData, isLoading: isLoadingChannels } = useSurfaceChannels(
         podId,
@@ -201,6 +217,18 @@ export function SurfaceModal({
         Boolean(target && existingSurface && definition?.capabilities.channelRoutes),
     );
     const availableChannels = (channelsData?.channels ?? []) as AvailableChannel[];
+
+    // Whether this workspace already runs the org's own app. Read from the auth
+    // config behind the surface's account, because that is where the app's
+    // credentials live — there is no per-surface answer to this question.
+    // Offering "use your own Slack app" to someone already using theirs reads
+    // as an invitation to do something they have done.
+    const usesOwnApp = useMemo(() => {
+        if (!existingSurface?.account_id) return false;
+        const account = accounts.find((row) => row.id === existingSurface.account_id);
+        if (!account) return false;
+        return findAuthConfigForAccount(account, authConfigs)?.config_source === 'ORG_CUSTOM';
+    }, [accounts, authConfigs, existingSurface?.account_id]);
 
     const platformAccounts = useMemo(
         () => accounts.filter((account) => accountMatchesConnector(account, catalogEntry?.connector_id)),
@@ -437,7 +465,12 @@ export function SurfaceModal({
                           .map((route) => ({
                               channel_id: route.channel_id,
                               channel_name: route.channel_name || null,
-                              agent_name: route.agent_name,
+                              // Sent apart, never derived from an empty name:
+                              // "the pod assistant answers here" and "nobody has
+                              // said" both leave agent_name null, and the API
+                              // rejects a route that claims to be both.
+                              agent_name: route.use_pod_assistant ? null : route.agent_name,
+                              use_pod_assistant: route.use_pod_assistant,
                           })),
                   }
                 : {}),
@@ -575,7 +608,7 @@ export function SurfaceModal({
                     <DialogDescription className="surface-modal-promise">
                         {rebinding && step === 'connect'
                             ? `Keep ${definition.label} exactly as it is, running on an account you own.`
-                            : stepPromise(step, definition.promise, agentName, definition.label, hasOutstandingSetup)}
+                            : stepPromise(step, definition.promise, agentName, definition.label, setupKind, definition.capabilities.senderFilters)}
                     </DialogDescription>
                 </DialogHeader>
 
@@ -634,20 +667,26 @@ export function SurfaceModal({
                             <p className="surface-verdict">
                                 <StepLoader size="xs" /> Checking what’s left…
                             </p>
-                        ) : hasOutstandingSetup ? (
+                        ) : hasSetupReference ? (
+                            // Renders whenever there is anything to show, which
+                            // includes reference-only cards — those are reached
+                            // deliberately from settings rather than pushed here.
                             <div className="grid gap-4">
                                 <SurfaceSetupChecklist actions={setupActions} consentUrl={consentUrl} />
-                                <button
-                                    type="button"
-                                    onClick={() => setStep('configure')}
-                                    className="lemma-quiet-text-button w-fit text-xs font-medium text-[var(--text-secondary)] underline-offset-2 hover:underline"
-                                >
-                                    Skip for now
-                                </button>
+                                {hasOutstandingSetup ? (
+                                    <button
+                                        type="button"
+                                        onClick={() => setStep('configure')}
+                                        className="lemma-quiet-text-button w-fit text-xs font-medium text-[var(--text-secondary)] underline-offset-2 hover:underline"
+                                    >
+                                        Skip for now
+                                    </button>
+                                ) : null}
                             </div>
                         ) : (
-                            // Nothing was outstanding after all (the account runs on
-                            // Lemma's own app) — show the proof instead of an empty list.
+                            // Nothing outstanding and nothing to reference (the
+                            // account runs on Lemma's own app) — show the proof
+                            // instead of an empty list.
                             <SurfaceLiveStep definition={definition} surface={existingSurface} />
                         )
                     ) : null}
@@ -673,6 +712,14 @@ export function SurfaceModal({
                                 availableChannels={availableChannels}
                                 isLoadingChannels={isLoadingChannels}
                                 defaultRouteAgent={agentName}
+                                customAppHref={
+                                    definition.platform === 'SLACK' && !usesOwnApp
+                                        ? `/pod/${podId}/connectors`
+                                        : undefined
+                                }
+                                onOpenReference={
+                                    hasSetupReference ? () => setStep('setup') : undefined
+                                }
                                 onRebind={() => {
                                     setAccountId('');
                                     setCredentials({});
@@ -710,12 +757,15 @@ export function SurfaceModal({
                             variant="quiet"
                             size="sm"
                             onClick={() => {
-                                if (step === 'message' || rebinding) {
+                                // A rebind entered `connect` from the settings
+                                // step, so Back belongs there — not in the
+                                // identity step this surface never revisits.
+                                if (rebinding) {
                                     setRebinding(false);
                                     setStep('configure');
                                     return;
                                 }
-                                setStep('identity');
+                                setStep(step === 'connect' ? 'identity' : 'configure');
                             }}
                             disabled={isBusy}
                             className="mr-auto"
@@ -797,22 +847,34 @@ function primaryAction({
     }
 }
 
+/** What the setup state is actually for, which decides how it introduces
+ * itself: work outstanding, a reference to check, or nothing at all. */
+type SetupKind = 'blocking' | 'reference' | 'none';
+
 function stepPromise(
     step: SurfaceModalStep,
     promise: string,
     agentName: string | null,
     label: string,
-    hasSetup: boolean,
+    setupKind: SetupKind,
+    senderFilters: boolean,
 ): string {
     const reachable = forAgent(`${label} can reach {agent} now. Here’s the address.`, agentName);
     if (step === 'live') return reachable;
     if (step === 'setup') {
-        return hasSetup
-            ? `Two minutes in ${label}, then messages start arriving.`
-            : reachable;
+        if (setupKind === 'blocking') return `Two minutes in ${label}, then messages start arriving.`;
+        if (setupKind === 'reference') return `Where ${label} delivers, if you ever need to check.`;
+        return reachable;
     }
     if (step === 'provisioning') return 'Finish naming it in Telegram — the bot is yours.';
-    if (step === 'configure') return forAgent('Who answers on {agent}’s behalf, and what gets through.', agentName);
+    // "What gets through" is only true where senders can be filtered — a
+    // mailbox. On Slack and Teams there is nothing to filter, so promising it
+    // described a screen that doesn't exist.
+    if (step === 'configure') {
+        return senderFilters
+            ? forAgent('Who answers as {agent}, and whose messages become work.', agentName)
+            : forAgent('Who answers as {agent}, and where.', agentName);
+    }
     if (step === 'message') return forAgent('Reach a teammate as {agent}.', agentName);
     return forAgent(promise, agentName);
 }
@@ -833,7 +895,12 @@ function defaultMode(entry: Parameters<typeof hasSystemIdentity>[0]): SurfaceIde
 /** An unfilled route row. The channel is picked in the modal; the agent is not,
  * because the page that opened it already answered that. */
 function blankChannelRow(agentName: string | null) {
-    return { channel_id: '', channel_name: '', agent_name: agentName };
+    return {
+        channel_id: '',
+        channel_name: '',
+        agent_name: agentName,
+        use_pod_assistant: agentName === null,
+    };
 }
 
 function emptyDraft(): ConfigureDraft {
@@ -855,6 +922,7 @@ function draftFromSurface(surface: AssistantSurface): ConfigureDraft {
             channel_id: route.channel_id || '',
             channel_name: route.channel_name || '',
             agent_name: route.agent_name ?? null,
+            use_pod_assistant: Boolean(route.use_pod_assistant),
         })),
         allowedDomains: (identity.allowed_domains || []).join(', '),
         allowedEmails: (identity.allowed_email_addresses || []).join(', '),

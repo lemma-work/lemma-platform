@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -182,3 +183,7 @@ class SurfaceApprovalRenderPlan(BaseModel):
             lines.append(f"Action: {self.action_summary}")
         lines.append('\nReply "approve" to run it or "deny" to cancel.')
         return "\n".join(lines)
+@dataclass(frozen=True, slots=True)
+class StreamAppendResult:
+    handle: dict[str, Any] | None
+    appended: bool

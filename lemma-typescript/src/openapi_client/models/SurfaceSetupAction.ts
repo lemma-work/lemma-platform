@@ -13,6 +13,7 @@ import type { SurfaceSetupActionField } from './SurfaceSetupActionField.js';
 export type SurfaceSetupAction = {
     description: string;
     fields?: Array<SurfaceSetupActionField>;
+    informational?: boolean;
     key: string;
     link?: (string | null);
     link_label?: (string | null);

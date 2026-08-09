@@ -13,6 +13,7 @@ from ..openapi_client.api.agent_surfaces import (
     agent_surface_send,
     agent_surface_setup,
     agent_surface_setup_guide,
+    agent_surface_slack_manifest,
     agent_surface_telegram_managed_get,
     agent_surface_telegram_managed_start,
     agent_surface_update,
@@ -119,6 +120,17 @@ class PodSurfaces(BoundResource):
     def setup_guide(self, platform: str) -> SurfacePlatformSetupGuide:
         """Pre-creation platform checklist — works before any surface exists."""
         return self._call(agent_surface_setup_guide, self._pod_uuid(), platform)
+
+    def slack_manifest(self) -> Any:
+        """The Slack app manifest to paste when running your own Slack app.
+
+        Takes no pod, despite living here: it describes the *deployment* — its
+        event URL, its OAuth callback, the scopes its code reads — and is the
+        same document for every pod. It is also what you need before there is
+        anything to scope it to, since the app it creates is what issues the
+        client id that connects the account a surface is built on.
+        """
+        return self._call(agent_surface_slack_manifest)
 
     def start_telegram_bot_setup(
         self,

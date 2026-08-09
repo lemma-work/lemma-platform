@@ -38,6 +38,19 @@ def public_https_api_url_available() -> bool:
     return parsed.scheme == "https" and hostname.lower() not in _LOCAL_WEBHOOK_HOSTS
 
 
+def platform_webhook_url(platform: SurfacePlatform) -> str | None:
+    """The one URL every surface of a platform receives events on.
+
+    Slack's manifest uses this rather than a per-surface URL. Which signing
+    secret verifies a request is decided from the workspace in the payload, so
+    one endpoint serves the deployment's app and every org's own app alike —
+    and the manifest stops depending on a surface existing first.
+    """
+    if not public_https_api_url_available():
+        return None
+    return f"{settings.api_url.rstrip('/')}/surfaces/webhooks/{platform.value.lower()}"
+
+
 def computed_webhook_url(surface: AgentSurfaceEntity) -> str | None:
     """The inbound webhook URL for a surface, or None when not webhook-driven.
 
@@ -57,6 +70,10 @@ def computed_webhook_url(surface: AgentSurfaceEntity) -> str | None:
         and surface.account_id is not None
     ):
         return f"{base}/surfaces/{surface.id}/webhook"
+    # Slack is deliberately absent here: a surface running the org's own app
+    # receives on the same shared endpoint as everyone else, because the secret
+    # that verifies a request is chosen from the workspace in the payload
+    # rather than from the URL it arrived on.
     if surface.surface_type in _PLATFORM_WEBHOOK_TYPES:
         return f"{base}/surfaces/webhooks/{surface.surface_type.value.lower()}"
     return None

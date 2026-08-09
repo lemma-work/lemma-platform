@@ -86,6 +86,7 @@ _NAME_TO_MODULE = {
     'AgentSummaryResponseMetadataType0': 'agent_summary_response_metadata_type_0',
     'AgentSurfaceListResponse': 'agent_surface_list_response',
     'AgentSurfaceResponse': 'agent_surface_response',
+    'AgentSurfaceSlackManifestResponseAgentSurfaceSlackManifest': 'agent_surface_slack_manifest_response_agent_surface_slack_manifest',
     'AgentSurfaceStatus': 'agent_surface_status',
     'AgentToolset': 'agent_toolset',
     'AppBundleUploadRequest': 'app_bundle_upload_request',
@@ -425,6 +426,9 @@ _NAME_TO_MODULE = {
     'SurfaceSetupPhase': 'surface_setup_phase',
     'SurfaceSetupResponse': 'surface_setup_response',
     'SurfaceSetupStep': 'surface_setup_step',
+    'SurfaceSlackConfigInput': 'surface_slack_config_input',
+    'SurfaceSlackConfigResponse': 'surface_slack_config_response',
+    'SurfaceSlackConfigResponseDmAgentByUser': 'surface_slack_config_response_dm_agent_by_user',
     'SurfaceSystemClaim': 'surface_system_claim',
     'SurfaceTelegramConfigInput': 'surface_telegram_config_input',
     'SurfaceUpdateRequest': 'surface_update_request',
@@ -591,6 +595,7 @@ if TYPE_CHECKING:
     from .agent_summary_response_metadata_type_0 import AgentSummaryResponseMetadataType0
     from .agent_surface_list_response import AgentSurfaceListResponse
     from .agent_surface_response import AgentSurfaceResponse
+    from .agent_surface_slack_manifest_response_agent_surface_slack_manifest import AgentSurfaceSlackManifestResponseAgentSurfaceSlackManifest
     from .agent_surface_status import AgentSurfaceStatus
     from .agent_toolset import AgentToolset
     from .app_bundle_upload_request import AppBundleUploadRequest
@@ -930,6 +935,9 @@ if TYPE_CHECKING:
     from .surface_setup_phase import SurfaceSetupPhase
     from .surface_setup_response import SurfaceSetupResponse
     from .surface_setup_step import SurfaceSetupStep
+    from .surface_slack_config_input import SurfaceSlackConfigInput
+    from .surface_slack_config_response import SurfaceSlackConfigResponse
+    from .surface_slack_config_response_dm_agent_by_user import SurfaceSlackConfigResponseDmAgentByUser
     from .surface_system_claim import SurfaceSystemClaim
     from .surface_telegram_config_input import SurfaceTelegramConfigInput
     from .surface_update_request import SurfaceUpdateRequest
@@ -1109,6 +1117,7 @@ __all__ = [
     'AgentSummaryResponseMetadataType0',
     'AgentSurfaceListResponse',
     'AgentSurfaceResponse',
+    'AgentSurfaceSlackManifestResponseAgentSurfaceSlackManifest',
     'AgentSurfaceStatus',
     'AgentToolset',
     'AppBundleUploadRequest',
@@ -1448,6 +1457,9 @@ __all__ = [
     'SurfaceSetupPhase',
     'SurfaceSetupResponse',
     'SurfaceSetupStep',
+    'SurfaceSlackConfigInput',
+    'SurfaceSlackConfigResponse',
+    'SurfaceSlackConfigResponseDmAgentByUser',
     'SurfaceSystemClaim',
     'SurfaceTelegramConfigInput',
     'SurfaceUpdateRequest',

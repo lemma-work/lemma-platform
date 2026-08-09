@@ -16,6 +16,7 @@ from app.modules.agent_surfaces.domain.entities import (
     SurfaceIdentityPolicy,
     SurfacePlatform,
     SurfaceSendPolicy,
+    SurfaceSlackConfig,
     SurfaceTelegramConfig,
 )
 from app.modules.agent_surfaces.domain.notification import (
@@ -38,9 +39,18 @@ class SurfaceIdentityConfigInput(BaseModel):
 
 
 class SurfaceChannelRouteInput(BaseModel):
+    """One channel's routing, in the same three states the domain models.
+
+    ``use_pod_assistant`` is not a synonym for an absent ``agent_name`` — see
+    :class:`SurfaceChannelRoute`. Omitting it here is what silently turned an
+    explicit "the pod assistant answers here", picked from inside Slack, back
+    into "unconfigured" on the next save from the web UI.
+    """
+
     channel_id: str | None = None
     channel_name: str | None = None
     agent_name: str | None = None
+    use_pod_assistant: bool = False
 
     model_config = ConfigDict(extra="forbid")
 
@@ -48,6 +58,10 @@ class SurfaceChannelRouteInput(BaseModel):
     def validate_channel_ref(self) -> "SurfaceChannelRouteInput":
         if not self.channel_id and not self.channel_name:
             raise ValueError("channel_id or channel_name is required")
+        if self.use_pod_assistant and self.agent_name:
+            raise ValueError(
+                "use_pod_assistant and agent_name are different answers; set one"
+            )
         return self
 
 
@@ -65,6 +79,29 @@ class SurfaceTelegramConfigInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class SurfaceSlackConfigInput(BaseModel):
+    """The Slack settings a *caller* owns.
+
+    Only ``app_name``. The per-person DM agent map is written from inside Slack
+    — each person picks their own in the App Home — so it is readable here and
+    never writable, which keeps one editor from reassigning everybody.
+    """
+
+    app_name: str | None = None
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class SurfaceSlackConfigResponse(BaseModel):
+    """Slack settings as read back. ``dm_agent_by_user`` maps a Slack user id to
+    the agent that person chose, or ``__pod_assistant__`` when they explicitly
+    chose the pod assistant. A user absent from the map has never chosen and
+    falls to the surface default."""
+
+    app_name: str | None = None
+    dm_agent_by_user: dict[str, str] = Field(default_factory=dict)
+
+
 class SurfaceBehaviorConfigInput(BaseModel):
     identity: SurfaceIdentityConfigInput = Field(default_factory=SurfaceIdentityConfigInput)
     channels: list[SurfaceChannelRouteInput] = Field(default_factory=list)
@@ -73,6 +110,7 @@ class SurfaceBehaviorConfigInput(BaseModel):
     telegram: SurfaceTelegramConfigInput = Field(
         default_factory=SurfaceTelegramConfigInput
     )
+    slack: SurfaceSlackConfigInput = Field(default_factory=SurfaceSlackConfigInput)
 
     model_config = ConfigDict(extra="forbid")
 
@@ -81,6 +119,7 @@ class SurfaceChannelRouteResponse(BaseModel):
     channel_id: str | None = None
     channel_name: str | None = None
     agent_name: str | None = None
+    use_pod_assistant: bool = False
 
 
 class AvailableSurfaceChannelResponse(BaseModel):
@@ -112,6 +151,9 @@ class SurfaceConfigResponse(BaseModel):
     telegram: SurfaceTelegramConfigInput = Field(
         default_factory=SurfaceTelegramConfigInput
     )
+    slack: SurfaceSlackConfigResponse = Field(
+        default_factory=SurfaceSlackConfigResponse
+    )
 
     @classmethod
     def from_domain(cls, config: SurfaceConfig) -> "SurfaceConfigResponse":
@@ -124,7 +166,11 @@ def surface_config_from_input(
     channel_routes: list[SurfaceChannelRoute],
 ) -> SurfaceConfig:
     """Build the domain config from API input (channel routes pre-resolved
-    from agent names by the controller)."""
+    from agent names by the controller).
+
+    ``slack.dm_agent_by_user`` is deliberately absent: it is written from
+    inside Slack and never carried on a create, which has no one's choices yet.
+    """
     return SurfaceConfig(
         dm_conversation_reset_after_hours=config_input.dm_conversation_reset_after_hours,
         identity=SurfaceIdentityPolicy(
@@ -134,6 +180,7 @@ def surface_config_from_input(
         channels=channel_routes,
         send_policy=SurfaceSendPolicy(allow_send=config_input.send_policy.allow_send),
         telegram=SurfaceTelegramConfig(app_name=config_input.telegram.app_name),
+        slack=SurfaceSlackConfig(app_name=config_input.slack.app_name),
     )
 
 

@@ -6,8 +6,13 @@ from app.modules.agent_surfaces.domain.entities import (
     ConversationType,
     ParsedInboundSurfaceEvent,
     ParsedSurfaceInteraction,
+    ParsedSurfaceLifecycleEvent,
+    SurfaceLifecycleKind,
 )
 from app.modules.agent_surfaces.platforms.common import render_attachment_prompt_block
+from app.modules.agent_surfaces.platforms.slack.config_parser import (
+    SlackConfigurationParserMixin,
+)
 from app.modules.agent_surfaces.platforms.slack.models import (
     SLACK_APPROVAL_DECISION_BY_ACTION_ID as _APPROVAL_DECISION_BY_ACTION_ID,
     SLACK_FORM_SUBMIT_ACTION_ID as _FORM_SUBMIT_ACTION_ID,
@@ -19,7 +24,7 @@ from app.core.log.log import get_logger
 logger = get_logger(__name__)
 
 
-class SlackMessageParser:
+class SlackMessageParser(SlackConfigurationParserMixin):
     platform = "SLACK"
 
     def parse(
@@ -129,6 +134,70 @@ class SlackMessageParser:
                 exc_info=True,
             )
             raise
+
+    def parse_lifecycle(
+        self, payload: dict[str, Any], headers: dict[str, str] | None = None
+    ) -> ParsedSurfaceLifecycleEvent | None:
+        """Recognise events about the app itself rather than about a message.
+
+        Returns None for everything else, including a *person* joining a
+        channel — only the bot's own arrival is a setup moment.
+        """
+        del headers
+        try:
+            payload = self._unwrap_payload(payload)
+            if payload.get("type") != "event_callback":
+                return None
+            event = payload.get("event") or {}
+            event_type = str(event.get("type") or "")
+            tenant_id = str(payload.get("team_id") or "").strip() or None
+
+            if event_type == "member_joined_channel":
+                # ``authorizations`` names the bot user for this delivery; if the
+                # user who joined is not it, a colleague joined and it is not
+                # ours to react to.
+                bot_user_id = self._authorized_bot_user_id(payload)
+                joined_user = str(event.get("user") or "").strip()
+                if not bot_user_id or joined_user != bot_user_id:
+                    return None
+                channel_id = str(event.get("channel") or "").strip()
+                if not channel_id:
+                    return None
+                return ParsedSurfaceLifecycleEvent(
+                    platform=self.platform,
+                    kind=SurfaceLifecycleKind.JOINED_CHANNEL,
+                    tenant_id=tenant_id,
+                    external_channel_id=channel_id,
+                    # The inviter is the whole point: they just acted, so they
+                    # are the right person to ask who should answer here.
+                    actor_external_user_id=(
+                        str(event.get("inviter") or "").strip() or None
+                    ),
+                    raw_payload=payload,
+                )
+
+            if event_type == "app_home_opened":
+                return ParsedSurfaceLifecycleEvent(
+                    platform=self.platform,
+                    kind=SurfaceLifecycleKind.HOME_OPENED,
+                    tenant_id=tenant_id,
+                    external_channel_id=str(event.get("channel") or "").strip() or None,
+                    actor_external_user_id=str(event.get("user") or "").strip() or None,
+                    raw_payload=payload,
+                )
+            return None
+        except (AttributeError, KeyError, TypeError, ValueError):
+            logger.debug("surface.slack.parse_lifecycle_failed", exc_info=True)
+            return None
+
+    def _authorized_bot_user_id(self, payload: dict[str, Any]) -> str | None:
+        for authorization in payload.get("authorizations") or []:
+            if not isinstance(authorization, dict):
+                continue
+            user_id = str(authorization.get("user_id") or "").strip()
+            if user_id:
+                return user_id
+        return None
 
     def parse_interaction(
         self, payload: dict[str, Any], headers: dict[str, str] | None = None

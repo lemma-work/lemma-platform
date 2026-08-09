@@ -82,6 +82,15 @@ class SurfaceSetupAction(BaseModel):
     link: str | None = None
     link_label: str | None = None
     fields: list[SurfaceSetupActionField] = Field(default_factory=list)
+    # Reference material, not a task: worth keeping to hand, but nothing is
+    # waiting on it. A surface carrying only these is finished, and saying
+    # otherwise puts "messages won't arrive until setup is finished" on a
+    # surface that is already delivering them.
+    informational: bool = False
+
+    @property
+    def is_blocking(self) -> bool:
+        return not self.informational
 
 
 def build_surface_setup_actions(
@@ -90,6 +99,8 @@ def build_surface_setup_actions(
     is_custom_app: bool,
     webhook_url: str | None,
     slack_socket_mode: bool = False,
+    slack_signing_secret_missing: bool = False,
+    slack_repair_url: str | None = None,
     whatsapp_verify_token: str | None = None,
 ) -> list[SurfaceSetupAction]:
     """The manual steps a user must complete for this surface — usually none.
@@ -106,29 +117,58 @@ def build_surface_setup_actions(
         return []
 
     if platform is SurfacePlatform.SLACK:
+        actions: list[SurfaceSetupAction] = []
+        if slack_signing_secret_missing:
+            actions.append(
+                SurfaceSetupAction(
+                    key="slack_signing_secret",
+                    title="Add the Slack signing secret",
+                    description=(
+                        "This workspace uses its own Slack app, but its signing "
+                        "secret is missing. Lemma rejects every event until the "
+                        "secret from Slack's Basic Information page is saved."
+                    ),
+                    link=slack_repair_url,
+                    link_label="Edit Slack credentials",
+                    steps=[
+                        "Open the Slack app's Basic Information page and copy its signing secret.",
+                        "Edit this Slack connector in Lemma and save the signing secret.",
+                    ],
+                )
+            )
         if slack_socket_mode or not webhook_url:
-            return []
-        return [
+            return actions
+        # Reference, not instructions. An app made from Lemma's manifest already
+        # has this URL and every event Lemma listens for — so telling someone to
+        # set them by hand is at best noise, and at worst wrong: the list used to
+        # name four events and the manifest declares six. Following it built an
+        # app whose App Home never opened, because `app_home_opened` was missing.
+        #
+        # Kept for the app that was *not* made from the manifest, where this is
+        # the only place the URL appears. Nothing here restates the events; that
+        # list lives in the manifest, which is the thing that can't drift.
+        actions.append(
             SurfaceSetupAction(
                 key="slack_event_subscriptions",
-                title="Point your Slack app's events at Lemma",
+                title="Where Slack sends messages",
                 description=(
-                    "This workspace uses its own Slack app, so Slack needs to "
-                    "know where to deliver messages."
+                    "This workspace runs its own Slack app. If you made it from "
+                    "Lemma's manifest, it already points here and there's "
+                    "nothing to do."
                 ),
                 link="https://api.slack.com/apps",
-                link_label="Open Slack API dashboard",
+                link_label="Open your Slack apps",
+                informational=True,
                 fields=[SurfaceSetupActionField(label="Request URL", value=webhook_url)],
                 steps=[
-                    "Open api.slack.com/apps and select the app connected to this workspace.",
-                    "Open ‘Event Subscriptions’ and turn it on.",
-                    "Paste the Request URL below and wait for Slack to show ‘Verified’.",
-                    "Under ‘Subscribe to bot events’, add: app_mention, message.im, "
-                    "message.channels, message.groups.",
-                    "Click ‘Save Changes’, then reinstall the app if Slack prompts you.",
+                    "Messages not arriving? Open your app on api.slack.com and "
+                    "check ‘Event Subscriptions’ shows this URL as Verified.",
+                    "If you changed anything, Slack may ask you to reinstall the "
+                    "app to your workspace.",
                 ],
             )
-        ]
+        )
+        return actions
 
     if platform is SurfacePlatform.TEAMS:
         if not webhook_url:
@@ -148,7 +188,7 @@ def build_surface_setup_actions(
                 ],
                 steps=[
                     "In the Azure Portal, open the Azure Bot resource for this tenant.",
-                    "Open ‘Configuration’ and set ‘Messaging endpoint’ to the URL below.",
+                    "Open ‘Configuration’ and set ‘Messaging endpoint’ to the URL above.",
                     "Make sure the ‘Microsoft Teams’ channel is enabled on the bot.",
                     "Save your changes.",
                 ],
@@ -176,7 +216,7 @@ def build_surface_setup_actions(
                 steps=[
                     "Open developers.facebook.com/apps and select your WhatsApp Business app.",
                     "Go to ‘WhatsApp → Configuration’.",
-                    "Set the Callback URL and Verify token to the values below.",
+                    "Set the Callback URL and Verify token to the values above.",
                     "Subscribe to the ‘messages’ webhook field.",
                     "Click ‘Verify and save’.",
                 ],

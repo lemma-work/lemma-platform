@@ -2,7 +2,6 @@
 
 import { useState } from 'react';
 import Image from 'next/image';
-import Link from 'next/link';
 import { MessageCircle, Plus } from '@/components/ui/icons';
 
 import { SurfaceModal, type SurfaceModalTarget } from '@/components/surfaces/surface-modal';
@@ -18,8 +17,6 @@ import {
     getSurfaceIdentity,
     getSurfacePlatformKey,
     getSurfaceStatus,
-    surfaceAnswersDirectMessages,
-    surfaceDirectMessageAgent,
     surfaceReaches,
 } from '@/lib/utils/surfaces';
 import type { AssistantSurface } from '@/lib/types';
@@ -77,7 +74,6 @@ export function AgentSurfacesRow({
                 {surfaces.map((surface) => (
                     <SurfaceChips
                         key={surface.id ?? surface.name}
-                        podId={podId}
                         surface={surface}
                         reachFor={agentName}
                         onOpen={(intent) =>
@@ -113,17 +109,16 @@ export function AgentSurfacesRow({
  * One surface's chips: a single chip for an identity platform, one per channel
  * for a channel platform.
  *
- * The DM chip is the one that can be *absent while still mattering* — a Slack
- * workspace has exactly one agent on its DMs, so on every other agent the right
- * thing to show is who holds them, not nothing.
+ * There is no chip for "someone else holds the DMs" any more. On Slack each
+ * person picks the agent that answers their own DMs, from the App Home, so DMs
+ * are not a thing one agent takes from the others — an agent that holds none
+ * simply has no DM chip, which is the same as any other reach it lacks.
  */
 function SurfaceChips({
-    podId,
     surface,
     reachFor,
     onOpen,
 }: {
-    podId: string;
     surface: AssistantSurface;
     reachFor: string | null;
     onOpen: (intent?: 'add-channel') => void;
@@ -136,7 +131,6 @@ function SurfaceChips({
     }
 
     const reaches = surfaceReaches(surface, reachFor);
-    const holdsDirectMessages = surfaceAnswersDirectMessages(surface, reachFor);
 
     return (
         <>
@@ -146,17 +140,10 @@ function SurfaceChips({
                     surface={surface}
                     reachFor={reachFor}
                     labelOverride={reach.label}
+                    detail={reach.detail}
                     onOpen={() => onOpen()}
                 />
             ))}
-
-            {holdsDirectMessages ? null : (
-                <DirectMessagesHeldChip
-                    podId={podId}
-                    platformLabel={definition.label}
-                    holder={surfaceDirectMessageAgent(surface)}
-                />
-            )}
 
             <AddChannelChip
                 platformLabel={definition.label}
@@ -180,12 +167,15 @@ function ReachChip({
     surface,
     reachFor,
     labelOverride,
+    detail,
     onOpen,
 }: {
     surface: AssistantSurface;
     reachFor: string | null;
     /** What this chip stands for, when it isn't the whole surface — `#sales`. */
     labelOverride?: string;
+    /** Why this reach exists, when the label doesn't say. */
+    detail?: string;
     onOpen: () => void;
 }) {
     const platform = getSurfacePlatformKey(surface);
@@ -223,60 +213,18 @@ function ReachChip({
             <TooltipContent>
                 {/* A chip standing for one channel already says what it reaches, so
                     the tooltip spends itself on what the chip dropped: which
-                    workspace that channel lives in. */}
+                    workspace that channel lives in, and — for DMs, where reach is
+                    now per person — how this agent came to hold any. */}
                 {status.label} · {labelOverride
                     ? identity || definition?.label || platform
                     : describeReach(surface, reachFor)}
+                {detail ? ` · ${detail}` : ''}
                 {deepLink ? ` · ${deepLink.replace(/^https?:\/\//, '')}` : ''}
                 {connection ? (
                     <span className="mt-1 block text-[var(--text-tertiary)]">
                         {connection.problem || connection.attribution}
                     </span>
                 ) : null}
-            </TooltipContent>
-        </Tooltip>
-    );
-}
-
-/**
- * The DMs of a channel platform, when another agent answers them.
- *
- * A Slack workspace routes DMs to exactly one agent — there is no channel in a
- * DM to route on — so on every other agent this is the shape of the constraint.
- * Naming the holder and linking to it is the same move the catalog makes for a
- * claimed system credential: render the limit as state, never as a failed save.
- */
-function DirectMessagesHeldChip({
-    podId,
-    platformLabel,
-    holder,
-}: {
-    podId: string;
-    platformLabel: string;
-    /** `null` = the pod default assistant. */
-    holder: string | null;
-}) {
-    const holderLabel = holder || 'the pod assistant';
-    const href = holder
-        ? `/pod/${podId}/agents/${encodeURIComponent(holder)}`
-        : `/pod/${podId}/ai/assistant`;
-
-    return (
-        <Tooltip>
-            <TooltipTrigger asChild>
-                <Link
-                    href={href}
-                    className={cn(chipClass, 'custom-focus-ring border-dashed opacity-60 transition-opacity hover:opacity-100')}
-                >
-                    <MessageCircle className="ml-1 h-4 w-4 shrink-0 text-[var(--text-tertiary)]" aria-hidden />
-                    <span className="truncate text-sm font-medium text-[var(--text-secondary)]">
-                        Direct messages
-                    </span>
-                </Link>
-            </TooltipTrigger>
-            <TooltipContent>
-                {platformLabel} direct messages are answered by {holderLabel}. One agent
-                takes them for the whole workspace.
             </TooltipContent>
         </Tooltip>
     );

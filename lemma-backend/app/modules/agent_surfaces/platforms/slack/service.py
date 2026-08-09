@@ -26,6 +26,13 @@ from app.modules.agent_surfaces.platforms.common import (
     background_channel_context_note,
     channel_author_label,
 )
+from app.modules.agent_surfaces.platforms.rendering import chunk_text
+from app.modules.agent_surfaces.platforms.slack.blocks import (
+    MARKDOWN_BLOCK_CHAR_LIMIT,
+    fallback_text,
+    feedback_actions_block,
+    markdown_block,
+)
 from app.modules.agent_surfaces.platforms.slack.client import (
     build_slack_client,
     slack_access_token,
@@ -131,18 +138,32 @@ class SlackPlatformService:
             return
 
         client = build_slack_client(self.credentials)
+        thread_ts = event.reply_target.get("thread_ts")
+        identity_kwargs = slack_customized_message_kwargs(
+            self.credentials,
+            (metadata or {}).get("agent_display_name"),
+            (metadata or {}).get("agent_icon_url"),
+        )
+        # Slack caps markdown blocks at 12,000 characters *per payload*, so a
+        # long answer becomes several messages rather than one truncated one.
+        chunks = chunk_text(message, limit=MARKDOWN_BLOCK_CHAR_LIMIT) or [message]
+        feedback_callback_id = str((metadata or {}).get("feedback_callback_id") or "")
         try:
-            payload: dict[str, Any] = {"channel": channel, "text": message}
-            thread_ts = event.reply_target.get("thread_ts")
-            if thread_ts:
-                payload["thread_ts"] = thread_ts
-            payload.update(
-                slack_customized_message_kwargs(
-                    self.credentials,
-                    (metadata or {}).get("agent_display_name"),
-                )
-            )
-            await client.chat_postMessage(**payload)
+            for index, chunk in enumerate(chunks):
+                blocks: list[dict[str, Any]] = [markdown_block(chunk)]
+                # Feedback rates the answer, so it belongs on the last message
+                # of a chunked answer — not on every part of one.
+                if feedback_callback_id and index == len(chunks) - 1:
+                    blocks.append(feedback_actions_block(feedback_callback_id))
+                payload: dict[str, Any] = {
+                    "channel": channel,
+                    "text": fallback_text(chunk),
+                    "blocks": blocks,
+                }
+                if thread_ts:
+                    payload["thread_ts"] = thread_ts
+                payload.update(identity_kwargs)
+                await client.chat_postMessage(**payload)
         except Exception:
             logger.debug(
                 'agent_surfaces.service.slack_send_message_channel_s.propagated',
@@ -288,12 +309,16 @@ class SlackPlatformService:
                         "invalid_arguments",
                         "method_not_supported_for_channel_type",
                     }:
+                        # Not an assistant thread (or the scope was revoked) —
+                        # fall through to the reaction below rather than
+                        # returning, or the DM shows no indicator at all while
+                        # the agent works.
                         logger.debug(
                             'agent_surfaces.service.slack_typing_indicator_unsupported_channel.diagnostic',
                             error_code=error_code,
                         )
-                        return
-                    raise
+                    else:
+                        raise
             await client.reactions_add(
                 channel=str(channel),
                 name="eyes",
@@ -313,80 +338,36 @@ class SlackPlatformService:
             )
             raise
 
-    async def stream_progress(
-        self,
-        event: ParsedInboundSurfaceEvent,
-        progress_text: str,
-        progress_handle: dict[str, Any] | None = None,
-    ) -> dict[str, Any] | None:
-        """Post/edit a live progress message via chat.update; return its handle.
-
-        First call posts a placeholder; subsequent calls edit it in place. The
-        handle carries the message ts + channel so ``end_progress`` can delete it.
-        Best-effort: rate limits / API errors keep the prior handle.
-        """
-        token = slack_access_token(self.credentials)
-        channel = event.reply_target.get("channel")
-        if not token or not channel:
-            return progress_handle
-        client = build_slack_client(self.credentials)
-        text = _truncate_slack_text(f"⏳ {progress_text}", 3000) or "⏳ Working…"
-        try:
-            if progress_handle and progress_handle.get("ts"):
-                await client.chat_update(
-                    channel=str(progress_handle.get("channel") or channel),
-                    ts=str(progress_handle["ts"]),
-                    text=text,
-                )
-                return progress_handle
-            payload: dict[str, Any] = {"channel": str(channel), "text": text}
-            thread_ts = event.reply_target.get("thread_ts")
-            if thread_ts:
-                payload["thread_ts"] = thread_ts
-            response = await client.chat_postMessage(**payload)
-            ts = str(response["ts"])
-            return {"ts": ts, "channel": str(response.get("channel") or channel)}
-        except SlackApiError:
-            logger.debug(
-                'agent_surfaces.service.slack_stream_progress_channel_s.diagnostic'
-            )
-            return progress_handle
-
-    async def end_progress(
-        self,
-        event: ParsedInboundSurfaceEvent,
-        progress_handle: dict[str, Any] | None = None,
-    ) -> None:
-        """Delete the streaming progress placeholder so it doesn't linger next to
-        the final answer. Best-effort."""
-        if not progress_handle or not progress_handle.get("ts"):
-            return
-        token = slack_access_token(self.credentials)
-        if not token:
-            return
-        client = build_slack_client(self.credentials)
-        channel = progress_handle.get("channel") or event.reply_target.get("channel")
-        try:
-            await client.chat_delete(
-                channel=str(channel), ts=str(progress_handle["ts"])
-            )
-        except SlackApiError:
-            logger.debug(
-                'agent_surfaces.service.slack_end_progress_delete_channel.diagnostic'
-            )
-
     async def list_channels(self) -> list[SurfaceChannelInfo]:
-        """List Slack public/private channels for configuring channel routes."""
+        """List Slack public/private channels for configuring channel routes.
+
+        Private channels need ``groups:read``, which a workspace installed
+        before that scope shipped will not have granted. Slack answers such a
+        request with ``missing_scope``, so the first failure retries with public
+        channels only rather than leaving the picker empty.
+        """
         client = build_slack_client(self.credentials)
         channels: list[SurfaceChannelInfo] = []
         cursor: str | None = None
+        channel_types = "public_channel,private_channel"
         for _ in range(20):  # bounded pagination safety
-            response = await client.conversations_list(
-                types="public_channel,private_channel",
-                exclude_archived=True,
-                limit=200,
-                cursor=cursor,
-            )
+            try:
+                response = await client.conversations_list(
+                    types=channel_types,
+                    exclude_archived=True,
+                    limit=200,
+                    cursor=cursor,
+                )
+            except SlackApiError as exc:
+                error_code = str((exc.response or {}).get("error") or "")
+                if error_code != "missing_scope" or channel_types == "public_channel":
+                    raise
+                logger.debug(
+                    "agent_surfaces.service.slack_list_channels_private_unavailable.diagnostic",
+                    error_code=error_code,
+                )
+                channel_types = "public_channel"
+                continue
             for item in response.get("channels") or []:
                 channel_id = str((item or {}).get("id") or "").strip()
                 if not channel_id:
@@ -722,6 +703,31 @@ class SlackPlatformService:
 
     def _filename_from_url(self, value: str) -> str:
         return str(value or "").rstrip("/").split("/")[-1].strip()
+
+
+def _markdown_chunk(text: str) -> dict[str, Any]:
+    """Model text as a stream chunk.
+
+    A stream is either chunk-based or plain-text for its whole life. Because
+    the step timeline uses chunks, the answer must be a chunk too — appending
+    top-level ``markdown_text`` to a chunk stream is rejected with
+    ``streaming_mode_mismatch``.
+    """
+    return {"type": "markdown_text", "text": text}
+
+
+def _task_chunk(sequence: int, title: str | None, status: str) -> dict[str, Any]:
+    """One step of the agent's work, as a Slack ``task_update`` chunk.
+
+    The id is stable per step so appending the same id with ``complete`` closes
+    the step already on screen rather than adding a second one.
+    """
+    return {
+        "type": "task_update",
+        "id": f"step-{sequence}",
+        "title": _truncate_slack_text(str(title or "Working…"), 200) or "Working…",
+        "status": status,
+    }
 
 
 def _slack_rejected_customized_identity(exc: SlackApiError) -> bool:

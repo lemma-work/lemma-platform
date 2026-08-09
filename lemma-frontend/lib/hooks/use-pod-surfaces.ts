@@ -138,6 +138,23 @@ export const useSurfaceChannels = (
     });
 };
 
+/**
+ * The Slack app manifest, with this deployment's URLs already substituted.
+ * Belongs to no pod or org — it describes the deployment — which is what lets
+ * it be shown before anything exists to scope it to. Fetched only when someone
+ * opens a panel that shows it; it reads a file off disk on every call.
+ */
+export const useSlackManifest = (enabled = true) => {
+    return useQuery({
+        queryKey: ['slack-app-manifest'],
+        queryFn: () => getLemmaClient().podSurfaces.slackManifest(),
+        enabled,
+        // The URLs only change when the deployment moves, and the scopes when
+        // Lemma ships — neither happens while a dialog is open.
+        staleTime: Infinity,
+    });
+};
+
 /** Provision a new surface. `name` defaults to the lowercased platform. */
 export const useCreatePodSurface = () => {
     const queryClient = useQueryClient();

@@ -349,6 +349,11 @@ async def _ensure_connector_account(
     provider: AuthProvider = AuthProvider.LEMMA,
     config_source: str = "SYSTEM_DEFAULT",
 ) -> Account:
+    if connector_id == "slack":
+        credentials = dict(credentials)
+        raw_response = dict(credentials.get("raw_response") or {})
+        raw_response.setdefault("app_id", "A0123456")
+        credentials["raw_response"] = raw_response
     await _ensure_connector(db_session, connector_id, provider=provider)
     kind = provider_to_kind(provider).value
     organization_id = await db_session.scalar(

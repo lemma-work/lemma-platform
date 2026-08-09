@@ -12,6 +12,7 @@ if TYPE_CHECKING:
     from ..models.surface_channel_route_response import SurfaceChannelRouteResponse
     from ..models.surface_identity_config_response import SurfaceIdentityConfigResponse
     from ..models.surface_send_policy_config import SurfaceSendPolicyConfig
+    from ..models.surface_slack_config_response import SurfaceSlackConfigResponse
     from ..models.surface_telegram_config_input import SurfaceTelegramConfigInput
 
 
@@ -27,6 +28,11 @@ class SurfaceConfigResponse:
         dm_conversation_reset_after_hours (int | Unset):  Default: 24.
         identity (SurfaceIdentityConfigResponse | Unset):
         send_policy (SurfaceSendPolicyConfig | Unset): Proactive-send controls. Mirrored across request and response.
+        slack (SurfaceSlackConfigResponse | Unset): Slack settings as read back. ``dm_agent_by_user`` maps a Slack user
+            id to
+            the agent that person chose, or ``__pod_assistant__`` when they explicitly
+            chose the pod assistant. A user absent from the map has never chosen and
+            falls to the surface default.
         telegram (SurfaceTelegramConfigInput | Unset): Selects the pod app exposed as this bot's Telegram Mini App.
     """
 
@@ -34,6 +40,7 @@ class SurfaceConfigResponse:
     dm_conversation_reset_after_hours: int | Unset = 24
     identity: SurfaceIdentityConfigResponse | Unset = UNSET
     send_policy: SurfaceSendPolicyConfig | Unset = UNSET
+    slack: SurfaceSlackConfigResponse | Unset = UNSET
     telegram: SurfaceTelegramConfigInput | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
@@ -55,6 +62,10 @@ class SurfaceConfigResponse:
         if not isinstance(self.send_policy, Unset):
             send_policy = self.send_policy.to_dict()
 
+        slack: dict[str, Any] | Unset = UNSET
+        if not isinstance(self.slack, Unset):
+            slack = self.slack.to_dict()
+
         telegram: dict[str, Any] | Unset = UNSET
         if not isinstance(self.telegram, Unset):
             telegram = self.telegram.to_dict()
@@ -72,6 +83,8 @@ class SurfaceConfigResponse:
             field_dict["identity"] = identity
         if send_policy is not UNSET:
             field_dict["send_policy"] = send_policy
+        if slack is not UNSET:
+            field_dict["slack"] = slack
         if telegram is not UNSET:
             field_dict["telegram"] = telegram
 
@@ -84,6 +97,7 @@ class SurfaceConfigResponse:
             SurfaceIdentityConfigResponse,
         )
         from ..models.surface_send_policy_config import SurfaceSendPolicyConfig
+        from ..models.surface_slack_config_response import SurfaceSlackConfigResponse
         from ..models.surface_telegram_config_input import SurfaceTelegramConfigInput
 
         d = dict(src_dict)
@@ -116,6 +130,13 @@ class SurfaceConfigResponse:
         else:
             send_policy = SurfaceSendPolicyConfig.from_dict(_send_policy)
 
+        _slack = d.pop("slack", UNSET)
+        slack: SurfaceSlackConfigResponse | Unset
+        if isinstance(_slack, Unset):
+            slack = UNSET
+        else:
+            slack = SurfaceSlackConfigResponse.from_dict(_slack)
+
         _telegram = d.pop("telegram", UNSET)
         telegram: SurfaceTelegramConfigInput | Unset
         if isinstance(_telegram, Unset):
@@ -128,6 +149,7 @@ class SurfaceConfigResponse:
             dm_conversation_reset_after_hours=dm_conversation_reset_after_hours,
             identity=identity,
             send_policy=send_policy,
+            slack=slack,
             telegram=telegram,
         )
 

@@ -15,6 +15,7 @@ from app.modules.agent_surfaces.services import progress_observer
 from app.modules.agent_surfaces.services.progress_observer import (
     SurfaceAgentRunProgressObserver,
 )
+from app.modules.agent_surfaces.domain.models import StreamAppendResult
 
 pytestmark = pytest.mark.asyncio
 
@@ -31,12 +32,15 @@ class _UowFactory:
 
 
 class _SurfaceService:
-    def __init__(self, *, send_result: bool = True):
+    def __init__(self, *, send_result: bool = True, finish_result: bool = True):
         self.calls = []
         self.messages = []
         self.progress = []
         self.cleared = []
+        self.finished = []
+        self.streamed = []
         self.send_result = send_result
+        self.finish_result = finish_result
 
     async def send_processing_indicator_for_conversation(self, **kwargs):
         self.calls.append(kwargs)
@@ -49,6 +53,14 @@ class _SurfaceService:
     async def clear_progress_for_conversation(self, **kwargs):
         self.cleared.append(kwargs)
         return None
+
+    async def append_stream_text_for_conversation(self, **kwargs):
+        self.streamed.append(kwargs)
+        return StreamAppendResult(handle={"message_id": 1}, appended=True)
+
+    async def finish_progress_for_conversation(self, **kwargs):
+        self.finished.append(kwargs)
+        return self.finish_result
 
     async def send_agent_message_for_conversation(self, **kwargs):
         self.messages.append(kwargs)
@@ -74,12 +86,17 @@ def _observer(service: _SurfaceService) -> SurfaceAgentRunProgressObserver:
     )
 
 
-async def test_progress_observer_streams_slack_tool_comment_progress():
+async def test_progress_observer_streams_tool_comment_progress():
+    """The step timeline lives on platforms that cannot stream text.
+
+    Slack is deliberately excluded: it streams the answer itself, and a step
+    appended into that stream lands mid-sentence.
+    """
     service = _SurfaceService()
     observer = _observer(service)
     conversation = SimpleNamespace(
         id=uuid4(),
-        metadata={"surface_platform": "SLACK"},
+        metadata={"surface_platform": "TELEGRAM"},
     )
     event = AgentEvent(
         type=AgentEventType.MESSAGE,
@@ -92,7 +109,6 @@ async def test_progress_observer_streams_slack_tool_comment_progress():
 
     await observer.on_event(event, conversation, SimpleNamespace())
 
-    # Slack now streams progress as an edited message (chat.update), not a status.
     assert service.progress == [
         {
             "conversation_id": conversation.id,
@@ -111,7 +127,7 @@ async def test_progress_observer_strips_thinking_from_tool_comment():
     observer = _observer(service)
     conversation = SimpleNamespace(
         id=uuid4(),
-        metadata={"surface_platform": "SLACK"},
+        metadata={"surface_platform": "TELEGRAM"},
     )
     event = AgentEvent(
         type=AgentEventType.MESSAGE,
@@ -226,13 +242,13 @@ async def test_progress_observer_sends_only_final_answer_not_thinking_or_tools()
 
     await observer.on_run_finished(conversation, SimpleNamespace())
 
-    # Exactly one content message — the final answer. The pre-tool narration was
-    # discarded and thinking/tool content was never sent as content.
-    assert service.messages == [
-        {"conversation_id": conversation.id, "message": "The final answer is 42."}
-    ]
-    # Thinking/tool activity surfaced as streamed Slack progress instead.
-    assert any(p.get("progress_text") for p in service.progress)
+    # Exactly one delivered answer. The pre-tool narration was discarded and
+    # thinking/tool content was never sent as content. No text token streamed
+    # in this run, so there is no live stream to close and the answer arrives
+    # as an ordinary message — see test_slack_final_answer_closes_the_live_stream
+    # for the streamed case.
+    assert [m["message"] for m in service.messages] == ["The final answer is 42."]
+    assert service.finished == []
 
 
 async def test_progress_observer_ignores_chat_display_resource_now_sent_by_tool():
@@ -520,9 +536,9 @@ async def test_progress_observer_strips_thinking_tags_and_resets_on_tool():
 
     await observer.on_run_finished(conversation, SimpleNamespace())
 
-    assert service.messages == [
-        {"conversation_id": conversation.id, "message": "The answer is 42."}
-    ]
+    # The point of this test is the stripping: the delivered text carries no
+    # thinking tags. Nothing streamed here, so it arrives as a plain message.
+    assert [m["message"] for m in service.messages] == ["The answer is 42."]
 
 
 async def test_progress_observer_stops_when_indicator_cannot_be_sent(monkeypatch):
@@ -657,3 +673,275 @@ class TestAgentHostPermissionPrompt:
         )
 
         assert service.messages == []
+
+
+async def _run_with_progress_then_answer(service, platform: str):
+    """Drive one run: something that opens live progress, then a final answer.
+
+    On Slack that is a text token (which opens the stream); everywhere else it
+    is a tool step.
+    """
+    observer = _observer(service)
+    conversation = SimpleNamespace(id=uuid4(), metadata={"surface_platform": platform})
+    if platform == "SLACK":
+        await observer.on_event(
+            AgentEvent(type=AgentEventType.TOKEN, data={"kind": "text", "data": "x" * 300}),
+            conversation,
+            SimpleNamespace(),
+        )
+    else:
+        await observer.on_event(
+            AgentEvent(
+                type=AgentEventType.MESSAGE,
+                data=MessageDraft.of_tool_call(
+                    tool_name="web_search",
+                    tool_call_id="t1",
+                    tool_args={"request": {"comment": "Searching the web"}},
+                ),
+            ),
+            conversation,
+            SimpleNamespace(),
+        )
+    await observer.on_event(
+        _assistant(MessageDraft.of_text("The answer is 42.")),
+        conversation,
+        SimpleNamespace(),
+    )
+    await observer.on_run_finished(conversation, SimpleNamespace())
+    return conversation
+
+
+async def test_slack_final_answer_closes_the_live_stream():
+    """On Slack the answer closes the stream: one message, not three acts.
+
+    The old shape posted a placeholder, deleted it, then posted the answer
+    beside it. Closing the stream keeps the agent's steps and its answer
+    together, so nothing is cleared and nothing is sent separately.
+    """
+    service = _SurfaceService()
+    await _run_with_progress_then_answer(service, "SLACK")
+
+    assert len(service.finished) == 1
+    assert service.finished[0]["already_streamed"] is True
+    assert service.cleared == []
+    assert service.messages == []
+
+
+async def test_slack_falls_back_to_a_plain_message_when_the_stream_will_not_close():
+    """A refused stop must not swallow the answer."""
+    service = _SurfaceService(finish_result=False)
+    await _run_with_progress_then_answer(service, "SLACK")
+
+    assert service.finished  # attempted
+    assert service.cleared  # progress cleaned up the old way
+    assert [m["message"] for m in service.messages] == ["The answer is 42."]
+
+
+async def test_telegram_still_clears_progress_and_sends_the_answer():
+    """Platforms without a streaming API keep the existing two-step delivery."""
+    service = _SurfaceService()
+    await _run_with_progress_then_answer(service, "TELEGRAM")
+
+    assert service.finished == []
+    assert service.cleared
+    assert [m["message"] for m in service.messages] == ["The answer is 42."]
+
+
+def _token(kind: str, data: str) -> AgentEvent:
+    return AgentEvent(type=AgentEventType.TOKEN, data={"kind": kind, "data": data})
+
+
+async def test_text_tokens_stream_to_slack_as_they_arrive():
+    """The answer appears as it is written, not all at once when the run ends."""
+    service = _SurfaceService()
+    observer = _observer(service)
+    conversation = SimpleNamespace(id=uuid4(), metadata={"surface_platform": "SLACK"})
+
+    # One delta over the flush threshold goes out immediately.
+    await observer.on_event(_token("text", "x" * 300), conversation, SimpleNamespace())
+
+    assert [c["text"] for c in service.streamed] == ["x" * 300]
+
+
+async def test_thinking_tokens_never_reach_the_surface():
+    """Reasoning is not the answer — the same rule every other path enforces."""
+    service = _SurfaceService()
+    observer = _observer(service)
+    conversation = SimpleNamespace(id=uuid4(), metadata={"surface_platform": "SLACK"})
+
+    await observer.on_event(
+        _token("thinking", "y" * 500), conversation, SimpleNamespace()
+    )
+
+    assert service.streamed == []
+
+
+async def test_first_delta_is_immediate_then_small_ones_batch():
+    """Fast first paint, then batching — one call per token would burn the rate limit.
+
+    The first delta flushes right away so text starts appearing the moment the
+    model does; everything after it waits for the size or time threshold.
+    """
+    service = _SurfaceService()
+    observer = _observer(service)
+    conversation = SimpleNamespace(id=uuid4(), metadata={"surface_platform": "SLACK"})
+
+    for _ in range(5):
+        await observer.on_event(_token("text", "hi "), conversation, SimpleNamespace())
+
+    assert [c["text"] for c in service.streamed] == ["hi "]
+
+
+async def test_a_streamed_answer_is_not_delivered_twice():
+    """What already streamed is on screen; only the remainder may be sent."""
+    service = _SurfaceService()
+    observer = _observer(service)
+    conversation = SimpleNamespace(id=uuid4(), metadata={"surface_platform": "SLACK"})
+
+    await observer.on_event(
+        _token("text", "The answer "), conversation, SimpleNamespace()
+    )
+    await observer.on_event(
+        _assistant(MessageDraft.of_text("The answer is 42.")),
+        conversation,
+        SimpleNamespace(),
+    )
+    await observer.on_run_finished(conversation, SimpleNamespace())
+
+    # The streamed prefix is not repeated — only what was left.
+    assert service.finished[0]["message"] == "is 42."
+    assert service.finished[0]["already_streamed"] is True
+    assert service.messages == []
+
+
+async def test_telegram_ignores_token_events():
+    """Only platforms that can show a live stream consume tokens."""
+    service = _SurfaceService()
+    observer = _observer(service)
+    conversation = SimpleNamespace(id=uuid4(), metadata={"surface_platform": "TELEGRAM"})
+
+    await observer.on_event(_token("text", "z" * 500), conversation, SimpleNamespace())
+
+    assert service.streamed == []
+
+
+async def test_reasoning_split_across_deltas_never_reaches_slack():
+    """Regression for reasoning leaking live into a Slack thread.
+
+    Fireworks-class models emit ``<think>…</think>`` inline in the *text*
+    stream. Per-delta stripping is not enough: the tag arrives in pieces, so
+    ``<thi`` + ``nk>`` slipped through and the user watched the model reason.
+    """
+    service = _SurfaceService()
+    observer = _observer(service)
+    conversation = SimpleNamespace(id=uuid4(), metadata={"surface_platform": "SLACK"})
+
+    for delta in ["Here is the plan. <thi", "nk>secret plotting</thi", "nk>", "x" * 300]:
+        await observer.on_event(_token("text", delta), conversation, SimpleNamespace())
+
+    streamed = "".join(c["text"] for c in service.streamed)
+    assert "think" not in streamed.lower()
+    assert "secret plotting" not in streamed
+    assert "Here is the plan." in streamed
+
+
+async def test_slack_gets_no_step_timeline_while_text_streams():
+    """A step chunk appended into a live text stream lands mid-sentence.
+
+    That is what split a word in half in the real thread: "Step 2: Bu" …step
+    box… "ild something". Slack's progress *is* the streamed text.
+    """
+    service = _SurfaceService()
+    observer = _observer(service)
+    conversation = SimpleNamespace(id=uuid4(), metadata={"surface_platform": "SLACK"})
+
+    await observer.on_event(
+        AgentEvent(
+            type=AgentEventType.MESSAGE,
+            data=MessageDraft.of_tool_call(
+                tool_name="web_search",
+                tool_call_id="t1",
+                tool_args={"request": {"comment": "Searching the web"}},
+            ),
+        ),
+        conversation,
+        SimpleNamespace(),
+    )
+
+    assert service.progress == []
+
+
+async def test_slack_opens_the_stream_at_run_start_so_channels_show_something():
+    """A channel gets no setStatus — an open stream is its only live signal.
+
+    setStatus works only inside an assistant DM thread, and waiting for the
+    first token leaves a tool-heavy channel run looking dead for seconds.
+    """
+    service = _SurfaceService()
+    observer = _observer(service)
+    conversation = SimpleNamespace(id=uuid4(), metadata={"surface_platform": "SLACK"})
+
+    await observer.on_run_started(conversation, SimpleNamespace())
+
+    assert [c["text"] for c in service.streamed] == [""]
+
+
+async def test_failed_token_append_stays_buffered_until_confirmed():
+    service = _SurfaceService()
+    observer = _observer(service)
+    conversation = SimpleNamespace(id=uuid4(), metadata={"surface_platform": "SLACK"})
+    attempts = 0
+
+    async def append(**kwargs):
+        nonlocal attempts
+        attempts += 1
+        service.streamed.append(kwargs)
+        return StreamAppendResult(
+            handle={"message_id": 1}, appended=attempts > 1
+        )
+
+    service.append_stream_text_for_conversation = append
+    observer._token_buffer = "must survive"
+
+    await observer._flush_tokens(conversation)
+    assert observer._token_buffer == "must survive"
+    assert observer._streamed_text == ""
+
+    await observer._flush_tokens(conversation)
+    assert observer._token_buffer == ""
+    assert observer._streamed_text == "must survive"
+    assert [call["text"] for call in service.streamed] == [
+        "must survive",
+        "must survive",
+    ]
+
+
+async def test_final_answer_sends_unsent_text_after_append_failure():
+    service = _SurfaceService()
+    observer = _observer(service)
+    conversation = SimpleNamespace(id=uuid4(), metadata={"surface_platform": "SLACK"})
+
+    async def reject_append(**kwargs):
+        service.streamed.append(kwargs)
+        return StreamAppendResult(
+            handle={"message_id": 1}, appended=False
+        )
+
+    service.append_stream_text_for_conversation = reject_append
+    observer._progress_handle = {"message_id": 1}
+    observer._token_buffer = "complete answer"
+    observer._final_answer_text = "complete answer"
+
+    assert await observer._finish_stream_with_answer(conversation) is True
+    assert service.finished[-1]["message"] == "complete answer"
+    assert service.finished[-1]["already_streamed"] is False
+
+
+async def test_non_streaming_platforms_do_not_open_a_stream_at_run_start():
+    service = _SurfaceService()
+    observer = _observer(service)
+    conversation = SimpleNamespace(id=uuid4(), metadata={"surface_platform": "TELEGRAM"})
+
+    await observer.on_run_started(conversation, SimpleNamespace())
+
+    assert service.streamed == []

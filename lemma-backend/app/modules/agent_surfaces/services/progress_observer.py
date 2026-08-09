@@ -5,6 +5,8 @@ import time
 from collections.abc import Callable
 from typing import Any
 
+from sqlalchemy.exc import SQLAlchemyError
+
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
@@ -13,9 +15,6 @@ from app.modules.agent.contracts import Conversation
 from app.modules.agent.contracts import (
     AgentEvent,
     AgentEventType,
-    MessageDraft,
-    MessageKind,
-    MessageRole,
 )
 from app.modules.agent.contracts import ConversationContext
 from app.modules.agent_surfaces.domain.entities import SurfacePlatform
@@ -23,11 +22,22 @@ from app.modules.agent_surfaces.platforms.platform_capabilities import (
     PLATFORM_CAPABILITIES,
 )
 from app.modules.agent_surfaces.platforms.rendering import (
-    sanitize_user_visible_text,
-    strip_thinking_tokens,
+    ThinkingStreamFilter,
 )
 from app.modules.agent_surfaces.services.ingress_service import (
     AgentSurfaceIngressService,
+)
+from app.modules.agent_surfaces.services.token_stream import TokenStreamMixin
+from app.modules.agent_surfaces.services.progress_events import (
+    _assistant_text_from_event,
+    _email_reply_tool_called,
+    _is_agent_host_permission_event,
+    _is_final_answer_event,
+    _is_tool_activity_event,
+    _join_text,
+    _progress_text_from_event,
+    _safe_run_error_text,
+    _surface_platform,
 )
 
 logger = get_logger(__name__)
@@ -42,12 +52,19 @@ _MAX_TYPING_REFRESH_SECONDS = 15 * 60.0
 # WhatsApp has no message-edit API, so it gets no per-step progress (the inbound
 # reaction indicator signals work) and email gets a single composed reply.
 _TEXT_PROGRESS_PLATFORMS: set[str] = set()
+# Slack is deliberately absent: it streams the answer token by token, and a
+# step chunk appended into that same stream lands *inside* the sentence being
+# written — splitting it mid-word. The streamed text is the progress indicator,
+# so a separate step timeline is both redundant and destructive.
 _STREAM_PROGRESS_PLATFORMS = {
-    SurfacePlatform.SLACK.value,
     SurfacePlatform.TELEGRAM.value,
     SurfacePlatform.TEAMS.value,
 }
 _MIN_TEXT_PROGRESS_INTERVAL_SECONDS = 2.0
+# Token flush policy: batch deltas so a fast model does not spend the Slack
+# rate limit one word at a time, while staying frequent enough to read as live.
+_TOKEN_FLUSH_CHARS = 280
+_TOKEN_FLUSH_INTERVAL_SECONDS = 0.8
 _MAX_PROGRESS_TEXT_LENGTH = 120
 # Email recipients should get one composed reply, not a stream of chat
 # messages. Agents reply via the platform reply tools; the observer only
@@ -66,7 +83,7 @@ _EMAIL_REPLY_TOOL_NAMES = {
 }
 
 
-class SurfaceAgentRunProgressObserver:
+class SurfaceAgentRunProgressObserver(TokenStreamMixin):
     """Reflect agent run progress through platform-native surface indicators.
 
     A surface conversation should receive exactly one content message per run:
@@ -109,6 +126,17 @@ class SurfaceAgentRunProgressObserver:
         # Opaque handle for the live progress message on streaming platforms
         # (Telegram/Teams), threaded across edits and cleared on finish.
         self._progress_handle: dict[str, Any] | None = None
+        # Live token streaming. ``_streamed_text`` is what the user has already
+        # seen in the stream; ``_token_buffer`` is what has arrived but not yet
+        # been flushed. Flushing every token would blow Slack's rate limit, so
+        # deltas are batched by size or elapsed time, whichever comes first.
+        self._token_buffer: str = ""
+        self._streamed_text: str = ""
+        self._last_token_flush: float = 0.0
+        # Reasoning arrives inline in the text stream on some models
+        # (``<think>…</think>``), and a tag can straddle two deltas — so the
+        # filter has to be stateful across the whole run.
+        self._think_filter = ThinkingStreamFilter()
         self._rendered_waiting_tool_calls: set[tuple[str, str]] = set()
 
     async def on_run_started(
@@ -120,6 +148,14 @@ class SurfaceAgentRunProgressObserver:
         platform = _surface_platform(conversation)
         if platform is None:
             return
+        capabilities = PLATFORM_CAPABILITIES.get(platform or "")
+        if capabilities is not None and capabilities.finishes_stream_with_answer:
+            # Open the stream up front. Slack shows a live indicator on an open
+            # stream, which is the only "working on it" signal a *channel* gets
+            # — setStatus is assistant-DM only, and waiting for the first token
+            # leaves a tool-heavy run looking dead. An empty stream is disposed
+            # of by end_progress if no answer ever arrives.
+            await self._open_stream(conversation)
         interval = _TYPING_REFRESH_INTERVAL_SECONDS.get(platform)
         if interval is None:
             return
@@ -147,6 +183,10 @@ class SurfaceAgentRunProgressObserver:
 
         if event.type == AgentEventType.WAITING:
             await self._handle_waiting_event(event, conversation)
+            return
+
+        if event.type == AgentEventType.TOKEN:
+            await self._on_token(event, conversation)
             return
 
         if _is_agent_host_permission_event(event):
@@ -312,6 +352,54 @@ class SurfaceAgentRunProgressObserver:
         if handle is not None:
             self._progress_handle = handle
 
+    async def _finish_stream_with_answer(self, conversation: Conversation) -> bool:
+        """Close a live stream with the final answer, so they are one message.
+
+        Only attempted on platforms whose streaming API can carry the answer
+        (``finishes_stream_with_answer``) and only when there is a live stream
+        and an answer to put in it. Returns True when the answer was delivered
+        this way, which also marks it delivered so ``_deliver_final_answer``
+        does not send it a second time.
+        """
+        if self._progress_handle is None or self._final_delivered or self._run_errored:
+            return False
+        capabilities = PLATFORM_CAPABILITIES.get(_surface_platform(conversation) or "")
+        if capabilities is None or not capabilities.finishes_stream_with_answer:
+            return False
+        await self._flush_tokens(conversation, final=True)
+        message = (self._final_answer_text or self._buffered_text or "").strip()
+        if not message:
+            return False
+        # Whatever already streamed is on screen. Send only what is left, or the
+        # user reads the answer twice.
+        if self._streamed_text:
+            if message.startswith(self._streamed_text):
+                message = message[len(self._streamed_text) :]
+            else:
+                # The stream and the final text disagree (a retry, or a rewritten
+                # answer). Trust the stream the user already saw and just close.
+                message = ""
+        handle = self._progress_handle
+        try:
+            async with self.uow_factory() as uow:
+                service = self.service_factory(uow)
+                delivered = await service.finish_progress_for_conversation(
+                    conversation_id=conversation.id,
+                    progress_handle=handle,
+                    message=message,
+                    already_streamed=bool(self._streamed_text),
+                )
+        except SQLAlchemyError:
+            logger.debug(
+                'agent_surfaces.progress_observer.surface_finish_stream_conversation.diagnostic'
+            )
+            return False
+        if not delivered:
+            return False
+        self._progress_handle = None
+        self._final_delivered = True
+        return True
+
     async def _clear_progress(self, conversation_id) -> None:
         if not self._progress_handle:
             return
@@ -339,7 +427,8 @@ class SurfaceAgentRunProgressObserver:
             except asyncio.CancelledError:
                 # Expected after task.cancel(); delivery cleanup must continue.
                 pass
-        await self._clear_progress(conversation.id)
+        if not await self._finish_stream_with_answer(conversation):
+            await self._clear_progress(conversation.id)
         await self._deliver_final_answer(conversation)
 
     async def on_run_failed(
@@ -468,126 +557,3 @@ class SurfaceAgentRunProgressObserver:
             return await service.send_agent_message_for_conversation(**kwargs)
 
 
-def _surface_platform(conversation: Conversation) -> str | None:
-    metadata = conversation.metadata or {}
-    platform = metadata.get("surface_platform") if isinstance(metadata, dict) else None
-    return str(platform).upper() if platform else None
-
-
-def _safe_run_error_text(event: AgentEvent) -> str:
-    del event
-    return "I couldn’t finish that request. Try it again without resending your message."
-
-
-def _email_reply_tool_called(event: AgentEvent) -> bool:
-    if event.type != AgentEventType.MESSAGE:
-        return False
-    data = event.data
-    return (
-        isinstance(data, MessageDraft)
-        and data.kind == MessageKind.TOOL_CALL
-        and data.tool_name in _EMAIL_REPLY_TOOL_NAMES
-    )
-
-
-def _progress_text_from_event(event: AgentEvent) -> str | None:
-    """Derive a short progress status from thinking/tool activity.
-
-    Tool calls prefer an explicit ``comment`` in the tool args, falling back to
-    the tool name; thinking events surface a generic "Thinking…" status.
-    """
-    if event.type != AgentEventType.MESSAGE:
-        return None
-    data = event.data
-    if not isinstance(data, MessageDraft):
-        return None
-    if data.kind == MessageKind.TOOL_CALL:
-        comment = _find_comment(data.tool_args)
-        if comment:
-            # A comment that is entirely reasoning sanitizes to empty -> no
-            # progress update (rather than streaming a blank/leaky message).
-            return _sanitize_progress_text(comment) or None
-        if data.tool_name:
-            return _sanitize_progress_text(f"Using {data.tool_name}")
-        return None
-    if data.kind == MessageKind.THINKING:
-        return "Thinking…"
-    return None
-
-
-def _is_final_answer_event(event: AgentEvent) -> bool:
-    if event.type != AgentEventType.MESSAGE:
-        return False
-    data = event.data
-    if not isinstance(data, MessageDraft):
-        return False
-    metadata = data.metadata or {}
-    return metadata.get("is_final_answer") is True
-
-
-def _is_agent_host_permission_event(event: AgentEvent) -> bool:
-    """An Agent Host permission pause, carried as STATUS rather than WAITING."""
-    return (
-        event.type == AgentEventType.STATUS
-        and isinstance(event.data, dict)
-        and event.data.get("status") == "permission_request"
-        and bool(event.data.get("tool_call_id"))
-    )
-
-
-def _is_tool_activity_event(event: AgentEvent) -> bool:
-    if event.type != AgentEventType.MESSAGE:
-        return False
-    data = event.data
-    return isinstance(data, MessageDraft) and data.kind in (
-        MessageKind.TOOL_CALL,
-        MessageKind.TOOL_RETURN,
-    )
-
-
-def _join_text(existing: str | None, new: str) -> str:
-    if not existing:
-        return new
-    return f"{existing}\n\n{new}"
-
-
-def _assistant_text_from_event(event: AgentEvent) -> str | None:
-    if event.type != AgentEventType.MESSAGE:
-        return None
-    data = event.data
-    if not isinstance(data, MessageDraft):
-        return None
-    role = data.role.value if isinstance(data.role, MessageRole) else str(data.role)
-    if role != MessageRole.ASSISTANT.value:
-        return None
-    if data.kind != MessageKind.TEXT:
-        return None
-    # Strip inline reasoning/thinking tags (e.g. ``…``) that some
-    # OpenAI-compatible models emit inside the text content. Without this the
-    # thinking block would be buffered as assistant text and delivered to the
-    # surface as a normal message.
-    text = strip_thinking_tokens(data.text or "")
-    return text or None
-
-
-def _find_comment(value: object) -> str | None:
-    if not isinstance(value, dict):
-        return None
-    for key in ("comment", "progress_comment", "progress", "status"):
-        raw = value.get(key)
-        if isinstance(raw, str) and raw.strip():
-            return raw
-    request = value.get("request")
-    if isinstance(request, dict):
-        return _find_comment(request)
-    return None
-
-
-def _sanitize_progress_text(value: str) -> str:
-    # Strip model reasoning BEFORE collapsing/truncating: a model that writes
-    # ``<think>…</think>`` into a tool-call comment must never have it streamed
-    # to the surface as a live progress update.
-    text = " ".join(sanitize_user_visible_text(value).split())
-    if len(text) <= _MAX_PROGRESS_TEXT_LENGTH:
-        return text
-    return text[: _MAX_PROGRESS_TEXT_LENGTH - 1].rstrip() + "..."

@@ -3,7 +3,7 @@
 import { CheckCircle2, Info } from '@/components/ui/icons';
 import { toast } from 'sonner';
 
-import { SurfaceReachCard } from '@/components/surfaces/surface-reach-card';
+import { SurfaceReachCard, hasReachCard } from '@/components/surfaces/surface-reach-card';
 import { useAccessiblePods } from '@/lib/hooks/use-pods';
 import { useSetDefaultSurface, useUserSurfaces } from '@/lib/hooks/use-pod-surfaces';
 import type { SurfacePlatformDefinition } from '@/lib/surfaces/registry';
@@ -13,7 +13,12 @@ import { cn } from '@/lib/utils';
 import { StepLoader } from '@/components/brand/loader';
 
 /**
- * The proof state: the surface exists, here is how a human reaches it.
+ * The proof state: the surface exists, and here is what to do with it.
+ *
+ * Usually that means its address — a handle, a link, a QR. Slack and Teams have
+ * no address worth showing (their handle is a bot's display name, which you
+ * never type anywhere), so there it is orientation instead: what happens next,
+ * and where.
  *
  * For platforms running on Lemma's shared bot/number this is also the only
  * honest moment to raise the cross-org question — the same number can front
@@ -28,15 +33,52 @@ export function SurfaceLiveStep({
     definition: SurfacePlatformDefinition;
     surface: AssistantSurface;
 }) {
+    // Slack and Teams have no address to show (see `hasReachCard`), and only
+    // Slack has an `afterConnect` block to put in its place — without this the
+    // proof state could render as an empty box, which reads as a failure.
+    const hasProof =
+        hasReachCard(surface)
+        || Boolean(definition.afterConnect)
+        || definition.capabilities.autoWebhook;
+
     return (
         <div className="grid gap-4">
             <SurfaceReachCard surface={surface} />
+
+            {hasProof ? null : (
+                <p className="surface-verdict is-valid">
+                    <CheckCircle2 className="h-3.5 w-3.5" />
+                    Connected. {definition.label} can reach this agent now.
+                </p>
+            )}
 
             {definition.capabilities.autoWebhook ? (
                 <p className="surface-verdict is-valid">
                     <CheckCircle2 className="h-3.5 w-3.5" />
                     Lemma wired up delivery — nothing else to configure.
                 </p>
+            ) : null}
+
+            {definition.afterConnect ? (
+                <div className="surface-panel-muted grid gap-2 p-3">
+                    <p className="text-sm font-medium text-[var(--text-primary)]">
+                        {definition.afterConnect.title}
+                    </p>
+                    <ul className="grid gap-1.5">
+                        {definition.afterConnect.lines.map((line) => (
+                            <li
+                                key={line}
+                                className="flex items-start gap-2 text-xs leading-5 text-[var(--text-secondary)]"
+                            >
+                                <span
+                                    className="mt-[7px] h-1 w-1 shrink-0 rounded-full bg-[var(--text-tertiary)]"
+                                    aria-hidden
+                                />
+                                {line}
+                            </li>
+                        ))}
+                    </ul>
+                </div>
             ) : null}
 
             <ReachableElsewhereNotice surface={surface} />

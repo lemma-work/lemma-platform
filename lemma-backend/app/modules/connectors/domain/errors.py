@@ -116,19 +116,21 @@ class ConnectorNotFoundError(_ConnectorNotFoundBase):
 
 class ConnectorTriggerNotFoundError(_ConnectorNotFoundBase):
     def __init__(self, trigger_id: str):
-        super().__init__(f"Trigger '{trigger_id}' not found")
+        _ConnectorNotFoundBase.__init__(self, f"Trigger '{trigger_id}' not found")
         self.code = "CONNECTOR_TRIGGER_NOT_FOUND"
 
 
 class AccountNotFoundError(_ConnectorNotFoundBase):
     def __init__(self, account_id: str):
-        super().__init__(f"Account '{account_id}' not found")
+        _ConnectorNotFoundBase.__init__(self, f"Account '{account_id}' not found")
         self.code = "ACCOUNT_NOT_FOUND"
 
 
 class CredentialsNotFoundError(_ConnectorNotFoundBase):
     def __init__(self, account_id: str):
-        super().__init__(f"Credentials not found for account '{account_id}'")
+        _ConnectorNotFoundBase.__init__(
+            self, f"Credentials not found for account '{account_id}'"
+        )
         self.code = "ACCOUNT_CREDENTIALS_NOT_FOUND"
 
 

@@ -10,6 +10,7 @@ from app.modules.apps.domain.errors import (
 from app.modules.apps.contracts.ready_app import (
     ReadyPodApp,
     get_ready_pod_app_by_name,
+    list_ready_pod_apps,
 )
 
 __all__ = [
@@ -21,4 +22,5 @@ __all__ = [
     "AppValidationError",
     "ReadyPodApp",
     "get_ready_pod_app_by_name",
+    "list_ready_pod_apps",
 ]
