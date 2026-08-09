@@ -99,6 +99,53 @@ class TestAnalyzeQueryRejections:
             analyze_query("   ")
 
 
+class TestSetConfigIsRejected:
+    """RLS reads GUCs any session role may overwrite.
+
+    `SET` as a statement was already blocked, but `set_config()` is an ordinary
+    function call, so it rode along inside a read-only SELECT. In a MATERIALIZED
+    CTE it runs before the outer scan, flipping the policy's `is_pod_admin`
+    branch to true and returning every user's rows.
+    """
+
+    @pytest.mark.parametrize(
+        "query",
+        [
+            # The reported exploit, verbatim in shape.
+            "WITH escalate AS MATERIALIZED ("
+            "SELECT set_config('app.current_user_is_pod_admin','true','true')"
+            ") SELECT t.* FROM escalate, expenses t",
+            # Impersonating another user rather than escalating.
+            "WITH s AS MATERIALIZED ("
+            "SELECT set_config('app.current_user_id','00000000-0000-0000-0000-000000000001','true')"
+            ") SELECT t.* FROM s, expenses t",
+            "SELECT set_config('app.current_user_is_pod_admin','true',true)",
+            "SELECT pg_catalog.set_config('app.current_user_is_pod_admin','true',true)",
+            "SELECT SET_CONFIG('app.current_user_is_pod_admin','true',true)",
+            # Buried in a subquery and in a projection expression.
+            "SELECT * FROM expenses WHERE id IN ("
+            "SELECT set_config('app.current_user_is_pod_admin','true',true)::int)",
+            "SELECT id, coalesce("
+            "set_config('app.current_user_is_pod_admin','true',true), '') FROM expenses",
+        ],
+    )
+    def test_set_config_rejected_anywhere_in_the_tree(self, query):
+        with pytest.raises(DatastoreQueryError, match="not allowed"):
+            analyze_query(query)
+
+    @pytest.mark.parametrize(
+        "query",
+        [
+            # Reading settings is harmless -- only writing them forges the context.
+            "SELECT current_setting('app.current_user_id', TRUE) FROM expenses",
+            "SELECT count(*), max(amount) FROM expenses",
+            "SELECT id FROM expenses WHERE name = 'set_config'",
+        ],
+    )
+    def test_ordinary_queries_still_pass(self, query):
+        analyze_query(query)
+
+
 def test_extract_referenced_tables_delegates_to_analyze_query():
     assert extract_referenced_tables(
         "SELECT * FROM customers c JOIN orders o ON o.cid = c.id"
