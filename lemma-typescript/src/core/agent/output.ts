@@ -73,7 +73,11 @@ export function extractJsonObject(text: string): Record<string, unknown> | null 
   const trimmed = text.trim();
   if (!trimmed) return null;
 
-  const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  // No `\s*` after the fence marker: it and the lazy capture that follows can
+  // both match the same spaces, so a long run of them costs quadratic time on
+  // text that never closes the fence. Every candidate is trimmed before
+  // parsing anyway, so skipping the whitespace here bought nothing.
+  const fenced = trimmed.match(/```(?:json)?([\s\S]*?)```/i);
   const objectStart = trimmed.indexOf("{");
   const objectEnd = trimmed.lastIndexOf("}");
   const candidates = [
