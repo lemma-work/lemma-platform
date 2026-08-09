@@ -81,3 +81,44 @@ def test_adapter_implements_the_required_core(platform, adapter, method):
 async def test_channel_setup_is_answerable_by_every_platform(platform, adapter):
     """The specific regression: this is called on every inbound webhook."""
     assert await adapter.parse_channel_setup({}, {}) is None
+
+
+@pytest.mark.parametrize("platform, adapter", _registered_adapters())
+def test_adapter_overrides_accept_every_argument_the_base_declares(platform, adapter):
+    """An override must take what the shared caller is entitled to pass.
+
+    Names alone are not the contract. #303 added `metadata` to
+    `stream_progress` on the base and on Slack, and the Telegram and Teams
+    overrides kept the old signature — so every progress update on those two
+    raised TypeError into a broad `except`, and live progress silently stopped
+    working on both. Nothing failed; it just went quiet.
+    """
+    mismatches: list[str] = []
+    for name, base_method in inspect.getmembers(
+        BaseSurfaceAdapter, inspect.isfunction
+    ):
+        if name.startswith("_"):
+            continue
+        override = getattr(type(adapter), name, None)
+        if override is None or override is base_method:
+            continue
+        base_params = inspect.signature(base_method).parameters
+        override_params = inspect.signature(override).parameters
+        if any(
+            p.kind is inspect.Parameter.VAR_KEYWORD for p in override_params.values()
+        ):
+            continue
+        missing = [
+            param
+            for param, spec in base_params.items()
+            if spec.kind is inspect.Parameter.KEYWORD_ONLY
+            and param not in override_params
+        ]
+        if missing:
+            mismatches.append(f"{name}() is missing {missing}")
+    assert not mismatches, (
+        f"{platform} overrides drift from BaseSurfaceAdapter: {mismatches}. The "
+        "shared caller passes what the base declares, so a narrower override "
+        "raises TypeError at runtime — swallowed wherever the call is "
+        "best-effort."
+    )

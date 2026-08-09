@@ -482,8 +482,12 @@ class TeamsSurfaceAdapter(BaseSurfaceAdapter):
         event: ParsedInboundSurfaceEvent,
         progress_text: str,
         progress_handle: dict[str, Any] | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any] | None:
-        del credentials
+        # Accepted and unused: the PUT edits an activity this bot already owns,
+        # so there is no author to set. Declared because the shared caller
+        # passes it to whichever adapter answers.
+        del credentials, metadata
         tenant_id = event.tenant_id
         conversation_id = event.reply_target.get("conversation_id")
         if not tenant_id or not conversation_id:
