@@ -1,7 +1,13 @@
 import type { Metadata } from 'next';
 import { notFound, redirect } from 'next/navigation';
 import { DocsPageView } from '@/components/docs/docs-shell';
-import { docsPages, getDocsPageFromSegments } from '@/lib/data/docs';
+import { JsonLd } from '@/components/seo/json-ld';
+import { docsPages, getDocsPageFromSegments, type DocsPage } from '@/lib/data/docs';
+import {
+  breadcrumbSchema,
+  techArticleSchema,
+  type BreadcrumbItem,
+} from '@/lib/seo/structured-data';
 import { socialCardPath } from '@/lib/share/social-card';
 
 type DocsRouteProps = {
@@ -88,7 +94,42 @@ export default async function DocsRoute({ params }: DocsRouteProps) {
     redirect('/docs');
   }
 
-  return <DocsPageView page={page} />;
+  return (
+    <>
+      <JsonLd
+        schema={[
+          techArticleSchema({
+            title: page.title,
+            description: page.description,
+            path: `/docs/${page.slug}`,
+            section: page.group,
+          }),
+          breadcrumbSchema(docsBreadcrumbs(page)),
+        ]}
+      />
+      <DocsPageView page={page} />
+    </>
+  );
+}
+
+/**
+ * Home → Documentation → group → page.
+ *
+ * The group crumb only earns a place when it is a real destination. Groups like
+ * `cli` and `sdk` prefix their pages' slugs and redirect to a landing page, so
+ * `/docs/cli` resolves; `Start` and `Concepts` are sidebar headings with no URL
+ * behind them, and a crumb pointing nowhere is worse than one less crumb.
+ */
+function docsBreadcrumbs(page: DocsPage): BreadcrumbItem[] {
+  const [prefix, ...rest] = page.slug.split('/');
+  const groupIsRoutable = rest.length > 0 && getGroupRootRedirect([prefix]) !== null;
+
+  return [
+    { name: 'Lemma', path: '/' },
+    { name: 'Documentation', path: '/docs' },
+    ...(groupIsRoutable ? [{ name: page.group, path: `/docs/${prefix}` }] : []),
+    { name: page.title },
+  ];
 }
 
 function getGroupRootRedirect(slug?: string[]): string | null {

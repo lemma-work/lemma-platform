@@ -2,7 +2,7 @@ import type { Metadata, Viewport } from "next";
 // Product and landing share one voice: Inter for everything, DM Mono for
 // machine values. See the typography note in styles/tokens.css. The rest are
 // landing-only display faces.
-import { Bricolage_Grotesque, DM_Mono, DM_Sans, Fraunces, IBM_Plex_Mono, Inter, Playwrite_TZ } from "next/font/google";
+import { Bricolage_Grotesque, DM_Mono, DM_Sans, Fraunces, IBM_Plex_Mono, Inter, Playwrite_TZ, Source_Serif_4 } from "next/font/google";
 import Script from "next/script";
 import "./globals.css";
 import "./auth/auth-portal.css";
@@ -57,6 +57,21 @@ const dmMono = DM_Mono({
   weight: ["400", "500"],
   subsets: ["latin"],
   variable: "--font-dm-mono",
+});
+
+// Reading serif — body copy on the blog, changelog and docs.
+//
+// Fraunces below is a *display* serif: it carries the landing's headlines and
+// is far too characterful to read a thousand words in. Source Serif 4 was drawn
+// for continuous reading on screen and shares Inter's vertical proportions, so
+// a sans headline over serif body sits on one baseline rhythm instead of
+// looking like two fonts that met by accident.
+const sourceSerif = Source_Serif_4({
+  weight: ["400", "600"],
+  subsets: ["latin"],
+  style: ["normal", "italic"],
+  variable: "--font-reading-serif",
+  preload: false,
 });
 
 // Landing display serif.
@@ -145,7 +160,7 @@ export default function RootLayout({
       lang="en"
       suppressHydrationWarning
       data-scroll-behavior="smooth"
-      className={`${bricolageGrotesque.variable} ${fraunces.variable} ${inter.variable} ${dmMono.variable} ${ibmPlexMono.variable} ${playwriteTz.variable} ${documentSans.variable}`}
+      className={`${bricolageGrotesque.variable} ${fraunces.variable} ${sourceSerif.variable} ${inter.variable} ${dmMono.variable} ${ibmPlexMono.variable} ${playwriteTz.variable} ${documentSans.variable}`}
     >
       <head>
         <Script src="/runtime-config.js" strategy="beforeInteractive" />

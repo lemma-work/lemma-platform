@@ -3,6 +3,7 @@ import type { Metadata } from 'next';
 import { ImportGithubClient } from './import-github-client';
 import { fetchPublicGitHubReadme } from '@/lib/github/public-repository';
 import { socialCardPath } from '@/lib/share/social-card';
+import { findPublicTemplateBySource } from '@/lib/templates/catalog';
 
 interface ImportGithubPageProps {
     params: Promise<{ owner: string; repo: string }>;
@@ -29,12 +30,22 @@ export async function generateMetadata({ params }: ImportGithubPageProps): Promi
         label: repoLabel,
     });
 
+    // This route renders for *any* repository on GitHub, and most of what it
+    // shows is someone else's README. Indexing the whole space would publish an
+    // unbounded set of pages whose real content is canonical on github.com —
+    // the textbook shape of auto-generated duplicate content. The ten curated
+    // templates are pages we author the framing for and stand behind, so they
+    // are the ones declared to search; everything else stays crawlable and
+    // link-following but out of the index.
+    const curated = findPublicTemplateBySource(owner, repo) !== null;
+
     return {
         title: `Run ${repo} on Lemma`,
         description: `Import ${owner}/${repo} into Lemma and run its apps, agents, workflows, and data.`,
         alternates: {
             canonical: `/import/github/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`,
         },
+        ...(curated ? {} : { robots: { index: false, follow: true } }),
         openGraph: {
             title: `Run ${repo} on Lemma.`,
             description: 'A complete pod, ready to run with your team.',

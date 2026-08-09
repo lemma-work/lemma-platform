@@ -1,0 +1,1144 @@
+/*
+ * The reading world.
+ *
+ * Lemma has two visual worlds already: the landing page is a poster, and the
+ * product is a workspace. Docs inherited the workspace skin by default —
+ * app header, sidebar, canvas — because nobody decided otherwise, and a page
+ * built to be read for ten minutes ended up dressed as one built to be
+ * operated for an hour.
+ *
+ * This is the third world, shared by docs, the blog and the changelog. It keeps
+ * the house stationery — warm ink on warm paper, alpha hairlines, one family,
+ * nothing bold — and changes what those materials are arranged into: a single
+ * measured column, generous leading, and hierarchy from size and the space
+ * above a heading rather than from weight or rules.
+ *
+ * Everything that styles prose lives in `@layer utilities`. Tailwind Typography
+ * ships its rules in that layer, and a `@layer components` rule loses to it
+ * regardless of specificity — the cascade compares layers before it ever looks
+ * at selectors. That is precisely how the document viewer went unstyled for
+ * months, and it is not a mistake worth making twice.
+ */
+
+@layer utilities {
+    /* ---- Page frame ------------------------------------------------------ */
+
+    /*
+     * Reading pages sit on stock (`--bg-surface`, #fdfcf8), not on the canvas
+     * cream the product uses. A workspace wants its panels to read as sheets
+     * laid on a desk; an article *is* the sheet, so the page itself should be
+     * the paper. Cards and code drop to `--bg-subtle` to keep a step of
+     * separation now that the page is the lighter of the two.
+     */
+    .content-page {
+        --content-raised: var(--bg-subtle);
+        /*
+         * The shared site header and footer both centre a 1180px band with
+         * `max(16px, calc((100vw - 1180px) / 2))`. The grid mirrors that
+         * formula exactly rather than approximating it with a max-width plus
+         * its own gutter — any other spelling puts the content on a different
+         * left edge from the logo above it.
+         */
+        --content-gutter: max(16px, calc((100vw - 1180px) / 2));
+        min-height: 100vh;
+        background: var(--bg-surface);
+        color: var(--text-primary);
+
+        /*
+         * The landing chrome is a light-only visual world with its own palette.
+         * Content pages follow the reader's appearance, so the `--lp-*` inputs
+         * the shared header and footer read from are re-pointed at the content
+         * tokens here — one remap instead of overriding every rule they set.
+         */
+        --lp-ink: var(--text-primary);
+        --lp-muted: var(--text-secondary);
+        --lp-faint: var(--text-tertiary);
+        --lp-rule: var(--border-subtle);
+        --lp-rule-strong: var(--border-strong);
+        --lp-paper: var(--bg-surface);
+        --lp-soft: var(--bg-subtle);
+        --lp-bg: var(--bg-surface);
+    }
+
+    .content-grid {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr);
+        /* 60px clears the fixed site header. */
+        padding: calc(60px + var(--space-10)) var(--content-gutter) var(--space-16);
+        gap: var(--space-10);
+    }
+
+    @media (min-width: 64rem) {
+        .content-grid {
+            grid-template-columns: 11rem minmax(0, 1fr);
+            gap: var(--space-8);
+        }
+    }
+
+    @media (min-width: 88rem) {
+        .content-grid {
+            grid-template-columns: 11rem minmax(0, 1fr) 12rem;
+        }
+    }
+
+    /*
+     * The reading column is capped well below its track. The panes either side
+     * carry navigation; the prose keeps a fixed measure regardless of how wide
+     * the window gets, so line length never depends on the viewport.
+     */
+    .content-column {
+        max-width: 58rem;
+        min-width: 0;
+        margin-inline: auto;
+    }
+
+    /* ---- Masthead -------------------------------------------------------- */
+
+    /*
+     * Ranged left, on the same axis as the body. A centred opener over
+     * left-aligned prose gives the page two competing start edges, and the eye
+     * has to find the text's true margin a second time on the first paragraph.
+     */
+    .content-masthead {
+        margin-bottom: var(--space-10);
+    }
+
+    .content-kicker {
+        display: flex;
+        align-items: center;
+        gap: var(--space-3);
+        color: var(--text-tertiary);
+        font-family: var(--font-mono-family);
+        font-size: var(--text-2xs);
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+    }
+
+    .content-kicker-tag {
+        border-radius: var(--radius-full);
+        background: var(--chip-bg);
+        padding: 0 var(--space-2);
+        color: var(--text-secondary);
+        text-transform: capitalize;
+    }
+
+    .content-eyebrow {
+        color: var(--text-tertiary);
+        font-family: var(--font-mono-family);
+        font-size: var(--text-2xs);
+        font-weight: 500;
+        letter-spacing: 0.09em;
+        text-transform: uppercase;
+    }
+
+    .content-title {
+        margin-top: var(--space-4);
+        font-size: var(--text-3xl);
+        font-weight: 500;
+        letter-spacing: -0.028em;
+        line-height: 1.1;
+        text-wrap: balance;
+    }
+
+    .content-dek {
+        margin-top: var(--space-3);
+        color: var(--text-secondary);
+        font-size: var(--text-md);
+        line-height: 1.55;
+        text-wrap: pretty;
+    }
+
+    .content-byline {
+        margin-top: var(--space-4);
+        color: var(--text-secondary);
+        font-size: var(--text-sm);
+    }
+
+    .content-updated {
+        margin-top: var(--space-1);
+        color: var(--text-tertiary);
+        font-size: var(--text-xs);
+    }
+
+    /* ---- Hero ------------------------------------------------------------ */
+
+    /*
+     * The one full-width element on the page. It breaks the column of grey text
+     * that a long article otherwise is, and it costs nothing to author: with no
+     * `cover` in frontmatter this is the post's own social card.
+     */
+    .content-hero {
+        overflow: hidden;
+        margin-bottom: var(--space-8);
+        border: 1px solid var(--card-border);
+        border-radius: var(--radius-xl);
+        background: var(--content-raised);
+    }
+
+    .content-hero img {
+        display: block;
+        width: 100%;
+        height: auto;
+    }
+
+    /* ---- Outro ----------------------------------------------------------- */
+
+    .content-outro {
+        margin-top: var(--space-16);
+        border: 1px solid var(--card-border);
+        border-radius: var(--radius-2xl);
+        background: var(--content-raised);
+        padding: var(--space-6);
+    }
+
+    .content-outro-eyebrow {
+        color: var(--text-tertiary);
+        font-family: var(--font-mono-family);
+        font-size: var(--text-2xs);
+        font-weight: 500;
+        letter-spacing: 0.09em;
+        text-transform: uppercase;
+    }
+
+    .content-outro-title {
+        margin-top: var(--space-2);
+        font-size: var(--text-xl);
+        font-weight: 500;
+        letter-spacing: -0.016em;
+    }
+
+    .content-outro-body {
+        margin-top: var(--space-2);
+        color: var(--text-secondary);
+        line-height: 1.6;
+    }
+
+    .content-outro-cta {
+        display: inline-flex;
+        align-items: center;
+        gap: var(--space-2);
+        margin-top: var(--space-5);
+        border-radius: var(--radius-md);
+        background: var(--text-primary);
+        padding: var(--space-2) var(--space-4);
+        color: var(--bg-surface);
+        font-size: var(--text-sm);
+        text-decoration: none;
+    }
+
+    .content-outro-arrow {
+        width: 0.9rem;
+        height: 0.9rem;
+    }
+
+    /* ---- The column ------------------------------------------------------ */
+
+    /*
+     * Reading size, not interface size — 20px at 1.75, which is the register
+     * Substack and Medium set body copy in and the reason those pages are
+     * comfortable for a thousand words. Everything before this was set at the
+     * product's 16px UI scale, which is correct for a dense workspace and
+     * exactly wrong for prose. The column is capped at 42rem so this lands
+     * near 65 characters.
+     */
+    /*
+     * Sans headline, serif body — the pairing the reference gets its warmth
+     * from. Source Serif carries the prose at 18px/1.7; Inter keeps the
+     * headings, labels and UI so the page still reads as this product rather
+     * than a generic magazine.
+     */
+    .content-article {
+        color: var(--text-primary);
+        font-family: var(--font-reading-serif), Georgia, serif;
+        font-size: var(--text-md);
+        line-height: 1.7;
+    }
+
+    .content-article > * + * {
+        margin-top: var(--space-5);
+    }
+
+    .content-article p {
+        text-wrap: pretty;
+    }
+
+    /* ---- Headings -------------------------------------------------------- */
+
+    /*
+     * Weight stays 500 everywhere, including headings. Hierarchy is carried by
+     * size and by the space above — a heading is announced by the silence that
+     * precedes it, not by getting heavier than the text it introduces.
+     */
+    .content-article h2,
+    .content-article h3,
+    .content-article h4 {
+        font-family: var(--font-body-family), sans-serif;
+        font-weight: 500;
+        color: var(--text-primary);
+        text-wrap: balance;
+    }
+
+    .content-article h2 {
+        margin-top: var(--space-10);
+        font-size: var(--text-xl);
+        letter-spacing: -0.016em;
+        line-height: 1.25;
+    }
+
+    .content-article h3 {
+        margin-top: var(--space-8);
+        font-size: var(--text-md);
+        letter-spacing: -0.012em;
+        line-height: 1.35;
+    }
+
+    .content-article h4 {
+        margin-top: var(--space-6);
+        font-size: var(--text-base);
+    }
+
+    /* The anchor is present for everyone and visible on approach. */
+    .content-article :is(h2, h3) {
+        position: relative;
+    }
+
+    .content-article :is(h2, h3) > a[href^='#'] {
+        position: absolute;
+        right: 100%;
+        padding-right: var(--space-2);
+        color: var(--text-soft);
+        opacity: 0;
+        text-decoration: none;
+        transition: opacity 120ms ease;
+    }
+
+    .content-article :is(h2, h3):hover > a[href^='#'],
+    .content-article :is(h2, h3) > a[href^='#']:focus-visible {
+        opacity: 1;
+    }
+
+    /* ---- Prose ----------------------------------------------------------- */
+
+    .content-article a {
+        color: var(--text-primary);
+        text-decoration: underline;
+        text-decoration-color: color-mix(in srgb, var(--action-primary) 40%, transparent);
+        text-underline-offset: 0.2em;
+        text-decoration-thickness: 1px;
+        transition: text-decoration-color 120ms ease;
+    }
+
+    .content-article a:hover {
+        text-decoration-color: rgb(var(--accent-rgb));
+    }
+
+    .content-article :is(ul, ol) {
+        padding-left: var(--space-5);
+    }
+
+    .content-article ul {
+        list-style: disc;
+    }
+
+    /*
+     * `:not(.content-steps)` is load-bearing. `.content-article ol` outranks a
+     * bare `.content-steps`, so the native decimal markers rendered *behind*
+     * the numbered badges and every step showed its number twice.
+     */
+    .content-article ol:not(.content-steps) {
+        list-style: decimal;
+    }
+
+    .content-article li + li {
+        margin-top: var(--space-2);
+    }
+
+    .content-article li::marker {
+        color: var(--text-soft);
+    }
+
+    .content-article strong {
+        font-weight: 500;
+        color: var(--text-primary);
+    }
+
+    .content-article blockquote {
+        border-left: 2px solid var(--border-subtle);
+        padding-left: var(--space-4);
+        color: var(--text-secondary);
+    }
+
+    .content-article hr {
+        border: 0;
+        border-top: 1px solid var(--border-subtle);
+        margin-block: var(--space-10);
+    }
+
+    .content-article img {
+        max-width: 100%;
+        height: auto;
+        border-radius: var(--radius-xl);
+    }
+
+    /* ---- Code ------------------------------------------------------------ */
+
+    /* Same recipe the GitHub-import markdown already uses for inline code. */
+    .content-article :not(pre) > code {
+        border-radius: var(--radius-sm);
+        background: var(--chip-bg);
+        padding: var(--space-1) var(--space-1-5);
+        color: var(--text-primary);
+        font-family: var(--font-mono-family);
+        font-size: var(--text-sm);
+    }
+
+    .content-article pre {
+        overflow-x: auto;
+        border: 1px solid var(--card-border);
+        border-radius: var(--radius-xl);
+        background: var(--content-raised);
+        padding: var(--space-4);
+        font-family: var(--font-mono-family);
+        font-size: var(--text-sm);
+        line-height: 1.65;
+    }
+
+    /*
+     * Shiki is configured with two themes and `defaultColor: false`, so every
+     * token carries both appearances as custom properties and neither is baked
+     * into the markup. Switching is a variable swap, which means a code block
+     * follows the reader's appearance instead of being the one element on the
+     * page that ignores it.
+     *
+     * Only the *token* colours are taken. Shiki also publishes a background per
+     * theme, and vitesse-light's is `#ffffff` — adopting it would make the code
+     * block the one pure-white surface in a palette where sheets are stock
+     * (`--card-bg`, `#fdfcf8`), which reads as a hole punched through the page.
+     * The surface stays ours; only the syntax is Shiki's.
+     *
+     * `.dark` and not `[data-theme]`: next-themes is configured with
+     * `attribute="class"` in `app/providers.tsx`, so the class is what actually
+     * lands on the element.
+     */
+    .content-article pre.shiki,
+    .content-article pre.shiki span {
+        color: var(--shiki-light);
+    }
+
+    .dark .content-article pre.shiki,
+    .dark .content-article pre.shiki span {
+        color: var(--shiki-dark);
+    }
+
+    /* ---- Tables ---------------------------------------------------------- */
+
+    .content-table-frame {
+        overflow-x: auto;
+        border: 1px solid var(--card-border);
+        border-radius: var(--radius-xl);
+    }
+
+    .content-table-frame table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: var(--text-sm);
+    }
+
+    .content-table-frame :is(th, td) {
+        border-bottom: 1px solid var(--border-subtle);
+        padding: var(--space-3) var(--space-4);
+        text-align: left;
+        vertical-align: top;
+    }
+
+    .content-table-frame th {
+        color: var(--text-secondary);
+        font-weight: 500;
+    }
+
+    .content-table-frame tr:last-child :is(th, td) {
+        border-bottom: 0;
+    }
+
+    /* ---- Callout --------------------------------------------------------- */
+
+    /*
+     * A 2px accent edge carries the tone, so the fill can stay near the paper.
+     * The earlier version leaned entirely on a tinted background and, at the
+     * low saturation this palette works at, arrived as a barely-there smudge.
+     */
+    .content-callout {
+        display: flex;
+        gap: var(--space-3);
+        border: 1px solid var(--card-border);
+        border-left-width: 2px;
+        border-radius: var(--radius-xl);
+        padding: var(--space-4);
+    }
+
+    .content-callout-icon {
+        flex: none;
+        width: 1.15rem;
+        height: 1.15rem;
+        margin-top: 0.15rem;
+    }
+
+    .content-callout-body > * + * {
+        margin-top: var(--space-2);
+    }
+
+    .content-callout-title {
+        font-weight: 500;
+    }
+
+    /*
+     * Each tone reuses the badge pair the rest of the product already uses for
+     * that role, so a warning in an article and a warning in the app are the
+     * same object rather than two takes on one idea.
+     */
+    .content-callout-note {
+        border-color: color-mix(in srgb, var(--intelligence) 18%, var(--card-border));
+        border-left-color: var(--intelligence);
+        background: color-mix(in srgb, var(--intelligence) 6%, var(--content-raised));
+    }
+
+    .content-callout-note .content-callout-icon {
+        color: var(--intelligence);
+    }
+
+    .content-callout-tip {
+        border-color: color-mix(in srgb, var(--action-primary) 18%, var(--card-border));
+        border-left-color: var(--action-primary);
+        background: color-mix(in srgb, var(--action-primary) 6%, var(--content-raised));
+    }
+
+    .content-callout-tip .content-callout-icon {
+        color: var(--action-primary);
+    }
+
+    .content-callout-warning {
+        border-color: color-mix(in srgb, var(--state-warning) 18%, var(--card-border));
+        border-left-color: var(--state-warning);
+        background: color-mix(in srgb, var(--state-warning) 6%, var(--content-raised));
+    }
+
+    .content-callout-warning .content-callout-icon {
+        color: var(--state-warning);
+    }
+
+    .content-callout-success {
+        border-color: color-mix(in srgb, var(--state-success) 18%, var(--card-border));
+        border-left-color: var(--state-success);
+        background: color-mix(in srgb, var(--state-success) 6%, var(--content-raised));
+    }
+
+    .content-callout-success .content-callout-icon {
+        color: var(--state-success);
+    }
+
+    /* ---- Steps ----------------------------------------------------------- */
+
+    /*
+     * The rail is drawn on the list, not per item, so it is one continuous line
+     * rather than a stack of segments that misalign whenever a step's body
+     * changes height.
+     */
+    .content-steps {
+        list-style: none;
+        padding-left: 0;
+        border-left: 1px solid var(--border-subtle);
+        margin-left: 0.6rem;
+        counter-reset: content-step;
+    }
+
+    .content-step {
+        position: relative;
+        padding-left: var(--space-6);
+        padding-bottom: var(--space-6);
+        counter-increment: content-step;
+    }
+
+    .content-step:last-child {
+        padding-bottom: 0;
+    }
+
+    .content-step::before {
+        content: counter(content-step);
+        position: absolute;
+        left: 0;
+        top: 0;
+        transform: translateX(-50%);
+        display: grid;
+        place-items: center;
+        width: 1.4rem;
+        height: 1.4rem;
+        border-radius: var(--radius-full);
+        background: rgb(var(--accent-rgb));
+        color: var(--text-on-brand);
+        font-size: var(--text-xs);
+        font-variant-numeric: tabular-nums;
+    }
+
+    .content-step-title {
+        font-weight: 500;
+        line-height: 1.4;
+    }
+
+    .content-step-body > * + * {
+        margin-top: var(--space-3);
+    }
+
+    .content-step-body {
+        margin-top: var(--space-2);
+        color: var(--text-secondary);
+    }
+
+    /* ---- Cards ----------------------------------------------------------- */
+
+    .content-card-group {
+        display: grid;
+        gap: var(--space-3);
+    }
+
+    @media (min-width: 40rem) {
+        .content-card-group-2 {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+
+        .content-card-group-3 {
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+        }
+    }
+
+    .content-card {
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-2);
+        border: 1px solid var(--card-border);
+        border-radius: var(--radius-xl);
+        background: var(--content-raised);
+        padding: var(--space-4);
+        color: var(--text-primary);
+        text-decoration: none;
+        transition:
+            border-color 120ms ease,
+            transform 120ms ease;
+    }
+
+    a.content-card:hover {
+        border-color: color-mix(in srgb, var(--action-primary) 45%, var(--card-border));
+        transform: translateY(-1px);
+    }
+
+    .content-card-title {
+        display: inline-flex;
+        align-items: center;
+        gap: var(--space-2);
+        font-weight: 500;
+    }
+
+    .content-card-arrow {
+        width: 0.9rem;
+        height: 0.9rem;
+        color: var(--text-tertiary);
+    }
+
+    .content-card-body {
+        color: var(--text-secondary);
+        font-size: var(--text-sm);
+        line-height: 1.6;
+    }
+
+    /* ---- Params ---------------------------------------------------------- */
+
+    .content-param {
+        border-top: 1px solid var(--border-subtle);
+        padding-top: var(--space-4);
+    }
+
+    .content-param-head {
+        display: flex;
+        align-items: baseline;
+        flex-wrap: wrap;
+        gap: var(--space-2);
+    }
+
+    .content-param-name {
+        font-family: var(--font-mono-family);
+        font-size: var(--text-sm);
+    }
+
+    .content-param-type {
+        color: var(--text-tertiary);
+        font-family: var(--font-mono-family);
+        font-size: var(--text-xs);
+    }
+
+    .content-param-required {
+        color: var(--attention);
+        font-size: var(--text-xs);
+    }
+
+    .content-param-body {
+        margin-top: var(--space-2);
+        color: var(--text-secondary);
+        font-size: var(--text-sm);
+    }
+
+    /* ---- Accordion ------------------------------------------------------- */
+
+    .content-accordion {
+        border: 1px solid var(--card-border);
+        border-radius: var(--radius-xl);
+        background: var(--content-raised);
+        padding: var(--space-3) var(--space-4);
+    }
+
+    .content-accordion-summary {
+        cursor: pointer;
+        list-style: none;
+        font-weight: 500;
+    }
+
+    .content-accordion-summary::-webkit-details-marker {
+        display: none;
+    }
+
+    .content-accordion-body {
+        margin-top: var(--space-3);
+        color: var(--text-secondary);
+    }
+}
+
+@layer utilities {
+    /* ---- Panes ----------------------------------------------------------- */
+
+    /*
+     * Both rails are sticky and quiet: mono labels, small links, no fills. They
+     * frame the column rather than compete with it — anything louder out here
+     * pulls the eye off the sentence being read.
+     */
+    .content-archive,
+    .content-rail {
+        display: none;
+    }
+
+    @media (min-width: 64rem) {
+        .content-archive {
+            display: block;
+            position: sticky;
+            top: 5rem;
+            align-self: start;
+            max-height: calc(100vh - 7rem);
+            overflow-y: auto;
+        }
+    }
+
+    @media (min-width: 88rem) {
+        .content-rail {
+            display: block;
+            position: sticky;
+            top: 5rem;
+            align-self: start;
+            max-height: calc(100vh - 7rem);
+            overflow-y: auto;
+        }
+    }
+
+    .content-archive-all {
+        color: var(--text-primary);
+        font-size: var(--text-sm);
+        font-weight: 500;
+        text-decoration: none;
+    }
+
+    .content-archive-group {
+        margin-top: var(--space-6);
+    }
+
+    .content-archive-title,
+    .content-rail-title {
+        color: var(--text-tertiary);
+        font-family: var(--font-mono-family);
+        font-size: var(--text-2xs);
+        font-weight: 500;
+        letter-spacing: 0.09em;
+        text-transform: uppercase;
+    }
+
+    .content-archive-group ul {
+        margin-top: var(--space-3);
+        list-style: none;
+    }
+
+    .content-archive-group li + li {
+        margin-top: var(--space-3);
+    }
+
+    .content-archive-group a {
+        display: block;
+        color: var(--text-secondary);
+        font-size: var(--text-sm);
+        line-height: 1.4;
+        text-decoration: none;
+        transition: color 120ms ease;
+    }
+
+    .content-archive-group a:hover {
+        color: var(--text-primary);
+    }
+
+    .content-archive-group a[data-active] {
+        color: var(--text-primary);
+        font-weight: 500;
+    }
+
+    .content-archive-tags li {
+        color: var(--text-secondary);
+        font-size: var(--text-sm);
+        text-transform: capitalize;
+    }
+
+    .content-rail ul {
+        margin-top: var(--space-3);
+        list-style: none;
+        border-left: 1px solid var(--border-subtle);
+    }
+
+    .content-rail li {
+        padding-block: var(--space-1);
+    }
+
+    /*
+     * The active marker is drawn on the link, over the list's own border, so
+     * the rule reads as one continuous line with a lit segment rather than a
+     * stack of separate bars.
+     */
+    .content-rail a {
+        display: block;
+        margin-left: -1px;
+        border-left: 2px solid transparent;
+        padding-left: var(--space-3);
+        color: var(--text-tertiary);
+        font-size: var(--text-sm);
+        line-height: 1.45;
+        text-decoration: none;
+        transition:
+            color 120ms ease,
+            border-color 120ms ease;
+    }
+
+    .content-rail a:hover {
+        color: var(--text-primary);
+    }
+
+    .content-rail a[data-active] {
+        border-left-color: rgb(var(--accent-rgb));
+        color: var(--text-primary);
+    }
+
+    .content-rail-h3 a {
+        padding-left: var(--space-5);
+    }
+}
+
+@layer utilities {
+    /* ---- Single-column pages --------------------------------------------- */
+
+    /*
+     * Index and changelog render one child. Declared after the responsive
+     * `.content-grid` rules so it wins on source order at equal specificity —
+     * without it that single child lands in the 12rem archive track and renders
+     * as a squeezed strip.
+     */
+    .content-grid-single {
+        grid-template-columns: minmax(0, 1fr);
+        gap: 0;
+    }
+
+    /*
+     * The landing pins the wordmark to near-black (`--text-primary: #17181a` on
+     * `.lp-brand-logo`) because that page is light-only. On a content page in
+     * dark mode that is ink on ink — the mark's violet bars stayed visible and
+     * the word "Lemma" vanished. Point it back at the remapped `--lp-ink`,
+     * which already resolves to the active theme's text colour.
+     */
+    .content-page .lp-brand-logo {
+        --text-primary: var(--lp-ink);
+    }
+
+    /*
+     * The index is a *list*, so it takes the whole frame — tiles and cards use
+     * width, they do not have to be read as a paragraph. The changelog is still
+     * reading matter and keeps a cap.
+     *
+     * `margin-inline: 0` is load-bearing. `.content-column` centres itself with
+     * `margin-inline: auto`, and on a *grid item* auto margins make the box
+     * shrink to fit its content instead of stretching — so lifting `max-width`
+     * alone left the column sized to its widest tile and floating in the middle
+     * of a track twice its width.
+     */
+    .content-grid-single > .content-column {
+        max-width: none;
+        margin-inline: 0;
+    }
+
+    .content-grid-narrow > .content-column {
+        max-width: 56rem;
+    }
+
+    /* ---- Changelog timeline ---------------------------------------------- */
+
+    /*
+     * A release history is a sequence, so it is drawn as one: a continuous rail
+     * with a marker per entry. The dot's colour comes from the entry's first
+     * tag, which makes "what kind of release was this" legible before any of
+     * the text is read.
+     */
+    .content-timeline {
+        list-style: none;
+        margin-top: var(--space-10);
+        padding-left: var(--space-6);
+        border-left: 1px dashed var(--border-strong, var(--border-subtle));
+    }
+
+    .content-timeline-item {
+        position: relative;
+    }
+
+    .content-timeline-item + .content-timeline-item {
+        margin-top: var(--space-10);
+    }
+
+    /* The dot sits on the rail, not beside it. */
+    .content-timeline-item::before {
+        content: '';
+        position: absolute;
+        left: calc(var(--space-6) * -1);
+        top: 0.45em;
+        transform: translateX(-50%);
+        width: 0.55rem;
+        height: 0.55rem;
+        border-radius: var(--radius-full);
+        background: var(--timeline-tone, var(--action-primary));
+        box-shadow: 0 0 0 3px var(--bg-surface);
+    }
+
+    .content-timeline-item[data-tone='success'] {
+        --timeline-tone: var(--state-success);
+    }
+
+    .content-timeline-item[data-tone='attention'] {
+        --timeline-tone: var(--attention);
+    }
+
+    .content-timeline-item[data-tone='delight'] {
+        --timeline-tone: var(--delight);
+    }
+
+    .content-timeline-item[data-tone='intelligence'] {
+        --timeline-tone: var(--intelligence);
+    }
+
+    .content-timeline-meta {
+        color: var(--text-tertiary);
+        font-family: var(--font-mono-family);
+        font-size: var(--text-2xs);
+        letter-spacing: 0.09em;
+        text-transform: uppercase;
+    }
+
+    .content-timeline-card {
+        margin-top: var(--space-3);
+        border: 1px solid var(--card-border);
+        border-radius: var(--radius-xl);
+        background: var(--content-raised);
+        padding: var(--space-6);
+    }
+
+    .content-timeline-version {
+        font-size: var(--text-xl);
+        font-weight: 500;
+        letter-spacing: -0.02em;
+    }
+
+    .content-timeline-version a {
+        color: var(--text-primary);
+        text-decoration: none;
+    }
+
+    .content-timeline-card .content-article {
+        margin-top: var(--space-4);
+    }
+
+    .content-timeline-card .content-article > h2:first-child {
+        margin-top: 0;
+    }
+
+    /* Nested cards on a card surface need their own step of separation. */
+    .content-timeline-card .content-article pre,
+    .content-timeline-card .content-callout {
+        background: var(--bg-surface);
+    }
+}
+
+@layer utilities {
+    /* ---- Blog index: lead tile + cards ----------------------------------- */
+
+    /*
+     * Colour comes from the badge pairs, so a topic reads the same here as it
+     * does anywhere else in the product. The tone is set per element and every
+     * rule below reads `--topic`/`--topic-soft`, which keeps the variants to
+     * four short declarations instead of a block per colour per component.
+     */
+    .content-lead,
+    .content-card-post {
+        --topic: var(--collaboration);
+        --topic-soft: var(--collaboration-soft);
+    }
+
+    [data-tone='intelligence'] {
+        --topic: var(--intelligence);
+        --topic-soft: var(--intelligence-soft);
+    }
+
+    [data-tone='success'] {
+        --topic: var(--state-success);
+        --topic-soft: var(--brand-green-soft);
+    }
+
+    [data-tone='delight'] {
+        --topic: var(--delight);
+        --topic-soft: var(--delight-soft);
+    }
+
+    .content-lead {
+        display: block;
+        margin-top: var(--space-10);
+        border: 1px solid color-mix(in srgb, var(--topic) 22%, transparent);
+        border-radius: var(--radius-3xl);
+        background: var(--topic-soft);
+        padding: var(--space-10);
+        color: var(--text-primary);
+        text-decoration: none;
+        transition:
+            transform 140ms ease,
+            border-color 140ms ease;
+    }
+
+    .content-lead:hover {
+        border-color: color-mix(in srgb, var(--topic) 45%, transparent);
+        transform: translateY(-2px);
+    }
+
+    .content-lead-meta,
+    .content-card-post-meta {
+        color: color-mix(in srgb, var(--topic) 72%, var(--text-secondary));
+        font-family: var(--font-mono-family);
+        font-size: var(--text-2xs);
+        letter-spacing: 0.09em;
+        text-transform: uppercase;
+    }
+
+    .content-lead-title {
+        max-width: 24ch;
+        margin-top: var(--space-4);
+        font-size: var(--text-3xl);
+        font-weight: 500;
+        letter-spacing: -0.028em;
+        line-height: 1.1;
+        text-wrap: balance;
+    }
+
+    .content-lead-dek {
+        max-width: 52ch;
+        margin-top: var(--space-4);
+        color: var(--text-secondary);
+        font-family: var(--font-reading-serif), Georgia, serif;
+        font-size: var(--text-md);
+        line-height: 1.6;
+    }
+
+    .content-lead-cta {
+        display: inline-flex;
+        align-items: center;
+        gap: var(--space-2);
+        margin-top: var(--space-6);
+        color: var(--topic);
+        font-size: var(--text-sm);
+        font-weight: 500;
+    }
+
+    .content-lead-arrow {
+        width: 0.9rem;
+        height: 0.9rem;
+        transition: transform 140ms ease;
+    }
+
+    .content-lead:hover .content-lead-arrow {
+        transform: translateX(3px);
+    }
+
+    .content-cards {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr);
+        gap: var(--space-4);
+        margin-top: var(--space-4);
+        list-style: none;
+    }
+
+    @media (min-width: 48rem) {
+        .content-cards {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+    }
+
+    @media (min-width: 72rem) {
+        .content-cards {
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+        }
+    }
+
+    /*
+     * The cards carry their colour as a top edge rather than a fill — a page of
+     * fully tinted tiles competes with the lead and stops any one of them
+     * reading as the place to start.
+     */
+    .content-card-post {
+        display: block;
+        height: 100%;
+        border: 1px solid var(--card-border);
+        border-top: 3px solid var(--topic);
+        border-radius: var(--radius-xl);
+        background: var(--content-raised);
+        padding: var(--space-6);
+        color: var(--text-primary);
+        text-decoration: none;
+        transition:
+            transform 140ms ease,
+            border-color 140ms ease;
+    }
+
+    .content-card-post:hover {
+        transform: translateY(-2px);
+    }
+
+    .content-card-post-title {
+        display: flex;
+        align-items: center;
+        gap: var(--space-2);
+        margin-top: var(--space-3);
+        font-size: var(--text-md);
+        font-weight: 500;
+        letter-spacing: -0.012em;
+        line-height: 1.3;
+    }
+
+    .content-card-post-dek {
+        margin-top: var(--space-2);
+        color: var(--text-secondary);
+        font-family: var(--font-reading-serif), Georgia, serif;
+        font-size: var(--text-base);
+        line-height: 1.55;
+    }
+}

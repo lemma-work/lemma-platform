@@ -1,0 +1,97 @@
+---
+title: The software your team needs doesn't exist yet
+description: Coding agents can write it. What they can't do is turn it into something a team can actually run.
+published: 2026-08-09
+author: Lemma
+tags:
+  - product
+  - agents
+pod: roundtable
+---
+
+Every team runs on a handful of processes that no vendor sells. The approval
+that needs two signatures unless the amount is under a threshold. The intake
+form that has to reach the right person within an hour. The weekly report that
+three people assemble by hand because the shape of it changed last quarter.
+
+These are not hard problems. They are *specific* problems, and specificity is
+exactly what off-the-shelf software cannot serve.
+
+## What changed
+
+Coding agents can now write this software. Not a prototype — the actual thing,
+with the actual rules, in an afternoon.
+
+What they produce is code. Code is not yet software a team can use.
+
+<Callout tone="note" title="The gap">
+  Generated code still needs shared state, permissions, workflows, approvals,
+  deployment, and somewhere agents can keep working after the first prompt.
+</Callout>
+
+That list is the difference between a script that ran once on someone's laptop
+and a system a team depends on. It is unglamorous, it is the same every time,
+and it is where most agent-built software quietly dies.
+
+## What a pod is
+
+A pod is the unit that closes that gap. It holds the parts that make generated
+code into working software, and it holds them together.
+
+<CardGroup cols={2}>
+  <Card title="Data">
+    Tables and files with real permissions, so state outlives the conversation
+    that created it.
+  </Card>
+  <Card title="Functions">
+    The steps that run the same way every time, whoever triggers them.
+  </Card>
+  <Card title="Agents">
+    Named workers with scoped access, doing the parts that need judgment.
+  </Card>
+  <Card title="Surfaces">
+    Where people meet the work — an app, or the chat tool they already use.
+  </Card>
+</CardGroup>
+
+People use the app. Agents work through the same state and the same workflows.
+Neither is a guest in the other's system.
+
+## Building one
+
+<Steps>
+  <Step title="Install Lemma">
+    Download the desktop app and choose **Local**, or point the CLI at a server
+    you already run.
+  </Step>
+  <Step title="Create a pod">
+    One command scaffolds the whole structure, including a starter you can throw
+    away.
+
+    ```bash
+    lemma pod create my-team --with-starter
+    ```
+  </Step>
+  <Step title="Describe what you need">
+    Open the directory in your coding agent and ask for the software you want.
+    The agent authors and verifies the pod through the same CLI you just used.
+  </Step>
+  <Step title="Give it a surface">
+    Connect Slack, Teams, WhatsApp or Telegram — or ship the app. The pod is the
+    same either way.
+  </Step>
+</Steps>
+
+## Why it has to be open
+
+Software a team depends on should not be something they can lose. Lemma runs on
+your laptop, your server, or our cloud, and the pod is a directory you own —
+exportable, diffable, and importable by anyone you send it to.
+
+<Callout tone="tip" title="Try it on something small">
+  The best first pod is a process you already run badly. It gives you a real
+  test and a comparison.
+</Callout>
+
+That last property is the one that matters most over time. A pod someone else
+built is a pod you can read, change, and make yours.

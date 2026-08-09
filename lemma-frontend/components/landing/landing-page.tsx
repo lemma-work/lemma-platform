@@ -4,8 +4,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { GithubLogo } from "@/components/ui/icons";
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
-import { Logo } from "@/components/brand/logo";
-import { copyrightNotice } from "@/lib/company";
+import { SiteFooter, SiteHeader } from "./site-chrome";
 import type { SurfaceMode } from "./landing-data";
 import { githubUrl, surfaceModes } from "./landing-data";
 import { WorkSurfaceStrip } from "./landing-animations";
@@ -47,19 +46,9 @@ function dayPartFor(hour: number): DayPart {
    so the snapshot is reference-stable and never re-renders in a loop. */
 const NEVER_CHANGES = () => () => {};
 
-/** One source for the header nav and the mobile menu, so they can't drift. */
-type NavLink = { label: string; href: string; external?: boolean };
-
-const NAV_LINKS: NavLink[] = [
-  { label: "How it works", href: "#loop" },
-  { label: "Templates", href: "/templates" },
-  { label: "Docs", href: "/docs", external: true },
-];
-
 export default function LandingPage() {
   const [activeSurface, setActiveSurface] =
     useState<SurfaceMode["key"]>("slack");
-  const [menuOpen, setMenuOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
 
   const dayPart = useSyncExternalStore(
@@ -94,94 +83,7 @@ export default function LandingPage() {
 
   return (
     <div className="lp-react" ref={rootRef}>
-      <header className="lp-header" aria-label="Site header">
-        <Link className="lp-brand" href="/" aria-label="Lemma home">
-          <Logo className="lp-brand-logo" size="sm" variant="mark-wordmark" />
-        </Link>
-        <nav className="lp-nav" aria-label="Primary navigation">
-          {NAV_LINKS.map((link) =>
-            link.external ? (
-              <a href={link.href} key={link.label} rel="noreferrer" target="_blank">
-                {link.label}
-              </a>
-            ) : link.href.startsWith("#") ? (
-              <a href={link.href} key={link.label}>
-                {link.label}
-              </a>
-            ) : (
-              <Link href={link.href} key={link.label}>
-                {link.label}
-              </Link>
-            ),
-          )}
-          <a
-            className="lp-gh-link"
-            href={githubUrl}
-            target="_blank"
-            rel="noreferrer"
-          >
-            <GithubLogo aria-hidden className="lp-gh-icon" />
-            GitHub
-          </a>
-        </nav>
-        <div className="lp-header-actions">
-          <Link className="lp-button primary" href="/auth">
-            Start building
-          </Link>
-          {/* Below the nav breakpoint this was the only control in the header,
-              leaving Templates, Docs and GitHub unreachable from a phone. */}
-          <button
-            aria-controls="lp-mobile-menu"
-            aria-expanded={menuOpen}
-            aria-label={menuOpen ? "Close menu" : "Open menu"}
-            className="lp-menu-toggle"
-            onClick={() => setMenuOpen((open) => !open)}
-            type="button"
-          >
-            <span className={menuOpen ? "is-open" : ""} />
-          </button>
-        </div>
-      </header>
-
-      <div
-        className={`lp-mobile-menu${menuOpen ? " is-open" : ""}`}
-        hidden={!menuOpen}
-        id="lp-mobile-menu"
-      >
-        {NAV_LINKS.map((link) =>
-          link.external ? (
-            <a
-              href={link.href}
-              key={link.label}
-              onClick={() => setMenuOpen(false)}
-              rel="noreferrer"
-              target="_blank"
-            >
-              {link.label}
-            </a>
-          ) : link.href.startsWith("#") ? (
-            <a
-              href={link.href}
-              key={link.label}
-              onClick={() => setMenuOpen(false)}
-            >
-              {link.label}
-            </a>
-          ) : (
-            <Link
-              href={link.href}
-              key={link.label}
-              onClick={() => setMenuOpen(false)}
-            >
-              {link.label}
-            </Link>
-          ),
-        )}
-        <a href={githubUrl} rel="noreferrer" target="_blank">
-          <GithubLogo aria-hidden className="lp-gh-icon" />
-          GitHub
-        </a>
-      </div>
+      <SiteHeader />
 
       <main>
         {/* §1 — thesis in three lines */}
@@ -352,61 +254,7 @@ export default function LandingPage() {
 
       {/* The page used to stop dead at the CTA — no docs, no licence, no way
           out except the two buttons. */}
-      <footer className="lp-site-footer">
-        <div className="lp-site-footer-inner">
-          <div className="lp-site-footer-brand">
-            <Logo className="lp-brand-logo" size="sm" variant="mark-wordmark" />
-            <p>The runtime for agent-built software.</p>
-          </div>
-
-          <nav aria-label="Product">
-            <p className="lp-site-footer-label">Product</p>
-            <a href="#loop">How it works</a>
-            <Link href="/templates">Templates</Link>
-            <Link href="/auth">Start building</Link>
-          </nav>
-
-          <nav aria-label="Developers">
-            <p className="lp-site-footer-label">Developers</p>
-            <a href="/docs" rel="noreferrer" target="_blank">
-              Docs
-            </a>
-            <a href={githubUrl} rel="noreferrer" target="_blank">
-              GitHub
-            </a>
-            <a
-              href={`${githubUrl}/releases`}
-              rel="noreferrer"
-              target="_blank"
-            >
-              Changelog
-            </a>
-          </nav>
-
-          <nav aria-label="Licence">
-            <p className="lp-site-footer-label">Licence</p>
-            <a
-              href={`${githubUrl}/blob/main/LICENSE`}
-              rel="noreferrer"
-              target="_blank"
-            >
-              AGPLv3 core
-            </a>
-            <a
-              href={`${githubUrl}/blob/main/LICENSE-APACHE`}
-              rel="noreferrer"
-              target="_blank"
-            >
-              Apache-2.0 SDKs
-            </a>
-          </nav>
-        </div>
-
-        <p className="lp-site-footer-base">
-          <span>Open source. Run it anywhere.</span>
-          <span>{copyrightNotice()}</span>
-        </p>
-      </footer>
+      <SiteFooter />
     </div>
   );
 }
