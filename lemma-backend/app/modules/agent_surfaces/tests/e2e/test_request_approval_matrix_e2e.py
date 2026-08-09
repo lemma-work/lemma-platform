@@ -57,7 +57,10 @@ from app.modules.agent_surfaces.tests.e2e.helpers import (
     _telegram_payload,
     _whatsapp_payload,
 )
-from app.modules.agent_surfaces.tests.e2e.mock_infrastructure import wait_for_messages
+from app.modules.agent_surfaces.tests.e2e.mock_infrastructure import (
+    wait_for_messages,
+    wait_for_slack_text,
+)
 from app.modules.agent_surfaces.tests.e2e.scripted_llm import (
     process_ingress_and_run_scripted,
     resume_latest_scripted_run,
@@ -275,8 +278,12 @@ async def test_request_approval_slack_native_buttons_then_resumes_on_approve(
         approval_id=_TOOL_CALL_ID,
     )
 
-    slack_messages = await wait_for_messages(message_store, "SLACK", min_count=2)
-    assert "Done — approved and executed." in slack_messages[-1]["text"]
+    delivered = await wait_for_slack_text(
+        message_store, "Done — approved and executed."
+    )
+    assert any("Done — approved and executed." in text for text in delivered), (
+        f"the resumed run never reached Slack: {delivered}"
+    )
 
     messages = await _messages_for_conversation(
         authenticated_client, pod_id=pod_id, conversation_id=conversation_id
@@ -371,8 +378,10 @@ async def test_request_approval_slack_native_deny_skips_wrapped_tool(
         approval_id=_TOOL_CALL_ID,
     )
 
-    slack_messages = await wait_for_messages(message_store, "SLACK", min_count=2)
-    assert "Okay, cancelled." in slack_messages[-1]["text"]
+    delivered = await wait_for_slack_text(message_store, "Okay, cancelled.")
+    assert any("Okay, cancelled." in text for text in delivered), (
+        f"the resumed run never reached Slack: {delivered}"
+    )
 
     messages = await _messages_for_conversation(
         authenticated_client, pod_id=pod_id, conversation_id=conversation_id
@@ -457,8 +466,10 @@ async def test_request_approval_slack_typed_deny_skips_wrapped_tool(
         script=None,
     )
 
-    slack_messages = await wait_for_messages(message_store, "SLACK", min_count=2)
-    assert "Okay, cancelled." in slack_messages[-1]["text"]
+    delivered = await wait_for_slack_text(message_store, "Okay, cancelled.")
+    assert any("Okay, cancelled." in text for text in delivered), (
+        f"the resumed run never reached Slack: {delivered}"
+    )
 
     messages = await _messages_for_conversation(
         authenticated_client, pod_id=pod_id, conversation_id=conversation_id

@@ -74,7 +74,10 @@ from app.modules.agent_surfaces.tests.e2e.helpers import (
     _telegram_payload,
     _whatsapp_payload,
 )
-from app.modules.agent_surfaces.tests.e2e.mock_infrastructure import wait_for_messages
+from app.modules.agent_surfaces.tests.e2e.mock_infrastructure import (
+    wait_for_messages,
+    wait_for_slack_text,
+)
 from app.modules.agent_surfaces.tests.e2e.scripted_llm import (
     process_ingress_and_run_scripted,
     script_display_resource,
@@ -461,13 +464,12 @@ async def test_display_resource_slack_routes_pod_resource_catalog_to_deep_links(
     assert "incident-dashboard" in rendered
     assert "daily-triage" in rendered
     assert "%2Freports%2Fquarterly.pdf" in rendered
-    assert (
-        sum(
-            message.get("text") == "The incident catalog is ready."
-            for message in slack_messages
-        )
-        == 1
+    delivered = await wait_for_slack_text(
+        message_store, "The incident catalog is ready."
     )
+    assert (
+        sum("The incident catalog is ready." in text for text in delivered) == 1
+    ), f"the final answer must land exactly once, got {delivered}"
 
 
 async def test_display_resource_teams_file_always_falls_back_to_link(

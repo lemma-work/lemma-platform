@@ -497,6 +497,51 @@ async def test_progress_observer_strips_inline_thinking_tags_from_text():
     assert "Let me check that." in delivered
 
 
+async def test_progress_observer_speaks_when_the_answer_was_only_reasoning():
+    """A model that writes `<think>` and stops must not end the turn in silence.
+
+    Seen live on Slack: the model emitted an unclosed thinking block and no
+    answer, stripping correctly reduced it to "", and the run completed having
+    sent nothing — the placeholder was even deleted. The person cannot tell
+    that from being ignored, so they ask again into the same silence.
+    """
+    service = _SurfaceService()
+    observer = _observer(service)
+    conversation = SimpleNamespace(id=uuid4(), metadata={"surface_platform": "SLACK"})
+
+    # Unclosed on purpose: this is what the model actually sent.
+    open_tag = chr(60) + "think" + chr(62)
+    raw_text = f"{open_tag}\nUser asks what I can do. Keep it short."
+
+    await observer.on_event(
+        _assistant(MessageDraft.of_text(raw_text)),
+        conversation,
+        SimpleNamespace(),
+    )
+    await observer.on_run_finished(conversation, SimpleNamespace())
+
+    assert len(service.messages) == 1, "the turn must not end in silence"
+    delivered = service.messages[0]["message"]
+    assert "think" not in delivered.lower()
+    assert "User asks what I can do" not in delivered
+
+
+async def test_progress_observer_stays_quiet_when_there_was_no_answer_at_all():
+    """The counterpart: nothing written is not the same as an answer lost.
+
+    A run that produced no assistant text has nothing to apologise for — tool
+    output and reply tools deliver on their own paths — so the fallback above
+    must not fire and add a spurious message.
+    """
+    service = _SurfaceService()
+    observer = _observer(service)
+    conversation = SimpleNamespace(id=uuid4(), metadata={"surface_platform": "SLACK"})
+
+    await observer.on_run_finished(conversation, SimpleNamespace())
+
+    assert service.messages == []
+
+
 async def test_progress_observer_strips_thinking_tags_and_resets_on_tool():
     """Inline thinking tags in intermediate narration are stripped, and the
     pre-tool narration is still discarded when a tool runs."""

@@ -55,6 +55,7 @@ from app.modules.agent_surfaces.tests.e2e.mock_infrastructure import (
     build_telegram_secret_headers,
     build_whatsapp_signature_headers,
     wait_for_messages,
+    wait_for_slack_text,
 )
 from app.modules.agent_surfaces.tests.e2e.scripted_llm import (
     process_ingress_and_run_scripted,
@@ -249,8 +250,12 @@ async def test_ask_user_native_slack_blocks_then_resumes_with_answer(
         agent_name=context.agent_name,
     )
 
-    slack_messages = await wait_for_messages(message_store, "SLACK", min_count=2)
-    assert "Thanks — recorded your answer." in slack_messages[-1]["text"]
+    delivered = await wait_for_slack_text(
+        message_store, "Thanks — recorded your answer."
+    )
+    assert any("Thanks — recorded your answer." in text for text in delivered), (
+        f"the resumed run never reached Slack: {delivered}"
+    )
 
     # Proof the mechanism gives that the old fake harness never could: the REAL
     # AskUserResponse shape flowed through persisted history.
@@ -326,8 +331,11 @@ async def test_ask_user_slack_native_failure_falls_back_to_text_and_typed_reply(
     assert isinstance(context, SurfaceChatContext)
     failed = message_store.get_all("SLACK_FAILED")
     assert failed[-1]["error"] == "invalid_blocks"
-    fallback_messages = await wait_for_messages(message_store, "SLACK", min_count=1)
-    fallback = fallback_messages[-1]["text"]
+    # Every question and the multi-select hint have to survive the degrade —
+    # in the body, which is the markdown block; `text` is only the
+    # notification preview and is truncated.
+    delivered = await wait_for_slack_text(message_store, "1. Which incident priorities")
+    fallback = "\n".join(delivered)
     assert "1. Which incident priorities" in fallback
     assert "Critical — Page the on-call engineer immediately. (recommended)" in fallback
     assert "2. Which response channel" in fallback
@@ -346,8 +354,12 @@ async def test_ask_user_slack_native_failure_falls_back_to_text_and_typed_reply(
     )
     assert isinstance(resumed, SurfaceChatContext)
 
-    slack_messages = await wait_for_messages(message_store, "SLACK", min_count=2)
-    assert slack_messages[-1]["text"] == "Incident notification preferences saved."
+    delivered = await wait_for_slack_text(
+        message_store, "Incident notification preferences saved."
+    )
+    assert any(
+        "Incident notification preferences saved." in text for text in delivered
+    ), f"the typed answer never resumed the run: {delivered}"
     messages = await _messages_for_conversation(
         authenticated_client,
         pod_id=pod_id,

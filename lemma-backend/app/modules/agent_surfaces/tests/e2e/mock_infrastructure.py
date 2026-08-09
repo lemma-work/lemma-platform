@@ -44,15 +44,31 @@ class MockPlatformMessageStore:
 
     def __init__(self) -> None:
         self._messages: dict[str, list[dict]] = {}
+        # One reply can reach a platform by more than one call — Slack posts a
+        # plain message but streams an answer — so "what did the user see, and
+        # in what order?" cannot be answered from a single bucket. The arrival
+        # log keeps that order across buckets.
+        self._arrivals: list[tuple[str, dict]] = []
 
     def add(self, platform: str, message: dict) -> None:
         self._messages.setdefault(platform, []).append(message)
+        self._arrivals.append((platform, message))
 
     def get_all(self, platform: str) -> list[dict]:
         return list(self._messages.get(platform, []))
 
+    def get_ordered(self, *platforms: str) -> list[tuple[str, dict]]:
+        """Messages across the given buckets, in the order they arrived."""
+        wanted = set(platforms)
+        return [
+            (platform, message)
+            for platform, message in self._arrivals
+            if not wanted or platform in wanted
+        ]
+
     def clear(self) -> None:
         self._messages.clear()
+        self._arrivals.clear()
 
 
 class FakeComposioServer:
@@ -1291,6 +1307,51 @@ def build_resend_svix_headers(
         "svix-signature": f"v1,{signature}",
         "Content-Type": "application/json",
     }
+
+
+def slack_delivered(store: MockPlatformMessageStore) -> list[str]:
+    """Every user-visible string Slack was asked to show, in arrival order.
+
+    Slack carries a reply three ways now, and all three moved under these
+    tests at least once: ``chat.postMessage`` text, the markdown ``blocks`` of
+    that same message (the body lives there, and ``text`` is only the
+    notification preview), and ``chat.appendStream`` chunks when the answer
+    closes the live stream opened at run start. Reading any single one of them
+    reports "nothing was delivered" for a reply the user can see perfectly
+    well. One entry per message, so counting entries counts replies rather
+    than the fields a reply happens to occupy.
+    """
+    delivered: list[str] = []
+    for platform, message in store.get_ordered("SLACK", "SLACK_STREAM_APPEND"):
+        if platform == "SLACK":
+            parts = [message.get("text"), message.get("blocks")]
+        else:
+            parts = [message.get("chunks")]
+        joined = "\n".join(str(part) for part in parts if part)
+        if joined:
+            delivered.append(joined)
+    return delivered
+
+
+async def wait_for_slack_text(
+    store: MockPlatformMessageStore,
+    needle: str,
+    timeout_seconds: float = 30.0,
+) -> list[str]:
+    """Wait until ``needle`` reaches Slack by any transport; return all of it.
+
+    Waiting on one bucket is what made these tests flaky-looking: the prompt
+    lands as a posted message immediately, so a wait on posted messages
+    returns straight away and the assertion runs before the streamed answer
+    has arrived.
+    """
+    deadline = asyncio.get_running_loop().time() + timeout_seconds
+    while asyncio.get_running_loop().time() < deadline:
+        delivered = slack_delivered(store)
+        if any(needle in text for text in delivered):
+            return delivered
+        await asyncio.sleep(0.2)
+    return slack_delivered(store)
 
 
 async def wait_for_messages(

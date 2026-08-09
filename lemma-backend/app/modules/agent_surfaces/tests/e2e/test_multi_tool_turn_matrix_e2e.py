@@ -37,7 +37,10 @@ from app.modules.agent_surfaces.tests.e2e.helpers import (
     _telegram_payload,
     _whatsapp_payload,
 )
-from app.modules.agent_surfaces.tests.e2e.mock_infrastructure import wait_for_messages
+from app.modules.agent_surfaces.tests.e2e.mock_infrastructure import (
+    wait_for_messages,
+    wait_for_slack_text,
+)
 from app.modules.agent_surfaces.tests.e2e.scripted_llm import (
     process_ingress_and_run_scripted,
     script_display_resource,
@@ -121,18 +124,22 @@ async def test_multi_tool_turn_slack_widget_then_say_then_one_final_answer(
     )
 
     # Widget landed before the voice note, which landed before the final
-    # answer — three distinct SLACK messages, in that order.
-    slack_messages = await wait_for_messages(message_store, "SLACK", min_count=1)
-    widget_index = next(
-        i for i, m in enumerate(slack_messages) if "blocks" in m or "attachments" in m
-    )
+    # answer. The widget is posted and the answer is streamed, so "in that
+    # order" spans two Slack APIs — hence arrival order, not one bucket's index.
+    delivered = await wait_for_slack_text(message_store, "All done.")
     uploads = await wait_for_messages(
         message_store, "SLACK_FILE_UPLOAD_URL", min_count=1
     )
     assert uploads
-    final_texts = [m for m in slack_messages if m.get("text") == "All done."]
-    assert len(final_texts) == 1, "final answer must be delivered exactly once"
-    assert slack_messages.index(final_texts[0]) > widget_index
+    finals = [i for i, text in enumerate(delivered) if "All done." in text]
+    assert len(finals) == 1, (
+        f"final answer must be delivered exactly once, got {len(finals)} "
+        f"in {delivered}"
+    )
+    widget_index = next(
+        i for i, text in enumerate(delivered) if "A widget is ready." in text
+    )
+    assert finals[0] > widget_index
 
 
 async def test_multi_tool_turn_teams_two_widgets_then_one_final_answer(
