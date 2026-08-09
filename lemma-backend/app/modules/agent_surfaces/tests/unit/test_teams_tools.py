@@ -353,10 +353,12 @@ async def test_teams_get_recent_thread_messages_include_files(
 
 
 def test_teams_download_helper_classifies_urls_and_credentials():
+    from app.modules.agent_surfaces.platforms.teams.attachment_urls import (
+        is_raw_sharepoint_document_url as _is_raw_sharepoint_document_url,
+        looks_like_bot_attachment_url as _looks_like_bot_attachment_url,
+        split_sharepoint_site_and_item_path as _split_sharepoint_site_and_item_path,
+    )
     from app.modules.agent_surfaces.platforms.teams.service import (
-        _is_raw_sharepoint_document_url,
-        _looks_like_bot_attachment_url,
-        _split_sharepoint_site_and_item_path,
         _tenant_id_from_credentials,
     )
 
@@ -371,8 +373,24 @@ def test_teams_download_helper_classifies_urls_and_credentials():
     assert _looks_like_bot_attachment_url(
         "https://smba.trafficmanager.net/amer/v3/attachments/abc/views/original"
     )
+    # The path alone must never qualify a host: `download_url` comes from an
+    # inbound message or an agent tool call, and this branch is what hands over
+    # the bot token.
+    assert not _looks_like_bot_attachment_url("https://attacker.test/v3/attachments/x")
+    assert not _looks_like_bot_attachment_url(
+        "https://trafficmanager.net.attacker.test/v3/attachments/x"
+    )
+    assert not _looks_like_bot_attachment_url(
+        "https://smba.trafficmanager.net/amer/unrelated"
+    )
+    assert _looks_like_bot_attachment_url(
+        "http://127.0.0.1:8080/teams/v3/attachments/abc", extra_host="127.0.0.1"
+    )
     assert _is_raw_sharepoint_document_url(
         "https://example.sharepoint.com/sites/Eng/Shared%20Documents/report.docx"
+    )
+    assert not _is_raw_sharepoint_document_url(
+        "https://sharepoint.com.attacker.test/sites/Eng/Shared%20Documents/r.docx"
     )
     assert _split_sharepoint_site_and_item_path(
         "/sites/Eng/Shared Documents/report.docx"
@@ -408,3 +426,114 @@ async def test_teams_download_attachment_returns_none_without_tokens(monkeypatch
     )
 
     assert result is None
+
+
+class _DownloadResponse:
+    def __init__(self, status: int, headers=None, body: bytes = b""):
+        self.status = status
+        self.headers = headers or {}
+        self._body = body
+
+    async def read(self) -> bytes:
+        return self._body
+
+    async def text(self) -> str:
+        return self._body.decode()
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+
+class _RecordingSession:
+    """Records each request so a test can assert what the credential saw."""
+
+    def __init__(self, responses):
+        self._responses = list(responses)
+        self.calls: list[dict] = []
+
+    def get(self, url, headers=None, allow_redirects=True):
+        self.calls.append(
+            {
+                "url": url,
+                "headers": dict(headers or {}),
+                "allow_redirects": allow_redirects,
+            }
+        )
+        return self._responses.pop(0)
+
+
+@pytest.mark.asyncio
+async def test_teams_download_refuses_bot_token_for_untrusted_host(monkeypatch):
+    """An attacker-chosen host must not be handed the tenant-wide bot token."""
+    from app.modules.agent_surfaces.platforms.teams.service import TeamsPlatformService
+
+    get_bot_token = AsyncMock(return_value="bot-secret")
+    monkeypatch.setattr(
+        "app.modules.agent_surfaces.platforms.teams.client.get_bot_token",
+        get_bot_token,
+    )
+    service = TeamsPlatformService(credentials={})
+
+    plan = await service._resolve_download_plan(
+        session=_RecordingSession([]),
+        tenant_id=None,
+        download_url="https://attacker.test/v3/attachments/x",
+        content_type="text/plain",
+    )
+
+    assert plan is None
+    get_bot_token.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_teams_download_still_uses_bot_token_for_real_attachment_host(monkeypatch):
+    from app.modules.agent_surfaces.platforms.teams.service import TeamsPlatformService
+
+    monkeypatch.setattr(
+        "app.modules.agent_surfaces.platforms.teams.client.get_bot_token",
+        AsyncMock(return_value="bot-secret"),
+    )
+    service = TeamsPlatformService(credentials={})
+
+    plan = await service._resolve_download_plan(
+        session=_RecordingSession([]),
+        tenant_id=None,
+        download_url="https://smba.trafficmanager.net/amer/v3/attachments/abc",
+        content_type="text/plain",
+    )
+
+    assert plan == {
+        "mode": "bot",
+        "url": "https://smba.trafficmanager.net/amer/v3/attachments/abc",
+        "headers": {"Authorization": "Bearer bot-secret"},
+    }
+
+
+@pytest.mark.asyncio
+async def test_teams_download_drops_credential_across_redirect():
+    """Graph redirects `/content` to a pre-signed URL; the token must not follow."""
+    from app.modules.agent_surfaces.platforms.teams.service import TeamsPlatformService
+
+    service = TeamsPlatformService(credentials={})
+    session = _RecordingSession(
+        [
+            _DownloadResponse(302, {"Location": "https://cdn.attacker.test/blob"}),
+            _DownloadResponse(200, body=b"payload"),
+        ]
+    )
+
+    content = await service._fetch_content(
+        session=session,
+        url="https://graph.microsoft.com/v1.0/drives/d/items/i/content",
+        headers={"Authorization": "Bearer graph-token"},
+        mode="graph",
+    )
+
+    assert content == b"payload"
+    assert session.calls[0]["headers"]["Authorization"] == "Bearer graph-token"
+    assert session.calls[1]["url"] == "https://cdn.attacker.test/blob"
+    assert "Authorization" not in session.calls[1]["headers"]
+    assert all(call["allow_redirects"] is False for call in session.calls)

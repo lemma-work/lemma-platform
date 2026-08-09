@@ -998,6 +998,7 @@ async def test_teams_channel_mention_ingests_attachment_and_channel_context(
         credentials={
             "access_token": "teams-account-token",
             "graph_api_base_url": fake_teams.graph_base_url,
+            "bot_service_base_url": fake_teams.service_url,
             "user_data": {"tenant_id": tenant_id},
         },
     )

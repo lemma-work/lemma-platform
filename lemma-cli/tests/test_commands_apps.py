@@ -168,3 +168,38 @@ def test_apps_init_writes_server_binding(tmp_path, monkeypatch):
     assert binding.exists()
     assert "LEMMA_POD_ID=pod-abc" in binding.read_text(encoding="utf-8")
     assert "LEMMA_SERVER=lemma-cloud" in (target / ".lemma.env").read_text(encoding="utf-8")
+
+
+def test_apps_open_never_puts_the_token_in_argv(monkeypatch):
+    """argv is world-readable on Linux and is captured by execve auditing.
+
+    A bearer token passed as a command-line argument is therefore readable by
+    any other local user while the call runs, and afterwards in the audit log.
+    """
+    secret = "SECRET-SESSION-TOKEN"
+    calls: list[dict] = []
+
+    def fake_run(command, **kwargs):
+        calls.append({"command": command, "input": kwargs.get("input", "")})
+        return SimpleNamespace(returncode=0, stdout="[]", stderr="")
+
+    monkeypatch.setattr(apps.shutil, "which", lambda _name: "/usr/local/bin/agent-browser")
+    monkeypatch.setattr(apps.subprocess, "run", fake_run)
+    monkeypatch.setattr(apps, "resolve_token", lambda *a, **k: secret)
+    monkeypatch.setattr(apps, "resolve_base_url", lambda *a, **k: "https://api.example.com")
+    monkeypatch.setattr(apps, "resolve_auth_url", lambda *a, **k: "https://auth.example.com")
+
+    client, _ = _make_client_and_captured()
+    _patch(monkeypatch, client)
+
+    result = runner.invoke(
+        app, ["--pod", "pod-1", "apps", "open", "--url", "https://app.example.com"]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert calls, "agent-browser was never invoked"
+    for call in calls:
+        assert secret not in " ".join(call["command"]), call["command"]
+    # It still reaches the browser -- over stdin, where the process table
+    # cannot see it.
+    assert any(secret in call["input"] for call in calls)

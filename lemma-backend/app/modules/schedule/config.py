@@ -28,7 +28,11 @@ class ScheduleSettings(BaseSettings):
     )
     scheduler_internal_token: SecretStr | None = Field(
         default=None,
-        description="Optional bearer token shared with the scheduler sidecar.",
+        description=(
+            "Bearer token shared with the scheduler sidecar. Required when the "
+            "scheduler runs as its own service; the single-process assembly "
+            "mints one at startup when it is unset."
+        ),
     )
 
 

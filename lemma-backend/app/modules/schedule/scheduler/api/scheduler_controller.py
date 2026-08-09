@@ -16,10 +16,9 @@ from app.modules.schedule.scheduler.api.schemas import (
     JobListResponse,
     JobStatusResponse,
 )
-from app.core.config import reveal_secret
 from app.core.log.log import get_logger
-from app.modules.schedule.config import schedule_settings
 from app.modules.schedule.domain.errors import ScheduleDomainError
+from app.modules.schedule.scheduler.internal_auth import get_internal_token
 
 logger = get_logger(__name__)
 
@@ -30,13 +29,19 @@ async def require_scheduler_token(
     """Service-to-service auth for the scheduler sidecar's job API.
 
     The sidecar is an internal singleton reached only by the backend's
-    ``SchedulerAPIClient``. When ``scheduler_internal_token`` is configured the
-    caller must present it as a bearer token; when it is unset (e.g. local
-    single-process dev) the check is skipped so nothing breaks out of the box.
+    ``SchedulerAPIClient``, and this check is the only thing standing in front
+    of it — the job API is excluded from the session middleware. An unset token
+    therefore has to deny rather than wave callers through: the single-process
+    assembly mints one at startup, so reaching here without a token configured
+    means a split deployment that was never given one.
     """
-    expected = reveal_secret(schedule_settings.scheduler_internal_token)
+    expected = get_internal_token()
     if not expected:
-        return
+        logger.error("schedule.scheduler_controller.internal_token_missing.degraded")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Scheduler API is not configured for authenticated access",
+        )
 
     provided: str | None = None
     if authorization and authorization.lower().startswith("bearer "):
