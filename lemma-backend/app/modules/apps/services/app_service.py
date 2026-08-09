@@ -517,6 +517,14 @@ class AppService:
         app = await self.repository.get_by_public_slug(public_slug)
         if not app:
             raise AppNotFoundError(f"App with public slug '{public_slug}' not found")
+        # No session reaches this route -- the ingress serves it to anonymous
+        # browsers by host -- so only an app published to everyone belongs here.
+        # Apps default to POD, which made the default "exposed to anyone who
+        # guesses the slug". An unrecognized stored value is not PUBLIC either.
+        # Report it as missing rather than forbidden: a 403 would confirm the
+        # slug exists to a caller who only guessed it.
+        if normalize_resource_visibility(app.visibility) is not ResourceVisibility.PUBLIC:
+            raise AppNotFoundError(f"App with public slug '{public_slug}' not found")
         return await self._asset_resolver.resolve(
             app,
             raise_not_found_name=public_slug,

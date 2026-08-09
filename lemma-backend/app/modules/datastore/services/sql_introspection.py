@@ -27,6 +27,17 @@ _FORBIDDEN_NODES: tuple[type[exp.Expression], ...] = (
     exp.Command,
 )
 
+# Functions that change session state. `SET` as a statement is already blocked
+# by ``exp.Command``, but ``set_config()`` is an ordinary function call and so
+# rides along inside an otherwise read-only SELECT. That matters because RLS is
+# enforced through GUCs (``app.current_user_id``,
+# ``app.current_user_is_pod_admin``) which any session role may overwrite: put
+# the call in a MATERIALIZED CTE and it runs before the outer scan, so the query
+# reads every user's rows. Revoking the parameters at the database level does
+# not help -- PostgreSQL keeps no ACL for customized options, so
+# ``REVOKE SET ON PARAMETER app.foo`` silently leaves the placeholder settable.
+_FORBIDDEN_FUNCTIONS = frozenset({"set_config"})
+
 # Read-only statement roots permitted as the top-level expression.
 _ALLOWED_ROOTS: tuple[type[exp.Expression], ...] = (
     exp.Select,
@@ -79,6 +90,20 @@ def analyze_query(sql: str) -> QueryAnalysis:
 
     if not isinstance(statement, _ALLOWED_ROOTS) or statement.find(*_FORBIDDEN_NODES):
         raise DatastoreQueryError("Only read-only SELECT queries are allowed")
+
+    for function in statement.find_all(exp.Func):
+        # sqlglot parses functions it does not model -- `set_config` among them
+        # -- as `Anonymous`, whose name is the function name. Named nodes report
+        # theirs through `sql_name()`; a schema qualifier does not change either.
+        name = (
+            function.name
+            if isinstance(function, exp.Anonymous)
+            else function.sql_name()
+        )
+        if name.lower() in _FORBIDDEN_FUNCTIONS:
+            raise DatastoreQueryError(
+                f"{name}() is not allowed in datastore queries"
+            )
 
     cte_aliases = {cte.alias for cte in statement.find_all(exp.CTE) if cte.alias}
 

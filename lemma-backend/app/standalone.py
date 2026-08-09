@@ -18,6 +18,7 @@ from fastapi import FastAPI
 from app.modules.schedule.scheduler.api.scheduler_controller import (
     router as scheduler_router,
 )
+from app.modules.schedule.scheduler.internal_auth import ensure_internal_token
 from app.modules.schedule.scheduler.scheduler_service import get_scheduler_service
 
 
@@ -92,17 +93,20 @@ def build_standalone_app(
 
     api_app.router.lifespan_context = standalone_lifespan
 
-    app_dependencies = api_app.router.dependencies
-    api_app.router.dependencies = []
-    try:
-        api_app.include_router(scheduler_router)
-        api_app.add_api_route(
-            "/scheduler/health",
-            scheduler_health_check,
-            methods=["GET"],
-            include_in_schema=False,
-        )
-    finally:
-        api_app.router.dependencies = app_dependencies
+    # Here the backend and the job API share a process, so a token minted now
+    # is one both sides can use and the operator has nothing to configure.
+    ensure_internal_token()
+
+    # The job API carries its own service-token dependency and is listed in
+    # `EXCLUDED_PATHS`, so the session dependency does not apply to it. It is
+    # kept out of the schema because it is an internal control plane and
+    # `/openapi.json` is served unauthenticated.
+    api_app.include_router(scheduler_router, include_in_schema=False)
+    api_app.add_api_route(
+        "/scheduler/health",
+        scheduler_health_check,
+        methods=["GET"],
+        include_in_schema=False,
+    )
 
     return api_app

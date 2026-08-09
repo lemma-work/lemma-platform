@@ -234,6 +234,7 @@ async def test_public_agent_runs_platform_context_tools_through_real_worker(
         credentials={
             "access_token": "teams-surface-tools",
             "graph_api_base_url": fake_teams.graph_base_url,
+            "bot_service_base_url": fake_teams.service_url,
             "user_data": {"tenant_id": REAL_TEAMS_TENANT_ID},
         },
     )

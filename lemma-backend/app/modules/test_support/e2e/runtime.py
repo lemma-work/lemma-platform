@@ -22,6 +22,7 @@ import uvicorn
 from app.core.config import settings
 from app.modules.workspace.config import workspace_settings
 from app.modules.schedule.config import schedule_settings
+from app.modules.schedule.scheduler.internal_auth import ensure_internal_token
 from app.modules.agent.tests.e2e.system_lemma_helpers import (
     skip_unless_system_lemma,
     system_lemma_api_key,
@@ -643,6 +644,11 @@ async def scheduler_api_server(
     original_scheduler_env = os.environ.get("SCHEDULER_API_URL")
     schedule_settings.scheduler_api_url = f"http://127.0.0.1:{port}"
     os.environ["SCHEDULER_API_URL"] = schedule_settings.scheduler_api_url
+    # The job API refuses to serve without a service token. Server and client
+    # share this process, so minting one here is what the single-process
+    # standalone assembly does too.
+    original_scheduler_token = schedule_settings.scheduler_internal_token
+    ensure_internal_token()
 
     config = uvicorn.Config(
         app=scheduler_app,
@@ -678,6 +684,7 @@ async def scheduler_api_server(
             with contextlib.suppress(asyncio.CancelledError):
                 await server_task
         schedule_settings.scheduler_api_url = original_scheduler_url
+        schedule_settings.scheduler_internal_token = original_scheduler_token
         if original_scheduler_env is None:
             os.environ.pop("SCHEDULER_API_URL", None)
         else:

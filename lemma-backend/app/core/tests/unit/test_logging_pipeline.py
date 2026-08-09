@@ -368,6 +368,46 @@ def test_repeated_faststream_errors_are_not_hidden_and_keep_correlation(
     assert all(record["correlation_id"] == str(correlation_id) for record in records)
 
 
+def test_level_survives_a_foreign_handler_rewriting_levelname(
+    captured_stdout,
+) -> None:
+    """A handler that formats a record before ours must not corrupt `level`.
+
+    FastStream's colourising formatter rewrites `record.levelname` in place with
+    an ANSI-wrapped, padded copy, and anything reading the *name* afterwards
+    inherits the escape codes. `level` therefore comes from `levelno`. Without
+    that, this record lands with a level of "\\u001b[31merror\\u001b[0m   " and
+    every consumer filtering by level silently stops matching it.
+
+    This is also what made the repeated-errors test above order-dependent: the
+    mutating handler only survives on the logger when an earlier test leaves one
+    attached, so the corruption appeared and vanished with collection order.
+    """
+    setup_logging(
+        "production",
+        service_name="lemma-worker",
+        json_logs=True,
+        log_level="INFO",
+    )
+    coloured_error = "\x1b[31mERROR\x1b[0m   "
+
+    class _RewritesLevelName(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            record.levelname = coloured_error
+
+    dependency_logger = get_dependency_logger("faststream.redis")
+    mutating_handler = _RewritesLevelName()
+    dependency_logger.addHandler(mutating_handler)
+    try:
+        dependency_logger.error("consumer failed")
+    finally:
+        dependency_logger.removeHandler(mutating_handler)
+
+    records = captured_stdout()
+    assert len(records) == 1
+    assert records[0]["level"] == "error"
+
+
 def test_uvicorn_access_records_follow_configured_debug_level(
     captured_stdout,
 ) -> None:

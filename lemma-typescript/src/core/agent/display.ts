@@ -835,9 +835,16 @@ function normalizePlanStatus(rawStatus: unknown): PlanStatus {
 
 const PLAN_XML_TAG_PATTERN =
   /<\/?\s*(?:todos?|item)\b[^>]*>|<\/\s*td\s*>(?=\s*(?:<\s*(?:item|\/?todos?)\b|$))/gi;
-const DUPLICATE_CHECKBOX_PREFIX_PATTERN = /^\s*(?:(?:[-*]\s*)?\[[ xX*~-]\]\s*){2,}/;
+// Whitespace is matched at the *start* of each repetition, where a checkbox has
+// to follow it, rather than trailing the group where it competes with the next
+// repetition for the same spaces. Same strings, without the quadratic cost of
+// re-splitting a long run of spaces once the second checkbox fails to appear.
+const DUPLICATE_CHECKBOX_PREFIX_PATTERN = /^(?:\s*(?:[-*]\s*)?\[[ xX*~-]\]){2,}\s*/;
+// `(.*?)\s+` let both halves match the same spaces. Requiring the step to end on
+// a non-space settles who owns them. Applied to input already trimmed at the
+// end, which is what the old trailing `\s*$` was for.
 const TEXT_PLAN_STATUS_PATTERN =
-  /^(.*?)\s+(?:([-—:])\s*)?(done|complete|completed|in[\s_-]*progress|pending|todo)\s*$/i;
+  /^((?:.*?\S)?)\s+(?:([-—:])\s*)?(done|complete|completed|in[\s_-]*progress|pending|todo)$/i;
 
 function planStatusFromMark(mark: string): PlanStatus {
   const normalized = mark.toLowerCase();
@@ -860,7 +867,7 @@ function parseTextPlanStatus(
     inferStatus: boolean;
   },
 ): { step: string; status?: PlanStatus } {
-  const match = TEXT_PLAN_STATUS_PATTERN.exec(text);
+  const match = TEXT_PLAN_STATUS_PATTERN.exec(text.trimEnd());
   if (!match) return { step: text };
   const hasExplicitSeparator = Boolean(match[2]);
   const isUppercaseLabel = text === text.toUpperCase();
@@ -878,7 +885,12 @@ function parseTextPlanStatus(
 
 function parsePlanTextStep(entry: string, inferTextStatus = false): PlanStepState | null {
   const normalizedEntry = stripDuplicatePlanCheckboxPrefix(entry);
-  const match = /^\s*[-*]?\s*\[([ xX*~-])\]\s*(.*)$/.exec(normalizedEntry);
+  // `\s*[-*]?\s*` gave two runs of optional whitespace either side of an
+  // optional bullet, so a line of spaces could be split between them countless
+  // ways. Binding the whitespace to the bullet leaves one reading. The trailing
+  // `\s*` is gone for the same reason -- it and `(.*)` competed for the spaces
+  // after the checkbox -- and the capture is trimmed below regardless.
+  const match = /^\s*(?:[-*]\s*)?\[([ xX*~-])\](.*)$/.exec(normalizedEntry);
   if (match) {
     const textStatus = parseTextPlanStatus(match[2].trim(), {
       inferStatus: inferTextStatus,
@@ -1134,7 +1146,13 @@ export {
 // --- markdown ---------------------------------------------------------------
 
 /** A GFM delimiter row on a line of its own — `| --- | :---: |`, `|---|---|`. */
-const TABLE_DELIMITER_ROW_PATTERN = /^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)*\|?\s*$/;
+// Every run of whitespace here leads into a token that must follow it, so no two
+// parts of the pattern compete for the same spaces. The previous spelling had
+// optional whitespace on both sides of each optional pipe, which is what made a
+// line of tabs take quadratic time to reject. `[ \t]` rather than `\s` because
+// this matches within one line.
+const TABLE_DELIMITER_ROW_PATTERN =
+  /^[ \t]*(?:\|[ \t]*)?:?-{3,}:?(?:[ \t]*\|[ \t]*:?-{3,}:?)*(?:[ \t]*\|)?[ \t]*$/;
 
 /**
  * Unpack one squashed line: a ` --- ` separator into a paragraph break, and
@@ -1149,11 +1167,18 @@ const TABLE_DELIMITER_ROW_PATTERN = /^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)
 function repairCompactLine(line: string): string {
   if (TABLE_DELIMITER_ROW_PATTERN.test(line)) return line;
 
+  // The lookahead and the run it follows used to be able to claim the same
+  // spaces, and the last pattern nested optional whitespace inside a repeated
+  // group. Both are spelled here so each stretch of whitespace has exactly one
+  // owner; the strings they match are unchanged.
   return line
     .replace(/[ \t]+---[ \t]+/g, "\n\n")
     .replace(/\|\s+\|/g, "|\n|")
-    .replace(/\|\s+(?=\|?\s*:?-{3,})/g, "|\n")
-    .replace(/(\|\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|)\s+/g, "$1\n");
+    .replace(/\|[ \t]+(?=\|[ \t]*:?-{3,}|:?-{3,})/g, "|\n")
+    .replace(
+      /(\|[ \t]*:?-{3,}:?(?:[ \t]*\|[ \t]*:?-{3,}:?)+[ \t]*\|)[ \t]+/g,
+      "$1\n",
+    );
 }
 
 /** Normalize compact/streamed assistant markdown for display (fixes table
