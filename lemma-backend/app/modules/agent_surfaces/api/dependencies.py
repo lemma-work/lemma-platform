@@ -15,6 +15,9 @@ from app.modules.agent_surfaces.infrastructure.adapters.account_adapter import (
 from app.modules.agent_surfaces.infrastructure.adapters.account_binding import (
     SurfaceAccountBindingResolver,
 )
+from app.modules.agent_surfaces.infrastructure.adapters.connection_owner_adapter import (
+    SqlAlchemySurfaceConnectionOwnerAdapter,
+)
 from app.modules.agent_surfaces.infrastructure.adapters.routing_resolution_adapter import (
     SqlAlchemySurfaceRoutingResolutionAdapter,
 )
@@ -45,6 +48,9 @@ from app.modules.agent_surfaces.services.surface_service import (
 )
 from app.modules.agent_surfaces.services.credential_resolver import (
     SurfaceCredentialResolver,
+)
+from app.modules.agent_surfaces.services.surface_connection_resolver import (
+    SurfaceConnectionResolver,
 )
 from app.modules.agent_surfaces.services.user_surfaces_service import (
     UserSurfacesService,
@@ -77,6 +83,13 @@ def get_surface_service(uow: UoWDep) -> AgentSurfaceService:
             session=uow.session,
             connector_service=get_connector_service(uow),
         ),
+    )
+
+
+def get_surface_connection_resolver(uow: UoWDep) -> SurfaceConnectionResolver:
+    return SurfaceConnectionResolver(
+        account_port=SqlAlchemySurfaceAccountAdapter(uow),
+        owner_port=SqlAlchemySurfaceConnectionOwnerAdapter(uow),
     )
 
 
@@ -137,6 +150,9 @@ def get_telegram_manager_service(
 
 
 SurfaceServiceDep = Annotated[AgentSurfaceService, Depends(get_surface_service)]
+SurfaceConnectionResolverDep = Annotated[
+    SurfaceConnectionResolver, Depends(get_surface_connection_resolver)
+]
 UserSurfacesServiceDep = Annotated[
     UserSurfacesService, Depends(get_user_surfaces_service)
 ]

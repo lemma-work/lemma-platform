@@ -860,6 +860,8 @@ async def test_org_domain_slug_availability_and_suggestions(
     assert available_before_resp.json() == {
         "slug": "acme-auto-join",
         "available": True,
+        "name": None,
+        "name_available": None,
     }
 
     create_org_resp = await async_client.post(
@@ -897,6 +899,27 @@ async def test_org_domain_slug_availability_and_suggestions(
     )
     assert available_after_resp.status_code == 200
     assert available_after_resp.json()["available"] is False
+
+    # Names are globally unique too, so the probe has to answer for the name a
+    # caller actually intends to create under — not just its slug.
+    name_taken_resp = await async_client.get(
+        "/organizations/slug-availability",
+        headers=owner_headers,
+        params={"slug": "acme-auto-join", "name": "Acme Auto Join"},
+    )
+    assert name_taken_resp.status_code == 200
+    assert name_taken_resp.json()["name"] == "Acme Auto Join"
+    assert name_taken_resp.json()["name_available"] is False
+
+    free_name = f"Acme Renamed {uuid4().hex[:6]}"
+    name_free_resp = await async_client.get(
+        "/organizations/slug-availability",
+        headers=owner_headers,
+        params={"slug": free_name, "name": free_name},
+    )
+    assert name_free_resp.status_code == 200
+    assert name_free_resp.json()["available"] is True
+    assert name_free_resp.json()["name_available"] is True
 
     coworker_suggestions_resp = await async_client.get(
         "/organizations/suggested",
@@ -948,6 +971,22 @@ async def test_org_domain_slug_availability_and_suggestions(
     )
     assert gmail_org_resp.status_code == 201
     assert gmail_org_resp.json()["email_domain"] is None
+
+    # Every consumer provider, not just the handful the server used to know:
+    # claiming one of these would auto-join strangers who share a mail host.
+    for provider in ("yahoo.com", "icloud.com", "proton.me"):
+        provider_user = await signup_user(
+            email=f"personal-{uuid4().hex[:8]}@{provider}"
+        )
+        provider_resp = await async_client.post(
+            "/organizations",
+            headers=_auth_headers(provider_user["token"]),
+            json={
+                "name": f"Consumer {uuid4().hex[:8]}",
+                "join_policy": "EMAIL_DOMAIN",
+            },
+        )
+        assert provider_resp.status_code == 400, provider_resp.text
 
 
 @pytest.mark.asyncio

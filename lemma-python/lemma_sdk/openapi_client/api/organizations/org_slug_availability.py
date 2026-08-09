@@ -9,17 +9,25 @@ from ...models.error_response import ErrorResponse
 from ...models.organization_slug_availability_response import (
     OrganizationSlugAvailabilityResponse,
 )
-from ...types import UNSET, Response
+from ...types import UNSET, Response, Unset
 
 
 def _get_kwargs(
     *,
     slug: str,
+    name: None | str | Unset = UNSET,
 ) -> dict[str, Any]:
 
     params: dict[str, Any] = {}
 
     params["slug"] = slug
+
+    json_name: None | str | Unset
+    if isinstance(name, Unset):
+        json_name = UNSET
+    else:
+        json_name = name
+    params["name"] = json_name
 
     params = {k: v for k, v in params.items() if v is not UNSET and v is not None}
 
@@ -66,13 +74,16 @@ def sync_detailed(
     *,
     client: AuthenticatedClient | Client,
     slug: str,
+    name: None | str | Unset = UNSET,
 ) -> Response[ErrorResponse | OrganizationSlugAvailabilityResponse]:
     """Check Organization Slug Availability
 
-     Check whether an organization slug is available
+     Check whether an organization slug is available, and optionally whether a candidate name is still
+    free
 
     Args:
         slug (str):
+        name (None | str | Unset):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -84,6 +95,7 @@ def sync_detailed(
 
     kwargs = _get_kwargs(
         slug=slug,
+        name=name,
     )
 
     response = client.get_httpx_client().request(
@@ -97,13 +109,16 @@ def sync(
     *,
     client: AuthenticatedClient | Client,
     slug: str,
+    name: None | str | Unset = UNSET,
 ) -> ErrorResponse | OrganizationSlugAvailabilityResponse | None:
     """Check Organization Slug Availability
 
-     Check whether an organization slug is available
+     Check whether an organization slug is available, and optionally whether a candidate name is still
+    free
 
     Args:
         slug (str):
+        name (None | str | Unset):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -116,6 +131,7 @@ def sync(
     return sync_detailed(
         client=client,
         slug=slug,
+        name=name,
     ).parsed
 
 
@@ -123,13 +139,16 @@ async def asyncio_detailed(
     *,
     client: AuthenticatedClient | Client,
     slug: str,
+    name: None | str | Unset = UNSET,
 ) -> Response[ErrorResponse | OrganizationSlugAvailabilityResponse]:
     """Check Organization Slug Availability
 
-     Check whether an organization slug is available
+     Check whether an organization slug is available, and optionally whether a candidate name is still
+    free
 
     Args:
         slug (str):
+        name (None | str | Unset):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -141,6 +160,7 @@ async def asyncio_detailed(
 
     kwargs = _get_kwargs(
         slug=slug,
+        name=name,
     )
 
     response = await client.get_async_httpx_client().request(**kwargs)
@@ -152,13 +172,16 @@ async def asyncio(
     *,
     client: AuthenticatedClient | Client,
     slug: str,
+    name: None | str | Unset = UNSET,
 ) -> ErrorResponse | OrganizationSlugAvailabilityResponse | None:
     """Check Organization Slug Availability
 
-     Check whether an organization slug is available
+     Check whether an organization slug is available, and optionally whether a candidate name is still
+    free
 
     Args:
         slug (str):
+        name (None | str | Unset):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -172,5 +195,6 @@ async def asyncio(
         await asyncio_detailed(
             client=client,
             slug=slug,
+            name=name,
         )
     ).parsed

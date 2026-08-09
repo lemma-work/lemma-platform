@@ -2,6 +2,7 @@
 
 import { Plus, Trash2 } from '@/components/ui/icons';
 
+import { SurfaceConnectionRow } from '@/components/surfaces/surface-connection-row';
 import { SurfaceReachCard } from '@/components/surfaces/surface-reach-card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -51,6 +52,7 @@ export function SurfaceConfigureStep({
     availableChannels,
     isLoadingChannels,
     defaultRouteAgent = null,
+    onRebind,
 }: {
     definition: SurfacePlatformDefinition;
     surface: AssistantSurface;
@@ -59,6 +61,8 @@ export function SurfaceConfigureStep({
     onDraftChange: (patch: Partial<ConfigureDraft>) => void;
     availableChannels: AvailableChannel[];
     isLoadingChannels: boolean;
+    /** Re-runs the connect journey to bind this surface to another account. */
+    onRebind: () => void;
     /** Agent a newly added route answers as — the one whose page opened this.
      * `null` falls to the pod default, which is right for the pod assistant. */
     defaultRouteAgent?: string | null;
@@ -76,6 +80,8 @@ export function SurfaceConfigureStep({
     return (
         <div className="grid gap-4">
             <SurfaceReachCard surface={surface} />
+
+            <SurfaceConnectionRow surface={surface} onRebind={onRebind} />
 
             <div className="grid gap-2">
                 <label className="type-eyebrow-medium">Who answers here</label>

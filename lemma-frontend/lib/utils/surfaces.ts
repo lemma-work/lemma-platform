@@ -179,3 +179,66 @@ export function describeReach(surface: AssistantSurface, reachFor: string | null
     const parts = surfaceReaches(surface, reachFor).map((reach) => reach.label);
     return parts.join(' · ') || 'Routed here';
 }
+
+/**
+ * What a pod member can say about the account a surface runs on.
+ *
+ * Connected accounts are personal, so for everyone except their owner the
+ * account id resolves to nothing — this is the only place a teammate learns who
+ * to ask. `problem` states what stops it working (or will), and `canRebind` is
+ * true when pointing the surface at your own account is the repair.
+ */
+export interface SurfaceConnectionSummary {
+    /** The account's own label — `@acme_ops_bot`, a mailbox, a workspace. */
+    label: string | null;
+    attribution: string;
+    problem: string | null;
+    canRebind: boolean;
+}
+
+function connectionOwnerName(surface: AssistantSurface): string | null {
+    const owner = surface.connection?.connected_by;
+    if (!owner) return null;
+    return owner.name?.trim() || owner.email?.trim() || null;
+}
+
+export function describeConnection(surface: AssistantSurface): SurfaceConnectionSummary | null {
+    const connection = surface.connection;
+    // No connection means no account: the surface runs on Lemma's own bot, and
+    // there is nobody to name.
+    if (!connection) return null;
+
+    const owner = connection.connected_by;
+    const name = connectionOwnerName(surface);
+    const isYou = Boolean(owner?.is_you);
+    const ownerLeft = Boolean(owner) && !owner?.is_pod_member;
+
+    const attribution = isYou
+        ? 'Connected by you'
+        : name
+            ? `Connected by ${name}`
+            : 'Connected by someone outside this pod';
+
+    let problem: string | null = null;
+    if (connection.status === 'MISSING') {
+        problem = 'The account this ran on no longer exists.';
+    } else if (connection.status === 'REAUTH_REQUIRED' || connection.status === 'DISCONNECTED') {
+        problem = isYou
+            ? 'Your account needs reconnecting — nothing arrives until it does.'
+            : ownerLeft
+                ? `${name || 'Its owner'} has left this pod, so nobody here can reconnect it.`
+                : `Only ${name || 'its owner'} can reconnect it.`;
+    } else if (ownerLeft) {
+        // Not an outage: the credential still resolves off the account row, so
+        // it keeps working right up until it expires — and then nobody is left
+        // who can renew it. Say that now, while it is still cheap to fix.
+        problem = `${name || 'Its owner'} has left this pod. It works until the account expires.`;
+    }
+
+    return {
+        label: connection.display_name?.trim() || null,
+        attribution,
+        problem,
+        canRebind: problem !== null,
+    };
+}

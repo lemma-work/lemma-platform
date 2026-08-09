@@ -2,40 +2,47 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from typing import Any, TypeVar, cast
+from uuid import UUID
 
 from attrs import define as _attrs_define
 from attrs import field as _attrs_field
 
 from ..types import UNSET, Unset
 
-T = TypeVar("T", bound="OrganizationSlugAvailabilityResponse")
+T = TypeVar("T", bound="SurfaceConnectionOwner")
 
 
 @_attrs_define
-class OrganizationSlugAvailabilityResponse:
-    """Organization slug availability response.
+class SurfaceConnectionOwner:
+    """The person whose connected account backs a surface.
 
-    ``available`` answers only for the slug. When the caller also passes a
-    candidate name, ``name_available`` answers for the globally-unique name; a
-    create succeeds only when both are true.
-
-        Attributes:
-            available (bool):
-            slug (str):
-            name (None | str | Unset):
-            name_available (bool | None | Unset):
+    Attributes:
+        user_id (UUID):
+        email (None | str | Unset):
+        is_pod_member (bool | Unset):  Default: False.
+        is_you (bool | Unset):  Default: False.
+        name (None | str | Unset):
     """
 
-    available: bool
-    slug: str
+    user_id: UUID
+    email: None | str | Unset = UNSET
+    is_pod_member: bool | Unset = False
+    is_you: bool | Unset = False
     name: None | str | Unset = UNSET
-    name_available: bool | None | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
-        available = self.available
+        user_id = str(self.user_id)
 
-        slug = self.slug
+        email: None | str | Unset
+        if isinstance(self.email, Unset):
+            email = UNSET
+        else:
+            email = self.email
+
+        is_pod_member = self.is_pod_member
+
+        is_you = self.is_you
 
         name: None | str | Unset
         if isinstance(self.name, Unset):
@@ -43,33 +50,41 @@ class OrganizationSlugAvailabilityResponse:
         else:
             name = self.name
 
-        name_available: bool | None | Unset
-        if isinstance(self.name_available, Unset):
-            name_available = UNSET
-        else:
-            name_available = self.name_available
-
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update(
             {
-                "available": available,
-                "slug": slug,
+                "user_id": user_id,
             }
         )
+        if email is not UNSET:
+            field_dict["email"] = email
+        if is_pod_member is not UNSET:
+            field_dict["is_pod_member"] = is_pod_member
+        if is_you is not UNSET:
+            field_dict["is_you"] = is_you
         if name is not UNSET:
             field_dict["name"] = name
-        if name_available is not UNSET:
-            field_dict["name_available"] = name_available
 
         return field_dict
 
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
         d = dict(src_dict)
-        available = d.pop("available")
+        user_id = UUID(d.pop("user_id"))
 
-        slug = d.pop("slug")
+        def _parse_email(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        email = _parse_email(d.pop("email", UNSET))
+
+        is_pod_member = d.pop("is_pod_member", UNSET)
+
+        is_you = d.pop("is_you", UNSET)
 
         def _parse_name(data: object) -> None | str | Unset:
             if data is None:
@@ -80,24 +95,16 @@ class OrganizationSlugAvailabilityResponse:
 
         name = _parse_name(d.pop("name", UNSET))
 
-        def _parse_name_available(data: object) -> bool | None | Unset:
-            if data is None:
-                return data
-            if isinstance(data, Unset):
-                return data
-            return cast(bool | None | Unset, data)
-
-        name_available = _parse_name_available(d.pop("name_available", UNSET))
-
-        organization_slug_availability_response = cls(
-            available=available,
-            slug=slug,
+        surface_connection_owner = cls(
+            user_id=user_id,
+            email=email,
+            is_pod_member=is_pod_member,
+            is_you=is_you,
             name=name,
-            name_available=name_available,
         )
 
-        organization_slug_availability_response.additional_properties = d
-        return organization_slug_availability_response
+        surface_connection_owner.additional_properties = d
+        return surface_connection_owner
 
     @property
     def additional_keys(self) -> list[str]:

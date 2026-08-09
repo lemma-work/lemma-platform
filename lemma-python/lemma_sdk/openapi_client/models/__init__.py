@@ -403,6 +403,9 @@ _NAME_TO_MODULE = {
     'SurfaceConnectDescriptor': 'surface_connect_descriptor',
     'SurfaceConnectDescriptorAuthConfigSchemaType0': 'surface_connect_descriptor_auth_config_schema_type_0',
     'SurfaceConnectDescriptorCredentialSchemaType0': 'surface_connect_descriptor_credential_schema_type_0',
+    'SurfaceConnection': 'surface_connection',
+    'SurfaceConnectionOwner': 'surface_connection_owner',
+    'SurfaceConnectionStatus': 'surface_connection_status',
     'SurfaceConnectorSetupGuide': 'surface_connector_setup_guide',
     'SurfaceCreateRequest': 'surface_create_request',
     'SurfaceCredentialMode': 'surface_credential_mode',
@@ -905,6 +908,9 @@ if TYPE_CHECKING:
     from .surface_connect_descriptor import SurfaceConnectDescriptor
     from .surface_connect_descriptor_auth_config_schema_type_0 import SurfaceConnectDescriptorAuthConfigSchemaType0
     from .surface_connect_descriptor_credential_schema_type_0 import SurfaceConnectDescriptorCredentialSchemaType0
+    from .surface_connection import SurfaceConnection
+    from .surface_connection_owner import SurfaceConnectionOwner
+    from .surface_connection_status import SurfaceConnectionStatus
     from .surface_connector_setup_guide import SurfaceConnectorSetupGuide
     from .surface_create_request import SurfaceCreateRequest
     from .surface_credential_mode import SurfaceCredentialMode
@@ -1420,6 +1426,9 @@ __all__ = [
     'SurfaceConnectDescriptor',
     'SurfaceConnectDescriptorAuthConfigSchemaType0',
     'SurfaceConnectDescriptorCredentialSchemaType0',
+    'SurfaceConnection',
+    'SurfaceConnectionOwner',
+    'SurfaceConnectionStatus',
     'SurfaceConnectorSetupGuide',
     'SurfaceCreateRequest',
     'SurfaceCredentialMode',

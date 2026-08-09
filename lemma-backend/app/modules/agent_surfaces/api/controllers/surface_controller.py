@@ -13,6 +13,7 @@ from app.core.api.dependencies import UoWDep
 from app.core.api.pagination import parse_uuid_page_token
 from app.composition.surface_agent import AgentServiceDep
 from app.modules.agent_surfaces.api.dependencies import (
+    SurfaceConnectionResolverDep,
     SurfaceEventHandlerDep,
     get_surface_service,
 )
@@ -23,6 +24,7 @@ from app.modules.agent_surfaces.api.schemas import (
     AvailableSurfaceChannelsResponse,
     AvailableSurfacesResponse,
     SurfaceConfigResponse,
+    SurfaceConnection,
     SurfaceCreateRequest,
     SurfaceReach,
     SurfaceSendRequest,
@@ -36,6 +38,7 @@ from app.modules.agent_surfaces.domain.entities import (
 )
 from app.modules.agent_surfaces.api.surface_config_resolver import (
     merge_surface_config,
+    require_own_account,
     require_surface_agent_action,
     resolve_surface_config,
 )
@@ -73,6 +76,7 @@ def _surface_response(
     *,
     agent_name: str | None = None,
     reach: SurfaceReach | None = None,
+    connection: SurfaceConnection | None = None,
 ) -> AgentSurfaceResponse:
     return AgentSurfaceResponse(
         id=surface.id,
@@ -84,6 +88,7 @@ def _surface_response(
         platform=surface.surface_type,
         credential_mode=surface.credential_mode,
         account_id=surface.account_id,
+        connection=connection,
         surface_identity_id=surface.surface_identity_id,
         surface_identity_username=surface.surface_identity_username,
         surface_identity_email=surface.surface_identity_email,
@@ -157,6 +162,7 @@ async def list_surfaces(
     agent_service: AgentServiceDep,
     ctx: PodContextDep,
     connector_service: ConnectorServiceDep,
+    connection_resolver: SurfaceConnectionResolverDep,
     service: AgentSurfaceService = Depends(get_surface_service),
     limit: int = 100,
     page_token: str | None = None,
@@ -181,7 +187,7 @@ async def list_surfaces(
         cursor=cursor,
         limit=limit,
     )
-    items = []
+    visible: list[tuple[AgentSurfaceEntity, str | None, SurfaceReach | None]] = []
     for surface in surfaces:
         resolved_agent_name = None
         if surface.agent_id is not None:
@@ -201,11 +207,24 @@ async def list_surfaces(
         reach = await _resolve_surface_reach(
             surface, service=service, connector_service=connector_service
         )
-        items.append(
-            _surface_response(
-                surface, agent_name=resolved_agent_name, reach=reach
-            )
+        visible.append((surface, resolved_agent_name, reach))
+
+    # Resolved once for the page, after the per-agent filter, so the two queries
+    # it costs cover only surfaces this caller can actually see.
+    connections = await connection_resolver.for_surfaces(
+        [surface for surface, _, _ in visible],
+        pod_id=pod_id,
+        viewer_user_id=user.id,
+    )
+    items = [
+        _surface_response(
+            surface,
+            agent_name=resolved_agent_name,
+            reach=reach,
+            connection=connections.get(surface.id),
         )
+        for surface, resolved_agent_name, reach in visible
+    ]
     return AgentSurfaceListResponse(
         items=items,
         limit=limit,
@@ -226,11 +245,18 @@ async def create_surface(
     agent_service: AgentServiceDep,
     ctx: PodContextDep,
     connector_service: ConnectorServiceDep,
+    connection_resolver: SurfaceConnectionResolverDep,
     service: AgentSurfaceService = Depends(get_surface_service),
 ) -> AgentSurfaceResponse:
     """Create a surface. ``name`` defaults to the lowercased platform — pass an
     explicit name to create a second surface of the same platform (e.g. a
     second bot routed to a different agent)."""
+    await require_own_account(
+        request.account_id,
+        user_id=user.id,
+        organization_id=ctx.organization_id,
+        connector_service=connector_service,
+    )
     agent = (
         await agent_service.get_agent_by_name(
             pod_id=pod_id, name=request.default_agent_name
@@ -274,9 +300,14 @@ async def create_surface(
     reach = await _resolve_surface_reach(
         surface, service=service, connector_service=connector_service
     )
-    del user
+    connection = await connection_resolver.for_surface(
+        surface, pod_id=pod_id, viewer_user_id=user.id
+    )
     return _surface_response(
-        surface, agent_name=agent.name if agent else None, reach=reach
+        surface,
+        agent_name=agent.name if agent else None,
+        reach=reach,
+        connection=connection,
     )
 
 
@@ -292,6 +323,7 @@ async def get_surface(
     agent_service: AgentServiceDep,
     ctx: PodContextDep,
     connector_service: ConnectorServiceDep,
+    connection_resolver: SurfaceConnectionResolverDep,
     service: AgentSurfaceService = Depends(get_surface_service),
 ) -> AgentSurfaceResponse:
     surface = await service.get_surface_by_name_in_pod(pod_id=pod_id, name=surface_name)
@@ -305,8 +337,12 @@ async def get_surface(
     reach = await _resolve_surface_reach(
         surface, service=service, connector_service=connector_service
     )
-    del user
-    return _surface_response(surface, agent_name=agent_name, reach=reach)
+    connection = await connection_resolver.for_surface(
+        surface, pod_id=pod_id, viewer_user_id=user.id
+    )
+    return _surface_response(
+        surface, agent_name=agent_name, reach=reach, connection=connection
+    )
 
 
 @router.patch(
@@ -323,10 +359,21 @@ async def update_surface(
     agent_service: AgentServiceDep,
     ctx: PodContextDep,
     connector_service: ConnectorServiceDep,
+    connection_resolver: SurfaceConnectionResolverDep,
     service: AgentSurfaceService = Depends(get_surface_service),
 ) -> AgentSurfaceResponse:
     """Partially update a surface. Only fields present in the request are
-    applied; the surface's platform and name are immutable."""
+    applied; the surface's platform and name are immutable.
+
+    Passing ``account_id`` rebinds the surface to a different connected account
+    — the repair when the account it runs on expires, or its owner leaves the
+    pod. It must be an account the caller owns."""
+    await require_own_account(
+        request.account_id,
+        user_id=user.id,
+        organization_id=ctx.organization_id,
+        connector_service=connector_service,
+    )
     update_agent_id = "default_agent_name" in request.model_fields_set
     agent = (
         await agent_service.get_agent_by_name(
@@ -381,9 +428,14 @@ async def update_surface(
     reach = await _resolve_surface_reach(
         updated, service=service, connector_service=connector_service
     )
-    del user
+    connection = await connection_resolver.for_surface(
+        updated, pod_id=pod_id, viewer_user_id=user.id
+    )
     return _surface_response(
-        updated, agent_name=resolved_agent_name, reach=reach
+        updated,
+        agent_name=resolved_agent_name,
+        reach=reach,
+        connection=connection,
     )
 
 
