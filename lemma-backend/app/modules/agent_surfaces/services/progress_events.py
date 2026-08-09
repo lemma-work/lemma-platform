@@ -132,6 +132,27 @@ def _assistant_text_from_event(event: AgentEvent) -> str | None:
     return text or None
 
 
+def _assistant_text_was_all_reasoning(event: AgentEvent) -> bool:
+    """True when the model's answer was reasoning and nothing else.
+
+    ``_assistant_text_from_event`` returns None both for "this event carries no
+    answer" and for "it carried one, and stripping the reasoning left nothing".
+    Only the second is a lost answer: the model wrote `<think>` and stopped
+    there, so the turn ends with the surface holding an empty string. Telling
+    those apart is what lets delivery say something rather than nothing.
+    """
+    if event.type != AgentEventType.MESSAGE:
+        return False
+    data = event.data
+    if not isinstance(data, MessageDraft):
+        return False
+    role = data.role.value if isinstance(data.role, MessageRole) else str(data.role)
+    if role != MessageRole.ASSISTANT.value or data.kind != MessageKind.TEXT:
+        return False
+    raw = (data.text or "").strip()
+    return bool(raw) and not strip_thinking_tokens(raw)
+
+
 def _find_comment(value: object) -> str | None:
     if not isinstance(value, dict):
         return None

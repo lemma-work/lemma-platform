@@ -52,7 +52,9 @@ from app.modules.agent_surfaces.tests.e2e.mock_infrastructure import (
     build_slack_signature_headers,
     build_telegram_secret_headers,
     build_whatsapp_signature_headers,
+    slack_delivered,
     wait_for_messages,
+    wait_for_slack_replies,
 )
 from app.modules.connectors.domain.connector import AuthProvider
 from app.modules.schedule.domain.events.schedule import ScheduleFired
@@ -61,7 +63,12 @@ from app.modules.schedule.domain.schedule import ScheduleType
 pytestmark = pytest.mark.e2e
 
 # Worker + queued run round-trip. Real-LLM mode can be slower, so keep room.
-REAL_REPLY_TIMEOUT = 180.0
+# Must stay well under the shard's pytest-timeout (120s in CI), or a reply
+# that never arrives kills the test before the wait returns — turning every
+# delivery failure into an opaque "Timeout (>120.0s)" with no clue which
+# assertion was waiting or what did arrive. A real worker round trip is
+# seconds; this only has to outlast a slow runner, not the whole test.
+REAL_REPLY_TIMEOUT = 60.0
 _RESEND_SIGNING_SECRET = "whsec_" + base64.b64encode(
     b"resend-e2e-signing-secret"
 ).decode("ascii")
@@ -421,12 +428,13 @@ async def test_slack_signed_webhook_is_deduplicated_and_replies_via_worker(
     )
     assert first.status_code == duplicate.status_code == 200
 
-    messages = await wait_for_messages(
-        message_store, "SLACK", min_count=1, timeout_seconds=REAL_REPLY_TIMEOUT
+    # Two identical webhooks, one reply — whichever way Slack carried it.
+    replies = await wait_for_slack_replies(
+        message_store, min_count=1, timeout_seconds=REAL_REPLY_TIMEOUT
     )
-    assert len(messages) == 1
-    assert messages[0]["channel"] == "D0123456"
-    assert str(messages[0].get("text") or "").strip()
+    assert len(replies) == 1, f"the duplicate was not deduplicated: {replies}"
+    assert replies[0]["channel"] == "D0123456"
+    assert "".join(slack_delivered(message_store)).strip()
 
     conversation = await _conversation_by_external_thread(
         authenticated_client,
@@ -526,11 +534,8 @@ async def test_slack_channel_attachment_and_history_are_persisted_via_worker(
         timeout_seconds=REAL_REPLY_TIMEOUT,
     )
     assert replies[-1]["channel"] == "C-SUPPORT"
-    await wait_for_messages(
-        message_store,
-        "SLACK",
-        min_count=1,
-        timeout_seconds=REAL_REPLY_TIMEOUT,
+    await wait_for_slack_replies(
+        message_store, min_count=1, timeout_seconds=REAL_REPLY_TIMEOUT
     )
 
     conversation = await _conversation_by_external_thread(
@@ -650,13 +655,11 @@ async def test_slack_native_socket_receiver_acknowledges_and_replies_via_worker(
     )
     runner_task = asyncio.create_task(runner.run())
     try:
-        messages = await wait_for_messages(
-            message_store,
-            "SLACK",
-            min_count=1,
-            timeout_seconds=REAL_REPLY_TIMEOUT,
+        replies = await wait_for_slack_replies(
+            message_store, min_count=1, timeout_seconds=REAL_REPLY_TIMEOUT
         )
-        assert messages[-1]["channel"] == "D0123456"
+        assert replies, "the socket receiver's run never replied to Slack"
+        assert replies[-1]["channel"] == "D0123456"
         assert acknowledgements == ["surface-e2e-envelope-1"]
     finally:
         runner_task.cancel()

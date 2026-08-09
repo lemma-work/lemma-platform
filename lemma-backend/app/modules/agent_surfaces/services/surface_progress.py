@@ -37,6 +37,14 @@ class SurfaceProgressMixin:
         """
         target = await self._resolve_egress_target(conversation_id)
         if target is None:
+            # Silent until now, and indistinguishable from a platform that
+            # simply has no live progress — so a conversation that cannot
+            # resolve its surface just never showed progress and said nothing
+            # about why.
+            logger.debug(
+                "agent_surfaces.ingress_service.surface_progress_no_egress_target.diagnostic",
+                conversation_id=conversation_id,
+            )
             return progress_handle
         try:
             # Author the stream as the agent: the answer that closes this same

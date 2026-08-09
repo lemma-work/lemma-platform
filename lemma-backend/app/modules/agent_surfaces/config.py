@@ -65,6 +65,17 @@ class SurfaceSettings(BaseSettings):
         default=None,
         description="Slack signing secret for verifying native Slack webhook requests",
     )
+    slack_app_id: Optional[str] = Field(
+        default=None,
+        description=(
+            "App id of this deployment's own Slack app (the 'A0…' Slack shows on "
+            "the app's Basic Information page). Inbound events name the app they "
+            "came from, and the shared webhook may also serve orgs running their "
+            "own Slack app, so this is how an event is matched to us rather than "
+            "to them. An account connected through OAuth stores its own app id, "
+            "which wins; this is the fallback for one that did not."
+        ),
+    )
     slack_home_logo_url: Optional[str] = Field(
         default=None,
         description=(

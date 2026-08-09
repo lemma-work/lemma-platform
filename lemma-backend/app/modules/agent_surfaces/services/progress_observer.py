@@ -30,6 +30,7 @@ from app.modules.agent_surfaces.services.ingress_service import (
 from app.modules.agent_surfaces.services.token_stream import TokenStreamMixin
 from app.modules.agent_surfaces.services.progress_events import (
     _assistant_text_from_event,
+    _assistant_text_was_all_reasoning,
     _email_reply_tool_called,
     _is_agent_host_permission_event,
     _is_final_answer_event,
@@ -137,6 +138,10 @@ class SurfaceAgentRunProgressObserver(TokenStreamMixin):
         # (``<think>…</think>``), and a tag can straddle two deltas — so the
         # filter has to be stateful across the whole run.
         self._think_filter = ThinkingStreamFilter()
+        # Set when an answer sanitized away to nothing, which is the one case
+        # where "no text to deliver" means an answer was lost rather than never
+        # written. See ``_deliver_final_answer``.
+        self._answer_was_all_reasoning = False
         self._rendered_waiting_tool_calls: set[tuple[str, str]] = set()
 
     async def on_run_started(
@@ -201,6 +206,12 @@ class SurfaceAgentRunProgressObserver(TokenStreamMixin):
         # Assistant text is buffered, never sent mid-run, so intermediate
         # narration cannot leak as a separate chat message. The final answer is
         # delivered once on on_run_finished.
+        if _assistant_text_was_all_reasoning(event):
+            # The model wrote reasoning and stopped. Stripping it is right, but
+            # it leaves nothing to send, and a turn that ends in silence reads
+            # as the agent ignoring the person. Remembered so delivery can say
+            # so instead.
+            self._answer_was_all_reasoning = True
         assistant_text = _assistant_text_from_event(event)
         if assistant_text is not None:
             if _is_final_answer_event(event):
@@ -472,6 +483,16 @@ class SurfaceAgentRunProgressObserver(TokenStreamMixin):
         if platform in _EMAIL_PLATFORMS and self._email_reply_tool_called:
             return
         message = (self._final_answer_text or self._buffered_text or "").strip()
+        if not message and self._answer_was_all_reasoning:
+            # An answer existed and sanitizing removed all of it, so the run
+            # "succeeded" with nothing to show. Saying nothing is the one
+            # outcome the person cannot act on — they cannot tell it from the
+            # agent never having seen the message, and will ask again into the
+            # same silence. Say the turn produced nothing instead.
+            message = (
+                "I thought that through but never wrote the answer. "
+                "Ask me again and I'll give it another go."
+            )
         if not message:
             return
         try:

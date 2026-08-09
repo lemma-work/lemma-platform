@@ -209,7 +209,12 @@ class TelegramSurfaceAdapter(BaseSurfaceAdapter):
         event: ParsedInboundSurfaceEvent,
         progress_text: str,
         progress_handle: dict[str, Any] | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any] | None:
+        # Accepted and unused: Slack authors its stream under the agent's name,
+        # Telegram edits a message the bot already owns. Declared because the
+        # shared caller passes it to whichever adapter answers.
+        del metadata
         return await TelegramPlatformService(credentials).stream_progress(
             event, progress_text, progress_handle
         )
