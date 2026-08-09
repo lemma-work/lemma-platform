@@ -7,6 +7,7 @@ from app.modules.connectors.domain.connector import (
     ConnectorKind,
 )
 from app.modules.connectors.domain.errors import (
+    AccountNotFoundError,
     ConnectorNotFoundError,
     OperationExecutionNotFoundError,
 )
@@ -17,6 +18,7 @@ __all__ = [
     "AuthProvider",
     "ConnectorKind",
     "AuthScheme",
+    "AccountNotFoundError",
     "ConnectorNotFoundError",
     "OperationExecutionNotFoundError",
     "SecretEncryptionPort",
