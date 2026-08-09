@@ -1,5 +1,11 @@
 import type { Metadata } from 'next';
 import { RootPageSwitch } from '@/components/root/root-page-switch';
+import { JsonLd } from '@/components/seo/json-ld';
+import {
+    organizationSchema,
+    softwareApplicationSchema,
+    webSiteSchema,
+} from '@/lib/seo/structured-data';
 
 /**
  * The shared preview is the first thing anyone sees — tab title, Slack unfurl,
@@ -43,5 +49,17 @@ export const metadata: Metadata = {
 };
 
 export default function HomePage() {
-    return <RootPageSwitch />;
+    return (
+        <>
+            {/*
+              The site's root entities are declared once, here, rather than in
+              the root layout — the layout also wraps every signed-in pod screen,
+              and those pages are `disallow`ed in robots.ts. Publisher and
+              website identity belong on the page a crawler is actually allowed
+              to read.
+            */}
+            <JsonLd schema={[organizationSchema(), webSiteSchema(), softwareApplicationSchema()]} />
+            <RootPageSwitch />
+        </>
+    );
 }

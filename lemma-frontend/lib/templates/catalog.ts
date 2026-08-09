@@ -335,7 +335,13 @@ export function getPublicTemplateBySlug(slug: string | null | undefined): Public
     return PUBLIC_TEMPLATES.find((template) => template.slug === slug) ?? null;
 }
 
-export function templateRunHref(template: PublicTemplate): string {
+export interface GitHubSource {
+    owner: string;
+    repo: string;
+}
+
+/** The `owner/repo` a template's import URL is built from. */
+export function templateGitHubSource(template: PublicTemplate): GitHubSource {
     const source = new URL(template.github);
     if (source.hostname.toLowerCase() !== 'github.com') {
         throw new Error(`Template "${template.slug}" must use a github.com source.`);
@@ -345,7 +351,33 @@ export function templateRunHref(template: PublicTemplate): string {
     if (!owner || !repo) {
         throw new Error(`Template "${template.slug}" has an invalid GitHub source.`);
     }
+    return { owner, repo };
+}
+
+export function templateRunHref(template: PublicTemplate): string {
+    const { owner, repo } = templateGitHubSource(template);
     return `/import/github/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
+}
+
+/**
+ * The curated template behind an import URL, if there is one.
+ *
+ * `/import/github/[owner]/[repo]` accepts any repository on GitHub, so this is
+ * what separates the ten pods we stand behind from the unbounded long tail.
+ * Only the curated set is worth declaring to a search engine — see the robots
+ * decision in the import route.
+ *
+ * GitHub owner and repository names are case-insensitive for lookup, so two
+ * spellings of the same repo must not resolve differently here.
+ */
+export function findPublicTemplateBySource(owner: string, repo: string): PublicTemplate | null {
+    const wanted = `${owner.toLowerCase()}/${repo.toLowerCase()}`;
+    return (
+        PUBLIC_TEMPLATES.find((template) => {
+            const source = templateGitHubSource(template);
+            return `${source.owner.toLowerCase()}/${source.repo.toLowerCase()}` === wanted;
+        }) ?? null
+    );
 }
 
 export function templateCoverPath(template: PublicTemplate): string {

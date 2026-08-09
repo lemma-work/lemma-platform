@@ -1,9 +1,6 @@
 import type { MetadataRoute } from 'next';
 
-function publicSiteUrl(): string {
-    const configured = process.env.NEXT_PUBLIC_SITE_URL?.trim();
-    return configured?.startsWith('http') ? configured.replace(/\/+$/, '') : 'https://lemma.work';
-}
+import { publicSiteUrl } from '@/lib/seo/site-url';
 
 export default function robots(): MetadataRoute.Robots {
     return {
