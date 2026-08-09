@@ -34,6 +34,7 @@ from app.modules.datastore.infrastructure.record_update_sql import (
     chunk_for_parameter_limit,
     split_previous_image,
 )
+from app.modules.datastore.infrastructure.rls_context import verify_rls_context
 from app.modules.datastore.infrastructure.sql_identifiers import sanitize_identifier
 from app.modules.datastore.services.record_validator import convert_record
 from app.modules.datastore.services.table_context import TableContext
@@ -341,6 +342,8 @@ class DatastoreRecordRepository(DatastoreRecordRepositoryPort):
                 await result.close()
                 if len(rows) > max_rows:
                     rows = rows[:max_rows]
+                if enable_rls:
+                    await verify_rls_context(session, user_id, is_pod_admin=is_pod_admin)
                 return rows, len(rows)
         except DBAPIError as exc:
             logger.debug("datastore.record.query.propagated", exc_info=True)

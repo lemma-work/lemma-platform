@@ -27,6 +27,7 @@ from app.modules.identity.services.whatsapp_mobile_verification import (
     is_whatsapp_verification_configured,
     parse_reserved_verification_message,
 )
+from app.modules.agent_surfaces.services import teams_consent
 from app.modules.agent_surfaces.services.surface_service import (
     AgentSurfaceService,
 )
@@ -413,13 +414,24 @@ async def teams_admin_consent_callback(
             "finish it. You can start the consent flow again from Lemma."
         )
 
+    surface_id_part, _, nonce = state.partition(":")
     try:
-        surface_id = UUID(state)
+        surface_id = UUID(surface_id_part)
     except ValueError:
         return _consent_failed(
             "The consent request came back with an identifier Lemma could not "
             "read, so nothing was changed. You can start the consent flow again "
             "from Lemma."
+        )
+
+    # This endpoint is unauthenticated and every parameter is caller-supplied,
+    # so the nonce is what distinguishes a real Microsoft round-trip from a
+    # direct call by anyone who saw a surface id. Spend it before touching the
+    # surface: activation sets the tenant binding, and that write is first-wins.
+    if not await teams_consent.consume_nonce(surface_id, nonce):
+        return _consent_failed(
+            "This consent link is no longer valid, so nothing was changed. You "
+            "can start the consent flow again from Lemma."
         )
 
     surface = await service.activate_after_consent(

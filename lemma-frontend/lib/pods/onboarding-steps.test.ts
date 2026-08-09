@@ -2,10 +2,11 @@ import { describe, expect, it } from "vitest";
 
 import {
   codingAgentStarterPrompt,
-  defaultWorkspaceName,
   generatedOrganizationName,
   hasUsableProfileName,
+  isRetriableOrganizationNameConflict,
   nextTeamSetupStep,
+  organizationNameCandidate,
   normalizeOnboardingStep,
   podNameForAudience,
   previousOnboardingStep,
@@ -42,30 +43,6 @@ describe("onboarding step paths", () => {
 
   it("uses the team label only for the pod name", () => {
     expect(podNameForAudience("team", "Sales")).toBe("Sales Pod");
-  });
-
-  it("defaults team workspaces from non-public email domains", () => {
-    expect(
-      defaultWorkspaceName(
-        "Ada Lovelace",
-        workDomainFromEmail("ada@gappy.ai"),
-      ),
-    ).toBe("Gappy Workspace");
-    expect(
-      defaultWorkspaceName(
-        "Ada Lovelace",
-        workDomainFromEmail("ada@research.acme.co.uk"),
-      ),
-    ).toBe("Acme Workspace");
-  });
-
-  it("keeps the user-name fallback for public email providers", () => {
-    expect(
-      defaultWorkspaceName(
-        "Ada Lovelace",
-        workDomainFromEmail("ada@gmail.com"),
-      ),
-    ).toBe("Ada's Workspace");
   });
 
   it("moves old team-first drafts back to workspace setup", () => {
@@ -105,6 +82,70 @@ describe("onboarding step paths", () => {
     expect(generated).toMatch(/^[A-Z][a-z]+ [A-Z][a-z]+$/);
     expect(generatedOrganizationName("ada@example.com")).toBe(generated);
     expect(generatedOrganizationName("ada@example.com", 1)).not.toBe(generated);
+  });
+
+  it("names a company organization after the company", () => {
+    const candidate = (email: string, attempt = 0) =>
+      organizationNameCandidate({
+        email,
+        workDomain: workDomainFromEmail(email),
+        attempt,
+      });
+
+    expect(candidate("ada@gappy.ai")).toBe("Gappy");
+    expect(candidate("ada@research.acme.co.uk")).toBe("Acme");
+    expect(candidate("ada@big-corp.com")).toBe("Big Corp");
+  });
+
+  it("invents a name only when the address names no company", () => {
+    for (const email of ["ada@gmail.com", "ada@icloud.com", "ada@proton.me"]) {
+      expect(
+        organizationNameCandidate({
+          email,
+          workDomain: workDomainFromEmail(email),
+        }),
+      ).toMatch(/^[A-Z][a-z]+ [A-Z][a-z]+$/);
+    }
+  });
+
+  it("keeps a contested company recognisable instead of inventing a name", () => {
+    const candidate = (attempt: number) =>
+      organizationNameCandidate({
+        email: "ada@acme.io",
+        workDomain: "acme.io",
+        attempt,
+      });
+
+    // The domain is globally unique, so one squatter on "Acme" cannot push a
+    // company off a name its colleagues will still recognise.
+    expect(candidate(1)).toBe("acme.io");
+    expect(candidate(2)).toBe("Acme 2");
+    expect(candidate(9)).toBe("Acme 9");
+
+    // Every candidate has to be distinct, or the retry loop spins.
+    const candidates = Array.from({ length: 20 }, (_, index) =>
+      candidate(index),
+    );
+    expect(new Set(candidates).size).toBe(candidates.length);
+  });
+
+  it("retries a taken name but not a taken email domain", () => {
+    expect(
+      isRetriableOrganizationNameConflict({
+        code: "ORGANIZATION_NAME_CONFLICT",
+      }),
+    ).toBe(true);
+    expect(
+      isRetriableOrganizationNameConflict({
+        code: "ORGANIZATION_SLUG_CONFLICT",
+      }),
+    ).toBe(true);
+    // Every candidate claims the same domain, so retrying cannot help.
+    expect(
+      isRetriableOrganizationNameConflict({ code: "ORGANIZATION_CONFLICT" }),
+    ).toBe(false);
+    expect(isRetriableOrganizationNameConflict(new Error("network"))).toBe(false);
+    expect(isRetriableOrganizationNameConflict(null)).toBe(false);
   });
 
   it("hands the composer an unfinished sentence, not a sent message", () => {

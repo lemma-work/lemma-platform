@@ -9741,11 +9741,33 @@
         "type": "string"
       },
       "OrganizationSlugAvailabilityResponse": {
-        "description": "Organization slug availability response.",
+        "description": "Organization slug availability response.\n\n``available`` answers only for the slug. When the caller also passes a\ncandidate name, ``name_available`` answers for the globally-unique name; a\ncreate succeeds only when both are true.",
         "properties": {
           "available": {
             "title": "Available",
             "type": "boolean"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "name_available": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name Available"
           },
           "slug": {
             "title": "Slug",
@@ -18139,7 +18161,7 @@
     },
     "/organizations/slug-availability": {
       "get": {
-        "description": "Check whether an organization slug is available",
+        "description": "Check whether an organization slug is available, and optionally whether a candidate name is still free",
         "operationId": "org.slug_availability",
         "parameters": [
           {
@@ -18149,6 +18171,22 @@
             "schema": {
               "title": "Slug",
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "name",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Name"
             }
           }
         ],

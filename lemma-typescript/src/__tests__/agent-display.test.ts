@@ -305,6 +305,27 @@ describe("latestPlanSummary", () => {
     expect(plan?.activeStep).toBe("Write HTML report");
     expect(plan?.pendingCount).toBe(2);
   });
+
+  it("does not degrade on plan text padded with whitespace", () => {
+    // Plan entries come from model output, so a step made of tens of thousands
+    // of spaces is reachable. The status and checkbox patterns used to let two
+    // parts of themselves claim the same spaces, which made parsing one of
+    // these entries quadratic and stalled the render.
+    const padded = "step" + " ".repeat(40_000) + "x";
+    const started = Date.now();
+
+    const plan = latestPlanSummary([
+      tool("padded-plan", {
+        toolCallId: "padded-plan",
+        toolName: "write_todos",
+        args: { todos: [padded, "[ ]" + " ".repeat(40_000), "done work \u2014 done"] },
+        state: "call",
+      }),
+    ]);
+
+    expect(plan).not.toBeNull();
+    expect(Date.now() - started).toBeLessThan(1_000);
+  });
 });
 
 describe("thought duration projection", () => {

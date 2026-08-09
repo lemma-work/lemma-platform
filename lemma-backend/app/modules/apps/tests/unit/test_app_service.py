@@ -52,6 +52,34 @@ async def _get_public_app_asset(service, public_slug, *, asset_path=None):
     return await service.read_app_asset(resolved)
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("visibility", ["POD", "PERSONAL", "RESTRICTED", "", "NONSENSE"])
+async def test_public_slug_route_serves_only_apps_published_to_everyone(visibility):
+    """`/public/apps` has no session, and apps default to POD.
+
+    Serving on slug alone meant every uploaded app was readable by anyone who
+    guessed the slug, which is kebab-cased from the app name.
+    """
+    repo = AsyncMock()
+    storage = AsyncMock()
+    service = AppService(repo, Mock(return_value=storage), AsyncMock())
+    repo.get_by_public_slug.return_value = AppEntity(
+        id=uuid4(),
+        pod_id=uuid4(),
+        user_id=uuid4(),
+        name="Private Desk",
+        public_slug="private-desk",
+        current_release_id=uuid4(),
+        visibility=visibility,
+    )
+
+    with pytest.raises(AppNotFoundError):
+        await _get_public_app_asset(service, "private-desk")
+
+    # Nothing was read from storage before the refusal.
+    storage.read_file.assert_not_called()
+
+
 async def _delete_app(service, pod_id, name, user_id, ctx=None):
     cleanup = await service.resolve_delete_app(pod_id, name, user_id, ctx=ctx)
     await service.cleanup_app_storage(cleanup)
@@ -353,6 +381,7 @@ async def test_public_app_entrypoint_includes_share_metadata(monkeypatch):
         description="Evidence-backed research for the team.",
         public_slug="research-desk",
         current_release_id=uuid4(),
+        visibility="PUBLIC",
     )
     release = AppReleaseEntity(
         id=app.current_release_id,
@@ -406,6 +435,7 @@ async def test_public_app_branding_can_be_removed_by_org_entitlement(monkeypatch
         name="Paid App",
         public_slug="paid-app",
         current_release_id=uuid4(),
+        visibility="PUBLIC",
     )
     release = AppReleaseEntity(
         id=app.current_release_id,
@@ -447,6 +477,7 @@ async def test_public_app_branding_fails_closed_when_entitlement_lookup_fails(
         user_id=uuid4(),
         name="Fallback App",
         public_slug="fallback-app",
+        visibility="PUBLIC",
         current_release_id=uuid4(),
     )
     release = AppReleaseEntity(

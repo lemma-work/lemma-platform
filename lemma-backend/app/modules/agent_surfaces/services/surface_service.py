@@ -3,12 +3,12 @@ from __future__ import annotations
 import secrets
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
-from urllib.parse import urlencode
 
 import httpx
 
 from app.core.config import settings
 from app.modules.agent_surfaces.config import surface_settings
+from app.modules.agent_surfaces.services import teams_consent
 from app.modules.agent_surfaces.platforms.common import (
     computed_webhook_url,
     public_https_api_url_available,
@@ -543,6 +543,10 @@ class AgentSurfaceService(TelegramMiniAppSyncMixin):
         if surface is None:
             return None
 
+        # `external_tenant_id` is the inbound-message tenant gate, and this
+        # write is first-wins, so a wrong value here would both reject the real
+        # tenant's messages and let the writer's own tenant through -- and then
+        # persist, because later legitimate activations skip the overwrite.
         if not surface.external_tenant_id:
             surface.external_tenant_id = tenant_id
 
@@ -568,20 +572,11 @@ class AgentSurfaceService(TelegramMiniAppSyncMixin):
             await self.surface_repository.update(surface)
             return {"status": AgentSurfaceStatus.ACTIVE}
 
-        consent_url = self._build_consent_url(surface.id, tenant_id)
+        consent_url = await teams_consent.build_consent_url(surface.id, tenant_id)
         return {
             "status": AgentSurfaceStatus.PENDING_ADMIN_CONSENT,
             "consent_url": consent_url,
         }
-
-    def _build_consent_url(self, surface_id: UUID, tenant_id: str) -> str:
-        callback_base = settings.api_url.rstrip("/")
-        params = urlencode({
-            "client_id": surface_settings.microsoft_bot_app_id or "",
-            "redirect_uri": f"{callback_base}/surfaces/teams/admin-consent/callback",
-            "state": str(surface_id),
-        })
-        return f"https://login.microsoftonline.com/{tenant_id}/adminconsent?{params}"
 
     async def _check_admin_consent_granted(self, tenant_id: str) -> bool:
         app_id = surface_settings.microsoft_bot_app_id

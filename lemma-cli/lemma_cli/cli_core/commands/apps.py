@@ -109,6 +109,31 @@ def _origin(url: str) -> str:
     return f"{parsed.scheme}://{parsed.netloc}"
 
 
+def _run_agent_browser(commands: list[list[str]], *, best_effort: bool = False) -> None:
+    """Drive agent-browser with the command list on stdin, never in argv.
+
+    Process arguments are world-readable on Linux -- any other local user can
+    read them from `ps` or /proc/<pid>/cmdline while the call runs, and execve
+    auditing records them for good afterwards. That makes argv the wrong place
+    for a session bearer token. `agent-browser batch` accepts the whole
+    sequence as JSON on stdin, so nothing sensitive reaches the process table.
+    """
+    result = subprocess.run(
+        ["agent-browser", "batch", "--bail"],
+        input=json.dumps(commands),
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode == 0 or best_effort:
+        return
+
+    # `--bail` stops at the first failure, so the tail of its own output is the
+    # reason. Relaying it beats the bare exit code the previous loop reported.
+    reason = (result.stderr or result.stdout or "").strip().splitlines()
+    detail = f": {reason[-1]}" if reason else ""
+    fail(f"agent-browser exited with code {result.returncode}{detail}.")
+
+
 @app.command("open")
 def open_app(
     ctx: typer.Context,
@@ -176,7 +201,7 @@ def open_app(
         # Register the bearer scoped to the API origin (agent-browser keeps it for
         # that origin and does not leak it to other origins the app loads) so the
         # app's direct, non-SDK API calls carry the header.
-        commands.append(["agent-browser", "open", api_origin, "--headers", headers])
+        commands.append(["open", api_origin, "--headers", headers])
         # The browser SDK only treats the session as authenticated when it finds a
         # token in localStorage ("injectedToken" mode); it never reads the bearer
         # header for its auth check, and in cookie mode it short-circuits to
@@ -185,26 +210,19 @@ def open_app(
         # any redirect to the auth portal, so a cookie-mode app can't bounce us off
         # its origin before the token lands; lift the block once it's seeded.
         if auth_origin and auth_origin != api_origin:
-            commands.append(
-                ["agent-browser", "network", "route", f"{auth_origin}/**", "--abort"]
-            )
-            cleanup.append(["agent-browser", "network", "unroute", f"{auth_origin}/**"])
-        commands.append(["agent-browser", "open", app_url])
-        commands.append(
-            ["agent-browser", "storage", "local", "set", "lemma_token", token]
-        )
-        commands.append(["agent-browser", "reload"])
+            commands.append(["network", "route", f"{auth_origin}/**", "--abort"])
+            cleanup.append(["network", "unroute", f"{auth_origin}/**"])
+        commands.append(["open", app_url])
+        commands.append(["storage", "local", "set", "lemma_token", token])
+        commands.append(["reload"])
     else:
-        commands.append(["agent-browser", "open", app_url])
+        commands.append(["open", app_url])
 
-    for command in commands:
-        result = subprocess.run(command)
-        if result.returncode != 0:
-            fail(f"agent-browser exited with code {result.returncode}.")
+    _run_agent_browser(commands)
     # Lift the temporary auth-portal block (best-effort; don't fail the open if it
     # errors) so later agent-browser commands in this session aren't blocked.
-    for command in cleanup:
-        subprocess.run(command)
+    if cleanup:
+        _run_agent_browser(cleanup, best_effort=True)
 
     emit(state, {"ok": True, "url": app_url, "authenticated": not no_auth})
 

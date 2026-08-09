@@ -81,6 +81,26 @@ def test_archive_inspection_enforces_entry_size_and_ratio_limits(monkeypatch) ->
         inspect_app_archive(_archive({"compressed": b"x" * 1_000}), label="Archive")
 
 
+def test_zip_bomb_is_refused_at_production_limits() -> None:
+    """A tiny upload that expands enormously must not reach the reader.
+
+    The other limit tests monkeypatch the caps down to prove the mechanism
+    fires; this one uses the shipped defaults, because what matters is that a
+    realistic bomb is refused by the configuration operators actually run.
+    `load_app_dist_bundle` is the sink under test: it reads every entry fully
+    into memory, so the refusal has to happen before it.
+    """
+    from app.modules.apps.services.app_dist_bundle import load_app_dist_bundle
+
+    # ~50 MB of zeros compresses to a few dozen KB: a ratio far above the
+    # allowed 200:1, and the shape nginx's compressed-body cap cannot see.
+    bomb = _archive({"index.html": b"<html></html>", "payload.bin": b"\0" * 50_000_000})
+    assert len(bomb) < 1024 * 1024
+
+    with pytest.raises(AppValidationError, match="compression ratio"):
+        load_app_dist_bundle(bomb)
+
+
 def test_archive_inspection_accepts_directory_entries() -> None:
     output = BytesIO()
     with ZipFile(output, "w") as archive:

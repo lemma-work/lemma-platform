@@ -63,5 +63,14 @@ class UserConflictError(IdentityConflictError):
 
 
 class OrganizationConflictError(IdentityConflictError):
-    def __init__(self, message: str):
-        super().__init__(message, code="ORGANIZATION_CONFLICT")
+    """A conflict on an organization's globally-unique fields.
+
+    The code distinguishes which field lost, because a caller picking its own
+    name (onboarding) can retry a taken name but not a taken email domain.
+    """
+
+    NAME_TAKEN = "ORGANIZATION_NAME_CONFLICT"
+    SLUG_TAKEN = "ORGANIZATION_SLUG_CONFLICT"
+
+    def __init__(self, message: str, code: str = "ORGANIZATION_CONFLICT"):
+        super().__init__(message, code=code)
