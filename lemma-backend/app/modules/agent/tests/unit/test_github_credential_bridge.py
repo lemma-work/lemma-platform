@@ -41,7 +41,9 @@ def _context() -> BaseAgentContext:
     return BaseAgentContext(user_id=uuid4(), pod_id=uuid4(), conversation_id=uuid4())
 
 
-_MARKER_KEY = f"{bridge._MARKER_KEY_PREFIX}:session-1"
+# The account is part of the key so two conversations in one session cannot
+# inherit each other's credential file; "default" is the no-account-named case.
+_MARKER_KEY = f"{bridge._MARKER_KEY_PREFIX}:session-1:default"
 
 
 @pytest.mark.parametrize(

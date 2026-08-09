@@ -47,6 +47,12 @@ class PlatformCapabilities:
     # Email genuinely can — it is the only reason an unreachable colleague still
     # gets told anything.
     can_cold_open: bool = False
+    # Can a live progress stream be closed *with* the final answer, so the
+    # agent's steps and the answer they produced are one message? True only
+    # where the platform has a real streaming API (Slack's chat.startStream /
+    # appendStream / stopStream). Everywhere else progress is a separate
+    # message that gets cleared before the answer is sent.
+    finishes_stream_with_answer: bool = False
     # Hours after the person's last inbound message during which free-form
     # replies are allowed. WhatsApp's 24h customer-service rule is real: past it
     # a send is refused unless it is a pre-approved template. None means no
@@ -69,10 +75,12 @@ class PlatformCapabilities:
 
 
 _SLACK_FORMATTING = (
-    "Slack mrkdwn: *bold*, _italic_, ~strike~, `code`, ```code blocks```, "
-    "> quotes, and <url|label> links. There are no headings or tables — use "
-    "bold lead-in lines and bullet lists instead. Keep replies short; long "
-    "output reads better as an attached file."
+    "Write normal Markdown; Lemma delivers it in a Slack markdown block, which "
+    "renders headings, tables, ordered/unordered lists, task lists, code fences "
+    "with syntax highlighting, block quotes, and [text](url) links natively. Do "
+    "not hand-write legacy Slack mrkdwn (single-asterisk bold, <url|label> "
+    "links) — it renders literally. Keep replies short; long output reads "
+    "better as an attached file."
 )
 _TEAMS_FORMATTING = (
     "Teams renders a limited markdown subset: bold, italic, bullet/numbered "
@@ -106,6 +114,7 @@ PLATFORM_CAPABILITIES: dict[str, PlatformCapabilities] = {
         markdown_mode="mrkdwn",
         formatting_style=_SLACK_FORMATTING,
         soft_char_limit=3000,
+        finishes_stream_with_answer=True,
     ),
     "TEAMS": PlatformCapabilities(
         platform="TEAMS",

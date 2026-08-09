@@ -16,11 +16,12 @@ from app.modules.agent_surfaces.domain.entities import (
     SurfaceIdentityPolicy,
     SurfacePlatform,
     SurfaceSendPolicy,
+    SurfaceSlackConfig,
     SurfaceTelegramConfig,
 )
 from app.modules.agent_surfaces.domain.errors import AgentSurfaceValidationError
 from app.modules.apps.contracts import get_ready_pod_app_by_name
-from app.modules.connectors.contracts import ConnectorNotFoundError
+from app.modules.connectors.contracts import AccountNotFoundError
 
 
 async def require_surface_agent_action(
@@ -60,7 +61,12 @@ async def require_own_account(
         return
     try:
         await connector_service.get_account(account_id, user_id, organization_id)
-    except ConnectorNotFoundError as exc:
+    # `get_account` answers "not yours" and "no such account" with the same
+    # AccountNotFoundError, which is the whole point: the caller learns nothing
+    # about accounts they do not own. Caught by its own name rather than through
+    # a base class, because which 404 base it carries is exactly what this
+    # branch changes.
+    except AccountNotFoundError as exc:
         raise HTTPException(
             status_code=403,
             detail=(
@@ -97,6 +103,10 @@ async def _resolve_channel_routes(
                 channel_id=route.channel_id,
                 channel_name=route.channel_name,
                 agent_name=agent_name,
+                # Carried, not derived. "The pod assistant answers here" and
+                # "nobody has said" both leave agent_name empty, and dropping
+                # the flag turned the first into the second on every save.
+                use_pod_assistant=route.use_pod_assistant,
             )
         )
     return routes
@@ -130,6 +140,42 @@ async def resolve_telegram_config(
     return SurfaceTelegramConfig(app_name=app.name)
 
 
+async def resolve_slack_config(
+    *,
+    uow,
+    pod_id: UUID,
+    platform: SurfacePlatform,
+    app_name: str | None,
+    existing: SurfaceSlackConfig | None = None,
+    ctx,
+) -> SurfaceSlackConfig:
+    """Resolve the Slack block, keeping everyone's DM choices.
+
+    ``dm_agent_by_user`` is carried from ``existing`` rather than taken from
+    the request: it is written from inside Slack, one person at a time, and a
+    settings save from the web UI has no business replacing it.
+    """
+    chosen = dict(existing.dm_agent_by_user) if existing else {}
+    resolved_name = str(app_name or "").strip()
+    if not resolved_name:
+        return SurfaceSlackConfig(dm_agent_by_user=chosen)
+    if platform is not SurfacePlatform.SLACK:
+        raise AgentSurfaceValidationError(
+            "A Slack app can only be featured on a Slack surface"
+        )
+    app = await get_ready_pod_app_by_name(
+        uow=uow,
+        pod_id=pod_id,
+        app_name=resolved_name,
+        ctx=ctx,
+    )
+    if app is None:
+        raise AgentSurfaceValidationError(
+            "The selected app must belong to this pod and be deployed"
+        )
+    return SurfaceSlackConfig(app_name=app.name, dm_agent_by_user=chosen)
+
+
 async def resolve_surface_config(
     *,
     uow,
@@ -151,6 +197,13 @@ async def resolve_surface_config(
         pod_id=pod_id,
         platform=platform,
         app_name=config_input.telegram.app_name,
+        ctx=ctx,
+    )
+    config.slack = await resolve_slack_config(
+        uow=uow,
+        pod_id=pod_id,
+        platform=platform,
+        app_name=config_input.slack.app_name,
         ctx=ctx,
     )
     return config
@@ -193,6 +246,15 @@ async def merge_surface_config(
             pod_id=pod_id,
             platform=platform,
             app_name=config_input.telegram.app_name,
+            ctx=ctx,
+        )
+    if "slack" in config_input.model_fields_set:
+        updates["slack"] = await resolve_slack_config(
+            uow=uow,
+            pod_id=pod_id,
+            platform=platform,
+            app_name=config_input.slack.app_name,
+            existing=existing.slack,
             ctx=ctx,
         )
     return existing.model_copy(update=updates)

@@ -127,6 +127,12 @@ export function SurfaceConnectStep({
                         Signing in to {definition.label} happens once for the whole organization.
                         Do that first, then come back here.
                     </p>
+                    {definition.platform === 'SLACK' ? (
+                        <p className="mt-2 text-xs leading-5 text-[var(--text-tertiary)]">
+                            Want Lemma to show up under your own name in Slack? You can set
+                            that up there too.
+                        </p>
+                    ) : null}
                     <Button asChild className="mt-3" size="sm" variant="secondary">
                         <Link href={`/pod/${podId}/connectors`}>Open connectors</Link>
                     </Button>

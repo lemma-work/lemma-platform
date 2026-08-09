@@ -12,16 +12,24 @@ T = TypeVar("T", bound="SurfaceChannelRouteInput")
 
 @_attrs_define
 class SurfaceChannelRouteInput:
-    """
-    Attributes:
-        agent_name (None | str | Unset):
-        channel_id (None | str | Unset):
-        channel_name (None | str | Unset):
+    """One channel's routing, in the same three states the domain models.
+
+    ``use_pod_assistant`` is not a synonym for an absent ``agent_name`` — see
+    :class:`SurfaceChannelRoute`. Omitting it here is what silently turned an
+    explicit "the pod assistant answers here", picked from inside Slack, back
+    into "unconfigured" on the next save from the web UI.
+
+        Attributes:
+            agent_name (None | str | Unset):
+            channel_id (None | str | Unset):
+            channel_name (None | str | Unset):
+            use_pod_assistant (bool | Unset):  Default: False.
     """
 
     agent_name: None | str | Unset = UNSET
     channel_id: None | str | Unset = UNSET
     channel_name: None | str | Unset = UNSET
+    use_pod_assistant: bool | Unset = False
 
     def to_dict(self) -> dict[str, Any]:
         agent_name: None | str | Unset
@@ -42,6 +50,8 @@ class SurfaceChannelRouteInput:
         else:
             channel_name = self.channel_name
 
+        use_pod_assistant = self.use_pod_assistant
+
         field_dict: dict[str, Any] = {}
 
         field_dict.update({})
@@ -51,6 +61,8 @@ class SurfaceChannelRouteInput:
             field_dict["channel_id"] = channel_id
         if channel_name is not UNSET:
             field_dict["channel_name"] = channel_name
+        if use_pod_assistant is not UNSET:
+            field_dict["use_pod_assistant"] = use_pod_assistant
 
         return field_dict
 
@@ -85,10 +97,13 @@ class SurfaceChannelRouteInput:
 
         channel_name = _parse_channel_name(d.pop("channel_name", UNSET))
 
+        use_pod_assistant = d.pop("use_pod_assistant", UNSET)
+
         surface_channel_route_input = cls(
             agent_name=agent_name,
             channel_id=channel_id,
             channel_name=channel_name,
+            use_pod_assistant=use_pod_assistant,
         )
 
         return surface_channel_route_input

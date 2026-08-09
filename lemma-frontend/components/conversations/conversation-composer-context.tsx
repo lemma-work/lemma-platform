@@ -5,8 +5,12 @@ import type {
     AgentRuntimeProfileListResponse,
 } from 'lemma-sdk';
 
+import { useAIAssistant } from '@/components/ai/ai-assistant-context';
 import { resolveRuntimeModelName, shortModelName } from '@/components/agents/agent-runtime-helpers';
 import { RuntimeModelPicker } from '@/components/lemma/assistant/model-picker';
+import { ProjectPicker } from '@/components/lemma/assistant/project-picker';
+import type { ProjectSelection } from '@/lib/assistant/project-selection';
+import { useGithubProjects } from '@/lib/hooks/use-github-projects';
 import {
     Select,
     SelectContent,
@@ -31,6 +35,8 @@ export function ConversationComposerContext({
     onAgentChange,
     onRuntimeChange,
     manageModelsHref,
+    podId,
+    boundProject = null,
 }: {
     agents: Agent[];
     selectedAgentName: string | null;
@@ -43,7 +49,15 @@ export function ConversationComposerContext({
     onAgentChange: (agentName: string | null) => void;
     onRuntimeChange: (runtime: AgentRuntimeConfig | null) => void;
     manageModelsHref?: string;
+    /** Where "Connect GitHub" goes: connectors live on the pod, not the org. */
+    podId: string;
+    /** The project an existing conversation is already working in. */
+    boundProject?: ProjectSelection | null;
 }) {
+    const { pendingProject, setPendingProject } = useAIAssistant();
+    // Only the picker needs the repo list, and only before a conversation
+    // exists — an open conversation's directory is already decided.
+    const githubProjects = useGithubProjects({ enabled: isNewConversation });
     const agentLabel = agentDisplayLabel
         ?? (selectedAgentName ? formatAgentName(selectedAgentName) : 'Pod default');
     const agentValue = selectedAgentName || POD_DEFAULT_AGENT_VALUE;
@@ -66,6 +80,18 @@ export function ConversationComposerContext({
                 <span className="max-w-28 truncate sm:max-w-52" title={`Model: ${modelLabel}`}>
                     {modelLabel}
                 </span>
+                {boundProject ? (
+                    <ProjectPicker
+                        value={boundProject}
+                        onChange={() => undefined}
+                        projects={[]}
+                        isConnected
+                        isLoadingProjects={false}
+                        readOnly
+                        connectHref="#"
+                        className="h-auto px-0"
+                    />
+                ) : null}
             </div>
         );
     }
@@ -112,6 +138,22 @@ export function ConversationComposerContext({
                 title="Choose a conversation model"
                 description="Pick the model before this conversation starts."
             />
+
+            {canWrite ? (
+                <>
+                    <span aria-hidden="true" className="shrink-0 text-xs text-[var(--text-soft)]">·</span>
+                    <ProjectPicker
+                        value={pendingProject}
+                        onChange={setPendingProject}
+                        projects={githubProjects.projects}
+                        isConnected={githubProjects.isConnected}
+                        isLoadingProjects={githubProjects.isLoadingProjects}
+                        error={githubProjects.error}
+                        accountId={githubProjects.accountId}
+                        connectHref={`/pod/${encodeURIComponent(podId)}/connectors`}
+                    />
+                </>
+            ) : null}
         </div>
     );
 }

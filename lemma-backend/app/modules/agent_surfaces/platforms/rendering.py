@@ -181,3 +181,61 @@ def sanitize_user_visible_text(text: str | None) -> str:
     Safe on ``None``/empty input.
     """
     return strip_thinking_tokens(text or "")
+
+
+# Longest tag we must never emit half of: ``</thinking>``.
+_MAX_THINK_TAG = len("</thinking>")
+_OPEN_THINK_RE = re.compile(r"<think(?:ing)?[^>]*>", re.IGNORECASE)
+_CLOSE_THINK_RE = re.compile(r"</think(?:ing)?>", re.IGNORECASE)
+
+
+class ThinkingStreamFilter:
+    """Strip ``<think>…</think>`` from a *token stream*.
+
+    ``strip_thinking_tokens`` works on a whole message. Streaming has neither
+    luxury: a tag can straddle two deltas, so a naive per-delta strip lets
+    ``<thi`` + ``nk>`` through and the user reads the model's reasoning.
+
+    This holds back trailing text that could still turn out to be the start of a
+    tag, emitting it once the next delta proves otherwise. Anything between an
+    opening and closing tag is dropped entirely.
+    """
+
+    def __init__(self) -> None:
+        self._buffer = ""
+        self._inside = False
+
+    def feed(self, delta: str) -> str:
+        """Return the part of ``delta`` that is safe to show now."""
+        self._buffer += delta
+        out: list[str] = []
+        while True:
+            if self._inside:
+                match = _CLOSE_THINK_RE.search(self._buffer)
+                if match is None:
+                    if len(self._buffer) > _MAX_THINK_TAG:
+                        self._buffer = self._buffer[-(_MAX_THINK_TAG - 1) :]
+                    break
+                self._buffer = self._buffer[match.end() :]
+                self._inside = False
+                continue
+            match = _OPEN_THINK_RE.search(self._buffer)
+            if match is not None:
+                out.append(self._buffer[: match.start()])
+                self._buffer = self._buffer[match.end() :]
+                self._inside = True
+                continue
+            safe_upto = len(self._buffer)
+            last_open = self._buffer.rfind("<")
+            if last_open != -1 and (len(self._buffer) - last_open) <= _MAX_THINK_TAG:
+                safe_upto = last_open
+            out.append(self._buffer[:safe_upto])
+            self._buffer = self._buffer[safe_upto:]
+            break
+        return "".join(out)
+
+    def flush(self) -> str:
+        """Emit whatever is safely left once the stream ends."""
+        remainder = "" if self._inside else self._buffer
+        self._buffer = ""
+        return remainder

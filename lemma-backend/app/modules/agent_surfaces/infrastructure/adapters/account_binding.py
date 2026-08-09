@@ -101,6 +101,11 @@ class SurfaceAccountBindingResolver(SurfaceAccountBindingPort):
             raise AgentSurfaceValidationError(
                 "Slack account credentials missing raw_response.bot_user_id"
             )
+        app_id = _str_or_none(raw_response.get("app_id"))
+        if not app_id:
+            raise AgentSurfaceValidationError(
+                "Slack account credentials missing raw_response.app_id; reconnect the Slack account"
+            )
         return None, workspace_id, bot_user_id
 
     async def _resolve_teams(self, account_id: UUID | None) -> str | None:

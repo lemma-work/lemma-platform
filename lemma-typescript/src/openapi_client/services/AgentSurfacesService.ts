@@ -342,4 +342,24 @@ export class AgentSurfacesService {
             },
         });
     }
+    /**
+     * Get Slack App Manifest
+     * The Slack app manifest to paste when running your own Slack app.
+     *
+     * Served rather than copied out of the repo so the URLs always match the
+     * deployment answering this request, and the scopes always match the code
+     * that will consume the events.
+     *
+     * Signed-in access is the only gate, and that is enough: every value in here
+     * is already public — this deployment's URLs and the scopes its own code
+     * asks for. It carries no credential and reveals nothing about a pod.
+     * @returns any Successful Response
+     * @throws ApiError
+     */
+    public static agentSurfaceSlackManifest(): CancelablePromise<Record<string, any>> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/surface-setup/slack/manifest',
+        });
+    }
 }

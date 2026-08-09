@@ -119,4 +119,20 @@ export class PodSurfacesNamespace {
       AgentSurfacesService.agentSurfaceChannels(podId, surfaceName),
     );
   }
+
+  /**
+   * The Slack app manifest to paste when an org runs its own Slack app, with
+   * this deployment's event and OAuth callback URLs already substituted.
+   * Served rather than copied from the repo so the URLs match the deployment
+   * answering, and the scopes match the code consuming the events.
+   *
+   * Takes no pod: it describes the deployment, and it is what you need before
+   * you have anything to scope it to — the app it creates is what issues the
+   * client id that connects the account a surface is built on.
+   */
+  slackManifest() {
+    return this.client.request(() =>
+      AgentSurfacesService.agentSurfaceSlackManifest(),
+    );
+  }
 }

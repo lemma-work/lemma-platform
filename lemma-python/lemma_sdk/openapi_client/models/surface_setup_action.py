@@ -28,6 +28,7 @@ class SurfaceSetupAction:
             key (str):
             title (str):
             fields (list[SurfaceSetupActionField] | Unset):
+            informational (bool | Unset):  Default: False.
             link (None | str | Unset):
             link_label (None | str | Unset):
             steps (list[str] | Unset):
@@ -37,6 +38,7 @@ class SurfaceSetupAction:
     key: str
     title: str
     fields: list[SurfaceSetupActionField] | Unset = UNSET
+    informational: bool | Unset = False
     link: None | str | Unset = UNSET
     link_label: None | str | Unset = UNSET
     steps: list[str] | Unset = UNSET
@@ -55,6 +57,8 @@ class SurfaceSetupAction:
             for fields_item_data in self.fields:
                 fields_item = fields_item_data.to_dict()
                 fields.append(fields_item)
+
+        informational = self.informational
 
         link: None | str | Unset
         if isinstance(self.link, Unset):
@@ -83,6 +87,8 @@ class SurfaceSetupAction:
         )
         if fields is not UNSET:
             field_dict["fields"] = fields
+        if informational is not UNSET:
+            field_dict["informational"] = informational
         if link is not UNSET:
             field_dict["link"] = link
         if link_label is not UNSET:
@@ -112,6 +118,8 @@ class SurfaceSetupAction:
 
                 fields.append(fields_item)
 
+        informational = d.pop("informational", UNSET)
+
         def _parse_link(data: object) -> None | str | Unset:
             if data is None:
                 return data
@@ -137,6 +145,7 @@ class SurfaceSetupAction:
             key=key,
             title=title,
             fields=fields,
+            informational=informational,
             link=link,
             link_label=link_label,
             steps=steps,

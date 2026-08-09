@@ -52,6 +52,10 @@ class SurfaceChatContext(SurfaceContextBase):
     message_user_id: UUID
     message_external_user_id: str | None = None
     message_external_message_id: str | None = None
+    # Set only when this turn *created* the conversation, carrying its title.
+    # It is how the platform learns a fresh thread began — the one moment worth
+    # naming the thread on Slack. None on every subsequent message.
+    created_conversation_title: str | None = None
 
 
 AgentSurfaceContext = Annotated[

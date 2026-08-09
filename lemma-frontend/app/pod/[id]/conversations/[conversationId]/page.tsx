@@ -7,6 +7,7 @@ import { useAIAssistant } from '@/components/ai/ai-assistant-context';
 import { PodAssistantEmbedded } from '@/components/ai/pod-assistant';
 import { resolveDefaultAgentRuntime } from '@/components/agents/agent-runtime-helpers';
 import { ConversationComposerContext } from '@/components/conversations/conversation-composer-context';
+import { projectFromMetadata } from '@/lib/assistant/project-selection';
 import { PodNewWorkspace } from '@/components/pod/pod-new-workspace';
 import { PodConversationSkeleton } from '@/components/pod/route-skeletons';
 import { ConversationPresentationStage } from '@/components/pod/conversation-presentation-stage';
@@ -166,6 +167,8 @@ export default function PodConversationPage({
             runtimeCatalog={runtimeCatalog}
             isNewConversation={isNewConversation}
             canWrite={canWriteConversations}
+            podId={podId}
+            boundProject={projectFromMetadata(activeConversation?.metadata)}
             onAgentChange={handleAgentChange}
             onRuntimeChange={handleCommandRuntimeChange}
             manageModelsHref={pod?.organization_id

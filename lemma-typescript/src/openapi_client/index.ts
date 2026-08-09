@@ -327,6 +327,8 @@ export { SurfaceSetupMode } from './models/SurfaceSetupMode.js';
 export { SurfaceSetupPhase } from './models/SurfaceSetupPhase.js';
 export type { SurfaceSetupResponse } from './models/SurfaceSetupResponse.js';
 export type { SurfaceSetupStep } from './models/SurfaceSetupStep.js';
+export type { SurfaceSlackConfigInput } from './models/SurfaceSlackConfigInput.js';
+export type { SurfaceSlackConfigResponse } from './models/SurfaceSlackConfigResponse.js';
 export type { SurfaceSystemClaim } from './models/SurfaceSystemClaim.js';
 export type { SurfaceTelegramConfigInput } from './models/SurfaceTelegramConfigInput.js';
 export type { SurfaceUpdateRequest } from './models/SurfaceUpdateRequest.js';

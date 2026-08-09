@@ -62,6 +62,24 @@ class SqlAlchemySurfaceRoutingResolutionAdapter(SurfacePodMembershipPort):
         # flushes it.
         user.preferences = updated.model_dump(mode="json")
 
+    async def set_user_default_surface_id(
+        self, user_id: UUID, platform: str, surface_id: UUID
+    ) -> None:
+        user = await self.session.get(User, user_id)
+        if user is None:
+            return
+        try:
+            preferences = (
+                UserPreferences.model_validate(user.preferences)
+                if user.preferences
+                else UserPreferences()
+            )
+        except ValidationError:
+            preferences = UserPreferences()
+        user.preferences = preferences.with_default_surface(
+            platform, surface_id
+        ).model_dump(mode="json")
+
     async def get_user_default_surface_ids(self, user_id: UUID) -> list[UUID]:
         raw = await self.session.scalar(
             select(User.preferences).where(User.id == user_id)

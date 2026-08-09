@@ -57,6 +57,9 @@ from app.modules.connectors.domain.ports import (
 from app.modules.connectors.infrastructure.repositories.auth_config_repository import (
     AuthConfigRepository,
 )
+from app.modules.connectors.services.auth_config_schemas import (
+    default_auth_config_schema,
+)
 from app.modules.connectors.services.account_profile import (
     load_native_account_profile,
     profile_to_dict,
@@ -386,26 +389,6 @@ class ConnectorService:
             raise UnsupportedAuthProviderError(AuthProvider.COMPOSIO.value)
         return capability
 
-    def _default_auth_config_schema(self, auth_scheme: AuthScheme) -> dict:
-        if auth_scheme != AuthScheme.OAUTH2:
-            return {"type": "object", "properties": {}, "additionalProperties": False}
-        return {
-            "type": "object",
-            "required": ["client_id", "client_secret"],
-            "properties": {
-                "client_id": {
-                    "type": "string",
-                    "title": "Client ID",
-                },
-                "client_secret": {
-                    "type": "string",
-                    "title": "Client secret",
-                    "format": "password",
-                },
-            },
-            "additionalProperties": False,
-        }
-
     def _enrich_connector_defaults(
         self,
         connector: ConnectorEntity,
@@ -436,8 +419,8 @@ class ConnectorService:
                             "auth_config_schema": (
                                 capability.auth_config_schema
                                 if capability.auth_config_schema is not None
-                                else self._default_auth_config_schema(
-                                    capability.auth_scheme
+                                else default_auth_config_schema(
+                                    capability.auth_scheme, connector.id
                                 )
                             ),
                         }
@@ -454,8 +437,8 @@ class ConnectorService:
                                 capability.auth_config_schema
                                 if capability.auth_config_schema is not None
                                 else (
-                                    self._default_auth_config_schema(
-                                        capability.auth_scheme
+                                    default_auth_config_schema(
+                                        capability.auth_scheme, connector.id
                                     )
                                     if capability.supports_org_custom_auth_config
                                     else None

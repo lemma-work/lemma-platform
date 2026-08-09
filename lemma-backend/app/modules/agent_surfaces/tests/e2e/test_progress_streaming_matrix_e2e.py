@@ -58,8 +58,7 @@ async def test_progress_streams_via_chat_update_on_slack(
     message_store,
     monkeypatch,
 ):
-    """Tool activity streams as an edited Slack message (chat.update) and the
-    placeholder is deleted before the final answer."""
+    """Slack opens one native stream, appends the answer, and closes it."""
     from app.core.config import settings as app_settings
     from app.modules.agent_surfaces.services import progress_observer as _po
 
@@ -100,12 +99,14 @@ async def test_progress_streams_via_chat_update_on_slack(
         ),
     )
 
-    updates = await wait_for_messages(message_store, "SLACK_UPDATE", min_count=1)
-    assert any("Reading the results" in json.dumps(u) for u in updates)
-    deletes = await wait_for_messages(message_store, "SLACK_DELETE", min_count=1)
-    assert deletes
-    final = await wait_for_messages(message_store, "SLACK", min_count=1)
-    assert "Here is the answer." in final[-1]["text"]
+    starts = await wait_for_messages(message_store, "SLACK_STREAM_START", min_count=1)
+    assert starts[-1]["channel"] == "D0123456"
+    chunks = await wait_for_messages(
+        message_store, "SLACK_STREAM_APPEND", min_count=1
+    )
+    assert any("Here is the answer." in json.dumps(item) for item in chunks)
+    stops = await wait_for_messages(message_store, "SLACK_STREAM_STOP", min_count=1)
+    assert stops[-1]["ts"] == chunks[-1]["ts"]
 
 
 async def test_progress_streams_via_edit_message_on_telegram(

@@ -12373,6 +12373,9 @@
           "send_policy": {
             "$ref": "#/components/schemas/SurfaceSendPolicyConfig"
           },
+          "slack": {
+            "$ref": "#/components/schemas/SurfaceSlackConfigInput"
+          },
           "telegram": {
             "$ref": "#/components/schemas/SurfaceTelegramConfigInput"
           }
@@ -12382,6 +12385,7 @@
       },
       "SurfaceChannelRouteInput": {
         "additionalProperties": false,
+        "description": "One channel's routing, in the same three states the domain models.\n\n``use_pod_assistant`` is not a synonym for an absent ``agent_name`` \u2014 see\n:class:`SurfaceChannelRoute`. Omitting it here is what silently turned an\nexplicit \"the pod assistant answers here\", picked from inside Slack, back\ninto \"unconfigured\" on the next save from the web UI.",
         "properties": {
           "agent_name": {
             "anyOf": [
@@ -12415,6 +12419,11 @@
               }
             ],
             "title": "Channel Name"
+          },
+          "use_pod_assistant": {
+            "default": false,
+            "title": "Use Pod Assistant",
+            "type": "boolean"
           }
         },
         "title": "SurfaceChannelRouteInput",
@@ -12454,6 +12463,11 @@
               }
             ],
             "title": "Channel Name"
+          },
+          "use_pod_assistant": {
+            "default": false,
+            "title": "Use Pod Assistant",
+            "type": "boolean"
           }
         },
         "title": "SurfaceChannelRouteResponse",
@@ -12479,6 +12493,9 @@
           },
           "send_policy": {
             "$ref": "#/components/schemas/SurfaceSendPolicyConfig"
+          },
+          "slack": {
+            "$ref": "#/components/schemas/SurfaceSlackConfigResponse"
           },
           "telegram": {
             "$ref": "#/components/schemas/SurfaceTelegramConfigInput"
@@ -12944,6 +12961,11 @@
             "title": "Fields",
             "type": "array"
           },
+          "informational": {
+            "default": false,
+            "title": "Informational",
+            "type": "boolean"
+          },
           "key": {
             "title": "Key",
             "type": "string"
@@ -13167,6 +13189,50 @@
           "description"
         ],
         "title": "SurfaceSetupStep",
+        "type": "object"
+      },
+      "SurfaceSlackConfigInput": {
+        "additionalProperties": false,
+        "description": "The Slack settings a *caller* owns.\n\nOnly ``app_name``. The per-person DM agent map is written from inside Slack\n\u2014 each person picks their own in the App Home \u2014 so it is readable here and\nnever writable, which keeps one editor from reassigning everybody.",
+        "properties": {
+          "app_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "App Name"
+          }
+        },
+        "title": "SurfaceSlackConfigInput",
+        "type": "object"
+      },
+      "SurfaceSlackConfigResponse": {
+        "description": "Slack settings as read back. ``dm_agent_by_user`` maps a Slack user id to\nthe agent that person chose, or ``__pod_assistant__`` when they explicitly\nchose the pod assistant. A user absent from the map has never chosen and\nfalls to the surface default.",
+        "properties": {
+          "app_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "App Name"
+          },
+          "dm_agent_by_user": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Dm Agent By User",
+            "type": "object"
+          }
+        },
+        "title": "SurfaceSlackConfigResponse",
         "type": "object"
       },
       "SurfaceSystemClaim": {
@@ -31395,6 +31461,37 @@
           "resource": "icon.public",
           "result": "entity",
           "verb": "get"
+        }
+      }
+    },
+    "/surface-setup/slack/manifest": {
+      "get": {
+        "description": "The Slack app manifest to paste when running your own Slack app.\n\nServed rather than copied out of the repo so the URLs always match the\ndeployment answering this request, and the scopes always match the code\nthat will consume the events.\n\nSigned-in access is the only gate, and that is enough: every value in here\nis already public \u2014 this deployment's URLs and the scopes its own code\nasks for. It carries no credential and reveals nothing about a pod.",
+        "operationId": "agent.surface.slack_manifest",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Agent.Surface.Slack Manifest",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Slack App Manifest",
+        "tags": [
+          "Agent Surfaces"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "agent.surface",
+          "result": "entity",
+          "verb": "slack_manifest"
         }
       }
     },

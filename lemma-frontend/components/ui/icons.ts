@@ -61,6 +61,7 @@ export {
     Lightbulb,
     Link,
     List,
+    Lock,
     ListChecks,
     Moon,
     Minus,
