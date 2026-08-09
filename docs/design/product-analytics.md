@@ -313,6 +313,41 @@ Bucketed counts (`1-5`, `6-20`, `21-100`, `100+`), never exact, never names.
 Enough to know version spread and whether self-hosted adoption is real; not
 enough to profile anyone's business.
 
+## 6a. Configuration
+
+Four processes report independently, and none of them shares a key with
+another. Every one is off until its key is set, and no key is set in this
+repository.
+
+| Variable | Process | Default | Effect when unset |
+|---|---|---|---|
+| `ANALYTICS_WRITE_KEY` | backend | — | `NullSink`; nothing is sent |
+| `ANALYTICS_HOST` | backend | `https://eu.i.posthog.com` | — |
+| `ANALYTICS_STRICT` | backend | `false` | violations are dropped, not raised |
+| `NEXT_PUBLIC_ANALYTICS_KEY` | web | — | client never initialises |
+| `NEXT_PUBLIC_ANALYTICS_HOST` | web | `https://eu.posthog.com` | dashboard links only |
+| `NEXT_PUBLIC_ANALYTICS_INGEST_HOST` | web | `https://eu.i.posthog.com` | `/ingest` rewrite target |
+| `LEMMA_TELEMETRY_KEY` | CLI, Desktop | — | nothing is sent |
+| `LEMMA_TELEMETRY_HOST` | CLI, Desktop | `https://eu.i.posthog.com` | — |
+| `LEMMA_TELEMETRY` | CLI, Desktop | — | `0`/`false`/`off`/`no` disables |
+| `LEMMA_CLIENT` | Python SDK | — | requests resolve to origin `SDK` |
+
+Two details that are easy to get wrong:
+
+- **The web key is read through `window.__ENV`, not `process.env`.** Next
+  inlines `process.env` at build time, so a key handed to a prebuilt image at
+  run time would never arrive and analytics would silently never start. It goes
+  through `lib/config.ts` like every other public setting, which the Docker
+  entrypoint populates at container start.
+- **`NEXT_PUBLIC_ANALYTICS_INGEST_HOST` is the exception**: `next.config.ts`
+  reads it from `process.env` when the server boots, so it is not part of
+  `window.__ENV` and does not need to be.
+
+The backend key belongs only to Lemma Cloud. The CLI and Desktop share
+`LEMMA_TELEMETRY_KEY` deliberately — both send the anonymous, install-scoped
+contract, and neither can express a pod — so they land in one project that is
+separate from the product one.
+
 ## 7. The privacy boundary
 
 Mirror what the observability plane already does:

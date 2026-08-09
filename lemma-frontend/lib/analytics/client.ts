@@ -40,18 +40,18 @@ let started = false;
 function analyticsAllowed(): boolean {
     if (typeof window === "undefined") return false;
     if (isLocalDeployment()) return false;
-    return Boolean(process.env.NEXT_PUBLIC_ANALYTICS_KEY);
+    return Boolean(config.ANALYTICS_KEY);
 }
 
 export function startAnalytics(): void {
     if (started || !analyticsAllowed()) return;
     started = true;
-    posthog.init(process.env.NEXT_PUBLIC_ANALYTICS_KEY as string, {
+    posthog.init(config.ANALYTICS_KEY, {
         // Same-origin, so an ad blocker does not silently eat a share of the
         // data — and the share it eats is not random, it skews toward exactly
         // the technical users Lemma sells to.
         api_host: "/ingest",
-        ui_host: process.env.NEXT_PUBLIC_ANALYTICS_HOST || "https://eu.posthog.com",
+        ui_host: config.ANALYTICS_HOST,
         autocapture: false,
         disable_session_recording: true,
         capture_pageview: false, // App Router navigations are captured by hand.
