@@ -84,14 +84,40 @@ jobs:
           data["version"] = version
           conf.write_text(json.dumps(data, indent=2) + "\n")
 
-          # Cargo.toml — keep the crate version in sync.
+          # desktop/Cargo.toml — [workspace.package] version, which every crate
+          # in the desktop workspace inherits. Anchored to that table on
+          # purpose: this manifest is also a [package] and also carries
+          # [workspace.dependencies], so a bare ^version = would be a coin flip
+          # over which one it rewrote.
           cargo = pathlib.Path("desktop/Cargo.toml")
-          text, n = re.subn(r'(?m)^version = "[^"]+"',
-                            f'version = "{version}"', cargo.read_text(), count=1)
-          if n != 1:
-              raise SystemExit("Could not set version in desktop/Cargo.toml")
+          text, count = re.subn(
+              r'(?ms)(^\[workspace\.package\].*?^version = ")[^"]+(")',
+              lambda m: m.group(1) + version + m.group(2),
+              cargo.read_text(),
+              count=1,
+          )
+          if count != 1:
+              raise SystemExit("Could not set [workspace.package] version in desktop/Cargo.toml")
           cargo.write_text(text)
+
+          # The committed placeholder runtime manifest. The app refuses a
+          # runtime whose version disagrees with its own, and check_version_
+          # consistency.py reads this file, so it moves with the tag.
+          manifest = pathlib.Path("desktop/runtime/lemma-local.json")
+          payload = json.loads(manifest.read_text())
+          payload["version"] = version
+          for group in ("host_packs", "guest_runtimes"):
+              for entry in payload.get(group, {}).values():
+                  entry["runtime_version"] = version
+          manifest.write_text(json.dumps(payload, indent=2) + "\n")
           PY
+
+      # Every Lemma-owned component must name the tag before anything is
+      # published — the same gate release-lemma-python.yml and
+      # release-lemma-typescript.yml already run. Desktop and the native crates
+      # were the components it did not cover.
+      - name: Check component versions agree with the tag
+        run: python3 scripts/check_version_consistency.py --expect "${{ steps.version.outputs.version }}"
 
       - name: Setup Node.js
         uses: actions/setup-node@v5
@@ -179,11 +205,15 @@ jobs:
           codesign -d --entitlements :- "${helper}" 2>&1 \
             | grep -F "com.apple.security.virtualization"
 
+      - name: Read the pinned Tauri CLI
+        run: |
+          echo "TAURI_CLI=@tauri-apps/cli@$(tr -d '[:space:]' < desktop/scripts/tauri-cli-version.txt)" >> "$GITHUB_ENV"
+
       - name: Build online DMG
         working-directory: desktop
         run: |
           set -euo pipefail
-          npx -y @tauri-apps/cli@2.11.4 build --config tauri.online.conf.json
+          npx -y "$TAURI_CLI" build --config tauri.online.conf.json
           mkdir -p target/release/release-artifacts
           dmg=(target/release/bundle/dmg/Lemma_*_aarch64.dmg)
           [[ "${#dmg[@]}" == 1 ]]
@@ -273,17 +303,46 @@ jobs:
         run: |
           import json, os, pathlib, re
           version = os.environ["VERSION"]
+
+          # tauri.conf.json — Tauri reads the bundle version from here.
           conf = pathlib.Path("desktop/tauri.conf.json")
           data = json.loads(conf.read_text())
           data["version"] = version
           conf.write_text(json.dumps(data, indent=2) + "\n")
+
+          # desktop/Cargo.toml — [workspace.package] version, which every crate
+          # in the desktop workspace inherits. Anchored to that table on
+          # purpose: this manifest is also a [package] and also carries
+          # [workspace.dependencies], so a bare ^version = would be a coin flip
+          # over which one it rewrote.
           cargo = pathlib.Path("desktop/Cargo.toml")
           text, count = re.subn(
-              r'(?m)^version = "[^"]+"', f'version = "{version}"', cargo.read_text(), count=1
+              r'(?ms)(^\[workspace\.package\].*?^version = ")[^"]+(")',
+              lambda m: m.group(1) + version + m.group(2),
+              cargo.read_text(),
+              count=1,
           )
           if count != 1:
-              raise SystemExit("Could not set version in desktop/Cargo.toml")
+              raise SystemExit("Could not set [workspace.package] version in desktop/Cargo.toml")
           cargo.write_text(text)
+
+          # The committed placeholder runtime manifest. The app refuses a
+          # runtime whose version disagrees with its own, and check_version_
+          # consistency.py reads this file, so it moves with the tag.
+          manifest = pathlib.Path("desktop/runtime/lemma-local.json")
+          payload = json.loads(manifest.read_text())
+          payload["version"] = version
+          for group in ("host_packs", "guest_runtimes"):
+              for entry in payload.get(group, {}).values():
+                  entry["runtime_version"] = version
+          manifest.write_text(json.dumps(payload, indent=2) + "\n")
+
+      # Every Lemma-owned component must name the tag before anything is
+      # published — the same gate release-lemma-python.yml and
+      # release-lemma-typescript.yml already run. Desktop and the native crates
+      # were the components it did not cover.
+      - name: Check component versions agree with the tag
+        run: python3 scripts/check_version_consistency.py --expect "${{ steps.version.outputs.version }}"
 
       - name: Set up Node.js
         uses: actions/setup-node@v5
@@ -408,13 +467,19 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw "Could not sign native runtime executable: $path" }
           }
 
+      - name: Read the pinned Tauri CLI
+        shell: pwsh
+        run: |
+          $v = (Get-Content desktop/scripts/tauri-cli-version.txt).Trim()
+          "TAURI_CLI=@tauri-apps/cli@$v" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+
       - name: Build online NSIS installer
         working-directory: desktop
         shell: pwsh
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
-          npx -y @tauri-apps/cli@2.11.4 build --config tauri.online.conf.json --bundles nsis
+          npx -y $env:TAURI_CLI build --config tauri.online.conf.json --bundles nsis
           if ($LASTEXITCODE -ne 0) { throw "Online NSIS build failed" }
           New-Item -ItemType Directory -Force target/release/release-artifacts | Out-Null
           $installers = @(Get-ChildItem target/release/bundle/nsis/Lemma_*_x64-setup.exe)

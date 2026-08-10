@@ -117,7 +117,56 @@ SOURCES: tuple[Source, ...] = (
         REPO_ROOT / "lemma-cli/lemma_cli/__init__.py",
         re.compile(r'(?m)^__version__ = "([^"]+)"'),
     ),
+    # Desktop and the native stack. release-desktop.yml rewrites the two below
+    # from the tag; before the cargo workspace the five sibling crates each
+    # carried their own literal and would have drifted silently, which is what
+    # [workspace.package] and the member check below now prevent.
+    Source(
+        "lemma-desktop tauri.conf.json",
+        REPO_ROOT / "desktop/tauri.conf.json",
+    ),
+    Source(
+        "desktop cargo workspace",
+        REPO_ROOT / "desktop/Cargo.toml",
+        # Anchored to [workspace.package]: this manifest is also a [package] and
+        # also carries [workspace.dependencies], so a bare ^version = would
+        # match whichever came first.
+        re.compile(r'(?ms)^\[workspace\.package\].*?^version = "([^"]+)"'),
+    ),
+    # The runtime manifest Desktop bundles. The app refuses to install a runtime
+    # whose version disagrees with its own, so a stale placeholder here is a
+    # build that cannot finish first launch.
+    Source(
+        "desktop bundled runtime manifest",
+        REPO_ROOT / "desktop/runtime/lemma-local.json",
+    ),
 )
+
+# Every crate in the desktop workspace inherits one version. A member that
+# re-declares its own would be invisible to SOURCES above and would drift at the
+# next release, so the shape is checked rather than the value.
+WORKSPACE_MEMBERS: tuple[str, ...] = (
+    "desktop/locald",
+    "desktop/agent-host",
+    "desktop/local-runtime/manager",
+    "desktop/local-runtime/hostctl",
+    "desktop/local-runtime/guestd",
+)
+
+
+def workspace_member_problems() -> list[str]:
+    problems: list[str] = []
+    for member in WORKSPACE_MEMBERS:
+        manifest = REPO_ROOT / member / "Cargo.toml"
+        if not manifest.exists():
+            problems.append(f"  {member}: no Cargo.toml")
+            continue
+        if "version.workspace = true" not in manifest.read_text(encoding="utf-8"):
+            problems.append(
+                f"  {member}: declares its own version instead of "
+                "version.workspace = true — it would drift at the next release"
+            )
+    return problems
 
 
 def main() -> int:
@@ -135,7 +184,7 @@ def main() -> int:
 
     readings: list[tuple[Source, str | None]] = [(s, s.read()) for s in SOURCES]
 
-    problems: list[str] = []
+    problems: list[str] = workspace_member_problems()
     for source, value in readings:
         rel = source.path.relative_to(REPO_ROOT)
         if value is None:

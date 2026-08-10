@@ -85,15 +85,31 @@ uv run --project lemma-backend pytest \
 npx tsc --noEmit --project lemma-frontend/tsconfig.json
 ```
 
-`lemma-guestd` is the Linux guest daemon and does not compile on a macOS or
-Windows host, so it sits outside the workspace's default members. CI builds and
-tests it on Linux; locally, `make desktop-guestd` does the same.
+`lemma-guestd` is the Linux guest daemon: it reaches for `std::os::unix`
+unconditionally, so it builds and tests on macOS and Linux but not on Windows.
+Its vsock listener is behind a Linux `cfg` that only a Linux build compiles,
+which is why CI runs `make desktop-guestd` there as well.
 
 Build Desktop sidecars:
 
 ```bash
-desktop/scripts/build-sidecar.sh
+make desktop-sidecars
 ```
+
+On Windows there is no `make`, so the same verbs live in a PowerShell
+dispatcher over the same underlying scripts:
+
+```powershell
+pwsh desktop\scripts\desktop.ps1 help
+pwsh desktop\scripts\desktop.ps1 test
+pwsh desktop\scripts\desktop.ps1 exe
+```
+
+There is deliberately no `dev` verb: running the app from source is macOS only
+for now. `desktop/local-runtime/manager` names its WSL distribution with a
+global constant, so a dev run in a throwaway state root would adopt and mutate
+the distribution a real install owns. On Windows, build and install the
+installer instead.
 
 ### Signing a local build you intend to actually use
 
@@ -169,39 +185,60 @@ Only that explicitly selected manifest may use `file://` artifact sources.
 Packaged releases ignore development port overrides and do not enable arbitrary
 local artifacts.
 
-## Build the PR test DMG
+## Build a test installer
 
-The DMG from CI's **macOS desktop build + codesign** job is *not* an installer.
-That job proves the app compiles and codesigns; it stages a placeholder manifest
-with unresolvable URLs, so its app refuses to install and says so. Its artifact
-is named `lemma-desktop-macos-buildcheck-<sha>`. Use the workflow below for
-anything you intend to run.
+CI's **Desktop workspace** and **Windows desktop build check** jobs do *not*
+produce installers. They prove the app compiles, lints, tests, and bundles;
+they build against a placeholder manifest with unresolvable URLs, so the
+resulting app refuses to install and says so. Their artifacts are named
+`lemma-desktop-macos-buildcheck-<sha>`.
 
-Run the **Release Local Images** workflow on the PR branch with:
+For anything you intend to run, cut a **Release Local Images** run with:
 
 - `version`: the Desktop version, currently `0.7.0`;
 - `publish`: `false`.
 
-The workflow builds and verifies both runtimes, creates a resource-backed
-manifest, builds an ad-hoc-signed DMG, enforces size gates, and uploads:
+One run builds and verifies both platforms' runtimes and uploads two
+self-contained installers:
 
 ```text
 lemma-desktop-macos-pr-test-<full-commit-sha>
+lemma-desktop-windows-pr-test-<full-commit-sha>
 ```
-
-Download with GitHub CLI:
 
 ```bash
-sha="$(git rev-parse HEAD)"
+gh workflow run release-local-images.yml -f version=0.7.0 -f publish=false
 gh run list --workflow release-local-images.yml --branch "$(git branch --show-current)"
-gh run download RUN_ID \
-  -n "lemma-desktop-macos-pr-test-${sha}" \
-  -D /tmp/lemma-pr-dmg
+
+sha="$(git rev-parse HEAD)"
+gh run download RUN_ID -n "lemma-desktop-macos-pr-test-${sha}" -D /tmp/lemma-pr
+gh run download RUN_ID -n "lemma-desktop-windows-pr-test-${sha}" -D /tmp/lemma-pr
 ```
 
-The test app installs its embedded compressed runtimes into Application
-Support on first launch. Registry access remains required for infrastructure
-and sandbox images.
+The Windows installer is unsigned, so SmartScreen warns on first run.
+
+### Or build one locally
+
+The same run's artifacts also drive a local build, through the same staging
+script CI uses — so a green local build and a green CI build mean the same
+thing. The host pack and the guest runtime cannot be produced from a checkout
+(the pack embeds digests of specific container builds; the guest is assembled
+under `docker buildx` with a kernel unpacked by `zstd`), which is why this
+fetches them:
+
+```bash
+make desktop-runtime-fetch RUN=<run-id>
+make desktop-dmg
+```
+
+```powershell
+pwsh desktop\scripts\desktop.ps1 runtime-fetch -Run <run-id>
+pwsh desktop\scripts\desktop.ps1 exe
+```
+
+One run feeds both machines. The test app installs its embedded compressed
+runtimes into Application Support on first launch; registry access is still
+required for infrastructure and sandbox images.
 
 ## Clean macOS acceptance test
 
