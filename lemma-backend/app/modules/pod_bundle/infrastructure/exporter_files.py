@@ -29,20 +29,32 @@ async def export_pod_files(
     ctx: Context,
     data_budget: Any,
     warnings: list[str],
+    folder_paths: list[str],
 ) -> bool:
-    """Export the pod's POD-visible file tree into ``files/`` — folders as
-    ``.folder.json``, file bytes (drawn from the shared data budget), and a
-    ``.files.json`` manifest — mirroring the CLI layout so either tool can
-    import the result. Returns whether any ``files/`` content was written.
+    """Export the named folders into ``files/`` — folders as ``.folder.json``,
+    file bytes (drawn from the shared data budget), and a ``.files.json``
+    manifest — mirroring the CLI layout so either tool can import the result.
+    Returns whether any ``files/`` content was written.
+
+    Only ``folder_paths`` and what lives beneath them are exported: naming a
+    folder means that subtree. There is no way to ask for the whole file tree,
+    which is what keeps a pod's private files out of a bundle nobody meant to
+    put them in.
+
     Best-effort: a file that can't be listed/downloaded is skipped, never
     failing the export."""
     from lemma_pod_bundle.layout import FILES_MANIFEST
 
     from app.composition.pod_bundle_resources import build_file_service
 
+    if not folder_paths:
+        return False
+
     try:
         service = build_file_service(uow)
-        entities = await walk_pod_files(service, pod_id, ctx)
+        entities = await _collect_named_folders(
+            service, pod_id, ctx, folder_paths, warnings
+        )
     except Exception as exc:  # noqa: BLE001 - files are best-effort
         logger.debug('pod_bundle.exporter.skipping_file_export_pod_s.diagnostic', pod_id=pod_id)
         # Best-effort must still be audible: silently returning an export
@@ -122,6 +134,68 @@ async def export_pod_files(
     if file_manifest:
         _write_json(files_root / FILES_MANIFEST, {"files": file_manifest})
     return wrote
+
+async def _collect_named_folders(
+    service: Any,
+    pod_id: UUID,
+    ctx: Context,
+    folder_paths: list[str],
+    warnings: list[str],
+) -> list[Any]:
+    """Every entity under each named folder, de-duplicated, order preserved.
+
+    A path that is not a folder here is reported and skipped: the caller named
+    it deliberately, so silence would leave them believing it travelled.
+    """
+    entities: list[Any] = []
+    seen_paths: set[str] = set()
+    for folder_path in folder_paths:
+        if folder_path == "/":
+            # "/" is the whole file tree, which is the one thing named
+            # selection exists to prevent. Refusing it by name stops the
+            # blanket export returning through the front door.
+            warnings.append(
+                "folder '/' is not exportable: name the folders you want "
+                "rather than the pod's whole file tree"
+            )
+            continue
+        found = await _folder_entity(service, pod_id, ctx, folder_path)
+        if found is None:
+            warnings.append(
+                f"folder '{folder_path}' requested for export but not found "
+                f"in the pod; skipped"
+            )
+            continue
+        subtree = await walk_pod_files(service, pod_id, ctx, folder_path)
+        for entity in [found, *subtree]:
+            path = str(entity.path or "")
+            if path in seen_paths:
+                continue
+            seen_paths.add(path)
+            entities.append(entity)
+    return entities
+
+
+async def _folder_entity(
+    service: Any, pod_id: UUID, ctx: Context, folder_path: str
+) -> Any | None:
+    """The folder entity at ``folder_path``, or None when it isn't one.
+
+    Found by listing the parent rather than the path itself: a folder that lists
+    itself would otherwise look indistinguishable from one that does not exist.
+    """
+    parent = folder_path.rsplit("/", 1)[0] or "/"
+    cursor: str | None = None
+    while True:
+        items, cursor = await service.list_files(
+            pod_id, ctx, directory_path=parent, limit=100, cursor=cursor
+        )
+        for item in items:
+            if str(item.path or "") == folder_path and item.is_folder:
+                return item
+        if not cursor:
+            return None
+
 
 async def walk_pod_files(
     service: Any,

@@ -184,10 +184,9 @@ class BundleExporter:
         *,
         pod_id: UUID,
         user_id: UUID,
-        with_data: bool,
         include: list[str] | None,
         data_tables: list[str] | None = None,
-        with_files: bool = False,
+        file_folders: list[str] | None = None,
         ctx: Context,
         uow: SqlAlchemyUnitOfWork,
         on_progress: ProgressCallback,
@@ -200,12 +199,15 @@ class BundleExporter:
         The schema always exports fully; only row data + file/asset bytes are
         bounded (best-effort), with each cap that trips noted in ``warnings``.
 
-        Row data is opt-in and off by default: a table is seeded only when
-        ``with_data`` (every table) or its name is in ``data_tables`` (just those).
+        Row data and files are selected by name, never in bulk: a table is
+        seeded only when it appears in ``data_tables``, and a file is included
+        only when it lives under one of ``file_folders``. Naming nothing exports
+        the pod's resources alone.
         """
         selected = _normalize_include(include)
         data_tables_set = _normalize_data_tables(data_tables)
-        wants_data = with_data or bool(data_tables_set)
+        folder_paths = _normalize_file_folders(file_folders)
+        wants_data = bool(data_tables_set)
         warnings: list[str] = []
         record_budget = _RecordBudget(
             per_table=pod_bundle_settings.pod_bundle_export_max_records_per_table,
@@ -284,8 +286,7 @@ class BundleExporter:
                     )
                     # Seed this table only when the caller asked for all data or
                     # named it explicitly.
-                    seed_this = with_data or table_name in data_tables_set
-                    if seed_this and record_service is not None:
+                    if table_name in data_tables_set and record_service is not None:
                         cap = record_budget.table_cap()
                         if cap <= 0:
                             record_budget.note_skipped(table=table_name)
@@ -478,7 +479,7 @@ class BundleExporter:
 
             # --- files (opt-in, byte-budgeted, shares the data pool) ----------
             wrote_files = False
-            if with_files:
+            if folder_paths:
                 wrote_files = await self._export_pod_files(
                     root=root,
                     uow=uow,
@@ -486,6 +487,7 @@ class BundleExporter:
                     ctx=ctx,
                     data_budget=data_budget,
                     warnings=warnings,
+                    folder_paths=folder_paths,
                 )
 
             # --- portability + contents manifest (no DB) ----------------------
@@ -665,6 +667,7 @@ class BundleExporter:
         ctx: Context,
         data_budget: "_ByteBudget",
         warnings: list[str],
+        folder_paths: list[str],
     ) -> bool:
         from app.modules.pod_bundle.infrastructure.exporter_files import (
             export_pod_files,
@@ -673,6 +676,7 @@ class BundleExporter:
         return await export_pod_files(
             root=root, uow=uow, pod_id=pod_id, ctx=ctx,
             data_budget=data_budget, warnings=warnings,
+            folder_paths=folder_paths,
         )
 
     async def _walk_pod_files(
@@ -791,9 +795,28 @@ def _normalize_include(include: list[str] | None) -> set[str]:
     return resolved or set(_EXPORT_RESOURCE_TYPES)
 
 
+def _normalize_file_folders(file_folders: list[str] | None) -> list[str]:
+    """Folder paths to export, normalized to a leading slash and de-duplicated.
+
+    Order is preserved so warnings come back in the order the caller asked."""
+    if not file_folders:
+        return []
+    seen: set[str] = set()
+    out: list[str] = []
+    for raw in file_folders:
+        if not raw or not raw.strip():
+            continue
+        path = "/" + raw.strip().strip("/")
+        if path in seen:
+            continue
+        seen.add(path)
+        out.append(path)
+    return out
+
+
 def _normalize_data_tables(data_tables: list[str] | None) -> set[str]:
     """The set of table names to seed row data for. ``None``/empty means none
-    (unless ``with_data`` seeds every table). Blank entries are dropped."""
+    Blank entries are dropped."""
     if not data_tables:
         return set()
     return {name.strip() for name in data_tables if name and name.strip()}

@@ -121,7 +121,7 @@ The orchestration API carries **no zip bytes**. Import takes a URL; export retur
 | `POST …/{id}/replan` | POD_UPDATE | re-plan against staged bundle; `410` if swept |
 | `DELETE …/{id}` | POD_UPDATE | abort jobs, delete state + staging |
 | `GET …/{id}/events` | POD_READ | SSE: `snapshot`, `status`, `step`, `progress`, `completed`, `error`, `expired` |
-| `POST /pods/{pod_id}/bundle/exports` | POD_READ | `{include?, with_data?, ttl_seconds?}` → `202 {export_id}` (ttl clamped to max) |
+| `POST /pods/{pod_id}/bundle/exports` | POD_READ | `{include?, data_tables?, file_folders?, ttl_seconds?}` → `202 {export_id}` (ttl clamped to max). Rows and files are selected by name — there is no "every table"/"every folder" switch, and an unknown field is rejected rather than ignored |
 | `GET /pods/{pod_id}/bundle/exports/{id}` | POD_READ | status; when READY: signed `download_url`, `expires_at`, and `warnings` (data-cap notices) |
 | `GET /pods/bundle/download?token=…` | CurrentUser (any user) + token | stream the archive (application/zip); not pod-scoped; `410` bad/expired token or swept archive |
 | `POST /pods/{pod_id}/bundle/publishes` | POD_READ | `{repo_name, private, account_id, ai_readme}` → `202`; GitHub authority comes from the user's own connector account |

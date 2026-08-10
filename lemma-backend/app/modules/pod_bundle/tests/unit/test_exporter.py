@@ -276,7 +276,7 @@ def patched_exporter(monkeypatch):
 
 
 async def _run_export(
-    patched_exporter, *, with_data, include=None, data_tables=None, with_files=False
+    patched_exporter, *, include=None, data_tables=None, file_folders=None
 ):
     progress: list[tuple[int, int]] = []
     warnings_holder: list[list[str]] = []
@@ -287,9 +287,8 @@ async def _run_export(
     filename, zip_bytes, warnings = await patched_exporter.export(
         pod_id=uuid4(),
         user_id=uuid4(),
-        with_data=with_data,
         data_tables=data_tables,
-        with_files=with_files,
+        file_folders=file_folders,
         include=include,
         ctx=object(),
         uow=object(),
@@ -301,7 +300,7 @@ async def _run_export(
 
 
 async def test_export_produces_expected_layout(patched_exporter, tmp_path):
-    filename, zip_bytes, progress = await _run_export(patched_exporter, with_data=True)
+    filename, zip_bytes, progress = await _run_export(patched_exporter, data_tables=["leads", "accounts"])
 
     assert filename == "my-crm-pod.zip"
     root = extract_bundle(zip_bytes, tmp_path / "out")
@@ -333,7 +332,7 @@ async def test_export_produces_expected_layout(patched_exporter, tmp_path):
 
 
 async def test_with_data_writes_data_csv(patched_exporter, tmp_path):
-    _filename, zip_bytes, _progress = await _run_export(patched_exporter, with_data=True)
+    _filename, zip_bytes, _progress = await _run_export(patched_exporter, data_tables=["leads", "accounts"])
     root = extract_bundle(zip_bytes, tmp_path / "out")
 
     data_csv = root / "tables" / "leads" / "data.csv"
@@ -346,7 +345,7 @@ async def test_with_data_writes_data_csv(patched_exporter, tmp_path):
 
 
 async def test_without_data_skips_data_csv(patched_exporter, tmp_path):
-    _filename, zip_bytes, _progress = await _run_export(patched_exporter, with_data=False)
+    _filename, zip_bytes, _progress = await _run_export(patched_exporter)
     root = extract_bundle(zip_bytes, tmp_path / "out")
     assert not (root / "tables" / "leads" / "data.csv").exists()
     # Table schema is still exported without data.
@@ -356,7 +355,7 @@ async def test_without_data_skips_data_csv(patched_exporter, tmp_path):
 async def test_data_tables_seeds_only_named_table(patched_exporter, tmp_path):
     # with_data off, but leads named explicitly → leads.data.csv is written.
     _filename, zip_bytes, _progress = await _run_export(
-        patched_exporter, with_data=False, data_tables=["leads"]
+        patched_exporter, data_tables=["leads"]
     )
     root = extract_bundle(zip_bytes, tmp_path / "out")
     assert (root / "tables" / "leads" / "data.csv").is_file()
@@ -369,7 +368,7 @@ async def test_data_tables_leaves_unnamed_row_bearing_table_unseeded(
     # Only 'accounts' requested → leads (which HAS rows) is NOT seeded. Proves the
     # selection is per-table, not all-or-nothing.
     _filename, zip_bytes, _progress = await _run_export(
-        patched_exporter, with_data=False, data_tables=["accounts"]
+        patched_exporter, data_tables=["accounts"]
     )
     root = extract_bundle(zip_bytes, tmp_path / "out")
     assert not (root / "tables" / "leads" / "data.csv").exists()
@@ -380,7 +379,7 @@ async def test_data_tables_leaves_unnamed_row_bearing_table_unseeded(
 
 async def test_data_tables_unknown_name_warns(patched_exporter, tmp_path):
     _filename, zip_bytes, _progress = await _run_export(
-        patched_exporter, with_data=False, data_tables=["ghost"]
+        patched_exporter, data_tables=["ghost"]
     )
     warnings = _run_export.last_warnings  # type: ignore[attr-defined]
     assert any("ghost" in w and "not found" in w for w in warnings)
@@ -396,7 +395,7 @@ async def test_table_data_byte_budget_truncates_rows(
     monkeypatch.setattr(
         exporter_mod.pod_bundle_settings, "pod_bundle_export_max_file_bytes", 22
     )
-    _filename, zip_bytes, _progress = await _run_export(patched_exporter, with_data=True)
+    _filename, zip_bytes, _progress = await _run_export(patched_exporter, data_tables=["leads", "accounts"])
     warnings = _run_export.last_warnings  # type: ignore[attr-defined]
     root = extract_bundle(zip_bytes, tmp_path / "out")
 
@@ -405,7 +404,7 @@ async def test_table_data_byte_budget_truncates_rows(
     assert any("truncated to 1 of 2 rows" in w and "leads" in w for w in warnings)
 
 
-async def test_with_files_exports_tree_bytes_and_manifest(
+async def test_named_folder_exports_its_subtree_bytes_and_manifest(
     patched_exporter, tmp_path, monkeypatch
 ):
     folder = _FakeFileEntity(path="/docs", name="docs", kind="FOLDER", description="d")
@@ -423,7 +422,7 @@ async def test_with_files_exports_tree_bytes_and_manifest(
     )
 
     _filename, zip_bytes, _progress = await _run_export(
-        patched_exporter, with_data=False, with_files=True
+        patched_exporter, file_folders=["/docs"]
     )
     root = extract_bundle(zip_bytes, tmp_path / "out")
 
@@ -435,8 +434,73 @@ async def test_with_files_exports_tree_bytes_and_manifest(
     assert [e["path"] for e in manifest["files"]] == ["/docs/guide.md"]
 
 
-async def test_without_with_files_writes_no_file_bytes(patched_exporter, tmp_path):
-    _filename, zip_bytes, _progress = await _run_export(patched_exporter, with_data=False)
+async def test_a_folder_outside_the_named_ones_is_not_exported(
+    patched_exporter, tmp_path, monkeypatch
+):
+    """Naming one folder must not drag its siblings along — that is the whole
+    point of naming them."""
+    docs = _FakeFileEntity(path="/docs", name="docs", kind="FOLDER")
+    other = _FakeFileEntity(path="/private-notes", name="private-notes", kind="FOLDER")
+    doc = _FakeFileEntity(path="/docs/guide.md", name="guide.md", kind="FILE", size_bytes=5)
+    note = _FakeFileEntity(
+        path="/private-notes/salaries.csv", name="salaries.csv", kind="FILE", size_bytes=4
+    )
+    by_dir = {
+        "/": [docs, other],
+        "/docs": [doc],
+        "/private-notes": [note],
+    }
+    contents = {"/docs/guide.md": b"hello", "/private-notes/salaries.csv": b"1234"}
+    monkeypatch.setattr(
+        "app.modules.datastore.api.dependencies.build_file_service",
+        lambda uow: _FakeFileService(by_dir, contents),
+    )
+
+    _filename, zip_bytes, _progress = await _run_export(
+        patched_exporter, file_folders=["/docs"]
+    )
+    root = extract_bundle(zip_bytes, tmp_path / "out")
+
+    assert (root / "files" / "docs" / "guide.md").is_file()
+    assert not (root / "files" / "private-notes").exists()
+
+
+async def test_naming_the_root_folder_is_refused(patched_exporter, tmp_path, monkeypatch):
+    """`/` would be "every file" spelled differently."""
+    docs = _FakeFileEntity(path="/docs", name="docs", kind="FOLDER")
+    doc = _FakeFileEntity(path="/docs/guide.md", name="guide.md", kind="FILE", size_bytes=5)
+    monkeypatch.setattr(
+        "app.modules.datastore.api.dependencies.build_file_service",
+        lambda uow: _FakeFileService({"/": [docs], "/docs": [doc]}, {"/docs/guide.md": b"hello"}),
+    )
+
+    _filename, zip_bytes, _progress = await _run_export(
+        patched_exporter, file_folders=["/"]
+    )
+    root = extract_bundle(zip_bytes, tmp_path / "out")
+    warnings = _run_export.last_warnings  # type: ignore[attr-defined]
+
+    assert not (root / "files" / ".files.json").exists()
+    assert any("not exportable" in w for w in warnings)
+
+
+async def test_unknown_folder_warns_rather_than_failing(
+    patched_exporter, tmp_path, monkeypatch
+):
+    monkeypatch.setattr(
+        "app.modules.datastore.api.dependencies.build_file_service",
+        lambda uow: _FakeFileService({"/": []}, {}),
+    )
+
+    _filename, _zip, _progress = await _run_export(
+        patched_exporter, file_folders=["/nope"]
+    )
+    warnings = _run_export.last_warnings  # type: ignore[attr-defined]
+    assert any("/nope" in w and "not found" in w for w in warnings)
+
+
+async def test_naming_no_folder_writes_no_file_bytes(patched_exporter, tmp_path):
+    _filename, zip_bytes, _progress = await _run_export(patched_exporter)
     root = extract_bundle(zip_bytes, tmp_path / "out")
     # files/ dir exists for layout parity but carries no manifest/content.
     assert not (root / "files" / ".files.json").exists()
@@ -447,7 +511,7 @@ async def test_per_table_record_cap_truncates_with_warning(patched_exporter, tmp
     monkeypatch.setattr(
         exporter_mod.pod_bundle_settings, "pod_bundle_export_max_records_per_table", 1
     )
-    _filename, zip_bytes, _progress = await _run_export(patched_exporter, with_data=True)
+    _filename, zip_bytes, _progress = await _run_export(patched_exporter, data_tables=["leads", "accounts"])
     warnings = _run_export.last_warnings  # type: ignore[attr-defined]
     root = extract_bundle(zip_bytes, tmp_path / "out")
 
@@ -464,7 +528,7 @@ async def test_overall_record_budget_makes_later_tables_schema_only(
     monkeypatch.setattr(
         exporter_mod.pod_bundle_settings, "pod_bundle_export_max_records_total", 0
     )
-    _filename, zip_bytes, _progress = await _run_export(patched_exporter, with_data=True)
+    _filename, zip_bytes, _progress = await _run_export(patched_exporter, data_tables=["leads", "accounts"])
     warnings = _run_export.last_warnings  # type: ignore[attr-defined]
     root = extract_bundle(zip_bytes, tmp_path / "out")
 
@@ -485,7 +549,7 @@ def test_byte_budget_helper():
 
 async def test_include_filters_resource_types(patched_exporter, tmp_path):
     _filename, zip_bytes, _progress = await _run_export(
-        patched_exporter, with_data=False, include=["tables"]
+        patched_exporter, include=["tables"]
     )
     root = extract_bundle(zip_bytes, tmp_path / "out")
     assert (root / "tables" / "leads" / "leads.json").is_file()
@@ -513,7 +577,7 @@ async def test_app_source_exported_and_slug_tokenized(
             "visibility": "POD",
         },
     )
-    _filename, zip_bytes, _progress = await _run_export(patched_exporter, with_data=False)
+    _filename, zip_bytes, _progress = await _run_export(patched_exporter)
     root = extract_bundle(zip_bytes, tmp_path / "out")
 
     # Source archive extracted into a git-friendly tree; no dist fallback written.
@@ -547,7 +611,7 @@ async def test_app_dist_fallback_when_no_source(patched_exporter, tmp_path, monk
             "visibility": "POD",
         },
     )
-    _filename, zip_bytes, _progress = await _run_export(patched_exporter, with_data=False)
+    _filename, zip_bytes, _progress = await _run_export(patched_exporter)
     root = extract_bundle(zip_bytes, tmp_path / "out")
 
     # No source → the built dist travels as dist.zip instead.
@@ -574,7 +638,7 @@ async def test_app_asset_over_byte_budget_is_skipped(
     monkeypatch.setattr(
         exporter_mod.pod_bundle_settings, "pod_bundle_export_max_app_bytes", 100
     )
-    _filename, zip_bytes, _progress = await _run_export(patched_exporter, with_data=False)
+    _filename, zip_bytes, _progress = await _run_export(patched_exporter)
     warnings = _run_export.last_warnings  # type: ignore[attr-defined]
     root = extract_bundle(zip_bytes, tmp_path / "out")
 

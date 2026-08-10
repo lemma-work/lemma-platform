@@ -124,7 +124,11 @@ async def _load_or_export_archive(
             pod_name, archive, warnings = await BundleExporter().export(
                 pod_id=pod_id,
                 user_id=user_id,
-                with_data=False,
+                # A published repository is the pod's shape, never its
+                # contents: no table named for seeding, no folder named for
+                # export.
+                data_tables=None,
+                file_folders=None,
                 include=None,
                 ctx=ctx,
                 uow=uow,

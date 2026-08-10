@@ -299,22 +299,29 @@ def test_export_pod_files_only_writes_pod_visible_folders(tmp_path: Path):
             "path": "/product_datasheets/spec-sheet.pdf",
         },
     }
-    client = FakeClient(files=None)
+    client = FakeClient(
+        files=SimpleNamespace(download=lambda _pod_id, path: b"%PDF-1.4")
+    )
 
     from lemma_cli.cli_app import pod_bundle
 
     original_fetch = pod_bundle.fetch_files_index
     pod_bundle.fetch_files_index = lambda _client, _pod_id: ({None: []}, items)
     try:
-        counts = _export_pod_files(client, "pod_123", tmp_path)
+        counts = _export_pod_files(
+            client, "pod_123", tmp_path, file_folders=["/product_datasheets"]
+        )
     finally:
         pod_bundle.fetch_files_index = original_fetch
 
-    assert counts == {"folders": 2, "files": 0}
+    assert counts == {"folders": 2, "files": 1}
     assert (tmp_path / "files" / "product_datasheets" / ".folder.json").exists()
     assert (tmp_path / "files" / "product_datasheets" / "indoor" / ".folder.json").exists()
+    assert (
+        tmp_path / "files" / "product_datasheets" / "spec-sheet.pdf"
+    ).read_bytes() == b"%PDF-1.4"
+    # An unnamed folder does not ride along, private or not.
     assert not (tmp_path / "files" / "private_notes").exists()
-    assert not (tmp_path / "files" / "product_datasheets" / "spec-sheet.pdf").exists()
 
 
 def test_export_pod_bundle_skips_excluded_apps(tmp_path: Path):
@@ -2070,19 +2077,26 @@ def test_with_files_export_then_import_round_trip(tmp_path: Path):
     from lemma_cli.cli_app.pod_bundle import _export_pod_files, _import_pod_files
 
     items = {
+        "d1": {
+            "id": "d1",
+            "name": "docs",
+            "kind": "FOLDER",
+            "visibility": "POD",
+            "path": "/docs",
+        },
         "f1": {
             "id": "f1",
             "name": "guide.md",
             "kind": "FILE",
             "visibility": "POD",
-            "path": "/guide.md",
+            "path": "/docs/guide.md",
             "description": "the guide",
             "search_enabled": True,
-        }
+        },
     }
 
     def download(_pod_id: str, path: str) -> bytes:
-        assert path == "/guide.md"
+        assert path == "/docs/guide.md"
         return b"hello world"
 
     export_client = FakeClient(files=SimpleNamespace(download=download))
@@ -2090,15 +2104,15 @@ def test_with_files_export_then_import_round_trip(tmp_path: Path):
     pod_bundle.fetch_files_index = lambda _client, _pod_id: ({None: []}, items)
     try:
         counts = _export_pod_files(
-            export_client, "pod_123", tmp_path, with_files=True
+            export_client, "pod_123", tmp_path, file_folders=["/docs"]
         )
     finally:
         pod_bundle.fetch_files_index = original_fetch
 
-    assert counts == {"folders": 0, "files": 1}
-    assert (tmp_path / "files" / "guide.md").read_bytes() == b"hello world"
+    assert counts == {"folders": 1, "files": 1}
+    assert (tmp_path / "files" / "docs" / "guide.md").read_bytes() == b"hello world"
     manifest = json.loads((tmp_path / "files" / ".files.json").read_text())
-    assert manifest["files"][0]["path"] == "/guide.md"
+    assert manifest["files"][0]["path"] == "/docs/guide.md"
 
     uploads: list[dict[str, object]] = []
 
@@ -2124,7 +2138,13 @@ def test_with_files_export_then_import_round_trip(tmp_path: Path):
         )
         return {"path": f"{directory_path.rstrip('/')}/{name}"}
 
-    import_client = FakeClient(files=SimpleNamespace(upload=upload))
+    def create_folder(_pod_id: str, **kwargs) -> dict[str, object]:
+        path = str(kwargs.get("path") or kwargs.get("directory_path") or "/")
+        return {"path": path}
+
+    import_client = FakeClient(
+        files=SimpleNamespace(upload=upload, create_folder=create_folder)
+    )
     original_list = pod_bundle._list_pod_visible_items
     pod_bundle._list_pod_visible_items = lambda _client, _pod_id: []
     try:
@@ -2134,9 +2154,9 @@ def test_with_files_export_then_import_round_trip(tmp_path: Path):
     finally:
         pod_bundle._list_pod_visible_items = original_list
 
-    assert summary == ["uploaded-file:guide.md"]
+    assert summary == ["created-folder:docs", "uploaded-file:docs/guide.md"]
     assert uploads[0]["name"] == "guide.md"
-    assert uploads[0]["directory_path"] == "/"
+    assert uploads[0]["directory_path"] == "/docs"
     assert uploads[0]["description"] == "the guide"
     assert uploads[0]["search_enabled"] is True
     assert uploads[0]["content"] == b"hello world"
@@ -3087,7 +3107,7 @@ def test_export_reads_search_enabled_from_the_file_not_the_tree(tmp_path: Path):
     )
 
     result = export_pod_bundle(
-        client, pod_id="pod_1", output_dir=tmp_path, with_files=True
+        client, pod_id="pod_1", output_dir=tmp_path, file_folders=["/knowledge"]
     )
 
     manifest = json.loads(
