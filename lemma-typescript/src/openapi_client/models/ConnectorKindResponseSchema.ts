@@ -24,7 +24,6 @@ export type ConnectorKindResponseSchema = {
     kind: ConnectorKind;
     oauth2_defaults?: (OAuth2DefaultsResponseSchema | null);
     package_name?: (string | null);
-    supports_org_custom_auth_config?: boolean;
     supports_org_custom_oauth?: boolean;
     system_default_available?: boolean;
     toolkit_slug?: (string | null);

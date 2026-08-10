@@ -5,6 +5,7 @@ import type { Connector } from '@/lib/types';
 import {
     canConnectWithDefaults,
     describeInstallTarget,
+    getCredentialSchema,
     getKindDescription,
     getKindLabel,
     getManagedConfigCopy,
@@ -166,6 +167,61 @@ describe('an OAuth connector served over http', () => {
         // button beside it, rather than a form demanding a client id.
         expect(hasSystemDefault(githubKind as KindSpec)).toBe(true);
         expect(supportsCustomConfig(githubKind as KindSpec)).toBe(true);
+    });
+});
+
+/**
+ * A Composio toolkit that authenticates with the third party's own API key
+ * (freshdesk, metabase, posthog...). Its `config_schema` is the *end user's*
+ * credential form, derived by the catalog importer from Composio's
+ * `connected_account_initiation` fields — not an org install config.
+ */
+const composioApiKeyKind = {
+    kind: ConnectorKind.COMPOSIO,
+    auth_scheme: AuthScheme.API_KEY,
+    system_default_available: true,
+    supports_org_custom_oauth: false,
+    config_schema: {
+        type: 'object',
+        required: ['generic_api_key'],
+        properties: { generic_api_key: { type: 'string' } },
+    },
+} satisfies Partial<KindSpec> as Partial<KindSpec>;
+
+const composioOAuthKind = {
+    kind: ConnectorKind.COMPOSIO,
+    auth_scheme: AuthScheme.OAUTH2,
+    system_default_available: true,
+    supports_org_custom_oauth: false,
+} satisfies Partial<KindSpec> as Partial<KindSpec>;
+
+describe('a Composio toolkit', () => {
+    it('goes straight to the credential form instead of Advanced setup', () => {
+        // The regression this guards: the API-key form's required fields read
+        // as an org install config, so Connect opened Advanced setup instead of
+        // asking for the key.
+        expect(requiresInstallConfig(composioApiKeyKind as KindSpec)).toBe(false);
+        expect(canConnectWithDefaults(composioApiKeyKind as KindSpec)).toBe(true);
+    });
+
+    it('never offers "Use my own" — the backend rejects org credentials', () => {
+        // Composio runs on Lemma's Composio account. Offering the choice
+        // produced a button whose only outcome was a 400.
+        expect(supportsCustomConfig(composioApiKeyKind as KindSpec)).toBe(false);
+        expect(supportsCustomConfig(composioOAuthKind as KindSpec)).toBe(false);
+    });
+
+    it('still renders the account credential form', () => {
+        // The fix must not reach the API-key connect dialog, which sources its
+        // fields here rather than through the two predicates above.
+        expect(getCredentialSchema(composioApiKeyKind as KindSpec)).toEqual(
+            composioApiKeyKind.config_schema,
+        );
+    });
+
+    it('leaves the OAuth toolkit connecting in one click, as before', () => {
+        expect(requiresInstallConfig(composioOAuthKind as KindSpec)).toBe(false);
+        expect(canConnectWithDefaults(composioOAuthKind as KindSpec)).toBe(true);
     });
 });
 

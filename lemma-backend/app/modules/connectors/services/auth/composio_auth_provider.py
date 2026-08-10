@@ -187,16 +187,20 @@ class ComposioAuthProvider(AuthProviderInterface):
         *,
         custom_auth_scheme: str | None = None,
     ) -> str:
-        """Reuse the connector's Composio auth config, else create one.
+        """Create the Composio auth config this connect will run under.
 
         OAuth apps use Composio-managed credentials (``use_composio_managed_auth``).
         Credential-managed apps (API key / no-auth) have no managed credentials, so
         they need ``use_custom_auth`` with the explicit scheme; the per-account key
-        is supplied at ``initiate`` time.
+        is supplied at ``initiate`` time. Note ``use_custom_auth`` is about the
+        *toolkit's* auth scheme, not about who owns the Composio account -- that is
+        always Lemma.
+
+        A ``connector.composio_auth_config_id`` reuse hook used to short-circuit
+        this. It could never fire: the id had to arrive in an install's config,
+        and a Composio install is always SYSTEM_DEFAULT, whose config is then
+        validated against a closed empty schema that rejects the key.
         """
-        auth_config_id = connector.composio_auth_config_id
-        if auth_config_id:
-            return auth_config_id
         if custom_auth_scheme is not None:
             options: dict[str, Any] = {
                 "type": "use_custom_auth",

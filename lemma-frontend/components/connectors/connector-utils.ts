@@ -115,6 +115,16 @@ export const isOAuthOverHttp = (
 ): boolean => kind === KIND.HTTP && capability?.auth_scheme === 'OAUTH2';
 
 /**
+ * Composio brokers this toolkit on Lemma's behalf.
+ *
+ * Always Lemma's own Composio account — there is no per-org Composio key, and
+ * the backend rejects an org-supplied install outright. Anything that offers
+ * the org a choice has to check this first.
+ */
+export const isComposio = (capability: ConnectorKindSpec | null): boolean =>
+    String(capability?.kind ?? '') === KIND.COMPOSIO;
+
+/**
  * True when *the org supplies the address* for this install.
  *
  * The kind alone is not the answer. `http` covers both "point Lemma at an
@@ -142,6 +152,13 @@ export const isTenantConfigured = (capability: ConnectorKindSpec | null): boolea
  */
 export const requiresInstallConfig = (capability: ConnectorKindSpec | null): boolean => {
     if (!capability) return false;
+    // A Composio install carries no org config at all: it runs on Lemma's
+    // Composio account. What its `config_schema` holds for an API-key toolkit
+    // is the *account's* credential form (see `getCredentialSchema`), which
+    // Connect collects after the install exists — reading it as an install
+    // config sent every such connector to Advanced setup instead of the
+    // credential dialog, and offered it a "Use my own" that always 400s.
+    if (isComposio(capability)) return false;
     // For an OAuth kind the config schema describes the org's own OAuth app —
     // opt-in, and unnecessary when the platform's client is available. This
     // mirrors the backend, which validates an OAuth system-default install
@@ -167,6 +184,11 @@ export const canConnectWithDefaults = (capability: ConnectorKindSpec | null): bo
 
 export const supportsCustomConfig = (capability: ConnectorKindSpec | null): boolean => {
     if (!capability) return false;
+    // Composio brokers every toolkit through Lemma's own Composio account, so
+    // there is no org-supplied anything to offer. Without this, an API-key
+    // toolkit reaches the branch below and renders "Use my own" — a button
+    // whose only outcome is a 400 from the backend.
+    if (isComposio(capability)) return false;
     const hasConfigFields = schemaHasFields(getConfigSchema(capability));
     if (!hasConfigFields) return false;
     // For an OAuth kind the config schema describes the org's *own OAuth app*,
@@ -174,13 +196,7 @@ export const supportsCustomConfig = (capability: ConnectorKindSpec | null): bool
     // describes the connection itself, so having fields is the whole condition
     // — gating those on an OAuth flag left sql/mcp/http with no way in at all.
     if (capability.auth_scheme !== 'OAUTH2') return true;
-    if ('supports_org_custom_oauth' in capability) {
-        return Boolean(capability.supports_org_custom_oauth);
-    }
-    if ('supports_org_custom_auth_config' in capability) {
-        return Boolean(capability.supports_org_custom_auth_config);
-    }
-    return true;
+    return Boolean(capability.supports_org_custom_oauth);
 };
 
 /** True when this connector has any Advanced (non-default kind / custom config) option worth surfacing. */
