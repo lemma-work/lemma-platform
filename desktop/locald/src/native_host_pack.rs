@@ -888,15 +888,15 @@ mod tests {
         );
         assert_eq!(
             manifest["services"][0]["env"]["HOME"],
-            path_text(&paths.root.join("state/home")).unwrap()
+            path_text(&paths.root.join("state").join("home")).unwrap()
         );
         assert_eq!(
             manifest["services"][0]["env"]["XDG_CACHE_HOME"],
-            path_text(&paths.root.join("state/cache")).unwrap()
+            path_text(&paths.root.join("state").join("cache")).unwrap()
         );
         assert_eq!(
             manifest["services"][0]["env"]["TLDEXTRACT_CACHE"],
-            path_text(&paths.root.join("state/cache/tldextract")).unwrap()
+            path_text(&paths.root.join("state").join("cache").join("tldextract")).unwrap()
         );
         assert_eq!(
             manifest["services"][0]["env"]["SUPERTOKENS_TLDEXTRACT_DISABLE_HTTP"],
@@ -904,7 +904,7 @@ mod tests {
         );
         assert_eq!(
             manifest["services"][0]["env"]["LOCAL_EMBEDDING_CACHE_DIR"],
-            path_text(&paths.root.join("state/cache/fastembed")).unwrap()
+            path_text(&paths.root.join("state").join("cache").join("fastembed")).unwrap()
         );
         assert_eq!(
             manifest["services"][0]["env"]["SECRET_KEY_PROVIDER"],
@@ -915,8 +915,18 @@ mod tests {
         assert!(manifest["services"][0]["env"]
             .get("SECRET_ENCRYPTION_KEY")
             .is_none());
-        assert!(paths.root.join("state/cache/tldextract").is_dir());
-        assert!(paths.root.join("state/cache/fastembed").is_dir());
+        assert!(paths
+            .root
+            .join("state")
+            .join("cache")
+            .join("tldextract")
+            .is_dir());
+        assert!(paths
+            .root
+            .join("state")
+            .join("cache")
+            .join("fastembed")
+            .is_dir());
         assert_eq!(
             manifest["services"][0]["env"]["AUTH_EMAIL_VERIFICATION_REQUIRED"],
             "false"

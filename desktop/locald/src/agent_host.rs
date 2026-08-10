@@ -615,7 +615,8 @@ mod tests {
         assert_eq!(
             status["log"],
             home.path()
-                .join("agent-host/agent-host.log")
+                .join("agent-host")
+                .join("agent-host.log")
                 .to_string_lossy()
                 .as_ref()
         );

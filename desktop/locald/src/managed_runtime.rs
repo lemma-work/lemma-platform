@@ -874,9 +874,11 @@ mod tests {
             environment["SUPERTOKENS_CORE_URL"],
             "http://192.168.64.10:3567"
         );
-        assert!(environment["LEMMA_GUEST_CAPABILITY_FILE"]
+        assert!(Path::new(&environment["LEMMA_GUEST_CAPABILITY_FILE"])
             .ends_with("local/run/guest-control/guest.capability"));
-        assert!(environment["LEMMA_GUEST_CONTROL_SOCKET"].ends_with("local/run/guest.sock"));
+        assert!(
+            Path::new(&environment["LEMMA_GUEST_CONTROL_SOCKET"]).ends_with("local/run/guest.sock")
+        );
         assert_eq!(environment["LEMMA_WSL_DISTRIBUTION"], "LemmaRuntime");
         assert!(!environment.values().any(|value| value.contains(":55432")));
     }
