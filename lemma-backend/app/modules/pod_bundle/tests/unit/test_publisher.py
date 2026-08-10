@@ -7,6 +7,7 @@ import pytest
 
 from app.modules.connectors.domain.errors import (
     OperationExecutionInfrastructureError,
+    OperationExecutionNotFoundError,
     OperationNotFoundError,
 )
 from app.modules.pod_bundle.domain.errors import (
@@ -18,8 +19,8 @@ from app.modules.pod_bundle.domain.errors import (
 from app.modules.pod_bundle.domain.state import PublishMode
 from app.modules.pod_bundle.infrastructure.ai_readme import polish_readme
 from app.modules.pod_bundle.infrastructure.github_publisher import (
-    ComposioGithubOps,
     GithubPublisher,
+    NativeGithubOps,
     RepoCreateResult,
 )
 from app.modules.pod_bundle.infrastructure.publish_manifest import (
@@ -80,17 +81,12 @@ class FakeOps:
         deletes,
         message,
         expected_head,
-        prefer_multi_file,
     ):
         del owner, repo, branch, message
         if self.race or expected_head != self.head:
             raise GithubBranchRaceError()
         self.commits.append(
-            {
-                "upserts": dict(upserts),
-                "deletes": set(deletes),
-                "prefer_multi_file": prefer_multi_file,
-            }
+            {"upserts": dict(upserts), "deletes": set(deletes)}
         )
         self.content.update(upserts)
         for path in deletes:
@@ -194,7 +190,6 @@ async def test_create_publishes_all_managed_files_in_one_atomic_commit():
     assert ops.create_calls == 1
     assert len(ops.commits) == 1
     commit = ops.commits[0]
-    assert commit["prefer_multi_file"] is True
     assert {
         "README.md",
         "pod.json",
@@ -245,7 +240,6 @@ async def test_update_preserves_unrelated_files_and_deletes_only_stale_managed_p
     assert ops.content["notes/keep.md"] == b"human content"
     assert "tables/old/old.json" not in ops.content
     assert ops.content["pod.json"] == b'{"name":"new"}'
-    assert ops.commits[-1]["prefer_multi_file"] is False
 
 
 async def test_first_legacy_update_overwrites_large_logical_path_without_deleting():
@@ -332,30 +326,31 @@ async def test_provider_error_after_create_resolves_accepted_repository():
     assert ops.create_calls == 1
 
 
-async def test_composio_ops_normalizes_live_content_response_shape():
+async def test_native_ops_reads_github_repository_and_content_shapes():
     calls = []
 
     async def runner(op, payload):
         calls.append((op, payload))
-        if op == "GITHUB_CREATE_A_REPOSITORY_FOR_THE_AUTHENTICATED_USER":
-            data = {
+        if op == "repos_create_for_authenticated_user":
+            result = {
                 "full_name": "acme/crm",
                 "html_url": "https://github.com/acme/crm",
                 "default_branch": "main",
             }
-        elif op == "GITHUB_GET_REPOSITORY_CONTENT":
-            data = {
-                "content": {
-                    "type": "file",
-                    "sha": "blob-sha",
-                    "content": base64.b64encode(b"manifest").decode(),
-                }
+        elif op == "repos_get_content":
+            # GitHub answers with the file object itself: base64 at the top
+            # level, not wrapped in a broker's envelope.
+            result = {
+                "type": "file",
+                "sha": "blob-sha",
+                "encoding": "base64",
+                "content": base64.b64encode(b"manifest").decode(),
             }
         else:
-            data = {}
-        return {"result": {"data": data, "successful": True}}
+            result = {}
+        return {"result": result}
 
-    ops = ComposioGithubOps(runner)
+    ops = NativeGithubOps(runner)
     repo = await ops.create_repo(name="crm", private=False, description="d")
     content = await ops.get_file(
         owner="acme",
@@ -364,16 +359,26 @@ async def test_composio_ops_normalizes_live_content_response_shape():
     )
     assert repo.owner == "acme" and repo.default_branch == "main"
     assert content == b"manifest"
-    assert calls[0][1]["auto_init"] is True
+    # Create parameters travel in the request body, as the curated operation
+    # declares them -- a flat payload would create a repository named nothing.
+    assert calls[0][1] == {
+        "body": {
+            "name": "crm",
+            "private": False,
+            "description": "d",
+            "auto_init": True,
+        }
+    }
 
 
-async def test_composio_ops_normalizes_live_user_and_repository_shapes():
+async def test_native_ops_resolves_repo_through_the_authenticated_user():
     async def runner(op, payload):
-        if op == "GITHUB_GET_THE_AUTHENTICATED_USER":
-            data = {"login": "acme", "id": 42}
+        if op == "users_get_authenticated":
+            result = {"login": "acme", "id": 42}
         else:
+            assert op == "repos_get"
             assert payload == {"owner": "acme", "repo": "crm"}
-            data = {
+            result = {
                 "id": 99,
                 "full_name": "acme/crm",
                 "html_url": "https://github.com/acme/crm",
@@ -381,9 +386,9 @@ async def test_composio_ops_normalizes_live_user_and_repository_shapes():
                 "owner": {"login": "acme"},
                 "private": True,
             }
-        return {"result": {"data": data, "successful": True}, "metadata": {}}
+        return {"result": result}
 
-    repo = await ComposioGithubOps(runner).resolve_repo(name="crm")
+    repo = await NativeGithubOps(runner).resolve_repo(name="crm")
     assert repo is not None
     assert (repo.owner, repo.repo, repo.default_branch, repo.private) == (
         "acme",
@@ -393,68 +398,32 @@ async def test_composio_ops_normalizes_live_user_and_repository_shapes():
     )
 
 
-async def test_composio_commit_multiple_uses_one_non_forced_operation():
+async def test_native_ops_reads_a_missing_repository_as_not_yet_created():
+    async def runner(op, payload):
+        del payload
+        if op == "users_get_authenticated":
+            return {"result": {"login": "acme"}}
+        raise OperationExecutionNotFoundError("repos_get")
+
+    assert await NativeGithubOps(runner).resolve_repo(name="crm") is None
+
+
+async def test_native_commit_builds_one_commit_from_git_data_operations():
     calls = []
 
     async def runner(op, payload):
         calls.append((op, payload))
-        return {
-            "result": {
-                "data": {"new_commit_sha": "commit-sha"},
-                "successful": True,
-            }
-        }
-
-    sha = await ComposioGithubOps(runner).commit_files(
-        owner="acme",
-        repo="crm",
-        branch="main",
-        upserts={"pod.json": b"{}"},
-        deletes=set(),
-        message="publish",
-        expected_head="head",
-        prefer_multi_file=True,
-    )
-    assert sha == "commit-sha"
-    assert calls == [
-        (
-            "GITHUB_COMMIT_MULTIPLE_FILES",
-            {
-                "owner": "acme",
-                "repo": "crm",
-                "branch": "main",
-                "message": "publish",
-                "force": False,
-                "max_retries": 0,
-                "upserts": [
-                    {
-                        "path": "pod.json",
-                        "content": "e30=",
-                        "encoding": "base64",
-                    }
-                ],
-                "deletes": [],
-            },
-        )
-    ]
-
-
-async def test_composio_git_data_commit_uses_live_ref_commit_and_tree_shapes():
-    calls = []
-
-    async def runner(op, payload):
-        calls.append((op, payload))
-        data = {
-            "GITHUB_GET_A_REFERENCE": {"object": {"sha": "head-sha"}},
-            "GITHUB_GET_A_COMMIT": {"commit": {"tree": {"sha": "base-tree"}}},
-            "GITHUB_CREATE_A_BLOB": {"sha": "blob-sha"},
-            "GITHUB_CREATE_A_TREE": {"sha": "new-tree"},
-            "GITHUB_CREATE_A_COMMIT": {"sha": "new-commit"},
-            "GITHUB_UPDATE_A_REFERENCE": {"object": {"sha": "new-commit"}},
+        result = {
+            "git_get_ref": {"object": {"sha": "head-sha"}},
+            "repos_get_commit": {"commit": {"tree": {"sha": "base-tree"}}},
+            "git_create_blob": {"sha": "blob-sha"},
+            "git_create_tree": {"sha": "new-tree"},
+            "git_create_commit": {"sha": "new-commit"},
+            "git_update_ref": {"object": {"sha": "new-commit"}},
         }[op]
-        return {"result": {"data": data, "successful": True}}
+        return {"result": result}
 
-    sha = await ComposioGithubOps(runner).commit_files(
+    sha = await NativeGithubOps(runner).commit_files(
         owner="acme",
         repo="crm",
         branch="main",
@@ -462,18 +431,63 @@ async def test_composio_git_data_commit_uses_live_ref_commit_and_tree_shapes():
         deletes={"old.json"},
         message="publish",
         expected_head="head-sha",
-        prefer_multi_file=False,
     )
+
     assert sha == "new-commit"
-    tree_call = next(payload for op, payload in calls if op == "GITHUB_CREATE_A_TREE")
-    assert tree_call["base_tree"] == "base-tree"
-    assert {"path": "old.json", "mode": "100644", "type": "blob", "sha": None} in tree_call[
-        "tree"
+    assert [op for op, _ in calls] == [
+        "git_get_ref",
+        "repos_get_commit",
+        "git_create_blob",
+        "git_create_tree",
+        "git_create_commit",
+        "git_update_ref",
     ]
-    update_call = next(
-        payload for op, payload in calls if op == "GITHUB_UPDATE_A_REFERENCE"
-    )
-    assert update_call["force"] is False
+    blob_call = next(payload for op, payload in calls if op == "git_create_blob")
+    assert blob_call["body"] == {"content": "e30=", "encoding": "base64"}
+    tree_call = next(payload for op, payload in calls if op == "git_create_tree")
+    assert tree_call["body"]["base_tree"] == "base-tree"
+    # A deletion is a tree entry with a null sha, not a separate call.
+    assert {
+        "path": "old.json",
+        "mode": "100644",
+        "type": "blob",
+        "sha": None,
+    } in tree_call["body"]["tree"]
+    commit_call = next(payload for op, payload in calls if op == "git_create_commit")
+    assert commit_call["body"]["parents"] == ["head-sha"]
+    update_call = next(payload for op, payload in calls if op == "git_update_ref")
+    # The whole ref path, not just the branch: the operation keeps its slash.
+    assert update_call["ref"] == "heads/main"
+    assert update_call["body"] == {"sha": "new-commit", "force": False}
+
+
+async def test_native_commit_reads_a_rejected_ref_update_as_a_branch_race():
+    async def runner(op, payload):
+        del payload
+        if op == "git_update_ref":
+            raise OperationExecutionInfrastructureError(
+                "rejected", details={"upstream_status": 422}
+            )
+        return {
+            "result": {
+                "git_get_ref": {"object": {"sha": "head-sha"}},
+                "repos_get_commit": {"commit": {"tree": {"sha": "base-tree"}}},
+                "git_create_blob": {"sha": "blob-sha"},
+                "git_create_tree": {"sha": "new-tree"},
+                "git_create_commit": {"sha": "new-commit"},
+            }[op]
+        }
+
+    with pytest.raises(GithubBranchRaceError):
+        await NativeGithubOps(runner).commit_files(
+            owner="acme",
+            repo="crm",
+            branch="main",
+            upserts={"pod.json": b"{}"},
+            deletes=set(),
+            message="publish",
+            expected_head="head-sha",
+        )
 
 
 async def test_missing_atomic_connector_operation_is_a_stable_capability_error():
@@ -482,13 +496,13 @@ async def test_missing_atomic_connector_operation_is_a_stable_capability_error()
         raise OperationNotFoundError(op)
 
     with pytest.raises(GithubPublishCapabilityUnavailableError) as exc:
-        await ComposioGithubOps(runner).get_head(
+        await NativeGithubOps(runner).get_head(
             owner="acme",
             repo="crm",
             branch="main",
         )
     assert exc.value.code == "GITHUB_PUBLISH_CAPABILITY_UNAVAILABLE"
-    assert exc.value.details == {"operation": "GITHUB_GET_A_REFERENCE"}
+    assert exc.value.details == {"operation": "git_get_ref"}
 
 
 # --- AI polish ---------------------------------------------------------------

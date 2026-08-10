@@ -119,7 +119,6 @@ class _MemoryGithubOps:
         deletes,
         message,
         expected_head,
-        prefer_multi_file,
     ):
         assert expected_head == self.head
         self.files.update(upserts)

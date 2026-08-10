@@ -33,7 +33,7 @@ from app.modules.pod_bundle.infrastructure.ai_readme import (
 )
 from app.modules.pod_bundle.infrastructure.exporter import BundleExporter
 from app.modules.pod_bundle.infrastructure.github_publisher import (
-    ComposioGithubOps,
+    NativeGithubOps,
     GithubPublisher,
     RepoCreateResult,
 )
@@ -342,7 +342,7 @@ async def publish_pod_github(context: dict[str, str | None]) -> None:
             publish_id, status_payload(state.status.value, state.seq)
         )
         publisher = GithubPublisher(
-            ComposioGithubOps(
+            NativeGithubOps(
                 _operation_runner(
                     worker_ctx=worker_ctx,
                     state=state,

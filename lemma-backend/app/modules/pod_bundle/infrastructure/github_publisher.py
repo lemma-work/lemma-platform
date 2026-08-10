@@ -1,4 +1,10 @@
-"""Atomic GitHub publishing through the Composio connector."""
+"""Atomic GitHub publishing through Lemma's own GitHub connector.
+
+Every call goes through the native (`http`-kind) GitHub connector's curated
+operations, so publishing uses the same account, consent and token the agent's
+`git`/`gh` use in a workspace -- there is no second GitHub identity behind a
+broker.
+"""
 
 from __future__ import annotations
 
@@ -28,8 +34,6 @@ from app.modules.pod_bundle.infrastructure.publish_manifest import (
     parse_publish_manifest,
 )
 
-# Keep the JSON/base64 request well below typical connector request ceilings.
-_MULTI_FILE_MAX_REQUEST_BYTES = 450_000
 _BLOB_CONCURRENCY = 8
 
 
@@ -80,7 +84,6 @@ class GithubOps(Protocol):
         deletes: set[str],
         message: str,
         expected_head: str,
-        prefer_multi_file: bool,
     ) -> str: ...
 
 
@@ -207,15 +210,6 @@ class GithubPublisher:
         new_managed = manifest_managed_paths(new_manifest)
         stale_paths = old_managed - new_managed
 
-        request_size = sum(
-            len(path) + len(base64.b64encode(content))
-            for path, content in physical_files.items()
-        )
-        prefer_multi_file = (
-            mode is PublishMode.CREATE
-            and not stale_paths
-            and request_size <= _MULTI_FILE_MAX_REQUEST_BYTES
-        )
         await self._ops.commit_files(
             owner=repo.owner,
             repo=repo.repo,
@@ -224,7 +218,6 @@ class GithubPublisher:
             deletes=stale_paths,
             message=f"Publish Lemma pod ({publish_id})",
             expected_head=head,
-            prefer_multi_file=prefer_multi_file,
         )
         await self._emit_completed_progress(
             list(logical_files),
@@ -245,20 +238,24 @@ class GithubPublisher:
             await on_progress(path, done, total)
 
 
-class ComposioGithubOps:
-    """Production :class:`GithubOps` over current Composio GitHub operations."""
+class NativeGithubOps:
+    """Production :class:`GithubOps` over Lemma's own GitHub connector.
 
-    _OP_CREATE_REPO = "GITHUB_CREATE_A_REPOSITORY_FOR_THE_AUTHENTICATED_USER"
-    _OP_GET_USER = "GITHUB_GET_THE_AUTHENTICATED_USER"
-    _OP_GET_REPO = "GITHUB_GET_A_REPOSITORY"
-    _OP_GET_CONTENT = "GITHUB_GET_REPOSITORY_CONTENT"
-    _OP_GET_REF = "GITHUB_GET_A_REFERENCE"
-    _OP_GET_COMMIT = "GITHUB_GET_A_COMMIT"
-    _OP_COMMIT_MULTIPLE = "GITHUB_COMMIT_MULTIPLE_FILES"
-    _OP_CREATE_BLOB = "GITHUB_CREATE_A_BLOB"
-    _OP_CREATE_TREE = "GITHUB_CREATE_A_TREE"
-    _OP_CREATE_COMMIT = "GITHUB_CREATE_A_COMMIT"
-    _OP_UPDATE_REF = "GITHUB_UPDATE_A_REFERENCE"
+    Names and payload shapes are the connector's curated operations, which
+    mirror GitHub's REST API directly: path and query parameters are top-level,
+    and a request body goes under ``body``.
+    """
+
+    _OP_CREATE_REPO = "repos_create_for_authenticated_user"
+    _OP_GET_USER = "users_get_authenticated"
+    _OP_GET_REPO = "repos_get"
+    _OP_GET_CONTENT = "repos_get_content"
+    _OP_GET_REF = "git_get_ref"
+    _OP_GET_COMMIT = "repos_get_commit"
+    _OP_CREATE_BLOB = "git_create_blob"
+    _OP_CREATE_TREE = "git_create_tree"
+    _OP_CREATE_COMMIT = "git_create_commit"
+    _OP_UPDATE_REF = "git_update_ref"
 
     def __init__(self, operation_runner: Callable[[str, dict], Awaitable[dict]]):
         self._run = operation_runner
@@ -291,12 +288,14 @@ class ComposioGithubOps:
         result = await self._capability(
             self._OP_CREATE_REPO,
             {
-                "name": name,
-                "private": private,
-                "description": description or "",
-                # Seed the default branch. All Lemma-managed files still land in
-                # the following single atomic commit.
-                "auto_init": True,
+                "body": {
+                    "name": name,
+                    "private": private,
+                    "description": description or "",
+                    # Seed the default branch. All Lemma-managed files still
+                    # land in the following single atomic commit.
+                    "auto_init": True,
+                }
             },
         )
         return _repo_result(result, fallback_owner="", fallback_repo=name)
@@ -327,10 +326,9 @@ class ComposioGithubOps:
             result = await self._capability(self._OP_GET_CONTENT, payload)
         except OperationExecutionNotFoundError:
             return None
-        item = result.get("content")
-        if not isinstance(item, dict):
-            return None
-        encoded = item.get("content")
+        # GitHub answers with the file object itself; a directory answers with a
+        # list, which `_unwrap_operation` flattens to an empty mapping.
+        encoded = result.get("content")
         if not isinstance(encoded, str):
             return None
         try:
@@ -350,76 +348,13 @@ class ComposioGithubOps:
         deletes: set[str],
         message: str,
         expected_head: str,
-        prefer_multi_file: bool,
     ) -> str:
-        if prefer_multi_file:
-            return await self._commit_multiple(
-                owner=owner,
-                repo=repo,
-                branch=branch,
-                upserts=upserts,
-                deletes=deletes,
-                message=message,
-            )
-        return await self._commit_git_data(
-            owner=owner,
-            repo=repo,
-            branch=branch,
-            upserts=upserts,
-            deletes=deletes,
-            message=message,
-            expected_head=expected_head,
-        )
+        """Write every file as one commit built out of GitHub's git-data API.
 
-    async def _commit_multiple(
-        self,
-        *,
-        owner: str,
-        repo: str,
-        branch: str,
-        upserts: dict[str, bytes],
-        deletes: set[str],
-        message: str,
-    ) -> str:
-        result = await self._capability(
-            self._OP_COMMIT_MULTIPLE,
-            {
-                "owner": owner,
-                "repo": repo,
-                "branch": branch,
-                "message": message,
-                "force": False,
-                "max_retries": 0,
-                "upserts": [
-                    {
-                        "path": path,
-                        "content": base64.b64encode(content).decode("ascii"),
-                        "encoding": "base64",
-                    }
-                    for path, content in upserts.items()
-                ],
-                "deletes": sorted(deletes),
-            },
-        )
-        sha = result.get("new_commit_sha")
-        if not isinstance(sha, str) or not sha:
-            commit = result.get("commit")
-            sha = commit.get("sha") if isinstance(commit, dict) else None
-        if not isinstance(sha, str) or not sha:
-            raise BundleInvalidError("GitHub did not return the new commit SHA.")
-        return sha
-
-    async def _commit_git_data(
-        self,
-        *,
-        owner: str,
-        repo: str,
-        branch: str,
-        upserts: dict[str, bytes],
-        deletes: set[str],
-        message: str,
-        expected_head: str,
-    ) -> str:
+        Blobs, a tree and a commit are staged without touching the branch, and
+        only the final ref update makes them visible -- so a publish that dies
+        halfway leaves the repository exactly as it was.
+        """
         current_head = await self.get_head(owner=owner, repo=repo, branch=branch)
         if current_head != expected_head:
             raise GithubBranchRaceError()
@@ -457,8 +392,7 @@ class ComposioGithubOps:
             {
                 "owner": owner,
                 "repo": repo,
-                "base_tree": base_tree,
-                "tree": entries,
+                "body": {"base_tree": base_tree, "tree": entries},
             },
         )
         tree_sha = tree_result.get("sha")
@@ -470,9 +404,11 @@ class ComposioGithubOps:
             {
                 "owner": owner,
                 "repo": repo,
-                "message": message,
-                "tree": tree_sha,
-                "parents": [expected_head],
+                "body": {
+                    "message": message,
+                    "tree": tree_sha,
+                    "parents": [expected_head],
+                },
             },
         )
         commit_sha = commit_result.get("sha")
@@ -486,12 +422,11 @@ class ComposioGithubOps:
                     "owner": owner,
                     "repo": repo,
                     "ref": f"heads/{branch}",
-                    "sha": commit_sha,
-                    "force": False,
+                    "body": {"sha": commit_sha, "force": False},
                 },
             )
         except DomainError as exc:
-            if getattr(exc, "status_code", None) in {409, 422}:
+            if _rejected_as_conflict(exc):
                 raise GithubBranchRaceError() from exc
             raise
         return commit_sha
@@ -512,8 +447,10 @@ class ComposioGithubOps:
                     {
                         "owner": owner,
                         "repo": repo,
-                        "content": base64.b64encode(content).decode("ascii"),
-                        "encoding": "base64",
+                        "body": {
+                            "content": base64.b64encode(content).decode("ascii"),
+                            "encoding": "base64",
+                        },
                     },
                 )
             sha = result.get("sha")
@@ -531,25 +468,30 @@ class ComposioGithubOps:
         return blobs
 
 
+def _rejected_as_conflict(exc: DomainError) -> bool:
+    """Did GitHub refuse this write because the branch moved under us?
+
+    A non-fast-forward ref update is a 422 (409 on some paths). The connector
+    layer maps those onto its own domain errors, so the provider's status can
+    also arrive as `details["upstream_status"]` rather than on the error itself.
+    """
+    statuses = {getattr(exc, "status_code", None)}
+    details = getattr(exc, "details", None)
+    if isinstance(details, dict):
+        statuses.add(details.get("upstream_status"))
+    return bool(statuses & {409, 422})
+
+
 def _unwrap_operation(result: object) -> dict[str, Any]:
-    """Normalize ``OperationExecutionResponse.result`` and provider wrappers."""
+    """Peel ``OperationExecutionResponse.result`` off GitHub's own response.
+
+    The connector returns the provider's JSON verbatim under ``result``; a
+    response that is not an object (a directory listing is an array) has nothing
+    this module can read, so it reads as empty.
+    """
     current = result
-    for _ in range(5):
-        if not isinstance(current, dict):
-            return {}
-        nested: object | None = None
-        if isinstance(current.get("result"), dict):
-            nested = current["result"]
-        elif "successful" in current and "data" in current:
-            nested = current["data"]
-        elif len(current) == 1 and isinstance(current.get("data"), dict):
-            nested = current["data"]
-        elif "response_data" in current:
-            nested = current["response_data"]
-        if isinstance(nested, dict):
-            current = nested
-            continue
-        return current
+    if isinstance(current, dict) and "result" in current:
+        current = current["result"]
     return current if isinstance(current, dict) else {}
 
 

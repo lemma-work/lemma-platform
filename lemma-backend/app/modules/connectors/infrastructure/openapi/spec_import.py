@@ -494,6 +494,15 @@ def _build_operation(
         "request_body": request_body_desc,
         "response": {"binary": binary},
     }
+    # Path parameters whose value spans several URL segments (a git ref such as
+    # `heads/main`). A spec cannot express this, so it comes from the override.
+    multi_segment = [
+        name
+        for name in override.get("multi_segment_path_params") or []
+        if name in params.path_params
+    ]
+    if multi_segment:
+        execution["multi_segment_path_params"] = multi_segment
     if default_headers:
         execution["default_headers"] = dict(default_headers)
 

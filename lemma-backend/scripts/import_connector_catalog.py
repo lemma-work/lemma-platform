@@ -107,6 +107,7 @@ from app.modules.connectors.domain.connector import (
     SystemOAuthCredentialRef,
     provider_to_kind,
 )
+from app.modules.connectors.domain.auth_config import AuthConfigStatus
 from app.modules.connectors.domain.connector_operation import (
     ConnectorOperationEntity,
 )
@@ -162,7 +163,17 @@ LEMMA_AUTH_PROVIDER_CONNECTOR_IDS = NATIVE_OPERATION_CONNECTOR_IDS | {"confluenc
 COMPOSIO_EXCLUDED_CONNECTOR_IDS = {
     "microsoft_teams",
     "splitwise",
+    "github",
 }
+# Connectors that used to be brokered by Composio and are now Lemma's own, so
+# the whole connector must stay active while only its Composio half goes away
+# -- unlike the ids above, which have nothing left once Composio is removed.
+#
+# GitHub is native because a workspace agent's `git`/`gh` need the account's
+# real OAuth token inside the sandbox (see the workspace GitHub credential
+# bridge). A broker holds that token and only ever lends us one API call, which
+# a shell cannot use.
+COMPOSIO_RETIRED_CONNECTOR_IDS = {"github"}
 # One-time id renames applied on catalog import: the value connector is synced
 # from config first, then existing accounts/auth-configs are re-pointed to it and
 # the old (key) connector is removed. ``teams`` -> ``microsoft_teams`` aligns the
@@ -191,7 +202,6 @@ DEFAULT_COMPOSIO_CONNECTOR_IDS: tuple[str, ...] = (
     "facebook",
     "figma",
     "freshdesk",
-    "github",
     "google_analytics",
     "google_chat",
     "googleads",
@@ -825,6 +835,11 @@ def _is_excluded_composio_connector(entity: ConnectorEntity) -> bool:
         toolkit_slug = getattr(capability, "toolkit_slug", None)
         if toolkit_slug:
             normalized_ids.add(_normalize_connector_id(toolkit_slug))
+
+    # A retired connector is excluded from Composio but still offered natively:
+    # deactivating it here would take the native connector down with it.
+    if normalized_ids & COMPOSIO_RETIRED_CONNECTOR_IDS:
+        return False
 
     return bool(normalized_ids & COMPOSIO_EXCLUDED_CONNECTOR_IDS) and (
         AuthProvider.COMPOSIO
@@ -1638,6 +1653,110 @@ async def _apply_connector_renames(connector_repository, session) -> int:
     return renamed
 
 
+async def _retire_composio_capabilities(connector_repository, session) -> int:
+    """Drop the Composio half of a connector Lemma now serves natively.
+
+    Catalog rows are regenerated on every import, so the Composio operations and
+    triggers are simply deleted. Installs and connected accounts are *not*:
+    deleting them would silently disconnect people. They are disabled instead,
+    which is reversible and makes the connector reappear as connectable through
+    its native install, and the accounts behind them are left for their owners
+    to remove.
+
+    Idempotent: a connector with no Composio capability left is skipped, so this
+    is a no-op on every import after the first.
+    """
+    from sqlalchemy import text
+
+    retired = 0
+    for connector_id in sorted(COMPOSIO_RETIRED_CONNECTOR_IDS):
+        existing = await connector_repository.get(connector_id)
+        if existing is None:
+            continue
+        remaining = [
+            spec
+            for spec in existing.kinds
+            if AuthProvider(spec.provider.value) is not AuthProvider.COMPOSIO
+        ]
+        if len(remaining) == len(existing.kinds):
+            continue
+        if not remaining:
+            logger.warning(
+                "connector_catalog.composio_retirement.no_native_capability",
+                connector_id=connector_id,
+            )
+            continue
+
+        composio_kind = provider_to_kind(AuthProvider.COMPOSIO).value
+        for table in ("connector_operations", "connector_triggers"):
+            result = await session.execute(
+                text(
+                    f"DELETE FROM {table} "  # noqa: S608 - table names are a fixed literal allow-list
+                    "WHERE connector_id = :connector_id AND kind = :kind"
+                ),
+                {"connector_id": connector_id, "kind": composio_kind},
+            )
+            logger.debug(
+                "connector_catalog.composio_retirement.rows_deleted",
+                count=int(getattr(result, "rowcount", 0) or 0),
+                table=table,
+                connector_id=connector_id,
+            )
+        disabled = await session.execute(
+            text(
+                "UPDATE auth_configs SET status = :disabled, is_default = false "
+                "WHERE connector_id = :connector_id AND kind = :kind "
+                "AND status <> :disabled"
+            ),
+            {
+                "disabled": AuthConfigStatus.DISABLED.value,
+                "connector_id": connector_id,
+                "kind": composio_kind,
+            },
+        )
+        disabled_count = int(getattr(disabled, "rowcount", 0) or 0)
+        if disabled_count:
+            logger.warning(
+                "connector_catalog.composio_retirement.installs_disabled",
+                count=disabled_count,
+                connector_id=connector_id,
+            )
+
+        await connector_repository.update(
+            existing.model_copy(update={"kinds": remaining})
+        )
+        retired += 1
+        logger.debug(
+            "connector_catalog.composio_retirement.applied",
+            connector_id=connector_id,
+        )
+    return retired
+
+
+async def _run_composio_retirements(*, dry_run: bool) -> int:
+    """Session wrapper around :func:`_retire_composio_capabilities`.
+
+    Runs on every import, not just Composio ones: a deployment that has already
+    dropped ``COMPOSIO_API_KEY`` still has the old Composio rows to clean up,
+    and that is exactly the deployment that never runs the Composio sync.
+    """
+    async with async_session_maker() as session:
+        uow = SqlAlchemyUnitOfWork(session)
+        connector_repository = ConnectorRepository(uow)
+        try:
+            retired = await _retire_composio_capabilities(
+                connector_repository, session
+            )
+            if dry_run:
+                await uow.rollback()
+            else:
+                await uow.commit()
+            return retired
+        except Exception:
+            await uow.rollback()
+            raise
+
+
 async def _run_connector_id_renames(*, dry_run: bool) -> int:
     """Session wrapper around :func:`_apply_connector_renames` (commit unless dry-run)."""
     async with async_session_maker() as session:
@@ -1997,6 +2116,15 @@ async def main() -> None:
             page_size=args.page_size,
             max_composio_apps=args.max_composio_apps,
             dry_run=args.dry_run,
+        )
+
+    # Retire the Composio half of connectors Lemma now serves natively, now that
+    # the native capability has been (re)synced above (idempotent).
+    retired_connectors = await _run_composio_retirements(dry_run=args.dry_run)
+    if retired_connectors:
+        logger.info(
+            "connector_catalog.composio_retirements.applied",
+            count=retired_connectors,
         )
 
     # Apply any one-time connector id renames now that the target connectors have

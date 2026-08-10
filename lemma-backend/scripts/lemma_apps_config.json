@@ -860,7 +860,7 @@
       ],
       "extra_params": {}
     },
-    "agent_instruction": "Use GitHub to manage repositories, issues, pull requests, gists, and releases. Read and write repo content, open and comment on issues, and download or upload release assets and repository archives. For anything not covered by the curated operations, use github_http_request to call the GitHub REST API directly.",
+    "agent_instruction": "Use GitHub to manage repositories, issues, pull requests, gists, and releases. Read and write repo content, open and comment on issues, and download or upload release assets and repository archives. To write several files as one commit, use the git data operations (git_create_blob, git_create_tree, git_create_commit, git_update_ref) rather than one repos_create_or_update_file_contents per file; git_get_ref and git_update_ref take a whole ref path such as heads/main. For anything not covered by the curated operations, use github_http_request to call the GitHub REST API directly.",
     "is_active": true,
     "triggers": [],
     "static_operations": [
@@ -15314,6 +15314,781 @@
               }
             }
           }
+        }
+      },
+      {
+        "name": "git_create_blob",
+        "description": "Create a blob",
+        "execution": {
+          "kind": "http",
+          "mode": "openapi",
+          "method": "POST",
+          "path": "/repos/{owner}/{repo}/git/blobs",
+          "server_url": "https://api.github.com",
+          "path_params": [
+            "owner",
+            "repo"
+          ],
+          "query_params": [],
+          "header_params": [],
+          "request_body": {
+            "content_type": "application/json",
+            "field": "body",
+            "binary_fields": [],
+            "form_fields": []
+          },
+          "response": {
+            "binary": false
+          },
+          "default_headers": {
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+            "User-Agent": "lemma-connectors"
+          }
+        },
+        "input_schema": {
+          "type": "object",
+          "title": "git_create_blob",
+          "properties": {
+            "owner": {
+              "type": "string",
+              "description": "The account owner of the repository. The name is not case sensitive."
+            },
+            "repo": {
+              "type": "string",
+              "description": "The name of the repository without the `.git` extension. The name is not case sensitive."
+            },
+            "body": {
+              "type": "object",
+              "properties": {
+                "content": {
+                  "type": "string",
+                  "description": "The new blob's content."
+                },
+                "encoding": {
+                  "type": "string",
+                  "description": "The encoding used for `content`. Currently, `\"utf-8\"` and `\"base64\"` are supported.",
+                  "default": "utf-8"
+                }
+              },
+              "required": [
+                "content"
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "owner",
+            "repo",
+            "body"
+          ]
+        },
+        "output_schema": {
+          "title": "Short Blob",
+          "description": "Short Blob",
+          "type": "object",
+          "properties": {
+            "url": {
+              "type": "string"
+            },
+            "sha": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "url",
+            "sha"
+          ]
+        }
+      },
+      {
+        "name": "git_create_commit",
+        "description": "Create a commit",
+        "execution": {
+          "kind": "http",
+          "mode": "openapi",
+          "method": "POST",
+          "path": "/repos/{owner}/{repo}/git/commits",
+          "server_url": "https://api.github.com",
+          "path_params": [
+            "owner",
+            "repo"
+          ],
+          "query_params": [],
+          "header_params": [],
+          "request_body": {
+            "content_type": "application/json",
+            "field": "body",
+            "binary_fields": [],
+            "form_fields": []
+          },
+          "response": {
+            "binary": false
+          },
+          "default_headers": {
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+            "User-Agent": "lemma-connectors"
+          }
+        },
+        "input_schema": {
+          "type": "object",
+          "title": "git_create_commit",
+          "properties": {
+            "owner": {
+              "type": "string",
+              "description": "The account owner of the repository. The name is not case sensitive."
+            },
+            "repo": {
+              "type": "string",
+              "description": "The name of the repository without the `.git` extension. The name is not case sensitive."
+            },
+            "body": {
+              "type": "object",
+              "properties": {
+                "message": {
+                  "type": "string",
+                  "description": "The commit message"
+                },
+                "tree": {
+                  "type": "string",
+                  "description": "The SHA of the tree object this commit points to"
+                },
+                "parents": {
+                  "type": "array",
+                  "description": "The full SHAs of the commits that were the parents of this commit. If omitted or empty, the commit will be written as a root commit. For a single parent, an array of one SHA should be provided; for a merge commit, an array of more than one should be provided.",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "author": {
+                  "type": "object",
+                  "description": "Information about the author of the commit. By default, the `author` will be the authenticated user and the current date. See the `author` and `committer` object below for details.",
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "description": "The name of the author (or committer) of the commit"
+                    },
+                    "email": {
+                      "type": "string",
+                      "description": "The email of the author (or committer) of the commit"
+                    },
+                    "date": {
+                      "type": "string",
+                      "format": "date-time",
+                      "description": "Indicates when this commit was authored (or committed). This is a timestamp in [ISO 8601](https://en.wikipedia.org/wiki/ISO_8601) format: `YYYY-MM-DDTHH:MM:SSZ`."
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "email"
+                  ]
+                },
+                "committer": {
+                  "type": "object",
+                  "description": "Information about the person who is making the commit. By default, `committer` will use the information set in `author`. See the `author` and `committer` object below for details.",
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "description": "The name of the author (or committer) of the commit"
+                    },
+                    "email": {
+                      "type": "string",
+                      "description": "The email of the author (or committer) of the commit"
+                    },
+                    "date": {
+                      "type": "string",
+                      "format": "date-time",
+                      "description": "Indicates when this commit was authored (or committed). This is a timestamp in [ISO 8601](https://en.wikipedia.org/wiki/ISO_8601) format: `YYYY-MM-DDTHH:MM:SSZ`."
+                    }
+                  }
+                },
+                "signature": {
+                  "type": "string",
+                  "description": "The [PGP signature](https://en.wikipedia.org/wiki/Pretty_Good_Privacy) of the commit. GitHub adds the signature to the `gpgsig` header of the created commit. For a commit signature to be verifiable by Git or GitHub, it must be an ASCII-armored detached PGP signature over the string commit as it would be written to the object database. To pass a `signature` parameter, you need to first manually create a valid PGP signature, which can be complicated. You may find it easier to [use the command line](https://git-scm.com/book/id/v2/Git-Tools-Signing-Your-Work) to create signed commits."
+                }
+              },
+              "required": [
+                "message",
+                "tree"
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "owner",
+            "repo",
+            "body"
+          ]
+        },
+        "output_schema": {
+          "title": "Git Commit",
+          "description": "Low-level Git commit operations within a repository",
+          "type": "object",
+          "properties": {
+            "sha": {
+              "description": "SHA for the commit",
+              "example": "7638417db6d59f3c431d3e1f261cc637155684cd",
+              "type": "string"
+            },
+            "node_id": {
+              "type": "string"
+            },
+            "url": {
+              "type": "string",
+              "format": "uri"
+            },
+            "author": {
+              "description": "Identifying information for the git-user",
+              "type": "object",
+              "properties": {
+                "date": {
+                  "description": "Timestamp of the commit",
+                  "example": "2014-08-09T08:02:04+12:00",
+                  "format": "date-time",
+                  "type": "string"
+                },
+                "email": {
+                  "type": "string",
+                  "description": "Git email address of the user",
+                  "example": "monalisa.octocat@example.com"
+                },
+                "name": {
+                  "description": "Name of the git user",
+                  "example": "Monalisa Octocat",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "email",
+                "name",
+                "date"
+              ]
+            },
+            "committer": {
+              "description": "Identifying information for the git-user",
+              "type": "object",
+              "properties": {
+                "date": {
+                  "description": "Timestamp of the commit",
+                  "example": "2014-08-09T08:02:04+12:00",
+                  "format": "date-time",
+                  "type": "string"
+                },
+                "email": {
+                  "type": "string",
+                  "description": "Git email address of the user",
+                  "example": "monalisa.octocat@example.com"
+                },
+                "name": {
+                  "description": "Name of the git user",
+                  "example": "Monalisa Octocat",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "email",
+                "name",
+                "date"
+              ]
+            },
+            "message": {
+              "description": "Message describing the purpose of the commit",
+              "example": "Fix #42",
+              "type": "string"
+            },
+            "tree": {
+              "type": "object",
+              "properties": {
+                "sha": {
+                  "description": "SHA for the commit",
+                  "example": "7638417db6d59f3c431d3e1f261cc637155684cd",
+                  "type": "string"
+                },
+                "url": {
+                  "type": "string",
+                  "format": "uri"
+                }
+              },
+              "required": [
+                "sha",
+                "url"
+              ]
+            },
+            "parents": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "sha": {
+                    "description": "SHA for the commit",
+                    "example": "7638417db6d59f3c431d3e1f261cc637155684cd",
+                    "type": "string"
+                  },
+                  "url": {
+                    "type": "string",
+                    "format": "uri"
+                  },
+                  "html_url": {
+                    "type": "string",
+                    "format": "uri"
+                  }
+                },
+                "required": [
+                  "sha",
+                  "url",
+                  "html_url"
+                ]
+              }
+            },
+            "verification": {
+              "type": "object",
+              "properties": {
+                "verified": {
+                  "type": "boolean"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "signature": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "payload": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "verified_at": {
+                  "type": "string",
+                  "nullable": true
+                }
+              },
+              "required": [
+                "verified",
+                "reason",
+                "signature",
+                "payload",
+                "verified_at"
+              ]
+            },
+            "html_url": {
+              "type": "string",
+              "format": "uri"
+            }
+          },
+          "required": [
+            "sha",
+            "node_id",
+            "url",
+            "html_url",
+            "author",
+            "committer",
+            "tree",
+            "message",
+            "parents",
+            "verification"
+          ]
+        }
+      },
+      {
+        "name": "git_get_ref",
+        "description": "Get a reference",
+        "execution": {
+          "kind": "http",
+          "mode": "openapi",
+          "method": "GET",
+          "path": "/repos/{owner}/{repo}/git/ref/{ref}",
+          "server_url": "https://api.github.com",
+          "path_params": [
+            "owner",
+            "repo",
+            "ref"
+          ],
+          "query_params": [],
+          "header_params": [],
+          "request_body": null,
+          "response": {
+            "binary": false
+          },
+          "multi_segment_path_params": [
+            "ref"
+          ],
+          "default_headers": {
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+            "User-Agent": "lemma-connectors"
+          }
+        },
+        "input_schema": {
+          "type": "object",
+          "title": "git_get_ref",
+          "properties": {
+            "owner": {
+              "type": "string",
+              "description": "The account owner of the repository. The name is not case sensitive."
+            },
+            "repo": {
+              "type": "string",
+              "description": "The name of the repository without the `.git` extension. The name is not case sensitive."
+            },
+            "ref": {
+              "type": "string",
+              "description": "The Git reference. For more information, see \"[Git References](https://git-scm.com/book/en/v2/Git-Internals-Git-References)\" in the Git documentation."
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "owner",
+            "repo",
+            "ref"
+          ]
+        },
+        "output_schema": {
+          "title": "Git Reference",
+          "description": "Git references within a repository",
+          "type": "object",
+          "properties": {
+            "ref": {
+              "type": "string"
+            },
+            "node_id": {
+              "type": "string"
+            },
+            "url": {
+              "type": "string",
+              "format": "uri"
+            },
+            "object": {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string"
+                },
+                "sha": {
+                  "description": "SHA for the reference",
+                  "example": "7638417db6d59f3c431d3e1f261cc637155684cd",
+                  "type": "string",
+                  "minLength": 40,
+                  "maxLength": 40
+                },
+                "url": {
+                  "type": "string",
+                  "format": "uri"
+                }
+              },
+              "required": [
+                "type",
+                "sha",
+                "url"
+              ]
+            }
+          },
+          "required": [
+            "ref",
+            "node_id",
+            "url",
+            "object"
+          ]
+        }
+      },
+      {
+        "name": "git_update_ref",
+        "description": "Update a reference",
+        "execution": {
+          "kind": "http",
+          "mode": "openapi",
+          "method": "PATCH",
+          "path": "/repos/{owner}/{repo}/git/refs/{ref}",
+          "server_url": "https://api.github.com",
+          "path_params": [
+            "owner",
+            "repo",
+            "ref"
+          ],
+          "query_params": [],
+          "header_params": [],
+          "request_body": {
+            "content_type": "application/json",
+            "field": "body",
+            "binary_fields": [],
+            "form_fields": []
+          },
+          "response": {
+            "binary": false
+          },
+          "multi_segment_path_params": [
+            "ref"
+          ],
+          "default_headers": {
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+            "User-Agent": "lemma-connectors"
+          }
+        },
+        "input_schema": {
+          "type": "object",
+          "title": "git_update_ref",
+          "properties": {
+            "owner": {
+              "type": "string",
+              "description": "The account owner of the repository. The name is not case sensitive."
+            },
+            "repo": {
+              "type": "string",
+              "description": "The name of the repository without the `.git` extension. The name is not case sensitive."
+            },
+            "ref": {
+              "type": "string",
+              "description": "The Git reference. For more information, see \"[Git References](https://git-scm.com/book/en/v2/Git-Internals-Git-References)\" in the Git documentation."
+            },
+            "body": {
+              "type": "object",
+              "properties": {
+                "sha": {
+                  "type": "string",
+                  "description": "The SHA1 value to set this reference to"
+                },
+                "force": {
+                  "type": "boolean",
+                  "description": "Indicates whether to force the update or to make sure the update is a fast-forward update. Leaving this out or setting it to `false` will make sure you're not overwriting work.",
+                  "default": false
+                }
+              },
+              "required": [
+                "sha"
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "owner",
+            "repo",
+            "ref",
+            "body"
+          ]
+        },
+        "output_schema": {
+          "title": "Git Reference",
+          "description": "Git references within a repository",
+          "type": "object",
+          "properties": {
+            "ref": {
+              "type": "string"
+            },
+            "node_id": {
+              "type": "string"
+            },
+            "url": {
+              "type": "string",
+              "format": "uri"
+            },
+            "object": {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string"
+                },
+                "sha": {
+                  "description": "SHA for the reference",
+                  "example": "7638417db6d59f3c431d3e1f261cc637155684cd",
+                  "type": "string",
+                  "minLength": 40,
+                  "maxLength": 40
+                },
+                "url": {
+                  "type": "string",
+                  "format": "uri"
+                }
+              },
+              "required": [
+                "type",
+                "sha",
+                "url"
+              ]
+            }
+          },
+          "required": [
+            "ref",
+            "node_id",
+            "url",
+            "object"
+          ]
+        }
+      },
+      {
+        "name": "git_create_tree",
+        "description": "Create a tree",
+        "execution": {
+          "kind": "http",
+          "mode": "openapi",
+          "method": "POST",
+          "path": "/repos/{owner}/{repo}/git/trees",
+          "server_url": "https://api.github.com",
+          "path_params": [
+            "owner",
+            "repo"
+          ],
+          "query_params": [],
+          "header_params": [],
+          "request_body": {
+            "content_type": "application/json",
+            "field": "body",
+            "binary_fields": [],
+            "form_fields": []
+          },
+          "response": {
+            "binary": false
+          },
+          "default_headers": {
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+            "User-Agent": "lemma-connectors"
+          }
+        },
+        "input_schema": {
+          "type": "object",
+          "title": "git_create_tree",
+          "properties": {
+            "owner": {
+              "type": "string",
+              "description": "The account owner of the repository. The name is not case sensitive."
+            },
+            "repo": {
+              "type": "string",
+              "description": "The name of the repository without the `.git` extension. The name is not case sensitive."
+            },
+            "body": {
+              "type": "object",
+              "properties": {
+                "tree": {
+                  "type": "array",
+                  "description": "Objects (of `path`, `mode`, `type`, and `sha`) specifying a tree structure.",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "path": {
+                        "type": "string",
+                        "description": "The file referenced in the tree."
+                      },
+                      "mode": {
+                        "type": "string",
+                        "description": "The file mode; one of `100644` for file (blob), `100755` for executable (blob), `040000` for subdirectory (tree), `160000` for submodule (commit), or `120000` for a blob that specifies the path of a symlink.",
+                        "enum": [
+                          "100644",
+                          "100755",
+                          "040000",
+                          "160000",
+                          "120000"
+                        ]
+                      },
+                      "type": {
+                        "type": "string",
+                        "description": "Either `blob`, `tree`, or `commit`.",
+                        "enum": [
+                          "blob",
+                          "tree",
+                          "commit"
+                        ]
+                      },
+                      "sha": {
+                        "type": "string",
+                        "description": "The SHA1 checksum ID of the object in the tree. Also called `tree.sha`. If the value is `null` then the file will be deleted.  \n  \n**Note:** Use either `tree.sha` or `content` to specify the contents of the entry. Using both `tree.sha` and `content` will return an error.",
+                        "nullable": true
+                      },
+                      "content": {
+                        "type": "string",
+                        "description": "The content you want this file to have. GitHub will write this blob out and use that SHA for this entry. Use either this, or `tree.sha`.  \n  \n**Note:** Use either `tree.sha` or `content` to specify the contents of the entry. Using both `tree.sha` and `content` will return an error."
+                      }
+                    }
+                  }
+                },
+                "base_tree": {
+                  "type": "string",
+                  "description": "The SHA1 of an existing Git tree object which will be used as the base for the new tree. If provided, a new Git tree object will be created from entries in the Git tree object pointed to by `base_tree` and entries defined in the `tree` parameter. Entries defined in the `tree` parameter will overwrite items from `base_tree` with the same `path`. If you're creating new changes on a branch, then normally you'd set `base_tree` to the SHA1 of the Git tree object of the current latest commit on the branch you're working on.\nIf not provided, GitHub will create a new Git tree object from only the entries defined in the `tree` parameter. If you create a new commit pointing to such a tree, then all files which were a part of the parent commit's tree and were not defined in the `tree` parameter will be listed as deleted by the new commit."
+                }
+              },
+              "required": [
+                "tree"
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "owner",
+            "repo",
+            "body"
+          ]
+        },
+        "output_schema": {
+          "title": "Git Tree",
+          "description": "The hierarchy between files in a Git repository.",
+          "type": "object",
+          "properties": {
+            "sha": {
+              "type": "string"
+            },
+            "url": {
+              "type": "string",
+              "format": "uri"
+            },
+            "truncated": {
+              "type": "boolean"
+            },
+            "tree": {
+              "description": "Objects specifying a tree structure",
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "path",
+                  "mode",
+                  "type",
+                  "sha"
+                ],
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "example": "test/file.rb"
+                  },
+                  "mode": {
+                    "type": "string",
+                    "example": "040000"
+                  },
+                  "type": {
+                    "type": "string",
+                    "example": "tree"
+                  },
+                  "sha": {
+                    "type": "string",
+                    "example": "23f6827669e43831def8a7ad935069c8bd418261"
+                  },
+                  "size": {
+                    "type": "integer",
+                    "example": 12
+                  },
+                  "url": {
+                    "type": "string",
+                    "example": "https://api.github.com/repos/owner-482f3203ecf01f67e9deb18e/BBB_Private_Repo/git/blobs/23f6827669e43831def8a7ad935069c8bd418261"
+                  }
+                }
+              },
+              "example": [
+                {
+                  "path": "file.rb",
+                  "mode": "100644",
+                  "type": "blob",
+                  "size": 30,
+                  "sha": "44b4fc6d56897b048c772eb4087f854f46256132",
+                  "url": "https://api.github.com/repos/octocat/Hello-World/git/blobs/44b4fc6d56897b048c772eb4087f854f46256132"
+                }
+              ]
+            }
+          },
+          "required": [
+            "sha",
+            "tree",
+            "truncated"
+          ]
         }
       },
       {
@@ -48797,6 +49572,64 @@
         }
       },
       {
+        "name": "repos_download_zipball_archive",
+        "description": "Download a repository archive (zip)",
+        "execution": {
+          "kind": "http",
+          "mode": "openapi",
+          "method": "GET",
+          "path": "/repos/{owner}/{repo}/zipball/{ref}",
+          "server_url": "https://api.github.com",
+          "path_params": [
+            "owner",
+            "repo",
+            "ref"
+          ],
+          "query_params": [],
+          "header_params": [],
+          "request_body": null,
+          "response": {
+            "binary": true
+          },
+          "default_headers": {
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+            "User-Agent": "lemma-connectors"
+          }
+        },
+        "input_schema": {
+          "type": "object",
+          "title": "repos_download_zipball_archive",
+          "properties": {
+            "owner": {
+              "type": "string",
+              "description": "The account owner of the repository. The name is not case sensitive."
+            },
+            "repo": {
+              "type": "string",
+              "description": "The name of the repository without the `.git` extension. The name is not case sensitive."
+            },
+            "ref": {
+              "type": "string"
+            },
+            "output_path": {
+              "type": "string",
+              "description": "Optional datastore path (e.g. /me/out.tar.gz) to write the downloaded file to. If omitted, the content is returned base64-encoded."
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "owner",
+            "repo",
+            "ref"
+          ]
+        },
+        "output_schema": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      },
+      {
         "name": "search_code",
         "description": "Search code",
         "execution": {
@@ -59699,7 +60532,7 @@
         "database": {
           "type": "string",
           "title": "Database",
-          "description": "Which database on that server to query. Not the table and not the schema — the database name you would pass to psql."
+          "description": "Which database on that server to query. Not the table and not the schema \u2014 the database name you would pass to psql."
         }
       },
       "additionalProperties": false
