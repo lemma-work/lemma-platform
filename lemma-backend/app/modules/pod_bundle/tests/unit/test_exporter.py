@@ -655,3 +655,44 @@ async def test_resource_grants_payload_is_best_effort_on_error(monkeypatch):
         grantee_id=uuid4(),
     )
     assert out is None
+
+
+class _SelfListingFiles:
+    """A file service whose home folder lists itself.
+
+    Not hypothetical: a pod's per-user home folder answers its own listing with
+    itself, which is what sent the walk infinite.
+    """
+
+    def __init__(self):
+        self.calls: list[str] = []
+
+    async def list_files(self, pod_id, ctx, *, directory_path, limit, cursor):
+        del pod_id, ctx, limit, cursor
+        self.calls.append(directory_path)
+        entries = {
+            "/": [
+                SimpleNamespace(path="/home", is_folder=True, is_file=False),
+                SimpleNamespace(path="/reports", is_folder=True, is_file=False),
+            ],
+            # The self-reference.
+            "/home": [SimpleNamespace(path="/home", is_folder=True, is_file=False)],
+            "/reports": [
+                SimpleNamespace(path="/reports/notes.md", is_folder=False, is_file=True)
+            ],
+        }
+        return entries.get(directory_path, []), None
+
+
+async def test_a_folder_that_lists_itself_does_not_sink_the_file_export():
+    """Regression: the walk recursed until RecursionError, which the best-effort
+    caller swallowed — so every pod with a home folder exported an empty
+    `files/` and said nothing. Every real pod has one."""
+    service = _SelfListingFiles()
+
+    entities = await BundleExporter()._walk_pod_files(service, uuid4(), object())
+
+    paths = sorted(str(e.path) for e in entities)
+    assert paths == ["/home", "/reports", "/reports/notes.md"]
+    # Each directory is listed once; the self-reference is not followed twice.
+    assert service.calls.count("/home") == 1
