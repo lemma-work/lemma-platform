@@ -30,6 +30,32 @@ def test_the_module_reads_its_own_env_var_names(monkeypatch) -> None:
     assert resolved.local_callback_url == "http://127.0.0.1:8710"
 
 
+def test_the_e2b_surface_is_exactly_four_settings() -> None:
+    """`E2B_*_BUILD_ID` is a CI repository variable, not a backend setting.
+
+    The workflows pin the exact template build their runs exercise with it.
+    Reading it here would be reasonable and is not what happens, so an
+    operator who sets it in a deployment environment is configuring nothing.
+    Anyone adding a fifth E2B setting should have to decide, deliberately,
+    whether `docs/configuration.md` is still true.
+    """
+    declared = {
+        (
+            field.validation_alias.choices[0]
+            if field.validation_alias
+            else name.upper()
+        )
+        for name, field in WorkspaceSettings.model_fields.items()
+    }
+
+    assert {name for name in declared if name.startswith("E2B_")} == {
+        "E2B_API_KEY",
+        "E2B_WORKSPACE_TEMPLATE",
+        "E2B_FUNCTION_TEMPLATE",
+        "E2B_DOMAIN",
+    }
+
+
 @pytest.mark.parametrize(("old", "new"), sorted(RENAMED_ENV_VARS.items()))
 def test_a_renamed_env_var_refuses_to_start_instead_of_defaulting(
     monkeypatch, old: str, new: str

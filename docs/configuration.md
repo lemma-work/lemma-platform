@@ -85,10 +85,32 @@ the sandbox *is* the disk, so recreating one loses its contents; the backend
 reports this so the user can be told rather than silently handed an empty
 workspace.
 
+### What each provider actually reads
+
+`WorkspaceSettings` declares every field regardless of provider, so a value
+being *set* does not mean it is *used*. Setting one the active provider ignores
+is harmless, but it is not a substitute for the one that matters.
+
+| Setting | `docker` | `e2b` | `lemma_local` |
+| --- | --- | --- | --- |
+| `WORKSPACE_IMAGE` / `FUNCTION_IMAGE` | **required** | not used | **required** |
+| `E2B_API_KEY`, `E2B_WORKSPACE_TEMPLATE`, `E2B_FUNCTION_TEMPLATE` | not used | **required** | not used |
+| `WORKSPACE_PROFILE_DIGEST` / `FUNCTION_PROFILE_DIGEST` | **used** | **used** | **used** |
+| `WORKSPACE_RUNTIME_CREDENTIAL_KEY` | **required** | **required** | **required** |
+| `WORKSPACE_DOCKER_*`, `WORKSPACE_ADD_HOST_GATEWAY`, `WORKSPACE_HOST_ALIAS` | **used** | not used | not used |
+| `WORKSPACE_LOCAL_*` | not used | not used | **required** |
+
+**Under `e2b`, the images are not what a sandbox is made from — the templates
+are.** `E2BSandboxProvider.create` passes `template=...` and never reads the
+image, so leaving `WORKSPACE_IMAGE` at its default is correct there. What
+still matters on E2B is the profile digest: it is stamped into sandbox
+metadata and is the only thing that moves an existing workspace onto a
+rebuilt template.
+
 ```dotenv
 WORKSPACE_PROVIDER=docker
 
-# The images sandboxes are made from. Pin by digest in any real deployment;
+# Docker and lemma_local only. Pin by digest in any real deployment;
 # WORKSPACE_DOCKER_ALLOW_MUTABLE_IMAGES=false refuses a tag that is not pinned.
 WORKSPACE_IMAGE=ghcr.io/lemma-work/lemma-workspace@sha256:...
 FUNCTION_IMAGE=ghcr.io/lemma-work/lemma-function@sha256:...
@@ -149,6 +171,18 @@ E2B_FUNCTION_TEMPLATE=lemma-function
 # Only for a self-hosted or non-default E2B deployment.
 E2B_DOMAIN=
 ```
+
+These four are the whole backend-side E2B surface. In particular:
+
+- **`E2B_WORKSPACE_BUILD_ID` and `E2B_FUNCTION_BUILD_ID` are not backend
+  settings.** `WorkspaceSettings` does not declare them and the backend never
+  reads them. They are GitHub Actions repository variables, consumed by the
+  E2B conformance and function-benchmark workflows to pin the exact template
+  build those runs exercise. Setting them in a deployment environment does
+  nothing; do not treat a template id alone as an unpinned deployment.
+- A template name is a moving pointer: rebuilding a template under the same
+  name changes what a *new* sandbox is made from. It does not touch sandboxes
+  that already exist — bump `WORKSPACE_PROFILE_DIGEST` for that.
 
 ### Reaching a sandbox
 

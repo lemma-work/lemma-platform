@@ -237,6 +237,32 @@ async def test_storage_is_the_sandbox_not_a_volume(
         )
 
 
+async def test_a_sandbox_is_made_from_the_template_not_from_an_image(
+    provider: E2BSandboxProvider, world: FakeE2B
+) -> None:
+    """On E2B the image settings are inert, and operators need to know it.
+
+    `WORKSPACE_IMAGE` and `FUNCTION_IMAGE` describe an OCI artifact, which is
+    what the Docker and lemma_local providers pull. E2B is made from a
+    template instead, so a deployment on E2B that carefully pins an image is
+    pinning nothing. Passing a deliberately wrong image here proves the
+    provider never consults it.
+    """
+    sandbox_id = uuid4()
+
+    await provider.create(_spec(sandbox_id, image="wrong-registry/nope@sha256:bad"))
+
+    assert world.created[0]["template"] == "lemma-workspace"
+
+
+async def test_a_function_sandbox_uses_the_function_template(
+    provider: E2BSandboxProvider, world: FakeE2B
+) -> None:
+    await provider.create(_spec(uuid4(), kind=SandboxKind.FUNCTION))
+
+    assert world.created[0]["template"] == "lemma-function"
+
+
 async def test_a_sandbox_from_the_same_template_build_is_adopted(
     provider: E2BSandboxProvider, world: FakeE2B
 ) -> None:
