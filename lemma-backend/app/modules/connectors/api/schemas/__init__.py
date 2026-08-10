@@ -61,7 +61,6 @@ class ConnectorKindResponseSchema(BaseModel):
     package_name: Optional[str] = None
     # `composio` only.
     toolkit_slug: Optional[str] = None
-    supports_org_custom_auth_config: bool = False
 
 
 # Connector Schemas

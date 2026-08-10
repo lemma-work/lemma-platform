@@ -672,7 +672,6 @@ def _composio_provider_capability(
         toolkit_slug=toolkit_slug,
         auth_config_schema=auth_config_schema,
         system_default_available=True,
-        supports_org_custom_auth_config=False,
         profile_operation_names=profile_operation_names,
     )
 

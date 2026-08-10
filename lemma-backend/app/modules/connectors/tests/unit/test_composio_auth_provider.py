@@ -208,11 +208,12 @@ async def test_connect_with_credentials_initiates_api_key_connection():
                 auth_scheme=AuthScheme.API_KEY,
             )
         ],
-        composio_auth_config_id="ac_existing",
     )
 
     initiate = MagicMock(return_value=SimpleNamespace(id="ca_new_connection"))
-    auth_configs = SimpleNamespace(create=MagicMock())
+    auth_configs = SimpleNamespace(
+        create=MagicMock(return_value=SimpleNamespace(id="ac_created"))
+    )
     composio = SimpleNamespace(
         connected_accounts=SimpleNamespace(initiate=initiate),
         auth_configs=auth_configs,
@@ -231,12 +232,22 @@ async def test_connect_with_credentials_initiates_api_key_connection():
 
     assert isinstance(credentials, ComposioCredentials)
     assert credentials.connection_id == "ca_new_connection"
-    # Reused the existing auth config (no create call) and passed an API_KEY config
-    # with no callback_url (non-OAuth flow).
-    auth_configs.create.assert_not_called()
+    # An API-key toolkit has no Composio-managed credentials, so its auth config
+    # is created with `use_custom_auth` and the toolkit's own scheme. This is
+    # about the TOOLKIT's auth, not about who owns the Composio account -- that
+    # is always Lemma. The end user's key rides on `initiate`, below.
+    auth_configs.create.assert_called_once()
+    _, create_kwargs = auth_configs.create.call_args
+    assert create_kwargs["toolkit"] == "airtable"
+    assert create_kwargs["options"] == {
+        "type": "use_custom_auth",
+        "auth_scheme": "API_KEY",
+    }
+
+    # ...and passed an API_KEY config with no callback_url (non-OAuth flow).
     initiate.assert_called_once()
     _, kwargs = initiate.call_args
-    assert kwargs["auth_config_id"] == "ac_existing"
+    assert kwargs["auth_config_id"] == "ac_created"
     assert kwargs["user_id"] == str(user_id)
     assert "callback_url" not in kwargs
     assert kwargs["config"]["auth_scheme"] == "API_KEY"

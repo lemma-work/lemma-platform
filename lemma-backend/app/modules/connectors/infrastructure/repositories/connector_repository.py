@@ -31,7 +31,6 @@ class ConnectorRepository(
             exclude={
                 "oauth2_config",
                 "composio_toolkit_slug",
-                "composio_auth_config_id",
                 "created_at",
                 "updated_at",
             },

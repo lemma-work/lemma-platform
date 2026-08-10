@@ -14,6 +14,8 @@ from app.modules.connectors.domain.account import (
     OAuthCredentials,
 )
 from app.modules.connectors.domain.auth_config import (
+    COMPOSIO_ORG_CUSTOM_REASON,
+    COMPOSIO_SYSTEM_CREDENTIALS_ONLY,
     AuthConfigEntity,
     AuthConfigSource,
 )
@@ -340,10 +342,6 @@ class ConnectorService:
         if provider == AuthProvider.COMPOSIO.value:
             capability = self._composio_capability(connector)
             updates["composio_toolkit_slug"] = capability.toolkit_slug
-            if provider_config.get("composio_auth_config_id"):
-                updates["composio_auth_config_id"] = provider_config[
-                    "composio_auth_config_id"
-                ]
 
         return connector.model_copy(update=updates)
 
@@ -428,24 +426,18 @@ class ConnectorService:
                 )
                 continue
             if isinstance(capability, ComposioProviderCapability):
+                # Composio runs on Lemma's own Composio account, so the system
+                # default is always there.
+                #
+                # `auth_config_schema` is deliberately left as the catalog
+                # stored it. For a non-OAuth toolkit it is the *account's*
+                # credential form, not an org install config, so replacing it
+                # with `default_auth_config_schema` (client_id/client_secret)
+                # or blanking it to None would empty the connect dialog for
+                # every API-key toolkit -- freshdesk, metabase, posthog and the
+                # rest -- with no error to show for it.
                 capabilities.append(
-                    capability.model_copy(
-                        update={
-                            "system_default_available": True,
-                            "supports_org_custom_auth_config": False,
-                            "auth_config_schema": (
-                                capability.auth_config_schema
-                                if capability.auth_config_schema is not None
-                                else (
-                                    default_auth_config_schema(
-                                        capability.auth_scheme, connector.id
-                                    )
-                                    if capability.supports_org_custom_auth_config
-                                    else None
-                                )
-                            ),
-                        }
-                    )
+                    capability.model_copy(update={"system_default_available": True})
                 )
                 continue
             capabilities.append(capability)
@@ -468,7 +460,8 @@ class ConnectorService:
         if kind is ConnectorKind.COMPOSIO:
             if config_source != AuthConfigSource.SYSTEM_DEFAULT:
                 raise ConnectorValidationError(
-                    "Composio auth configs only support system default credentials in v1."
+                    COMPOSIO_SYSTEM_CREDENTIALS_ONLY,
+                    details={"reason": COMPOSIO_ORG_CUSTOM_REASON},
                 )
             return
 

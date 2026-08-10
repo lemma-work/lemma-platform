@@ -14,8 +14,12 @@ from uuid import uuid4
 
 import pytest
 
-from app.modules.connectors.domain.auth_config import AuthConfigSource
+from app.modules.connectors.domain.auth_config import (
+    COMPOSIO_ORG_CUSTOM_REASON,
+    AuthConfigSource,
+)
 from app.modules.connectors.domain.connector import (
+    ComposioKindSpec,
     ConnectorKind,
     McpKindSpec,
     PackageKindSpec,
@@ -68,6 +72,33 @@ def _install(kind: ConnectorKind, config: dict | None = None) -> ResolvedInstall
         config=config or {},
         config_source=AuthConfigSource.SYSTEM_DEFAULT,
         spec=specs.get(kind, PackageKindSpec()),
+    )
+
+
+@pytest.mark.asyncio
+async def test_composio_installer_refuses_org_supplied_credentials():
+    """The second guard on "Composio uses Lemma's Composio account".
+
+    Not a duplicate of the service-layer check: this one also runs on the
+    *update* path, which never reaches `_validate_auth_config_request`. It had
+    no coverage at all, while a `supports_org_custom_auth_config` flag on the
+    Composio spec advertised the opposite of what it enforces.
+    """
+    installer = _registry().get(ConnectorKind.COMPOSIO).installer
+    spec = ComposioKindSpec(toolkit_slug="gmail")
+
+    with pytest.raises(ConnectorValidationError) as excinfo:
+        await installer.validate_install(
+            spec=spec, config={}, config_source=AuthConfigSource.ORG_CUSTOM
+        )
+    assert excinfo.value.details["reason"] == COMPOSIO_ORG_CUSTOM_REASON
+
+    # The system default is the only way in, and it still works.
+    assert (
+        await installer.validate_install(
+            spec=spec, config={}, config_source=AuthConfigSource.SYSTEM_DEFAULT
+        )
+        == {}
     )
 
 

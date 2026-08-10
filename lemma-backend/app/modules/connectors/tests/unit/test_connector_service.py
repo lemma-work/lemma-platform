@@ -24,7 +24,11 @@ from app.modules.connectors.domain.connector import (
 from app.modules.connectors.domain.connector_operation import (
     ConnectorOperationEntity,
 )
-from app.modules.connectors.domain.auth_config import AuthConfigEntity, AuthConfigSource
+from app.modules.connectors.domain.auth_config import (
+    COMPOSIO_ORG_CUSTOM_REASON,
+    AuthConfigEntity,
+    AuthConfigSource,
+)
 from app.modules.connectors.domain.connect_request import ConnectRequestEntity
 from app.modules.connectors.domain.connect_request import ConnectRequestStatus
 from app.modules.connectors.domain.errors import (
@@ -298,6 +302,92 @@ async def test_create_composio_auth_config_allows_system_default_without_env_key
     assert result.config_source == AuthConfigSource.SYSTEM_DEFAULT
     auth_config_repo.create.assert_awaited_once()
     uow.commit.assert_awaited_once()
+
+
+async def test_create_composio_auth_config_refuses_org_custom_credentials():
+    """Composio runs on Lemma's Composio account; an org cannot bring its own.
+
+    This rejection has guarded the create path since the beginning and nothing
+    asserted it -- while a `supports_org_custom_auth_config` flag sat on the
+    Composio spec implying the opposite. The flag is gone; this is the fact it
+    was pretending to express.
+    """
+    app = ConnectorEntity(
+        id="dropbox",
+        provider_capabilities=[ComposioProviderCapability(toolkit_slug="dropbox")],
+    )
+    auth_config_repo = AsyncMock(
+        get_active_by_org_and_app=AsyncMock(return_value=None),
+    )
+    uow = AsyncMock()
+    service = _service(
+        uow=uow,
+        connector_repository=AsyncMock(get=AsyncMock(return_value=app)),
+        auth_config_repository=auth_config_repo,
+    )
+
+    with pytest.raises(ConnectorValidationError) as excinfo:
+        await service.create_auth_config(
+            user_id=uuid4(),
+            organization_id=ORG_ID,
+            connector_id="dropbox",
+            kind=ConnectorKind.COMPOSIO.value,
+            config_source=AuthConfigSource.ORG_CUSTOM.value,
+            config={"client_id": "x", "client_secret": "y"},
+        )
+
+    assert excinfo.value.details["reason"] == COMPOSIO_ORG_CUSTOM_REASON
+    # Refused before anything was written, not rolled back after.
+    auth_config_repo.create.assert_not_awaited()
+    uow.commit.assert_not_awaited()
+
+
+async def test_composio_api_key_toolkit_keeps_its_credential_form():
+    """The enrichment must not touch a Composio spec's `auth_config_schema`.
+
+    For a non-OAuth toolkit that field is the *end user's* credential form, not
+    an org install config. Blanking it to None -- or replacing it with the
+    client_id/client_secret default -- empties the connect dialog for every
+    API-key toolkit (freshdesk, metabase, posthog...) with nothing to show for
+    it, which is exactly the shape of bug a "simplify this branch" edit makes.
+    """
+    credential_form = {
+        "type": "object",
+        "required": ["generic_api_key"],
+        "properties": {"generic_api_key": {"type": "string"}},
+        "additionalProperties": False,
+    }
+    app = ConnectorEntity(
+        id="freshdesk",
+        provider_capabilities=[
+            ComposioProviderCapability(
+                toolkit_slug="freshdesk",
+                auth_scheme=AuthScheme.API_KEY,
+                auth_config_schema=credential_form,
+            )
+        ],
+    )
+    service = _service(connector_repository=AsyncMock(get=AsyncMock(return_value=app)))
+
+    enriched = await service.get_connector("freshdesk")
+    spec = enriched.capability_for(AuthProvider.COMPOSIO)
+
+    assert spec.auth_config_schema == credential_form
+    # Always on: Lemma's Composio key is the only one there is.
+    assert spec.system_default_available is True
+
+    # An OAuth2 toolkit legitimately carries none, and must not acquire one.
+    oauth_app = ConnectorEntity(
+        id="hubspot",
+        provider_capabilities=[ComposioProviderCapability(toolkit_slug="hubspot")],
+    )
+    oauth_service = _service(
+        connector_repository=AsyncMock(get=AsyncMock(return_value=oauth_app))
+    )
+    oauth_spec = (await oauth_service.get_connector("hubspot")).capability_for(
+        AuthProvider.COMPOSIO
+    )
+    assert oauth_spec.auth_config_schema is None
 
 
 async def test_initiate_connect_request_allows_reauth_for_unusable_account():

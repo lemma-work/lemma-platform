@@ -41,7 +41,6 @@ class ConnectorKindResponseSchema:
             discovery (str | Unset):  Default: 'none'.
             oauth2_defaults (None | OAuth2DefaultsResponseSchema | Unset):
             package_name (None | str | Unset):
-            supports_org_custom_auth_config (bool | Unset):  Default: False.
             supports_org_custom_oauth (bool | Unset):  Default: False.
             system_default_available (bool | Unset):  Default: False.
             toolkit_slug (None | str | Unset):
@@ -56,7 +55,6 @@ class ConnectorKindResponseSchema:
     discovery: str | Unset = "none"
     oauth2_defaults: None | OAuth2DefaultsResponseSchema | Unset = UNSET
     package_name: None | str | Unset = UNSET
-    supports_org_custom_auth_config: bool | Unset = False
     supports_org_custom_oauth: bool | Unset = False
     system_default_available: bool | Unset = False
     toolkit_slug: None | str | Unset = UNSET
@@ -115,8 +113,6 @@ class ConnectorKindResponseSchema:
         else:
             package_name = self.package_name
 
-        supports_org_custom_auth_config = self.supports_org_custom_auth_config
-
         supports_org_custom_oauth = self.supports_org_custom_oauth
 
         system_default_available = self.system_default_available
@@ -146,10 +142,6 @@ class ConnectorKindResponseSchema:
             field_dict["oauth2_defaults"] = oauth2_defaults
         if package_name is not UNSET:
             field_dict["package_name"] = package_name
-        if supports_org_custom_auth_config is not UNSET:
-            field_dict["supports_org_custom_auth_config"] = (
-                supports_org_custom_auth_config
-            )
         if supports_org_custom_oauth is not UNSET:
             field_dict["supports_org_custom_oauth"] = supports_org_custom_oauth
         if system_default_available is not UNSET:
@@ -257,10 +249,6 @@ class ConnectorKindResponseSchema:
 
         package_name = _parse_package_name(d.pop("package_name", UNSET))
 
-        supports_org_custom_auth_config = d.pop(
-            "supports_org_custom_auth_config", UNSET
-        )
-
         supports_org_custom_oauth = d.pop("supports_org_custom_oauth", UNSET)
 
         system_default_available = d.pop("system_default_available", UNSET)
@@ -282,7 +270,6 @@ class ConnectorKindResponseSchema:
             discovery=discovery,
             oauth2_defaults=oauth2_defaults,
             package_name=package_name,
-            supports_org_custom_auth_config=supports_org_custom_auth_config,
             supports_org_custom_oauth=supports_org_custom_oauth,
             system_default_available=system_default_available,
             toolkit_slug=toolkit_slug,

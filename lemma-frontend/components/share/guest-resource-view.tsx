@@ -49,7 +49,11 @@ export function GuestResourceView({
                     <span className="text-xs font-medium uppercase tracking-wide text-[var(--text-tertiary)]">
                         {getShareKindCopy(kind).noun}
                     </span>
-                    <ResourceVisibilityBadge visibility={preview.visibility} hideWhenDefault={false} />
+                    <ResourceVisibilityBadge
+                        visibility={preview.visibility}
+                        resourceType={kind === 'app' ? 'app' : undefined}
+                        hideWhenDefault={false}
+                    />
                 </div>
                 <h1 className="mt-1.5 truncate font-display text-2xl font-semibold text-[var(--text-primary)]">
                     {displayName}

@@ -319,7 +319,11 @@ class AppStepRunner:
                             name=name,
                             public_slug=slug,
                             description=manifest.get("description"),
-                            visibility=manifest.get("visibility") or "POD",
+                            # A manifest that says nothing takes the app default
+                            # (PUBLIC), not the platform-wide POD: an imported
+                            # bundle should serve on its host like a hand-created
+                            # app does.
+                            visibility=manifest.get("visibility") or "PUBLIC",
                         ),
                         user_id,
                         ctx=ctx,
