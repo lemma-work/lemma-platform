@@ -10,6 +10,7 @@ import {
     getManagedConfigCopy,
     getTenantConfiguredConnectors,
     getTenantConfiguredKindSpec,
+    hasSystemDefault,
     isTenantConfigured,
     requiresInstallConfig,
     supportsCustomConfig,
@@ -128,6 +129,43 @@ describe('an OAuth connector served over http', () => {
         const byoApi = { ...githubKind, auth_scheme: AuthScheme.API_KEY };
         expect(getKindDescription(ConnectorKind.HTTP, byoApi as KindSpec)).toContain('OpenAPI');
         expect(requiresInstallConfig(byoApi as KindSpec)).toBe(true);
+    });
+
+    it('is not something the org supplies an address for', () => {
+        // The regression this guards: `http` is a tenant-configured kind, so
+        // GitHub was routed to the databases/APIs/MCP flow — Connect opened the
+        // "add a connection" form asking for an address, and the
+        // Lemma's-app-or-your-own choice was never reachable. Every other
+        // GitHub assertion above passed the whole time, because none of them
+        // went through this classifier.
+        expect(isTenantConfigured(githubKind as KindSpec)).toBe(false);
+
+        // Still true without a platform client: the org owes an OAuth app, not
+        // an address, so it must not fall back into the connection flow.
+        expect(
+            isTenantConfigured({ ...githubKind, system_default_available: false } as KindSpec),
+        ).toBe(false);
+
+        // A genuine bring-your-own API over http is unchanged.
+        expect(
+            isTenantConfigured({ ...githubKind, auth_scheme: AuthScheme.API_KEY } as KindSpec),
+        ).toBe(true);
+    });
+
+    it('stays in the catalog grid instead of the connections section', () => {
+        const catalog = [
+            connector('github', [githubKind]),
+            connector('sql', [sqlKind]),
+        ];
+        expect(getTenantConfiguredConnectors(catalog).map((app) => app.id)).toEqual(['sql']);
+        expect(getTenantConfiguredKindSpec(catalog[0])).toBeNull();
+    });
+
+    it('offers the Lemma-or-your-own choice', () => {
+        // What the user actually sees: "Use Lemma's" with a "Use my own"
+        // button beside it, rather than a form demanding a client id.
+        expect(hasSystemDefault(githubKind as KindSpec)).toBe(true);
+        expect(supportsCustomConfig(githubKind as KindSpec)).toBe(true);
     });
 });
 

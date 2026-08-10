@@ -104,8 +104,33 @@ export const schemaHasFields = (schema: JsonSchemaLike | null): boolean =>
 export const hasSystemDefault = (capability: ConnectorKindSpec | null): boolean =>
     Boolean(capability?.system_default_available);
 
-export const isTenantConfigured = (capability: ConnectorKindSpec | null): boolean =>
-    Boolean(capability && TENANT_CONFIGURED_KINDS.has(String(capability.kind)));
+/**
+ * A kind alone stopped being enough to describe an install once a first-party
+ * OAuth connector shipped over the http kind. GitHub is `http`, but nobody
+ * points Lemma at a GitHub spec — they sign in.
+ */
+export const isOAuthOverHttp = (
+    kind: string,
+    capability: ConnectorKindSpec | null,
+): boolean => kind === KIND.HTTP && capability?.auth_scheme === 'OAUTH2';
+
+/**
+ * True when *the org supplies the address* for this install.
+ *
+ * The kind alone is not the answer. `http` covers both "point Lemma at an
+ * OpenAPI spec" and a first-party OAuth connector that merely happens to speak
+ * HTTP (GitHub), whose operations carry their own server_url and whose OAuth
+ * client Lemma owns. Classifying the latter as tenant-configured sent it down
+ * the databases/APIs/MCP path: Connect opened the "add a connection" form
+ * asking for an address, the catalog grid dropped it into the Connections
+ * section, and the Lemma's-app-or-your-own choice was never reachable.
+ */
+export const isTenantConfigured = (capability: ConnectorKindSpec | null): boolean => {
+    if (!capability) return false;
+    const kind = String(capability.kind);
+    if (!TENANT_CONFIGURED_KINDS.has(kind)) return false;
+    return !isOAuthOverHttp(kind, capability);
+};
 
 /**
  * True when an install of this kind cannot exist until the org fills in a config.
@@ -189,14 +214,6 @@ export const formatKindName = (kind: string): string => {
         .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
         .join(' ');
 };
-
-/**
- * A kind alone stopped being enough to describe an install once a first-party
- * OAuth connector shipped over the http kind. GitHub is `http`, but nobody
- * points Lemma at a GitHub spec — they sign in.
- */
-const isOAuthOverHttp = (kind: string, capability: ConnectorKindSpec | null): boolean =>
-    kind === KIND.HTTP && capability?.auth_scheme === 'OAUTH2';
 
 export const getKindLabel = (kind: string, capability: ConnectorKindSpec | null): string => {
     if (kind === KIND.COMPOSIO) return 'Composio (recommended)';
