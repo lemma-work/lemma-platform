@@ -931,6 +931,8 @@ fn locald_matches_host_pack(
 }
 
 fn enriched_path() -> String {
+    // Only the unix arm below appends to this.
+    #[cfg_attr(not(unix), expect(unused_mut, reason = "extended on unix only"))]
     let mut parts: Vec<PathBuf> = std::env::var_os("PATH")
         .map(|value| std::env::split_paths(&value).collect())
         .unwrap_or_default();
@@ -2527,12 +2529,15 @@ fn diagnostic_file_identity(metadata: &std::fs::Metadata) -> String {
 
 #[cfg(windows)]
 fn diagnostic_file_identity(metadata: &std::fs::Metadata) -> String {
+    // The unix arm uses (device, inode), whose Windows equivalent -- volume
+    // serial and file index -- is still behind the unstable `windows_by_handle`
+    // feature, so reaching for it does not compile on stable at all.
+    //
+    // Creation time and size are enough for what this identity is for: a
+    // cursor is only invalidated when the log it points into is no longer the
+    // same file, and rotation replaces the file rather than truncating it.
     use std::os::windows::fs::MetadataExt;
-    format!(
-        "{:x}-{:x}",
-        metadata.volume_serial_number().unwrap_or_default(),
-        metadata.file_index().unwrap_or_default()
-    )
+    format!("{:x}-{:x}", metadata.creation_time(), metadata.file_size())
 }
 
 #[cfg(not(any(unix, windows)))]
@@ -4751,6 +4756,9 @@ fn main() {
                     handle_deep_link(app, &url);
                 }
             }
+            // Clicking the Dock icon with every window closed. macOS-only:
+            // the variant does not exist on other platforms.
+            #[cfg(target_os = "macos")]
             tauri::RunEvent::Reopen { .. } => {
                 if let Some(window) = app.get_webview_window("main") {
                     let _ = window.show();

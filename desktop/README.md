@@ -98,10 +98,18 @@ branches, which is enough to lint them:
 
 ```bash
 brew install mingw-w64
-cd desktop && CC_x86_64_pc_windows_gnu=x86_64-w64-mingw32-gcc \
+cd desktop
+# tauri-build resolves externalBin by target triple, so the app crate needs
+# files under the Windows names before it will compile at all. Placeholders
+# are enough for a lint; only bundling reads them.
+for n in lemma-locald lemma-agent-host lemma-runtime; do
+  cp "binaries/$n-aarch64-apple-darwin" "binaries/$n-x86_64-pc-windows-gnu.exe"
+done
+CC_x86_64_pc_windows_gnu=x86_64-w64-mingw32-gcc \
   CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=x86_64-w64-mingw32-gcc \
-  cargo clippy --workspace --exclude lemma-guestd --exclude lemma-desktop \
+  cargo clippy --workspace --exclude lemma-guestd \
     --all-targets --target x86_64-pc-windows-gnu -- -D warnings
+rm -f binaries/*windows-gnu.exe
 ```
 
 The **Windows desktop build check** job in CI is the real gate; this is how to
