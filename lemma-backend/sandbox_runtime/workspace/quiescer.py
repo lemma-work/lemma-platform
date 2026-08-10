@@ -17,7 +17,7 @@ class WorkspaceQuiescer:
     """Remove nonportable compute state before a workspace is suspended."""
 
     _ephemeral_directories = (
-        Path("/tmp/agentbox-browser"),
+        Path("/tmp/lemma-browser"),
         Path("/home/appuser/.agent-browser"),
         Path("/workspace/.browser-profile"),
     )
@@ -42,7 +42,7 @@ class WorkspaceQuiescer:
             self._ephemeral_files if ephemeral_files is None else ephemeral_files
         )
         self._isolated_process_namespace = (
-            os.getenv("AGENTBOX_SANDBOX_PROCESS_NAMESPACE") == "isolated"
+            os.getenv("LEMMA_SANDBOX_PROCESS_NAMESPACE") == "isolated"
             if isolated_process_namespace is None
             else isolated_process_namespace
         )

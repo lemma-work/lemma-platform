@@ -2,7 +2,7 @@
 
 Real ASGI app + the real streaq worker run plan then apply. Most tests build the
 bundle in-process (``worker`` marker, no sandbox); the final roundtrip creates a
-real function via the agentbox (``workspace`` marker) to prove export→import→apply
+real function via a sandbox (``workspace`` marker) to prove export→import→apply
 across process boundaries.
 """
 
@@ -287,7 +287,7 @@ async def test_cancel_persists_terminal_tombstone(
 async def test_export_then_import_apply_roundtrip(
     authenticated_client, test_pod, fixed_test_org, worker, workspace_api, tmp_path
 ):
-    """Full cross-pod flow: build a source pod (function needs the agentbox),
+    """Full cross-pod flow: build a source pod (function needs a sandbox),
     export it, import the real bundle into a fresh pod, apply, verify."""
     source_id = test_pod["id"]
     func_name = f"upper_{uuid4().hex[:6]}"

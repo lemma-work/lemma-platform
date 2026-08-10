@@ -121,21 +121,27 @@ async def test_ensure_github_credentials_writes_credential_file_and_marks_provis
     session = _FakeCredentialSession()
     await bridge.ensure_github_credentials(_context(), session)
 
-    assert session.written == [
-        (
-            "/tmp/.git-credentials",
-            b"https://x-access-token:gho_faketoken123@github.com\n",
-        )
-    ]
+    written = dict(session.written)
+    assert written["/tmp/.git-credentials"] == (
+        b"https://x-access-token:gho_faketoken123@github.com\n"
+    )
+    # `gh` does not read git's credential file. Writing its own config is what
+    # makes `gh` authenticate as the same account, without the token entering
+    # the environment where `env` would print it into a tool result.
+    assert b"oauth_token: gho_faketoken123" in written["/tmp/lemma-gh/hosts.yml"]
+    assert b"user: octocat" in written["/tmp/lemma-gh/hosts.yml"]
+
     assert len(session.commands) == 1
     cmd = session.commands[0]
     assert "credential.helper" in cmd
     assert "/tmp/.git-credentials" in cmd
     assert "user.name octocat" in cmd
     assert "user.email octocat@example.com" in cmd
-    # The token is delivered via write_file, never interpolated into a shell
-    # string that could end up in process listings or command logs.
+    # Both credential files are delivered via write_file, never interpolated
+    # into a shell string that could end up in process listings or command
+    # logs. The permissions are what the command is for.
     assert "gho_faketoken123" not in cmd
+    assert "chmod 600 /tmp/lemma-gh/hosts.yml" in cmd
     assert redis.values[_MARKER_KEY] == "provisioned"
 
 

@@ -18,8 +18,8 @@ def manifest():
             "images": {
                 "backend": "ghcr.io/lemma-work/lemma-backend:v1.0.0",
                 "frontend": "ghcr.io/lemma-work/lemma-frontend:v1.0.0",
-                "agentbox_workspace": "ghcr.io/lemma-work/lemma-agentbox-workspace:v1.0.0",
-                "agentbox_function": "ghcr.io/lemma-work/lemma-agentbox-function:v1.0.0",
+                "workspace": "ghcr.io/lemma-work/lemma-workspace:v1.0.0",
+                "function": "ghcr.io/lemma-work/lemma-function:v1.0.0",
             },
         }
     )
@@ -125,15 +125,14 @@ def test_selinux_adds_z_to_rw_binds_only(config, paths, manifest):
 def test_sandbox_provisioning_podman_wiring(config, paths, manifest):
     spec = by_name(build(config, paths, manifest, provider="podman"), "backend")
     assert spec.env["WORKSPACE_PROVIDER"] == "docker"
-    assert spec.env["AGENTBOX_DOCKER_SOCKET_PATH"] == "/var/run/docker.sock"
-    assert spec.env["AGENTBOX_DOCKER_PRIVATE_NETWORK"] == "lemma-local-net"
+    assert spec.env["WORKSPACE_DOCKER_SOCKET_PATH"] == "/var/run/docker.sock"
+    assert spec.env["WORKSPACE_DOCKER_PRIVATE_NETWORK"] == "lemma-local-net"
     # No manager means no second database and no URL to reach it on.
     assert "AGENTBOX_STATE_DATABASE_URL" not in spec.env
     assert "AGENTBOX_API_URL" not in spec.env
     assert "FUNCTION_RUNTIME_SECRET" not in spec.env
     assert len(spec.env["WORKSPACE_RUNTIME_CREDENTIAL_KEY"]) == 44
-    assert spec.env["AGENTBOX_ADD_HOST_GATEWAY"] == "false"
-    assert spec.env["AGENTBOX_LOCAL_RUNTIME_TIMEOUT_SECONDS"] == "600"
+    assert spec.env["WORKSPACE_ADD_HOST_GATEWAY"] == "false"
     assert spec.user == "root"
     mounts = dict((t, s) for s, t, _ in spec.binds)
     assert mounts["/var/run/docker.sock"] == "/run/user/501/podman/podman.sock"
@@ -144,8 +143,8 @@ def test_sandbox_provisioning_docker_wiring(config, paths, manifest):
     assert spec.env["WORKSPACE_PROVIDER"] == "docker"
     # Sandboxes and the backend share this private network. lemma-cli inside a
     # sandbox reaches the all-in-one API through the backend DNS alias.
-    assert spec.env["AGENTBOX_DOCKER_SOCKET_PATH"] == "/var/run/docker.sock"
-    assert spec.env["AGENTBOX_DOCKER_PRIVATE_NETWORK"] == "lemma-local-net"
+    assert spec.env["WORKSPACE_DOCKER_SOCKET_PATH"] == "/var/run/docker.sock"
+    assert spec.env["WORKSPACE_DOCKER_PRIVATE_NETWORK"] == "lemma-local-net"
     assert spec.env["WORKSPACE_CALLBACK_API_URL"] == "http://backend:8000"
     assert spec.env["FUNCTION_RUNTIME_GATEWAY_URL"] == "http://backend:8000"
     assert spec.env["WORKSPACE_CALLBACK_AUTH_URL"] == "http://frontend:8080/auth"
@@ -166,7 +165,7 @@ def test_sandbox_provisioning_docker_wiring(config, paths, manifest):
         ("Windows", False, "docker", ()),
     ],
 )
-def test_agentbox_socket_selinux_guard_matrix(
+def test_sandbox_socket_selinux_guard_matrix(
     monkeypatch,
     config,
     paths,
@@ -184,7 +183,7 @@ def test_agentbox_socket_selinux_guard_matrix(
     assert spec.security_opts == expected
 
 
-def test_agentbox_security_opts_change_config_hash(config, paths, manifest, monkeypatch):
+def test_sandbox_security_opts_change_config_hash(config, paths, manifest, monkeypatch):
     monkeypatch.setattr(specs_mod.platform, "system", lambda: "Linux")
     monkeypatch.setattr(specs_mod, "selinux_enforcing", lambda: False)
     unconfined = by_name(build(config, paths, manifest, provider="podman"), "backend")

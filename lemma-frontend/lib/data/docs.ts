@@ -99,7 +99,7 @@ const baseDocsPages: DocsPage[] = [
         rows: [
           ['Lemma Cloud', 'You want to start without hosting anything.', 'An account at lemma.work and hosted pods.'],
           ['Local stack', 'You want the product running on your own machine.', 'Frontend, API, database, auth, Redis, and document processing in containers.'],
-          ['Source checkout', 'You want to change Lemma itself.', 'Hot-reload backend, frontend, and agentbox from this repo.'],
+          ['Source checkout', 'You want to change Lemma itself.', 'Hot-reload backend and frontend from this repo.'],
         ],
       },
       {

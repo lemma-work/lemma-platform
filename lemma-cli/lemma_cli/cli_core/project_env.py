@@ -21,7 +21,7 @@ Precedence (low -> high among files); real process env and CLI flags win over al
 Loading is intentionally minimal — the CLI already resolves pod/org/server from
 ``LEMMA_*`` env vars, so this only populates them (never overwriting a value real
 env already set). A real ``LEMMA_TOKEN`` in the environment (an env-driven context
-such as agentbox) skips the files entirely.
+such as a workspace sandbox) skips the files entirely.
 """
 
 from __future__ import annotations
@@ -133,7 +133,7 @@ def load_project_env(
     info["token_in_committed_file"] = "LEMMA_TOKEN" in committed_base
 
     # A real LEMMA_TOKEN already in the environment means an env-driven context
-    # (e.g. agentbox, which injects token + pod and has no config.json). The project
+    # (e.g. a workspace sandbox, which injects token + pod and has no config.json). The project
     # files must never interfere there — skip them entirely so a committed file
     # can't redirect the server or shadow the injected identity.
     if os.environ.get("LEMMA_TOKEN"):

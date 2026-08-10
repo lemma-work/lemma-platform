@@ -20,7 +20,7 @@ flowchart LR
     R --> L["API and worker lifespans"]
     A --> U["HTTP and WebSocket clients"]
     E --> J
-    J --> P["PostgreSQL, Redis, object storage, AgentBox, providers"]
+    J --> P["PostgreSQL, Redis, object storage, the sandbox runtime, providers"]
 ```
 
 The canonical registration order is identity, pod, pod bundle, datastore,
@@ -46,7 +46,7 @@ depending on import order.
 | [agent_surfaces](agent_surfaces.md) | External chat/email ingress, identity mapping, and delivery | `agent_surfaces`, `agent_surface_external_users`, `agent_surface_conversation_links` |
 | [icon](icon.md) | Public raster icon upload and retrieval | None; bytes live in public object/local storage |
 | [usage](usage.md) | Model-usage metering, reservations, limits, and reporting | `usage_records`, `usage_limit_counters` |
-| [workspace](workspace.md) | AgentBox sandbox/session access and workspace tool runtime | None; runtime state is in AgentBox and Redis |
+| [workspace](workspace.md) | sandbox/session access and workspace tool runtime | None; runtime state is in the sandbox runtime and Redis |
 
 ## Cross-module runtime map
 
@@ -60,7 +60,7 @@ flowchart TB
     C["connectors"] --> S["agent_surfaces"]
     A <--> S
     A --> U["usage"]
-    A --> X["workspace / AgentBox"]
+    A --> X["workspace / the sandbox runtime"]
     F --> X
     SC["schedule"] --> A
     SC --> W

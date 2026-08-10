@@ -1,4 +1,4 @@
-"""Durable function dispatcher over AgentBox's resident sandbox runtime API."""
+"""Durable function dispatcher over the sandbox runtime's resident API."""
 
 from __future__ import annotations
 
@@ -65,7 +65,7 @@ OrganizationResolver = Callable[[UUID | None], Awaitable[str | None]]
 class FunctionDispatcher:
     """Start one persisted run, invoke the sandbox, and persist its result.
 
-    No method keeps a Unit of Work alive across AgentBox, identity, sleep, or
+    No method keeps a Unit of Work alive across sandbox, identity, sleep, or
     sandbox I/O. The backend owns the PENDING -> RUNNING transition; the
     runtime receives the complete immutable envelope and never claims it back.
     """

@@ -64,7 +64,7 @@ _function_session_token_cache = FunctionSessionTokenCache(
 )
 _function_runtime_endpoint_cache = FunctionRuntimeEndpointCache(
     # Bounded by the same short window the lease is requested for: reusing an
-    # endpoint for longer than AgentBox is willing to treat as activity would
+    # endpoint for longer tha sandbox is willing to treat as activity would
     # hand out a lease for a sandbox that idle cleanup has already destroyed.
     ttl_seconds=settings.function_runtime_endpoint_reuse_seconds,
     max_entries=settings.function_runtime_endpoint_cache_max_entries,

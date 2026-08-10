@@ -2,7 +2,7 @@
 
 Real ASGI app + the real streaq worker subprocess run the ``plan_pod_import``
 job. Bundles are built in-process with ``lemma_pod_bundle.pack_bundle`` (no
-agentbox needed), so these tests are ``worker``-marked, not ``workspace``: the
+sandbox needed), so these tests are ``worker``-marked, not ``workspace``: the
 planner only lists+diffs the pod's resources, it never runs a sandbox.
 """
 

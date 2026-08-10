@@ -1,10 +1,13 @@
 """What image a sandbox kind runs, and how to tell when it is up.
 
 A profile pairs a name+digest with the artifact for one kind. The digest is
-recorded on the sandbox row rather than only read from settings, because a
-workspace holding a user's files keeps running the profile it was created with
-when the configured digest moves -- replacing it on a config change would
-restart every workspace in the fleet at deploy time.
+recorded on the sandbox row so that a running sandbox can be compared against
+what is configured now: when the two differ the sandbox is replaced rather than
+reused, because it is running an image the backend may no longer know how to
+talk to. Moving the configured digest therefore does restart the fleet, and
+that is the point -- it is the only lever that reaches a sandbox that already
+exists. A sandbox is compute, not storage: on Docker and lemma_local the disk
+is a separate object and is adopted across the replacement.
 """
 
 from __future__ import annotations

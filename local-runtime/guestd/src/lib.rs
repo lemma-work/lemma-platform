@@ -15,8 +15,8 @@ pub const PROTOCOL_VERSION: u64 = 1;
 pub const VSOCK_PORT: u32 = 42_411;
 const MAX_REQUEST_BYTES: u64 = 1024 * 1024;
 const MAX_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
-const CONTAINER_PREFIX: &str = "agentbox-";
-const MANAGED_LABEL: &str = "app.kubernetes.io/name=agentbox-sandbox";
+const CONTAINER_PREFIX: &str = "lemma-sandbox-";
+const MANAGED_LABEL: &str = "app.kubernetes.io/name=lemma-sandbox";
 const ENGINE_COMMAND_TIMEOUT: Duration = Duration::from_secs(120);
 const ENGINE_PULL_TIMEOUT: Duration = Duration::from_secs(300);
 const CACHE_REPAIR_RESPONSE_GRACE: Duration = Duration::from_secs(10);
@@ -467,6 +467,7 @@ impl<E: Engine> GuestService<E> {
 
     fn ensure_core(&self, value: Value) -> Result<Value, GuestError> {
         let parameters = self.parse_core_parameters(value)?;
+        self.reap_pre_rename_sandboxes();
         self.ensure_core_images(&parameters)?;
         self.ensure_postgres(&parameters)?;
         self.ensure_redis(&parameters)?;
@@ -474,10 +475,46 @@ impl<E: Engine> GuestService<E> {
         self.core_status()
     }
 
+    /// Remove sandboxes created before the containers were renamed.
+    ///
+    /// They carry `app.kubernetes.io/name=agentbox-sandbox` and an
+    /// `agentbox-` name prefix, so nothing here can see them any more: the
+    /// sweep filters on the current label and would leave them running for as
+    /// long as the guest lives, holding memory this VM admits against a budget
+    /// it thinks is free. Their runtime also predates the in-image contract,
+    /// so there is nothing to adopt -- only to clean up.
+    ///
+    /// Best-effort by design. A guest that cannot reach its engine has a
+    /// bigger problem than a stale container, and failing bring-up over
+    /// cleanup would turn a leak into an outage. Delete once no guest can
+    /// still be carrying pre-rename sandboxes.
+    fn reap_pre_rename_sandboxes(&self) {
+        const LEGACY_LABEL: &str = "app.kubernetes.io/name=agentbox-sandbox";
+        let Ok(output) = self.run_checked(&[
+            "ps".into(),
+            "--all".into(),
+            "--filter".into(),
+            format!("label={LEGACY_LABEL}"),
+            "--format".into(),
+            "{{.Names}}".into(),
+        ]) else {
+            return;
+        };
+        for name in output.lines().map(str::trim).filter(|line| !line.is_empty()) {
+            let _ = self.run_checked(&["rm".into(), "--force".into(), name.to_owned()]);
+        }
+    }
+
     fn ensure_core_stage(&self, value: Value, stage: CoreStage) -> Result<Value, GuestError> {
         let parameters = self.parse_core_parameters(value)?;
         match stage {
-            CoreStage::Images => self.ensure_core_images(&parameters)?,
+            // locald brings the core up a stage at a time and never issues
+            // `core.ensure`, so the reap has to hang off the first stage it
+            // does call or it never runs in the shipped path at all.
+            CoreStage::Images => {
+                self.reap_pre_rename_sandboxes();
+                self.ensure_core_images(&parameters)?
+            }
             CoreStage::Postgres => self.ensure_postgres(&parameters)?,
             CoreStage::Redis => self.ensure_redis(&parameters)?,
             CoreStage::SuperTokens => self.ensure_supertokens(&parameters)?,
@@ -999,7 +1036,7 @@ impl<E: Engine> GuestService<E> {
     }
 
     fn ensure_databases(&self) -> Result<(), GuestError> {
-        for database in ["lemma", "lemma_datastore", "agentbox", "supertokens"] {
+        for database in ["lemma", "lemma_datastore", "supertokens"] {
             self.ensure_database(database, 120)?;
         }
         Ok(())
@@ -1751,21 +1788,21 @@ fn build_run_arguments(
         "--label".into(),
         MANAGED_LABEL.into(),
         "--label".into(),
-        format!("agentbox.work/sandbox-id={}", parameters.sandbox_id),
+        format!("lemma.work/sandbox-id={}", parameters.sandbox_id),
         "--label".into(),
-        "agentbox.work/provider=lemma_local".into(),
+        "lemma.work/provider=lemma_local".into(),
         "--label".into(),
         format!(
-            "agentbox.work/workload-kind={}",
+            "lemma.work/workload-kind={}",
             match parameters.workload_kind {
                 WorkloadKind::Workspace => "workspace",
                 WorkloadKind::Function => "function",
             }
         ),
         "--label".into(),
-        format!("agentbox.work/image-ref={}", parameters.image),
+        format!("lemma.work/image-ref={}", parameters.image),
         "--label".into(),
-        format!("agentbox.work/metadata={metadata}"),
+        format!("lemma.work/metadata={metadata}"),
         "--env-file".into(),
         env_file.display().to_string(),
         "--add-host".into(),
@@ -1784,7 +1821,7 @@ fn build_run_arguments(
                 format!("type=bind,src={},dst=/workspace", workspace.display()),
                 "--mount".into(),
                 format!(
-                    "type=bind,src={},dst=/run/agentbox-bootstrap",
+                    "type=bind,src={},dst=/run/lemma-bootstrap",
                     runtime_token_mount.display()
                 ),
                 "--workdir".into(),
@@ -1873,7 +1910,7 @@ fn snapshot_from_inspect(
         .and_then(|config| config.get("Labels"))
         .and_then(Value::as_object);
     let workload_kind = labels
-        .and_then(|value| value.get("agentbox.work/workload-kind"))
+        .and_then(|value| value.get("lemma.work/workload-kind"))
         .and_then(Value::as_str)
         .ok_or_else(|| GuestError::engine("sandbox workload label is missing"))?;
     let apps = match workload_kind {
@@ -1882,11 +1919,11 @@ fn snapshot_from_inspect(
         _ => return Err(GuestError::engine("sandbox workload label is invalid")),
     };
     let image = labels
-        .and_then(|value| value.get("agentbox.work/image-ref"))
+        .and_then(|value| value.get("lemma.work/image-ref"))
         .and_then(Value::as_str)
         .ok_or_else(|| GuestError::engine("sandbox image label is missing"))?;
     let metadata = labels
-        .and_then(|value| value.get("agentbox.work/metadata"))
+        .and_then(|value| value.get("lemma.work/metadata"))
         .and_then(Value::as_str)
         .ok_or_else(|| GuestError::engine("sandbox metadata label is missing"))
         .and_then(|encoded| {
@@ -2618,9 +2655,9 @@ mod tests {
             "Id": "sha256:exact-generation",
             "State": {"Running": true, "Status": "running"},
             "Config": {"Labels": {
-                "agentbox.work/workload-kind": "workspace",
-                "agentbox.work/image-ref": "ghcr.io/lemma/workspace@sha256:abc",
-                "agentbox.work/metadata": "{\"managed-by\":\"agentbox\"}"
+                "lemma.work/workload-kind": "workspace",
+                "lemma.work/image-ref": "ghcr.io/lemma/workspace@sha256:abc",
+                "lemma.work/metadata": "{\"managed-by\":\"lemma-workspace\"}"
             }},
             "NetworkSettings": {"Ports": {
                 "8080/tcp": [{"HostIp": "0.0.0.0", "HostPort": "49152"}],
@@ -2731,13 +2768,59 @@ mod tests {
         )
         .unwrap();
 
-        service.ensure_database("agentbox", 1).unwrap();
+        service.ensure_database("lemma_datastore", 1).unwrap();
 
         let commands = service.engine.commands.lock().unwrap();
         assert_eq!(commands.len(), 3);
         assert_eq!(commands[0][2], "psql");
         assert_eq!(commands[1][2], "createdb");
         assert_eq!(commands[2][2], "psql");
+    }
+
+    #[test]
+    fn pre_rename_sandboxes_are_removed_on_core_bring_up() {
+        // Nothing else can see them: every sweep filters on the current label,
+        // so without this they stay running for the life of the guest and are
+        // counted against nobody's memory budget.
+        let root = tempdir().unwrap();
+        let service = GuestService::new(
+            FakeEngine::new(vec![
+                output(true, "agentbox-box-1\nagentbox-box-2\n"),
+                output(true, ""),
+                output(true, ""),
+            ]),
+            root.path().into(),
+            "192.168.64.2".into(),
+            "192.168.64.1".into(),
+            None,
+        )
+        .unwrap();
+
+        service.reap_pre_rename_sandboxes();
+
+        let commands = service.engine.commands.lock().unwrap();
+        assert_eq!(commands.len(), 3);
+        assert!(commands[0].contains(&"label=app.kubernetes.io/name=agentbox-sandbox".to_owned()));
+        assert_eq!(commands[1], vec!["rm", "--force", "agentbox-box-1"]);
+        assert_eq!(commands[2], vec!["rm", "--force", "agentbox-box-2"]);
+    }
+
+    #[test]
+    fn reaping_pre_rename_sandboxes_never_fails_bring_up() {
+        // A guest that cannot reach its engine has a bigger problem than a
+        // stale container; refusing to start over cleanup turns a leak into
+        // an outage.
+        let root = tempdir().unwrap();
+        let service = GuestService::new(
+            FakeEngine::new(vec![output(false, "")]),
+            root.path().into(),
+            "192.168.64.2".into(),
+            "192.168.64.1".into(),
+            None,
+        )
+        .unwrap();
+
+        service.reap_pre_rename_sandboxes();
     }
 
     #[test]
@@ -2774,7 +2857,7 @@ mod tests {
             workload_kind: WorkloadKind::Workspace,
             image: "ghcr.io/lemma/workspace@sha256:abc".into(),
             env: BTreeMap::from([("LEMMA_TOKEN".into(), "secret".into())]),
-            metadata: BTreeMap::from([("managed-by".into(), "agentbox".into())]),
+            metadata: BTreeMap::from([("managed-by".into(), "lemma-workspace".into())]),
             runtime_token: Some("runtime-secret".into()),
             apps: workspace_apps(),
             resources: ResourceSpec {
@@ -2799,9 +2882,9 @@ mod tests {
         assert!(joined.contains("0.0.0.0::4848"));
         assert!(!joined.contains("0.0.0.0::8090"));
         assert!(
-            joined.contains("/var/lib/lemma/run/runtime-token-box-1,dst=/run/agentbox-bootstrap")
+            joined.contains("/var/lib/lemma/run/runtime-token-box-1,dst=/run/lemma-bootstrap")
         );
-        assert!(!joined.contains("agentbox-bootstrap,readonly"));
+        assert!(!joined.contains("lemma-bootstrap,readonly"));
         assert!(joined.ends_with("ghcr.io/lemma/workspace@sha256:abc"));
     }
 
@@ -2886,7 +2969,7 @@ mod tests {
         .unwrap();
 
         let error = service.sandbox_startup_error(
-            "agentbox-box-1",
+            "lemma-sandbox-box-1",
             "sandbox runtime stopped before becoming ready",
         );
 
@@ -2898,12 +2981,12 @@ mod tests {
         assert_eq!(
             service.engine.commands.lock().unwrap().as_slice(),
             [
-                vec!["inspect".to_owned(), "agentbox-box-1".to_owned()],
+                vec!["inspect".to_owned(), "lemma-sandbox-box-1".to_owned()],
                 vec![
                     "logs".to_owned(),
                     "--tail".to_owned(),
                     "20".to_owned(),
-                    "agentbox-box-1".to_owned(),
+                    "lemma-sandbox-box-1".to_owned(),
                 ],
             ]
         );

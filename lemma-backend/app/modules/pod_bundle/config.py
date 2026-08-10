@@ -75,7 +75,7 @@ class PodBundleSettings(BaseSettings):
     )
 
     # --- Per-user daily abuse guard --------------------------------------
-    # Export and import are long-running jobs (archive assembly, agentbox app
+    # Export and import are long-running jobs (archive assembly, sandbox app
     # builds, multi-resource apply). A generous per-user daily cap stops a
     # single account from hammering the workers; buckets are independent so a
     # day of exports never blocks imports (and vice versa). 0 disables the cap.

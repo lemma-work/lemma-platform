@@ -202,7 +202,7 @@ async def _temporary_workspace_tunnel(
 # missing here caches a stale image, and a path that no longer exists makes the
 # fingerprint unresolvable, which silently rebuilds the image for every test
 # module.
-_AGENTBOX_BUILD_INPUTS = (
+_SANDBOX_BUILD_INPUTS = (
     "lemma-backend/sandbox-images",
     "lemma-backend/sandbox_runtime",
     "lemma-python",
@@ -213,15 +213,15 @@ _AGENTBOX_BUILD_INPUTS = (
 )
 
 
-def _agentbox_image_fingerprint(repo_root: Path) -> str | None:
-    """Short content hash of the agentbox runtime image's build inputs.
+def _sandbox_image_fingerprint(repo_root: Path) -> str | None:
+    """Short content hash of the sandbox runtime image's build inputs.
 
     Combines the committed git tree/blob hashes of the relevant paths with the
     current uncommitted diff and any untracked files, so the fingerprint changes
     exactly when the image would build differently — committed or not. Returns
     None when git can't be used (then the caller falls back to always building).
     """
-    paths = list(_AGENTBOX_BUILD_INPUTS)
+    paths = list(_SANDBOX_BUILD_INPUTS)
     try:
         rev = subprocess.run(
             ["git", "-C", str(repo_root), "rev-parse", *[f"HEAD:{p}" for p in paths]],
@@ -276,11 +276,11 @@ def _workspace_image_name() -> str:
     configured_image = os.getenv("WORKSPACE_E2E_IMAGE")
     if configured_image:
         return configured_image
-    fingerprint = _agentbox_image_fingerprint(Path(__file__).resolve().parents[5])
+    fingerprint = _sandbox_image_fingerprint(Path(__file__).resolve().parents[5])
     return (
-        f"agentbox-workspace:e2e-{fingerprint}"
+        f"lemma-workspace:e2e-{fingerprint}"
         if fingerprint
-        else "agentbox-workspace:e2e"
+        else "lemma-workspace:e2e"
     )
 
 
@@ -290,12 +290,12 @@ def _function_image_name() -> str:
     if configured_image:
         return configured_image
     platform = os.getenv("FUNCTION_E2E_PLATFORM", "linux/amd64")
-    fingerprint = _agentbox_image_fingerprint(Path(__file__).resolve().parents[5])
+    fingerprint = _sandbox_image_fingerprint(Path(__file__).resolve().parents[5])
     platform_tag = platform.rsplit("/", 1)[-1].replace("_", "-")
     return (
-        f"agentbox-function:e2e-{platform_tag}-{fingerprint}"
+        f"lemma-function:e2e-{platform_tag}-{fingerprint}"
         if fingerprint
-        else f"agentbox-function:e2e-{platform_tag}"
+        else f"lemma-function:e2e-{platform_tag}"
     )
 
 
@@ -305,7 +305,7 @@ def workspace_provisioning_env() -> dict[str, str]:
     Sandboxes are provisioned in-process now, so the worker provisions its own
     -- it is no longer a client of a separate manager process that held this
     configuration. It captures its environment once at spawn, and
-    ``local_agentbox_server`` is function-scoped, so anything set there arrives
+    ``local_sandbox_server`` is function-scoped, so anything set there arrives
     far too late: the worker would reject the tag-pinned E2E images for not
     being digest-pinned, and its sandboxes could not reach the host.
     """
@@ -326,8 +326,8 @@ def workspace_provisioning_env() -> dict[str, str]:
 def workspace_image(e2e_settings) -> Generator[str, None, None]:
     """Ensure the docker workspace runtime image exists locally.
 
-    Uses a content-addressed tag (``agentbox-runtime:e2e-<fingerprint>``) so the
-    image is reused when agentbox + the bundled SDKs are unchanged, and rebuilt
+    Uses a content-addressed tag (``sandbox-runtime:e2e-<fingerprint>``) so the
+    image is reused when the sandbox images + the bundled SDKs are unchanged, and rebuilt
     automatically when they change — no per-run rebuild (the build context is the
     whole monorepo, which is slow to transfer) and no stale pinned image. Set
     WORKSPACE_E2E_IMAGE to pin an explicit image (e.g. in CI).
@@ -345,7 +345,7 @@ def workspace_image(e2e_settings) -> Generator[str, None, None]:
     image_present = inspect.returncode == 0
     # Fall back to always-build only when we couldn't fingerprint (floating tag).
     should_build = not image_present or (
-        not configured_image and image == "agentbox-workspace:e2e"
+        not configured_image and image == "lemma-workspace:e2e"
     )
 
     if should_build:
@@ -375,7 +375,7 @@ def workspace_image(e2e_settings) -> Generator[str, None, None]:
 
 @pytest.fixture(scope="module")
 def function_image(e2e_settings) -> Generator[str, None, None]:
-    """Build the slim stateless function runner image used by AgentBox.
+    """Build the slim stateless function runner image used by the sandbox runtime.
 
     Function artifacts currently declare the x86_64 runtime ABI, including for
     native wheels. Build the E2E runtime for that exact platform even on arm64
@@ -469,7 +469,7 @@ async def backend_server(test_app) -> AsyncGenerator[dict[str, str], None]:
 
 
 @pytest_asyncio.fixture(scope="function")
-async def local_agentbox_server(
+async def local_sandbox_server(
     request,
     e2e_settings,
 ) -> AsyncGenerator[dict[str, str], None]:
@@ -502,20 +502,20 @@ async def local_agentbox_server(
         )
         env_updates.update(
             {
-                "AGENTBOX_WORKSPACE_IMAGE": workspace_image,
-                "AGENTBOX_FUNCTION_IMAGE": function_image,
-                "AGENTBOX_DOCKER_ALLOW_MUTABLE_IMAGES": "true",
-                "AGENTBOX_ADD_HOST_GATEWAY": "true",
-                "AGENTBOX_HOST_ALIAS": "host.docker.internal",
+                "WORKSPACE_IMAGE": workspace_image,
+                "FUNCTION_IMAGE": function_image,
+                "WORKSPACE_DOCKER_ALLOW_MUTABLE_IMAGES": "true",
+                "WORKSPACE_ADD_HOST_GATEWAY": "true",
+                "WORKSPACE_HOST_ALIAS": "host.docker.internal",
             }
         )
     else:
         required = {
             "E2B_API_KEY": _e2b_environment("E2B_API_KEY"),
             "E2B_WORKSPACE_TEMPLATE": _e2b_environment(
-                "AGENTBOX_E2B_WORKSPACE_TEMPLATE"
+                "E2B_WORKSPACE_TEMPLATE"
             ),
-            "E2B_FUNCTION_TEMPLATE": _e2b_environment("AGENTBOX_E2B_FUNCTION_TEMPLATE"),
+            "E2B_FUNCTION_TEMPLATE": _e2b_environment("E2B_FUNCTION_TEMPLATE"),
         }
         missing = [name for name, value in required.items() if not value]
         if missing:
@@ -560,9 +560,9 @@ async def local_agentbox_server(
 @pytest_asyncio.fixture
 async def configure_workspace_api_url(
     backend_server,
-    local_agentbox_server,
+    local_sandbox_server,
 ) -> AsyncGenerator[dict[str, str], None]:
-    """Route workspace SDK calls to the backend and selected AgentBox provider."""
+    """Route workspace SDK calls to the backend and selected the sandbox runtime provider."""
 
     from app.modules.workspace.services.workspace_tool_runtime import (
         close_workspace_tool_runtimes,
@@ -578,12 +578,12 @@ async def configure_workspace_api_url(
     # A sandbox running in someone else's cloud cannot reach a laptop, so the
     # backend has to be published for it. This is needed whenever the *live*
     # provisioner puts sandboxes off-box, which is no longer only a question
-    # about AgentBox: the workspace module selects its own provider.
+    # about the sandbox runtime: the workspace module selects its own provider.
     # Read the setting rather than re-deriving its default from the
     # environment: the two disagreed the moment the cutover default flipped,
     # and the harness would then have decided the old path was live while the
     # backend it started was running the new one.
-    needs_public_backend = local_agentbox_server["provider"] == "e2b"
+    needs_public_backend = local_sandbox_server["provider"] == "e2b"
     # A session-scoped tunnel may already be published for the worker, which
     # cannot see a per-test one. Reuse it: a second tunnel to the same port
     # would work but costs a process and a startup wait per test.
@@ -610,7 +610,7 @@ async def configure_workspace_api_url(
         try:
             yield {
                 **backend_server,
-                **local_agentbox_server,
+                **local_sandbox_server,
                 "workspace_callback_url": settings.workspace_callback_api_url,
             }
         finally:
@@ -698,9 +698,9 @@ async def full_stack(
 ) -> AsyncGenerator[dict[str, str], None]:
     """The complete stack for fully-real e2e tests.
 
-    Combines the real backend + local Docker AgentBox (``configure_workspace_api_url``)
+    Combines the real backend + local Docker sandbox (``configure_workspace_api_url``)
     and a real scheduler (``scheduler_api_server``) with the **production streaq
-    worker subprocess** wired to the AgentBox and the ``system:lemma`` agent
+    worker subprocess** wired to the sandbox and the ``system:lemma`` agent
     runtime. The worker is a fresh subprocess per test (no shared in-process
     singletons), so triggered runs execute real functions in Docker and
     deterministic mock agents by default. Set ``E2E_LLM_MODE=real`` to use the

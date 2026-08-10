@@ -18,7 +18,7 @@ from sandbox_runtime.workspace.app import create_app
 
 pytestmark = pytest.mark.asyncio
 TOKEN = "runtime-test-token"
-HEADERS = {"X-AgentBox-Runtime-Token": TOKEN}
+HEADERS = {"X-Lemma-Runtime-Token": TOKEN}
 
 
 def start_body(

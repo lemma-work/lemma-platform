@@ -1598,7 +1598,7 @@ impl Daemon {
                 "backend" => (
                     "Starting the Lemma backend",
                     78,
-                    "starting API, workers, schedules, AgentBox, and document processing",
+                    "starting API, workers, schedules, the sandbox runtime, and document processing",
                     "backend",
                 ),
                 "frontend" => (
@@ -1809,9 +1809,12 @@ impl Daemon {
         let mut command = supervisor_command()?;
         command
             .env("LEMMA_DESKTOP", "1")
+            // Handed straight to the bundled supervisor, which ships in the
+            // same release as this daemon, so both ends move together and no
+            // compatibility name is needed here.
             .env(
-                "AGENTBOX_PROVIDER",
-                env::var("AGENTBOX_PROVIDER").unwrap_or_else(|_| "auto".into()),
+                "LEMMA_CONTAINER_RUNTIME",
+                env::var("LEMMA_CONTAINER_RUNTIME").unwrap_or_else(|_| "auto".into()),
             )
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -2212,7 +2215,7 @@ fn prepare_compatibility_host_manifest(
 }
 
 fn transitional_provider(managed_runtime_available: bool) -> String {
-    match env::var("AGENTBOX_PROVIDER") {
+    match env::var("LEMMA_CONTAINER_RUNTIME") {
         Ok(provider)
             if matches!(provider.as_str(), "docker" | "podman")
                 || (provider == "lemma_local" && managed_runtime_available) =>

@@ -70,7 +70,7 @@ class _CanonicalClient:
     async def send_process_input(
         self, *_args: Any, data: bytes | None = None, **_kwargs: Any
     ) -> None:
-        # AgentBoxClient accepts data positionally; preserve either fake form.
+        # SandboxClient accepts data positionally; preserve either fake form.
         if data is not None:
             self.inputs.append(data)
 
@@ -100,7 +100,7 @@ class _CanonicalClient:
 
 class _TransportFailureClient(_CanonicalClient):
     async def start_process(self, *_args: Any, **_kwargs: Any) -> None:
-        request = httpx.Request("POST", "https://agentbox.test/processes")
+        request = httpx.Request("POST", "https://sandbox.test/processes")
         raise httpx.ReadTimeout("lost response", request=request)
 
 

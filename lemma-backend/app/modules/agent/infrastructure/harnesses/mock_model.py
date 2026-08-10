@@ -3,7 +3,7 @@
 When ``settings.e2e_llm_mode == "mock"`` every pydantic-ai model is built here as
 a ``FunctionModel`` instead of the real provider model. We keep the *whole* rest
 of the system — harness, tool execution, streaming, persistence — so an e2e run
-exercises the full pipeline against the (fake or real) AgentBox; only the token
+exercises the full pipeline against the (fake or real) sandbox; only the token
 source is deterministic.
 
 A test scripts the model by putting ``mock_llm_script`` on the conversation

@@ -1,4 +1,4 @@
-name: AgentBox function benchmark
+name: Sandbox function benchmark
 
 on:
   schedule:
@@ -22,7 +22,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: agentbox-function-benchmark-${{ github.event.schedule || inputs.provider || github.ref }}
+  group: sandbox-function-benchmark-${{ github.event.schedule || inputs.provider || github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -69,7 +69,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: agentbox-function-docker-${{ github.sha }}
+          name: sandbox-function-docker-${{ github.sha }}
           path: .benchmark-results/function-execution/docker/*.json
           if-no-files-found: error
           retention-days: 30
@@ -108,10 +108,10 @@ jobs:
         run: test -n "$E2B_API_KEY"
       - name: Pin the immutable E2B templates
         env:
-          WORKSPACE_TEMPLATE: ${{ vars.AGENTBOX_E2B_WORKSPACE_TEMPLATE }}
-          WORKSPACE_BUILD_ID: ${{ vars.AGENTBOX_E2B_WORKSPACE_BUILD_ID }}
-          FUNCTION_TEMPLATE: ${{ vars.AGENTBOX_E2B_FUNCTION_TEMPLATE }}
-          FUNCTION_BUILD_ID: ${{ vars.AGENTBOX_E2B_FUNCTION_BUILD_ID }}
+          WORKSPACE_TEMPLATE: ${{ vars.E2B_WORKSPACE_TEMPLATE || vars.AGENTBOX_E2B_WORKSPACE_TEMPLATE }}
+          WORKSPACE_BUILD_ID: ${{ vars.E2B_WORKSPACE_BUILD_ID || vars.AGENTBOX_E2B_WORKSPACE_BUILD_ID }}
+          FUNCTION_TEMPLATE: ${{ vars.E2B_FUNCTION_TEMPLATE || vars.AGENTBOX_E2B_FUNCTION_TEMPLATE }}
+          FUNCTION_BUILD_ID: ${{ vars.E2B_FUNCTION_BUILD_ID || vars.AGENTBOX_E2B_FUNCTION_BUILD_ID }}
         run: |
           set -euo pipefail
           test -n "$WORKSPACE_TEMPLATE"
@@ -141,7 +141,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: agentbox-function-e2b-${{ github.sha }}
+          name: sandbox-function-e2b-${{ github.sha }}
           path: .benchmark-results/function-execution/e2b/*.json
           if-no-files-found: error
           retention-days: 30

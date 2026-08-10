@@ -1,14 +1,14 @@
-# AgentBox Sandbox Protocol
+# The sandbox runtime Sandbox Protocol
 
 **Status:** Implemented and verified for Docker and E2B; Kubernetes deferred
 
-**Parent:** [AgentBox](README.md)
+**Parent:** [the sandbox runtime](README.md)
 
 **Test contract:** [Testing strategy](testing-strategy.md)
 
 ## 1. Purpose
 
-This document defines AgentBox's provider-neutral model, internal ports, durable
+This document defines the sandbox runtime's provider-neutral model, internal ports, durable
 state, canonical breaking HTTP/WebSocket API, error semantics, admission behavior,
 and reconciliation algorithms. Provider-specific mappings are defined in
 [Provider adapters](provider-adapters.md).
@@ -119,7 +119,7 @@ session or process bound to an older epoch is stale and must fail with
 
 ## 3. Profile model
 
-AgentBox loads an immutable profile registry at startup. A profile contains:
+The sandbox runtime loads an immutable profile registry at startup. A profile contains:
 
 ```python
 class SandboxProfile(BaseModel):
@@ -140,7 +140,7 @@ class SandboxProfile(BaseModel):
 - Kubernetes: OCI image digest plus Pod template digest;
 - E2B: template ID/build ID pinned by profile publication.
 
-AgentBox refuses an ensure request when:
+The sandbox runtime refuses an ensure request when:
 
 - the profile does not exist;
 - the kind does not match;
@@ -249,7 +249,7 @@ Exactly one of `command` and `argv` is supplied. Workspace shell tools normally 
 `command`; trusted platform launchers use `argv` to avoid shell interpretation.
 
 `operation_id` identifies the intention to start one process within a live manager
-incarnation. AgentBox keeps a bounded in-memory record and a request fingerprint;
+incarnation. The sandbox runtime keeps a bounded in-memory record and a request fingerprint;
 neither the request nor its fingerprint is persisted or logged. Reusing the same
 ID with a different fingerprint is
 `OPERATION_CONFLICT`. Reusing it with the same hash returns the same process while
@@ -259,12 +259,12 @@ Environment values and initial stdin are transmitted to the adapter but are not
 stored. Logs must never print env values or stdin.
 
 `background=False` is a client convenience, not a different provider primitive.
-If a response is lost after the provider may have started the process, AgentBox
+If a response is lost after the provider may have started the process, the sandbox runtime
 returns `UNKNOWN_DISPATCH` and does not replay it. A process remains inspectable
 only while its manager routing record and allocation incarnation remain live.
 
 Streams are sequence-numbered. `after_seq` permits reconnect without requiring an
-adapter to replay unlimited output. AgentBox stores only a bounded output tail; the
+adapter to replay unlimited output. The sandbox runtime stores only a bounded output tail; the
 response reports `truncated_before_seq` when earlier output is unavailable.
 
 ### 4.3 `PythonSessionPort`
@@ -331,7 +331,7 @@ ephemeral cache root. Symlink resolution is checked at the adapter boundary.
 Writes use a temporary sibling file, fsync when supported, and atomic rename. The
 API streams binary bytes and never base64-encodes through a shell command. Range
 reads and a configured maximum transfer size support large files without buffering
-them entirely in AgentBox memory. The default transfer bound is 256 MiB and may be
+them entirely in the sandbox runtime memory. The default transfer bound is 256 MiB and may be
 configured up to 2 GiB. Docker streams through the private workspace runtime. E2B
 downloads through its native async reader and uploads through a bounded spooled
 file because the E2B SDK accepts file-like upload bodies. A failed or oversized
@@ -356,7 +356,7 @@ Workspace profiles support caller-facing application grants. Function profiles
 support only the fixed private resident-runtime port declared by the immutable
 profile, and only the backend service audience may request that grant. The adapter
 returns an opaque grant with URL, expiry, allocation ID, and epoch. Provider
-addresses, traffic tokens, and credentials remain behind AgentBox's signed proxy.
+addresses, traffic tokens, and credentials remain behind the sandbox runtime's signed proxy.
 Grants are invalid after allocation replacement, workspace release, or function
 destruction.
 
@@ -369,7 +369,7 @@ Neither is available over the public manager API.
 ## 5. Canonical API
 
 All routes require `X-API-Key` plus service identity at the network layer. Requests
-accept `X-Request-ID` for tracing. Mutation bodies contain `deadline_at`; AgentBox
+accept `X-Request-ID` for tracing. Mutation bodies contain `deadline_at`; the sandbox runtime
 rejects expired requests without provider activity.
 
 Base path:
@@ -400,7 +400,7 @@ Ensure body:
 ```
 
 `GET` never calls provider inventory or waits for readiness. `:wait` waits on an
-AgentBox state notification; clients do not poll every second.
+The sandbox runtime state notification; clients do not poll every second.
 
 ### 5.2 Process routes
 
@@ -493,7 +493,7 @@ bounded manager memory. They deliberately disappear across manager or allocation
 incarnations. The schema therefore has no `processes`, `sessions`, or
 `python_executions` tables.
 
-AgentBox uses SQLAlchemy 2.x async mappings and short-lived units of work.
+The sandbox runtime uses SQLAlchemy 2.x async mappings and short-lived units of work.
 Transactions end before provider I/O. ORM rows never escape the persistence
 adapter. Alembic migrations define the shared PostgreSQL schema and the equivalent
 single-manager SQLite test schema.
@@ -541,14 +541,14 @@ scheduler.
 If the deadline expires before safe quiescence, release fails and leaves the
 allocation active or explicitly degraded; it never pauses behind an active process.
 
-At hard expiry, AgentBox destroys the exact allocation and workspace storage but
+At hard expiry, the sandbox runtime destroys the exact allocation and workspace storage but
 retains a recreatable logical workspace. The next ensure creates a new allocation
 and storage generation. An explicit delete is different: it permanently tombstones
 the logical workspace and future ensure returns `SANDBOX_NOT_FOUND`.
 
 ### 7.3 Function idle destruction
 
-AgentBox updates `last_used_at` on signed resident-runtime access. A background
+The sandbox runtime updates `last_used_at` on signed resident-runtime access. A background
 cleanup worker selects current `FUNCTION` allocations with no active port lease and
 five minutes of idle time, marks them `DESTROYING`, and calls exact provider
 deletion. The backend/runtime deadline extension protects an active long JOB.
@@ -583,7 +583,7 @@ of template startup. See [E2B start and ready commands](https://e2b.dev/docs/tem
 
 ## 9. Admission and 429 handling
 
-AgentBox has generic admission classes:
+The sandbox runtime has generic admission classes:
 
 ```text
 interactive  - workspace creation/resume
@@ -629,7 +629,7 @@ Normative mapping:
 
 | Code | HTTP | Disposition | Meaning |
 | --- | ---: | --- | --- |
-| `CAPACITY_EXHAUSTED` | 429 | `WAIT` | AgentBox admission has no eligible capacity |
+| `CAPACITY_EXHAUSTED` | 429 | `WAIT` | the sandbox runtime admission has no eligible capacity |
 | `RATE_LIMITED` | 429 | `WAIT` | Provider scope is blocked until retry-after |
 | `PROVISIONING` | 409/202 | `WAIT` | Matching allocation is still becoming ready |
 | `AMBIGUOUS_CREATE` | 503 | `WAIT` | Create may have been accepted; do not recreate |
@@ -645,7 +645,7 @@ Normative mapping:
 | `FILE_CONFLICT` | 409 | `DO_NOT_RETRY` | Digest precondition, destination, or directory constraint failed |
 | `INVALID_REQUEST` | 4xx | `DO_NOT_RETRY` | Filesystem or request validation was definitively rejected |
 
-`SAFE_SAME_OPERATION` is allowed only when AgentBox proves the provider did not
+`SAFE_SAME_OPERATION` is allowed only when the sandbox runtime proves the provider did not
 accept a request or the exact provider operation is intrinsically idempotent. It
 always reuses the same allocation/operation ID.
 

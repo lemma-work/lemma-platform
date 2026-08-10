@@ -2,7 +2,7 @@
 
 This is the canonical repeatable benchmark for the complete Lemma function path.
 It uses public Lemma APIs and measures authorization, durable run creation,
-AgentBox readiness/lease acquisition, runtime dispatch, delegated SDK data access,
+the sandbox runtime readiness/lease acquisition, runtime dispatch, delegated SDK data access,
 JOB callback persistence, and client-visible completion.
 
 There is one reusable harness:
@@ -82,10 +82,10 @@ make benchmark-functions-e2b \
   FUNCTION_BENCH_CONCURRENCY=5 \
   FUNCTION_BENCH_BATCH_ROWS=1000 \
   FUNCTION_BENCH_TUNNEL=ngrok \
-  AGENTBOX_E2B_WORKSPACE_TEMPLATE=<template-id> \
-  AGENTBOX_E2B_WORKSPACE_BUILD_ID=<build-id> \
-  AGENTBOX_E2B_FUNCTION_TEMPLATE=<template-id> \
-  AGENTBOX_E2B_FUNCTION_BUILD_ID=<build-id>
+  E2B_WORKSPACE_TEMPLATE=<template-id> \
+  E2B_WORKSPACE_BUILD_ID=<build-id> \
+  E2B_FUNCTION_TEMPLATE=<template-id> \
+  E2B_FUNCTION_BUILD_ID=<build-id>
 ```
 
 The report records the provider, configuration, resource names, cold/pool-fill

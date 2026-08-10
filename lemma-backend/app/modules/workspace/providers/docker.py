@@ -34,6 +34,8 @@ from app.modules.workspace.providers import naming
 from app.modules.workspace.providers.base import (
     LABEL_EPOCH,
     LABEL_MANAGED_BY,
+    LABEL_PROFILE_DIGEST,
+    LABEL_PROFILE_NAME,
     LABEL_SANDBOX_ID,
     LABEL_SANDBOX_KIND,
     LEGACY_LOGICAL_ID,
@@ -141,8 +143,8 @@ class DockerSandboxProvider(DockerOpsMixin):
             LABEL_SANDBOX_ID: str(spec.sandbox_id),
             LABEL_SANDBOX_KIND: spec.kind.value,
             LABEL_EPOCH: str(spec.epoch),
-            "profile-name": spec.profile_name or profile.name,
-            "profile-digest": spec.profile_digest or profile.digest,
+            LABEL_PROFILE_NAME: spec.profile_name or profile.name,
+            LABEL_PROFILE_DIGEST: spec.profile_digest or profile.digest,
         }
         binds: list[str] = []
         if spec.volume_name is not None:
@@ -155,12 +157,38 @@ class DockerSandboxProvider(DockerOpsMixin):
         self, spec: ProviderCreateSpec, *, is_function: bool
     ) -> list[str]:
         env = [
-            f"AGENTBOX_MAX_FILE_TRANSFER_BYTES={self._config.max_file_transfer_bytes}"
+            f"LEMMA_MAX_FILE_TRANSFER_BYTES={self._config.max_file_transfer_bytes}"
         ]
         if is_function:
             env.append("LEMMA_FUNCTION_CACHE_ROOT=/run/lemma-function-cache")
         env.extend(f"{name}={value}" for name, value in sorted(spec.env.items()))
         return env
+
+    async def _reusable(
+        self, spec: ProviderCreateSpec, profile: SandboxProfile
+    ) -> ProviderInstance | None:
+        """The container this name already has, if it is still the right one.
+
+        Two questions at once, because the answer to both is "use this or make
+        a new one". *Is there one* is idempotence: the name is derived, so a
+        retry after a lost response has to find the container rather than
+        create a second. *Is it current* is the fence: a container keeps the
+        image it was born with for as long as it lives, so reusing one built
+        from an older profile would mean a fix shipped in the sandbox image
+        never reaching anyone who already had a workspace.
+
+        A stale one is destroyed here rather than left for the sweep, so the
+        caller's create finds the name free. Its volume is a separate object
+        and is adopted afterwards, so the user's files survive.
+        """
+
+        existing = await self.inspect(spec.name, deadline_at=spec.deadline_at)
+        if existing is None:
+            return None
+        if existing.profile_digest == (spec.profile_digest or profile.digest):
+            return existing
+        await self.destroy(spec.name, deadline_at=spec.deadline_at)
+        return None
 
     async def create(self, spec: ProviderCreateSpec) -> ProviderInstance:
         profile = profile_for(spec.kind)
@@ -170,9 +198,7 @@ class DockerSandboxProvider(DockerOpsMixin):
                 "Docker profile image must be pinned by sha256 digest"
             )
 
-        # Idempotence: the name is derived, so a retry after a lost response
-        # finds the container rather than creating a second one.
-        existing = await self.inspect(spec.name, deadline_at=spec.deadline_at)
+        existing = await self._reusable(spec, profile)
         if existing is not None:
             return existing
 
@@ -266,6 +292,7 @@ class DockerSandboxProvider(DockerOpsMixin):
             name=name,
             volume_name=inspected.config.labels.get("workspace-storage-id"),
             running=inspected.state.running,
+            profile_digest=inspected.config.labels.get(LABEL_PROFILE_DIGEST),
         )
 
     async def wait_ready(

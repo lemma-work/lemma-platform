@@ -50,15 +50,15 @@ def _execute(
             if tree.body and isinstance(tree.body[-1], ast.Expr):
                 prefix = ast.Module(body=tree.body[:-1], type_ignores=[])
                 if prefix.body:
-                    exec(compile(prefix, "<agentbox>", "exec"), namespace, namespace)
+                    exec(compile(prefix, "<lemma>", "exec"), namespace, namespace)
                 expression = ast.Expression(tree.body[-1].value)
                 value = eval(
-                    compile(expression, "<agentbox>", "eval"), namespace, namespace
+                    compile(expression, "<lemma>", "eval"), namespace, namespace
                 )
                 if value is not None:
                     result = repr(value)
             else:
-                exec(compile(tree, "<agentbox>", "exec"), namespace, namespace)
+                exec(compile(tree, "<lemma>", "exec"), namespace, namespace)
         except BaseException as exc:
             state = "failed"
             error_name = type(exc).__name__
@@ -113,7 +113,7 @@ def _execute(
 
 
 def _namespace() -> dict[str, Any]:
-    module = ModuleType("agentbox_session")
+    module = ModuleType("lemma_session")
     module.__dict__["__builtins__"] = __builtins__
     sys.modules[module.__name__] = module
     return module.__dict__
@@ -161,8 +161,8 @@ def main() -> None:
     os.dup2(devnull, 1)
     os.dup2(devnull, 2)
     os.close(devnull)
-    os.environ.pop("AGENTBOX_RUNTIME_TOKEN", None)
-    os.environ.pop("AGENTBOX_RUNTIME_TOKEN_FILE", None)
+    os.environ.pop("LEMMA_RUNTIME_TOKEN", None)
+    os.environ.pop("LEMMA_RUNTIME_TOKEN_FILE", None)
     run(control_input, control_output)
 
 

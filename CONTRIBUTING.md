@@ -18,7 +18,7 @@ make architecture
 ```
 
 Use `make test-e2e-fast E2E_WORKERS=1` for the deterministic container-backed
-suite. Real providers, model calls, and Docker AgentBox tests are protected and
+suite. Real providers, model calls, and Docker sandbox tests are protected and
 must never use personal or production credentials.
 
 ## Backend architecture
@@ -34,6 +34,14 @@ must never use personal or production credentials.
 - Add an Alembic upgrade and downgrade test for schema changes. Reliability
   work for this release is intentionally consolidated in revision
   `0003_backend_reliability`.
+
+## Configuration
+
+Every setting is an environment variable declared on a `pydantic-settings`
+class. [`docs/configuration.md`](docs/configuration.md) covers the ones an
+operator sets and points at the classes for the rest. Adding a setting means
+adding a field with a description and a default, not reading `os.environ`
+directly.
 
 ## Generated code
 

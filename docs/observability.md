@@ -116,7 +116,7 @@ shows up in Phoenix.
   tool itself), so raw SQL is the reliable path here.
 - **Errors** — Errors by span kind over time (inbound endpoint failures vs.
   outbound dependency failures look very different — most local errors are
-  outbound `Client`-kind calls, e.g. AgentBox polling), errors by HTTP status
+  outbound `Client`-kind calls, e.g. sandbox polling), errors by HTTP status
   code, and a recent-error-spans search tile.
 - **Logs** — Volume by severity and a recent warnings/errors search tile
   (now that `OTEL_LOGS=1` ships logs by default).

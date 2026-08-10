@@ -8,7 +8,7 @@ resolution-markers = [
 ]
 
 [[package]]
-name = "agentbox-workspace-environment"
+name = "lemma-workspace-environment"
 version = "1.0.0"
 source = { virtual = "." }
 dependencies = [

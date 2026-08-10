@@ -2,7 +2,7 @@
 
 These run the COMPLETE stack in one process via the ``full_stack`` fixture:
 the API, the embedded streaq worker, and the scheduler, wired to a real local
-Docker AgentBox manager and the Fireworks-backed ``system:lemma`` agent
+Docker sandbox manager and the Fireworks-backed ``system:lemma`` agent
 runtime. Nothing is simulated — datastore writes and webhook posts flow through
 Redis to the embedded worker, FUNCTION nodes execute in real Docker
 containers, and AGENT nodes make real Fireworks LLM calls.

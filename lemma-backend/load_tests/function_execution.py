@@ -3,7 +3,7 @@
 The benchmark provisions four isolated pod tables and seven immutable functions,
 warms the per-pod sandbox once, then drives each function with bounded client
 concurrency. It intentionally uses only public Lemma HTTP APIs so the measured
-path includes authorization, durable runs, AgentBox allocation, resident runtime
+path includes authorization, durable runs, the sandbox runtime allocation, resident runtime
 dispatch, runtime callbacks, delegated SDK table access, and terminal result
 persistence.
 """

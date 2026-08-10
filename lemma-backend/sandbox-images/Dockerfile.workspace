@@ -1,25 +1,53 @@
 # Build context is the monorepo root:
-#   docker build -f lemma-backend/sandbox-images/Dockerfile.workspace -t agentbox-workspace:dev .
-# NOTE ON NAMING: paths and env vars inside the image still say "agentbox"
-# (/opt/agentbox-python, /run/agentbox-bootstrap, AGENTBOX_RUNTIME_TOKEN_FILE).
-# They are not cosmetic: they are the contract between a *running* sandbox and
-# the backend that delivers its credential. Workspaces on E2B are adopted
-# rather than replaced, so a sandbox created from an older template outlives a
-# backend deploy -- renaming these would leave the backend writing a token to a
-# path that sandbox does not read. They change when there is a reason to
-# recreate every sandbox, not before.
+#   docker build -f lemma-backend/sandbox-images/Dockerfile.workspace -t lemma-workspace:dev .
+# NOTE ON NAMING: the paths and env vars here (/opt/lemma-python,
+# /run/lemma-bootstrap, LEMMA_RUNTIME_TOKEN_FILE) are the contract between a
+# *running* sandbox and the backend that delivers its credential, not cosmetic
+# detail. Changing one requires every existing sandbox to be recreated, which
+# is what the profile digest is for: a sandbox is only reused when its recorded
+# digest matches the configured one, so bumping the digest in the same release
+# as an image change is what makes a rename here safe.
 
 ARG PYTHON_IMAGE=python:3.14.6-slim
 ARG NODE_IMAGE=node:24.18.0-slim
 ARG UV_VERSION=0.11.31
 ARG PNPM_VERSION=11.15.1
+ARG GH_VERSION=2.97.0
 
 FROM ghcr.io/astral-sh/uv:${UV_VERSION} AS uv-runtime
+
+# The GitHub CLI is not in Debian, and an agent working in a repo reaches for
+# `gh` as readily as `git` -- issues, PRs and releases have no plumbing
+# equivalent. Pinned and checksummed like Node above, because this fetches a
+# binary over the network at build time.
+FROM ${PYTHON_IMAGE} AS gh-runtime
+ARG GH_VERSION
+ARG TARGETARCH
+# The slim base has no curl; the final stage installs its own.
+RUN apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+    && rm -rf /var/lib/apt/lists/*
+RUN set -eu; \
+    runtime_arch="${TARGETARCH:-$(dpkg --print-architecture)}"; \
+    case "${runtime_arch}" in \
+        amd64) gh_sha=a2c9b8497e1f85b1ad0dfcb78b5a622e098801b8e461e459e88e1ee12f018112 ;; \
+        arm64) gh_sha=73ea440ecad9c9e284429997ee6f93577bc6f7bc6fba357ef62c53ad8fb641a5 ;; \
+        *) echo "unsupported GitHub CLI architecture: ${runtime_arch}" >&2; exit 1 ;; \
+    esac; \
+    archive="gh_${GH_VERSION}_linux_${runtime_arch}.tar.gz"; \
+    curl -fsSL "https://github.com/cli/cli/releases/download/v${GH_VERSION}/${archive}" \
+        -o /tmp/gh.tar.gz; \
+    echo "${gh_sha}  /tmp/gh.tar.gz" | sha256sum -c -; \
+    tar -xzf /tmp/gh.tar.gz -C /tmp; \
+    install -m 0755 "/tmp/gh_${GH_VERSION}_linux_${runtime_arch}/bin/gh" /usr/local/bin/gh; \
+    rm -rf /tmp/gh.tar.gz "/tmp/gh_${GH_VERSION}_linux_${runtime_arch}"
 
 FROM ${NODE_IMAGE} AS node-runtime
 ARG PNPM_VERSION
 ARG TARGETARCH
-WORKDIR /opt/agentbox-node
+WORKDIR /opt/lemma-node
 RUN corepack enable pnpm \
     && corepack prepare "pnpm@${PNPM_VERSION}" --activate
 COPY lemma-backend/sandbox-images/templates/workspace-node/package.json ./package.json
@@ -41,7 +69,7 @@ RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
     && pnpm store prune
 
 FROM ${PYTHON_IMAGE} AS python-runtime
-ENV UV_PROJECT_ENVIRONMENT=/opt/agentbox-python \
+ENV UV_PROJECT_ENVIRONMENT=/opt/lemma-python \
     UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy
 COPY --from=uv-runtime /uv /usr/local/bin/uv
@@ -58,7 +86,7 @@ RUN uv sync \
         --no-editable \
     && printf '%s\n' \
         'import sys; p="/workspace/.python/lib/python3.14/site-packages"; sys.path.insert(0, p) if p not in sys.path else None' \
-        > /opt/agentbox-python/lib/python3.14/site-packages/agentbox-workspace-overlay.pth \
+        > /opt/lemma-python/lib/python3.14/site-packages/lemma-workspace-overlay.pth \
     && uv cache clean
 
 FROM ${PYTHON_IMAGE}
@@ -66,23 +94,26 @@ FROM ${PYTHON_IMAGE}
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_PREFIX=/workspace/.python \
-    PYTHONPATH=/app:/workspace/.python/lib/python3.14/site-packages:/opt/agentbox-python/lib/python3.14/site-packages \
+    PYTHONPATH=/app:/workspace/.python/lib/python3.14/site-packages:/opt/lemma-python/lib/python3.14/site-packages \
     HOME=/home/appuser \
     DISPLAY=:99 \
-    XDG_RUNTIME_DIR=/tmp/agentbox-browser/runtime \
+    XDG_RUNTIME_DIR=/tmp/lemma-browser/runtime \
     WORKSPACE_XVFB_SCREEN=1440x960x24 \
-    AGENT_BROWSER_CONFIG=/tmp/agentbox-browser/config.json \
+    AGENT_BROWSER_CONFIG=/tmp/lemma-browser/config.json \
     AGENT_BROWSER_DASHBOARD_PORT=4848 \
     AGENT_BROWSER_DASHBOARD_INTERNAL_PORT=4849 \
     AGENT_BROWSER_EXECUTABLE_PATH=/usr/local/bin/workspace-chrome \
-    AGENT_BROWSER_PROFILE=/tmp/agentbox-browser/profile \
+    AGENT_BROWSER_PROFILE=/tmp/lemma-browser/profile \
     AGENT_BROWSER_SESSION=workspace \
     AGENT_BROWSER_HEADED=true \
-    AGENTBOX_RUNTIME_TOKEN_FILE=/run/agentbox-bootstrap/token \
-    AGENTBOX_SANDBOX_PROCESS_NAMESPACE=isolated \
-    NODE_PATH=/opt/agentbox-node/node_modules \
+    LEMMA_RUNTIME_TOKEN_FILE=/run/lemma-bootstrap/token \
+    LEMMA_SANDBOX_PROCESS_NAMESPACE=isolated \
+    GH_CONFIG_DIR=/tmp/lemma-gh \
+    GH_NO_UPDATE_NOTIFIER=1 \
+    GH_PAGER=cat \
+    NODE_PATH=/opt/lemma-node/node_modules \
     PNPM_HOME=/home/appuser/.local/share/pnpm \
-    PATH=/workspace/.python/bin:/opt/agentbox-python/bin:/opt/agentbox-node/node_modules/.bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin \
+    PATH=/workspace/.python/bin:/opt/lemma-python/bin:/opt/lemma-node/node_modules/.bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin \
     MPLBACKEND=Agg
 
 RUN apt-get update \
@@ -115,18 +146,19 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=node-runtime /usr/local/bin/node /usr/local/bin/node
-COPY --from=node-runtime /opt/agentbox-node /opt/agentbox-node
-COPY --from=python-runtime /opt/agentbox-python /opt/agentbox-python
+COPY --from=node-runtime /opt/lemma-node /opt/lemma-node
+COPY --from=python-runtime /opt/lemma-python /opt/lemma-python
 COPY --from=uv-runtime /uv /usr/local/bin/uv
 COPY --from=uv-runtime /uvx /usr/local/bin/uvx
-COPY lemma-backend/sandbox-images/scripts/agentbox-node-tool /usr/local/lib/agentbox-node-tool
+COPY --from=gh-runtime /usr/local/bin/gh /usr/local/bin/gh
+COPY lemma-backend/sandbox-images/scripts/lemma-node-tool /usr/local/lib/lemma-node-tool
 RUN ln -sf "$(command -v chromium)" /usr/local/bin/workspace-chrome \
-    && ln -sf /opt/agentbox-python/bin/lemma /usr/local/bin/lemma \
-    && chmod 0755 /usr/local/lib/agentbox-node-tool \
-    && ln -sf /usr/local/lib/agentbox-node-tool /usr/local/bin/agent-browser \
-    && ln -sf /usr/local/lib/agentbox-node-tool /usr/local/bin/lit \
-    && ln -sf /usr/local/lib/agentbox-node-tool /usr/local/bin/liteparse \
-    && ln -sf /usr/local/lib/agentbox-node-tool /usr/local/bin/pnpm
+    && ln -sf /opt/lemma-python/bin/lemma /usr/local/bin/lemma \
+    && chmod 0755 /usr/local/lib/lemma-node-tool \
+    && ln -sf /usr/local/lib/lemma-node-tool /usr/local/bin/agent-browser \
+    && ln -sf /usr/local/lib/lemma-node-tool /usr/local/bin/lit \
+    && ln -sf /usr/local/lib/lemma-node-tool /usr/local/bin/liteparse \
+    && ln -sf /usr/local/lib/lemma-node-tool /usr/local/bin/pnpm
 
 RUN groupadd --gid 10001 appuser \
     && useradd --uid 10001 --gid 10001 --home-dir /home/appuser --create-home appuser \
@@ -134,24 +166,25 @@ RUN groupadd --gid 10001 appuser \
         /app/sandbox_runtime/api \
         /app/sandbox_runtime/workspace \
         /workspace \
-        /run/agentbox-bootstrap \
+        /run/lemma-bootstrap \
         /tmp/.X11-unix \
-        /tmp/agentbox-browser/runtime \
+        /tmp/lemma-browser/runtime \
     && chmod 1777 /tmp/.X11-unix \
     && chown -R 10001:10001 \
         /app \
         /workspace \
         /home/appuser \
-        /run/agentbox-bootstrap \
-        /tmp/agentbox-browser \
-    && chmod 0700 /run/agentbox-bootstrap
+        /run/lemma-bootstrap \
+        /tmp/lemma-browser \
+    && chmod 0700 /run/lemma-bootstrap
 
 COPY lemma-python /sdk/lemma-python
 COPY lemma-pod-bundle /sdk/lemma-pod-bundle
 COPY lemma-cli /sdk/lemma-cli
 COPY lemma-typescript /sdk/lemma-typescript
 COPY lemma-skills /sdk/lemma-skills
-COPY lemma-backend/sandbox-images/templates/workspace-python/agentbox-profile.sh /etc/profile.d/agentbox-python.sh
+COPY lemma-backend/sandbox-images/templates/workspace-python/lemma-profile.sh /etc/profile.d/lemma-python.sh
+COPY lemma-backend/sandbox-images/templates/workspace-github/lemma-profile.sh /etc/profile.d/lemma-github.sh
 RUN chmod -R a+rX /sdk
 
 COPY --chown=10001:10001 lemma-backend/sandbox_runtime/__init__.py /app/sandbox_runtime/__init__.py
@@ -162,8 +195,8 @@ COPY --chown=10001:10001 lemma-backend/sandbox_runtime/workspace /app/sandbox_ru
 COPY lemma-backend/sandbox-images/scripts/start-workspace-runtime.sh /usr/local/bin/start-workspace-runtime
 COPY lemma-backend/sandbox-images/scripts/start-browser.sh /usr/local/bin/start-browser
 COPY lemma-backend/sandbox-images/scripts/save-webpage.sh /usr/local/bin/save-webpage
-COPY lemma-backend/sandbox-images/scripts/webpage-to-markdown.mjs /opt/agentbox-node/webpage-to-markdown.mjs
-RUN ln -sf /opt/agentbox-node/webpage-to-markdown.mjs /usr/local/lib/webpage-to-markdown.mjs
+COPY lemma-backend/sandbox-images/scripts/webpage-to-markdown.mjs /opt/lemma-node/webpage-to-markdown.mjs
+RUN ln -sf /opt/lemma-node/webpage-to-markdown.mjs /usr/local/lib/webpage-to-markdown.mjs
 RUN chmod 0755 \
         /usr/local/bin/start-workspace-runtime \
         /usr/local/bin/start-browser \

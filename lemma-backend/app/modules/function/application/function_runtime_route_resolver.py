@@ -103,7 +103,7 @@ class FunctionRuntimeRouteResolver:
                 # Ask only for what this invocation needs, plus a short window
                 # so a busy pod reuses one lease instead of paying a
                 # control-plane call per call. Asking for a long horizon here
-                # was what kept idle function sandboxes alive: AgentBox treats
+                # was what kept idle function sandboxes alive: the sandbox runtime treats
                 # a lease as activity, so a single invocation requesting a
                 # four-hour endpoint protected its sandbox for four hours and
                 # the five-minute idle destroy never fired. Function execution
@@ -234,7 +234,7 @@ class FunctionRuntimeRouteResolver:
             or parsed.query
             or parsed.fragment
         ):
-            raise ValueError("AgentBox returned a mismatched function runtime lease")
+            raise ValueError("the sandbox returned a mismatched function runtime lease")
 
     @staticmethod
     def _runtime_request_headers(
@@ -253,7 +253,7 @@ class FunctionRuntimeRouteResolver:
                 or "\n" in item.value
                 or "\x00" in item.value
             ):
-                raise ValueError("AgentBox returned an invalid runtime request header")
+                raise ValueError("the sandbox returned an invalid runtime request header")
             names.add(normalized)
             headers.append((item.name, item.value))
         return tuple(headers)

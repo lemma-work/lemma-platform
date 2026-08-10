@@ -31,7 +31,7 @@ from app.modules.workspace.testing.fake_docker_engine import FakeDockerEngine
 
 pytestmark = pytest.mark.asyncio
 
-PINNED_IMAGE = "lemma-agentbox-workspace@sha256:" + "b" * 64
+PINNED_IMAGE = "lemma-workspace@sha256:" + "b" * 64
 
 
 def _deadline() -> datetime:
@@ -70,7 +70,7 @@ async def test_a_pre_cutover_volume_is_adopted_by_its_legacy_label() -> None:
     """This is the test that stands between the migration and data loss.
 
     The volume holding a user's files is named `ab-ws-{token}` from a random
-    uuid4 minted in AgentBox's database. Nothing in the new schema can derive
+    uuid4 minted in the sandbox runtime's database. Nothing in the new schema can derive
     it, so it has to be found by the `logical-id` label -- which is the user
     id, which is exactly what the migration set the sandbox id to.
     """
@@ -256,6 +256,37 @@ async def test_a_new_epoch_gets_a_container_the_old_one_cannot_name() -> None:
 
     assert old.name != new.name
     assert old.provider_id != new.provider_id
+
+
+async def test_a_container_from_the_same_profile_build_is_reused() -> None:
+    """The idempotence the fence must not break: a retry after a lost response
+    finds the container rather than creating a second one."""
+    engine = FakeDockerEngine()
+    provider = _provider(engine)
+    sandbox_id = uuid4()
+
+    first = await provider.create(_spec(sandbox_id))
+    second = await provider.create(_spec(sandbox_id))
+
+    assert first.provider_id == second.provider_id
+
+
+async def test_a_container_from_an_older_profile_build_is_replaced() -> None:
+    """Releasing a new sandbox image has to reach workspaces that already
+    exist. Reuse keyed only on the name would leave this container running the
+    image it was born with for as long as the workspace lives, so a fix shipped
+    in the image would never arrive. The volume is a separate object and is
+    adopted, so the user's files survive the replacement.
+    """
+    engine = FakeDockerEngine()
+    provider = _provider(engine)
+    sandbox_id = uuid4()
+
+    old = await provider.create(_spec(sandbox_id, profile_digest="sha256:" + "a" * 64))
+    new = await provider.create(_spec(sandbox_id, profile_digest="sha256:" + "b" * 64))
+
+    assert new.provider_id != old.provider_id, "the stale container must be replaced"
+    assert new.volume_name == old.volume_name, "the files must not go with it"
 
 
 async def test_an_operation_against_a_destroyed_container_is_definitively_gone() -> None:

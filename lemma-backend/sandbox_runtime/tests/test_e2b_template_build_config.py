@@ -28,19 +28,19 @@ _SPEC.loader.exec_module(_MODULE)
 def test_template_resources_default_to_one_cpu_and_two_gib(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("AGENTBOX_E2B_WORKSPACE_CPU_COUNT", raising=False)
-    monkeypatch.delenv("AGENTBOX_E2B_WORKSPACE_MEMORY_MB", raising=False)
+    monkeypatch.delenv("E2B_WORKSPACE_CPU_COUNT", raising=False)
+    monkeypatch.delenv("E2B_WORKSPACE_MEMORY_MB", raising=False)
 
     assert (
         _MODULE._positive_int_environment(
-            "AGENTBOX_E2B_WORKSPACE_CPU_COUNT",
+            "E2B_WORKSPACE_CPU_COUNT",
             default=_MODULE.DEFAULT_CPU_COUNT,
         )
         == 1
     )
     assert (
         _MODULE._positive_int_environment(
-            "AGENTBOX_E2B_WORKSPACE_MEMORY_MB",
+            "E2B_WORKSPACE_MEMORY_MB",
             default=_MODULE.DEFAULT_MEMORY_MB,
         )
         == 2048
@@ -50,11 +50,11 @@ def test_template_resources_default_to_one_cpu_and_two_gib(
 def test_template_resources_accept_positive_environment_override(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("AGENTBOX_E2B_FUNCTION_CPU_COUNT", "2")
+    monkeypatch.setenv("E2B_FUNCTION_CPU_COUNT", "2")
 
     assert (
         _MODULE._positive_int_environment(
-            "AGENTBOX_E2B_FUNCTION_CPU_COUNT",
+            "E2B_FUNCTION_CPU_COUNT",
             default=_MODULE.DEFAULT_CPU_COUNT,
         )
         == 2
@@ -66,10 +66,10 @@ def test_template_resources_reject_invalid_environment(
     monkeypatch: pytest.MonkeyPatch,
     value: str,
 ) -> None:
-    monkeypatch.setenv("AGENTBOX_E2B_FUNCTION_CPU_COUNT", value)
+    monkeypatch.setenv("E2B_FUNCTION_CPU_COUNT", value)
 
     with pytest.raises(ValueError):
         _MODULE._positive_int_environment(
-            "AGENTBOX_E2B_FUNCTION_CPU_COUNT",
+            "E2B_FUNCTION_CPU_COUNT",
             default=_MODULE.DEFAULT_CPU_COUNT,
         )

@@ -14,9 +14,12 @@ from typing import Optional
 from app.core.config import settings
 from app.core.infrastructure.redis.client import get_redis
 
-# Baked into the key rather than passed in. It was always the literal
-# "agentbox", and keeping it stable means existing markers stay addressable.
-_RUNTIME_KEY_SEGMENT = "agentbox"
+# Baked into the key rather than passed in. Moving it orphans the markers
+# written under the old segment, which is harmless by construction: a session
+# that has never been seen returns False from `observe_storage_generation`, so
+# the worst case is one missed "your files were recreated" notice, not a false
+# alarm.
+_RUNTIME_KEY_SEGMENT = "workspace"
 
 
 class WorkspaceStorageGenerationStore:

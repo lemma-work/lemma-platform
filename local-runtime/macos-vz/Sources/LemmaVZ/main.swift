@@ -103,7 +103,7 @@ private func configuration(
     configuration.cpuCount = min(4, max(2, processors / 2))
     let physical = ProcessInfo.processInfo.physicalMemory
     // VZ allocates guest memory on demand, so expose enough headroom for the
-    // core services and one bounded AgentBox without asking users to manage a
+    // core services and one bounded the sandbox runtime without asking users to manage a
     // Podman-style reservation. Keep at least half of an 8 GiB Mac for macOS,
     // then scale automatically on larger machines.
     let adaptiveMemory = max(UInt64(4 * 1_024 * 1_024 * 1_024), physical / 3)

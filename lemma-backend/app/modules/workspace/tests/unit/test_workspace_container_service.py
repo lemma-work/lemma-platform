@@ -26,7 +26,7 @@ def _sandbox_info(
         name=str(user_id),
         status="RUNNING",
         image="",
-        endpoint=f"agentbox://{user_id}",
+        endpoint=f"sandbox://{user_id}",
         allocation_id=str(allocation_id or uuid4()),
         allocation_epoch=allocation_epoch,
     )

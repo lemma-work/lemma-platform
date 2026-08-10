@@ -18,11 +18,11 @@ data across repair/update, and releases all resources on explicit full stop.
 
 The host runs Desktop, a durable local control daemon, one all-in-one Python
 backend, and one Next.js frontend. One invisible app-owned Linux runtime holds
-PostgreSQL, Redis, SuperTokens, containerd, and AgentBox sandboxes.
+PostgreSQL, Redis, SuperTokens, containerd, and sandboxes.
 
 This release deliberately retains the shared VM. Native PostgreSQL/Valkey,
 backend-owned auth, Apple Containerization providers, and trusted host
-AgentBox execution are future architecture options, not hidden scope in this
+The sandbox runtime execution are future architecture options, not hidden scope in this
 release.
 
 The normal journey never presents Docker, Podman, WSL distributions, VM sizing,
@@ -190,7 +190,7 @@ The workspace and API use `app.lemma.localhost` on different dynamic ports so
 Safari/WKWebView treats auth cookies consistently. Built apps use
 `<slug>.apps.lemma.localhost`; sandbox apps use the workspace subdomain.
 
-AgentBox uses the explicit `host.lemma.internal` bridge. The backend does not
+The sandbox runtime uses the explicit `host.lemma.internal` bridge. The backend does not
 rewrite localhost or infer Docker topology. Production React apps continue to
 use `<app-name>.apps.lemma.work`.
 
@@ -216,7 +216,7 @@ uses HTTPS at the tunnel edge while its gateway remains loopback-only.
 - Logs and events never expose secrets.
 - Provider private-network access requires explicit trust.
 - Local auth relaxations cannot affect hosted production.
-- AgentBox remains isolated in the private Linux runtime.
+- The sandbox runtime remains isolated in the private Linux runtime.
 - The gateway replaces client-supplied forwarding headers with trusted values
   and never exposes PostgreSQL, Redis, SuperTokens, VM, or model ports.
 
@@ -250,7 +250,7 @@ Required automated gates:
 - balloon active/idle transition test with nonfatal unsupported case;
 - WKWebView signup/session test;
 - built-app routing test;
-- AgentBox-to-dynamic-API CLI operation;
+- The sandbox runtime-to-dynamic-API CLI operation;
 - canonical gateway SSE, WebSocket, upload/download, prefix, cookie, and
   forwarding-header tests;
 - LAN signup from a second browser plus ngrok/named-Cloudflare lifecycle tests;
@@ -259,14 +259,14 @@ Required automated gates:
 - rotated bounded diagnostics test.
 
 Before merge, a maintainer performs a clean PR-DMG install, local signup,
-provider setup, AgentBox operation, restart, diagnostics, repair, and full-stop
+provider setup, sandbox operation, restart, diagnostics, repair, and full-stop
 test.
 
 ## 9. Deferred work
 
 - true offline installation including every OCI image;
 - native PostgreSQL/Valkey/auth;
-- Apple Containerization or alternate AgentBox providers;
+- Apple Containerization or alternate sandbox providers;
 - Intel Mac, Windows Arm, and Desktop Linux releases;
 - invite/share-code gating for public signup;
 - destructive managed-data uninstall UI.

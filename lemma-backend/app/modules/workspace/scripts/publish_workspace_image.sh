@@ -4,7 +4,7 @@ set -euo pipefail
 # Build and push a prebuilt workspace image for e2e usage.
 # Example:
 #   ./app/modules/workspace/scripts/publish_workspace_image.sh \
-#     ghcr.io/lemma-work/lemma-agentbox-workspace:2026-07-23-arm64 \
+#     ghcr.io/lemma-work/lemma-workspace:2026-07-23-arm64 \
 #     linux/arm64/v8
 
 IMAGE_TAG="${1:-}"
@@ -41,4 +41,4 @@ echo "Pushing: $IMAGE_TAG"
 docker push "$IMAGE_TAG"
 
 echo "Done. Use this image as the sandbox manager default:"
-echo "  export AGENTBOX_WORKSPACE_IMAGE=$IMAGE_TAG"
+echo "  export WORKSPACE_IMAGE=$IMAGE_TAG"

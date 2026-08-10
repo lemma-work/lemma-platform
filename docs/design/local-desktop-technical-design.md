@@ -15,15 +15,15 @@ lemma-locald ─────────────── process ledger / netw
   ├─ lemma-agent-host sidecar (local coding agents over ACP)
   ├─ optional canonical-origin sharing gateway
   ├─ optional exact-owned ngrok or cloudflared child
-  ├─ all-in-one Python backend (API + worker + scheduler + AgentBox + documents)
+  ├─ all-in-one Python backend (API + worker + scheduler + sandboxes + documents)
   ├─ Next.js frontend
   └─ lemma-runtime bridge
        └─ private Linux runtime
-            ├─ PostgreSQL: lemma + agentbox databases
+            ├─ PostgreSQL: lemma + sandbox databases
             ├─ Redis
             ├─ SuperTokens
             ├─ containerd
-            └─ AgentBox workspace/function containers
+            └─ workspace and function containers
 ```
 
 macOS uses an app-owned Virtualization.framework VM. Windows uses a private
@@ -76,7 +76,7 @@ system state.
 
 `locald/runtime/macos/data.raw` is the sole sparse mutable disk. Guest mount
 setup binds persistent paths for PostgreSQL, Redis, SuperTokens, containerd,
-and AgentBox workspaces from that disk. Ephemeral runtime paths use tmpfs.
+and sandbox workspaces from that disk. Ephemeral runtime paths use tmpfs.
 
 The build creates a 1.25 GiB maximum ext4 image, populates it with numeric
 ownership preserved, shrinks it to minimum contents, adds 128 MiB headroom,
@@ -142,7 +142,7 @@ The host-pack manifest requires exactly:
 
 The backend environment selects the all-in-one app, local auth settings,
 background embedding initialization, private service addresses, dynamic local
-origins, and AgentBox bridge. Frontend follows the backend dependency.
+origins, and sandbox bridge. Frontend follows the backend dependency.
 
 Health endpoints:
 
@@ -398,7 +398,7 @@ Unit/integration coverage must include:
 - VM read-only root, data persistence, and balloon state;
 - bounded rotated diagnostic cursors/redaction;
 - local session retention and built-app routing;
-- AgentBox bridge to the dynamic API.
+- The sandbox runtime bridge to the dynamic API.
 
 Packaged E2Es and the manual PR-DMG checklist remain merge gates because source
 browser tests cannot reproduce WKWebView, Finder installation, code signing,

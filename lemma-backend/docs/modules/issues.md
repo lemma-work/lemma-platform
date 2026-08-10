@@ -60,7 +60,7 @@ original architectural/operational debt is not fully eliminated.
 | CONNECTOR-001 | **Resolved** | Raw credential GET route and generated Python/TypeScript SDK methods/types removed. This is a semver-major API/SDK change. | OpenAPI contract tests; Python SDK 44 passed/one skip; TypeScript SDK 115 passed; generated-client drift/build checks. |
 | CONNECTOR-002 | **Resolved** | Replaced `exec()` with a restricted AST parser; removed unused runtime compiler injection; only allowlisted Pydantic declarations, literals, annotations, and containers are accepted. | `test_schema_compiler.py` (27), including hostile snippets, modern unions, constraints, recursion, and unsupported executable constructs. |
 | TEST-001 | **Resolved** | CI combines raw coverage from seven E2E shards before unit data, publishes one module-wise `Unit`/`E2E only`/`Combined` PR table, and enforces 80% E2E-only for agent, agent surfaces, datastore, and function plus 70% combined overall, 65% combined schedule, and 85% changed code. | [Run 29087138000](https://github.com/lemma-work/lemma-platform/actions/runs/29087138000): 414 hermetic E2E journeys (411 passed, three protected/optional skips); agent 80.05%, agent surfaces 80.26%, datastore 80.80%, function 81.52% E2E-only; 84.95% combined overall, 78.59% combined schedule, 93% changed code. Unit/component suite: 2,200 run (2,199 passed, one optional skip). |
-| TEST-002 | **Resolved** | Protected/scheduled workflow covers document processors, Docker AgentBox, scheduler recovery, OAuth connector, representative surface, real model budget, and commit-linked freshness artifacts. | `.github/workflows/backend-protected-e2e.yml`; locally protected external cases remain credential/runtime-gated by design. |
+| TEST-002 | **Resolved** | Protected/scheduled workflow covers document processors, Docker sandbox, scheduler recovery, OAuth connector, representative surface, real model budget, and commit-linked freshness artifacts. | `.github/workflows/backend-protected-e2e.yml`; locally protected external cases remain credential/runtime-gated by design. |
 | QUALITY-001 | **Resolved** | Handwritten app/migrations/scripts are Ruff-clean; BasedPyright strict critical slice is mandatory; generated code is excluded from style but checked for codegen drift. | `uv run ruff check app migrations scripts` passed; `make typecheck-critical` reports 0 errors; `make architecture` passed. |
 | ARCH-001 | **Partial** | Explicit contracts/events rule and architecture checker prevent new forbidden imports/cycles. Root composition and several contracts were extracted, but the inherited baseline still contains 59 forbidden import relationships and one strongly connected component. | `make architecture` passes the no-growth ratchet and reports `59 inherited import violations, 1 inherited cycles`. Full zero-baseline cleanup remains follow-up work. |
 | ARCH-002 | **Partial** | Datastore record/storage phases, apps storage/use-case phases, bundle planning/staging/applying/checkpointing, and connector operation routing were extracted. Complexity and >600-line files cannot grow, but several original orchestration files remain oversized. | Architecture complexity/oversized-file ratchet passed; extracted-component unit tests pass. Completing all seven service splits remains follow-up work. |
@@ -190,7 +190,7 @@ and makes incident recovery ambiguous.
 - Persist a cancellation tombstone with a retention TTL instead of deleting
   state immediately.
 - Check it before each step, after every external call, and before commit; make
-  long AgentBox builds cooperatively cancellable.
+  long the sandbox runtime builds cooperatively cancellable.
 - Return `202 CANCELLING` until the worker confirms `CANCELLED`; only then clean
   staging/state.
 - Define whether already committed steps remain (partial cancellation) or must
@@ -352,7 +352,7 @@ Catalog import uses it for generated connector snippets, so a compromised or
 unexpected catalog source becomes arbitrary code execution with API/importer
 process privileges.
 
-Parse a restricted AST/JSON schema format or run compilation inside AgentBox
+Parse a restricted AST/JSON schema format or run compilation inside the sandbox runtime
 with no secrets/network and strict time/memory limits. Remove the unused
 runtime dependency. Add hostile snippets (`import os`, file/network access,
 infinite loop) to security tests.
@@ -372,13 +372,13 @@ usage concurrency. Track branch coverage as well as lines.
 ### TEST-002 — optional and real integration paths are not routine gates
 
 The unit run skips MarkItDown when the optional package is absent. Backend e2e
-is an opt-in label/manual workflow, while real model, provider, AgentBox,
+is an opt-in label/manual workflow, while real model, provider, the sandbox runtime,
 scheduler, and live-surface tests require credentials/runtime flags. This is
 reasonable for cost, but it leaves release-critical adapters dependent on
 manual execution.
 
 Create scheduled/nightly protected-environment matrices for document
-processors, Postgres/Redis outage recovery, Docker AgentBox, scheduler, one
+processors, Postgres/Redis outage recovery, Docker sandbox, scheduler, one
 native OAuth connector, and one representative surface. Publish freshness and
 results in release checks; require a recent green run before release.
 
@@ -480,7 +480,7 @@ Python dependency audit, and image scanning with a documented triage policy.
 `app/modules/agent_surfaces/README.md` documents routes such as a surface-id
 CRUD path, `/toggle`, and platform checklist that do not match the registered
 name-based routes and current setup/catalog endpoints. The workspace README
-covers only the AgentBox model/config and omits public endpoints, Redis caches,
+covers only the sandbox model/config and omits public endpoints, Redis caches,
 delegated token behavior, browser access, retry boundaries, and consumers.
 
 Make `docs/modules/*.md` the canonical architecture docs, link them from the
@@ -537,7 +537,7 @@ about and hide whether an event is deliberately unconsumed.
 | Python / TypeScript SDK | Python 44 passed, one skip; TypeScript 115 passed; TypeScript production/browser bundles built |
 | CLI / frontend | CLI 585 passed (24 deselected); frontend production build passed with 69 pages |
 
-Protected provider/AgentBox/live-surface cases remain intentionally gated on
+Protected provider/the sandbox runtime/live-surface cases remain intentionally gated on
 credentials and a stable Docker runner. The repository workflow publishes
 commit-linked results and applies release freshness checks; local Docker
 Desktop instability was recorded as infrastructure failure rather than

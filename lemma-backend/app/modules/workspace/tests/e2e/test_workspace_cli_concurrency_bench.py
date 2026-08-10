@@ -2,9 +2,9 @@
 
 Drives the *real* tool entrypoint (`workspace_cli.exec_command_internal`) the way
 pydantic-ai does — multiple concurrent calls sharing one BaseAgentContext (hence
-one conversation-scoped shell session) — against a local Docker AgentBox manager.
+one conversation-scoped shell session) — against a local Docker sandbox manager.
 Because the manager/runtime are local (no gVisor, no remote network), any
-serialization observed here is in OUR backend layer, not AgentBox.
+serialization observed here is in OUR backend layer, not the sandbox runtime.
 
 The headline probe is ``N`` parallel ``sleep 1`` calls: with true concurrency the
 wall time is ~1s; if the backend serializes them it is ~Ns.

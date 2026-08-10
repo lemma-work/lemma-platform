@@ -1,4 +1,4 @@
-# AgentBox: Sandbox Fabric
+# Sandbox fabric
 
 **Status:** Implemented and verified for Docker and E2B; Kubernetes deferred
 
@@ -17,21 +17,21 @@
 
 ## 1. Executive decision
 
-AgentBox is Lemma's provider-neutral **sandbox fabric**. It owns the parts that
+The sandbox runtime is Lemma's provider-neutral **sandbox fabric**. It owns the parts that
 must be implemented once for Docker, Kubernetes, and E2B: provider credentials,
 logical-to-physical allocation, lifecycle, capacity admission, generic execution,
 filesystem access, stateful Python sessions, terminal processes, application port
 access, and reconciliation.
 
-AgentBox is not a function platform. The Lemma backend owns function definitions,
+The sandbox runtime is not a function platform. The Lemma backend owns function definitions,
 immutable artifacts, durable runs, API/JOB scheduling, deadlines, callbacks,
 cancellation policy, results, and domain events. A function
 sandbox contains one profile-owned resident runtime on a fixed private port.
-AgentBox starts and health-checks that opaque profile runtime and exposes it only
+The sandbox runtime starts and health-checks that opaque profile runtime and exposes it only
 through an allocation-fenced direct runtime lease. The backend authenticates the
-control-plane lease request with the AgentBox manager key, then calls the returned
+control-plane lease request with sandbox manager key, then calls the returned
 Docker or E2B endpoint directly with opaque provider headers plus the delegated
-function bearer. AgentBox is not in the per-invocation data path and does not
+function bearer. The sandbox runtime is not in the per-invocation data path and does not
 interpret the invocation protocol. No durable queue or public result registry runs
 inside a sandbox.
 
@@ -51,14 +51,14 @@ workload kind:
 ```
 
 The function logical ID is therefore exactly the pod ID without sharing a namespace
-with user workspaces. Provider-generated IDs remain private AgentBox data.
+with user workspaces. Provider-generated IDs remain private sandbox data.
 
 ## 2. Problem statement
 
 The current implementation couples four independently difficult concerns:
 
 1. provider lifecycle;
-2. a workload-specific HTTP runtime incorrectly used as AgentBox's generic control
+2. a workload-specific HTTP runtime incorrectly used as the sandbox runtime's generic control
    plane;
 3. user workspace sessions and browser/application routing;
 4. function scheduling and execution.
@@ -82,33 +82,33 @@ boots and cannot use auto-resume. Paused sandboxes do not expire automatically.
 See [E2B sandbox persistence](https://e2b.dev/docs/sandbox/persistence) and
 [auto-resume](https://e2b.dev/docs/sandbox/auto-resume).
 
-AgentBox pauses workspaces filesystem-only (`keep_memory=False`) on both edges
+The sandbox runtime pauses workspaces filesystem-only (`keep_memory=False`) on both edges
 of the transition: its own idle release and the provider's `on_timeout`. Files
 are the durability guarantee; running processes and interpreter state are
 ephemeral by design and do not survive a pause. Because E2B refuses auto-resume
 for filesystem-only snapshots, `auto_resume` is disabled as a consequence of
 that choice rather than as an independent policy. Resume itself is not fully
-under AgentBox's control: `connect()` resumes a paused sandbox implicitly, so
+under the sandbox runtime's control: `connect()` resumes a paused sandbox implicitly, so
 the control plane detects and records resume rather than gating it.
 
 E2B's `timeout` is a **continuous-runtime ceiling, not an idle timer** — nothing
 happening inside the sandbox extends it, and `set_timeout` resets the clock from
-the moment it is called. AgentBox therefore refreshes it on every workspace
+the moment it is called. The sandbox runtime therefore refreshes it on every workspace
 runtime operation, which turns it into an inactivity backstop that agrees with
-AgentBox's own idle release instead of racing an active session. E2B still
+The sandbox runtime's own idle release instead of racing an active session. E2B still
 enforces a hard maximum continuous runtime per plan (24h on Pro), so a workspace
 busy for longer is paused regardless.
 
-AgentBox removes the compensating machinery instead of making it more complex.
+The sandbox runtime removes the compensating machinery instead of making it more complex.
 Provider adapters use the provider's strongest native data plane. The public
-AgentBox protocol describes portable behavior and makes nonportable behavior
+The sandbox runtime protocol describes portable behavior and makes nonportable behavior
 explicit.
 
 ## 3. Goals
 
 - Give Lemma one internal API for sandbox lifecycle and generic execution across
   Docker, Kubernetes, and E2B.
-- Make a warm workspace command a single AgentBox operation plus one provider data
+- Make a warm workspace command a single sandbox operation plus one provider data
   plane operation.
 - Preserve user files across workspace release on every supported provider, and
   across a profile update — the only routine paths that discard a workspace disk
@@ -125,7 +125,7 @@ explicit.
   account, because it needs live credentials and published template builds.
   Kubernetes remains specified but cannot be enabled until its later conformance
   program passes.
-- Keep AgentBox state transitions readable behind SQLAlchemy repositories and an
+- Keep sandbox state transitions readable behind SQLAlchemy repositories and an
   explicit unit-of-work boundary rather than embedding raw SQL in lifecycle logic.
 
 ## 4. Non-goals
@@ -141,16 +141,16 @@ explicit.
 - Treating ordinary Docker/runc as a production hostile-code boundary.
 - Hiding a reusable credential from arbitrary code executing in the same sandbox.
   Such a credential must never enter the sandbox.
-- Supporting the current experimental AgentBox API shape. The replacement is an
+- Supporting the current experimental the sandbox runtime's API shape. The replacement is an
   atomic internal breaking change.
 - Supporting Daytona, Podman, or additional managed providers in the first
   implementation.
 - Claiming Kubernetes production support in the initial Docker/E2B delivery. Its
   adapter contract remains designed now, but production enablement waits for a
   real disposable-cluster and strong-runtime test program.
-- Migrating or adopting experimental AgentBox database rows, workspace files,
+- Migrating or adopting experimental sandbox database rows, workspace files,
   sessions, processes, Docker resources, or E2B sandboxes. Cutover starts from an
-  empty AgentBox database and fresh provider allocations.
+  empty sandbox database and fresh provider allocations.
 
 ## 5. Responsibility boundaries
 
@@ -165,12 +165,12 @@ flowchart TB
         Artifacts["Immutable artifact store"]
     end
 
-    subgraph AgentBox["AgentBox sandbox fabric"]
+    subgraph SandboxFabric["Sandbox fabric"]
         API["Typed API"]
         Lifecycle["Lifecycle and reconciliation"]
         Admission["Distributed provider admission"]
         Ports["Process / Python / files / PTY / ports"]
-        State[("AgentBox PostgreSQL")]
+        State[("Sandbox PostgreSQL")]
     end
 
     subgraph Providers["Provider adapters"]
@@ -199,7 +199,7 @@ flowchart TB
     Gateway --> Artifacts
 ```
 
-### 5.1 AgentBox owns
+### 5.1 the sandbox runtime owns
 
 - provider API credentials and SDK configuration;
 - workload profiles and immutable template/image references;
@@ -216,7 +216,7 @@ flowchart TB
 - user authorization and user-to-workspace mapping;
 - conversation/session naming and intended working directory;
 - short-lived delegated workspace credentials;
-- translating agent tool calls into AgentBox operations;
+- translating agent tool calls into sandbox operations;
 - user-facing output truncation and tool result schemas.
 
 ### 5.3 Lemma function modules own
@@ -229,7 +229,7 @@ flowchart TB
 - direct API dispatch and bounded JOB admission;
 - domain completion events and workflow resumption.
 
-AgentBox sees a request to ensure a `FUNCTION` sandbox and open an authenticated
+The sandbox runtime sees a request to ensure a `FUNCTION` sandbox and open an authenticated
 port to the opaque runtime declared by its profile. It does not know whether a
 request through that port represents an API function, a JOB function, or another
 future stateless workload.
@@ -265,12 +265,12 @@ Initial profiles:
 - no browser, Node, package installer, compiler, workspace runtime, or persistent
   volume;
 - no unauthenticated public ingress; the fixed runtime port is reachable only
-  through an allocation-bound AgentBox grant;
+  through an allocation-bound sandbox grant;
 - Lemma runtime gateway plus a controlled egress gateway that enforces the
   revision-declared public HTTPS destinations;
 - five-minute warm idle period followed by destruction.
 
-A profile update creates a new digest. For **functions**, AgentBox drains the old
+A profile update creates a new digest. For **functions**, the sandbox runtime drains the old
 physical allocation and creates a replacement. It never mutates an active
 allocation into a different profile.
 
@@ -287,13 +287,13 @@ The consequence is deliberate: a workspace may run an N-1 template until it is
 naturally recreated, so a template fix rolls out over up to the retention
 window. That is the accepted trade against destroying user work on every deploy.
 Because a workspace can outlive the current release, the previous release's
-artifacts must stay resolvable — `AGENTBOX_WORKSPACE_RETAINED_PROFILES` carries
+artifacts must stay resolvable — `WORKSPACE_RETAINED_PROFILES` carries
 them into the profile registry, and dropping an entry that live workspaces still
 reference makes them unreachable.
 
 ### 6.3 Package and document tooling decision
 
-`uv` and `pnpm` are the only canonical package managers in maintained AgentBox
+`uv` and `pnpm` are the only canonical package managers in maintained the sandbox runtime
 images and templates. Lock files are release inputs; builds use locked/frozen modes
 and never rewrite them. Workspace agents may use those two tools explicitly.
 Function sandboxes contain only the resolved environment and do not expose an
@@ -367,7 +367,7 @@ idle threshold expire, the allocation is destroyed on every provider.
 
 ## 8. Reliability principles
 
-1. **One owner per decision.** AgentBox decides provider create/release/destroy
+1. **One owner per decision.** The sandbox runtime decides provider create/release/destroy
    recovery. The function dispatcher never replays an invocation; a client creates
    a new run when its own semantics permit another execution.
 2. **One deadline.** Every operation carries an absolute UTC deadline. Nested
@@ -381,7 +381,7 @@ idle threshold expire, the allocation is destroyed on every provider.
    operations. Inventory, webhooks, and metadata queries repair background state.
 6. **No semantic retry from HTTP status alone.** Typed error provenance determines
    retry permission.
-7. **No heartbeat protocol.** Active AgentBox operations and provider timeouts cover
+7. **No heartbeat protocol.** Active sandbox operations and provider timeouts cover
    liveness. Long operations set their timeout once from the absolute deadline.
 8. **No function polling in healthy execution.** API responses and JOB callbacks
    complete durable runs. Inspection exists for reconciliation and cancellation
@@ -417,7 +417,7 @@ idle threshold expire, the allocation is destroyed on every provider.
 
 ## 10. Source-of-truth rule
 
-This directory is the sole target-architecture source of truth for AgentBox and
+This directory is the sole target-architecture source of truth for the sandbox runtime and
 sandbox-backed function execution. Module READMEs may summarize ownership and link
 here, but must not restate lifecycle, retry, provider, or execution protocol rules.
 
@@ -432,10 +432,10 @@ invariants, and the acceptance gates together.
 | Logical sandbox | Stable `(workload_kind, logical_id)` requested by a caller |
 | Physical allocation | One provider-created container, Pod, or E2B sandbox |
 | Workspace storage | Durable `/workspace` content owned by one logical workspace, independent of a replaceable allocation where the provider permits |
-| Allocation token | AgentBox-generated unique identifier for one create attempt |
+| Allocation token | the sandbox runtime-generated unique identifier for one create attempt |
 | Allocation epoch | Monotonic logical incarnation used to fence sessions/processes |
 | Profile | Immutable workload image/template, capabilities, and policies |
-| Operation ID | Caller-generated identifier for one generic AgentBox process start |
+| Operation ID | Caller-generated identifier for one generic sandbox process start |
 | Provider process ID | Opaque provider-native process or runtime reference |
 | Release | Stop workspace compute while preserving workspace files |
 | Destroy | Permanently remove a physical allocation; for workspace delete, storage too |

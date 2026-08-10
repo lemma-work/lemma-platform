@@ -103,11 +103,11 @@ format_generated_python "$OUT_DIR"
 
 # openapi-python-client emits a models/__init__.py that eagerly imports every
 # generated model, which makes importing a single model load all 450+ (~10s in
-# the agentbox runtime). Rewrite it to a lazy PEP 562 __getattr__ loader.
+# the sandbox runtime). Rewrite it to a lazy PEP 562 __getattr__ loader.
 "$PYTHON_BIN" "$SCRIPT_DIR/make_models_init_lazy.py" "$OUT_DIR/models/__init__.py"
 
 # Same treatment for the package top-level __init__: the generated version
-# eagerly imports .client (httpx, ~80ms locally / ~1s in the agentbox runtime),
+# eagerly imports .client (httpx, ~80ms locally / ~1s in the sandbox runtime),
 # which every `from ...models.foo import Foo` pays because Python executes the
 # parent package first. Keep it lazy so CLI startup never loads the HTTP stack.
 cat > "$OUT_DIR/__init__.py" <<'PY'

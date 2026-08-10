@@ -587,7 +587,7 @@ async def apply_pod_import(context: dict[str, str | None]) -> None:
             worker_ctx, state, pod_id=pod_id, user_id=user_id
         )
 
-        # APP steps build in the agentbox and must not hold a pooled DB connection,
+        # APP steps build in a sandbox and must not hold a pooled DB connection,
         # so they run through a self-scoped runner instead of the per-step uow_scope.
         app_runner = AppStepRunner(uow_factory=worker_ctx.uow_factory)
         function_runner = None
@@ -612,7 +612,7 @@ async def apply_pod_import(context: dict[str, str | None]) -> None:
                 await store.save_import(state)
                 try:
                     if step.kind in {StepKind.APP, StepKind.FUNCTION}:
-                        # Self-scoped: creates the app, builds it in the agentbox
+                        # Self-scoped: creates the app, builds it in a sandbox
                         # (no connection held), then deploys — managing its own short
                         # UoWs. Idempotent-by-name + dist sha256 dedup, so a replay
                         # after a crash converges.

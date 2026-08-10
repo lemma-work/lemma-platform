@@ -17,7 +17,7 @@ guest, or network is unhealthy.
 
 The managed host pack runs one all-in-one backend and one frontend. The private
 guest controller starts PostgreSQL, Redis, compatibility auth when enabled,
-and on-demand AgentBox sandboxes through a narrow authenticated protocol. It
+and on-demand sandboxes through a narrow authenticated protocol. It
 does not expose Docker/Podman/containerd sockets to the backend.
 
 ```bash

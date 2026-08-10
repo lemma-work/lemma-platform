@@ -6,10 +6,9 @@
 #
 # Usage (see also `make load-test` in lemma-backend/Makefile):
 #
-#   # 1. Build the image (from repo root):
+#   # 1. Build the images (from repo root):
 #   docker build -t lemma-backend:load-test -f lemma-backend/Dockerfile .
-#   docker build -t lemma-agentbox:load-test -f agentbox/Dockerfile agentbox
-#   make -C agentbox build-test-images
+#   make -C lemma-backend sandbox-images
 #
 #   # 2. Bring up infrastructure + API + worker:
 #   docker compose -f load_tests/docker-compose.load-test.yml up -d
@@ -74,33 +73,6 @@ services:
     networks:
       - load_test_net
 
-  # ── Canonical AgentBox with the real Docker adapter ───────────────────────
-  agentbox:
-    image: ${AGENTBOX_IMAGE:-lemma-agentbox:load-test}
-    container_name: lemma-load-agentbox
-    environment:
-      AGENTBOX_API_KEY: "load-test-agentbox-key"
-      AGENTBOX_RUNTIME_CREDENTIAL_KEY: "load-test-agentbox-runtime-credential-key"
-      AGENTBOX_API_URL: "http://agentbox:8000"
-      AGENTBOX_PROVIDER: "docker"
-      AGENTBOX_DOCKER_SOCKET_PATH: "/var/run/docker.sock"
-      AGENTBOX_DOCKER_PRIVATE_NETWORK: "lemma-load-test-net"
-      AGENTBOX_WORKSPACE_IMAGE: ${AGENTBOX_WORKSPACE_IMAGE:-agentbox-workspace:dev}
-      AGENTBOX_FUNCTION_IMAGE: ${AGENTBOX_FUNCTION_IMAGE:-agentbox-function:dev}
-      AGENTBOX_STATE_DB_PATH: "/data/state.db"
-      AGENTBOX_AUTO_CREATE_SCHEMA: "true"
-      AGENTBOX_ADD_HOST_GATEWAY: "false"
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-      - agentbox_state:/data
-    networks:
-      - load_test_net
-    deploy:
-      resources:
-        limits:
-          cpus: "1.0"
-          memory: 1G
-
   # ── API service (matches prod: separate pod) ──────────────────────────────
   api:
     image: ${LEMMA_IMAGE:-lemma-backend:load-test}
@@ -121,7 +93,7 @@ services:
       DATASTORE_DB_MAX_OVERFLOW: "5"
       WORKER_CONCURRENCY: "20"
       # Mock LLM: deterministic in-process pydantic-ai FunctionModel — no real
-      # model, API key, or agentbox. The journey scripts each response via
+      # model or API key. The journey scripts each response via
       # conversation.metadata.mock_llm_script (text deltas + a write_todos call).
       # Placeholder key so default runtime-profile resolution succeeds; the mock
       # short-circuits model construction before it is ever used.
@@ -132,9 +104,19 @@ services:
       LEMMA_OPENAI_API_KEY: "EMPTY"
       API_URL: "http://api:8000"
       FUNCTION_RUNTIME_GATEWAY_URL: "http://api:8000"
-      AGENTBOX_API_URL: "http://agentbox:8000"
-      AGENTBOX_API_KEY: "load-test-agentbox-key"
       E2E_SANDBOX_MODE: "docker"
+      # Sandboxes are provisioned in-process against the mounted Docker socket;
+      # there is no separate manager service to point at any more.
+      WORKSPACE_PROVIDER: "docker"
+      WORKSPACE_RUNTIME_CREDENTIAL_KEY: "load-test-runtime-credential-key"
+      WORKSPACE_DOCKER_SOCKET_PATH: "/var/run/docker.sock"
+      WORKSPACE_DOCKER_PRIVATE_NETWORK: "lemma-load-test-net"
+      WORKSPACE_DOCKER_ALLOW_MUTABLE_IMAGES: "true"
+      WORKSPACE_ADD_HOST_GATEWAY: "false"
+      WORKSPACE_IMAGE: ${WORKSPACE_IMAGE:-lemma-workspace:dev}
+      FUNCTION_IMAGE: ${FUNCTION_IMAGE:-lemma-function:dev}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
     ports:
       - "8000:8000"
     depends_on:
@@ -143,8 +125,6 @@ services:
       supertokens:
         condition: service_healthy
       redis:
-        condition: service_started
-      agentbox:
         condition: service_started
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\" || exit 1"]
@@ -192,17 +172,25 @@ services:
       LEMMA_OPENAI_API_KEY: "EMPTY"
       API_URL: "http://api:8000"
       FUNCTION_RUNTIME_GATEWAY_URL: "http://api:8000"
-      AGENTBOX_API_URL: "http://agentbox:8000"
-      AGENTBOX_API_KEY: "load-test-agentbox-key"
       E2E_SANDBOX_MODE: "docker"
+      # Sandboxes are provisioned in-process against the mounted Docker socket;
+      # there is no separate manager service to point at any more.
+      WORKSPACE_PROVIDER: "docker"
+      WORKSPACE_RUNTIME_CREDENTIAL_KEY: "load-test-runtime-credential-key"
+      WORKSPACE_DOCKER_SOCKET_PATH: "/var/run/docker.sock"
+      WORKSPACE_DOCKER_PRIVATE_NETWORK: "lemma-load-test-net"
+      WORKSPACE_DOCKER_ALLOW_MUTABLE_IMAGES: "true"
+      WORKSPACE_ADD_HOST_GATEWAY: "false"
+      WORKSPACE_IMAGE: ${WORKSPACE_IMAGE:-lemma-workspace:dev}
+      FUNCTION_IMAGE: ${FUNCTION_IMAGE:-lemma-function:dev}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
       db:
         condition: service_healthy
       supertokens:
         condition: service_healthy
       redis:
-        condition: service_started
-      agentbox:
         condition: service_started
     networks:
       - load_test_net
@@ -220,6 +208,3 @@ networks:
   load_test_net:
     name: lemma-load-test-net
     driver: bridge
-
-volumes:
-  agentbox_state:

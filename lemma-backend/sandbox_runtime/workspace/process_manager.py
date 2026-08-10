@@ -286,8 +286,8 @@ class ProcessManager:
 
     async def _spawn(self, request: StartProcessRequest) -> ManagedProcess:
         environment = os.environ.copy()
-        environment.pop("AGENTBOX_RUNTIME_TOKEN", None)
-        environment.pop("AGENTBOX_RUNTIME_TOKEN_FILE", None)
+        environment.pop("LEMMA_RUNTIME_TOKEN", None)
+        environment.pop("LEMMA_RUNTIME_TOKEN_FILE", None)
         environment.update({item.name: item.value for item in request.environment})
         output = OutputBuffer(request.output_limit_bytes)
         if request.tty is not None:

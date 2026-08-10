@@ -16,6 +16,10 @@ NODE_LINUX_X64_SHA256 = (
     "55aa7153f9d88f28d765fcdad5ae6945b5c0f98a36881703817e4c450fa76742"
 )
 PNPM_VERSION = "11.15.1"
+GH_VERSION = "2.97.0"
+GH_LINUX_X64_SHA256 = (
+    "a2c9b8497e1f85b1ad0dfcb78b5a622e098801b8e461e459e88e1ee12f018112"
+)
 DEFAULT_CPU_COUNT = 1
 DEFAULT_MEMORY_MB = 2048
 
@@ -31,6 +35,26 @@ def _positive_int_environment(name: str, *, default: int) -> int:
     if value < 1:
         raise ValueError(f"{name} must be at least 1")
     return value
+
+
+def _install_gh_command() -> str:
+    """The GitHub CLI, which Debian does not package.
+
+    An agent working in a repo reaches for `gh` as readily as `git` -- issues,
+    PRs and releases have no plumbing equivalent -- and `lemma-github.sh` gives
+    it the same credential git already has.
+    """
+
+    directory = f"gh_{GH_VERSION}_linux_amd64"
+    archive = f"{directory}.tar.gz"
+    return (
+        f"curl -fsSL https://github.com/cli/cli/releases/download/"
+        f"v{GH_VERSION}/{archive} -o /tmp/{archive} && "
+        f"echo '{GH_LINUX_X64_SHA256}  /tmp/{archive}' | sha256sum -c - && "
+        f"tar -xzf /tmp/{archive} -C /tmp && "
+        f"install -m 0755 /tmp/{directory}/bin/gh /usr/local/bin/gh && "
+        f"rm -rf /tmp/{archive} /tmp/{directory}"
+    )
 
 
 def _install_uv_command() -> str:
@@ -109,7 +133,8 @@ def workspace_template():
             "/opt/node24/bin/corepack enable pnpm && "
             f"/opt/node24/bin/corepack prepare pnpm@{PNPM_VERSION} "
             "--activate && "
-            f"{_install_uv_command()}",
+            f"{_install_uv_command()} && "
+            f"{_install_gh_command()}",
             user="root",
         )
         .copy("lemma-python", "/build/lemma-python")
@@ -123,7 +148,7 @@ def workspace_template():
         .run_cmd(
             "UV_PYTHON_INSTALL_DIR=/opt/python uv python install 3.14 && "
             "UV_PYTHON_INSTALL_DIR=/opt/python "
-            "UV_PROJECT_ENVIRONMENT=/opt/agentbox-python "
+            "UV_PROJECT_ENVIRONMENT=/opt/lemma-python "
             "UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy "
             "uv sync --project /build/lemma-backend/sandbox-images/templates/workspace-python "
             "--python 3.14 "
@@ -132,20 +157,20 @@ def workspace_template():
             "'import sys; "
             'p="/workspace/.python/lib/python3.14/site-packages"; '
             "sys.path.insert(0, p) if p not in sys.path else None' "
-            "> /opt/agentbox-python/lib/python3.14/site-packages/"
-            "agentbox-workspace-overlay.pth && "
-            "test -x /opt/agentbox-python/bin/python && "
-            'test "$(/opt/agentbox-python/bin/python -c '
+            "> /opt/lemma-python/lib/python3.14/site-packages/"
+            "lemma-workspace-overlay.pth && "
+            "test -x /opt/lemma-python/bin/python && "
+            'test "$(/opt/lemma-python/bin/python -c '
             "'import sys; print(f\"{sys.version_info.major}.{sys.version_info.minor}\")'"
             ')" = "3.14" && '
-            "/opt/agentbox-python/bin/python -c "
+            "/opt/lemma-python/bin/python -c "
             '"import ipykernel, lemma_sdk, pydantic" && '
-            "test -x /opt/agentbox-python/bin/lemma && "
-            "ln -sf /opt/agentbox-python/bin/lemma /usr/local/bin/lemma && "
+            "test -x /opt/lemma-python/bin/lemma && "
+            "ln -sf /opt/lemma-python/bin/lemma /usr/local/bin/lemma && "
             "/usr/local/bin/lemma --version && "
             "mkdir -p /root/.local/share/jupyter/kernels/python3 && "
             "printf '%s\\n' "
-            '\'{"argv":["/opt/agentbox-python/bin/python","-m",'
+            '\'{"argv":["/opt/lemma-python/bin/python","-m",'
             '"ipykernel_launcher","-f","{connection_file}"],'
             '"display_name":"Python 3.14","language":"python",'
             '"metadata":{"debugger":true}}\' '
@@ -157,11 +182,11 @@ def workspace_template():
         )
         .copy(
             "lemma-backend/sandbox-images/templates/workspace-node",
-            "/opt/agentbox-node",
+            "/opt/lemma-node",
         )
         .run_cmd(
             "export PATH=/opt/node24/bin:$PATH && "
-            "cd /opt/agentbox-node && "
+            "cd /opt/lemma-node && "
             "pnpm install --prod --frozen-lockfile && "
             "browser_bin_dir=$(find node_modules/.pnpm -type d "
             "-path '*/node_modules/agent-browser/bin' -print -quit) && "
@@ -174,31 +199,36 @@ def workspace_template():
             user="root",
         )
         .copy(
-            "lemma-backend/sandbox-images/scripts/agentbox-node-tool",
-            "/usr/local/lib/agentbox-node-tool",
+            "lemma-backend/sandbox-images/scripts/lemma-node-tool",
+            "/usr/local/lib/lemma-node-tool",
             mode=0o755,
         )
         .run_cmd(
-            "ln -sf /usr/local/lib/agentbox-node-tool "
+            "ln -sf /usr/local/lib/lemma-node-tool "
             "/usr/local/bin/agent-browser && "
-            "ln -sf /usr/local/lib/agentbox-node-tool /usr/local/bin/lit && "
-            "ln -sf /usr/local/lib/agentbox-node-tool "
+            "ln -sf /usr/local/lib/lemma-node-tool /usr/local/bin/lit && "
+            "ln -sf /usr/local/lib/lemma-node-tool "
             "/usr/local/bin/liteparse && "
-            "ln -sf /usr/local/lib/agentbox-node-tool /usr/local/bin/pnpm",
+            "ln -sf /usr/local/lib/lemma-node-tool /usr/local/bin/pnpm",
             user="root",
         )
         .run_cmd(
-            "AGENTBOX_NODE_BINARY=/opt/node24/bin/node agent-browser install",
+            "LEMMA_NODE_BINARY=/opt/node24/bin/node agent-browser install",
             user="user",
         )
         .copy(
-            "lemma-backend/sandbox-images/templates/workspace-node/agentbox-profile.sh",
-            "/etc/profile.d/agentbox-node.sh",
+            "lemma-backend/sandbox-images/templates/workspace-node/lemma-profile.sh",
+            "/etc/profile.d/lemma-node.sh",
             mode=0o644,
         )
         .copy(
-            "lemma-backend/sandbox-images/templates/workspace-python/agentbox-profile.sh",
-            "/etc/profile.d/agentbox-python.sh",
+            "lemma-backend/sandbox-images/templates/workspace-python/lemma-profile.sh",
+            "/etc/profile.d/lemma-python.sh",
+            mode=0o644,
+        )
+        .copy(
+            "lemma-backend/sandbox-images/templates/workspace-github/lemma-profile.sh",
+            "/etc/profile.d/lemma-github.sh",
             mode=0o644,
         )
         .copy(
@@ -213,13 +243,13 @@ def workspace_template():
         )
         .copy(
             "lemma-backend/sandbox-images/scripts/webpage-to-markdown.mjs",
-            "/opt/agentbox-node/webpage-to-markdown.mjs",
+            "/opt/lemma-node/webpage-to-markdown.mjs",
             mode=0o755,
         )
         .run_cmd(
-            "mkdir -p /workspace /tmp/agentbox-browser/runtime "
-            "/tmp/agentbox-browser/profile && "
-            "ln -sf /opt/agentbox-node/webpage-to-markdown.mjs "
+            "mkdir -p /workspace /tmp/lemma-browser/runtime "
+            "/tmp/lemma-browser/profile && "
+            "ln -sf /opt/lemma-node/webpage-to-markdown.mjs "
             "/usr/local/lib/webpage-to-markdown.mjs && "
             "find /home/user/.agent-browser/browsers -type f "
             "-name chrome -perm /111 "
@@ -227,31 +257,35 @@ def workspace_template():
             "test -x /usr/local/bin/workspace-chrome && "
             "rm -rf /root/.cache/pnpm /root/.local/share/pnpm/store "
             "/home/user/.cache/pnpm /home/user/.local/share/pnpm/store && "
-            "chown -R user:user /workspace /tmp/agentbox-browser",
+            "chown -R user:user /workspace /tmp/lemma-browser",
             user="root",
         )
         .set_envs(
             {
                 "DISPLAY": ":99",
-                "XDG_RUNTIME_DIR": "/tmp/agentbox-browser/runtime",
+                "XDG_RUNTIME_DIR": "/tmp/lemma-browser/runtime",
                 "WORKSPACE_XVFB_SCREEN": "1440x960x24",
-                "AGENT_BROWSER_CONFIG": "/tmp/agentbox-browser/config.json",
+                "AGENT_BROWSER_CONFIG": "/tmp/lemma-browser/config.json",
                 "AGENT_BROWSER_DASHBOARD_PORT": "4848",
                 "AGENT_BROWSER_DASHBOARD_INTERNAL_PORT": "4849",
                 "AGENT_BROWSER_EXECUTABLE_PATH": "/usr/local/bin/workspace-chrome",
-                "AGENT_BROWSER_PROFILE": "/tmp/agentbox-browser/profile",
+                "AGENT_BROWSER_PROFILE": "/tmp/lemma-browser/profile",
                 "AGENT_BROWSER_SESSION": "workspace",
                 "AGENT_BROWSER_HEADED": "true",
-                "AGENTBOX_NODE_BINARY": "/opt/node24/bin/node",
-                "NODE_PATH": "/opt/agentbox-node/node_modules",
+                "LEMMA_NODE_BINARY": "/opt/node24/bin/node",
+                # Where the credential bridge writes gh's config.
+                "GH_CONFIG_DIR": "/tmp/lemma-gh",
+                "GH_NO_UPDATE_NOTIFIER": "1",
+                "GH_PAGER": "cat",
+                "NODE_PATH": "/opt/lemma-node/node_modules",
                 "PNPM_HOME": "/home/user/.local/share/pnpm",
                 "PIP_PREFIX": "/workspace/.python",
                 "PYTHONPATH": (
                     "/workspace/.python/lib/python3.14/site-packages:"
-                    "/opt/agentbox-python/lib/python3.14/site-packages"
+                    "/opt/lemma-python/lib/python3.14/site-packages"
                 ),
                 "PATH": (
-                    "/workspace/.python/bin:/opt/agentbox-python/bin:"
+                    "/workspace/.python/bin:/opt/lemma-python/bin:"
                     "/opt/node24/bin:"
                     "/usr/local/bin:/usr/bin:/bin"
                 ),
@@ -278,7 +312,7 @@ def function_template():
         )
         .run_cmd(
             f"{_install_uv_command()} && "
-            "UV_PROJECT_ENVIRONMENT=/opt/agentbox-function "
+            "UV_PROJECT_ENVIRONMENT=/opt/lemma-function "
             "UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy "
             "uv sync --project /build/lemma-backend/sandbox-images/templates/function-python "
             "--locked --no-dev --no-editable && "
@@ -309,7 +343,7 @@ def function_template():
                 "PYTHONUNBUFFERED": "1",
                 "PYTHONDONTWRITEBYTECODE": "1",
                 "PYTHONPATH": "/app",
-                "PATH": ("/opt/agentbox-function/bin:/usr/local/bin:/usr/bin:/bin"),
+                "PATH": ("/opt/lemma-function/bin:/usr/local/bin:/usr/bin:/bin"),
             }
         )
         .set_workdir("/tmp")
@@ -331,13 +365,13 @@ def build(
     selected = {
         "workspace": (
             workspace_template,
-            "lemma-agentbox-workspace",
+            "lemma-workspace",
             _positive_int_environment(
-                "AGENTBOX_E2B_WORKSPACE_CPU_COUNT",
+                "E2B_WORKSPACE_CPU_COUNT",
                 default=DEFAULT_CPU_COUNT,
             ),
             _positive_int_environment(
-                "AGENTBOX_E2B_WORKSPACE_MEMORY_MB",
+                "E2B_WORKSPACE_MEMORY_MB",
                 default=DEFAULT_MEMORY_MB,
             ),
         ),
@@ -346,13 +380,13 @@ def build(
         # not an advertised four-request admission limit.
         "function": (
             function_template,
-            "lemma-agentbox-function",
+            "lemma-function",
             _positive_int_environment(
-                "AGENTBOX_E2B_FUNCTION_CPU_COUNT",
+                "E2B_FUNCTION_CPU_COUNT",
                 default=DEFAULT_CPU_COUNT,
             ),
             _positive_int_environment(
-                "AGENTBOX_E2B_FUNCTION_MEMORY_MB",
+                "E2B_FUNCTION_MEMORY_MB",
                 default=DEFAULT_MEMORY_MB,
             ),
         ),

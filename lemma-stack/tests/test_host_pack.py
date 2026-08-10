@@ -19,8 +19,8 @@ def _release():
             "images": {
                 "backend": "backend:test",
                 "frontend": "frontend:test",
-                "agentbox_workspace": "workspace:test",
-                "agentbox_function": "function:test",
+                "workspace": "workspace:test",
+                "function": "function:test",
             },
         }
     )
@@ -51,7 +51,7 @@ def test_builds_exact_backend_frontend_native_contract(paths, tmp_path):
         "backend",
         "frontend",
     ]
-    # One chain: AgentBox's own database and alembic history are gone.
+    # One chain: the sandbox runtime's own database and alembic history are gone.
     assert [setup["id"] for setup in manifest["setup"]] == ["migrations"]
     assert manifest["setup"][0]["max_attempts"] == 3
     assert manifest["setup"][0]["retry_backoff_seconds"] == 2
@@ -72,9 +72,8 @@ def test_builds_exact_backend_frontend_native_contract(paths, tmp_path):
     assert backend["env"]["FUNCTION_RUNTIME_GATEWAY_URL"] == (
         "http://host.lemma.internal:8711"
     )
-    assert backend["env"]["AGENTBOX_WORKSPACE_IMAGE"] == "workspace:test"
-    assert backend["env"]["AGENTBOX_FUNCTION_IMAGE"] == "function:test"
-    assert backend["env"]["AGENTBOX_LOCAL_RUNTIME_TIMEOUT_SECONDS"] == "600"
+    assert backend["env"]["WORKSPACE_IMAGE"] == "workspace:test"
+    assert backend["env"]["FUNCTION_IMAGE"] == "function:test"
     assert backend["env"]["BROWSER_SDK_PATH"].endswith("lemma-client.js")
     assert backend["env"]["SESSION_COOKIE_DOMAIN"] == ""
     assert frontend["dependencies"] == ["backend"]
@@ -104,8 +103,8 @@ def test_managed_runtime_contract_is_explicit(paths, tmp_path, monkeypatch):
             "images": {
                 "backend": "backend:test",
                 "frontend": "frontend:test",
-                "agentbox_workspace": "workspace@sha256:agentbox",
-                "agentbox_function": "function@sha256:agentbox",
+                "workspace": "workspace@sha256:agentbox",
+                "function": "function@sha256:agentbox",
             },
             "infra": {
                 "postgres": "postgres@sha256:postgres",
@@ -133,18 +132,18 @@ def test_managed_runtime_contract_is_explicit(paths, tmp_path, monkeypatch):
     }
     backend = manifest["services"][0]
     assert backend["env"]["WORKSPACE_PROVIDER"] == "lemma_local"
-    assert backend["env"]["AGENTBOX_LOCAL_RUNTIME_CLI"] == "/signed/lemma-runtime"
-    assert backend["env"]["AGENTBOX_LOCAL_CALLBACK_REQUIRED"] == "true"
-    assert backend["env"]["AGENTBOX_LOCAL_CALLBACK_URL"] == (
+    assert backend["env"]["WORKSPACE_LOCAL_RUNTIME_CLI"] == "/signed/lemma-runtime"
+    assert backend["env"]["WORKSPACE_LOCAL_CALLBACK_REQUIRED"] == "true"
+    assert backend["env"]["WORKSPACE_LOCAL_CALLBACK_URL"] == (
         "http://host.lemma.internal:8711"
     )
-    assert backend["env"]["AGENTBOX_WORKSPACE_IMAGE"] == (
+    assert backend["env"]["WORKSPACE_IMAGE"] == (
         "workspace@sha256:agentbox"
     )
-    assert backend["env"]["AGENTBOX_FUNCTION_IMAGE"] == (
+    assert backend["env"]["FUNCTION_IMAGE"] == (
         "function@sha256:agentbox"
     )
-    assert backend["env"]["AGENTBOX_ADD_HOST_GATEWAY"] == "false"
+    assert backend["env"]["WORKSPACE_ADD_HOST_GATEWAY"] == "false"
     assert backend["env"]["DATABASE_URL"].startswith("postgresql+asyncpg://postgres:" + "a" * 64)
     assert backend["env"]["REDIS_URL"].startswith("redis://:" + "b" * 64)
     assert backend["env"]["WORKSPACE_CALLBACK_API_URL"] == ("http://host.lemma.internal:8711")

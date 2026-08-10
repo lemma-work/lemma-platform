@@ -29,14 +29,14 @@ from app.modules.workspace.services.sandbox_service import SandboxService
 
 pytestmark = [pytest.mark.integration, pytest.mark.workspace, pytest.mark.asyncio]
 
-_SOCKET = os.getenv("AGENTBOX_DOCKER_SOCKET_PATH", "/var/run/docker.sock")
-_IMAGE = os.getenv("AGENTBOX_WORKSPACE_IMAGE", "")
+_SOCKET = os.getenv("WORKSPACE_DOCKER_SOCKET_PATH", "/var/run/docker.sock")
+_IMAGE = os.getenv("WORKSPACE_IMAGE", "")
 
 
 @pytest_asyncio.fixture
 async def sandbox_stack(sandbox_uow_factory, monkeypatch) -> AsyncIterator[tuple]:
     if not _IMAGE:
-        pytest.skip("set AGENTBOX_WORKSPACE_IMAGE to run the end-to-end sandbox test")
+        pytest.skip("set WORKSPACE_IMAGE to run the end-to-end sandbox test")
     if not os.path.exists(_SOCKET):
         pytest.skip(f"no docker socket at {_SOCKET}")
 

@@ -2,8 +2,8 @@
 
 A static (no-``package.json``) app exercises the whole APP apply path — create the
 app with a unique slug, upload its source + dist, finalize a release — without an
-agentbox build, proving apps travel with their code and actually serve in the
-target pod. (The Vite build-in-agentbox path is covered by unit tests with a mocked
+sandbox build, proving apps travel with their code and actually serve in the
+target pod. (The Vite build-in-sandbox path is covered by unit tests with a mocked
 session and, under ``E2E_REAL``, a real build.)
 """
 

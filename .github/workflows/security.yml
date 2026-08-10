@@ -65,8 +65,6 @@ jobs:
               - 'lemma-backend/uv.lock'
               - 'lemma-backend/lemma-connectors/pyproject.toml'
               - 'lemma-backend/lemma-connectors/uv.lock'
-              - 'agentbox-client/pyproject.toml'
-              - 'agentbox-client/uv.lock'
               - 'lemma-pod-bundle/pyproject.toml'
               - 'lemma-pod-bundle/uv.lock'
               - '.github/workflows/security.yml'
@@ -182,8 +180,6 @@ jobs:
       - name: Export locked third-party dependency graph
         run: >-
           uv export --frozen --no-dev --extra local --no-emit-project
-          --no-emit-package agentbox
-          --no-emit-package agentbox-client
           --no-emit-package lemma-pod-bundle
           --no-emit-package lemma-connectors
           --output-file /tmp/lemma-backend-audit.txt

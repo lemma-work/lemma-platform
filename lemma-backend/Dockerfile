@@ -25,8 +25,8 @@ COPY lemma-pod-bundle /lemma-pod-bundle
 COPY lemma-backend/lemma-connectors ./lemma-connectors
 COPY lemma-skills ./lemma-skills
 
-# Install dependencies into /app/.venv. The local extra ships AgentBox and
-# MarkItDown in the backend image for the managed all-in-one composition.
+# Install dependencies into /app/.venv. The local extra ships MarkItDown in the
+# backend image for the managed all-in-one composition.
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev --no-install-project --extra local
 

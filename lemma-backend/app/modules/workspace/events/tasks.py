@@ -1,6 +1,6 @@
 """Periodic sandbox reclamation.
 
-The AgentBox manager ran this as a maintenance loop inside its own process.
+The sandbox manager ran this as a maintenance loop inside its own process.
 Deleting it left `SandboxSweeper` written, tested and called by nothing, which
 is the worst of both: idle sandboxes would hold compute forever, and a
 container or paid E2B sandbox that outlived its row would never be found again.

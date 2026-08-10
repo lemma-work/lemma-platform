@@ -17,7 +17,7 @@ runtime configuration injection into HTML entrypoints.
 | Middleware | `AppHostRoutingMiddleware` maps app subdomains/hosts to public app routes |
 
 There are no event consumers or worker tasks in this module. Builds performed
-during pod-bundle import use AgentBox from the bundle module.
+during pod-bundle import use the sandbox runtime from the bundle module.
 
 ## Data and storage
 

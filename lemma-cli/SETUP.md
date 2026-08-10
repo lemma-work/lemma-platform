@@ -142,7 +142,7 @@ lemma --server lemma-cloud apps deploy # uses .lemma.lemma-cloud.env
   otherwise a command that needs a pod fails with a clear
   `No pod bound for server '<server>'` hint.
 - **Don't commit tokens.** Auth comes from your stored login (`lemma auth login`);
-  `LEMMA_TOKEN` is an agentbox concept. A real `LEMMA_TOKEN` in the environment makes
+  `LEMMA_TOKEN` is a workspace-sandbox concept. A real `LEMMA_TOKEN` in the environment makes
   the CLI ignore the project files entirely.
 - `lemma config show` reports the resolved server and which files were applied.
 

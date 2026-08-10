@@ -7,7 +7,7 @@ Node.js, PostgreSQL, Redis, or a general-purpose VM manager.
 The signed application is a small online installer. On first local launch it
 downloads the exact host and private-guest runtime for that Desktop version,
 verifies their SHA-256 digests, extracts them into app-owned storage, and then
-starts Lemma. Infrastructure and AgentBox OCI images are also downloaded when
+starts Lemma. Infrastructure and sandbox OCI images are also downloaded when
 first needed, so this release is not an air-gapped installer.
 
 ## Supported systems
@@ -21,7 +21,7 @@ Intel Macs, Windows on Arm, and Desktop Linux are not release targets yet.
 
 Allow at least the expanded runtime size shown during setup plus 4 GiB of
 working headroom. The immutable host and guest runtimes are gated at 2.25 GiB
-combined; user databases, files, images, and AgentBox workspaces grow
+combined; user databases, files, images, and workspace sandboxs grow
 separately.
 
 ## macOS installation
@@ -59,7 +59,7 @@ Setup reports the real stage being performed:
 4. Verify and extract both archives.
 5. Start the private runtime.
 6. Prepare infrastructure images.
-7. Start PostgreSQL and its `lemma` and `agentbox` databases.
+7. Start PostgreSQL and its `lemma` and `lemma_datastore` databases.
 8. Start Redis.
 9. Start SuperTokens.
 10. Run migrations and start the all-in-one backend.
@@ -78,11 +78,11 @@ continues to use the system browser.
 
 The local application consists of:
 
-- one all-in-one Python backend for API, workers, schedules, AgentBox
+- one all-in-one Python backend for API, workers, schedules, the sandbox runtime
   management, surfaces, and document conversion;
 - one Next.js frontend process;
 - one private Linux runtime containing PostgreSQL, Redis, SuperTokens, and
-  isolated AgentBox containers.
+  isolated sandbox containers.
 
 Embedding-model initialization runs in the background and is non-fatal.
 Signup, files, tables, settings, and normal workspace access do not wait for
@@ -203,7 +203,7 @@ Production React apps remain available at
 `<app-name>.apps.lemma.work`; local builds use the corresponding
 `*.apps.lemma.localhost` route.
 
-AgentBox receives the resolved API bridge as
+The sandbox receives the resolved API bridge as
 `http://host.lemma.internal:<backend-port>`. The backend never guesses a
 container runtime and never rewrites localhost automatically.
 
@@ -293,7 +293,7 @@ Important subpaths include:
 
 The active macOS guest root is attached directly from its release directory as
 read-only. Volatile OS state uses tmpfs; PostgreSQL, Redis, SuperTokens,
-containerd, and AgentBox workspaces use the separate data disk. Updates replace
+containerd, and workspace sandboxs use the separate data disk. Updates replace
 the immutable release and preserve data.
 
 Removing the app does not silently remove user data. Quit Lemma, back up
@@ -309,7 +309,7 @@ branch’s compressed, digest-verified host and guest archives.
 
 This is not a public offline installer. It exercises the same first-launch
 installer using trusted application resources, while infrastructure and
-AgentBox OCI images still require network access. CI rejects:
+sandbox OCI images still require network access. CI rejects:
 
 - combined host/guest compressed archives above 750 MiB;
 - the PR application resources above 850 MiB;

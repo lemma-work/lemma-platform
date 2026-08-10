@@ -21,7 +21,7 @@ class _FailingRuntime:
 
     async def get_session(self, **kwargs):
         del kwargs
-        raise RuntimeError("agentbox manager returned 500")
+        raise RuntimeError("sandbox runtime returned 500")
 
 
 class _FakeWorkspaceSession:
@@ -143,7 +143,7 @@ async def test_exec_command_internal_returns_failure_when_session_setup_raises(
     assert result.success is False
     assert result.completed is False
     assert result.exit_code is None
-    assert "agentbox manager returned 500" in (result.error or "")
+    assert "sandbox runtime returned 500" in (result.error or "")
     assert "retry" in (result.error or "").lower()
 
 
@@ -291,7 +291,7 @@ async def test_write_stdin_setup_failure_preserves_process_binding(
 
     async def fail_get_session(**kwargs):
         del kwargs
-        raise RuntimeError("agentbox manager returned 500")
+        raise RuntimeError("sandbox runtime returned 500")
 
     runtime.get_session = fail_get_session  # type: ignore[method-assign]
     monkeypatch.setattr(

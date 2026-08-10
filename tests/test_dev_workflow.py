@@ -39,24 +39,14 @@ class DevWorkflowTests(unittest.TestCase):
                 values[key] = value
         return values
 
-    def test_init_generates_complete_local_config_and_agentbox_override_file(self):
+    def test_init_generates_complete_local_config(self):
         with tempfile.TemporaryDirectory() as raw_tmp:
             tmp = Path(raw_tmp)
             backend = tmp / "backend"
-            agentbox = tmp / "agentbox"
             backend.mkdir()
-            agentbox.mkdir()
-            variables = {
-                "BACKEND_DIR": str(backend),
-                "AGENTBOX_DIR": str(agentbox),
-            }
+            variables = {"BACKEND_DIR": str(backend)}
 
-            self.run_make(
-                tmp,
-                "_init-backend-env",
-                "_init-agentbox-env",
-                variables=variables,
-            )
+            self.run_make(tmp, "_init-backend-env", variables=variables)
 
             backend_env = self.env_values(backend / ".env")
             self.assertEqual(backend_env["ENVIRONMENT"], "local")
@@ -67,12 +57,6 @@ class DevWorkflowTests(unittest.TestCase):
             self.assertEqual(backend_env["AUTH_EMAIL_VERIFICATION_REQUIRED"], "false")
             self.assertEqual(backend_env["API_URL"], "http://localhost:8710")
             self.assertEqual(backend_env["FRONTEND_URL"], "http://localhost:3710")
-
-            agentbox_text = (agentbox / ".env").read_text()
-            self.assertIn("AgentBox local overrides", agentbox_text)
-
-            self.run_make(tmp, "_init-agentbox-env", variables=variables)
-            self.assertEqual((agentbox / ".env").read_text(), agentbox_text)
 
     def test_ensure_backend_env_appends_only_missing_values(self):
         with tempfile.TemporaryDirectory() as raw_tmp:
@@ -94,9 +78,6 @@ class DevWorkflowTests(unittest.TestCase):
             self.assertIn("API_URL=https://custom.example.test", text)
             self.assertEqual(
                 sum(line.startswith("DATASTORE_DATABASE_URL=") for line in lines), 1
-            )
-            self.assertEqual(
-                sum(line.startswith("AGENTBOX_API_KEY=") for line in lines), 1
             )
             self.assertEqual(
                 sum(line.startswith("APP_BASE_DOMAIN=") for line in lines), 1
@@ -149,44 +130,25 @@ class DevWorkflowTests(unittest.TestCase):
                 result.stdout,
             )
 
-    def test_wait_agentbox_reports_stopped_unified_backend(self):
+    def test_backend_provisions_sandboxes_itself_under_workspace_names(self):
+        """The dev stack must hand the backend the names its settings read.
+
+        These are the module's own `WORKSPACE_*`/`FUNCTION_*` names. A writer
+        left on a name the settings no longer declare would not fail here --
+        the field would silently take its default -- so pinning the rendered
+        env is what keeps the two ends of the contract together.
+        """
         with tempfile.TemporaryDirectory() as raw_tmp:
             tmp = Path(raw_tmp)
-            agentbox = tmp / "agentbox"
-            agentbox.mkdir()
+            result = self.run_make(tmp, "-n", "_run-backend")
 
-            result = self.run_make(
-                tmp,
-                "_wait-agentbox",
-                variables={
-                    "AGENTBOX_DIR": str(agentbox),
-                    "DEV_AGENTBOX_PORT": "1",
-                    "AGENTBOX_READY_TIMEOUT": "1",
-                },
-                check=False,
-            )
-
-            self.assertNotEqual(result.returncode, 0)
-            output = result.stdout + result.stderr
-            self.assertIn("Embedded AgentBox did not become ready", output)
-            self.assertIn("unified backend process is not running", output)
-
-    def test_unified_backend_uses_postgres_and_canonical_agentbox_images(self):
-        with tempfile.TemporaryDirectory() as raw_tmp:
-            tmp = Path(raw_tmp)
-            result = self.run_make(
-                tmp,
-                "-n",
-                "_run-backend",
-            )
-
-            self.assertIn(
-                "AGENTBOX_STATE_DATABASE_URL=postgresql+psycopg://",
-                result.stdout,
-            )
-            self.assertIn("AGENTBOX_WORKSPACE_IMAGE=agentbox-workspace:dev", result.stdout)
-            self.assertIn("AGENTBOX_FUNCTION_IMAGE=agentbox-function:dev", result.stdout)
+            self.assertIn("WORKSPACE_PROVIDER=docker", result.stdout)
+            self.assertIn("WORKSPACE_IMAGE=lemma-workspace:dev", result.stdout)
+            self.assertIn("FUNCTION_IMAGE=lemma-function:dev", result.stdout)
             self.assertIn("uv run --extra local uvicorn local_app:app", result.stdout)
+            # There is no separate manager process, and so no database or URL
+            # of its own to reach it on.
+            self.assertNotIn("AGENTBOX", result.stdout)
 
     def test_public_mode_tunnels_only_api_and_keeps_frontend_local(self):
         with tempfile.TemporaryDirectory() as raw_tmp:

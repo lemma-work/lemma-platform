@@ -204,7 +204,7 @@ class FilesystemManager:
                 or self._digest(candidate) != expected_sha256
             ):
                 raise FileConflictError("file content digest does not match")
-        temporary = candidate.with_name(f".{candidate.name}.agentbox-{uuid4().hex}")
+        temporary = candidate.with_name(f".{candidate.name}.lemma-{uuid4().hex}")
         return candidate, temporary, temporary.open("xb")
 
     @staticmethod

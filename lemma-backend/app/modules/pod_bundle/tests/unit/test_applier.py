@@ -56,7 +56,7 @@ def test_read_csv_parses_rows(tmp_path):
 
 
 async def test_app_step_not_dispatched_by_applier(tmp_path):
-    # APP is applied by the self-scoped AppStepRunner (it builds in the agentbox
+    # APP is applied by the self-scoped AppStepRunner (it builds in a sandbox
     # with no pooled connection held), so the apply loop special-cases it and it
     # never reaches the applier dispatch — a direct call raises to make that clear.
     applier = _applier(tmp_path)

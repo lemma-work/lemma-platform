@@ -84,7 +84,6 @@ help:
 	@echo "  make teams-manifest-zip OUTPUT=path"
 	@echo "                         # package Teams manifest zip"
 	@echo "  make docker-build      # build backend image from monorepo root"
-	@echo "  make # build local AgentBox runtime images"
 	@echo "  make benchmark-functions-docker # no-op + single/batch API/JOB benchmark on Docker"
 	@echo "  make benchmark-functions-e2b    # same benchmark on pinned E2B builds"
 	@echo ""
@@ -113,7 +112,7 @@ test-unit:
 	uv run pytest -m "not e2e"
 
 # Default e2e gate: fast + deterministic. The agent LLM is a mocked
-# FunctionModel and workspace tools hit the in-process fake AgentBox, so there
+# FunctionModel and workspace tools hit the in-process fake sandbox, so there
 # is NO real model call and NO Docker workspace. Parallelized via xdist. This is
 # what CI runs (no API keys, no Docker image needed). real_llm/real_sandbox
 # tests auto-skip here.
@@ -121,7 +120,7 @@ test-e2e:
 	uv run pytest $(E2E_PARALLEL) -m e2e -o timeout=120
 
 # Real e2e: real model from env (needs LEMMA_OPENAI_API_KEY) + real Docker
-# AgentBox. Runs the real_llm/real_sandbox tests too. For local/manual/nightly
+# sandbox. Runs the real_llm/real_sandbox tests too. For local/manual/nightly
 # verification of the actual model + sandbox. Serial (Docker workspace shares a
 # global container namespace).
 test-e2e-real:
@@ -142,7 +141,7 @@ test-e2e-shard:
 # Kreuzberg-backed indexing/search e2e (real document extraction). Split out of
 # test-e2e-fast so that job stays fast and never boots the RAM-heavy Kreuzberg
 # container; these are still mocked (Kreuzberg only — no model key, no Docker
-# AgentBox) and run as their own CI job so indexing/authz coverage isn't lost.
+# sandbox) and run as their own CI job so indexing/authz coverage isn't lost.
 test-e2e-indexing:
 	uv run pytest $(E2E_PARALLEL) -m "e2e and indexing and not provider and not local_cli" -o timeout=180
 
@@ -418,11 +417,13 @@ SANDBOX_FUNCTION_PLATFORMS ?= linux/amd64
 SANDBOX_PYTHON_IMAGE ?= python:3.14.6-slim
 SANDBOX_NODE_IMAGE   ?= node:24.18.0-slim
 
-WORKSPACE_IMAGE := $(SANDBOX_REGISTRY)/lemma-agentbox-workspace
-FUNCTION_IMAGE  := $(SANDBOX_REGISTRY)/lemma-agentbox-function
-# Published names keep "agentbox" because they are pinned by digest in
-# lemma-local.json and referenced by already-installed releases. Renaming a
-# published image is a release concern, not a refactor.
+WORKSPACE_IMAGE := $(SANDBOX_REGISTRY)/lemma-workspace
+FUNCTION_IMAGE  := $(SANDBOX_REGISTRY)/lemma-function
+# Renaming a published image is safe here only because lemma-local.json still
+# carries the old `agentbox_workspace`/`agentbox_function` manifest *keys*: an
+# already-installed client looks the image up by key and gets whatever ref it
+# points at. Those keys are what must not move until no released client reads
+# them -- see the note in .github/workflows/release-local-images.yml.
 
 IMAGES_DIR := sandbox-images
 

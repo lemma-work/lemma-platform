@@ -35,7 +35,7 @@ from app.modules.workspace.providers.docker_engine import (
 
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 
-_SOCKET = os.getenv("AGENTBOX_DOCKER_SOCKET_PATH", "/var/run/docker.sock")
+_SOCKET = os.getenv("WORKSPACE_DOCKER_SOCKET_PATH", "/var/run/docker.sock")
 
 
 def _deadline() -> datetime:
@@ -70,7 +70,7 @@ async def provider(engine: DockerEngineClient) -> DockerSandboxProvider:
 async def test_a_real_legacy_volume_is_adopted(
     engine: DockerEngineClient, provider: DockerSandboxProvider
 ) -> None:
-    """Reproduces exactly what AgentBox leaves behind.
+    """Reproduces exactly what the sandbox runtime leaves behind.
 
     The volume name embeds a random storage token while the label carries the
     logical id, and the two are unrelated UUIDs -- which is precisely why the
@@ -164,7 +164,7 @@ async def test_real_label_filters_do_not_leak_across_sandboxes(
 async def test_the_sweep_sees_real_legacy_containers(
     provider: DockerSandboxProvider,
 ) -> None:
-    """Whatever this host is holding, anything labelled by AgentBox must come
+    """Whatever this host is holding, anything labelled by the sandbox runtime must come
     back marked legacy -- otherwise pre-cutover containers leak forever."""
     objects = await provider.list_objects(deadline_at=_deadline())
 

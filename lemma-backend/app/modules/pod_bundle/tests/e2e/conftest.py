@@ -4,7 +4,7 @@ Re-exports the shared e2e fixtures (real ASGI app + real streaq worker
 subprocess + testcontainers) the same way the function module's conftest does.
 The export job runs on the real worker, so the ``worker`` fixture is required;
 the ``workspace`` marker + ``configure_workspace_api_url`` autouse fixture let
-the flow create a real function (its schema extraction runs in the agentbox).
+the flow create a real function (its schema extraction runs in a sandbox).
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ from app.modules.test_support.e2e.runtime import (
     backend_server,
     configure_workspace_api_url,
     function_image,
-    local_agentbox_server,
+    local_sandbox_server,
     workspace_image,
 )
 
@@ -56,10 +56,10 @@ scenario = e2e_fixtures.scenario
 
 @pytest_asyncio.fixture
 async def workspace_api(configure_workspace_api_url):
-    """Point the backend at the local agentbox so function creation works.
+    """Point the backend at a local sandbox so function creation works.
 
     Not autouse: only the function-creating roundtrip test requests it, so the
-    lighter table/agent/expiry tests don't pay for the agentbox image build.
+    lighter table/agent/expiry tests don't pay for the sandbox image build.
     """
 
     yield configure_workspace_api_url
@@ -93,7 +93,7 @@ __all__ = [
     "e2e_settings",
     "fixed_test_org",
     "fixed_test_user",
-    "local_agentbox_server",
+    "local_sandbox_server",
     "function_image",
     "postgres_container",
     "redis_container",

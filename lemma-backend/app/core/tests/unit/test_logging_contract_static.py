@@ -66,7 +66,7 @@ def test_every_runtime_log_call_matches_its_exact_catalog_contract() -> None:
     roots = {
         REPO_ROOT / "lemma-backend" / "app": BACKEND_CATALOG,
         REPO_ROOT / "lemma-backend" / "scripts": BACKEND_CATALOG,
-        # agentbox had its own catalog for the manager's logging. What survives
+        # AgentBox had its own catalog for the manager's logging. What survives
         # of that package -- the two sandbox runtimes, the domain types and the
         # wire contracts -- contains no logging calls at all, so there is no
         # longer a second catalog to hold to its contract.

@@ -20,6 +20,31 @@ from tomlkit import TOMLDocument
 from lemma_stack.config import store
 from lemma_stack.paths import LocalPaths
 
+# What the backend used to call these settings. An installed config.toml can
+# still carry an override under an old name -- in [agentbox.env], or in
+# [backend.env] because `config set` routes any UPPER_SNAKE key there -- and
+# the backend now refuses to start on one rather than silently ignoring it.
+# Translating on the way out keeps that override doing what its author meant.
+# Drop this with the backend's own compatibility check.
+RENAMED_BACKEND_ENV = {
+    "AGENTBOX_WORKSPACE_IMAGE": "WORKSPACE_IMAGE",
+    "AGENTBOX_FUNCTION_IMAGE": "FUNCTION_IMAGE",
+    "AGENTBOX_WORKSPACE_PROFILE_NAME": "WORKSPACE_PROFILE_NAME",
+    "AGENTBOX_WORKSPACE_PROFILE_DIGEST": "WORKSPACE_PROFILE_DIGEST",
+    "AGENTBOX_FUNCTION_PROFILE_NAME": "FUNCTION_PROFILE_NAME",
+    "AGENTBOX_FUNCTION_PROFILE_DIGEST": "FUNCTION_PROFILE_DIGEST",
+    "AGENTBOX_RUNTIME_CREDENTIAL_KEY": "WORKSPACE_RUNTIME_CREDENTIAL_KEY",
+    "AGENTBOX_WORKSPACE_IDLE_SECONDS": "WORKSPACE_IDLE_RELEASE_SECONDS",
+    "AGENTBOX_DOCKER_SOCKET_PATH": "WORKSPACE_DOCKER_SOCKET_PATH",
+    "AGENTBOX_DOCKER_PRIVATE_NETWORK": "WORKSPACE_DOCKER_PRIVATE_NETWORK",
+    "AGENTBOX_DOCKER_ALLOW_MUTABLE_IMAGES": "WORKSPACE_DOCKER_ALLOW_MUTABLE_IMAGES",
+    "AGENTBOX_ADD_HOST_GATEWAY": "WORKSPACE_ADD_HOST_GATEWAY",
+    "AGENTBOX_HOST_ALIAS": "WORKSPACE_HOST_ALIAS",
+    "AGENTBOX_LOCAL_RUNTIME_CLI": "WORKSPACE_LOCAL_RUNTIME_CLI",
+    "AGENTBOX_LOCAL_CALLBACK_REQUIRED": "WORKSPACE_LOCAL_CALLBACK_REQUIRED",
+    "AGENTBOX_LOCAL_CALLBACK_URL": "WORKSPACE_LOCAL_CALLBACK_URL",
+}
+
 NETWORK_NAME = "lemma-local-net"
 CONTAINER_PREFIX = "lemma-local"
 POSTGRES_VOLUME = "lemma-local-postgres-data"
@@ -46,12 +71,32 @@ LOCAL_WORKSPACES_DOMAIN = f"workspaces.{LOCAL_ROOT_DOMAIN}"
 # Allow every Lemma-local host depth, on any published port.
 LOCAL_CORS_ORIGIN_REGEX = r"^https?://([a-z0-9-]+\.)*lemma\.localhost(:\d+)?$"
 
-# Container-side mount points under /app/.local (match the backend/agentbox
-# image defaults so app config keeps working).
+# Container-side mount points under /app/.local (match the backend image
+# defaults so app config keeps working).
 STATE_MOUNT = "/app/.local/lemma"
 WORKSPACES_MOUNT = "/app/.local/workspaces"
 OBJECT_STORAGE_MOUNT = "/app/.local/object-storage"
 FILES_MOUNT = "/app/.local/files"
+
+
+def _user_backend_overrides(doc: TOMLDocument) -> dict[str, str]:
+    """User-authored backend settings, under the names the backend reads now.
+
+    [agentbox.env] predates the backend absorbing sandbox provisioning; it was
+    never a separate namespace -- both sections land in the one backend
+    environment -- so it is still read, with [backend.env] last.
+
+    An override that names a setting the backend has since renamed is applied
+    under the new name. Passing it through verbatim would hand the backend a
+    name it refuses to start on, turning someone's old override into a stack
+    that will not boot. An explicit new-name override always wins.
+    """
+
+    merged: dict[str, str] = {}
+    for section in ("agentbox", "backend"):
+        for key, value in store.env_overrides(doc, section).items():
+            merged[RENAMED_BACKEND_ENV.get(key, key)] = value
+    return merged
 
 
 def frontend_origin(doc: TOMLDocument) -> str:
@@ -67,18 +112,19 @@ def app_base_domain(doc: TOMLDocument) -> str:
     return f"{LOCAL_APPS_DOMAIN}:{store.port(doc, 'backend')}"
 
 
-def _agentbox_runtime_key(doc: TOMLDocument) -> str:
+def _runtime_credential_key(doc: TOMLDocument) -> str:
     """Derive a stable local-only runtime credential key.
 
-    The stored ``agentbox_api_key`` is now only seed material -- there is no
-    manager left to authenticate to. It keeps its name because renaming it
-    would change this derivation, and with it the credential every already
-    installed local stack has handed to its running sandboxes.
+    The installation secret is only seed material here -- there is no manager
+    left to authenticate to. The domain string changed with the sandbox image
+    contract, which rotates this credential once; that is safe because the
+    same release bumps the profile digest, so every sandbox is recreated and
+    reads the new token at startup rather than holding the old one.
     """
 
     digest = hmac.digest(
-        store.agentbox_api_key(doc).encode("utf-8"),
-        b"lemma-agentbox-runtime-credential-v1",
+        store.installation_secret(doc).encode("utf-8"),
+        b"lemma-workspace-runtime-credential-v1",
         "sha256",
     )
     return base64.urlsafe_b64encode(digest).decode("ascii")
@@ -112,18 +158,16 @@ def backend_env(
         "DOCUMENT_PROCESSOR": "markitdown",
         # Sandboxes are provisioned by the backend itself.
         "WORKSPACE_PROVIDER": adapter_provider,
-        "WORKSPACE_RUNTIME_CREDENTIAL_KEY": _agentbox_runtime_key(doc),
-        "AGENTBOX_WORKSPACE_IMAGE": workspace_image,
-        "AGENTBOX_FUNCTION_IMAGE": function_image,
-        "AGENTBOX_DOCKER_SOCKET_PATH": container_socket,
-        "AGENTBOX_DOCKER_SCOPE": f"{provider}:local",
-        "AGENTBOX_DOCKER_ALLOW_MUTABLE_IMAGES": "false",
-        "AGENTBOX_DOCKER_PRIVATE_NETWORK": (
+        "WORKSPACE_RUNTIME_CREDENTIAL_KEY": _runtime_credential_key(doc),
+        "WORKSPACE_IMAGE": workspace_image,
+        "FUNCTION_IMAGE": function_image,
+        "WORKSPACE_DOCKER_SOCKET_PATH": container_socket,
+        "WORKSPACE_DOCKER_ALLOW_MUTABLE_IMAGES": "false",
+        "WORKSPACE_DOCKER_PRIVATE_NETWORK": (
             "" if provider == "lemma_local" else NETWORK_NAME
         ),
-        "AGENTBOX_ADD_HOST_GATEWAY": "false",
-        "AGENTBOX_HOST_ALIAS": "host.lemma.internal",
-        "AGENTBOX_LOCAL_RUNTIME_TIMEOUT_SECONDS": "600",
+        "WORKSPACE_ADD_HOST_GATEWAY": "false",
+        "WORKSPACE_HOST_ALIAS": "host.lemma.internal",
         # sandboxes share the network; no host.docker.internal rewrite
         "WORKSPACE_CALLBACK_API_URL": "http://backend:8000",
         "WORKSPACE_CALLBACK_AUTH_URL": "http://frontend:8080/auth",
@@ -170,8 +214,7 @@ def backend_env(
         "ENABLE_TELEGRAM_POLLING_MODE": "true",
         "ENABLE_SLACK_SOCKET_MODE": "true",
     }
-    env.update(store.env_overrides(doc, "agentbox"))
-    env.update(store.env_overrides(doc, "backend"))
+    env.update(_user_backend_overrides(doc))
     return env
 
 
@@ -224,8 +267,8 @@ def host_backend_env(
             ),
             "REDIS_URL": redis_url,
             "SUPERTOKENS_CORE_URL": (f"http://127.0.0.1:{store.port(doc, 'supertokens')}"),
-            "AGENTBOX_DOCKER_PRIVATE_NETWORK": "",
-            "AGENTBOX_ADD_HOST_GATEWAY": "true",
+            "WORKSPACE_DOCKER_PRIVATE_NETWORK": "",
+            "WORKSPACE_ADD_HOST_GATEWAY": "true",
             "WORKSPACE_CALLBACK_API_URL": (f"http://host.lemma.internal:{backend_port}"),
             "WORKSPACE_CALLBACK_AUTH_URL": (f"http://host.lemma.internal:{frontend_port}/auth"),
             "WORKSPACE_CALLBACK_FRONTEND_URL": (f"http://host.lemma.internal:{frontend_port}"),
@@ -242,18 +285,16 @@ def host_backend_env(
     if provider == "lemma_local":
         env.update(
             {
-                "AGENTBOX_LOCAL_RUNTIME_CLI": managed_runtime_cli,
-                "AGENTBOX_LOCAL_SCOPE": "lemma-local:managed",
-                "AGENTBOX_ADD_HOST_GATEWAY": "false",
-                "AGENTBOX_LOCAL_CALLBACK_REQUIRED": "true",
-                "AGENTBOX_LOCAL_CALLBACK_URL": (
+                "WORKSPACE_LOCAL_RUNTIME_CLI": managed_runtime_cli,
+                "WORKSPACE_ADD_HOST_GATEWAY": "false",
+                "WORKSPACE_LOCAL_CALLBACK_REQUIRED": "true",
+                "WORKSPACE_LOCAL_CALLBACK_URL": (
                     f"http://host.lemma.internal:{backend_port}"
                 ),
             }
         )
     # User settings retain normal last-wins semantics.
-    env.update(store.env_overrides(doc, "agentbox"))
-    env.update(store.env_overrides(doc, "backend"))
+    env.update(_user_backend_overrides(doc))
     return env
 
 

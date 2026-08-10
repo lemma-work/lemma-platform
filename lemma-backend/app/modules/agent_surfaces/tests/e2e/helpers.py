@@ -476,7 +476,7 @@ async def _seed_pod_file(
     """Write a real pod file via the datastore file service and return its path.
 
     Used to give ``display_resource(type=FILE, path=...)`` a real file to
-    reference — no AgentBox/sandbox involvement, matching how the real tool
+    reference — no sandbox involvement, matching how the real tool
     resolves a path.
     """
     from app.core.authorization.current import (

@@ -5,8 +5,8 @@
  * latency of every API plus the full agent message round-trip. Everything runs
  * against mocks so no external service is needed:
  *   - LLM: deterministic in-process FunctionModel (E2E_LLM_MODE=mock).
- *   - Sandbox/AgentBox: the in-process fake AgentBox service (E2E_SANDBOX_MODE=
- *     Docker, AGENTBOX_API_URL -> agentbox) — so function create + execute run
+ *   - Sandbox/the sandbox runtime: the in-process fake sandbox service (E2E_SANDBOX_MODE=
+ *     Docker, provisioned in-process) — so function create + execute run
  *     without a real Docker sandbox (functions echo their input).
  *
  * Per VU:
@@ -15,7 +15,7 @@
  *   - every iteration exercises:
  *       * agent message (SSE round-trip: api->DB->redis->worker->mock->SSE)
  *       * file CRUD: create -> update(content) -> download -> delete
- *       * function execute (API/sync, against the fake AgentBox)
+ *       * function execute (API/sync, against the fake sandbox)
  *       * app asset load (serve the uploaded dist bundle)
  *
  * Run (see `make load-test-journey`):
@@ -58,7 +58,7 @@ const MOCK_LLM_SCRIPT = [
   { text: "All set — your todos are updated." },
 ];
 
-// API (synchronous) function. The fake AgentBox cans schema extraction and echoes
+// API (synchronous) function. The fake sandbox cans schema extraction and echoes
 // input on execute, so the run completes without real code execution; the headers
 // + models match the real format so create's schema-extraction script is built.
 function functionCode(name) {
@@ -392,7 +392,7 @@ export function journeyVU() {
   fileSuccess.add(fileOk);
   if (!fileOk) journeyErrors.add(1);
 
-  // 3. Function execute (API/sync) — against the fake AgentBox. The run executes
+  // 3. Function execute (API/sync) — against the fake sandbox. The run executes
   // inline and the response carries the terminal status.
   if (vuState.functionName) {
     const fx = http.post(

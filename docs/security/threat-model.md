@@ -16,7 +16,7 @@ integrity of asynchronous work.
 | Redis Streams and job queue | Duplicate, delayed, abandoned, or legacy messages | At-least-once delivery, deterministic IDs, 60-second reclaim, bounded retries, durable terminal outcome |
 | Object storage and archives | Traversal, bombs, polyglots, partial uploads | Streaming limits, metadata inspection, type verification, cleanup |
 | Provider and model APIs | Errors containing secrets, timeouts, hostile payloads | Server-side credentials, allowlisted error fields, retry classification, time/cost budgets |
-| AgentBox/workspaces | User code and delegated tokens | Isolation, least privilege, encrypted session-bound cache, short expiry, cleanup |
+| Sandboxes and workspaces | User code and delegated tokens | Isolation, least privilege, encrypted session-bound cache, short expiry, cleanup |
 | Generated SDK/browser bundles | Breaking or stale contracts | Committed OpenAPI source, reproducible generation, drift checks, semver-major releases |
 
 ## Primary threats and mitigations

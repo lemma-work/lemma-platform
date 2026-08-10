@@ -49,6 +49,12 @@ LABEL_MANAGED_BY = "managed-by"
 LABEL_SANDBOX_ID = "lemma-sandbox-id"
 LABEL_SANDBOX_KIND = "lemma-sandbox-kind"
 LABEL_EPOCH = "lemma-epoch"
+LABEL_PROFILE_NAME = "profile-name"
+# Which build of the profile a sandbox was made from. Reuse is fenced on this:
+# a sandbox is only adopted when it already runs the profile we would create it
+# with, so releasing a new image actually reaches existing workspaces instead of
+# leaving them on the old one for as long as they live.
+LABEL_PROFILE_DIGEST = "profile-digest"
 # What AgentBox stamped on the same objects. Read-only compatibility.
 LEGACY_MANAGED_BY = "agentbox"
 LEGACY_LOGICAL_ID = "logical-id"
@@ -109,6 +115,10 @@ class ProviderInstance:
     # adoption inside create. False means a fresh sandbox was made, and
     # therefore that whatever files existed before are gone.
     storage_adopted: bool | None = None
+    # The profile digest recorded on the object when it was created, or None
+    # for one made before the fence existed. Compared against the configured
+    # digest to decide whether this instance may be reused.
+    profile_digest: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

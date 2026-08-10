@@ -37,8 +37,8 @@ The repository does not use submodules. Backend code depends on sibling packages
 | `../lemma-typescript/` | TypeScript SDK used by apps |
 | `../lemma-skills/` | Built-in agent skills loaded by the backend and workspace containers |
 | `lemma-connectors/` | Backend-local editable Python connector package |
-| `sandbox_runtime/` | The runtime inside sandbox images, and its protocol (Apache-2.0) |
-| `sandbox-images/` | Dockerfiles and templates for the sandbox images (Apache-2.0) |
+| `sandbox_runtime/` | The runtime inside sandbox images, and its protocol |
+| `sandbox-images/` | Dockerfiles and templates for the sandbox images |
 
 ## Development
 
@@ -49,11 +49,11 @@ make init                       # (repo root) generate .env files with local dev
 cd lemma-backend && uv sync     # install deps into .venv (uses uv.lock)
 ```
 
-`make init` writes the backend `.env` (DB/Redis/SuperTokens URLs, encryption keys, AgentBox URL). Re-run it any time to backfill missing keys.
+`make init` writes the backend `.env` (DB/Redis/SuperTokens URLs, encryption keys, sandbox settings). Re-run it any time to backfill missing keys.
 
 ### Run the full stack (recommended)
 
-From the **repo root** — infra in Docker + backend + frontend + AgentBox as hot-reload host processes:
+From the **repo root** — infra in Docker + backend + frontend + the sandbox runtime as hot-reload host processes:
 
 ```bash
 make dev                # start everything
@@ -110,7 +110,7 @@ make test                       # unit + e2e
 
 ### e2e — mocked (default gate)
 
-Container-backed but with **no external services**: the agent LLM is an in-process pydantic-ai `FunctionModel` (scriptable per conversation), and workspace tools + functions hit an in-process **fake AgentBox** — so **no model API key and no Docker workspace image** are needed. Postgres/Redis/SuperTokens/Kreuzberg are provided per worker by testcontainers.
+Container-backed but with **no external services**: the agent LLM is an in-process pydantic-ai `FunctionModel` (scriptable per conversation), and workspace tools + functions hit an in-process **fake sandbox** — so **no model API key and no Docker workspace image** are needed. Postgres/Redis/SuperTokens/Kreuzberg are provided per worker by testcontainers.
 
 ```bash
 make test-e2e         # all mocked e2e (parallel via pytest-xdist)
@@ -130,10 +130,10 @@ make test-e2e-fast E2E_WORKERS=1      # serial — most reliable (no inter-worke
 
 ### e2e — real (manual / nightly)
 
-Uses the **real model** (`LEMMA_OPENAI_API_KEY`) + the **real Docker AgentBox**, and runs the `real_llm` / `real_sandbox` tests. Serial.
+Uses the **real model** (`LEMMA_OPENAI_API_KEY`) + the **real Docker sandbox**, and runs the `real_llm` / `real_sandbox` tests. Serial.
 
 ```bash
-make test-e2e-real      # all e2e against the real model + Docker AgentBox
+make test-e2e-real      # all e2e against the real model + Docker sandbox
 make test-e2e-runtime   # only the slow/worker/workspace/provider/local_cli subset
 ```
 
@@ -143,7 +143,7 @@ Markers: `e2e`, `slow`, `worker` (needs the real streaq worker), `workspace` (ne
 
 ### Pre-merge e2e gate (CI)
 
-e2e is **not** run on every commit (it's expensive). It runs as a separate, opt-in gate (`.github/workflows/e2e.yml`): add the **`run-e2e`** label to a PR, or trigger *Actions → "Backend E2E" → Run workflow*. It is a real end-to-end run (Postgres/Redis/SuperTokens/workers/fake providers); only the LLM and the AgentBox sandbox are stubbed. Per-commit CI (`ci.yml`) runs unit + build/lint/SDK checks only.
+e2e is **not** run on every commit (it's expensive). It runs as a separate, opt-in gate (`.github/workflows/e2e.yml`): add the **`run-e2e`** label to a PR, or trigger *Actions → "Backend E2E" → Run workflow*. It is a real end-to-end run (Postgres/Redis/SuperTokens/workers/fake providers); only the LLM and the sandbox are stubbed. Per-commit CI (`ci.yml`) runs unit + build/lint/SDK checks only.
 
 ## Coverage
 
@@ -162,7 +162,7 @@ make lint     # ruff check .
 
 ## Load testing
 
-A prod-shaped stack (1-CPU/2-GB API + worker as separate containers) plus k6 journeys that exercise the full surface — chat, file CRUD, function execute, app load — at 100 concurrent users using the mock LLM + fake AgentBox.
+A prod-shaped stack (1-CPU/2-GB API + worker as separate containers) plus k6 journeys that exercise the full surface — chat, file CRUD, function execute, app load — at 100 concurrent users using the mock LLM + fake sandbox.
 
 ```bash
 make load-test-build && make load-test-up && make load-test-migrate

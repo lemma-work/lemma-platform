@@ -134,7 +134,7 @@ def _source_bindings(root: Path) -> _Bindings:
         browser_sdk=root / "lemma-typescript/public/lemma-client.js",
         browser_ui=root / "lemma-typescript/public/lemma-ui.js",
         skills=root / "lemma-skills",
-        # The backend depends on AgentBox, so its interpreter can run AgentBox's
+        # The backend depends on the sandbox runtime, so its interpreter can run the sandbox runtime's
         # migrations; only the working directory and config name differ.
         secret_key_provider="static",
     )
@@ -177,8 +177,8 @@ def build_manifest(
         config,
         paths,
         provider=selected_provider,
-        workspace_image=release.image("agentbox_workspace").pull_ref,
-        function_image=release.image("agentbox_function").pull_ref,
+        workspace_image=release.image("workspace").pull_ref,
+        function_image=release.image("function").pull_ref,
     )
     browser_sdk = bindings.browser_sdk
     browser_ui = bindings.browser_ui

@@ -19,8 +19,6 @@ def test_dependabot_is_monthly_grouped_and_uv_native() -> None:
     assert "interval: weekly" not in config
     assert config.count("applies-to: security-updates") == 4
     for directory in (
-        "/agentbox",
-        "/agentbox-client",
         "/lemma-backend/lemma-connectors",
         "/lemma-cli",
         "/lemma-pod-bundle",

@@ -3,7 +3,7 @@ name: Backend E2E
 # The fast backend end-to-end suite. This is a REAL e2e run — Postgres, Redis,
 # SuperTokens, the streaq workers, and the fake provider servers all run for real
 # (from testcontainers on the runner). Only the two nondeterministic/expensive
-# externals are stubbed: the LLM (a deterministic FunctionModel) and the AgentBox
+# externals are stubbed: the LLM (a deterministic FunctionModel) and the sandbox
 # workspace (an in-process fake) — so it needs NO model API keys and NO Docker
 # workspace image. Slow, Docker-workspace, live-provider, local-CLI, and
 # real-indexing tests live in "Backend protected E2E" instead.

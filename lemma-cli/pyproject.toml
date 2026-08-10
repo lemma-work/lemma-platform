@@ -121,7 +121,7 @@ addopts = "-ra --import-mode=importlib --strict-markers"
 # Resolve lemma-sdk from the sibling checkout without requiring it to be
 # published. Non-editable on purpose: editable installs add a per-import finder
 # hook and skip bytecode precompilation, which makes `lemma` startup multiple
-# seconds slower in the agentbox runtime. For live SDK editing during dev,
+# seconds slower in the sandbox runtime. For live SDK editing during dev,
 # install it editable explicitly: `uv pip install -e ../lemma-python`.
 #
 # This only affects local uv resolution — the published wheel pins lemma-sdk

@@ -30,9 +30,14 @@ def meta_epoch(namespace: str) -> str:
     return f"{namespace}-epoch"
 
 
+def meta_profile_digest(namespace: str) -> str:
+    return f"{namespace}-profile-digest"
+
+
 META_SANDBOX_ID = meta_sandbox_id(DEFAULT_METADATA_NAMESPACE)
 META_SANDBOX_KIND = meta_sandbox_kind(DEFAULT_METADATA_NAMESPACE)
 META_EPOCH = meta_epoch(DEFAULT_METADATA_NAMESPACE)
+META_PROFILE_DIGEST = meta_profile_digest(DEFAULT_METADATA_NAMESPACE)
 
 # What AgentBox stamped on the same sandboxes. Read-only: matched so existing
 # production workspaces are adopted, never written.

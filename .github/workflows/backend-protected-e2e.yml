@@ -24,8 +24,6 @@ jobs:
           enable-cache: true
       - name: Sync protected dependencies
         run: uv sync --extra markitdown
-      - name: Sync AgentBox service dependencies
-        run: uv sync --directory ../agentbox --locked
       - name: Run protected suite
         run: >-
           uv run pytest

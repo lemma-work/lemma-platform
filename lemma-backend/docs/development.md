@@ -28,7 +28,7 @@ How to comply, by situation:
 - **Multi-phase executors**: take a `uow_factory` and open a fresh short UoW
   per DB step (status update, terminal write). Canonical:
   `function_dispatcher.py` and `function_runtime_gateway.py` — neither holds a
-  connection across AgentBox, object-storage, identity, or wait operations.
+  connection across the sandbox runtime, object-storage, identity, or wait operations.
 - **Agent tools**: one short UoW per tool call, committed on clean exit.
   Canonical: `pod_data_access.py::pod_services`.
 - **Message-bus handlers**: `uow_factory` per message, never a held session.

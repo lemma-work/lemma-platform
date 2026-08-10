@@ -458,7 +458,7 @@ def host_manifest(
     paths.ensure()
     config = store.load_or_create(paths)
     # A checkout has no release.json of its own: its app code is local but the
-    # infrastructure and AgentBox images it runs against are still the pinned
+    # infrastructure and sandbox images it runs against are still the pinned
     # ones, so the release manifest comes from --release-manifest or the pin.
     bundled_manifest = pack_root / "release.json" if pack_root is not None else None
     if manifest_path is not None or (

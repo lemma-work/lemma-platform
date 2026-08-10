@@ -218,14 +218,17 @@ class Supervisor:
             self._finish_ready(config)
 
     def _resolve_provider(self, config) -> str:
-        """Honor an explicit AGENTBOX_PROVIDER from the desktop, else config,
-        else auto-detect (podman preferred). Persist the resolution.
+        """Honor an explicit LEMMA_CONTAINER_RUNTIME from the desktop, else
+        config, else auto-detect (podman preferred). Persist the resolution.
 
         Always goes through select_runtime so a provider that is requested or
         persisted but not actually installed gets installed (podman) or fails
         with an actionable error (docker) instead of "CLI not found on PATH".
+
+        This supervisor is bundled with the locald that launches it, so the
+        two always agree on the name and no compatibility spelling is read.
         """
-        requested = (os.environ.get("AGENTBOX_PROVIDER") or "").strip().lower()
+        requested = (os.environ.get("LEMMA_CONTAINER_RUNTIME") or "").strip().lower()
         if requested not in ("docker", "podman"):
             # store.provider() defaults to podman; only trust it if the user
             # actually made a choice at some point.

@@ -1,5 +1,5 @@
 # Build-context excludes for all images built from the repo root
-# (lemma-backend, lemma-frontend, agentbox-runtime). Keeps host-only artifacts
+# (lemma-backend, lemma-frontend, the sandbox images). Keeps host-only artifacts
 # out of the image — critically a host .venv, whose interpreter symlinks/shebangs
 # point at the build machine and break `alembic`/`python` inside the container.
 

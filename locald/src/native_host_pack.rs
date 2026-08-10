@@ -39,10 +39,18 @@ pub(crate) struct ManagedManifestMaterial {
     pub bridge_executable: PathBuf,
 }
 
+/// The per-installation seed every derived local key hangs off.
+///
+/// The alias is load-bearing: this file already exists on installed machines
+/// under the old field name, `deny_unknown_fields` would reject it, and the
+/// value cannot simply be regenerated -- it also derives the key that
+/// encrypts stored secrets, so a fresh one would leave every encrypted row in
+/// that installation unreadable.
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct HostSecrets {
-    agentbox_api_key: String,
+    #[serde(alias = "agentbox_api_key")]
+    installation_secret: String,
 }
 
 /// Where the code a manifest points at actually lives.
@@ -101,7 +109,7 @@ fn source_layout() -> io::Result<Option<SourceLayout>> {
         .ok_or_else(|| {
             invalid(
                 "LEMMA_LOCALD_SOURCE_ROOT needs LEMMA_LOCALD_SOURCE_RELEASE_MANIFEST: a \
-                 checkout has no release.json, but its infrastructure and AgentBox images \
+                 checkout has no release.json, but its infrastructure and sandbox images \
                  are still pinned ones",
             )
         })?;
@@ -184,8 +192,8 @@ fn source_bindings(root: &Path) -> io::Result<Bindings> {
 fn source_bindings_with(root: &Path, uv: &Path, node: &Path) -> io::Result<Bindings> {
     let backend_dir = required_dir(root, "the backend project", "lemma-backend")?;
     let frontend_dir = required_dir(root, "the frontend project", "lemma-frontend")?;
-    // The backend depends on AgentBox, so its interpreter can run AgentBox's
-    // migrations; only the working directory and config name differ.
+    // The backend owns sandbox provisioning, so one interpreter runs every
+    // migration; only the working directory and config name differ.
     let launcher = required_file(
         root,
         "frontend launcher",
@@ -229,7 +237,7 @@ fn build(
     validate_hex_secret("Redis password", &material.redis_password)?;
 
     // A checkout carries no release.json or pack.json of its own: its app code
-    // is local, but the infrastructure and AgentBox images it runs against are
+    // is local, but the infrastructure and sandbox images it runs against are
     // still the pinned ones, borrowed from an installed release.
     let (bindings, release_path) = match source {
         Some(layout) => {
@@ -273,20 +281,25 @@ fn build(
             ));
         }
     }
+    // Manifests published before the rename carry only the agentbox_* keys.
     let workspace_image = pull_ref(
-        release.pointer("/images/agentbox_workspace"),
-        "AgentBox workspace image",
+        release
+            .pointer("/images/workspace")
+            .or_else(|| release.pointer("/images/agentbox_workspace")),
+        "workspace sandbox image",
     )?;
     let function_image = pull_ref(
-        release.pointer("/images/agentbox_function"),
-        "AgentBox function image",
+        release
+            .pointer("/images/function")
+            .or_else(|| release.pointer("/images/agentbox_function")),
+        "function sandbox image",
     )?;
     let postgres_image = pull_ref(release.pointer("/infra/postgres"), "Postgres image")?;
     let redis_image = pull_ref(release.pointer("/infra/redis"), "Redis image")?;
     let supertokens_image = pull_ref(release.pointer("/infra/supertokens"), "SuperTokens image")?;
     for (label, image) in [
-        ("AgentBox workspace", &workspace_image),
-        ("AgentBox function", &function_image),
+        ("workspace sandbox", &workspace_image),
+        ("function sandbox", &function_image),
         ("Postgres", &postgres_image),
         ("Redis", &redis_image),
         ("SuperTokens", &supertokens_image),
@@ -334,15 +347,15 @@ fn build(
     // `Bindings::secret_key_provider`.
     let secret_encryption_key = URL_SAFE.encode(Sha256::digest(
         [
-            secrets.agentbox_api_key.as_bytes(),
+            secrets.installation_secret.as_bytes(),
             b"lemma-secret-encryption-v1",
         ]
         .concat(),
     ));
     let runtime_key = URL_SAFE.encode(Sha256::digest(
         [
-            secrets.agentbox_api_key.as_bytes(),
-            b"lemma-agentbox-runtime-credential-v1",
+            secrets.installation_secret.as_bytes(),
+            b"lemma-workspace-runtime-credential-v1",
         ]
         .concat(),
     ));
@@ -408,23 +421,17 @@ fn build(
         // there is no manager URL, key or database of its own here.
         ("WORKSPACE_PROVIDER", "lemma_local".to_owned()),
         ("WORKSPACE_RUNTIME_CREDENTIAL_KEY", runtime_key),
-        ("AGENTBOX_WORKSPACE_IMAGE", workspace_image),
-        ("AGENTBOX_FUNCTION_IMAGE", function_image),
-        ("AGENTBOX_ADD_HOST_GATEWAY", "false".to_owned()),
-        ("AGENTBOX_HOST_ALIAS", "host.lemma.internal".to_owned()),
-        ("AGENTBOX_LOCAL_SCOPE", "lemma-local:managed".to_owned()),
-        ("AGENTBOX_LOCAL_WORKSPACE_MEMORY", "2g".to_owned()),
-        ("AGENTBOX_LOCAL_WORKSPACE_CPUS", "2".to_owned()),
-        ("AGENTBOX_LOCAL_FUNCTION_MEMORY", "2g".to_owned()),
-        ("AGENTBOX_LOCAL_FUNCTION_CPUS", "4".to_owned()),
-        ("AGENTBOX_LOCAL_CALLBACK_REQUIRED", "true".to_owned()),
+        ("WORKSPACE_IMAGE", workspace_image),
+        ("FUNCTION_IMAGE", function_image),
+        ("WORKSPACE_ADD_HOST_GATEWAY", "false".to_owned()),
+        ("WORKSPACE_HOST_ALIAS", "host.lemma.internal".to_owned()),
+        ("WORKSPACE_LOCAL_CALLBACK_REQUIRED", "true".to_owned()),
         (
-            "AGENTBOX_LOCAL_CALLBACK_URL",
+            "WORKSPACE_LOCAL_CALLBACK_URL",
             format!("http://host.lemma.internal:{backend_port}"),
         ),
-        ("AGENTBOX_LOCAL_RUNTIME_TIMEOUT_SECONDS", "600".to_owned()),
         (
-            "AGENTBOX_LOCAL_RUNTIME_CLI",
+            "WORKSPACE_LOCAL_RUNTIME_CLI",
             path_text(&material.bridge_executable)?,
         ),
         (
@@ -701,14 +708,14 @@ fn load_or_create_host_secrets(path: &Path) -> io::Result<HostSecrets> {
     if path.is_file() {
         ensure_private_file(path)?;
         let secrets: HostSecrets = serde_json::from_slice(&fs::read(path)?)?;
-        validate_hex_secret("AgentBox API key", &secrets.agentbox_api_key)?;
+        validate_hex_secret("installation secret", &secrets.installation_secret)?;
         return Ok(secrets);
     }
     let mut bytes = [0_u8; 32];
     getrandom::fill(&mut bytes)
         .map_err(|error| io::Error::other(format!("secure randomness failed: {error}")))?;
     let secrets = HostSecrets {
-        agentbox_api_key: bytes.iter().map(|byte| format!("{byte:02x}")).collect(),
+        installation_secret: bytes.iter().map(|byte| format!("{byte:02x}")).collect(),
     };
     write_private_atomic(path, &serde_json::to_vec(&secrets)?)?;
     Ok(secrets)
@@ -863,7 +870,7 @@ mod tests {
 
         assert_eq!(manifest["release"], "6.2.0");
         assert_eq!(manifest["services"].as_array().unwrap().len(), 2);
-        // One migration chain: AgentBox's own database is gone.
+        // One migration chain: the manager's own database is gone.
         assert_eq!(manifest["setup"].as_array().unwrap().len(), 1);
         assert_eq!(manifest["setup"][0]["id"], "migrations");
         assert_eq!(
@@ -950,31 +957,15 @@ mod tests {
             format!("http://app.lemma.localhost:{backend_port}")
         );
         assert_eq!(
-            manifest["services"][0]["env"]["AGENTBOX_LOCAL_WORKSPACE_MEMORY"],
-            "2g"
-        );
-        assert_eq!(
-            manifest["services"][0]["env"]["AGENTBOX_LOCAL_WORKSPACE_CPUS"],
-            "2"
-        );
-        assert_eq!(
-            manifest["services"][0]["env"]["AGENTBOX_LOCAL_FUNCTION_CPUS"],
-            "4"
-        );
-        assert_eq!(
-            manifest["services"][0]["env"]["AGENTBOX_LOCAL_RUNTIME_TIMEOUT_SECONDS"],
-            "600"
-        );
-        assert_eq!(
-            manifest["services"][0]["env"]["AGENTBOX_LOCAL_CALLBACK_URL"],
+            manifest["services"][0]["env"]["WORKSPACE_LOCAL_CALLBACK_URL"],
             format!("http://host.lemma.internal:{backend_port}")
         );
         assert_eq!(
-            manifest["services"][0]["env"]["AGENTBOX_WORKSPACE_IMAGE"],
+            manifest["services"][0]["env"]["WORKSPACE_IMAGE"],
             "workspace@sha256:workspace"
         );
         assert_eq!(
-            manifest["services"][0]["env"]["AGENTBOX_FUNCTION_IMAGE"],
+            manifest["services"][0]["env"]["FUNCTION_IMAGE"],
             "function@sha256:function"
         );
         assert_eq!(
@@ -1040,7 +1031,7 @@ mod tests {
         // quietly — it puts up "a keychain cannot be found to store
         // secret-encryption-keyset" and the whole run stalls behind a dialog.
         let root = tempfile::tempdir().unwrap();
-        for directory in ["lemma-backend", "lemma-frontend", "agentbox"] {
+        for directory in ["lemma-backend", "lemma-frontend"] {
             fs::create_dir_all(root.path().join(directory)).unwrap();
         }
         fs::create_dir_all(root.path().join("desktop/runtime")).unwrap();
