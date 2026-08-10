@@ -164,6 +164,32 @@ class DockerSandboxProvider(DockerOpsMixin):
         env.extend(f"{name}={value}" for name, value in sorted(spec.env.items()))
         return env
 
+    async def _reusable(
+        self, spec: ProviderCreateSpec, profile: SandboxProfile
+    ) -> ProviderInstance | None:
+        """The container this name already has, if it is still the right one.
+
+        Two questions at once, because the answer to both is "use this or make
+        a new one". *Is there one* is idempotence: the name is derived, so a
+        retry after a lost response has to find the container rather than
+        create a second. *Is it current* is the fence: a container keeps the
+        image it was born with for as long as it lives, so reusing one built
+        from an older profile would mean a fix shipped in the sandbox image
+        never reaching anyone who already had a workspace.
+
+        A stale one is destroyed here rather than left for the sweep, so the
+        caller's create finds the name free. Its volume is a separate object
+        and is adopted afterwards, so the user's files survive.
+        """
+
+        existing = await self.inspect(spec.name, deadline_at=spec.deadline_at)
+        if existing is None:
+            return None
+        if existing.profile_digest == (spec.profile_digest or profile.digest):
+            return existing
+        await self.destroy(spec.name, deadline_at=spec.deadline_at)
+        return None
+
     async def create(self, spec: ProviderCreateSpec) -> ProviderInstance:
         profile = profile_for(spec.kind)
         image = spec.image or profile.image
@@ -172,19 +198,9 @@ class DockerSandboxProvider(DockerOpsMixin):
                 "Docker profile image must be pinned by sha256 digest"
             )
 
-        # Idempotence: the name is derived, so a retry after a lost response
-        # finds the container rather than creating a second one.
-        expected_digest = spec.profile_digest or profile.digest
-        existing = await self.inspect(spec.name, deadline_at=spec.deadline_at)
+        existing = await self._reusable(spec, profile)
         if existing is not None:
-            if existing.profile_digest == expected_digest:
-                return existing
-            # The profile behind this name was rebuilt. Reusing the container
-            # would keep the workspace on the image it was born with for as
-            # long as it lives, so releasing a fixed sandbox image would never
-            # reach anyone who already has one. The volume is a separate object
-            # and is adopted below, so replacing the container keeps the files.
-            await self.destroy(spec.name, deadline_at=spec.deadline_at)
+            return existing
 
         labels, binds = self._labels_and_binds(spec, profile)
         is_function = profile.is_function
