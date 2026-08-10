@@ -38,7 +38,8 @@ class AppEntity(BaseModel):
     source_archive_path: str | None = None
     current_release_id: UUID | None = None
     status: AppStatus = AppStatus.DRAFT
-    visibility: str = "POD"
+    # PUBLIC, not POD -- see the note on ``AppModel.visibility``.
+    visibility: str = "PUBLIC"
     allowed_actions: list[str] = Field(default_factory=list)
     created_at: datetime | None = None
     updated_at: datetime | None = None

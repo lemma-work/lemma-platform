@@ -47,7 +47,7 @@ class AppResponse(BaseModel):
     source_archive_path: Optional[str] = None
     current_release_id: Optional[UUID] = None
     status: AppStatus
-    visibility: str = "POD"
+    visibility: str = "PUBLIC"
     created_at: Any
     updated_at: Any
 

@@ -31,6 +31,7 @@ import { cn } from '@/lib/utils';
 // component's React/Query surface; re-exported below so existing importers of
 // `ResourceVisibilityValue` / `normalizeResourceVisibility` are unaffected.
 import {
+    defaultVisibilityFor,
     normalizeResourceVisibility,
     reachesOutsidePod,
     VISIBILITY_VALUES,
@@ -38,6 +39,7 @@ import {
 } from '@/lib/share/resource-visibility';
 
 export {
+    defaultVisibilityFor,
     normalizeResourceVisibility,
     reachesOutsidePod,
     VISIBILITY_VALUES,
@@ -139,6 +141,7 @@ function toResourceLabel(resourceLabel?: string) {
 export function getResourceVisibilityCopy(
     value?: string | null,
     resourceLabel?: string,
+    resourceType?: ShareableResourceType | null,
 ): ResourceVisibilityCopy {
     const visibility = normalizeResourceVisibility(value);
     const resources = toResourceLabel(resourceLabel);
@@ -166,6 +169,23 @@ export function getResourceVisibilityCopy(
     }
 
     if (visibility === 'PUBLIC') {
+        // An app is the one resource where PUBLIC really does mean the open
+        // internet: the page is served by public host to browsers with no
+        // session at all. Everywhere else authorization still runs against a
+        // signed-in principal, so PUBLIC waives pod scope rather than opening
+        // the resource up. Two different promises, so two different sentences
+        // -- this is the copy someone reads before deciding.
+        if (resourceType === 'app') {
+            return {
+                value: visibility,
+                label: 'On the web',
+                shortDescription: 'Anyone with the link',
+                description:
+                    'Anyone with the link can load this app, no sign-in needed. Its data still requires access — visitors are asked to sign in or request it.',
+                icon: Globe2,
+                className: 'state-badge-warning',
+            };
+        }
         return {
             value: visibility,
             // Not anonymous: authorization still runs against a signed-in
@@ -258,23 +278,29 @@ const VISIBILITY_TONE: Record<string, string> = {
 export function ResourceVisibilityBadge({
     visibility,
     resourceLabel,
+    resourceType,
     className,
     compact = false,
     hideWhenDefault,
 }: {
     visibility?: string | null;
     resourceLabel?: string;
+    /** Which kind of resource this is. Decides both the PUBLIC wording and which level counts as the default worth hiding — apps differ on both. */
+    resourceType?: ShareableResourceType | null;
     className?: string;
     compact?: boolean;
-    /** When the value is the default (pod workspace), render nothing. Defaults to `compact` — dense list rows hide the common case so only exceptions stand out. */
+    /** When the value is this resource's default, render nothing. Defaults to `compact` — dense list rows hide the common case so only exceptions stand out. */
     hideWhenDefault?: boolean;
 }) {
-    const copy = getResourceVisibilityCopy(visibility, resourceLabel);
+    const copy = getResourceVisibilityCopy(visibility, resourceLabel, resourceType);
     const Icon = copy.icon;
     const tone = VISIBILITY_TONE[copy.value] ?? 'text-[var(--text-tertiary)]';
     const shouldHideDefault = hideWhenDefault ?? compact;
 
-    if (shouldHideDefault && copy.value === 'POD') {
+    // Per resource, not a hardcoded POD: apps are created PUBLIC, so hiding POD
+    // there would silence the badge on exactly the app someone deliberately
+    // took off the web, while flagging every untouched one.
+    if (shouldHideDefault && copy.value === defaultVisibilityFor(resourceType)) {
         return null;
     }
 
@@ -403,8 +429,8 @@ export function ResourceShareButton({
     const selectedAccess = accessLevels.find((level) => level.value === selectedAccessLevel) || accessLevels[0];
     const accessQueryKey = ['pods', podId, 'resources', resourceType, resourceId, 'access'];
     const optionCopies = useMemo(
-        () => options.map((option) => getResourceVisibilityCopy(option, resourceLabel)),
-        [options, resourceLabel],
+        () => options.map((option) => getResourceVisibilityCopy(option, resourceLabel, resourceType)),
+        [options, resourceLabel, resourceType],
     );
     const { data: accessData, isLoading: isAccessLoading } = useQuery({
         queryKey: accessQueryKey,

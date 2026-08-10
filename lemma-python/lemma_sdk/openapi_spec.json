@@ -2555,7 +2555,7 @@
             "type": "string"
           },
           "visibility": {
-            "default": "POD",
+            "default": "PUBLIC",
             "title": "Visibility",
             "type": "string"
           }

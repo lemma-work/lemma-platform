@@ -240,7 +240,7 @@ export default function AppPagesRoute({ params }: { params: Promise<{ id: string
 
                                 <div className="mt-3 flex items-center justify-between gap-2 text-xs text-[var(--text-tertiary)]">
                                     <div className="flex min-w-0 items-center gap-3">
-                                        <ResourceVisibilityBadge visibility={page.visibility} resourceLabel="apps" hideWhenDefault />
+                                        <ResourceVisibilityBadge visibility={page.visibility} resourceLabel="apps" resourceType="app" hideWhenDefault />
                                         {updatedLabel ? <span className="truncate">Updated {updatedLabel}</span> : null}
                                     </div>
                                     <div className="flex shrink-0 items-center gap-1">
