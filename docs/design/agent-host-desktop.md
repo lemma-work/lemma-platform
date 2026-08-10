@@ -2,7 +2,7 @@
 
 How the Agent Host is supervised, controlled, and reported from Lemma Desktop.
 For the sidecar's own architecture — the ACP bridge, adapters, journal, and the
-device half of the API — see [`agent-host/README.md`](../../agent-host/README.md).
+device half of the API — see [`desktop/agent-host/README.md`](../../desktop/agent-host/README.md).
 
 ## What it is for
 

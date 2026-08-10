@@ -1,22 +1,17 @@
 [package]
 name = "lemma-runtime-manager"
-version = "0.7.0"
+version.workspace = true
 description = "Host lifecycle manager for Lemma's private macOS VZ and Windows WSL runtimes"
 edition = "2021"
 license = "AGPL-3.0-or-later"
 
 [dependencies]
 getrandom = "0.3"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+serde = { workspace = true }
+serde_json = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 libc = "0.2"
 
 [dev-dependencies]
-tempfile = "3"
-
-[profile.release]
-strip = true
-lto = true
-codegen-units = 1
+tempfile = { workspace = true }

@@ -1,8 +1,72 @@
+# This manifest is deliberately two things at once.
+#
+# As a [package] it is `lemma-desktop`, and it stays at desktop/ rather than
+# moving down into desktop/app/: main.rs takes its development runtime root from
+# CARGO_MANIFEST_DIR.parent(), which has to be the repo checkout. One more
+# directory level would quietly point a dev build at desktop/ instead.
+#
+# As a [workspace] it owns every Rust crate Desktop ships. Before this they were
+# six independent crates with six lockfiles and six target directories, which
+# meant reqwest, tokio and hyper were compiled three times over — and that the
+# guest daemon and the runtime bridge triggered no CI job at all, because there
+# was nothing that built them together.
 [package]
 name = "lemma-desktop"
-version = "0.7.0"
+version.workspace = true
 description = "Lemma desktop shell"
 edition = "2021"
+
+[workspace]
+resolver = "2"
+members = [
+    "locald",
+    "agent-host",
+    "local-runtime/manager",
+    "local-runtime/hostctl",
+    "local-runtime/guestd",
+]
+# Only the app crate is a default member, so `tauri build`'s bare `cargo build`
+# still builds exactly one binary, and `cd desktop && cargo test` still means
+# "the desktop crate's tests" — which is what every existing CI step assumes.
+# The whole-workspace commands say so out loud instead:
+#
+#     cargo clippy --workspace --all-targets -- -D warnings
+#     cargo test   --workspace --locked
+#
+# On Windows both need `--exclude lemma-guestd`. guestd is the Linux guest
+# daemon and reaches for std::os::unix unconditionally, so it builds and tests
+# on macOS and Linux but does not compile for Windows at all. Its vsock
+# listener is behind a Linux cfg that only a Linux build ever compiles, which
+# is why CI runs it there too rather than trusting the macOS run.
+default-members = ["."]
+
+[workspace.package]
+# One version for six crates. Release used to rewrite desktop/Cargo.toml alone,
+# so the moment the other five moved in here they would have drifted silently.
+version = "0.7.0"
+
+[workspace.dependencies]
+# Hoisted because feature unification makes the *emergent* feature set of a
+# multi-crate build different from what any single manifest asks for: locald
+# wanted blocking+json+native-tls, desktop blocking+native-tls+system-proxy, the
+# agent host json+native-tls+system-proxy. Sharing one target directory, they
+# get the union whether or not anybody decided that. Declaring it once makes it
+# a reviewed choice, and stops cargo rebuilding reqwest from scratch every time
+# the selected package set changes.
+#
+# Note what the union hands locald: system-proxy, which it never asked for. See
+# the no_proxy() calls on its loopback clients — a proxy configured without a
+# `<local>` bypass would otherwise route locald's own health checks through it.
+reqwest = { version = "=0.13.4", default-features = false, features = [
+    "blocking",
+    "json",
+    "native-tls",
+    "system-proxy",
+] }
+sha2 = "=0.10.9"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tempfile = "3"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
@@ -21,11 +85,11 @@ tauri-plugin-deep-link = "2"
 # hidden is the ordinary case. An OS-drawn alert is the only surface that
 # survives that, so this is used from Rust only and needs no capability entry.
 tauri-plugin-dialog = "2"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+serde = { workspace = true }
+serde_json = { workspace = true }
 interprocess = "2.4"
-reqwest = { version = "=0.13.4", default-features = false, features = ["blocking", "native-tls", "system-proxy"] }
-sha2 = "=0.10.9"
+reqwest = { workspace = true }
+sha2 = { workspace = true }
 zip = { version = "=8.6.0", default-features = false, features = ["deflate"] }
 
 [target.'cfg(unix)'.dependencies]
@@ -42,8 +106,26 @@ objc2-app-kit = { version = "0.3", features = ["NSColor", "NSColorSpace"] }
 windows-sys = { version = "0.61.2", features = ["Win32_Storage_FileSystem"] }
 
 [dev-dependencies]
-tempfile = "3"
+tempfile = { workspace = true }
 
+# A workspace ignores [profile] in anything but the root manifest — with a
+# warning that is easy to miss — so every member's release profile lives here.
+# strip and lto were already identical across all six. codegen-units = 1 was
+# not: the five daemons had it and the desktop binary did not. It is one of the
+# few keys a per-package override accepts, so it stays exactly where it was
+# rather than lengthening the release build that is already desktop CI's long
+# pole.
 [profile.release]
 strip = true
 lto = true
+
+[profile.release.package.lemma-locald]
+codegen-units = 1
+[profile.release.package.lemma-agent-host]
+codegen-units = 1
+[profile.release.package.lemma-runtime-manager]
+codegen-units = 1
+[profile.release.package.lemma-runtime]
+codegen-units = 1
+[profile.release.package.lemma-guestd]
+codegen-units = 1

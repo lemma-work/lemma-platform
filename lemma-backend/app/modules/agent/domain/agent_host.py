@@ -470,7 +470,7 @@ def validate_agent_host_model(
     return normalized
 
 
-# Mirrors the Agent Host's own policy filter (agent-host/src/acp.rs:569-600):
+# Mirrors the Agent Host's own policy filter (desktop/agent-host/src/acp.rs:569-600):
 # an option whose id or category mentions one of these governs what the coding
 # agent is allowed to do without asking.
 # Settings the platform owns, so a profile may not carry them. `mode` is the

@@ -1,50 +1,49 @@
 {
   "schema_version": 1,
   "version": "0.7.0",
-  "released_at": "2026-07-29T11:15:00Z",
-  "min_admin_version": "0.1.0",
-  "images": {
-    "backend": {
-      "ref": "ghcr.io/lemma-work/lemma-backend:test-d5e99e0dd10c",
-      "digest": "sha256:025fdfb4e21efd24b9a2db7214aee6e8439084cf033db4d2a3391e9ce8312b2a"
-    },
-    "frontend": {
-      "ref": "ghcr.io/lemma-work/lemma-frontend:test-d5e99e0dd10c",
-      "digest": "sha256:48b99678cac01dc89bac101a356eb862452518ebcd06624b789750b9ec88b7a2"
-    },
-    "agentbox_workspace": {
-      "ref": "ghcr.io/lemma-work/lemma-workspace:test-d5e99e0dd10c",
-      "digest": "sha256:b2122880de54867bec92a6b727aa918b4635f6adeb747e973a08bd1e7b2f3f48"
-    },
-    "agentbox_function": {
-      "ref": "ghcr.io/lemma-work/lemma-function:test-d5e99e0dd10c",
-      "digest": "sha256:1bebb56e70cd7c008e9112ca0ec41454b852563071b9f71d90522e914f744d83"
-    }
-  },
+  "artifact_source": "ci-build-check",
   "host_packs": {
     "aarch64-apple-darwin": {
-      "url": null,
-      "sha256": "56938b7dc50e7e2b59d9fc3ed04ac07e663f4debd2dd8c04093e6b74b2ff4e64",
-      "size": 293115395,
-      "expanded_size": 900287229,
+      "url": "https://downloads.example.invalid/lemma-host-pack.zip",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "size": 1,
+      "expanded_size": 1,
       "format": "zip",
       "platform": "macos",
       "architecture": "aarch64",
-      "runtime_version": "0.7.0",
-      "resource": "host-runtime.zip"
+      "runtime_version": "0.7.0"
+    },
+    "x86_64-pc-windows-msvc": {
+      "url": "https://downloads.example.invalid/lemma-host-pack.zip",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "size": 1,
+      "expanded_size": 1,
+      "format": "zip",
+      "platform": "windows",
+      "architecture": "x86_64",
+      "runtime_version": "0.7.0"
     }
   },
   "guest_runtimes": {
     "macos-aarch64": {
-      "url": null,
-      "sha256": "d29934c88981b0008a609c701f76c865a9141700fec46a774988f274f2367007",
-      "size": 222621097,
-      "expanded_size": 989186093,
+      "url": "https://downloads.example.invalid/lemma-guest-runtime.zip",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "size": 1,
+      "expanded_size": 1,
       "format": "zip",
       "platform": "linux",
       "architecture": "aarch64",
-      "runtime_version": "0.7.0",
-      "resource": "guest-runtime.zip"
+      "runtime_version": "0.7.0"
+    },
+    "windows-x86_64": {
+      "url": "https://downloads.example.invalid/lemma-guest-runtime.zip",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "size": 1,
+      "expanded_size": 1,
+      "format": "zip",
+      "platform": "linux",
+      "architecture": "x86_64",
+      "runtime_version": "0.7.0"
     }
   }
 }

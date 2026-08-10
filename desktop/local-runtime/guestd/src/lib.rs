@@ -500,7 +500,11 @@ impl<E: Engine> GuestService<E> {
         ]) else {
             return;
         };
-        for name in output.lines().map(str::trim).filter(|line| !line.is_empty()) {
+        for name in output
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+        {
             let _ = self.run_checked(&["rm".into(), "--force".into(), name.to_owned()]);
         }
     }
@@ -2881,9 +2885,7 @@ mod tests {
         assert!(joined.contains("0.0.0.0::8080"));
         assert!(joined.contains("0.0.0.0::4848"));
         assert!(!joined.contains("0.0.0.0::8090"));
-        assert!(
-            joined.contains("/var/lib/lemma/run/runtime-token-box-1,dst=/run/lemma-bootstrap")
-        );
+        assert!(joined.contains("/var/lib/lemma/run/runtime-token-box-1,dst=/run/lemma-bootstrap"));
         assert!(!joined.contains("lemma-bootstrap,readonly"));
         assert!(joined.ends_with("ghcr.io/lemma/workspace@sha256:abc"));
     }

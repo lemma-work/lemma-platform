@@ -1646,6 +1646,10 @@ fn ensure_private_directory(path: &Path) -> io::Result<()> {
     Ok(())
 }
 
+#[cfg_attr(
+    not(unix),
+    expect(unused_variables, reason = "mode bits are unix-only")
+)]
 fn make_private_file(path: &Path) -> io::Result<()> {
     #[cfg(unix)]
     {

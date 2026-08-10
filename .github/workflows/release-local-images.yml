@@ -343,14 +343,14 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y zstd
 
       - name: Build guest control daemon
-        run: cargo build --manifest-path local-runtime/guestd/Cargo.toml --release
+        run: cargo build --manifest-path desktop/Cargo.toml -p lemma-guestd --release
 
       - name: Assemble private guest artifact
         shell: bash
         run: |
           bash scripts/build_local_guest_runtime.sh \
             --target "${{ matrix.target }}" \
-            --guestd local-runtime/guestd/target/release/lemma-guestd \
+            --guestd desktop/target/release/lemma-guestd \
             --output "guest-runtime-out/lemma-guest-runtime-${{ matrix.target }}.zip"
 
       - name: Upload managed guest runtime
@@ -838,54 +838,20 @@ jobs:
           name: lemma-local-test-manifest-${{ github.sha }}
           path: desktop/runtime/download
 
+      # One staging engine for CI and for `make desktop-dmg`, so a locally
+      # built test DMG and this one are produced by the same code.
       - name: Verify and stage compressed PR test runtime
         shell: bash
-        env:
-          VERSION: ${{ inputs.version }}
-          TARGET: aarch64-apple-darwin
-          GUEST_TARGET: macos-aarch64
         run: |
           set -euo pipefail
-          python3 - <<'PY'
-          import hashlib
-          import json
-          import os
-          from pathlib import Path
-
-          root = Path("desktop/runtime/download")
-          manifest = json.loads((root / "lemma-local.json").read_text())
-          version = os.environ["VERSION"].removeprefix("v")
-          if manifest["version"] != version:
-              raise SystemExit("branch-test manifest version does not match Desktop")
-          for group, prefix, target in (
-              ("host_packs", "lemma-host-pack", os.environ["TARGET"]),
-              ("guest_runtimes", "lemma-guest-runtime", os.environ["GUEST_TARGET"]),
-          ):
-              archive = root / f"{prefix}-{target}.zip"
-              expected = manifest[group][target]
-              actual = hashlib.sha256(archive.read_bytes()).hexdigest()
-              if archive.stat().st_size != expected["size"] or actual != expected["sha256"]:
-                  raise SystemExit(f"{archive.name} digest/size mismatch")
-          host = manifest["host_packs"][os.environ["TARGET"]]
-          guest = manifest["guest_runtimes"][os.environ["GUEST_TARGET"]]
-          manifest["host_packs"] = {os.environ["TARGET"]: {
-              **host, "url": None, "resource": "host-runtime.zip"
-          }}
-          manifest["guest_runtimes"] = {os.environ["GUEST_TARGET"]: {
-              **guest, "url": None, "resource": "guest-runtime.zip"
-          }}
-          Path("desktop/runtime/lemma-local.json").write_text(
-              json.dumps(manifest, indent=2) + "\n"
-          )
-          PY
-
-          mkdir -p desktop/runtime/bundled
-          cp "desktop/runtime/download/lemma-host-pack-${TARGET}.zip" \
-            desktop/runtime/bundled/host-runtime.zip
-          cp "desktop/runtime/download/lemma-guest-runtime-${GUEST_TARGET}.zip" \
-            desktop/runtime/bundled/guest-runtime.zip
-          test ! -e desktop/runtime/local-runtime
-          test ! -e desktop/runtime/managed-runtime
+          python3 scripts/prepare_desktop_test_runtime.py \
+            --artifacts-dir desktop/runtime/download \
+            --mode bundled \
+            --expect-version "${{ inputs.version }}" \
+            --host-target aarch64-apple-darwin \
+            --guest-target macos-aarch64 \
+            --stage-dir desktop/runtime/bundled \
+            --output desktop/runtime/bundled/lemma-local.json
 
       - name: Bake splash concepts
         run: node desktop/scripts/extract-concepts.mjs

@@ -778,6 +778,7 @@ fn terminate_verified_process(pid: u32) -> io::Result<()> {
     ))
 }
 
+#[cfg(target_os = "macos")]
 fn remove_if_present(path: &Path) -> io::Result<()> {
     match fs::remove_file(path) {
         Ok(()) => Ok(()),
@@ -894,6 +895,7 @@ fn rotate_log(path: &Path, max_bytes: u64) -> io::Result<()> {
 /// normal boot always writes several of these. They are the *first* thing in
 /// `vz.log`, which is why quoting the first line reported a healthy boot's retry
 /// as the cause of an exit that happened minutes later.
+#[cfg(any(target_os = "macos", test))]
 fn is_boot_retry(line: &str) -> bool {
     line.contains("guest connect failed")
 }
@@ -916,13 +918,13 @@ fn first_diagnostic(value: &[u8], fallback: &str) -> String {
 /// An exit is explained by what the log said last, not first. Boot retries are
 /// skipped entirely: if they are all there is, the log holds no explanation and
 /// saying so is more honest than quoting one.
+#[cfg(any(target_os = "macos", test))]
 fn last_diagnostic(value: &[u8], fallback: &str) -> String {
     let value = String::from_utf8_lossy(value);
     let diagnostic = value
         .lines()
         .map(str::trim)
-        .filter(|line| !line.is_empty() && !is_boot_retry(line))
-        .next_back()
+        .rfind(|line| !line.is_empty() && !is_boot_retry(line))
         .unwrap_or(fallback);
     diagnostic
         .strip_prefix("lemma-runtime: ")

@@ -21,10 +21,10 @@ and on-demand sandboxes through a narrow authenticated protocol. It
 does not expose Docker/Podman/containerd sockets to the backend.
 
 ```bash
-cargo run --manifest-path locald/Cargo.toml -- serve
-cargo run --manifest-path locald/Cargo.toml -- status
-cargo run --manifest-path locald/Cargo.toml -- send '{"cmd":"start","id":"manual"}'
-cargo run --manifest-path locald/Cargo.toml -- send '{"cmd":"control.snapshot","id":"manual"}'
+cargo run --manifest-path desktop/Cargo.toml -p lemma-locald -- serve
+cargo run --manifest-path desktop/Cargo.toml -p lemma-locald -- status
+cargo run --manifest-path desktop/Cargo.toml -p lemma-locald -- send '{"cmd":"start","id":"manual"}'
+cargo run --manifest-path desktop/Cargo.toml -p lemma-locald -- send '{"cmd":"control.snapshot","id":"manual"}'
 ```
 
 `LEMMA_LOCALD_ROOT` selects an isolated state root. Packaged launchers provide

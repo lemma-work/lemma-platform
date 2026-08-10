@@ -241,10 +241,7 @@ static LAUNCH_START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
 /// shows up as a number, and so the startup targets have evidence behind them
 /// rather than a stopwatch and an opinion.
 fn launch_trace(stage: &str) {
-    let elapsed = LAUNCH_START
-        .get_or_init(Instant::now)
-        .elapsed()
-        .as_millis();
+    let elapsed = LAUNCH_START.get_or_init(Instant::now).elapsed().as_millis();
     append_bounded_log(&launch_log_path(), &format!("{elapsed:>6}ms {stage}"));
 }
 
@@ -441,7 +438,11 @@ fn resume_entry_url(target: &ResumeTarget) -> String {
     format!(
         "{}{}",
         target.url.trim_end_matches('/'),
-        if target.route == "/" { "" } else { &target.route }
+        if target.route == "/" {
+            ""
+        } else {
+            &target.route
+        }
     )
 }
 
@@ -487,9 +488,7 @@ fn generation_matches(client: &reqwest::blocking::Client, url: &str, generation:
     if !response.status().is_success() {
         return false;
     }
-    response
-        .text()
-        .is_ok_and(|body| body.contains(generation))
+    response.text().is_ok_and(|body| body.contains(generation))
 }
 
 fn write_config(update: impl FnOnce(&mut Value)) -> Result<(), String> {
@@ -1072,7 +1071,7 @@ fn ensure_runtime_artifacts(app: &AppHandle) -> Result<(), String> {
 }
 
 fn ensure_runtime_artifacts_inner(app: &AppHandle) -> Result<(), String> {
-    if runtime_root().join("locald/Cargo.toml").is_file() {
+    if runtime_root().join("desktop/locald/Cargo.toml").is_file() {
         return Ok(());
     }
     let config = read_config();
@@ -1165,11 +1164,11 @@ fn ensure_runtime_artifacts_inner(app: &AppHandle) -> Result<(), String> {
         &runtime_install_root(),
         env!("CARGO_PKG_VERSION"),
         &mut |progress| {
-            let fraction = if progress.total == 0 {
-                0
-            } else {
-                progress.current.saturating_mul(1000) / progress.total
-            };
+            let fraction = progress
+                .current
+                .saturating_mul(1000)
+                .checked_div(progress.total)
+                .unwrap_or(0);
             let percent = match progress.stage {
                 "download" => 2 + fraction.saturating_mul(44) / 1000,
                 "verify" => 47,
@@ -1336,10 +1335,11 @@ fn locald_binary() -> Option<PathBuf> {
         .filter(|p| p.exists())
         .or_else(bundled_locald)
         .or_else(|| {
+            // One workspace under desktop/, so one target directory.
             let candidate = runtime_root().join(if cfg!(windows) {
-                "locald/target/debug/lemma-locald.exe"
+                "desktop/target/debug/lemma-locald.exe"
             } else {
-                "locald/target/debug/lemma-locald"
+                "desktop/target/debug/lemma-locald"
             });
             candidate.exists().then_some(candidate)
         })
@@ -1347,7 +1347,7 @@ fn locald_binary() -> Option<PathBuf> {
 
 fn spawn_locald() -> Result<(), String> {
     let root = runtime_root();
-    let have_checkout = root.join("locald/Cargo.toml").exists();
+    let have_checkout = root.join("desktop/locald/Cargo.toml").exists();
     let locald_bin = locald_binary();
 
     let mut command = match &locald_bin {
@@ -1364,7 +1364,7 @@ fn spawn_locald() -> Result<(), String> {
                 "run",
                 "--quiet",
                 "--manifest-path",
-                "locald/Cargo.toml",
+                "desktop/locald/Cargo.toml",
                 "--",
                 "serve",
             ]);
@@ -1982,15 +1982,13 @@ fn handle_locald_event(app: &AppHandle, event: &Value) {
                             .into();
                 }
             }
-            "done" => {
-                if event_operation_id.is_some_and(|id| id == ui.active_operation_id) {
-                    let completed_operation_id = ui.active_operation_id.clone();
-                    ui.completed_operation_ids.push(completed_operation_id);
-                    if ui.completed_operation_ids.len() > 16 {
-                        ui.completed_operation_ids.remove(0);
-                    }
-                    ui.active_operation_id.clear();
+            "done" if event_operation_id.is_some_and(|id| id == ui.active_operation_id) => {
+                let completed_operation_id = ui.active_operation_id.clone();
+                ui.completed_operation_ids.push(completed_operation_id);
+                if ui.completed_operation_ids.len() > 16 {
+                    ui.completed_operation_ids.remove(0);
                 }
+                ui.active_operation_id.clear();
             }
             _ => {}
         }
@@ -3156,11 +3154,7 @@ fn discover_provider_models(
 /// and restarts the backend, and both of those can fail in ways the user needs
 /// the actual message for.
 #[tauri::command]
-fn configure_ai_provider(
-    window: Webview,
-    app: AppHandle,
-    payload: Value,
-) -> Result<Value, String> {
+fn configure_ai_provider(window: Webview, app: AppHandle, payload: Value) -> Result<Value, String> {
     require_agent_host_caller(&window, &app)?;
     if current_mode(&app) != "local" {
         return Err("the local AI provider is configured only on a local install".into());
@@ -3900,14 +3894,12 @@ fn build_app_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     let about = PredefinedMenuItem::about(
         app,
         Some("About Lemma"),
-        Some(
-            AboutMetadata {
-                name: Some("Lemma".into()),
-                version: Some(env!("CARGO_PKG_VERSION").into()),
-                website: Some("https://lemma.work".into()),
-                ..Default::default()
-            },
-        ),
+        Some(AboutMetadata {
+            name: Some("Lemma".into()),
+            version: Some(env!("CARGO_PKG_VERSION").into()),
+            website: Some("https://lemma.work".into()),
+            ..Default::default()
+        }),
     )?;
     let settings = MenuItem::with_id(app, "control", "Settings…", local, Some("CmdOrCtrl+,"))?;
     let connection = MenuItem::with_id(app, "mode", "Connection…", true, None::<&str>)?;
@@ -4036,7 +4028,8 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     // connection mode — which is a maintainer's console, not the thing you
     // reach for from the menu bar. Everything operational moved into
     // Troubleshoot; everything standard moved into the app menu.
-    let status_item = MenuItem::with_id(app, "tray-state", "Lemma: checking…", false, None::<&str>)?;
+    let status_item =
+        MenuItem::with_id(app, "tray-state", "Lemma: checking…", false, None::<&str>)?;
     let open_item = MenuItem::with_id(app, "open", "Open Lemma", true, None::<&str>)?;
     let login_item = MenuItem::with_id(app, "login", "Log In…", true, None::<&str>)?;
     let control_item = MenuItem::with_id(app, "control", "Local settings…", local, None::<&str>)?;
@@ -4075,11 +4068,23 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
             &MenuItem::with_id(app, "start", "Start Lemma", local, None::<&str>)?,
             &MenuItem::with_id(app, "restart", "Restart Lemma", local, None::<&str>)?,
             &MenuItem::with_id(app, "stop", "Stop Lemma", local, None::<&str>)?,
-            &MenuItem::with_id(app, "stop-all", "Stop the local server", local, None::<&str>)?,
+            &MenuItem::with_id(
+                app,
+                "stop-all",
+                "Stop the local server",
+                local,
+                None::<&str>,
+            )?,
             &PredefinedMenuItem::separator(app)?,
             &MenuItem::with_id(app, "diagnostics", "Diagnostics…", local, None::<&str>)?,
             &MenuItem::with_id(app, "logs", "Open Logs", local, None::<&str>)?,
-            &MenuItem::with_id(app, "agent-host-log", "Open Agent Host Log", true, None::<&str>)?,
+            &MenuItem::with_id(
+                app,
+                "agent-host-log",
+                "Open Agent Host Log",
+                true,
+                None::<&str>,
+            )?,
             &PredefinedMenuItem::separator(app)?,
             &MenuItem::with_id(app, "reload", "Reload", true, None::<&str>)?,
             &MenuItem::with_id(app, "devtools", "Developer Tools", true, None::<&str>)?,
@@ -4599,7 +4604,9 @@ fn main() {
 
             #[cfg(target_os = "macos")]
             if desktop_vibrancy_enabled() {
-                use window_vibrancy::{apply_vibrancy, NSVisualEffectMaterial, NSVisualEffectState};
+                use window_vibrancy::{
+                    apply_vibrancy, NSVisualEffectMaterial, NSVisualEffectState,
+                };
 
                 // Sidebar is the material AppKit itself uses behind source
                 // lists, which is what the pod shell rail is.
@@ -4615,9 +4622,8 @@ fn main() {
                     None,
                 ) {
                     eprintln!("lemma: could not apply window vibrancy: {error}");
-                    let _ = main.eval(
-                        "document.documentElement.removeAttribute('data-desktop-vibrancy')",
-                    );
+                    let _ = main
+                        .eval("document.documentElement.removeAttribute('data-desktop-vibrancy')");
                 }
             }
 
@@ -4633,7 +4639,7 @@ fn main() {
                             event,
                             tauri::WindowEvent::Focused(true) | tauri::WindowEvent::ThemeChanged(_)
                         ) {
-                            let _ = window.eval(&format!(
+                            let _ = window.eval(format!(
                                 "document.documentElement.style.setProperty('--accent-rgb','{}')",
                                 accent_channel_triple(),
                             ));
@@ -5133,10 +5139,22 @@ mod tests {
         );
 
         // And the tokens themselves must be the product's, not a parallel set.
-        assert!(css.contains("--accent-rgb: 90 63 212"), "light accent is the action violet");
-        assert!(css.contains("--accent-rgb: 139 122 245"), "dark accent is the action violet");
-        assert!(css.contains("--canvas: #f2efe7"), "light canvas is the product's paper");
-        assert!(!css.contains("Bricolage"), "the page no longer carries its own display face");
+        assert!(
+            css.contains("--accent-rgb: 90 63 212"),
+            "light accent is the action violet"
+        );
+        assert!(
+            css.contains("--accent-rgb: 139 122 245"),
+            "dark accent is the action violet"
+        );
+        assert!(
+            css.contains("--canvas: #f2efe7"),
+            "light canvas is the product's paper"
+        );
+        assert!(
+            !css.contains("Bricolage"),
+            "the page no longer carries its own display face"
+        );
     }
 
     #[test]
@@ -5152,7 +5170,9 @@ mod tests {
             let start = source
                 .find("fn build_app_menu")
                 .expect("the app menu builder exists");
-            let end = source.find("fn disconnect_locald").expect("tray builder ends");
+            let end = source
+                .find("fn disconnect_locald")
+                .expect("tray builder ends");
             &source[start..end]
         };
 
@@ -5187,7 +5207,11 @@ mod tests {
         );
 
         // The operator vocabulary this replaced must not come back.
-        for retired in ["Stop Services and Infra", "Switch Connection Mode", "Start Services"] {
+        for retired in [
+            "Stop Services and Infra",
+            "Switch Connection Mode",
+            "Start Services",
+        ] {
             assert!(
                 !menus.contains(retired),
                 "{retired:?} is supervisor vocabulary, not a product menu item"
@@ -5212,7 +5236,8 @@ mod tests {
         // The whole point of the prompt is that none of this is on screen. A
         // warning that says "are you sure?" and nothing else would be worse than
         // no warning, because it teaches people to dismiss it.
-        let running_host = json!({"running": true, "targets": [{"name": "work"}, {"name": "home"}]});
+        let running_host =
+            json!({"running": true, "targets": [{"name": "work"}, {"name": "home"}]});
         let lines = quit_impact_lines(true, Some(&running_host), Some("public"));
         assert_eq!(
             lines,

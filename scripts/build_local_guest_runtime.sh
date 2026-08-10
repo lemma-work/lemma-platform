@@ -48,8 +48,8 @@ rootfs="$work_dir/rootfs"
 rootfs_tar="$work_dir/rootfs.tar"
 artifact="$work_dir/artifact/$target"
 mkdir -p "$context" "$rootfs" "$artifact"
-cp "$repo_root/local-runtime/guest-image/Dockerfile" "$context/Dockerfile"
-cp -R "$repo_root/local-runtime/guest-image/rootfs-overlay" "$context/rootfs-overlay"
+cp "$repo_root/desktop/local-runtime/guest-image/Dockerfile" "$context/Dockerfile"
+cp -R "$repo_root/desktop/local-runtime/guest-image/rootfs-overlay" "$context/rootfs-overlay"
 cp "$guestd" "$context/lemma-guestd"
 
 docker buildx build \

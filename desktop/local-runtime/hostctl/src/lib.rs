@@ -7,6 +7,9 @@ use std::process::{Command, Stdio};
 
 const MAX_REQUEST_BYTES: u64 = 1024 * 1024;
 const MAX_RESPONSE_BYTES: u64 = 4 * 1024 * 1024;
+// Windows reaches the guest by running `wsl.exe --exec`, and waits on the child
+// rather than on a socket, so only the unix transport has a read to bound.
+#[cfg(unix)]
 const RESPONSE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(8 * 60);
 
 pub enum Transport {
@@ -236,7 +239,12 @@ fn local_root() -> PathBuf {
     }
 }
 
-#[cfg(test)]
+// The bridge speaks to the guest over a unix socket on macOS and over
+// `wsl.exe --exec` on Windows, and only the first can be stood up in-process:
+// these tests bind a real UnixListener and hand the bridge a 0600 capability
+// file. There is no Windows equivalent to gate them against, so they are
+// unix-only rather than skipped.
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;

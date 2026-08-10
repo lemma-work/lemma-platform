@@ -13,16 +13,18 @@ cd "$(dirname "$0")/../.."
 TRIPLE="${LEMMA_SIDECAR_TRIPLE:-aarch64-apple-darwin}"
 OUT_DIR="desktop/binaries"
 mkdir -p "$OUT_DIR"
-cargo build --manifest-path locald/Cargo.toml --release --target "$TRIPLE"
-cp "locald/target/$TRIPLE/release/lemma-locald" "$OUT_DIR/lemma-locald-$TRIPLE"
-cargo build --manifest-path agent-host/Cargo.toml --release --target "$TRIPLE"
-cp "agent-host/target/$TRIPLE/release/lemma-agent-host" \
-  "$OUT_DIR/lemma-agent-host-$TRIPLE"
-cargo build --manifest-path local-runtime/hostctl/Cargo.toml --release --target "$TRIPLE"
-cp "local-runtime/hostctl/target/$TRIPLE/release/lemma-runtime" \
-  "$OUT_DIR/lemma-runtime-$TRIPLE"
-swift build --package-path local-runtime/macos-vz -c release --arch arm64
-cp "local-runtime/macos-vz/.build/arm64-apple-macosx/release/lemma-vz" \
+# One invocation, not three. These used to be separate crates with separate
+# target directories; now they share one, and asking cargo for them separately
+# would resolve features over three different package sets — rebuilding reqwest,
+# tokio and hyper from scratch each time, every time.
+cargo build --manifest-path desktop/Cargo.toml --release --target "$TRIPLE" \
+  -p lemma-locald -p lemma-agent-host -p lemma-runtime
+BUILT="desktop/target/$TRIPLE/release"
+cp "$BUILT/lemma-locald" "$OUT_DIR/lemma-locald-$TRIPLE"
+cp "$BUILT/lemma-agent-host" "$OUT_DIR/lemma-agent-host-$TRIPLE"
+cp "$BUILT/lemma-runtime" "$OUT_DIR/lemma-runtime-$TRIPLE"
+swift build --package-path desktop/local-runtime/macos-vz -c release --arch arm64
+cp "desktop/local-runtime/macos-vz/.build/arm64-apple-macosx/release/lemma-vz" \
   "$OUT_DIR/lemma-vz-$TRIPLE"
 # Prefer a real Developer ID over an ad-hoc signature when the machine has one.
 #

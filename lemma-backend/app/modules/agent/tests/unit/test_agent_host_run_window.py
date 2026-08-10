@@ -39,7 +39,7 @@ from app.modules.agent.infrastructure.harnesses.remote_payload import token_expi
 
 
 # The window the host holds an ACP permission request open for, in Rust
-# (PERMISSION_DECISION_TIMEOUT in agent-host/src/runtime.rs). Mirrored here so a
+# (PERMISSION_DECISION_TIMEOUT in desktop/agent-host/src/runtime.rs). Mirrored here so a
 # change on either side breaks this, rather than quietly making every
 # mid-run approval unanswerable.
 HOST_PERMISSION_WINDOW_SECONDS = 30 * 60

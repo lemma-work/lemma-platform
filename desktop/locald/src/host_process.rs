@@ -1988,6 +1988,8 @@ fn is_loopback(address: IpAddr) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // Only the unix tests spawn a real supervised process to bind a port.
+    #[cfg(unix)]
     use crate::port_reservation::PortReservation;
     use std::net::{Ipv4Addr, TcpListener};
     use tempfile::tempdir;
@@ -2050,6 +2052,7 @@ mod tests {
     /// The body is shared because the manager mints the runtime generation and
     /// rewrites every health spec's expected body to it, so what counts as
     /// healthy is not known until the generation exists.
+    #[cfg(unix)]
     fn slow_response(
         delay_ms: u64,
         body: Arc<Mutex<String>>,

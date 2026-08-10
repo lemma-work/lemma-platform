@@ -10,6 +10,8 @@ SHELL := /bin/bash
 #   make dev OTEL=1 LLM_OTEL=1  same, with local HyperDX + Phoenix dashboards
 #   make stop          stop backend/frontend processes
 #   make stop-all      also stop infra containers
+#   make desktop-dev   run Lemma Desktop from this checkout (macOS)
+#   make desktop-dmg   build a self-contained macOS test DMG
 #   make test          run all component test suites
 #   make coverage      full coverage report (unit + e2e per component)
 # ──────────────────────────────────────────────────────────────────────────────
@@ -17,7 +19,11 @@ SHELL := /bin/bash
 .PHONY: help init dev dev-public stop stop-all logs otel-up otel-down otel-tail otel-smoke \
         observability-up observability-down observability-open \
         _prepare-dev _start-public-api-tunnel _ensure-databases _ensure-sandbox-images _wait-backend \
-        _ensure-native-connectors \
+        _ensure-native-connectors _desktop-verify-dist-app \
+        desktop-dev desktop-sidecars desktop-test desktop-test-app desktop-fmt desktop-fmt-fix \
+        desktop-lint desktop-guestd desktop-concepts desktop-concepts-check \
+        desktop-runtime-fetch desktop-dmg desktop-exe desktop-verify-agents desktop-clean \
+        version-check \
         test-dev-workflow \
         test test-backend test-backend-unit test-backend-e2e \
         test-frontend test-cli test-cli-unit test-cli-e2e test-python \
@@ -29,6 +35,8 @@ SHELL := /bin/bash
 
 RELOAD        ?= 0
 E2E_WORKERS   ?= 2
+CONTROL       ?= 0
+RUN           ?=
 MODULE        ?=
 OTEL          ?= 0
 OTEL_LOGS     ?= 1
@@ -39,6 +47,23 @@ FRONTEND_DIR  := lemma-frontend
 CLI_DIR       := lemma-cli
 PYTHON_DIR    := lemma-python
 TS_DIR        := lemma-typescript
+DESKTOP_DIR   := desktop
+
+# Desktop is one cargo workspace: the app shell, the durable daemon, the Agent
+# Host, and the runtime helpers share a lockfile and a target directory. That
+# is why these point at `desktop` and not at five separate crates.
+DESKTOP_DOWNLOAD_DIR := $(DESKTOP_DIR)/runtime/download
+DESKTOP_BUNDLED_DIR  := $(DESKTOP_DIR)/runtime/bundled
+# Pinned in one file, read by the Makefile, dev-local.sh, desktop.ps1, and every
+# workflow. It used to be typed inline in five of those.
+TAURI_CLI     := @tauri-apps/cli@$(shell tr -d '[:space:]' < $(DESKTOP_DIR)/scripts/tauri-cli-version.txt)
+MACOS_TRIPLE         := aarch64-apple-darwin
+MACOS_GUEST_TARGET   := macos-aarch64
+WINDOWS_TRIPLE       := x86_64-pc-windows-msvc
+WINDOWS_GUEST_TARGET := windows-x86_64
+# lemma-guestd is the Linux guest daemon: it reaches for std::os::unix
+# unconditionally, so it builds on macOS and Linux but not on Windows.
+DESKTOP_CARGO_SCOPE  := --workspace
 
 PID_FILE      := .dev-pids
 BACKEND_PID_FILE  := $(BACKEND_DIR)/.dev-backend.pid
@@ -273,6 +298,19 @@ help:
 	@echo "    make observability-down stop the observability stack"
 	@echo "    make otel-smoke         verify traces, metrics, logs, and LLM isolation (CI-safe, no dashboards)"
 	@echo ""
+	@echo "  Desktop (one cargo workspace: app, locald, Agent Host, runtime helpers)"
+	@echo "    make desktop-dev        run Desktop from this checkout (macOS; CONTROL=1 opens Local settings)"
+	@echo "    make desktop-test       Rust tests across the whole desktop workspace"
+	@echo "    make desktop-test-app   desktop crate tests only (fast loop)"
+	@echo "    make desktop-lint       clippy across the workspace, warnings are errors"
+	@echo "    make desktop-fmt        rustfmt check (make desktop-fmt-fix rewrites)"
+	@echo "    make desktop-sidecars   build locald, Agent Host, runtime bridge, VZ helper"
+	@echo "    make desktop-runtime-fetch RUN=<id>  download runtime artifacts from a CI run"
+	@echo "    make desktop-dmg        self-contained macOS test DMG (needs runtime-fetch first)"
+	@echo "    make desktop-exe        Windows installer — says how to build it on Windows"
+	@echo "    make desktop-guestd     build and test the Linux guest daemon (Linux only)"
+	@echo "    make desktop-clean      remove desktop build output and staged runtime"
+	@echo ""
 	@echo "  Tests"
 	@echo "    make test-dev-workflow  test generated dev config and startup diagnostics"
 	@echo "    make test               run all component test suites"
@@ -298,6 +336,7 @@ help:
 	@echo ""
 	@echo "  Other"
 	@echo "    make lint               ruff + eslint across all components"
+	@echo "    make version-check      every Lemma component declares the same version"
 	@echo "    make migrate            apply backend database migrations"
 	@echo ""
 
@@ -800,6 +839,260 @@ otel-smoke: otel-down otel-up
 
 logs:
 	@cd $(BACKEND_DIR) && docker compose logs -f
+
+# ── Desktop ───────────────────────────────────────────────────────────────────
+#
+# Lemma Desktop is one cargo workspace rooted at desktop/Cargo.toml: the app
+# shell, the durable daemon (locald), the Agent Host, and the runtime helpers.
+# It ships on macOS and Windows.
+#
+# The Makefile is the macOS and Linux entrypoint. Windows has no `make`, so the
+# same verbs live in desktop/scripts/desktop.ps1 and every target that cannot
+# run on this host names its counterpart rather than just failing.
+
+# Agent Host has no headless install any more, so this replaced `make
+# agent-host`: there is one dev entrypoint, and it is the whole app.
+#
+# dev-local.sh builds every sidecar, retires the daemon a previous run left
+# behind — a locald an hour older than the fix under test will happily keep
+# reproducing the bug it fixed — and points every mutable path at a throwaway
+# root, so a dev session cannot adopt or corrupt the identity a real install
+# owns. It borrows the managed guest from an installed release, because a
+# checkout cannot build one.
+desktop-dev:
+	@test "$$(uname -s)" = "Darwin" || ( \
+		echo "  ✗ make desktop-dev runs the app from source, which is macOS only"; \
+		echo "    On Windows, build and install the app instead:"; \
+		echo "      pwsh desktop\\scripts\\desktop.ps1 exe"; exit 1)
+	@command -v cargo >/dev/null 2>&1 || \
+		(echo "  ✗ cargo not found — install Rust from https://rustup.rs"; exit 1)
+	@command -v node >/dev/null 2>&1 || \
+		(echo "  ✗ node not found — install Node.js 22 from https://nodejs.org"; exit 1)
+	@$(DESKTOP_DIR)/scripts/dev-local.sh --source $(if $(filter 1,$(CONTROL)),--control,)
+
+# Four binaries from one cargo invocation. Asking for them separately would
+# resolve features over three different package sets and rebuild reqwest, tokio
+# and hyper from scratch each time.
+desktop-sidecars:
+	@command -v cargo >/dev/null 2>&1 || \
+		(echo "  ✗ cargo not found — install Rust from https://rustup.rs"; exit 1)
+	@case "$$(uname -s)" in \
+		Darwin) $(DESKTOP_DIR)/scripts/build-sidecar.sh ;; \
+		*) echo "  ✗ sidecars are built per platform"; \
+		   echo "    On Windows: pwsh desktop\\scripts\\desktop.ps1 sidecars"; exit 1 ;; \
+	esac
+
+# One workspace, one test command — the point of collapsing six crates into it.
+# lemma-guestd is included here because it builds on macOS and Linux; only
+# Windows has to skip it.
+desktop-test:
+	@command -v cargo >/dev/null 2>&1 || \
+		(echo "  ✗ cargo not found — install Rust from https://rustup.rs"; exit 1)
+	@echo "→ Desktop workspace tests…"
+	@cd $(DESKTOP_DIR) && cargo test $(DESKTOP_CARGO_SCOPE) --locked
+	@echo "  ✓ desktop workspace tests pass"
+
+# The app crate alone, for when the shell is what changed.
+desktop-test-app:
+	@echo "→ Desktop app tests…"
+	@cd $(DESKTOP_DIR) && cargo test -p lemma-desktop --locked
+
+desktop-fmt:
+	@echo "→ Desktop rustfmt…"
+	@cd $(DESKTOP_DIR) && cargo fmt --all --check
+
+desktop-fmt-fix:
+	@echo "→ Rewriting the desktop workspace with rustfmt…"
+	@cd $(DESKTOP_DIR) && cargo fmt --all
+
+desktop-lint:
+	@command -v cargo >/dev/null 2>&1 || \
+		(echo "  ✗ cargo not found — install Rust from https://rustup.rs"; exit 1)
+	@echo "→ Desktop workspace clippy…"
+	@cd $(DESKTOP_DIR) && cargo clippy $(DESKTOP_CARGO_SCOPE) --locked --all-targets -- -D warnings
+	@echo "  ✓ clippy clean"
+
+# guestd's vsock listener is behind a Linux cfg that only a Linux build ever
+# compiles, so a green macOS run says nothing about the code that actually runs
+# in the guest.
+desktop-guestd:
+	@test "$$(uname -s)" = "Linux" || ( \
+		echo "  ✗ the guest daemon's Linux-only paths need a Linux host"; \
+		echo "    CI runs this on ubuntu-latest."; exit 1)
+	@echo "→ Guest daemon (Linux)…"
+	@cd $(DESKTOP_DIR) && cargo clippy -p lemma-guestd --locked --all-targets -- -D warnings
+	@cd $(DESKTOP_DIR) && cargo test -p lemma-guestd --locked
+
+# desktop/ui/concepts.gen.json is generated from the frontend's concept registry
+# and committed, so the splash can name concepts without importing the frontend.
+desktop-concepts:
+	@echo "→ Baking splash concepts…"
+	@node $(DESKTOP_DIR)/scripts/extract-concepts.mjs
+
+desktop-concepts-check: desktop-concepts
+	@git diff --exit-code $(DESKTOP_DIR)/ui/concepts.gen.json || ( \
+		echo "  ✗ desktop/ui/concepts.gen.json is stale — commit the regenerated file"; \
+		exit 1)
+
+# The host pack and the guest runtime are release artifacts, not build outputs.
+# The pack embeds digests of a specific set of container builds; the guest is an
+# ext4 image (macOS) or a WSL rootfs (Windows) assembled under docker buildx with
+# a kernel unpacked by zstd. Neither can be produced from a checkout on demand,
+# which is why this fetches them. One run feeds both a Mac and a Windows box.
+desktop-runtime-fetch:
+	@command -v gh >/dev/null 2>&1 || \
+		(echo "  ✗ gh not found — install from https://cli.github.com"; exit 1)
+	@test -n "$(RUN)" || ( \
+		echo "RUN is required, e.g. make desktop-runtime-fetch RUN=12345678901"; \
+		echo ""; \
+		echo "  Cut one first:"; \
+		echo "    gh workflow run release-local-images.yml -f version=0.7.0 -f publish=false"; \
+		echo "    gh run list --workflow release-local-images.yml"; \
+		exit 1)
+	@echo "→ Downloading runtime artifacts from run $(RUN)…"
+	@rm -rf $(DESKTOP_DOWNLOAD_DIR)
+	@gh run download $(RUN) --dir $(DESKTOP_DOWNLOAD_DIR) \
+		--pattern 'host-pack-*' \
+		--pattern 'guest-runtime-*' \
+		--pattern 'lemma-local-test-manifest-*' || ( \
+		echo "  ✗ download failed — is $(RUN) a Release Local Stack Images run with publish: false?"; \
+		exit 1)
+	@echo "  ✓ artifacts in $(DESKTOP_DOWNLOAD_DIR)"
+
+# The one command that turns this checkout into an installable macOS build.
+#
+# "Self-contained" means the DMG carries the host pack and the guest runtime as
+# app resources instead of downloading them on first launch, so it installs on a
+# machine with no network and against no published release. That is the build
+# worth handing someone to try a branch — CI's build-check DMG points at
+# unresolvable URLs on purpose and refuses to install.
+#
+# Every step mirrors release-local-images.yml's macos-test-desktop job and
+# shares its staging engine, so a green local build and a green CI build mean
+# the same thing.
+desktop-dmg:
+	@test "$$(uname -s)" = "Darwin" || ( \
+		echo "  ✗ desktop-dmg builds a macOS DMG"; \
+		echo "    On Windows: pwsh desktop\\scripts\\desktop.ps1 exe"; exit 1)
+	@command -v cargo >/dev/null 2>&1 || \
+		(echo "  ✗ cargo not found — install Rust from https://rustup.rs"; exit 1)
+	@command -v swift >/dev/null 2>&1 || \
+		(echo "  ✗ swift not found — install Xcode or the Command Line Tools"; exit 1)
+	@command -v node >/dev/null 2>&1 || \
+		(echo "  ✗ node not found — install Node.js 22 from https://nodejs.org"; exit 1)
+	@command -v jq >/dev/null 2>&1 || (echo "  ✗ jq not found — brew install jq"; exit 1)
+	@test -d $(DESKTOP_DOWNLOAD_DIR) || ( \
+		echo "  ✗ no runtime artifacts in $(DESKTOP_DOWNLOAD_DIR)"; \
+		echo "    Fetch them first: make desktop-runtime-fetch RUN=<run-id>"; exit 1)
+	@echo "→ Staging the bundled runtime for $(MACOS_TRIPLE)…"
+	@python3 scripts/prepare_desktop_test_runtime.py \
+		--artifacts-dir $(DESKTOP_DOWNLOAD_DIR) \
+		--mode bundled \
+		--host-target $(MACOS_TRIPLE) \
+		--guest-target $(MACOS_GUEST_TARGET) \
+		--stage-dir $(DESKTOP_BUNDLED_DIR) \
+		--output $(DESKTOP_BUNDLED_DIR)/lemma-local.json >/dev/null
+	@echo "  ✓ host and guest archives verified and staged"
+	@$(MAKE) --no-print-directory desktop-concepts-check
+	@echo "→ Building native sidecars…"
+	@$(DESKTOP_DIR)/scripts/build-sidecar.sh >/dev/null
+	@# Virtualization.framework checks the signature of whoever creates the VM,
+	@# and the bundler re-signs sidecars without helper entitlements — which is
+	@# why the VZ helper ships as a pre-signed resource, re-sealed here exactly
+	@# as CI does it.
+	@echo "→ Re-sealing the virtualization helper…"
+	@codesign --force --options runtime \
+		--entitlements $(DESKTOP_DIR)/entitlements.plist \
+		--sign "$${APPLE_SIGNING_IDENTITY:--}" \
+		$(DESKTOP_DIR)/binaries/lemma-vz-$(MACOS_TRIPLE) 2>/dev/null
+	@codesign --verify --strict $(DESKTOP_DIR)/binaries/lemma-vz-$(MACOS_TRIPLE)
+	@echo "→ Bundling the self-contained DMG…"
+	@cd $(DESKTOP_DIR) && APPLE_SIGNING_IDENTITY="$${APPLE_SIGNING_IDENTITY:--}" \
+		npx -y $(TAURI_CLI) build --config tauri.dist.conf.json
+	@$(MAKE) --no-print-directory _desktop-verify-dist-app
+	@echo ""
+	@dmg=$$(ls $(DESKTOP_DIR)/target/release/bundle/dmg/Lemma_*.dmg 2>/dev/null | head -1); \
+	echo "  ✓ $$dmg"
+	@test -n "$${APPLE_SIGNING_IDENTITY:-}" || ( \
+		echo "    Ad-hoc signed: Gatekeeper will ask on first open, and locald"; \
+		echo "    re-prompts for keychain access after every rebuild. Set"; \
+		echo "    APPLE_SIGNING_IDENTITY to a Developer ID to avoid both."; true)
+
+# Windows cannot be cross-built from here: the NSIS bundler and the MSVC
+# toolchain both have to run on the target. This target exists to say so.
+desktop-exe:
+	@echo "  ✗ the Windows installer is built on Windows"
+	@echo "    There, run:"
+	@echo "      pwsh desktop\\scripts\\desktop.ps1 runtime-fetch -Run <run-id>"
+	@echo "      pwsh desktop\\scripts\\desktop.ps1 exe"
+	@exit 1
+
+# The one command that answers "does ACP chat over Agent Host actually work?"
+# Drives Codex, Claude Code and OpenCode over real ACP and asserts each streams
+# a real answer back through the host protocol, keeps one provider session
+# across two turns, and survives a session the provider has forgotten.
+#
+# Spends real provider quota and needs those agents authenticated locally, which
+# is why it is opt-in and excluded from CI.
+desktop-verify-agents:
+	@command -v cargo >/dev/null 2>&1 || \
+		(echo "  ✗ cargo not found — install Rust from https://rustup.rs"; exit 1)
+	@echo "→ Verifying ACP chat over Agent Host (real agents, real quota)…"
+	@cd $(DESKTOP_DIR) && \
+		LEMMA_REAL_AGENT_HOST_DATA_DIR="$${LEMMA_REAL_AGENT_HOST_DATA_DIR:-$$HOME/Library/Application Support/Lemma/agent-host}" \
+		cargo test -p lemma-agent-host --locked --test real_harness_e2e -- \
+			--ignored --nocapture --test-threads=1
+	@echo "  ✓ ACP chat over Agent Host verified"
+
+# Everything a build produces. desktop/capabilities/ is hand-written and stays;
+# desktop/permissions/autogenerated/ is written by build.rs and regenerates on
+# the next build of the app crate.
+desktop-clean:
+	@echo "→ Removing desktop build output…"
+	@rm -rf $(DESKTOP_DIR)/target $(DESKTOP_DIR)/binaries $(DESKTOP_DIR)/gen \
+		$(DESKTOP_DIR)/permissions/autogenerated \
+		$(DESKTOP_DOWNLOAD_DIR) $(DESKTOP_BUNDLED_DIR) \
+		$(DESKTOP_DIR)/local-runtime/macos-vz/.build
+	@echo "  ✓ clean"
+
+# Exactly the gates release-local-images.yml applies to its PR test DMG, so a
+# bundle that passes here is the bundle CI would have accepted — plus the
+# locald identifier check, which a local build is the likeliest place to lose.
+_desktop-verify-dist-app:
+	@set -eu; \
+	app="$(DESKTOP_DIR)/target/release/bundle/macos/Lemma.app"; \
+	test -x "$$app/Contents/MacOS/lemma-locald"; \
+	test -x "$$app/Contents/MacOS/lemma-agent-host"; \
+	test -x "$$app/Contents/MacOS/lemma-runtime"; \
+	test -x "$$app/Contents/Resources/lemma-vz"; \
+	test -f "$$app/Contents/Resources/lemma-local.json"; \
+	test -f "$$app/Contents/Resources/host-runtime.zip"; \
+	test -f "$$app/Contents/Resources/guest-runtime.zip"; \
+	test ! -e "$$app/Contents/Resources/local-runtime"; \
+	test ! -e "$$app/Contents/Resources/managed-runtime"; \
+	app_bytes=$$(du -sk "$$app" | awk '{print $$1 * 1024}'); \
+	test "$$app_bytes" -le $$((850 * 1024 * 1024)) || ( \
+		echo "  ✗ app is $$app_bytes bytes; the bundled gate is 850 MiB"; exit 1); \
+	codesign --verify --deep --strict "$$app"; \
+	codesign -d --entitlements :- "$$app/Contents/Resources/lemma-vz" 2>&1 \
+		| grep -qF "com.apple.security.virtualization"; \
+	codesign -dvvv "$$app/Contents/MacOS/lemma-locald" 2>&1 \
+		| grep -qFx "Identifier=work.lemma.locald" || ( \
+		echo "  ✗ locald lost its embedded Info.plist identifier — the credential"; \
+		echo "    vault would treat every rebuild as a different program"; exit 1); \
+	test "$$(jq -r .version "$$app/Contents/Resources/lemma-local.json")" = \
+		"$$(jq -r .version $(DESKTOP_DIR)/tauri.conf.json)" || ( \
+		echo "  ✗ the bundled runtime manifest and Desktop disagree on the version"; \
+		exit 1); \
+	echo "  ✓ bundle verified (sidecars, resources, size, signature, identifier, version)"
+
+# Consistency matters when something is published, not while it is being
+# written, so this is not part of `make quality`. It is here because the Rust
+# crates were never covered at all: release rewrites one manifest, and before
+# the workspace the other five would have drifted silently.
+version-check:
+	@echo "→ Component versions…"
+	@python3 scripts/check_version_consistency.py
 
 # ── Tests ─────────────────────────────────────────────────────────────────────
 

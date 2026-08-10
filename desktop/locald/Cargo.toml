@@ -1,6 +1,6 @@
 [package]
 name = "lemma-locald"
-version = "0.7.0"
+version.workspace = true
 description = "Durable local control plane for Lemma Desktop and lemma-stack"
 edition = "2021"
 license = "AGPL-3.0-or-later"
@@ -14,10 +14,10 @@ interprocess = "2.4"
 keyring = "4.1.5"
 lemma-runtime-manager = { path = "../local-runtime/manager" }
 qrcode = { version = "0.14", default-features = false, features = ["svg"] }
-reqwest = { version = "=0.13.4", default-features = false, features = ["blocking", "json", "native-tls"] }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-sha2 = "0.10"
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
 socket2 = "0.6"
 tokio = { version = "1", features = ["io-util", "net", "rt-multi-thread", "sync"] }
 
@@ -33,9 +33,4 @@ windows-sys = { version = "0.61.2", features = [
 ] }
 
 [dev-dependencies]
-tempfile = "3"
-
-[profile.release]
-strip = true
-lto = true
-codegen-units = 1
+tempfile = { workspace = true }

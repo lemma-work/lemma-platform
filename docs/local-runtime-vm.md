@@ -33,16 +33,16 @@ That yields `macos-aarch64/{vmlinuz,initrd,disk.raw,runtime.json}`.
 The virtualization entitlement is what makes this Mac-only and signature-bound:
 
 ```bash
-swift build -c release --package-path local-runtime/macos-vz
+swift build -c release --package-path desktop/local-runtime/macos-vz
 codesign --force --sign "<your Apple Development identity>" --options runtime \
-  --entitlements local-runtime/macos-vz/lemma-vz.entitlements.plist \
-  local-runtime/macos-vz/.build/arm64-apple-macosx/release/lemma-vz
+  --entitlements desktop/local-runtime/macos-vz/lemma-vz.entitlements.plist \
+  desktop/local-runtime/macos-vz/.build/arm64-apple-macosx/release/lemma-vz
 ```
 
 ## 3. Prepare the runtime state and the trusted control share
 
 `locald` normally does this. By hand it is two files and a sparse disk — sizes
-and modes taken from `local-runtime/manager/src/lib.rs`:
+and modes taken from `desktop/local-runtime/manager/src/lib.rs`:
 
 ```bash
 mkdir -p /tmp/lemma-vz-state /tmp/lemma-vz-share
@@ -59,7 +59,7 @@ VM boots to a login prompt with containerd up and no Lemma runtime at all.
 ## 4. Boot
 
 ```bash
-local-runtime/macos-vz/.build/arm64-apple-macosx/release/lemma-vz serve \
+desktop/local-runtime/macos-vz/.build/arm64-apple-macosx/release/lemma-vz serve \
   --release /tmp/lemma-desktop-runtime/extracted/macos-aarch64 \
   --runtime /tmp/lemma-vz-state \
   --control-socket /tmp/lemma-vz-state/control.sock \
@@ -77,7 +77,7 @@ invalid", which means a previous one is still running, not that the disk is bad.
 export LEMMA_GUEST_CONTROL_SOCKET=/tmp/lemma-vz-state/control.sock
 export LEMMA_GUEST_CAPABILITY_FILE=/tmp/lemma-vz-share/guest.capability
 echo '{"version":1,"operation":"sandbox.list","parameters":{}}' \
-  | local-runtime/hostctl/target/release/lemma-runtime request
+  | desktop/target/release/lemma-runtime request
 ```
 
 Point the provider at the same two variables plus

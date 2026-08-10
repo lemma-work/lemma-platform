@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::env;
 use std::io::{self, BufReader, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
@@ -2075,8 +2075,16 @@ fn exact_origin_regex(origin: &str) -> String {
 }
 
 fn validate_canonical_origin(origin: &str) -> io::Result<()> {
+    // no_proxy, like every other client in this crate. locald talks to the
+    // stack it is itself supervising, and a proxy configured without a
+    // `<local>` bypass would route that at something that has never heard of
+    // it. This used to be true for free: before the desktop workspace, locald's
+    // reqwest had no system-proxy feature to honour. Sharing one dependency
+    // graph with the agent host and the shell means it does now, so the
+    // intent has to be written down.
     let client = reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(5))
+        .no_proxy()
         .build()
         .map_err(io::Error::other)?;
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(45);
@@ -2158,8 +2166,12 @@ fn supervisor_base_command() -> io::Result<Command> {
     let root = env::var_os("LEMMA_DESKTOP_RUNTIME_ROOT")
         .map(PathBuf::from)
         .or_else(|| {
+            // desktop/locald -> desktop -> the repo checkout. Two levels, not
+            // one, since this crate moved under desktop/ with the rest of the
+            // native stack.
             PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                 .parent()
+                .and_then(Path::parent)
                 .map(PathBuf::from)
         })
         .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "runtime root not found"))?;

@@ -1,7 +1,7 @@
 """Which harness configuration selections a profile may save.
 
 Agent Host keeps its own deny-list and refuses a policy-bearing selection when
-it sets up the session (``selection_is_allowed`` in ``agent-host/src/acp.rs``),
+it sets up the session (``selection_is_allowed`` in ``desktop/agent-host/src/acp.rs``),
 so nothing here is a privilege boundary. It is a timing fix: without it a value
 the host will refuse saves cleanly and only fails on the user's first run, far
 from the dialog that accepted it.

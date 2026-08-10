@@ -51,6 +51,11 @@ fi
 
 "${repo_root}/desktop/scripts/build-sidecar.sh"
 
+# The Tauri CLI version lives in one file, read by this script, the Makefile,
+# and every workflow. It used to be typed inline in five places, which is four
+# chances for the next upgrade to leave one behind.
+tauri_cli="@tauri-apps/cli@$(tr -d '[:space:]' < "${repo_root}/desktop/scripts/tauri-cli-version.txt")"
+
 host_triple="$(uname -m)-apple-darwin"
 locald_bin="${repo_root}/desktop/binaries/lemma-locald-${host_triple}"
 vz_bin="${repo_root}/desktop/binaries/lemma-vz-${host_triple}"
@@ -166,4 +171,4 @@ exec env \
   ${control_env[@]+"${control_env[@]}"} \
   LEMMA_DESKTOP_LOCALD_BIN="${locald_bin}" \
   LEMMA_DESKTOP_VZ_BIN="${vz_bin}" \
-  npx -y @tauri-apps/cli@2.11.4 dev
+  npx -y "${tauri_cli}" dev

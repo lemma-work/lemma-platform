@@ -16,7 +16,7 @@ export function isLocalAgentKind(kind?: string | null): boolean {
 }
 
 // Keyed by the `harness_key` Agent Host publishes for each adapter it ships
-// (see agent-host/agent-adapters.lock.json), which is also what a runtime
+// (see desktop/agent-host/agent-adapters.lock.json), which is also what a runtime
 // profile created from a harness records in its metadata.
 export const HARNESS_LOGOS: Partial<Record<string, string>> = {
     'claude-code': '/harnesslogos/claudecode.png',
@@ -312,7 +312,7 @@ export type HarnessConfigControl = {
 
 // Options whose value decides how much the agent may do unattended, and the
 // values Agent Host refuses for them. Mirrors `is_policy_bearing_option` /
-// `is_disallowed_policy_value` (agent-host/src/acp.rs) and the same pair in the
+// `is_disallowed_policy_value` (desktop/agent-host/src/acp.rs) and the same pair in the
 // backend domain. Harnesses *do* enumerate these — Claude Code lists
 // `bypassPermissions` among its permission modes — and the host rejects them
 // anyway at session setup, so offering one here would be a dead choice.

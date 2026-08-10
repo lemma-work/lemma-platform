@@ -76,15 +76,18 @@ Python/uv, and the repository’s normal build toolchain.
 Run focused validation:
 
 ```bash
-cargo test --manifest-path desktop/Cargo.toml --locked
-cargo test --manifest-path locald/Cargo.toml --locked
-cargo test --manifest-path local-runtime/manager/Cargo.toml --locked
-cargo test --manifest-path local-runtime/guestd/Cargo.toml --locked
-swift build --package-path local-runtime/macos-vz
+make desktop-test          # every crate in the desktop workspace
+make desktop-test-app      # just the app crate, for a fast loop
+make desktop-lint          # clippy, warnings are errors
+swift build --package-path desktop/local-runtime/macos-vz
 uv run --project lemma-backend pytest \
   lemma-backend/app/tests/unit/test_health_endpoints.py
 npx tsc --noEmit --project lemma-frontend/tsconfig.json
 ```
+
+`lemma-guestd` is the Linux guest daemon and does not compile on a macOS or
+Windows host, so it sits outside the workspace's default members. CI builds and
+tests it on Linux; locally, `make desktop-guestd` does the same.
 
 Build Desktop sidecars:
 
@@ -113,7 +116,7 @@ the code identity of whoever created it. An ad-hoc designated requirement is a
 bare `cdhash`, so every rebuild is a new program as far as the vault is
 concerned and the user is asked to re-authorise access on the next launch. A
 Developer ID requirement names `work.lemma.locald` and the team instead — the
-identifier being fixed by the `Info.plist` that `locald/build.rs` links into the
+identifier being fixed by the `Info.plist` that `desktop/locald/build.rs` links into the
 binary — and survives rebuilds.
 
 Verify with:

@@ -523,8 +523,10 @@ fn discover_executable() -> Option<PathBuf> {
     } else {
         "lemma-agent-host"
     };
+    // One workspace, one target directory: the agent host builds into
+    // desktop/target alongside this crate, not into a sibling crate's own.
     let development = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../agent-host/target/debug")
+        .join("../target/debug")
         .join(filename);
     development.is_file().then_some(development)
 }
