@@ -8,7 +8,6 @@ both provision successfully and then fail at the first thing a user does.
 from __future__ import annotations
 
 import pytest
-from pydantic import ValidationError
 
 from app.modules.workspace.config import WorkspaceSettings, workspace_settings
 from app.modules.workspace.providers.base import ProviderStorageKind
