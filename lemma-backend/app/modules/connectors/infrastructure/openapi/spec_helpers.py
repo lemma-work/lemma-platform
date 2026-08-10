@@ -36,17 +36,6 @@ IGNORED_PARAMETER_NAMES = {
     "$.xgafv",
 }
 
-_HTTP_METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"}
-
-# Multipart-/binary-aware order — we must NOT collapse everything to JSON.
-_BODY_PREFERRED_TYPES = [
-    "application/json",
-    "multipart/form-data",
-    "application/octet-stream",
-    "*/*",
-]
-_RESPONSE_PREFERRED_TYPES = ["application/json", "*/*"]
-
 
 # --- ported pure helpers ----------------------------------------------------
 

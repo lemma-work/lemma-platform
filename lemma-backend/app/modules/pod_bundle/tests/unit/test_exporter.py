@@ -492,9 +492,7 @@ async def test_unknown_folder_warns_rather_than_failing(
         lambda uow: _FakeFileService({"/": []}, {}),
     )
 
-    _filename, _zip, _progress = await _run_export(
-        patched_exporter, file_folders=["/nope"]
-    )
+    await _run_export(patched_exporter, file_folders=["/nope"])
     warnings = _run_export.last_warnings  # type: ignore[attr-defined]
     assert any("/nope" in w and "not found" in w for w in warnings)
 

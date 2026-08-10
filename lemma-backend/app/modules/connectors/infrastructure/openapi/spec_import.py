@@ -19,9 +19,6 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from app.modules.connectors.infrastructure.openapi.spec_helpers import (
-    _BODY_PREFERRED_TYPES,
-    _HTTP_METHODS,
-    _RESPONSE_PREFERRED_TYPES,
     build_parameter_entry,
     build_tool_name,
     pick_content_schema,
@@ -30,11 +27,18 @@ from app.modules.connectors.infrastructure.openapi.spec_helpers import (
     resolve_once,
 )
 
-# --- constants --------------------------------------------------------------
-
-
-
 # --- descriptor building ----------------------------------------------------
+
+_HTTP_METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"}
+
+# Multipart-/binary-aware order — we must NOT collapse everything to JSON.
+_BODY_PREFERRED_TYPES = [
+    "application/json",
+    "multipart/form-data",
+    "application/octet-stream",
+    "*/*",
+]
+_RESPONSE_PREFERRED_TYPES = ["application/json", "*/*"]
 
 
 @dataclass
