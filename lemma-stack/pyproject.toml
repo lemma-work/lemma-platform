@@ -5,10 +5,10 @@ description = "Installer and management tool for a fully-local Lemma stack"
 readme = "README.md"
 requires-python = ">=3.14,<3.15"
 dependencies = [
-    "typer>=0.12.5",
+    "typer>=0.27.1",
     "rich>=13.9.4",
-    "tomlkit>=0.13.0",
-    "packaging>=24.0",
+    "tomlkit>=0.15.1",
+    "packaging>=26.3",
 ]
 
 [project.scripts]
@@ -16,8 +16,8 @@ lemma-stack = "lemma_stack.app:main"
 
 [dependency-groups]
 dev = [
-    "pytest>=8.4.0",
-    "ruff>=0.9.0",
+    "pytest>=9.1.1",
+    "ruff>=0.16.1",
 ]
 
 [build-system]
