@@ -2,7 +2,7 @@
 
 ``start_publish`` authorizes, acquires an account/repository concurrency lock,
 writes the initial ``QUEUED`` state, and enqueues the ``publish_pod_github`` job.
-``get_publish`` is a state read. All heavy work — export, README, Composio
+``get_publish`` is a state read. All heavy work — export, README, GitHub
 uploads — happens in the worker with short per-operation UoW scopes.
 """
 

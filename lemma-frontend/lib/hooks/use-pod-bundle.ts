@@ -134,9 +134,18 @@ function client(podId: string) {
 // Export
 // ---------------------------------------------------------------------------
 
+/**
+ * Row data and files are chosen by name, one table and one folder at a time.
+ * There is deliberately no "everything" switch: those are the parts of a pod
+ * most likely to be private, so they leave it only where someone asked.
+ */
 export function startExport(
     podId: string,
-    body: { with_data?: boolean; include?: string[] | null } = {},
+    body: {
+        data_tables?: string[] | null;
+        file_folders?: string[] | null;
+        include?: string[] | null;
+    } = {},
 ): Promise<ExportStatusResponse> {
     return client(podId).request('POST', `/pods/${podId}/bundle/exports`, { body });
 }

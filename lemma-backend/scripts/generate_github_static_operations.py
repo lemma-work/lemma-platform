@@ -121,6 +121,15 @@ ALLOWLIST = [
         "repos/create-release",
         "repos/upload-release-asset",
         "repos/download-tarball-archive",
+        "repos/download-zipball-archive",
+        # Git data. Enough to build a commit out of band -- what publishing a
+        # pod as a repository needs, and what an agent needs to write several
+        # files as one commit rather than one PUT per file.
+        "git/get-ref",
+        "git/update-ref",
+        "git/create-blob",
+        "git/create-tree",
+        "git/create-commit",
         # Search
         "search/repos",
         "search/issues-and-pull-requests",
@@ -137,6 +146,12 @@ OVERRIDES = {
     # to a generic non-binary schema. The executor follows the redirect
     # transparently either way; this only affects how the result is decoded.
     "repos/download-tarball-archive": {"binary_response": True},
+    "repos/download-zipball-archive": {"binary_response": True},
+    # `{ref}` here is a whole ref path (`heads/main`, `tags/v1`), not one
+    # segment. Percent-encoding its slash makes GitHub answer 404 for every
+    # real ref.
+    "git/get-ref": {"multi_segment_path_params": ["ref"]},
+    "git/update-ref": {"multi_segment_path_params": ["ref"]},
 }
 
 RAW_PASSTHROUGH_NAME = "github_http_request"

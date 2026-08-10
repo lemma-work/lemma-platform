@@ -33,7 +33,7 @@ from app.modules.pod_bundle.infrastructure.ai_readme import (
 )
 from app.modules.pod_bundle.infrastructure.exporter import BundleExporter
 from app.modules.pod_bundle.infrastructure.github_publisher import (
-    ComposioGithubOps,
+    NativeGithubOps,
     GithubPublisher,
     RepoCreateResult,
 )
@@ -124,7 +124,11 @@ async def _load_or_export_archive(
             pod_name, archive, warnings = await BundleExporter().export(
                 pod_id=pod_id,
                 user_id=user_id,
-                with_data=False,
+                # A published repository is the pod's shape, never its
+                # contents: no table named for seeding, no folder named for
+                # export.
+                data_tables=None,
+                file_folders=None,
                 include=None,
                 ctx=ctx,
                 uow=uow,
@@ -342,7 +346,7 @@ async def publish_pod_github(context: dict[str, str | None]) -> None:
             publish_id, status_payload(state.status.value, state.seq)
         )
         publisher = GithubPublisher(
-            ComposioGithubOps(
+            NativeGithubOps(
                 _operation_runner(
                     worker_ctx=worker_ctx,
                     state=state,

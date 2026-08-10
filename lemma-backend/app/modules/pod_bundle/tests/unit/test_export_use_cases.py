@@ -114,11 +114,11 @@ async def test_start_export_saves_queued_and_enqueues_with_dedup_id():
     pod_id, user_id = uuid4(), uuid4()
 
     state = await use_cases.start_export(
-        pod_id=pod_id, user_id=user_id, with_data=True, include=None
+        pod_id=pod_id, user_id=user_id, data_tables=["settings"], include=None
     )
 
     assert state.status == ExportStatus.QUEUED
-    assert state.with_data is True
+    assert state.data_tables == ["settings"]
     # Persisted under its export_id.
     saved = store.exports[state.export_id]
     assert saved.status == ExportStatus.QUEUED
@@ -139,17 +139,17 @@ async def test_start_export_passes_include_through():
     store = _FakeStore()
     use_cases = _use_cases(store=store)
     state = await use_cases.start_export(
-        pod_id=uuid4(), user_id=uuid4(), with_data=False, include=["tables", "agents"]
+        pod_id=uuid4(), user_id=uuid4(), include=["tables", "agents"]
     )
     assert store.exports[state.export_id].include == ["tables", "agents"]
-    assert store.exports[state.export_id].with_data is False
+    assert store.exports[state.export_id].data_tables is None
 
 
 async def test_start_export_duplicate_enqueue_raises_conflict():
     use_cases = _use_cases(queue=_FakeQueue(return_none=True))
     with pytest.raises(BundleJobConflictError):
         await use_cases.start_export(
-            pod_id=uuid4(), user_id=uuid4(), with_data=True, include=None
+            pod_id=uuid4(), user_id=uuid4(), data_tables=["settings"], include=None
         )
 
 
@@ -199,7 +199,7 @@ async def test_start_export_clamps_ttl_to_max():
 
     huge = pod_bundle_settings.pod_bundle_export_url_max_ttl_seconds + 10_000
     state = await use_cases.start_export(
-        pod_id=uuid4(), user_id=uuid4(), with_data=True, include=None, ttl_seconds=huge
+        pod_id=uuid4(), user_id=uuid4(), data_tables=["settings"], include=None, ttl_seconds=huge
     )
     assert state.ttl_seconds == pod_bundle_settings.pod_bundle_export_url_max_ttl_seconds
 
@@ -210,7 +210,7 @@ async def test_start_export_default_ttl_when_omitted():
     from app.modules.pod_bundle.config import pod_bundle_settings
 
     state = await use_cases.start_export(
-        pod_id=uuid4(), user_id=uuid4(), with_data=True, include=None
+        pod_id=uuid4(), user_id=uuid4(), data_tables=["settings"], include=None
     )
     assert state.ttl_seconds == pod_bundle_settings.pod_bundle_export_url_ttl_seconds
 
@@ -250,3 +250,22 @@ async def test_open_download_by_token_swept_archive_raises_staging_missing():
     token = mint_download_token(kind="pod-exports", job_id=uuid4(), ttl_seconds=600)
     with pytest.raises(BundleStagingMissingError):
         await use_cases.open_download_by_token(token)
+
+
+async def test_start_export_carries_both_selections_to_the_job_state():
+    """The worker reads its selection off the state doc, so what the caller named
+    has to survive the hand-off — an export that quietly forgot the folders would
+    look like a pod with no files."""
+    store = _FakeStore()
+    use_cases = _use_cases(store=store)
+    state = await use_cases.start_export(
+        pod_id=uuid4(),
+        user_id=uuid4(),
+        include=None,
+        data_tables=["settings", "roles"],
+        file_folders=["/reports", "/config"],
+    )
+
+    saved = store.exports[state.export_id]
+    assert saved.data_tables == ["settings", "roles"]
+    assert saved.file_folders == ["/reports", "/config"]

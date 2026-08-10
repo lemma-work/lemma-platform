@@ -197,6 +197,77 @@ async def test_missing_path_param_raises(monkeypatch):
         await _run(monkeypatch, hr, {}, lambda r: httpx.Response(200))
 
 
+_GIT_REF_EXECUTION = {
+    "mode": "openapi",
+    "method": "PATCH",
+    "path": "/repos/{owner}/{repo}/git/refs/{ref}",
+    "server_url": "https://api.github.com",
+    "path_params": ["owner", "repo", "ref"],
+    "multi_segment_path_params": ["ref"],
+    "query_params": [],
+    "header_params": [],
+    "request_body": None,
+    "response": {"binary": False},
+}
+
+
+@pytest.mark.asyncio
+async def test_a_multi_segment_path_param_keeps_its_slashes(monkeypatch):
+    """A git ref is several segments in one placeholder.
+
+    Percent-encoding its slash is what a path parameter normally deserves, and
+    is exactly what makes GitHub answer 404 for every real ref.
+    """
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["url"] = str(request.url)
+        return httpx.Response(200, json={"ok": True})
+
+    await _run(
+        monkeypatch,
+        _GIT_REF_EXECUTION,
+        {"owner": "me", "repo": "demo", "ref": "heads/main"},
+        handler,
+    )
+    assert seen["url"] == "https://api.github.com/repos/me/demo/git/refs/heads/main"
+
+
+@pytest.mark.asyncio
+async def test_a_multi_segment_path_param_cannot_climb_out_of_its_endpoint(
+    monkeypatch,
+):
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("the request must never be made")
+
+    with pytest.raises(OpenApiHttpExecutionError, match="relative segments"):
+        await _run(
+            monkeypatch,
+            _GIT_REF_EXECUTION,
+            {"owner": "me", "repo": "demo", "ref": "../../../user/repos"},
+            handler,
+        )
+
+
+@pytest.mark.asyncio
+async def test_an_ordinary_path_param_still_escapes_its_slashes(monkeypatch):
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["url"] = str(request.url)
+        return httpx.Response(200, json={"ok": True})
+
+    execution = {**_GIT_REF_EXECUTION}
+    del execution["multi_segment_path_params"]
+    await _run(
+        monkeypatch,
+        execution,
+        {"owner": "me", "repo": "demo", "ref": "heads/main"},
+        handler,
+    )
+    assert seen["url"].endswith("/git/refs/heads%2Fmain")
+
+
 @pytest.mark.asyncio
 async def test_non_2xx_raises_with_status(monkeypatch):
     def handler(request: httpx.Request) -> httpx.Response:

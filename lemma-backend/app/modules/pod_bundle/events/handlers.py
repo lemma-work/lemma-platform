@@ -228,9 +228,8 @@ async def export_pod_bundle(context: dict[str, str | None]) -> None:
                 bundle_filename, zip_bytes, warnings = await BundleExporter().export(
                     pod_id=pod_id,
                     user_id=user_id,
-                    with_data=state.with_data,
                     data_tables=state.data_tables,
-                    with_files=state.with_files,
+                    file_folders=state.file_folders,
                     include=state.include,
                     ctx=ctx,
                     uow=uow,
