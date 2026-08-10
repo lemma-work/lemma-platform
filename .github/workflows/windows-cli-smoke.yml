@@ -1,9 +1,13 @@
-name: Windows Agent Host smoke
+name: Windows CLI smoke
 
-# Validates that the lemma CLI works on a real Windows kernel — the `uv tool
-# install` path plus the `lemma agent-host` command surface. This exercises the
-# Windows-specific code that cannot be run on the Linux/macOS dev machines:
-# console encoding, path handling, and the Agent Host service paths (schtasks).
+# Validates that the lemma CLI works on a real Windows kernel, through the same
+# `uv tool install` path a user takes. This exercises Windows-specific behaviour
+# that cannot be reproduced on the Linux/macOS dev machines: console encoding
+# and path handling.
+#
+# This used to also assert the `lemma agent-host` command surface. Agent Host is
+# supervised by Lemma Desktop now and has no CLI, so the Windows coverage that
+# matters for it is the desktop build check in ci.yml.
 #
 # Triggers:
 #   * push to main           — post-merge gate (only when CLI files change)
@@ -15,7 +19,7 @@ on:
     paths:
       - 'lemma-cli/**'
       - 'lemma-skills/**'
-      - '.github/workflows/windows-agent-host.yml'
+      - '.github/workflows/windows-cli-smoke.yml'
   pull_request:
     types: [labeled]
   workflow_dispatch:
@@ -24,12 +28,12 @@ permissions:
   contents: read
 
 concurrency:
-  group: windows-agent-host-${{ github.event.pull_request.head.ref || github.ref_name }}
+  group: windows-cli-smoke-${{ github.event.pull_request.head.ref || github.ref_name }}
   cancel-in-progress: true
 
 jobs:
-  windows-agent-host:
-    name: Windows Agent Host CLI
+  windows-cli-smoke:
+    name: Windows CLI smoke
     # Always on push/dispatch; on PRs only when the `windows-ci` label is present.
     if: >-
       github.event_name == 'workflow_dispatch' ||
@@ -70,18 +74,3 @@ jobs:
           if ($LASTEXITCODE -notin 0, 1) { throw "lemma auth status exited $LASTEXITCODE" }
           Write-Host "smoke commands ok"
           exit 0
-
-      - name: Agent Host command surface
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-          # Pairing needs a signed-in user and running a host needs an installed
-          # harness, so CI asserts the command surface resolves rather than
-          # driving a real host.
-          lemma agent-host --help
-          if ($LASTEXITCODE -ne 0) { throw "agent-host --help exited $LASTEXITCODE" }
-          $help = (lemma agent-host --help | Out-String)
-          foreach ($cmd in @("connect", "harnesses", "status", "start", "stop", "doctor")) {
-            if ($help -notmatch $cmd) { throw "agent-host is missing the '$cmd' command" }
-          }
-          Write-Host "agent-host command surface OK"

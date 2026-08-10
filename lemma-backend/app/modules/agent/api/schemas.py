@@ -291,8 +291,8 @@ class AgentRuntimeProfileListResponse(BaseModel):
 
 class CreateAgentHostRuntimeProfileRequest(BaseModel):
     source: Literal["AGENT_HOST"] = "AGENT_HOST"
-    # From `lemma agent-host harnesses` (or GET
-    # /me/runtime/agent-hosts/{id}/harnesses).
+    # From GET /me/runtime/agent-hosts/{id}/harnesses, which is what Lemma
+    # Desktop lists under Models.
     harness_id: UUID
     scope: RuntimeProfileScope = RuntimeProfileScope.ORGANIZATION
     name: str = Field(min_length=1, max_length=255)

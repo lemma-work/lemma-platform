@@ -91,7 +91,7 @@ impl HostPaths {
         if fs4::FileExt::try_lock(&file).is_err() {
             anyhow::bail!(
                 "another Agent Host is already serving {}. Stop it first \
-                 (`lemma agent-host stop`, or quit the other process); running two \
+                 (quit Lemma, or stop the other process); running two \
                  against one workspace makes them fight over the same pairing.",
                 self.root.display()
             );

@@ -79,7 +79,7 @@ fn agent_host_data_directory() -> PathBuf {
         .map(PathBuf::from)
         .expect(
             "set LEMMA_REAL_AGENT_HOST_DATA_DIR to an Agent Host directory whose pinned \
-             adapters have been installed with `lemma agent-host doctor --repair`",
+             adapters have been installed with `lemma-agent-host doctor --repair`",
         )
 }
 

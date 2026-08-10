@@ -506,38 +506,8 @@ export function splitModelNames(value: string): string[] {
         .filter(Boolean);
 }
 
-// The CLI auto-trusts plain HTTP only on loopback, so a self-hosted API on a
-// LAN address needs the flag spelled out or `connect` refuses the URL.
-function needsInsecureHttpOptIn(apiBaseUrl: string): boolean {
-    try {
-        const url = new URL(apiBaseUrl);
-        if (url.protocol !== 'http:') return false;
-        return !['localhost', '127.0.0.1', '::1', '[::1]'].includes(url.hostname);
-    } catch {
-        return false;
-    }
-}
-
-export function pairingCommands(
-    pairing: { pairing_code: string; display_name: string },
-    apiBaseUrl: string,
-): string[] {
-    const name = pairing.display_name.replaceAll('"', '\\"');
-    // `connect` already resolves the binary itself - PATH, a dev checkout, then
-    // a managed download - so there is no separate install step. Asking for one
-    // would also fail outright on any build whose release assets aren't
-    // published, which is every self-hosted and development install.
-    const connect = [
-        'lemma agent-host connect',
-        `--url ${apiBaseUrl}`,
-        `--pairing-code ${pairing.pairing_code}`,
-        `--name "${name}"`,
-        ...(needsInsecureHttpOptIn(apiBaseUrl) ? ['--allow-insecure-http'] : []),
-    ].join(' ');
-
-    return [
-        'uv tool install lemma-terminal',
-        connect,
-        'lemma agent-host status',
-    ];
-}
+// Agent Host used to have a second install channel: a CLI that downloaded the
+// binary from a release and registered it as an OS service, which is what the
+// pairing-code path here was for. Desktop supervises the only copy now, so a
+// machine connects by running Desktop and signing in — there is no code to
+// carry, and nothing that could consume one.

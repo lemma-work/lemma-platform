@@ -135,15 +135,12 @@ automatically.
 
 ## Connect a target
 
-Create a pairing code in Lemma's Local Agents UI, then:
+Lemma Desktop owns this. **Models → Connect this computer** mints a pairing code
+through the session the app already holds and hands it to the bundled sidecar
+over locald's private IPC — nothing is displayed and nothing is copied.
 
-```bash
-lemma agent-host connect \
-  --url https://api.example.lemma.ai \
-  --pairing-code 'one-time-code'
-```
-
-The native binary can also be invoked directly:
+The binary's own CLI is what Desktop and locald drive, and it is available for
+development and debugging:
 
 ```bash
 lemma-agent-host connect \
@@ -157,37 +154,31 @@ boundary.
 
 ## Lifecycle and diagnostics
 
-```bash
-lemma agent-host discover
-lemma agent-host doctor
-lemma agent-host status
-lemma agent-host refresh
-lemma agent-host drain
-lemma agent-host resume
-lemma agent-host logs --follow
-```
-
-Desktop installations route lifecycle changes through locald's authenticated
-private IPC. A competing standalone service is refused when locald owns the
-lifecycle.
-
-For a headless workstation:
+Desktop routes every lifecycle change through locald's authenticated private
+IPC, and locald refuses a competing standalone service while it owns the
+lifecycle. Against a host locald is not supervising, the binary answers directly:
 
 ```bash
-lemma agent-host install-service
-lemma agent-host start
-lemma agent-host stop
-lemma agent-host uninstall-service
+lemma-agent-host discover
+lemma-agent-host doctor
+lemma-agent-host status
+lemma-agent-host refresh
+lemma-agent-host drain
+lemma-agent-host resume
+lemma-agent-host logs --follow
 ```
 
-The installer uses a launchd LaunchAgent on macOS, a systemd user unit on Linux,
-and a limited per-user Task Scheduler entry on Windows. For containers or an
-external supervisor, run `lemma agent-host serve` in the foreground.
+There is no OS service install any more. `install-service` built a launchd
+LaunchAgent, a systemd user unit, or a per-user Task Scheduler entry pinned to a
+downloaded release — a second install channel that could run alongside Desktop's
+own copy against the same pairing, speaking an older protocol. Desktop is the
+supported way to keep a host running; `lemma-agent-host serve` runs one in the
+foreground for containers or an external supervisor.
 
 Disconnect revokes the remote device before deleting its local identity:
 
 ```bash
-lemma agent-host disconnect --target my-workspace
+lemma-agent-host disconnect --target my-workspace
 ```
 
 If a target is permanently unreachable, `--force-local` removes only the local

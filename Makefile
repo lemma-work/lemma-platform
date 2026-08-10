@@ -8,14 +8,13 @@ SHELL := /bin/bash
 #   make dev-public    same, with an ephemeral public Cloudflare API URL
 #   make dev RELOAD=1  same, with uvicorn --reload on the backend
 #   make dev OTEL=1 LLM_OTEL=1  same, with local HyperDX + Phoenix dashboards
-#   make agent-host    build, pair, and run the local Agent Host against make dev
 #   make stop          stop backend/frontend processes
 #   make stop-all      also stop infra containers
 #   make test          run all component test suites
 #   make coverage      full coverage report (unit + e2e per component)
 # ──────────────────────────────────────────────────────────────────────────────
 
-.PHONY: help init dev dev-public agent-host verify-agent-host stop-agent-host stop stop-all logs otel-up otel-down otel-tail otel-smoke \
+.PHONY: help init dev dev-public stop stop-all logs otel-up otel-down otel-tail otel-smoke \
         observability-up observability-down observability-open \
         _prepare-dev _start-public-api-tunnel _ensure-databases _ensure-sandbox-images _wait-backend \
         _ensure-native-connectors \
@@ -40,8 +39,6 @@ FRONTEND_DIR  := lemma-frontend
 CLI_DIR       := lemma-cli
 PYTHON_DIR    := lemma-python
 TS_DIR        := lemma-typescript
-AGENT_HOST_DIR := agent-host
-AGENT_HOST_BIN := $(abspath $(AGENT_HOST_DIR)/target/debug/lemma-agent-host)
 
 PID_FILE      := .dev-pids
 BACKEND_PID_FILE  := $(BACKEND_DIR)/.dev-backend.pid
@@ -266,7 +263,6 @@ help:
 	@echo "    make dev                start infra + backend + frontend"
 	@echo "    make dev-public         start with an ephemeral public API tunnel"
 	@echo "    make dev RELOAD=1       same, with uvicorn --reload on the backend"
-	@echo "    make agent-host         build, pair, and run the local Agent Host"
 	@echo "    make stop               stop app and tunnel processes"
 	@echo "    make stop-all           also bring down infra containers"
 	@echo "    make logs               tail infrastructure container logs"
@@ -498,7 +494,7 @@ dev:
 	@echo "  API docs  →  $(DEV_BACKEND_URL)/scalar"
 	@echo ""
 	@echo "  Run local Codex/Claude Code/OpenCode/Cursor against this stack:"
-	@echo "    make agent-host        (one-time pairing, then it keeps running)"
+	@echo "    make desktop-dev       (Lemma Desktop, which supervises Agent Host)"
 	@echo ""
 	@echo "  Debug and safe request-access logs are enabled."
 	@echo "  Press Ctrl-C or run 'make stop' to stop."
@@ -544,72 +540,6 @@ dev-public:
 		status=$$?; $(MAKE) --no-print-directory stop; wait 2>/dev/null || true; exit $$status; \
 	}; \
 	wait
-
-# Agent Host is deliberately NOT started by `make dev`. It is a separate,
-# durable, per-user process that holds a pairing credential bound to a
-# signed-in Lemma user, so it cannot be started unattended by a target that has
-# no session; it is a Rust binary whose first build would add minutes to every
-# `make dev` and hard-fail for anyone without a Rust toolchain; and it is meant
-# to outlive individual dev-stack restarts rather than be swept by `make stop`.
-# So `make dev` prints one line pointing here, and this target is that one line.
-stop-agent-host:
-	@# The managed background service first: it is what re-appears on its own.
-	@if [ "$$(uname)" = "Darwin" ]; then \
-		launchctl bootout gui/$$(id -u)/ai.lemma.agent-host >/dev/null 2>&1 || true; \
-	else \
-		systemctl --user stop lemma-agent-host >/dev/null 2>&1 || true; \
-	fi
-	@pkill -f 'lemma-agent-host serve' >/dev/null 2>&1 || true
-
-# The one command that answers "does ACP chat over Agent Host actually work?"
-#
-# Pairs a real Agent Host against a control plane over `app.lemma.localhost` -
-# the hostname Desktop uses - then drives Codex, Claude Code and OpenCode over
-# real ACP and asserts each streams a real answer back through the host
-# protocol, keeps one provider session across two turns, and survives a session
-# the provider has forgotten.
-#
-# Spends real provider quota and needs those agents authenticated locally, which
-# is why it is opt-in and excluded from CI.
-verify-agent-host:
-	@command -v cargo >/dev/null 2>&1 || 		(echo "  ✗ cargo not found — install Rust from https://rustup.rs"; exit 1)
-	@echo "→ Verifying ACP chat over Agent Host (real agents, real quota)…"
-	@cd $(AGENT_HOST_DIR) && 		LEMMA_REAL_AGENT_HOST_DATA_DIR="$${LEMMA_REAL_AGENT_HOST_DATA_DIR:-$$HOME/Library/Application Support/Lemma/agent-host}" 		cargo test --locked --test real_harness_e2e -- --ignored --nocapture --test-threads=1
-	@echo "  ✓ ACP chat over Agent Host verified"
-
-agent-host:
-	@command -v cargo >/dev/null 2>&1 || \
-		(echo "  ✗ cargo not found — install Rust from https://rustup.rs"; exit 1)
-	@echo "→ Building Agent Host…"
-	@cd $(AGENT_HOST_DIR) && cargo build --quiet
-	@# Only ever run the binary this target just built. Two hosts polling the
-	@# same target fight over one credential, and the loser's shutdown writes
-	@# available_runs=0 — which the server reads as DRAINING, so the workspace
-	@# shows a healthy machine as unavailable. The background service counts:
-	@# `lemma agent-host connect` installs a launchd/systemd job pinned to a
-	@# downloaded release, which then runs alongside this one, speaking an
-	@# older protocol against the same pairing.
-	@$(MAKE) --no-print-directory stop-agent-host
-	@echo "→ Pairing with $(DEV_BACKEND_URL) (no-op if already paired)…"
-	@# `lemma agent-host connect` mints a pairing code from the CLI's own login
-	@# and consumes it immediately, so pairing is this one command.
-	@# LEMMA_AGENT_HOST_BIN pins it to the build above: without it the CLI can
-	@# resolve a previously downloaded release and pair with a different,
-	@# older binary than the one this target then serves.
-	@cd $(CLI_DIR) && LEMMA_AGENT_HOST_BIN=$(AGENT_HOST_BIN) \
-		uv run lemma agent-host connect --url $(DEV_BACKEND_URL) || { \
-		echo "  ✗ Pairing failed. Run 'cd $(CLI_DIR) && uv run lemma auth login' first."; \
-		exit 1; \
-	}
-	@echo ""
-	@echo "  Agent Host is serving. Next:"
-	@echo "    cd $(CLI_DIR) && uv run lemma agent-host harnesses   # copy a harness_id"
-	@echo "    cd $(CLI_DIR) && uv run lemma runtime profiles create AGENT_HOST \\"
-	@echo "        --name 'Codex on my laptop' --harness-id <harness_id>"
-	@echo ""
-	@echo "  Press Ctrl-C to stop."
-	@echo ""
-	@$(AGENT_HOST_BIN) serve
 
 _prepare-dev:
 	@$(MAKE) --no-print-directory stop 2>/dev/null || true

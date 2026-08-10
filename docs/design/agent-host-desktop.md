@@ -38,8 +38,10 @@ cloud user who never touches the feature never gets a daemon.
 
 **The Agent Host runs while Lemma is open.** Lemma lives in the tray and can
 start at login, so this covers ordinary use with one rule the UI can state
-plainly. There is no OS service install from the desktop app; `lemma agent-host
-install-service` remains for headless machines.
+plainly. There is no OS service install at all: Desktop compiles and supervises
+the only copy of the sidecar, which is what retired the separate CLI-managed
+install and its per-user launchd/systemd/schtasks job. A machine that cannot run
+Desktop cannot run an Agent Host.
 
 Full quit stops it through the `desktop.release` handshake — the same hook that
 closes an open LAN or public tunnel, because the daemon deliberately outlives
@@ -66,7 +68,7 @@ These do not always agree, and the difference is the whole point.
 | Plane | Source | Answers |
 |---|---|---|
 | Process | locald's supervisor | Is the sidecar installed, and is it alive? |
-| Connection | the host's own journal, via `agent-host status --json` | Is it paired, is it reaching the workspace, what work does it hold? |
+| Connection | the host's own journal, via the sidecar's `status --json` | Is it paired, is it reaching the workspace, what work does it hold? |
 | Cloud | `GET /me/runtime/agent-hosts` | Did the backend hear a heartbeat in the last 90s, and what harnesses were published? |
 
 **The UI reports reachability, not liveness.** A running host that is unpaired,
@@ -123,11 +125,11 @@ is granted somewhere.
 
 ## Pairing
 
-Inside the desktop app pairing is one click: the page mints a code through the
-session it already has open and hands it straight to the bundled sidecar over
-`agent-host.pair`. Nothing is displayed and nothing is copied.
+Pairing is one click: the page mints a code through the session it already has
+open and hands it straight to the bundled sidecar over `agent-host.pair`.
+Nothing is displayed and nothing is copied.
 
-The copyable commands remain for pairing a *different* machine, which is the
-case they were always for. Failures are reported with the pairing code stripped:
-the host quotes its argument list back on error, and one of those arguments is a
-live single-use credential.
+A *different* machine pairs the same way — install Desktop there and sign in —
+so there is no code to carry and no copyable command to get wrong. Failures are
+still reported with the pairing code stripped: the host quotes its argument list
+back on error, and one of those arguments is a live single-use credential.

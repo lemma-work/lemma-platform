@@ -38,7 +38,7 @@ impl ServiceManager {
                     .is_some_and(|value| value == "1"),
             concat!(
                 "Lemma Desktop/locald is installed and already owns Agent Host lifecycle; ",
-                "use the Desktop controls or `lemma agent-host start` instead"
+                "use the Desktop controls instead"
             )
         );
         self.paths.ensure()?;
