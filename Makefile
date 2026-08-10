@@ -19,7 +19,7 @@ SHELL := /bin/bash
 .PHONY: help init dev dev-public stop stop-all logs otel-up otel-down otel-tail otel-smoke \
         observability-up observability-down observability-open \
         _prepare-dev _start-public-api-tunnel _ensure-databases _ensure-sandbox-images _wait-backend \
-        _ensure-native-connectors _desktop-verify-dist-app \
+        _ensure-native-connectors _desktop-verify-dist-app _desktop-ensure-sidecars \
         desktop-dev desktop-sidecars desktop-test desktop-test-app desktop-fmt desktop-fmt-fix \
         desktop-lint desktop-guestd desktop-concepts desktop-concepts-check \
         desktop-runtime-fetch desktop-dmg desktop-exe desktop-verify-agents desktop-clean \
@@ -882,10 +882,25 @@ desktop-sidecars:
 		   echo "    On Windows: pwsh desktop\\scripts\\desktop.ps1 sidecars"; exit 1 ;; \
 	esac
 
+# tauri-build resolves the externalBin sidecars at build-script time, so
+# anything that compiles lemma-desktop -- clippy and the tests included -- fails
+# outright on a fresh clone until they exist. Build them once rather than making
+# every contributor learn that from a build-script panic.
+_desktop-ensure-sidecars:
+	@case "$$(uname -s)" in \
+		Darwin) built="$(DESKTOP_DIR)/binaries/lemma-locald-$(MACOS_TRIPLE)" ;; \
+		*) built="" ;; \
+	esac; \
+	if [ -n "$$built" ] && [ ! -f "$$built" ]; then \
+		echo "→ Building native sidecars (lemma-desktop cannot compile without them)…"; \
+		$(DESKTOP_DIR)/scripts/build-sidecar.sh >/dev/null; \
+		echo "  ✓ sidecars ready"; \
+	fi
+
 # One workspace, one test command — the point of collapsing six crates into it.
 # lemma-guestd is included here because it builds on macOS and Linux; only
 # Windows has to skip it.
-desktop-test:
+desktop-test: _desktop-ensure-sidecars
 	@command -v cargo >/dev/null 2>&1 || \
 		(echo "  ✗ cargo not found — install Rust from https://rustup.rs"; exit 1)
 	@echo "→ Desktop workspace tests…"
@@ -893,7 +908,7 @@ desktop-test:
 	@echo "  ✓ desktop workspace tests pass"
 
 # The app crate alone, for when the shell is what changed.
-desktop-test-app:
+desktop-test-app: _desktop-ensure-sidecars
 	@echo "→ Desktop app tests…"
 	@cd $(DESKTOP_DIR) && cargo test -p lemma-desktop --locked
 
@@ -905,7 +920,7 @@ desktop-fmt-fix:
 	@echo "→ Rewriting the desktop workspace with rustfmt…"
 	@cd $(DESKTOP_DIR) && cargo fmt --all
 
-desktop-lint:
+desktop-lint: _desktop-ensure-sidecars
 	@command -v cargo >/dev/null 2>&1 || \
 		(echo "  ✗ cargo not found — install Rust from https://rustup.rs"; exit 1)
 	@echo "→ Desktop workspace clippy…"

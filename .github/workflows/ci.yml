@@ -524,17 +524,11 @@ jobs:
             exit 1
           fi
 
+      # rustfmt compiles nothing, so it can run before the cache is warm and
+      # before the sidecars exist. --all covers lemma-guestd too.
       - name: Check formatting
         working-directory: desktop
         run: cargo fmt --all --check
-
-      - name: Lint
-        working-directory: desktop
-        run: cargo clippy --workspace --locked --all-targets -- -D warnings
-
-      - name: Test
-        working-directory: desktop
-        run: cargo test --workspace --locked
 
       - name: Cache Cargo
         uses: actions/cache@v4
@@ -574,8 +568,20 @@ jobs:
       - name: Verify baked splash concepts are committed
         run: git diff --exit-code desktop/ui/concepts.gen.json
 
+      # tauri-build resolves the externalBin sidecars at build-script time and
+      # fails when they are absent, so clippy and the tests need them just as
+      # much as bundling does. Nothing that compiles lemma-desktop may run
+      # before this step.
       - name: Build native local sidecars
         run: desktop/scripts/build-sidecar.sh
+
+      - name: Lint
+        working-directory: desktop
+        run: cargo clippy --workspace --locked --all-targets -- -D warnings
+
+      - name: Test
+        working-directory: desktop
+        run: cargo test --workspace --locked
 
       # desktop/runtime/lemma-local.json is committed as an online-shaped
       # placeholder: unresolvable URLs, zero digests, and `artifact_source:
@@ -730,6 +736,18 @@ jobs:
           key: desktop-win-cargo-${{ runner.os }}-${{ hashFiles('desktop/Cargo.lock') }}
           restore-keys: desktop-win-cargo-${{ runner.os }}-
 
+      - name: Bake splash concepts
+        run: node desktop/scripts/extract-concepts.mjs
+
+      - name: Verify baked splash concepts are committed
+        run: git diff --exit-code desktop/ui/concepts.gen.json
+
+      # Before clippy and the tests, not after: tauri-build resolves the
+      # externalBin sidecars at build-script time, so nothing that compiles
+      # lemma-desktop can run until they exist.
+      - name: Build Windows sidecars
+        run: desktop/scripts/build-sidecar.ps1
+
       # lemma-guestd is the Linux guest daemon and reaches for std::os::unix
       # unconditionally, so it does not compile for Windows at all. The macOS
       # and Linux jobs cover it.
@@ -740,15 +758,6 @@ jobs:
       - name: Test
         working-directory: desktop
         run: cargo test --workspace --exclude lemma-guestd --locked
-
-      - name: Bake splash concepts
-        run: node desktop/scripts/extract-concepts.mjs
-
-      - name: Verify baked splash concepts are committed
-        run: git diff --exit-code desktop/ui/concepts.gen.json
-
-      - name: Build Windows sidecars
-        run: desktop/scripts/build-sidecar.ps1
 
       - name: Read the pinned Tauri CLI
         run: |
