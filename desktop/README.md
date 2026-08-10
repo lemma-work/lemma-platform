@@ -90,6 +90,23 @@ unconditionally, so it builds and tests on macOS and Linux but not on Windows.
 Its vsock listener is behind a Linux `cfg` that only a Linux build compiles,
 which is why CI runs `make desktop-guestd` there as well.
 
+The `cfg(windows)` branches — most of the runtime manager, locald's job objects
+and named pipes, the Agent Host's npm shims — compile on no developer machine
+here. The msvc target cannot be cross-compiled from macOS because
+`libsqlite3-sys` needs a C toolchain, but the gnu target compiles the same
+branches, which is enough to lint them:
+
+```bash
+brew install mingw-w64
+cd desktop && CC_x86_64_pc_windows_gnu=x86_64-w64-mingw32-gcc \
+  CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=x86_64-w64-mingw32-gcc \
+  cargo clippy --workspace --exclude lemma-guestd --exclude lemma-desktop \
+    --all-targets --target x86_64-pc-windows-gnu -- -D warnings
+```
+
+The **Windows desktop build check** job in CI is the real gate; this is how to
+avoid learning about it from a red PR.
+
 Build Desktop sidecars:
 
 ```bash
