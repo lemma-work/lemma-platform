@@ -796,6 +796,10 @@ fn require_auth(headers: &HeaderMap) -> Result<(), StatusCode> {
     .ok_or(StatusCode::UNAUTHORIZED)
 }
 
+#[cfg_attr(
+    windows,
+    expect(unused_variables, reason = "adapter reuse is a unix symlink")
+)]
 async fn run_through_paired_agent_host(source_paths: &HostPaths, agent: &str) {
     let state = ControlServerState {
         host_id: Uuid::new_v4(),

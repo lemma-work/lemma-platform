@@ -264,11 +264,9 @@ fn cached_adapter_executable(cache_root: &Path, spec: &AdapterSpec) -> PathBuf {
 
 fn platform_cached_executable(root: &Path, command: &str) -> PathBuf {
     let executable = root.join("node_modules").join(".bin").join(command);
+    // npm writes a .cmd shim on Windows and a symlink everywhere else.
     #[cfg(windows)]
-    {
-        return executable.with_extension("cmd");
-    }
-    #[cfg(not(windows))]
+    let executable = executable.with_extension("cmd");
     executable
 }
 

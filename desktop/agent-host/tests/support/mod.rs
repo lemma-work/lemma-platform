@@ -939,6 +939,10 @@ impl InProcessHost {
     ///
     /// # Panics
     /// If pairing or configuration fails.
+    #[cfg_attr(
+        windows,
+        expect(unused_variables, reason = "adapter reuse is a unix symlink")
+    )]
     pub async fn start(
         root: &Path,
         control: &ControlPlane,
