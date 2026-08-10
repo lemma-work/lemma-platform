@@ -179,11 +179,29 @@ class PackageKindSpec(KindSpecBase):
 
 
 class ComposioKindSpec(KindSpecBase):
+    """A toolkit Composio brokers on Lemma's behalf.
+
+    Always system-credentialed: every Composio toolkit runs on Lemma's own
+    Composio account, so ``system_default_available`` is always True and an
+    install is always SYSTEM_DEFAULT (see
+    ``COMPOSIO_SYSTEM_CREDENTIALS_ONLY``). A ``supports_org_custom_auth_config``
+    flag used to sit here promising the opposite; it was hardcoded False by the
+    only thing that produced it, force-set False again on read, and rejected
+    two layers earlier than the one branch that consulted it -- so it never
+    carried information. ``supports_org_custom_oauth`` on the base class is the
+    real "org may bring its own client" flag, and it belongs to the kinds that
+    can honour it.
+
+    ``auth_config_schema`` is NOT an org install form here: for a non-OAuth
+    toolkit the catalog fills it with the *end user's* credential fields
+    (derived from Composio's ``connected_account_initiation``), which is what
+    the connect dialog renders.
+    """
+
     kind: Literal[ConnectorKind.COMPOSIO] = ConnectorKind.COMPOSIO
     auth_scheme: AuthScheme = AuthScheme.OAUTH2
     toolkit_slug: str
     system_default_available: bool = True
-    supports_org_custom_auth_config: bool = False
 
 
 class HttpKindSpec(KindSpecBase):
@@ -231,10 +249,6 @@ class ConnectorEntity(BaseModel):
     composio_toolkit_slug: str | None = Field(
         None,
         description="Runtime-only Composio toolkit slug selected by auth config.",
-    )
-    composio_auth_config_id: str | None = Field(
-        None,
-        description="Runtime-only Composio auth config id selected by auth config.",
     )
     is_active: bool = Field(default=True, description="Whether the connector is active")
     created_at: datetime.datetime | None = Field(None, description="Created at")

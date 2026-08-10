@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+    defaultVisibilityFor,
     normalizeResourceVisibility,
     reachesOutsidePod,
     VISIBILITY_VALUES,
@@ -34,6 +35,19 @@ describe('normalizeResourceVisibility', () => {
 describe('VISIBILITY_VALUES', () => {
     it('runs narrow to wide', () => {
         expect(VISIBILITY_VALUES).toEqual(['PERSONAL', 'POD', 'RESTRICTED', 'PUBLIC']);
+    });
+});
+
+describe('defaultVisibilityFor', () => {
+    it('is PUBLIC for apps and POD for everything else', () => {
+        // Mirrors the backend: apps are created PUBLIC because they are served
+        // on their own public host, every other resource starts POD. A badge
+        // that hides the wrong "default" reads as the opposite of the truth.
+        expect(defaultVisibilityFor('app')).toBe('PUBLIC');
+        expect(defaultVisibilityFor('agent')).toBe('POD');
+        expect(defaultVisibilityFor('datastore_table')).toBe('POD');
+        expect(defaultVisibilityFor(undefined)).toBe('POD');
+        expect(defaultVisibilityFor(null)).toBe('POD');
     });
 });
 

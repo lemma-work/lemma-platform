@@ -30,7 +30,7 @@ class AppDetailResponse:
         current_release_id (None | Unset | UUID):
         description (None | str | Unset):
         source_archive_path (None | str | Unset):
-        visibility (str | Unset):  Default: 'POD'.
+        visibility (str | Unset):  Default: 'PUBLIC'.
     """
 
     created_at: Any
@@ -46,7 +46,7 @@ class AppDetailResponse:
     current_release_id: None | Unset | UUID = UNSET
     description: None | str | Unset = UNSET
     source_archive_path: None | str | Unset = UNSET
-    visibility: str | Unset = "POD"
+    visibility: str | Unset = "PUBLIC"
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:

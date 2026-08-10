@@ -55,10 +55,12 @@ async def _get_public_app_asset(service, public_slug, *, asset_path=None):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("visibility", ["POD", "PERSONAL", "RESTRICTED", "", "NONSENSE"])
 async def test_public_slug_route_serves_only_apps_published_to_everyone(visibility):
-    """`/public/apps` has no session, and apps default to POD.
+    """`/public/apps` has no session, so only a PUBLIC app belongs on it.
 
-    Serving on slug alone meant every uploaded app was readable by anyone who
-    guessed the slug, which is kebab-cased from the app name.
+    Apps are created PUBLIC now, so reaching this refusal takes a deliberate
+    narrowing in the share dialog -- and that narrowing has to hold, or the
+    dialog's "pod only" is decoration. An empty or unrecognized stored value is
+    not PUBLIC either: it is refused rather than read as the default.
     """
     repo = AsyncMock()
     storage = AsyncMock()
@@ -78,6 +80,50 @@ async def test_public_slug_route_serves_only_apps_published_to_everyone(visibili
 
     # Nothing was read from storage before the refusal.
     storage.read_file.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_created_app_is_public_and_reaches_the_public_slug_route():
+    """The default has to be the one the public route accepts.
+
+    These two live in different modules, and when they disagreed every app
+    404'd on the host it was deployed to. Asserting the default string is not
+    enough -- this walks a created app back through the serving gate, so the
+    pair cannot drift apart again.
+    """
+    repo = AsyncMock()
+    storage = AsyncMock()
+    service = AppService(repo, Mock(return_value=storage), AsyncMock())
+
+    pod_id, user_id = uuid4(), uuid4()
+    repo.get_by_name.return_value = None
+    repo.get_by_public_slug.return_value = None
+    repo.create.side_effect = lambda entity: entity
+
+    created = await service.create_app_with_context(
+        AppEntity(
+            pod_id=pod_id, user_id=user_id, name="Task Flow", public_slug="taskflow"
+        ),
+        user_id,
+        ctx=allow_all_context(user_id=user_id, pod_id=pod_id),
+    )
+
+    assert created.visibility == "PUBLIC"
+
+    created.id = uuid4()
+    created.current_release_id = uuid4()
+    repo.get_by_public_slug.return_value = created
+    repo.get_release.return_value = AppReleaseEntity(
+        id=created.current_release_id,
+        app_id=created.id,
+        version="v1",
+        dist_root_path="releases/v1/dist/",
+    )
+    storage.read_file.return_value = b"<html><body>flow</body></html>"
+
+    asset = await _get_public_app_asset(service, "taskflow")
+
+    assert asset.is_entrypoint is True
 
 
 async def _delete_app(service, pod_id, name, user_id, ctx=None):

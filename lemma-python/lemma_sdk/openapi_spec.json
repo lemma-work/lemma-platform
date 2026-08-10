@@ -2555,7 +2555,7 @@
             "type": "string"
           },
           "visibility": {
-            "default": "POD",
+            "default": "PUBLIC",
             "title": "Visibility",
             "type": "string"
           }
@@ -3791,11 +3791,6 @@
               }
             ],
             "title": "Package Name"
-          },
-          "supports_org_custom_auth_config": {
-            "default": false,
-            "title": "Supports Org Custom Auth Config",
-            "type": "boolean"
           },
           "supports_org_custom_oauth": {
             "default": false,

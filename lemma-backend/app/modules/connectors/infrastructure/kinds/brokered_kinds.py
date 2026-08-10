@@ -9,7 +9,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.modules.connectors.domain.auth_config import AuthConfigSource
+from app.modules.connectors.domain.auth_config import (
+    COMPOSIO_ORG_CUSTOM_REASON,
+    COMPOSIO_SYSTEM_CREDENTIALS_ONLY,
+    AuthConfigSource,
+)
 from app.modules.connectors.domain.connector import KindSpec, kind_to_provider
 from app.modules.connectors.domain.errors import ConnectorValidationError
 from app.modules.connectors.domain.kinds import ExecutionRequest
@@ -26,10 +30,13 @@ class ComposioInstaller:
         config: dict[str, Any],
         config_source: AuthConfigSource,
     ) -> dict[str, Any]:
+        # Also reached on the update path, which the service-layer check in
+        # `_validate_auth_config_request` never sees -- so this is a second
+        # guard, not a duplicate one. Both raise the same shared message.
         if config_source == AuthConfigSource.ORG_CUSTOM:
             raise ConnectorValidationError(
-                "Composio installs use Composio-managed credentials.",
-                details={"reason": "org_custom_not_supported_for_composio"},
+                COMPOSIO_SYSTEM_CREDENTIALS_ONLY,
+                details={"reason": COMPOSIO_ORG_CUSTOM_REASON},
             )
         return validate_install_config(spec, config, config_source)
 

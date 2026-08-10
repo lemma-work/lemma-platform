@@ -26,6 +26,21 @@ class AuthConfigSource(str, enum.Enum):
     ORG_CUSTOM = "ORG_CUSTOM"
 
 
+# Composio brokers every one of its toolkits through Lemma's own Composio
+# account -- one process-global ``COMPOSIO_API_KEY`` (connectors/config.py).
+# There is no per-org Composio key, so a Composio install is always
+# SYSTEM_DEFAULT.
+#
+# Two layers enforce this, and they are not redundant: the service check runs
+# on create, the kind installer also runs on the update path. They share these
+# constants so the two can't drift into saying different things.
+COMPOSIO_SYSTEM_CREDENTIALS_ONLY = (
+    "Composio installs use Lemma's Composio credentials; org-supplied "
+    "credentials are not supported."
+)
+COMPOSIO_ORG_CUSTOM_REASON = "org_custom_not_supported_for_composio"
+
+
 class AuthConfigEntity(Entity):
     """One organization's install of a connector.
 

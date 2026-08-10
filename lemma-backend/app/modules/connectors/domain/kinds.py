@@ -37,7 +37,6 @@ class ResolvedInstall:
     config: dict[str, Any]
     config_source: AuthConfigSource
     spec: KindSpec
-    composio_auth_config_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

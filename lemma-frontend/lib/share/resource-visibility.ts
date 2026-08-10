@@ -54,3 +54,21 @@ export function normalizeResourceVisibility(value?: string | null): ResourceVisi
 export function reachesOutsidePod(value: ResourceVisibilityValue): boolean {
     return REACHES_OUTSIDE_POD.includes(value);
 }
+
+/**
+ * What the backend stores when nobody picks a level.
+ *
+ * Apps are the exception: an app is deployed to its own public host and the
+ * page itself is served to anonymous browsers, so the backend creates it
+ * PUBLIC (its data calls are still authorized one by one, and the SDK's
+ * AppGate turns a denial into sign-in or request-access). Everything else
+ * starts POD.
+ *
+ * Callers use this to decide whether a stored value is worth showing: a badge
+ * that flags the default is noise, and — worse, after apps flipped — a badge
+ * that stays silent on the *narrowed* case tells the reader the opposite of
+ * what is true.
+ */
+export function defaultVisibilityFor(resourceType?: string | null): ResourceVisibilityValue {
+    return resourceType === 'app' ? 'PUBLIC' : 'POD';
+}

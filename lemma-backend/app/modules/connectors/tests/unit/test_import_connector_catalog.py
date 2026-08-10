@@ -577,8 +577,10 @@ async def test_sync_composio_catalog_keeps_composio_operations_for_non_native_ap
     assert _providers(entity) == [AuthProvider.COMPOSIO]
     capability = _capability(entity, AuthProvider.COMPOSIO)
     assert capability.toolkit_slug == "hubspot"
+    # Always true: every Composio toolkit runs on Lemma's own Composio account.
     assert capability.system_default_available is True
-    assert capability.supports_org_custom_auth_config is False
+    # None only because HubSpot is OAuth2 here. A non-OAuth toolkit carries the
+    # end user's credential form in this field -- see the API_KEY case below.
     assert capability.auth_config_schema is None
 
     upsert_operation.assert_awaited_once()
