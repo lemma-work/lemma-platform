@@ -66,14 +66,14 @@ _TERMINAL_PROCESS_STATES = {
 def _load_token(explicit_token: str | None) -> str:
     if explicit_token:
         return explicit_token
-    token_file = os.environ.pop("AGENTBOX_RUNTIME_TOKEN_FILE", None)
+    token_file = os.environ.pop("LEMMA_RUNTIME_TOKEN_FILE", None)
     if token_file:
         path = Path(token_file)
         token = path.read_text().strip()
         path.unlink()
         if token:
             return token
-    token = os.environ.pop("AGENTBOX_RUNTIME_TOKEN", "").strip()
+    token = os.environ.pop("LEMMA_RUNTIME_TOKEN", "").strip()
     if token:
         return token
     raise RuntimeError("workspace runtime token is not configured")
@@ -87,7 +87,7 @@ def create_app(
 ) -> FastAPI:
     runtime_token = _load_token(token)
     transfer_limit = (
-        int(os.getenv("AGENTBOX_MAX_FILE_TRANSFER_BYTES", str(256 * 1024 * 1024)))
+        int(os.getenv("LEMMA_MAX_FILE_TRANSFER_BYTES", str(256 * 1024 * 1024)))
         if max_file_transfer_bytes is None
         else max_file_transfer_bytes
     )
@@ -101,15 +101,17 @@ def create_app(
     )
     python_sessions = PythonSessionManager(allowed_roots=allowed_roots)
     quiescer = WorkspaceQuiescer()
-    app = FastAPI(title="AgentBox Workspace Runtime")
+    app = FastAPI(title="Lemma Workspace Runtime")
     app.state.process_manager = manager
     app.state.filesystem_manager = filesystem
     app.state.python_session_manager = python_sessions
 
     async def authenticate(
-        x_agentbox_runtime_token: str | None = Header(default=None),
+        # FastAPI derives the header name from this parameter, so it is the
+        # wire contract: X-Lemma-Runtime-Token.
+        x_lemma_runtime_token: str | None = Header(default=None),
     ) -> None:
-        provided = (x_agentbox_runtime_token or "").strip()
+        provided = (x_lemma_runtime_token or "").strip()
         if not provided or not hmac.compare_digest(provided, runtime_token):
             raise HTTPException(status_code=401, detail="invalid runtime credential")
 
@@ -190,14 +192,14 @@ def create_app(
         snapshot = await process.output.snapshot(after_seq, wait_seconds=wait_seconds)
         return Response(
             content=_encode_chunks(snapshot.chunks),
-            media_type="application/vnd.agentbox.process-output",
+            media_type="application/vnd.lemma.process-output",
             headers={
-                "X-AgentBox-Next-Sequence": str(snapshot.next_sequence),
-                "X-AgentBox-Truncated-Before": (
+                "X-Lemma-Next-Sequence": str(snapshot.next_sequence),
+                "X-Lemma-Truncated-Before": (
                     str(snapshot.truncated_before_sequence or "")
                 ),
-                "X-AgentBox-Process-State": process.state.value,
-                "X-AgentBox-Exit-Code": (
+                "X-Lemma-Process-State": process.state.value,
+                "X-Lemma-Exit-Code": (
                     str(process.exit_code) if process.exit_code is not None else ""
                 ),
             },
@@ -205,7 +207,7 @@ def create_app(
 
     @app.websocket("/processes/{operation_id}/stream")
     async def stream_process_output(websocket: WebSocket, operation_id: UUID) -> None:
-        provided = websocket.headers.get("x-agentbox-runtime-token", "").strip()
+        provided = websocket.headers.get("x-lemma-runtime-token", "").strip()
         if not provided or not hmac.compare_digest(provided, runtime_token):
             await websocket.close(code=4401)
             return

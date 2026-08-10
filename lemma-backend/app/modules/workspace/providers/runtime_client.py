@@ -85,7 +85,7 @@ class WorkspaceRuntimeClient:
         self._request_timeout_seconds = request_timeout_seconds
         self._client = httpx.AsyncClient(
             base_url=base_url,
-            headers={"X-AgentBox-Runtime-Token": token},
+            headers={"X-Lemma-Runtime-Token": token},
             timeout=None,
         )
 
@@ -201,13 +201,13 @@ class WorkspaceRuntimeClient:
                     data=data,
                 )
             )
-        truncated = response.headers.get("X-AgentBox-Truncated-Before", "")
-        exit_code = response.headers.get("X-AgentBox-Exit-Code", "")
+        truncated = response.headers.get("X-Lemma-Truncated-Before", "")
+        exit_code = response.headers.get("X-Lemma-Exit-Code", "")
         return ProcessOutputSnapshot(
             chunks=tuple(chunks),
-            next_sequence=int(response.headers["X-AgentBox-Next-Sequence"]),
+            next_sequence=int(response.headers["X-Lemma-Next-Sequence"]),
             truncated_before_sequence=int(truncated) if truncated else None,
-            state=ProcessState(response.headers["X-AgentBox-Process-State"]),
+            state=ProcessState(response.headers["X-Lemma-Process-State"]),
             exit_code=int(exit_code) if exit_code else None,
         )
 

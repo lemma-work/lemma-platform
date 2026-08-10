@@ -50,8 +50,8 @@ controlled backend restart.
 ## Managed architecture
 
 The host has exactly one backend process and one frontend process. The backend
-contains API, worker, scheduler, AgentBox manager, surfaces, and document
-processing. PostgreSQL, Redis, SuperTokens, and AgentBox containers remain in
+contains API, worker, scheduler, sandbox manager, surfaces, and document
+processing. PostgreSQL, Redis, SuperTokens, and sandbox containers remain in
 one app-owned private Linux runtime.
 
 Closing Desktop does not stop the daemon or schedules. Use

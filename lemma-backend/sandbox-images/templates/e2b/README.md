@@ -2,17 +2,17 @@
 
 Sandbox provisioning uses two immutable E2B template builds:
 
-- `lemma-agentbox-workspace` extends E2B Code Interpreter with a locked authoring
+- `lemma-workspace` extends E2B Code Interpreter with a locked authoring
   environment (including the Lemma SDK), Node 24, pnpm, uv, LiteParse, and
   headful Chrome. The shell, `python`, `python3`, `pip`, `pip3`, and E2B code
   contexts all use the locked Python 3.14 environment. Packages installed with
   plain `pip install` go into `/workspace/.python`, so shell commands and
   persistent Python contexts see the same workspace-backed package set.
-- `lemma-agentbox-function` contains only the function runner and Lemma SDK.
+- `lemma-function` contains only the function runner and Lemma SDK.
 
 Builds are created from the monorepo source. Both profiles default to 1 vCPU and
 2 GB RAM; deployments may override the build resources with
-`AGENTBOX_E2B_{WORKSPACE,FUNCTION}_{CPU_COUNT,MEMORY_MB}`. E2B's template build
+`E2B_{WORKSPACE,FUNCTION}_{CPU_COUNT,MEMORY_MB}`. E2B's template build
 API does not expose a disk-size setting, and function filesystems are treated as
 ephemeral because the provider allocation is destroyed after the configured idle
 period.
@@ -53,8 +53,8 @@ Do not configure a template name alone. Runtime profiles require both the templa
 ID and its exact build ID through:
 
 ```text
-AGENTBOX_E2B_WORKSPACE_TEMPLATE
-AGENTBOX_E2B_WORKSPACE_BUILD_ID
-AGENTBOX_E2B_FUNCTION_TEMPLATE
-AGENTBOX_E2B_FUNCTION_BUILD_ID
+E2B_WORKSPACE_TEMPLATE
+E2B_WORKSPACE_BUILD_ID
+E2B_FUNCTION_TEMPLATE
+E2B_FUNCTION_BUILD_ID
 ```

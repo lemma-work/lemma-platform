@@ -1,8 +1,8 @@
 name: Release Local Stack Images
 
-# Builds the backend, frontend, AgentBox manager compatibility image, and the
-# provider-neutral workspace/function images. It also assembles the native host
-# packs and private guest runtimes consumed by Lemma Desktop. Published runs
+# Builds the backend, frontend, and the workspace/function sandbox images. It
+# also assembles the native host packs and private guest runtimes consumed by
+# Lemma Desktop. Published runs
 # attach them to the GitHub release; branch-test runs retain them in Actions.
 # lemma-stack resolves:
 #   stable  -> releases/latest/download/lemma-local.json
@@ -87,15 +87,12 @@ jobs:
           - name: lemma-frontend
             context: .
             dockerfile: lemma-frontend/Dockerfile
-          - name: lemma-agentbox
+          - name: lemma-workspace
             context: .
-            dockerfile: agentbox/Dockerfile
-          - name: lemma-agentbox-workspace
+            dockerfile: lemma-backend/sandbox-images/Dockerfile.workspace
+          - name: lemma-function
             context: .
-            dockerfile: agentbox/Dockerfile.workspace
-          - name: lemma-agentbox-function
-            context: .
-            dockerfile: agentbox/Dockerfile.function
+            dockerfile: lemma-backend/sandbox-images/Dockerfile.function
         platform:
           - arch: amd64
             runner: ubuntu-latest
@@ -155,9 +152,8 @@ jobs:
         image:
           - lemma-backend
           - lemma-frontend
-          - lemma-agentbox
-          - lemma-agentbox-workspace
-          - lemma-agentbox-function
+          - lemma-workspace
+          - lemma-function
     steps:
       - name: Resolve version
         id: version
@@ -479,8 +475,15 @@ jobs:
               "images": {
                   "backend": image("lemma-backend"),
                   "frontend": image("lemma-frontend"),
-                  "agentbox_workspace": image("lemma-agentbox-workspace"),
-                  "agentbox_function": image("lemma-agentbox-function"),
+                  "workspace": image("lemma-workspace"),
+                  "function": image("lemma-function"),
+                  # Same refs under the pre-rename keys. A lemma-stack or locald
+                  # already installed on someone's machine looks these up by name
+                  # and raises if they are missing, and publishing a manifest
+                  # cannot upgrade a client that has not run yet. Drop them once
+                  # no released client reads them.
+                  "agentbox_workspace": image("lemma-workspace"),
+                  "agentbox_function": image("lemma-function"),
               },
               "infra": infra,
           }
@@ -700,10 +703,13 @@ jobs:
               "images": {
                   "backend": image("lemma-backend"),
                   "frontend": image("lemma-frontend"),
-                  # Legacy compatibility only; current lemma-stack does not pull it.
-                  "agentbox": image("lemma-agentbox"),
-                  "agentbox_workspace": image("lemma-agentbox-workspace"),
-                  "agentbox_function": image("lemma-agentbox-function"),
+                  "workspace": image("lemma-workspace"),
+                  "function": image("lemma-function"),
+                  # Same refs under the pre-rename keys, for clients already
+                  # installed when this ships. See the note in the host-release
+                  # manifest above; drop both together.
+                  "agentbox_workspace": image("lemma-workspace"),
+                  "agentbox_function": image("lemma-function"),
               },
               # Keep schema-1 compatibility for older lemma-stack clients:
               # public infra entries remain strings, now pinned to the
@@ -746,7 +752,7 @@ jobs:
                   ).get("breakdown", {}),
                   "oci_images": manifest["infra"] | {
                       name: manifest["images"][name]
-                      for name in ("agentbox_workspace", "agentbox_function")
+                      for name in ("workspace", "function")
                   },
               }, indent=2))
           print(json.dumps(manifest, indent=2))

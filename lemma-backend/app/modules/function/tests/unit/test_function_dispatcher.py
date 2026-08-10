@@ -149,7 +149,7 @@ async def test_api_dispatch_sends_complete_v2_envelope_and_uses_direct_result(
             )
 
     dispatcher = _dispatcher(_Runtime())
-    endpoint = _endpoint("https://agentbox.test/runtime/")
+    endpoint = _endpoint("https://sandbox.test/runtime/")
     monkeypatch.setattr(
         dispatcher,
         "_resolve_dispatch",
@@ -214,7 +214,7 @@ async def test_job_returns_after_runtime_acceptance_and_uses_same_function_token
         dispatcher,
         "_runtime_endpoint",
         AsyncMock(
-            return_value=_endpoint("https://agentbox.test/runtime/")
+            return_value=_endpoint("https://sandbox.test/runtime/")
         ),
     )
     monkeypatch.setattr(
@@ -260,7 +260,7 @@ async def test_ambiguous_response_is_not_replayed() -> None:
             )
 
     dispatcher = _dispatcher(_Runtime())
-    endpoint = _endpoint("https://agentbox.test/runtime/")
+    endpoint = _endpoint("https://sandbox.test/runtime/")
 
     with pytest.raises(InvocationOutcomeUnconfirmed):
         await dispatcher._invoke_runtime_with_recovery(
@@ -275,7 +275,7 @@ async def test_ambiguous_response_is_not_replayed() -> None:
 
 
 @pytest.mark.asyncio
-async def test_unavailable_agentbox_allocation_is_refreshed_once_before_runtime_work(
+async def test_unavailable_allocation_is_refreshed_once_before_runtime_work(
     monkeypatch,
 ) -> None:
     dispatch = _dispatch()
@@ -304,14 +304,14 @@ async def test_unavailable_agentbox_allocation_is_refreshed_once_before_runtime_
             )
 
     dispatcher = _dispatcher(_Runtime())
-    refreshed = _endpoint("https://agentbox.test/fresh-allocation/")
+    refreshed = _endpoint("https://sandbox.test/fresh-allocation/")
     resolver = AsyncMock(return_value=refreshed)
     monkeypatch.setattr(dispatcher, "_runtime_endpoint", resolver)
 
     result = await dispatcher._invoke_runtime_with_recovery(
         dispatch,
         context=context,
-        endpoint=_endpoint("https://agentbox.test/stale-allocation/"),
+        endpoint=_endpoint("https://sandbox.test/stale-allocation/"),
         function_token="delegated-function-token",
         organization_id=None,
     )
@@ -319,11 +319,11 @@ async def test_unavailable_agentbox_allocation_is_refreshed_once_before_runtime_
     assert result.status == "completed"
     assert [str(request[0]) for request in requests] == [
         (
-            "https://agentbox.test/stale-allocation/"
+            "https://sandbox.test/stale-allocation/"
             f"functions/{dispatch.function_id}/runs/{dispatch.run_id}"
         ),
         (
-            "https://agentbox.test/fresh-allocation/"
+            "https://sandbox.test/fresh-allocation/"
             f"functions/{dispatch.function_id}/runs/{dispatch.run_id}"
         ),
     ]
@@ -343,7 +343,7 @@ async def test_runtime_cancel_uses_allocation_channel_without_bearer() -> None:
     dispatcher = _dispatcher(_Runtime())
     await dispatcher._best_effort_cancel(
         dispatch,
-        endpoint=_endpoint("https://agentbox.test/exact-allocation/"),
+        endpoint=_endpoint("https://sandbox.test/exact-allocation/"),
     )
 
     assert str(observed["url"]).endswith(

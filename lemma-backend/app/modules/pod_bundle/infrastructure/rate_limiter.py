@@ -1,6 +1,6 @@
 """Per-user daily rate limiting for pod-bundle export/import jobs.
 
-Export and import kick off long-running worker jobs (archive assembly, agentbox
+Export and import kick off long-running worker jobs (archive assembly, sandbox
 app builds, multi-resource apply). Without a cap a single account can enqueue
 them without bound and starve the workers, so we count job *starts* per user per
 UTC day in Redis and reject once the configured limit is hit.

@@ -1,13 +1,12 @@
 # Build context is the monorepo root:
-#   docker build -f lemma-backend/sandbox-images/Dockerfile.function -t agentbox-function:dev .
-# NOTE ON NAMING: paths and env vars inside the image still say "agentbox"
-# (/opt/agentbox-python, /run/agentbox-bootstrap, AGENTBOX_RUNTIME_TOKEN_FILE).
-# They are not cosmetic: they are the contract between a *running* sandbox and
-# the backend that delivers its credential. Workspaces on E2B are adopted
-# rather than replaced, so a sandbox created from an older template outlives a
-# backend deploy -- renaming these would leave the backend writing a token to a
-# path that sandbox does not read. They change when there is a reason to
-# recreate every sandbox, not before.
+#   docker build -f lemma-backend/sandbox-images/Dockerfile.function -t lemma-function:dev .
+# NOTE ON NAMING: the paths and env vars here (/opt/lemma-python,
+# /run/lemma-bootstrap, LEMMA_RUNTIME_TOKEN_FILE) are the contract between a
+# *running* sandbox and the backend that delivers its credential, not cosmetic
+# detail. Changing one requires every existing sandbox to be recreated, which
+# is what the profile digest is for: a sandbox is only reused when its recorded
+# digest matches the configured one, so bumping the digest in the same release
+# as an image change is what makes a rename here safe.
 
 ARG PYTHON_IMAGE=python:3.14.6-slim
 ARG UV_VERSION=0.11.31
@@ -15,7 +14,7 @@ ARG UV_VERSION=0.11.31
 FROM ghcr.io/astral-sh/uv:${UV_VERSION} AS uv-runtime
 
 FROM ${PYTHON_IMAGE} AS python-runtime
-ENV UV_PROJECT_ENVIRONMENT=/opt/agentbox-function \
+ENV UV_PROJECT_ENVIRONMENT=/opt/lemma-function \
     UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy
 COPY --from=uv-runtime /uv /usr/local/bin/uv
@@ -33,9 +32,9 @@ FROM ${PYTHON_IMAGE}
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONPATH=/app:/opt/agentbox-function/lib/python3.14/site-packages \
+    PYTHONPATH=/app:/opt/lemma-function/lib/python3.14/site-packages \
     HOME=/home/appuser \
-    PATH=/opt/agentbox-function/bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin
+    PATH=/opt/lemma-function/bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends bash ca-certificates tini \
@@ -45,7 +44,7 @@ RUN apt-get update \
     && mkdir -p /app/sandbox_runtime/function \
     && chown -R 10001:10001 /app /home/appuser
 
-COPY --from=python-runtime /opt/agentbox-function /opt/agentbox-function
+COPY --from=python-runtime /opt/lemma-function /opt/lemma-function
 
 COPY --chown=10001:10001 lemma-backend/sandbox_runtime/__init__.py /app/sandbox_runtime/__init__.py
 COPY --chown=10001:10001 lemma-backend/sandbox_runtime/tasks.py /app/sandbox_runtime/tasks.py

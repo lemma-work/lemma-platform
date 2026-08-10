@@ -227,7 +227,7 @@ def get_workspace_tool_runtime() -> WorkspaceToolRuntime:
 
 
 def reset_workspace_tool_runtimes() -> None:
-    """Reset cached workspace runtimes so tests can swap AgentBox endpoints."""
+    """Reset cached workspace runtimes so tests can swap the sandbox runtime endpoints."""
     global _workspace_tool_runtime
     _workspace_tool_runtime = None
 

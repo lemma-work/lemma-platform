@@ -5,15 +5,15 @@ DISPLAY_VALUE="${DISPLAY:-:99}"
 SCREEN="${WORKSPACE_XVFB_SCREEN:-1440x960x24}"
 DASHBOARD_PORT="${AGENT_BROWSER_DASHBOARD_PORT:-4848}"
 DASHBOARD_INTERNAL_PORT="${AGENT_BROWSER_DASHBOARD_INTERNAL_PORT:-$((DASHBOARD_PORT + 1))}"
-PROFILE_DIR="${AGENT_BROWSER_PROFILE:-/tmp/agentbox-browser/profile}"
-RUNTIME_DIR="${XDG_RUNTIME_DIR:-/tmp/agentbox-browser/runtime}"
-CONFIG_PATH="${AGENT_BROWSER_CONFIG:-/tmp/agentbox-browser/config.json}"
+PROFILE_DIR="${AGENT_BROWSER_PROFILE:-/tmp/lemma-browser/profile}"
+RUNTIME_DIR="${XDG_RUNTIME_DIR:-/tmp/lemma-browser/runtime}"
+CONFIG_PATH="${AGENT_BROWSER_CONFIG:-/tmp/lemma-browser/config.json}"
 EXECUTABLE_PATH="${AGENT_BROWSER_EXECUTABLE_PATH:-/usr/local/bin/workspace-chrome}"
 DISPLAY_NUMBER="${DISPLAY_VALUE#:}"
 DISPLAY_NUMBER="${DISPLAY_NUMBER%%.*}"
 HOME_DIR="${HOME:-/home/appuser}"
 if ! mkdir -p "$HOME_DIR" 2>/dev/null || [ ! -w "$HOME_DIR" ]; then
-  HOME_DIR="/tmp/agentbox-home-${UID:-10001}"
+  HOME_DIR="/tmp/lemma-home-${UID:-10001}"
   mkdir -p "$HOME_DIR"
 fi
 
@@ -50,7 +50,7 @@ export XDG_RUNTIME_DIR="$RUNTIME_DIR"
 if [ ! -S "/tmp/.X11-unix/X${DISPLAY_NUMBER}" ]; then
   rm -f "/tmp/.X${DISPLAY_NUMBER}-lock"
   nohup Xvfb "$DISPLAY_VALUE" -screen 0 "$SCREEN" -ac +extension RANDR \
-    >/tmp/agentbox-xvfb.log 2>&1 &
+    >/tmp/lemma-xvfb.log 2>&1 &
   sleep 0.4
 fi
 

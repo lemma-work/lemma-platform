@@ -21,13 +21,6 @@ _REAL_MODE = (
 if not _REAL_MODE:
     os.environ.setdefault("LEMMA_DISABLE_DOTENV", "1")
 
-# AgentBox config is required to construct workspace/function services. Default
-# to test-only values (set before app.core.config is imported) so suites run
-# without a configured local AgentBox manager; workspace-marked e2e tests
-# override these with a real local manager via their fixtures.
-os.environ.setdefault("AGENTBOX_API_KEY", "test-agentbox-key")
-os.environ.setdefault("AGENTBOX_API_URL", "http://localhost:9999")
-
 WORKSPACE_FIXTURES = {
     "configure_workspace_api_url",
     "workspace_image",
@@ -59,7 +52,7 @@ def _e2e_real_llm() -> bool:
 
 
 def _e2e_real_sandbox() -> bool:
-    """All supported E2E sandbox modes use a real AgentBox provider."""
+    """All supported E2E sandbox modes use a real the sandbox runtime provider."""
     mode = os.getenv("E2E_SANDBOX_MODE", "").lower()
     return mode in {"", "docker", "e2b"}
 
@@ -68,7 +61,7 @@ def pytest_collection_modifyitems(config, items):
     """Classify e2e tests and gate them by the active e2e mode.
 
     The LLM may be deterministic, but sandbox behavior always uses a real
-    Docker or credential-gated E2B AgentBox.
+    Docker or credential-gated E2B the sandbox runtime.
     """
     real_llm = _e2e_real_llm()
     real_sandbox = _e2e_real_sandbox()
@@ -111,14 +104,14 @@ def pytest_collection_modifyitems(config, items):
             item.add_marker(pytest.mark.provider)
 
         marker_names = {marker.name for marker in item.iter_markers()}
-        # Tests that need the real Docker AgentBox (workspace fixtures) or are
+        # Tests that need the real Docker sandbox (workspace fixtures) or are
         # explicitly real-sandbox-only: skip unless running in real sandbox mode.
         if ("workspace" in marker_names or "real_sandbox" in marker_names) and (
             not real_sandbox
         ):
             item.add_marker(
                 pytest.mark.skip(
-                    reason="needs the real Docker AgentBox — set E2E_REAL=1 "
+                    reason="needs the real Docker sandbox — set E2E_REAL=1 "
                     "(or E2E_SANDBOX_MODE=docker)."
                 )
             )
@@ -215,7 +208,7 @@ def pytest_runtest_teardown(item: pytest.Item, nextitem: pytest.Item | None) -> 
         return
     from app.modules.test_support import e2e_base
 
-    # Per-test: reap only this test's agentbox sandbox pods, NOT the shared
+    # Per-test: reap only this test's sandbox pods, NOT the shared
     # session testcontainers (which carry the same lemma.e2e label).
     e2e_base._cleanup_e2e_workspace_containers(sandboxes_only=True)
 

@@ -13,11 +13,11 @@
       "digest": "sha256:48b99678cac01dc89bac101a356eb862452518ebcd06624b789750b9ec88b7a2"
     },
     "agentbox_workspace": {
-      "ref": "ghcr.io/lemma-work/lemma-agentbox-workspace:test-d5e99e0dd10c",
+      "ref": "ghcr.io/lemma-work/lemma-workspace:test-d5e99e0dd10c",
       "digest": "sha256:b2122880de54867bec92a6b727aa918b4635f6adeb747e973a08bd1e7b2f3f48"
     },
     "agentbox_function": {
-      "ref": "ghcr.io/lemma-work/lemma-agentbox-function:test-d5e99e0dd10c",
+      "ref": "ghcr.io/lemma-work/lemma-function:test-d5e99e0dd10c",
       "digest": "sha256:1bebb56e70cd7c008e9112ca0ec41454b852563071b9f71d90522e914f744d83"
     }
   },

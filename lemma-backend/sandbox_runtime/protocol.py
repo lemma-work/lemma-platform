@@ -5,7 +5,7 @@ between the workspace module and the HTTP server running inside a sandbox
 image. Both sides import it, which is why it lives beside the runtime rather
 than inside `app/` -- a sandbox image must not need the backend to start.
 
-It is deliberately smaller than what it replaced. The AgentBox manager kept its
+It is deliberately smaller than what it replaced. The sandbox manager kept its
 allocation, admission and reconciliation state machine in the same file; none
 of that survived the move to deterministic naming, so none of it survived here.
 """
@@ -428,7 +428,7 @@ class PortAccessGrant:
 
 
 
-class AgentBoxError(RuntimeError):
+class SandboxRuntimeError(RuntimeError):
     def __init__(
         self,
         code: ErrorCode,

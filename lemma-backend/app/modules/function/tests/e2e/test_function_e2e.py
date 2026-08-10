@@ -749,7 +749,7 @@ def _record_grant_function_code(function_name: str, table_name: str) -> str:
     """
     # Uses typing.Optional on purpose: under Python 3.14 (PEP 649) deferred
     # annotations, schema extraction must resolve typing names from the
-    # function's namespace, not just builtins. This guards the agentbox runtime
+    # function's namespace, not just builtins. This guards the sandbox runtime
     # fix that registers the execution namespace as a real module.
     return f"""#input_type_name: WriteInput
 #output_type_name: WriteResult

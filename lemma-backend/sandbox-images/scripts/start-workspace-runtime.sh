@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-token_file="${AGENTBOX_RUNTIME_TOKEN_FILE:-/run/agentbox-bootstrap/token}"
+token_file="${LEMMA_RUNTIME_TOKEN_FILE:-/run/lemma-bootstrap/token}"
 deadline=$((SECONDS + 30))
 while [ ! -s "$token_file" ]; do
   if [ "$SECONDS" -ge "$deadline" ]; then
@@ -13,5 +13,5 @@ done
 
 exec python -m uvicorn sandbox_runtime.workspace.server:app \
   --host 0.0.0.0 \
-  --port "${AGENTBOX_WORKSPACE_RUNTIME_PORT:-8080}" \
+  --port "${LEMMA_WORKSPACE_RUNTIME_PORT:-8080}" \
   --no-access-log

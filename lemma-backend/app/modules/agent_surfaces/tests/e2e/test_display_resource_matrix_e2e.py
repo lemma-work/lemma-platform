@@ -262,7 +262,7 @@ async def test_display_resource_slack_routes_pod_resource_catalog_to_deep_links(
     browser_access_calls: list[tuple[UUID, int]] = []
 
     class _FakeWorkspaceSandboxService:
-        """Keep this surface-delivery journey hermetic at the AgentBox boundary."""
+        """Keep this surface-delivery journey hermetic at the sandbox boundary."""
 
         async def create_browser_access(
             self,
@@ -277,7 +277,7 @@ async def test_display_resource_slack_routes_pod_resource_catalog_to_deep_links(
                 ),
                 port=4848,
                 protocol=PortProtocol.HTTP,
-                url="https://agentbox.example.test/port-access/browser-token",
+                url="https://sandbox.example.test/port-access/browser-token",
                 expires_at=datetime.now(timezone.utc) + timedelta(seconds=ttl_seconds),
             )
 
@@ -453,7 +453,7 @@ async def test_display_resource_slack_routes_pod_resource_catalog_to_deep_links(
     )
     rendered = json.dumps(slack_messages)
     # Every Lemma-owned resource gets a frontend deep link. BROWSER is the one
-    # exception: it intentionally opens the short-lived AgentBox URL asserted
+    # exception: it intentionally opens the short-lived sandbox settings asserted
     # separately below.
     assert rendered.count("https://app.example.test/pod/") >= len(resource_calls) - 1
     assert "incidents" in rendered

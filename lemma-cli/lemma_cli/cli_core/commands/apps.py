@@ -549,7 +549,7 @@ def init_app(
         return
 
     # Bind the folder to this pod on the active server so later `lemma` commands
-    # target it automatically. Skipped under the read-only env server (agentbox).
+    # target it automatically. Skipped under the read-only env server (a workspace sandbox).
     binding_path: Path | None = None
     if not state.server_read_only:
         values = {"LEMMA_POD_ID": selected_pod_id}

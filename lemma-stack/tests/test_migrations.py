@@ -37,7 +37,7 @@ def result(returncode: int = 0, *, stderr: str = "") -> subprocess.CompletedProc
 
 
 def test_runs_one_migration_chain() -> None:
-    """AgentBox had its own database and alembic chain; there is one now."""
+    """the sandbox runtime had its own database and alembic chain; there is one now."""
 
     runtime = FakeRuntime([result()])
 

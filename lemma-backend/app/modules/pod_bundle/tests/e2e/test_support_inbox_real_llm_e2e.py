@@ -9,7 +9,7 @@ function writes a ticket to the imported table (its own record grants). We asser
 the ticket landed — the whole imported pod working under a real model.
 
 Gated: needs real provider creds (``system_lemma_available``) + the Docker
-AgentBox (run under ``E2E_REAL=1``); skipped in the mock e2e gate.
+the sandbox runtime (run under ``E2E_REAL=1``); skipped in the mock e2e gate.
 """
 
 from __future__ import annotations

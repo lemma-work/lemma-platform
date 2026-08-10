@@ -79,7 +79,7 @@ class LocalSandboxHandle:
     route resolver branches on it, and a handle without it raises an
     AttributeError that no handler catches, so the run fails with a generic
     message and nothing in the logs. Anything this client returns in place of
-    AgentBox's handle has to carry the same surface.
+    the sandbox runtime's handle has to carry the same surface.
     """
 
     sandbox_id: UUID
@@ -91,7 +91,7 @@ class LocalSandboxHandle:
 
 
 class LocalSandboxClient(LocalSandboxFilesMixin):
-    """Speaks the AgentBox client surface over the local sandbox service."""
+    """Speaks the sandbox client surface over the local sandbox service."""
 
     def __init__(self, service: SandboxService) -> None:
         self._service = service
@@ -112,7 +112,7 @@ class LocalSandboxClient(LocalSandboxFilesMixin):
         Workspaces are backfilled per user, but a pod's function runtime is
         created on first invocation -- there is no moment before that when the
         pod is known to need one. The id is pinned to the pod id, matching the
-        logical id AgentBox used, so an already-running function sandbox is
+        logical id the sandbox runtime used, so an already-running function sandbox is
         recognised rather than duplicated.
         """
         if _is_function(workload_kind):
@@ -337,7 +337,7 @@ class LocalSandboxClient(LocalSandboxFilesMixin):
         which under concurrency fails the invocations that joined the cache
         rather than minting their own.
 
-        Being generous is safe here in a way it was not before. AgentBox
+        Being generous is safe here in a way it was not before. the sandbox runtime
         treated a lease as activity, so a long horizon kept idle function
         sandboxes alive; here activity is recorded when a sandbox is used, and
         the expiry only bounds caching.

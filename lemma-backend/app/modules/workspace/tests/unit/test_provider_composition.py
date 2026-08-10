@@ -8,22 +8,20 @@ both provision successfully and then fail at the first thing a user does.
 from __future__ import annotations
 
 import pytest
+from pydantic import ValidationError
 
-from app.modules.workspace.config import WorkspaceSettings, workspace_settings
+from app.modules.workspace.config import (
+    RENAMED_ENV_VARS,
+    WorkspaceSettings,
+    workspace_settings,
+)
 from app.modules.workspace.providers.base import ProviderStorageKind
 
 
-def test_desktop_env_var_names_are_still_honoured(monkeypatch) -> None:
-    """Lemma Desktop already sets the AGENTBOX_LOCAL_* names.
-
-    If this module only read WORKSPACE_LOCAL_*, the cutover would leave every
-    machine on the current desktop build unable to reach its guest -- a silent
-    break with no error until a workspace is opened.
-    """
-    monkeypatch.setenv("AGENTBOX_LOCAL_RUNTIME_CLI", "/opt/lemma/bin/bridge")
-    monkeypatch.setenv("AGENTBOX_LOCAL_CALLBACK_REQUIRED", "true")
-    monkeypatch.setenv("AGENTBOX_LOCAL_CALLBACK_URL", "http://127.0.0.1:8710")
-    monkeypatch.delenv("WORKSPACE_LOCAL_RUNTIME_CLI", raising=False)
+def test_the_module_reads_its_own_env_var_names(monkeypatch) -> None:
+    monkeypatch.setenv("WORKSPACE_LOCAL_RUNTIME_CLI", "/opt/lemma/bin/bridge")
+    monkeypatch.setenv("WORKSPACE_LOCAL_CALLBACK_REQUIRED", "true")
+    monkeypatch.setenv("WORKSPACE_LOCAL_CALLBACK_URL", "http://127.0.0.1:8710")
 
     resolved = WorkspaceSettings()
 
@@ -32,10 +30,45 @@ def test_desktop_env_var_names_are_still_honoured(monkeypatch) -> None:
     assert resolved.local_callback_url == "http://127.0.0.1:8710"
 
 
-def test_the_new_names_win_when_both_are_set(monkeypatch) -> None:
-    monkeypatch.setenv("AGENTBOX_LOCAL_RUNTIME_CLI", "/old/bridge")
-    monkeypatch.setenv("WORKSPACE_LOCAL_RUNTIME_CLI", "/new/bridge")
-    assert WorkspaceSettings().local_runtime_cli == "/new/bridge"
+@pytest.mark.parametrize(("old", "new"), sorted(RENAMED_ENV_VARS.items()))
+def test_a_renamed_env_var_refuses_to_start_instead_of_defaulting(
+    monkeypatch, old: str, new: str
+) -> None:
+    """Every name this module used to read must fail loudly, not silently.
+
+    Pydantic never sees a name it does not declare, so without this the field
+    takes its default and the operator's value is discarded without a word.
+    `WORKSPACE_IMAGE` is the sharp one: its default is a tag `make init` builds
+    locally, so a stale name resolves to a real but old image rather than
+    failing to pull.
+    """
+    monkeypatch.setenv("LEMMA_DISABLE_DOTENV", "1")
+    monkeypatch.delenv(new, raising=False)
+    monkeypatch.setenv(old, "anything")
+
+    with pytest.raises(ValidationError) as caught:
+        WorkspaceSettings()
+
+    assert old in str(caught.value)
+    assert new in str(caught.value), "the message must name the replacement"
+
+
+def test_the_new_name_alone_is_accepted(monkeypatch) -> None:
+    """The guard fires on a leftover, not on a correctly configured process."""
+    monkeypatch.setenv("LEMMA_DISABLE_DOTENV", "1")
+    monkeypatch.delenv("AGENTBOX_WORKSPACE_IMAGE", raising=False)
+    monkeypatch.setenv("WORKSPACE_IMAGE", "lemma-workspace@sha256:" + "c" * 64)
+
+    assert WorkspaceSettings().workspace_image.endswith("c" * 64)
+
+
+def test_a_sandbox_side_variable_does_not_trip_the_guard(monkeypatch) -> None:
+    """The backend can legitimately inherit a sandbox's own environment, and
+    those names were never settings here."""
+    monkeypatch.setenv("LEMMA_DISABLE_DOTENV", "1")
+    monkeypatch.setenv("AGENTBOX_RUNTIME_TOKEN", "inherited")
+
+    assert WorkspaceSettings().provider == "docker"
 
 
 def test_the_docker_provider_carries_the_host_gateway(monkeypatch) -> None:

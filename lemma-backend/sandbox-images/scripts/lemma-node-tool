@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [ -n "${AGENTBOX_NODE_BINARY:-}" ]; then
-  NODE_BINARY="$AGENTBOX_NODE_BINARY"
+if [ -n "${LEMMA_NODE_BINARY:-}" ]; then
+  NODE_BINARY="$LEMMA_NODE_BINARY"
 elif [ -x /opt/node24/bin/node ]; then
   NODE_BINARY="/opt/node24/bin/node"
 else
   NODE_BINARY="node"
 fi
-NODE_PROJECT="${AGENTBOX_NODE_PROJECT:-/opt/agentbox-node}"
+NODE_PROJECT="${LEMMA_NODE_PROJECT:-/opt/lemma-node}"
 tool="$(basename "$0")"
 
 case "$tool" in
@@ -22,7 +22,7 @@ case "$tool" in
     pattern='*/node_modules/pnpm/bin/pnpm.mjs'
     ;;
   *)
-    echo "unsupported AgentBox Node tool: $tool" >&2
+    echo "unsupported the sandbox runtime Node tool: $tool" >&2
     exit 64
     ;;
 esac
@@ -31,7 +31,7 @@ entrypoint="$(
   find "$NODE_PROJECT/node_modules/.pnpm" -path "$pattern" -print -quit
 )"
 if [ -z "$entrypoint" ]; then
-  echo "AgentBox Node tool is not installed: $tool" >&2
+  echo "the sandbox runtime Node tool is not installed: $tool" >&2
   exit 127
 fi
 

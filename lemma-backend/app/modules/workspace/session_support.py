@@ -3,7 +3,7 @@
 These are the parts of a session that are not the session: canonicalising a
 path, remembering how much of a process's output has already been delivered,
 and waiting out a retryable capacity signal. Keeping them here leaves the
-session itself about talking to AgentBox.
+session itself about talking to the sandbox runtime.
 """
 
 from __future__ import annotations
@@ -152,7 +152,7 @@ class OutputCursor:
             stored = await self._store.get_output_cursor(str(operation_id))
         except _STORE_FAILURES:
             logger.debug(
-                "workspace.agentbox_session.output_cursor_read_failed",
+                "workspace.sandbox_session.output_cursor_read_failed",
                 sandbox_id=self._sandbox_id,
                 process_id=str(operation_id),
             )
@@ -170,7 +170,7 @@ class OutputCursor:
             )
         except _STORE_FAILURES:
             logger.debug(
-                "workspace.agentbox_session.output_cursor_write_failed",
+                "workspace.sandbox_session.output_cursor_write_failed",
                 sandbox_id=self._sandbox_id,
                 process_id=str(operation_id),
             )
@@ -198,7 +198,7 @@ async def await_python_session_ready(create, deadline: datetime) -> None:
             delay = max(0.05, (exc.retry_after_ms or 250) / 1000)
             await asyncio.sleep(min(delay, remaining))
     detail = (
-        f"; last AgentBox error was {last_error.code}: {last_error}"
+        f"; last the sandbox runtime error was {last_error.code}: {last_error}"
         if last_error is not None
         else ""
     )
@@ -241,7 +241,7 @@ async def resize_process_terminal(
         )
     except (httpx.HTTPError, OSError, ValueError) as exc:
         return sandbox_command_failure(
-            error=f"AgentBox terminal resize failed: {type(exc).__name__}: {exc}",
+            error=f"the sandbox runtime terminal resize failed: {type(exc).__name__}: {exc}",
             retryable=True,
             process_id=process_id,
             completed=False,

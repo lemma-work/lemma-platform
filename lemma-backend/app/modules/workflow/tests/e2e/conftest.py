@@ -11,7 +11,7 @@ from app.modules.test_support.e2e.runtime import (
     configure_workspace_api_url,
     function_image,
     full_stack,
-    local_agentbox_server,
+    local_sandbox_server,
     scheduler_api_server,
     workspace_image,
 )
@@ -56,7 +56,7 @@ __all__ = [
     "fixed_test_org",
     "fixed_test_user",
     "full_stack",
-    "local_agentbox_server",
+    "local_sandbox_server",
     "function_image",
     "postgres_container",
     "redis_container",

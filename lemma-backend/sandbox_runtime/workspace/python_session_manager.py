@@ -168,7 +168,7 @@ class PythonSessionManager:
         environment = {
             key: value
             for key, value in os.environ.items()
-            if key not in {"AGENTBOX_RUNTIME_TOKEN", "AGENTBOX_RUNTIME_TOKEN_FILE"}
+            if key not in {"LEMMA_RUNTIME_TOKEN", "LEMMA_RUNTIME_TOKEN_FILE"}
         }
         return await asyncio.create_subprocess_exec(
             sys.executable,

@@ -9,7 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from sandbox_runtime.protocol import (
     AdmissionClass,
-    AgentBoxError,
+    SandboxRuntimeError,
     AllocationErrorContext,
     AllocationState,
     CapacityErrorContext,
@@ -472,7 +472,7 @@ class ErrorResponse(StrictApiModel):
     error: ErrorBody
 
     @classmethod
-    def from_error(cls, error: AgentBoxError) -> ErrorResponse:
+    def from_error(cls, error: SandboxRuntimeError) -> ErrorResponse:
         context: ErrorContextModel | None = None
         if isinstance(error.context, CapacityErrorContext):
             context = CapacityErrorContextModel(

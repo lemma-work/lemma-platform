@@ -14,9 +14,6 @@ TARGETS = {
         ROOT / "lemma-backend" / "app",
         ROOT / "lemma-backend" / "scripts",
     ),
-    ROOT / "agentbox" / "agentbox" / "event_catalog.py": (
-        ROOT / "agentbox" / "agentbox",
-    ),
 }
 
 

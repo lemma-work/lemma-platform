@@ -157,7 +157,7 @@ def _ensure_machine(runtime) -> None:
 
 
 def _ensure_linux_socket() -> None:
-    # Rootless podman needs the user API socket for the agentbox manager.
+    # Rootless podman needs the user API socket for provisioning sandboxes.
     proc = _run(
         ["systemctl", "--user", "enable", "--now", "podman.socket"],
         check=False,

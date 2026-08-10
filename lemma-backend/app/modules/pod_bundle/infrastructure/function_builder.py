@@ -1,6 +1,6 @@
 """Self-scoped function bundle step runner.
 
-Function compilation uses AgentBox and object storage, so it must never run
+Function compilation uses the sandbox runtime and object storage, so it must never run
 inside the apply loop's shared database unit of work.
 """
 

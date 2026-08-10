@@ -1,4 +1,4 @@
-"""App build/deploy step: pure helpers, the agentbox build (fake session), and
+"""App build/deploy step: pure helpers, the sandbox build (fake session), and
 the runner's artifact selection by tier — all without a DB or a real sandbox."""
 
 from __future__ import annotations
@@ -70,7 +70,7 @@ def test_clean_slug_drops_placeholder_and_empty():
     assert _clean_slug("good-slug") == "good-slug"
 
 
-# --- agentbox build (fake session) -------------------------------------------
+# --- sandbox build (fake session) -------------------------------------------
 
 
 class _FakeSession:
@@ -140,7 +140,7 @@ async def test_build_tool_failure_is_terminal():
 
 class _ExplodingSandbox:
     async def build(self, **kwargs):
-        raise AssertionError("no agentbox build should run for this tier")
+        raise AssertionError("no sandbox build should run for this tier")
 
 
 def _runner(sandbox):

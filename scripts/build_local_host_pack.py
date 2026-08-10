@@ -22,15 +22,11 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 LOCAL_WHEEL_PROJECTS = (
-    "agentbox-client",
-    "agentbox",
     "lemma-pod-bundle",
     "lemma-backend/lemma-connectors",
     "lemma-backend",
 )
 LOCAL_WHEEL_PACKAGES = (
-    "agentbox-client",
-    "agentbox",
     "lemma-pod-bundle",
     "lemma-connectors",
     "lemma-backend",
@@ -183,23 +179,12 @@ def install_python(
     smoke_environment = os.environ.copy()
     smoke_environment.update(
         {
-            "AGENTBOX_API_KEY": "host-pack-smoke",
-            "AGENTBOX_API_URL": "http://127.0.0.1:8711/internal/agentbox",
-            "AGENTBOX_PUBLIC_URL": "http://127.0.0.1:8711/internal/agentbox",
-            "AGENTBOX_PROVIDER": "lemma_local",
-            "AGENTBOX_RUNTIME_CREDENTIAL_KEY": "host-pack-smoke-runtime-key-000000",
-            "AGENTBOX_WORKSPACE_IMAGE": (
-                "ghcr.io/lemma-work/lemma-agentbox-workspace@sha256:"
-                + "1" * 64
-            ),
-            "AGENTBOX_FUNCTION_IMAGE": (
-                "ghcr.io/lemma-work/lemma-agentbox-function@sha256:"
-                + "2" * 64
-            ),
-            # Adapter construction validates that the managed-runtime bridge
+            "WORKSPACE_PROVIDER": "lemma_local",
+            "WORKSPACE_RUNTIME_CREDENTIAL_KEY": "host-pack-smoke-runtime-key-000000",
+            # Provider construction validates that the managed-runtime bridge
             # exists. The private Python executable is a harmless stand-in for
             # this build-only import smoke test; no bridge request is made.
-            "AGENTBOX_LOCAL_RUNTIME_CLI": str(executable),
+            "WORKSPACE_LOCAL_RUNTIME_CLI": str(executable),
         }
     )
     run(
@@ -207,9 +192,10 @@ def install_python(
         "-c",
         (
             "from fastmcp import FastMCP; "
-            "from agentbox.adapters.lemma_local import LemmaLocalSandboxAdapter; "
+            "from app.modules.workspace.providers.lemma_local import "
+            "LemmaLocalSandboxProvider; "
             "import keyring, local_app, markitdown, uvicorn; "
-            "assert LemmaLocalSandboxAdapter.name == 'lemma_local'; "
+            "assert LemmaLocalSandboxProvider.name == 'lemma_local'; "
             "print('backend pack: import ok')"
         ),
         env=smoke_environment,
@@ -232,7 +218,7 @@ def prune_python_runtime(python_root: Path) -> None:
         for name in ("test", "idlelib", "turtledemo", "ensurepip"):
             shutil.rmtree(standard_library / name, ignore_errors=True)
         site_packages = standard_library / "site-packages"
-        for package in ("app", "agentbox", "agentbox_client", "lemma_connectors"):
+        for package in ("app", "lemma_connectors"):
             root = site_packages / package
             if not root.is_dir():
                 continue
@@ -457,13 +443,12 @@ def main() -> None:
     release_manifest = args.release_manifest.resolve()
     release = json.loads(release_manifest.read_text(encoding="utf-8"))
     images = release.get("images", {})
-    if (
-        not release.get("version")
-        or not images.get("agentbox_workspace")
-        or not images.get("agentbox_function")
-    ):
+    # Manifests published before the rename carry only the agentbox_* keys.
+    workspace_image = images.get("workspace") or images.get("agentbox_workspace")
+    function_image = images.get("function") or images.get("agentbox_function")
+    if not release.get("version") or not workspace_image or not function_image:
         raise SystemExit(
-            "release manifest lacks version, agentbox_workspace, or agentbox_function"
+            "release manifest lacks version, workspace, or function image"
         )
 
     with tempfile.TemporaryDirectory(prefix="lemma-host-wheels-") as wheel_dir:

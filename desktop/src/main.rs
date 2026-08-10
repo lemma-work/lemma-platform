@@ -1379,9 +1379,16 @@ fn spawn_locald() -> Result<(), String> {
         .env("LEMMA_DESKTOP", "1")
         .env("LEMMA_LOCALD_ROOT", locald_root())
         .env("LEMMA_DESKTOP_RUNTIME_ROOT", &root)
+        // Which container runtime to use -- docker, podman, lemma_local, or
+        // "auto" to detect. Not the sandbox provider: the backend's
+        // WORKSPACE_PROVIDER is derived from this separately and takes a
+        // narrower set of values. This is the one hop that reads the user's
+        // own shell, so it still honours the pre-rename name for now.
         .env(
-            "AGENTBOX_PROVIDER",
-            std::env::var("AGENTBOX_PROVIDER").unwrap_or_else(|_| "auto".into()),
+            "LEMMA_CONTAINER_RUNTIME",
+            std::env::var("LEMMA_CONTAINER_RUNTIME")
+                .or_else(|_| std::env::var("AGENTBOX_PROVIDER"))
+                .unwrap_or_else(|_| "auto".into()),
         )
         .stdin(Stdio::null())
         .stdout(Stdio::null())

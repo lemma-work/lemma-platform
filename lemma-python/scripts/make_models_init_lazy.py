@@ -5,7 +5,7 @@ openapi-python-client emits a ``models/__init__.py`` that eagerly imports every
 generated model (450+ ``attrs`` classes). Because Python runs a package's
 ``__init__`` before resolving any submodule, a single
 ``from ...models.foo import Foo`` drags in *all* models — adding ~10s of import
-time inside the agentbox runtime (no bytecode cache, constrained CPU).
+time inside the sandbox runtime (no bytecode cache, constrained CPU).
 
 This script replaces the eager imports with a PEP 562 ``__getattr__`` lazy
 loader. Submodule imports (``from ...models.foo import Foo``) then only run the

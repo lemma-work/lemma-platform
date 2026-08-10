@@ -4,7 +4,7 @@ The CLI registers ~20 command groups, each of which imports its slice of the
 SDK (generated request models, attrs classes, helpers). Loading all of them on
 every invocation dominated startup — `lemma --help` paid for the full tree,
 and `lemma pods list` paid for agents, surfaces, connectors, and the rest.
-This matters most in the agentbox sandbox, where gVisor and a 500m CPU limit
+This matters most in the workspace sandbox, where gVisor and a 500m CPU limit
 multiply every import.
 
 `LazyRootGroup` lists lazy groups from a static registry (name, module, attr,

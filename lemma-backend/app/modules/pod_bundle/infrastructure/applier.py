@@ -74,7 +74,7 @@ class BundleApplier:
         }.get(step.kind)
         if handler is None:
             # APP and FUNCTION are applied by self-scoped runners because they
-            # perform AgentBox/storage I/O with no pooled connection held.
+            # perform the sandbox runtime/storage I/O with no pooled connection held.
             raise StepNotApplicableError(
                 f"{step.kind.value} import is not supported yet; skipped."
             )

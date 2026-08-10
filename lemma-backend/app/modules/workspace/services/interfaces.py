@@ -51,7 +51,7 @@ class IWorkspaceSession(ABC):
     Pure workspace session interface for operations.
 
     This interface is independent of the sandbox provider. Implementations may
-    talk to AgentBox directly, to a local Docker runtime, or to another adapter.
+    talk to the sandbox runtime directly, to a local Docker runtime, or to another adapter.
     """
 
     @abstractmethod

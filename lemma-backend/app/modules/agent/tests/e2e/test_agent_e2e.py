@@ -602,7 +602,7 @@ class TestPodAgentLifecycle:
         configure_workspace_api_url,
         worker,
     ):
-        # configure_workspace_api_url starts the per-test AgentBox manager and
+        # configure_workspace_api_url starts the per-test sandbox manager and
         # routes workspace calls to it. Without it the worker has no manager to
         # reach and every exec_command fails with ConnectError (the run only
         # "passed" when a previous test's manager happened to linger on the

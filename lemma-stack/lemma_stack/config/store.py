@@ -20,7 +20,6 @@ from lemma_stack.paths import LocalPaths
 
 SCHEMA_VERSION = 1
 SECRET_KEY_RE = re.compile(r"KEY|TOKEN|SECRET|PASSWORD", re.IGNORECASE)
-ENV_SECTIONS = ("backend", "frontend", "agentbox")
 
 DEFAULT_PORTS = {
     "frontend": 3711,
@@ -62,8 +61,6 @@ observability = false
 
 [frontend.env]
 
-[agentbox.env]
-
 # Generated values — do not edit.
 [internal]
 """
@@ -71,7 +68,7 @@ observability = false
 
 def new_document() -> TOMLDocument:
     doc = tomlkit.parse(_TEMPLATE)
-    doc["internal"]["agentbox_api_key"] = secrets.token_hex(16)
+    doc["internal"]["installation_secret"] = secrets.token_hex(16)
     return doc
 
 
@@ -208,12 +205,20 @@ def env_overrides(doc: TOMLDocument, section: str) -> dict[str, str]:
     return {str(k): str(v) for k, v in values.items()}
 
 
-def agentbox_api_key(doc: TOMLDocument) -> str:
+def installation_secret(doc: TOMLDocument) -> str:
+    """The per-installation seed every derived local key hangs off.
+
+    Reads the pre-rename ``agentbox_api_key`` when that is what an existing
+    config carries. This value cannot be regenerated: it also derives the key
+    that encrypts stored secrets, so a fresh one would leave every encrypted
+    row in that installation unreadable.
+    """
+
     internal = doc.setdefault("internal", tomlkit.table())
-    key = internal.get("agentbox_api_key")
+    key = internal.get("installation_secret") or internal.get("agentbox_api_key")
     if not key:
         key = secrets.token_hex(16)
-        internal["agentbox_api_key"] = key
+        internal["installation_secret"] = key
     return str(key)
 
 

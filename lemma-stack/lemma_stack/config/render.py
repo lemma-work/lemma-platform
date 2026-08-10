@@ -46,8 +46,8 @@ LOCAL_WORKSPACES_DOMAIN = f"workspaces.{LOCAL_ROOT_DOMAIN}"
 # Allow every Lemma-local host depth, on any published port.
 LOCAL_CORS_ORIGIN_REGEX = r"^https?://([a-z0-9-]+\.)*lemma\.localhost(:\d+)?$"
 
-# Container-side mount points under /app/.local (match the backend/agentbox
-# image defaults so app config keeps working).
+# Container-side mount points under /app/.local (match the backend image
+# defaults so app config keeps working).
 STATE_MOUNT = "/app/.local/lemma"
 WORKSPACES_MOUNT = "/app/.local/workspaces"
 OBJECT_STORAGE_MOUNT = "/app/.local/object-storage"
@@ -67,18 +67,19 @@ def app_base_domain(doc: TOMLDocument) -> str:
     return f"{LOCAL_APPS_DOMAIN}:{store.port(doc, 'backend')}"
 
 
-def _agentbox_runtime_key(doc: TOMLDocument) -> str:
+def _runtime_credential_key(doc: TOMLDocument) -> str:
     """Derive a stable local-only runtime credential key.
 
-    The stored ``agentbox_api_key`` is now only seed material -- there is no
-    manager left to authenticate to. It keeps its name because renaming it
-    would change this derivation, and with it the credential every already
-    installed local stack has handed to its running sandboxes.
+    The installation secret is only seed material here -- there is no manager
+    left to authenticate to. The domain string changed with the sandbox image
+    contract, which rotates this credential once; that is safe because the
+    same release bumps the profile digest, so every sandbox is recreated and
+    reads the new token at startup rather than holding the old one.
     """
 
     digest = hmac.digest(
-        store.agentbox_api_key(doc).encode("utf-8"),
-        b"lemma-agentbox-runtime-credential-v1",
+        store.installation_secret(doc).encode("utf-8"),
+        b"lemma-workspace-runtime-credential-v1",
         "sha256",
     )
     return base64.urlsafe_b64encode(digest).decode("ascii")
@@ -112,18 +113,16 @@ def backend_env(
         "DOCUMENT_PROCESSOR": "markitdown",
         # Sandboxes are provisioned by the backend itself.
         "WORKSPACE_PROVIDER": adapter_provider,
-        "WORKSPACE_RUNTIME_CREDENTIAL_KEY": _agentbox_runtime_key(doc),
-        "AGENTBOX_WORKSPACE_IMAGE": workspace_image,
-        "AGENTBOX_FUNCTION_IMAGE": function_image,
-        "AGENTBOX_DOCKER_SOCKET_PATH": container_socket,
-        "AGENTBOX_DOCKER_SCOPE": f"{provider}:local",
-        "AGENTBOX_DOCKER_ALLOW_MUTABLE_IMAGES": "false",
-        "AGENTBOX_DOCKER_PRIVATE_NETWORK": (
+        "WORKSPACE_RUNTIME_CREDENTIAL_KEY": _runtime_credential_key(doc),
+        "WORKSPACE_IMAGE": workspace_image,
+        "FUNCTION_IMAGE": function_image,
+        "WORKSPACE_DOCKER_SOCKET_PATH": container_socket,
+        "WORKSPACE_DOCKER_ALLOW_MUTABLE_IMAGES": "false",
+        "WORKSPACE_DOCKER_PRIVATE_NETWORK": (
             "" if provider == "lemma_local" else NETWORK_NAME
         ),
-        "AGENTBOX_ADD_HOST_GATEWAY": "false",
-        "AGENTBOX_HOST_ALIAS": "host.lemma.internal",
-        "AGENTBOX_LOCAL_RUNTIME_TIMEOUT_SECONDS": "600",
+        "WORKSPACE_ADD_HOST_GATEWAY": "false",
+        "WORKSPACE_HOST_ALIAS": "host.lemma.internal",
         # sandboxes share the network; no host.docker.internal rewrite
         "WORKSPACE_CALLBACK_API_URL": "http://backend:8000",
         "WORKSPACE_CALLBACK_AUTH_URL": "http://frontend:8080/auth",
@@ -170,6 +169,9 @@ def backend_env(
         "ENABLE_TELEGRAM_POLLING_MODE": "true",
         "ENABLE_SLACK_SOCKET_MODE": "true",
     }
+    # [agentbox.env] predates the backend absorbing sandbox provisioning. It
+    # was never a separate namespace -- both land in this one environment --
+    # so it is still read for configs that have it, with [backend.env] last.
     env.update(store.env_overrides(doc, "agentbox"))
     env.update(store.env_overrides(doc, "backend"))
     return env
@@ -224,8 +226,8 @@ def host_backend_env(
             ),
             "REDIS_URL": redis_url,
             "SUPERTOKENS_CORE_URL": (f"http://127.0.0.1:{store.port(doc, 'supertokens')}"),
-            "AGENTBOX_DOCKER_PRIVATE_NETWORK": "",
-            "AGENTBOX_ADD_HOST_GATEWAY": "true",
+            "WORKSPACE_DOCKER_PRIVATE_NETWORK": "",
+            "WORKSPACE_ADD_HOST_GATEWAY": "true",
             "WORKSPACE_CALLBACK_API_URL": (f"http://host.lemma.internal:{backend_port}"),
             "WORKSPACE_CALLBACK_AUTH_URL": (f"http://host.lemma.internal:{frontend_port}/auth"),
             "WORKSPACE_CALLBACK_FRONTEND_URL": (f"http://host.lemma.internal:{frontend_port}"),
@@ -242,16 +244,18 @@ def host_backend_env(
     if provider == "lemma_local":
         env.update(
             {
-                "AGENTBOX_LOCAL_RUNTIME_CLI": managed_runtime_cli,
-                "AGENTBOX_LOCAL_SCOPE": "lemma-local:managed",
-                "AGENTBOX_ADD_HOST_GATEWAY": "false",
-                "AGENTBOX_LOCAL_CALLBACK_REQUIRED": "true",
-                "AGENTBOX_LOCAL_CALLBACK_URL": (
+                "WORKSPACE_LOCAL_RUNTIME_CLI": managed_runtime_cli,
+                "WORKSPACE_ADD_HOST_GATEWAY": "false",
+                "WORKSPACE_LOCAL_CALLBACK_REQUIRED": "true",
+                "WORKSPACE_LOCAL_CALLBACK_URL": (
                     f"http://host.lemma.internal:{backend_port}"
                 ),
             }
         )
     # User settings retain normal last-wins semantics.
+    # [agentbox.env] predates the backend absorbing sandbox provisioning. It
+    # was never a separate namespace -- both land in this one environment --
+    # so it is still read for configs that have it, with [backend.env] last.
     env.update(store.env_overrides(doc, "agentbox"))
     env.update(store.env_overrides(doc, "backend"))
     return env

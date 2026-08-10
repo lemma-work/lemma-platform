@@ -51,7 +51,7 @@ flowchart LR
 ```
 
 Every non-app apply step opens its own authorization/UoW scope and commits
-before the Redis `DONE` checkpoint. App steps self-scope around an AgentBox
+before the Redis `DONE` checkpoint. App steps self-scope around a sandbox
 build. A crash between commit and checkpoint replays an idempotent upsert. The
 format handles tables/data, files, functions, agents/grants/toolsets, workflows,
 schedules, apps/source, surfaces/account variables, and pod metadata.

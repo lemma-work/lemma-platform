@@ -43,7 +43,7 @@ _TERMINAL_PROCESS_STATES = {
 
 
 class SandboxWorkspaceSession:
-    """Backend adapter over AgentBox's process and Python-session protocols."""
+    """Backend adapter over the sandbox runtime's process and Python-session protocols."""
 
     def __init__(
         self,
@@ -64,7 +64,7 @@ class SandboxWorkspaceSession:
         self.session_id = session_id or str(uuid4())
         self.python_session_id = uuid5(
             NAMESPACE_URL,
-            f"agentbox:{self.logical_id}:python:{self.session_id}",
+            f"workspace:{self.logical_id}:python:{self.session_id}",
         )
         self.env_vars = env_vars or {}
         self._environment = tuple(
@@ -196,7 +196,7 @@ class SandboxWorkspaceSession:
             )
         except (httpx.HTTPError, OSError) as exc:
             return _sandbox_command_failure(
-                error=f"AgentBox transport failed: {type(exc).__name__}: {exc}",
+                error=f"the sandbox runtime transport failed: {type(exc).__name__}: {exc}",
                 retryable=True,
                 process_id=str(operation_id),
             )
@@ -241,7 +241,7 @@ class SandboxWorkspaceSession:
                     completed=False,
                 )
             return _sandbox_command_failure(
-                error=f"AgentBox {exc.code}: {exc}",
+                error=f"the sandbox runtime {exc.code}: {exc}",
                 retryable=exc.retry.value != "do_not_retry",
                 process_id=process_id,
             )
@@ -249,7 +249,7 @@ class SandboxWorkspaceSession:
             if not chars:
                 return _sandbox_command_failure(
                     error=(
-                        "AgentBox process status polling failed: "
+                        "the sandbox runtime process status polling failed: "
                         f"{type(exc).__name__}: {exc}"
                     ),
                     retryable=True,
@@ -261,12 +261,12 @@ class SandboxWorkspaceSession:
             return _sandbox_command_failure(
                 error=(
                     (
-                        "AgentBox accepted the input, but subsequent process "
+                        "the sandbox runtime accepted the input, but subsequent process "
                         "status collection failed; poll again without resending "
                         "the input: "
                     )
                     if input_accepted
-                    else "AgentBox process input outcome is unknown: "
+                    else "the sandbox runtime process input outcome is unknown: "
                 )
                 + (
                     f"{type(exc).__name__}: {exc}"
@@ -467,7 +467,7 @@ class SandboxWorkspaceSession:
                     )
                 except Exception:
                     logger.debug(
-                        "workspace.agentbox_session.python_session_delete_failed",
+                        "workspace.sandbox_session.python_session_delete_failed",
                         sandbox_id=self.sandbox_id,
                         session_id=self.session_id,
                     )

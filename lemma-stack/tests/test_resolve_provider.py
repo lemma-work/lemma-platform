@@ -14,9 +14,9 @@ from lemma_stack.supervise import Supervisor
 def _resolve(monkeypatch, tmp_path, config, env_provider=None):
     monkeypatch.setenv("LEMMA_STACK_ROOT", str(tmp_path))
     if env_provider is None:
-        monkeypatch.delenv("AGENTBOX_PROVIDER", raising=False)
+        monkeypatch.delenv("LEMMA_CONTAINER_RUNTIME", raising=False)
     else:
-        monkeypatch.setenv("AGENTBOX_PROVIDER", env_provider)
+        monkeypatch.setenv("LEMMA_CONTAINER_RUNTIME", env_provider)
     calls = []
 
     def fake_select(requested, *, assume_yes):

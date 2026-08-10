@@ -23,7 +23,7 @@ Environment facts:
 
 - Nothing is running at startup — call `start-browser [url]` once, then reuse the same session for everything.
 - The session is preconfigured: headed Chromium at `/usr/local/bin/workspace-chrome` on virtual display, persistent profile at `/workspace/.browser-profile` (cookies/logins survive across commands and tasks), session name `workspace`.
-- Dashboard on port 4848 for human observation (signed URL via AgentBox Manager `/sandboxes/<id>/browser-url`).
+- Dashboard on port 4848 for human observation (signed URL via the sandbox runtime Manager `/sandboxes/<id>/browser-url`).
 - Local apps: browse `http://127.0.0.1:<port>` from inside the container, never the public preview URL.
 - Never install Playwright or browser binaries — everything is preinstalled.
 

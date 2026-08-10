@@ -13,7 +13,7 @@ from app.modules.test_support.e2e.runtime import (
     backend_server,
     configure_workspace_api_url,
     function_image,
-    local_agentbox_server,
+    local_sandbox_server,
     workspace_image,
 )
 
@@ -78,6 +78,6 @@ __all__ = [
     "test_redis_url",
     "sandbox_reachable_backend",
     "worker",
-    "local_agentbox_server",
+    "local_sandbox_server",
     "workspace_image",
 ]

@@ -1,1 +1,1 @@
-"""AgentBox sandbox manager and client package."""
+"""sandbox manager and client package."""

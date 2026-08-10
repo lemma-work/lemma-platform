@@ -17,7 +17,7 @@ SHELL := /bin/bash
 
 .PHONY: help init dev dev-public agent-host verify-agent-host stop-agent-host stop stop-all logs otel-up otel-down otel-tail otel-smoke \
         observability-up observability-down observability-open \
-        _prepare-dev _start-public-api-tunnel _ensure-databases _ensure-agentbox-images _wait-backend \
+        _prepare-dev _start-public-api-tunnel _ensure-databases _ensure-sandbox-images _wait-backend \
         _ensure-native-connectors \
         test-dev-workflow \
         test test-backend test-backend-unit test-backend-e2e \
@@ -78,12 +78,11 @@ DEV_APP_BASE_DOMAIN   := apps.lemma.localhost:$(DEV_BACKEND_PORT)
 DEV_APPS_DOMAIN_SUFFIX := apps.lemma.localhost
 DEV_DATABASE_URL      := postgresql+asyncpg://postgres:postgres@localhost:$(DEV_POSTGRES_PORT)/lemma
 DEV_DATASTORE_DATABASE_URL := postgresql+asyncpg://postgres:postgres@localhost:$(DEV_POSTGRES_PORT)/lemma_datastore
-DEV_AGENTBOX_DATABASE_URL  := postgresql+psycopg://postgres:postgres@localhost:$(DEV_POSTGRES_PORT)/agentbox
 DEV_REDIS_URL         := redis://localhost:$(DEV_REDIS_PORT)/0
 DEV_SUPERTOKENS_URL   := http://localhost:$(DEV_SUPERTOKENS_PORT)
 DEV_SANDBOX_BACKEND_URL := http://host.lemma.internal:$(DEV_BACKEND_PORT)
 DEV_SANDBOX_FRONTEND_URL := http://host.lemma.internal:$(DEV_FRONTEND_PORT)
-DEV_AGENTBOX_RUNTIME_CREDENTIAL_KEY ?= dev-agentbox-runtime-credential-key-0001
+DEV_WORKSPACE_RUNTIME_CREDENTIAL_KEY ?= dev-workspace-runtime-credential-key-0001
 DEV_CORS_ORIGIN_REGEX := https?://(localhost|127\.0\.0\.\d+|127\.\d+\.\d+\.\d+|127-0-0-\d+\.sslip\.io|[\w-]+\.nip\.io)(:\d+)?
 DEV_LOG_LEVEL         ?= DEBUG
 DEV_JSON_LOGS_ENABLED ?= true
@@ -146,9 +145,12 @@ LLM_OTEL_DEV_ENV = \
 	LLM_OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:$(PHOENIX_OTLP_GRPC_PORT) \
 	LLM_OTEL_EXPORTER_OTLP_PROTOCOL=grpc \
 	LLM_OTEL_TRACES_SAMPLER=always_on
-# Immutable-profile inputs used by the local Docker provider.
-AGENTBOX_WORKSPACE_IMAGE ?= agentbox-workspace:dev
-AGENTBOX_FUNCTION_IMAGE ?= agentbox-function:dev
+# Immutable-profile inputs used by the local Docker provider. Named DEV_* here
+# because lemma-backend/Makefile already uses WORKSPACE_IMAGE/FUNCTION_IMAGE for
+# the untagged registry path, and these are passed across a recursive-make
+# boundary below -- one name with two meanings there has ambiguous precedence.
+DEV_WORKSPACE_IMAGE ?= lemma-workspace:dev
+DEV_FUNCTION_IMAGE ?= lemma-function:dev
 
 COMMON_DEV_ENV := \
 	DEV_POSTGRES_PORT=$(DEV_POSTGRES_PORT) \
@@ -237,12 +239,12 @@ WORKSPACE_PROVIDER ?= docker
 
 WORKSPACE_DEV_ENV := \
 	WORKSPACE_PROVIDER=$(WORKSPACE_PROVIDER) \
-	WORKSPACE_RUNTIME_CREDENTIAL_KEY=$(DEV_AGENTBOX_RUNTIME_CREDENTIAL_KEY) \
-	AGENTBOX_WORKSPACE_IMAGE=$(AGENTBOX_WORKSPACE_IMAGE) \
-	AGENTBOX_FUNCTION_IMAGE=$(AGENTBOX_FUNCTION_IMAGE) \
-	AGENTBOX_DOCKER_ALLOW_MUTABLE_IMAGES=true \
-	AGENTBOX_ADD_HOST_GATEWAY=true \
-	AGENTBOX_HOST_ALIAS=host.lemma.internal
+	WORKSPACE_RUNTIME_CREDENTIAL_KEY=$(DEV_WORKSPACE_RUNTIME_CREDENTIAL_KEY) \
+	WORKSPACE_IMAGE=$(DEV_WORKSPACE_IMAGE) \
+	FUNCTION_IMAGE=$(DEV_FUNCTION_IMAGE) \
+	WORKSPACE_DOCKER_ALLOW_MUTABLE_IMAGES=true \
+	WORKSPACE_ADD_HOST_GATEWAY=true \
+	WORKSPACE_HOST_ALIAS=host.lemma.internal
 
 # ── Help ──────────────────────────────────────────────────────────────────────
 
@@ -306,7 +308,7 @@ init:
 	@docker compose version >/dev/null 2>&1 || \
 		(echo "  ✗ Docker Compose v2 is required — install/update Docker Desktop"; exit 1)
 	@command -v node >/dev/null 2>&1 || (echo "  ✗ Node.js not found — install from https://nodejs.org/"; exit 1)
-	@command -v openssl >/dev/null 2>&1 || (echo "  ✗ openssl not found — required to generate the local AgentBox state key"; exit 1)
+	@command -v openssl >/dev/null 2>&1 || (echo "  ✗ openssl not found — required to generate the local sandbox state key"; exit 1)
 	@echo "  ✓ Prerequisites OK"
 	@echo ""
 	@echo "→ Installing dependencies…"
@@ -328,24 +330,23 @@ init:
 	@echo "→ Creating .env files (skipped if already present)…"
 	@$(MAKE) --no-print-directory _init-backend-env
 	@$(MAKE) --no-print-directory _init-frontend-env
-	@$(MAKE) --no-print-directory _init-agentbox-env
 	@echo ""
-	@$(MAKE) --no-print-directory _ensure-agentbox-images
+	@$(MAKE) --no-print-directory _ensure-sandbox-images
 	@echo ""
 	@echo "Done. Run 'make dev' to start the stack."
 
-_ensure-agentbox-images:
-	@if docker image inspect "$(AGENTBOX_WORKSPACE_IMAGE)" >/dev/null 2>&1 \
-		&& docker image inspect "$(AGENTBOX_FUNCTION_IMAGE)" >/dev/null 2>&1; then \
-		echo "  ✓ AgentBox workspace/function images already present"; \
+_ensure-sandbox-images:
+	@if docker image inspect "$(DEV_WORKSPACE_IMAGE)" >/dev/null 2>&1 \
+		&& docker image inspect "$(DEV_FUNCTION_IMAGE)" >/dev/null 2>&1; then \
+		echo "  ✓ workspace/function sandbox images already present"; \
 	else \
-		echo "→ Building canonical AgentBox workspace/function images…"; \
+		echo "→ Building canonical workspace/function sandbox images…"; \
 		$(MAKE) -C $(BACKEND_DIR) sandbox-image-workspace \
-			WORKSPACE_IMAGE="$(basename $(AGENTBOX_WORKSPACE_IMAGE))" \
-			SANDBOX_TAG="$(suffix $(AGENTBOX_WORKSPACE_IMAGE))"; \
+			WORKSPACE_IMAGE="$(basename $(DEV_WORKSPACE_IMAGE))" \
+			SANDBOX_TAG="$(suffix $(DEV_WORKSPACE_IMAGE))"; \
 		$(MAKE) -C $(BACKEND_DIR) sandbox-image-function \
-			FUNCTION_IMAGE="$(basename $(AGENTBOX_FUNCTION_IMAGE))" \
-			SANDBOX_TAG="$(suffix $(AGENTBOX_FUNCTION_IMAGE))"; \
+			FUNCTION_IMAGE="$(basename $(DEV_FUNCTION_IMAGE))" \
+			SANDBOX_TAG="$(suffix $(DEV_FUNCTION_IMAGE))"; \
 	fi
 
 _init-backend-env:
@@ -384,7 +385,7 @@ _init-backend-env:
 			echo "ENABLE_SLACK_SOCKET_MODE=true"; \
 			echo 'CORS_ORIGINS=["http://localhost:$(DEV_FRONTEND_PORT)","http://127.0.0.1:$(DEV_FRONTEND_PORT)"]'; \
 			echo 'CORS_ORIGIN_REGEX=$(DEV_CORS_ORIGIN_REGEX)'; \
-			echo "# AgentBox sandbox manager — embedded in the local backend"; \
+			echo "# sandbox manager — embedded in the local backend"; \
 			echo "# Model provider — set a key and the exact model names available to it."; \
 			echo "LEMMA_DEFAULT_MODEL_TYPE=openai_compat"; \
 			echo "LEMMA_OPENAI_API_KEY="; \
@@ -477,8 +478,6 @@ _ensure-frontend-env-keys:
 		append NEXT_PUBLIC_APPS_DOMAIN_SUFFIX '$(DEV_APPS_DOMAIN_SUFFIX)'; \
 		cd $(FRONTEND_DIR) && npm run gen:runtime-config --silent; \
 	fi
-
-_init-agentbox-env:
 
 # ── Dev stack ─────────────────────────────────────────────────────────────────
 
@@ -608,7 +607,7 @@ agent-host:
 _prepare-dev:
 	@$(MAKE) --no-print-directory stop 2>/dev/null || true
 	@$(MAKE) --no-print-directory _ensure-init
-	@$(MAKE) --no-print-directory _ensure-agentbox-images
+	@$(MAKE) --no-print-directory _ensure-sandbox-images
 	@$(MAKE) --no-print-directory _infra-up
 	@$(MAKE) --no-print-directory _wait-infra
 	@$(MAKE) --no-print-directory _ensure-databases
@@ -668,7 +667,7 @@ _ensure-init:
 	@test -f $(TS_DIR)/dist/index.js || { echo "  ! $(TS_DIR)/dist missing — run 'make init' (or cd $(TS_DIR) && npm run build)"; exit 1; }
 	@$(MAKE) --no-print-directory _ensure-backend-env-keys
 	@$(MAKE) --no-print-directory _ensure-frontend-env-keys
-	@cd $(BACKEND_DIR) && uv run --extra local python -c 'import agentbox, markitdown, psycopg, psycopg_pool' >/dev/null || { echo "  ! Local backend dependencies missing — run 'make init'"; exit 1; }
+	@cd $(BACKEND_DIR) && uv run --extra local python -c 'import markitdown, psycopg, psycopg_pool' >/dev/null || { echo "  ! Local backend dependencies missing — run 'make init'"; exit 1; }
 	@echo "  Using $(BACKEND_DIR)/.env + $(FRONTEND_DIR)/.env.local"
 
 _infra-up:
@@ -689,9 +688,9 @@ _wait-infra:
 		echo "  ✓ Postgres ready"
 
 _ensure-databases:
-	@echo "  Ensuring extra databases (supertokens, lemma_datastore, agentbox) exist…"
+	@echo "  Ensuring extra databases (supertokens, lemma_datastore) exist…"
 	@cd $(BACKEND_DIR) && \
-		for db in supertokens lemma_datastore agentbox; do \
+		for db in supertokens lemma_datastore; do \
 			exists=$$(docker compose exec -T db psql -U postgres -tAc "SELECT 1 FROM pg_database WHERE datname = '$$db'" 2>/dev/null | tr -d '[:space:]'); \
 			if [ "$$exists" != "1" ]; then \
 				echo "    Creating database $$db…"; \

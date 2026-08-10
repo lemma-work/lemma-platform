@@ -21,7 +21,7 @@ Environment variables (pre-set inside Lemma workspaces/sandboxes — use them, d
 - `.lemma.env` — base; may set the folder's default `LEMMA_SERVER`.
 - `.lemma.<server>.env` — per-server binding (`LEMMA_POD_ID`, optional `LEMMA_ORG_ID`).
 
-Then `lemma pods describe` uses the folder's default server while `lemma --server lemma-cloud apps deploy` targets cloud — same repo, no global switching. The CLI loads the nearest anchor walking up (ceiling: git root / `$HOME`); active server resolves as `--server` → `LEMMA_SERVER` → base file → config `active_server`. Gitignored `.lemma.<server>.env.local` overrides per-machine; real env always wins (a real `LEMMA_TOKEN`, e.g. agentbox, skips the files). A command that needs a pod on an unbound server fails with `No pod bound for server '<server>'`. `lemma config show` reports the resolved server + applied files. No secrets in these files.
+Then `lemma pods describe` uses the folder's default server while `lemma --server lemma-cloud apps deploy` targets cloud — same repo, no global switching. The CLI loads the nearest anchor walking up (ceiling: git root / `$HOME`); active server resolves as `--server` → `LEMMA_SERVER` → base file → config `active_server`. Gitignored `.lemma.<server>.env.local` overrides per-machine; real env always wins (a real `LEMMA_TOKEN`, e.g. inside a workspace sandbox, skips the files). A command that needs a pod on an unbound server fails with `No pod bound for server '<server>'`. `lemma config show` reports the resolved server + applied files. No secrets in these files.
 
 Scripting conventions:
 

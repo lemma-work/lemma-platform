@@ -54,6 +54,7 @@ from app.modules.workspace.providers.e2b_common import (
     LEGACY_MANAGED_BY,
     LEGACY_MANAGED_BY_KEY,
     meta_epoch,
+    meta_profile_digest,
     meta_sandbox_id,
     meta_sandbox_kind,
     sdk_best_effort,
@@ -153,6 +154,7 @@ class E2BSandboxProvider(E2BOpsMixin):
             meta_sandbox_id(namespace): str(spec.sandbox_id),
             meta_sandbox_kind(namespace): spec.kind.value,
             meta_epoch(namespace): str(spec.epoch),
+            meta_profile_digest(namespace): spec.profile_digest,
         }
 
     def _template(self, kind: SandboxKind) -> str:
@@ -183,6 +185,22 @@ class E2BSandboxProvider(E2BOpsMixin):
         a stale operation fails rather than landing on it.
         """
         existing = await self._find_any(spec.sandbox_id)
+        if existing is not None and existing.profile_digest != spec.profile_digest:
+            # Made from a different build of the template. Here the sandbox is
+            # the disk, so there is no way to keep the files and still move to
+            # the new image -- and leaving it would keep this workspace on the
+            # old template forever, talking a protocol the backend no longer
+            # speaks. Destroy it so the create below starts clean; the caller
+            # learns the disk is new from storage_adopted=False.
+            #
+            # Not best-effort: if the stale sandbox survives, the fresh one
+            # carries the same sandbox-id metadata and a later lookup could
+            # land on either. Failing the provision is better than stranding
+            # the user's files behind a duplicate.
+            sandbox = await self._connect(existing.provider_id)
+            with sdk_errors():
+                await sandbox.kill(**self._api())
+            existing = None
         if existing is not None:
             await self._stamp(existing.provider_id, spec)
             return ProviderInstance(
@@ -190,6 +208,7 @@ class E2BSandboxProvider(E2BOpsMixin):
                 name=spec.name,
                 running=existing.running,
                 storage_adopted=True,
+                profile_digest=spec.profile_digest,
             )
 
         with sdk_errors():
@@ -413,11 +432,15 @@ class E2BSandboxProvider(E2BOpsMixin):
             reverse=True,
         )
         for info in ordered:
+            metadata = getattr(info, "metadata", None) or {}
             return ProviderInstance(
                 provider_id=info.sandbox_id,
                 name=info.sandbox_id,
                 volume_name=None,
                 running=str(info.state).lower().endswith("running"),
+                profile_digest=metadata.get(
+                    meta_profile_digest(self._config.metadata_namespace)
+                ),
             )
         return None
 

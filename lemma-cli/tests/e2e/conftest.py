@@ -206,8 +206,6 @@ def backend_server(postgres_container, redis_container, supertokens_container):
         "AUTH_DISPOSABLE_EMAIL_DOMAINS_ENABLED": "false",
         "AUTH_ABUSE_PROTECTION_ENABLED": "false",
         "AUTH_ALTCHA_ENABLED": "false",
-        "AGENTBOX_API_KEY": "test-key",
-        "AGENTBOX_API_URL": "http://localhost:9999",
     }
 
     # Apply the DB schema before starting the server. The uvicorn lifespan does

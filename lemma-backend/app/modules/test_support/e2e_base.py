@@ -69,7 +69,7 @@ def _cleanup_e2e_workspace_containers(*, sandboxes_only: bool = False) -> None:
     would tear down the live session containers mid-run. Sandboxes are
     identifiable on their own: the workspace module labels its containers
     ``managed-by=lemma-workspace``, and pre-cutover ones carry
-    ``app.kubernetes.io/name=agentbox-sandbox``.
+    ``app.kubernetes.io/name=lemma-sandbox``.
 
     - ``sandboxes_only=True`` (per-test cleanup): remove ONLY sandboxes, sparing
       the shared session containers — otherwise the workspace teardown after the
@@ -93,7 +93,7 @@ def _cleanup_e2e_workspace_containers(*, sandboxes_only: bool = False) -> None:
     if sandboxes_only:
         filter_sets = [
             ["--filter", "label=lemma.e2e=true",
-             "--filter", "label=app.kubernetes.io/name=agentbox-sandbox"],
+             "--filter", "label=app.kubernetes.io/name=lemma-sandbox"],
             ["--filter", "label=managed-by=lemma-workspace"],
         ]
     else:
@@ -376,7 +376,7 @@ def e2e_settings(test_database_url, test_redis_url, supertokens_container):
     # E2E execution mode: default to the fast mocked level (no real model, no
     # Docker) so CI and local runs are fast and deterministic. ``E2E_REAL=1``
     # (or the per-axis E2E_LLM_MODE / E2E_SANDBOX_MODE) opts into the real model
-    # + Docker AgentBox. Set on os.environ too so the worker subprocess (which
+    # + Docker sandbox. Set on os.environ too so the worker subprocess (which
     # inherits os.environ) runs in the same mode.
     real = os.environ.get("E2E_REAL", "").lower() in ("1", "true", "yes")
     llm_mode = os.environ.get("E2E_LLM_MODE") or ("real" if real else "mock")

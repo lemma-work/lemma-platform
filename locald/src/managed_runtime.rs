@@ -174,7 +174,7 @@ impl ManagedRuntimeController {
                 "postgres",
                 "Starting PostgreSQL",
                 50,
-                "preparing Lemma, datastore, AgentBox, and auth databases",
+                "preparing Lemma, datastore, the sandbox runtime, and auth databases",
             ),
             (
                 "core.redis",
@@ -281,13 +281,6 @@ impl ManagedRuntimeController {
                 ),
             ),
             (
-                "AGENTBOX_STATE_DATABASE_URL".into(),
-                format!(
-                    "postgresql+asyncpg://postgres:{}@{host}:5432/agentbox",
-                    self.spec.credentials.postgres_password
-                ),
-            ),
-            (
                 "REDIS_URL".into(),
                 format!(
                     "redis://:{}@{host}:6379",
@@ -295,7 +288,7 @@ impl ManagedRuntimeController {
                 ),
             ),
             ("SUPERTOKENS_CORE_URL".into(), format!("http://{host}:3567")),
-            // The backend invokes the narrow runtime bridge for AgentBox
+            // The backend invokes the narrow runtime bridge for the sandbox runtime
             // lifecycle operations. Pass explicit paths to the app-owned
             // capability and transport; the bridge must never guess from a
             // developer checkout or rewrite a localhost URL.
@@ -877,8 +870,7 @@ mod tests {
 
         let environment = controller.backend_environment().unwrap();
         assert!(environment["DATABASE_URL"].contains("@192.168.64.10:5432/lemma"));
-        assert!(environment["AGENTBOX_STATE_DATABASE_URL"].starts_with("postgresql+asyncpg://"));
-        assert!(environment["AGENTBOX_STATE_DATABASE_URL"].contains("@192.168.64.10:5432/agentbox"));
+        assert!(!environment.contains_key("AGENTBOX_STATE_DATABASE_URL"));
         assert_eq!(
             environment["SUPERTOKENS_CORE_URL"],
             "http://192.168.64.10:3567"

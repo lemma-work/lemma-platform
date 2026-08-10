@@ -1,4 +1,4 @@
-# AgentBox Function Execution Benchmark
+# Sandbox function execution benchmark
 
 The function benchmark is the repeatable full-path quality gate for the shared
 per-pod function sandbox. It executes real API and JOB functions against either
@@ -43,7 +43,7 @@ make benchmark-functions-e2b
 The E2B command reads `E2B_API_KEY` from `lemma-backend/.env` or the process
 environment. It uses exact immutable workspace and function template/build IDs.
 A candidate build is tested without changing any E2B template, alias, or account
-setting by overriding the four `AGENTBOX_E2B_*` variables.
+setting by overriding the four `E2B_*` variables.
 
 The local synthetic backend is exposed to E2B through a temporary ngrok tunnel by
 default. Set `FUNCTION_BENCH_TUNNEL=cloudflared` to test through Cloudflare, or
@@ -97,7 +97,7 @@ within the same provider, runner class, profile digest, workload, and concurrenc
 
 ## Automation
 
-`.github/workflows/agentbox-function-benchmark.yml` runs Docker nightly and E2B
+`.github/workflows/sandbox-function-benchmark.yml` runs Docker nightly and E2B
 weekly at concurrency five, supports either provider or both through manual
 dispatch, and publishes distinct JSON reports under the tested commit SHA. Each
 lane first runs that provider's real workspace/function conformance suite,

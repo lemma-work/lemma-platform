@@ -8,7 +8,7 @@ reasons:
   URLs) into its bundle at build time, and its ``public_slug`` is unique
   platform-wide — both change when the pod is imported elsewhere, so a prebuilt
   dist from the source pod is useless. The rebuild runs ``pnpm install && pnpm run
-  build`` inside the importing user's AgentBox sandbox with the *target* pod's
+  build`` inside the importing user's sandbox with the *target* pod's
   values. (A static/no-``package.json`` app needs no rebuild — the host injects
   ``window.__LEMMA_CONFIG__`` at serve time — so its files are deployed as-is.)
 * **It must hold no DB connection across the build.** The build + storage upload
@@ -20,7 +20,7 @@ reasons:
   shared per-step ``uow_scope``.
 
 :class:`AppStepRunner` owns the create → build → upload sequencing and the short
-UoW boundaries; :class:`AppSandboxBuilder` owns the (DB-free) agentbox build.
+UoW boundaries; :class:`AppSandboxBuilder` owns the (DB-free) sandbox build.
 Both take injected collaborators so the step is unit-testable with a fake
 workspace session and a fake app service.
 """
@@ -119,11 +119,11 @@ def slug_candidates(preferred: str | None, *, pod_id: UUID, app_name: str) -> li
     return candidates
 
 
-# --- agentbox build (no DB connection) ---------------------------------------
+# --- sandbox build (no DB connection) ---------------------------------------
 
 
 class AppSandboxBuilder:
-    """Runs the Vite build for an app inside the importing user's AgentBox and
+    """Runs the Vite build for an app inside the importing user's the sandbox runtime and
     returns the built ``dist`` archive bytes. Holds no DB connection."""
 
     def __init__(self, workspace_service: Any | None = None):
@@ -270,7 +270,7 @@ class AppStepRunner:
             return
 
         # Phase 2 (no DB connection): assemble source + dist bytes (building in the
-        # agentbox for a Vite app, baking the deployed slug).
+        # sandbox for a Vite app, baking the deployed slug).
         source_bytes, dist_bytes = await self._artifacts(
             resource_dir, step.name, app_slug=app_slug, pod_id=pod_id, user_id=user_id
         )
@@ -348,7 +348,7 @@ class AppStepRunner:
         user_id: UUID,
     ) -> tuple[bytes | None, bytes]:
         """Produce ``(source_bytes, dist_bytes)`` for upload. A Vite source is built
-        in the agentbox; a static source is deployed as-is; a bundle carrying only a
+        in a sandbox; a static source is deployed as-is; a bundle carrying only a
         prebuilt ``dist.zip`` (widget/no-source app) is uploaded with no source."""
         source_dir = resource_dir / "source"
         dist_zip = resource_dir / "dist.zip"

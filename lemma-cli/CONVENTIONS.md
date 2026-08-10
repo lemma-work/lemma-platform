@@ -89,7 +89,7 @@ Every `delete` (and any other irreversible command) must call
   `$HOME`), resolves the active server, and applies the matching files' `LEMMA_*` keys
   before resolving state. Gitignored `.lemma.env.local` / `.lemma.<server>.env.local`
   override per-machine. Real process env always wins (a real `LEMMA_TOKEN` — e.g.
-  agentbox — skips the files entirely). `init` writes these. See `SETUP.md`.
+  a workspace sandbox — skips the files entirely). `init` writes these. See `SETUP.md`.
 - `pods select` stores the pod **and** its org; `orgs select` stores the org and
   clears the pod (a pod belongs to one org).
 

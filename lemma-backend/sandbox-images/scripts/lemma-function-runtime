@@ -1,4 +1,4 @@
-#!/opt/agentbox-function/bin/python
+#!/opt/lemma-function/bin/python
 import sys
 
 sys.path.insert(0, "/app")

@@ -58,7 +58,7 @@ pytestmark = [
     pytest.mark.workspace,
 ]
 
-_AGENTBOX_ACCEPTANCE_MODEL = "accounts/fireworks/models/minimax-m3"
+_ACCEPTANCE_MODEL = "accounts/fireworks/models/minimax-m3"
 
 # Some assertions here require the *sandbox* to call back into the backend this
 # test just started on 127.0.0.1 -- the workspace token check and anything
@@ -72,7 +72,7 @@ def _sandbox_runs_locally() -> bool:
 
     Keyed off the provider actually in use rather than the harness's sandbox
     mode, because the two can differ: the workspace module may be provisioning
-    on E2B while the harness still configures the AgentBox side for Docker.
+    on E2B while the harness still configures the sandbox side for Docker.
     """
     if os.getenv("WORKSPACE_OWNS_SANDBOXES", "").lower() in {"1", "true", "yes"}:
         return os.getenv("WORKSPACE_PROVIDER", "docker").lower() != "e2b"
@@ -98,7 +98,7 @@ async def test_fresh_workspace_token_authenticates_over_backend_http(
     backend_server,
     configure_workspace_api_url,
 ):
-    """A workspace token must survive both HTTP and AgentBox process boundaries."""
+    """A workspace token must survive both HTTP and the sandbox runtime process boundaries."""
 
     service = WorkspaceSandboxService()
     try:
@@ -108,7 +108,7 @@ async def test_fresh_workspace_token_authenticates_over_backend_http(
             organization_id=UUID(fixed_test_org["id"]),
             workload_type="agent",
             workload_id=uuid4(),
-            workload_name="agentbox_token_preflight",
+            workload_name="sandbox_token_preflight",
             scope=["pod.read"],
             session_id=str(uuid4()),
         )
@@ -176,7 +176,7 @@ async def test_fresh_workspace_token_authenticates_over_backend_http(
 @pytest.mark.real_sandbox
 @pytest.mark.skipif(
     not e2e_real_llm(),
-    reason="set E2E_LLM_MODE=real to run the live AgentBox agent acceptance test",
+    reason="set E2E_LLM_MODE=real to run the live sandbox agent acceptance test",
 )
 @pytest.mark.skipif(not system_lemma_available(), reason=SYSTEM_LEMMA_SKIP_REASON)
 async def test_agent_uses_lemma_cli_through_selected_agentbox_provider(
@@ -196,7 +196,7 @@ async def test_agent_uses_lemma_cli_through_selected_agentbox_provider(
     pod_response = await authenticated_client.post(
         "/pods",
         json={
-            "name": f"AgentBox Lemma CLI Agent Pod {uuid4().hex[:8]}",
+            "name": f"Sandbox Lemma CLI Agent Pod {uuid4().hex[:8]}",
             "type": "ASSISTANT",
             "organization_id": fixed_test_org["id"],
         },
@@ -207,18 +207,18 @@ async def test_agent_uses_lemma_cli_through_selected_agentbox_provider(
     create_agent = await authenticated_client.post(
         f"/pods/{pod['id']}/agents",
         json={
-            "name": f"AgentBox CLI Acceptance Agent {uuid4().hex[:8]}",
+            "name": f"Sandbox CLI Acceptance Agent {uuid4().hex[:8]}",
             "instruction": (
                 "You verify the installed Lemma CLI. When asked, you must call "
                 "exec_command through the WORKSPACE_CLI toolset and use the exact "
                 "command supplied by the user. Never invent or infer the command "
                 "output. After the tool succeeds, report the returned profile email "
-                "and the exact marker LEMMA_CLI_AGENTBOX_OK."
+                "and the exact marker LEMMA_CLI_SANDBOX_OK."
             ),
             "toolsets": ["WORKSPACE_CLI"],
             "agent_runtime": {
                 "profile_id": "system:lemma",
-                "model_name": _AGENTBOX_ACCEPTANCE_MODEL,
+                "model_name": _ACCEPTANCE_MODEL,
             },
         },
     )
@@ -229,7 +229,7 @@ async def test_agent_uses_lemma_cli_through_selected_agentbox_provider(
         f"/pods/{pod['id']}/conversations",
         json={
             "agent_name": agent["name"],
-            "title": f"AgentBox {provider} Lemma CLI acceptance",
+            "title": f"{provider} Lemma CLI acceptance",
             "type": "CHAT",
         },
     )
@@ -240,7 +240,7 @@ async def test_agent_uses_lemma_cli_through_selected_agentbox_provider(
 
     async with production_worker_process(
         e2e_settings,
-        log_prefix=f"agentbox_{provider}_lemma_cli_agent",
+        log_prefix=f"sandbox_{provider}_lemma_cli_agent",
     ) as acceptance_worker:
         events = await _post_sse(
             authenticated_client,
@@ -250,7 +250,7 @@ async def test_agent_uses_lemma_cli_through_selected_agentbox_provider(
                     "Use exec_command now to run exactly: "
                     "`lemma --output json profile get`. "
                     "Do not answer from memory. After it succeeds, reply with the "
-                    "profile email and LEMMA_CLI_AGENTBOX_OK."
+                    "profile email and LEMMA_CLI_SANDBOX_OK."
                 )
             },
         )
@@ -300,11 +300,11 @@ async def test_agent_uses_lemma_cli_through_selected_agentbox_provider(
         for item in items
         if item["role"] == "assistant" and item["kind"] == "TEXT"
     )
-    assert "LEMMA_CLI_AGENTBOX_OK" in assistant_text.upper(), assistant_text
+    assert "LEMMA_CLI_SANDBOX_OK" in assistant_text.upper(), assistant_text
     assert fixed_test_user["email"] in assistant_text, assistant_text
 
 
-async def test_agent_workspace_cli_tools_execute_through_real_agentbox(
+async def test_agent_workspace_cli_tools_execute_through_a_real_sandbox(
     authenticated_client,
     fixed_test_org,
     fixed_test_user,
@@ -335,8 +335,8 @@ async def test_agent_workspace_cli_tools_execute_through_real_agentbox(
     python_set = await execute_python_internal(
         ctx,
         ExecutePythonRequest(
-            comment="compute through AgentBox",
-            code="agentbox_value = 6 * 7\nagentbox_value",
+            comment="compute through the sandbox runtime",
+            code="sandbox_value = 6 * 7\nsandbox_value",
         ),
     )
     assert python_set.success is True, python_set
@@ -346,7 +346,7 @@ async def test_agent_workspace_cli_tools_execute_through_real_agentbox(
         ctx,
         ExecutePythonRequest(
             comment="verify persistent python session",
-            code="agentbox_value += 1\nagentbox_value",
+            code="sandbox_value += 1\nsandbox_value",
         ),
     )
     assert python_get.success is True, python_get
@@ -359,7 +359,7 @@ async def test_agent_workspace_cli_tools_execute_through_real_agentbox(
     shell = await exec_command_internal(
         ctx,
         ExecCommandRequest(
-            comment="verify shell env and Lemma CLI through AgentBox",
+            comment="verify shell env and Lemma CLI through the sandbox runtime",
             cmd=(
                 "pwd; "
                 'printf \'pod=%s user=%s\\n\' "$LEMMA_POD_ID" "$LEMMA_USER_ID"; '
@@ -383,7 +383,7 @@ async def test_agent_workspace_cli_tools_execute_through_real_agentbox(
         ctx,
         ExecCommandRequest(
             comment="start interactive shell command",
-            cmd="read line; printf 'agentbox-stdin:%s\\n' \"$line\"",
+            cmd="read line; printf 'sandbox-stdin:%s\\n' \"$line\"",
             tty=True,
             yield_time_ms=500,
         ),
@@ -403,7 +403,7 @@ async def test_agent_workspace_cli_tools_execute_through_real_agentbox(
     )
     assert stdin.success is True, stdin
     assert stdin.completed is True
-    assert "agentbox-stdin:hello-agent" in (stdin.stdout or "")
+    assert "sandbox-stdin:hello-agent" in (stdin.stdout or "")
 
     tty_check = await exec_command_internal(
         ctx,

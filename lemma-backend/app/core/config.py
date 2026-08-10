@@ -805,7 +805,7 @@ class Settings(BaseSettings):
     e2e_sandbox_mode: Literal["docker", "e2b"] = Field(
         default="docker",
         description=(
-            "TEST HOOK ONLY. Selects the real AgentBox provider used by E2E. "
+            "TEST HOOK ONLY. Selects the real sandbox provider used by E2E. "
             "Docker is the default; E2B is credential-gated."
         ),
     )
@@ -849,9 +849,9 @@ class Settings(BaseSettings):
             "How far ahead a function-runtime lease is requested beyond the "
             "current invocation's own needs, so a busy pod reuses one lease "
             "instead of paying a control-plane call per invocation. "
-            "AgentBox treats a lease as activity and keeps the sandbox alive "
+            "The sandbox runtime treats a lease as activity and keeps the sandbox alive "
             "for the horizon it grants, so this must stay well below "
-            "AGENTBOX_FUNCTION_IDLE_SECONDS (default 300): otherwise a single "
+            "WORKSPACE_IDLE_RELEASE_SECONDS (default 900): otherwise a single "
             "invocation keeps a pod's sandbox billing long after the last "
             "function ran. Function execution is the activity that should keep "
             "a sandbox warm - never the mere existence of a cached endpoint."

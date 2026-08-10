@@ -30,7 +30,7 @@ async def test_workspace_browser_access_uses_canonical_signed_port_grant(
                 ),
                 port=4848,
                 protocol=PortProtocol.HTTP,
-                url="https://agentbox.test/port-access/signed/",
+                url="https://sandbox.test/port-access/signed/",
                 expires_at=expires_at,
             )
 
@@ -53,7 +53,7 @@ async def test_workspace_browser_access_uses_canonical_signed_port_grant(
 
     assert response.status_code == 200
     assert response.json()["app"] == "browser"
-    assert response.json()["url"] == "https://agentbox.test/port-access/signed/"
+    assert response.json()["url"] == "https://sandbox.test/port-access/signed/"
     assert calls == [(user_id, 900)]
 
 

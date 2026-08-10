@@ -11,7 +11,7 @@ from sandbox_runtime.workspace.app import create_app
 
 pytestmark = pytest.mark.asyncio
 TOKEN = "runtime-filesystem-test-token"
-HEADERS = {"X-AgentBox-Runtime-Token": TOKEN}
+HEADERS = {"X-Lemma-Runtime-Token": TOKEN}
 
 
 async def test_binary_file_crud_range_digest_and_listing(tmp_path: Path) -> None:
@@ -204,7 +204,7 @@ async def test_streaming_transfer_is_bounded_and_failed_upload_is_atomic(
     assert oversized.status_code == 413
     assert downloaded == transfer_limit
     assert target.stat().st_size == transfer_limit
-    assert list(tmp_path.glob(".*.agentbox-*")) == []
+    assert list(tmp_path.glob(".*.lemma-*")) == []
 
 
 async def test_filesystem_rejects_relative_and_symlink_escape(tmp_path: Path) -> None:

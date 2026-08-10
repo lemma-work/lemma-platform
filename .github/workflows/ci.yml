@@ -28,6 +28,7 @@ jobs:
       desktop: ${{ steps.filter.outputs.desktop }}
       locald: ${{ steps.filter.outputs.locald }}
       agent_host: ${{ steps.filter.outputs.agent_host }}
+      repo_tooling: ${{ steps.filter.outputs.repo_tooling }}
     steps:
       - uses: actions/checkout@v7
       - uses: dorny/paths-filter@v4
@@ -74,9 +75,17 @@ jobs:
               - 'agent-host/**'
               - '.github/workflows/ci.yml'
               - '.github/workflows/release-agent-host.yml'
+            repo_tooling:
+              - 'Makefile'
+              - 'tests/**'
+              - '.github/workflows/ci.yml'
             locald:
               - 'locald/**'
               - 'local-runtime/manager/**'
+              # guestd names and adopts the guest containers locald provisions,
+              # so a change here can strand them. It used to compile only in
+              # release-local-images.yml, which is far too late to find out.
+              - 'local-runtime/guestd/**'
               - '.github/workflows/ci.yml'
   backend-unit:
     name: lemma-backend unit
@@ -363,6 +372,39 @@ jobs:
         run: npm run bundle:budget:ci
       - name: Verify generated SDK browser bundles are committed
         run: git diff --exit-code -- lemma-typescript/public/lemma-client.js lemma-typescript/public/lemma-ui.js
+
+  # lemma-stack renders the environment the backend actually boots with, so its
+  # tests are the only thing that catches a writer drifting from the settings
+  # class that reads it. They need no Docker and finish in seconds; only
+  # test_install_experience.py does, and it keeps its own job below.
+  lemma-stack-unit:
+    name: lemma-stack unit
+    timeout-minutes: 10
+    needs: changes
+    if: needs.changes.outputs.python_sdk == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Run lemma-stack unit tests
+        working-directory: lemma-stack
+        run: uv run python -m pytest tests/ --ignore=tests/test_install_experience.py -q
+
+  # The dev-workflow tests assert on the env `make dev` hands the backend. They
+  # had drifted badly enough to reference deleted targets, because nothing ran
+  # them outside `make test-dev-workflow`.
+  dev-workflow:
+    name: Dev workflow
+    timeout-minutes: 10
+    needs: changes
+    if: needs.changes.outputs.repo_tooling == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Run dev workflow tests
+        run: python3 -m unittest tests.test_dev_workflow -v
 
   install-experience:
     name: Install experience (Linux Docker)
@@ -700,6 +742,8 @@ jobs:
       - codegen-drift
       - frontend-check
       - frontend-build
+      - lemma-stack-unit
+      - dev-workflow
       - install-experience
       - windows-cli
       - desktop

@@ -6,8 +6,6 @@ version: 2
 updates:
   - package-ecosystem: uv
     directories:
-      - /agentbox
-      - /agentbox-client
       - /lemma-backend
       - /lemma-backend/lemma-connectors
       - /lemma-cli
@@ -61,7 +59,6 @@ updates:
 
   - package-ecosystem: docker
     directories:
-      - /agentbox
       - /lemma-backend
       - /lemma-frontend
     schedule:

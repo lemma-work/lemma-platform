@@ -18,7 +18,7 @@ The host runs:
 - one Next.js frontend;
 - `lemma-runtime` plus `lemma-vz` on macOS or WSL tooling on Windows.
 
-The private guest runs PostgreSQL, Redis, SuperTokens, containerd, and AgentBox
+The private guest runs PostgreSQL, Redis, SuperTokens, containerd, and the sandbox runtime
 sandboxes. There is no user-facing Docker/Podman dependency and no Kreuzberg
 container. PDF/document conversion runs in the backend.
 
@@ -198,7 +198,7 @@ gh run download RUN_ID \
 
 The test app installs its embedded compressed runtimes into Application
 Support on first launch. Registry access remains required for infrastructure
-and AgentBox images.
+and sandbox images.
 
 ## Clean macOS acceptance test
 
@@ -250,7 +250,7 @@ Acceptance flow:
     setup creates one installation-owned named tunnel and DNS route, reuses it
     after disable, and still offers an existing tunnel as an advanced option.
     Quick Tunnels must not appear.
-12. Run an AgentBox operation that uses `lemma` CLI against the dynamic API.
+12. Run a sandbox operation that uses `lemma` CLI against the dynamic API.
 13. Open a built React app at `*.apps.lemma.localhost`; while sharing, verify
     the UI honestly says published pod apps remain local-only.
 14. Check the menu bar: **Settings…** on ⌘, opens Local settings, and no menu

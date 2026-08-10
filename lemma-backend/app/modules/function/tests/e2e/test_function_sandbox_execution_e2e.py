@@ -1,4 +1,4 @@
-"""Real backend -> AgentBox -> Docker runner -> backend execution contract."""
+"""Real backend -> the sandbox runtime -> Docker runner -> backend execution contract."""
 
 from __future__ import annotations
 
@@ -153,7 +153,7 @@ async def _wait_for_terminal(db_manager, run_id: UUID) -> FunctionRunModel:
 
 @pytest.mark.asyncio
 async def test_api_and_job_execute_through_one_per_pod_docker_sandbox(
-    local_agentbox_server,
+    local_sandbox_server,
     backend_server,
     configure_workspace_api_url,
     db_manager,

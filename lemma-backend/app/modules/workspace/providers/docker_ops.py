@@ -55,7 +55,7 @@ from app.modules.workspace.providers.runtime_client import (
 # The runtime reads this path once on start and unlinks it, so delivering a
 # credential means writing here rather than setting an environment variable
 # that would outlive the container in `docker inspect`.
-_BOOTSTRAP_DIR = "/run/agentbox-bootstrap"
+_BOOTSTRAP_DIR = "/run/lemma-bootstrap"
 
 
 

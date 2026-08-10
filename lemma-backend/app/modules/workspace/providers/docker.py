@@ -34,6 +34,8 @@ from app.modules.workspace.providers import naming
 from app.modules.workspace.providers.base import (
     LABEL_EPOCH,
     LABEL_MANAGED_BY,
+    LABEL_PROFILE_DIGEST,
+    LABEL_PROFILE_NAME,
     LABEL_SANDBOX_ID,
     LABEL_SANDBOX_KIND,
     LEGACY_LOGICAL_ID,
@@ -141,8 +143,8 @@ class DockerSandboxProvider(DockerOpsMixin):
             LABEL_SANDBOX_ID: str(spec.sandbox_id),
             LABEL_SANDBOX_KIND: spec.kind.value,
             LABEL_EPOCH: str(spec.epoch),
-            "profile-name": spec.profile_name or profile.name,
-            "profile-digest": spec.profile_digest or profile.digest,
+            LABEL_PROFILE_NAME: spec.profile_name or profile.name,
+            LABEL_PROFILE_DIGEST: spec.profile_digest or profile.digest,
         }
         binds: list[str] = []
         if spec.volume_name is not None:
@@ -155,7 +157,7 @@ class DockerSandboxProvider(DockerOpsMixin):
         self, spec: ProviderCreateSpec, *, is_function: bool
     ) -> list[str]:
         env = [
-            f"AGENTBOX_MAX_FILE_TRANSFER_BYTES={self._config.max_file_transfer_bytes}"
+            f"LEMMA_MAX_FILE_TRANSFER_BYTES={self._config.max_file_transfer_bytes}"
         ]
         if is_function:
             env.append("LEMMA_FUNCTION_CACHE_ROOT=/run/lemma-function-cache")
@@ -172,9 +174,17 @@ class DockerSandboxProvider(DockerOpsMixin):
 
         # Idempotence: the name is derived, so a retry after a lost response
         # finds the container rather than creating a second one.
+        expected_digest = spec.profile_digest or profile.digest
         existing = await self.inspect(spec.name, deadline_at=spec.deadline_at)
         if existing is not None:
-            return existing
+            if existing.profile_digest == expected_digest:
+                return existing
+            # The profile behind this name was rebuilt. Reusing the container
+            # would keep the workspace on the image it was born with for as
+            # long as it lives, so releasing a fixed sandbox image would never
+            # reach anyone who already has one. The volume is a separate object
+            # and is adopted below, so replacing the container keeps the files.
+            await self.destroy(spec.name, deadline_at=spec.deadline_at)
 
         labels, binds = self._labels_and_binds(spec, profile)
         is_function = profile.is_function
@@ -266,6 +276,7 @@ class DockerSandboxProvider(DockerOpsMixin):
             name=name,
             volume_name=inspected.config.labels.get("workspace-storage-id"),
             running=inspected.state.running,
+            profile_digest=inspected.config.labels.get(LABEL_PROFILE_DIGEST),
         )
 
     async def wait_ready(

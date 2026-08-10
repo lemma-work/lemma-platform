@@ -81,7 +81,7 @@ def selinux_enforcing() -> bool:
     return Path("/sys/fs/selinux/enforce").exists()
 
 
-def agentbox_socket_requires_label_disable(provider: str) -> bool:
+def sandbox_socket_requires_label_disable(provider: str) -> bool:
     """Return whether the nested runtime socket needs an unconfined label.
 
     Podman on macOS and Windows runs containers inside an SELinux-enforcing
@@ -211,8 +211,8 @@ def build_specs(
                 doc,
                 paths,
                 provider=provider,
-                workspace_image=manifest.image("agentbox_workspace").pull_ref,
-                function_image=manifest.image("agentbox_function").pull_ref,
+                workspace_image=manifest.image("workspace").pull_ref,
+                function_image=manifest.image("function").pull_ref,
                 container_socket=socket_mount,
             ),
             command=(
@@ -235,7 +235,7 @@ def build_specs(
             # The workspace module drives the host runtime socket directly.
             user="root",
             security_opts=("label=disable",)
-            if agentbox_socket_requires_label_disable(provider)
+            if sandbox_socket_requires_label_disable(provider)
             else (),
             wait_http=f"{render.backend_origin(doc)}/health/ready",
         )

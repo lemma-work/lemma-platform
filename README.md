@@ -290,10 +290,10 @@ For contributing to the platform itself — hot-reload from source:
 git clone https://github.com/lemma-work/lemma-platform.git
 cd lemma-platform
 make init        # install dependencies and create persistent local configuration
-make dev         # run backend, frontend, and AgentBox with local debug/request logs
+make dev         # run backend, frontend, and the sandbox runtime with local debug/request logs
 make dev-public  # add an ephemeral public API URL for webhooks and surfaces
 make logs        # tail infrastructure container logs
-make stop        # stop dev app, AgentBox, and tunnel processes
+make stop        # stop dev app, the sandbox runtime, and tunnel processes
 make stop-all    # also stop dev infrastructure
 ```
 
@@ -317,6 +317,7 @@ make migrate
 ```
 
 See [`docs/installation.md`](docs/installation.md) for the full setup guide,
+[`docs/configuration.md`](docs/configuration.md) for what every setting does,
 [`lemma-backend/README.md`](lemma-backend/README.md) for backend details, and
 [`lemma-frontend/README.md`](lemma-frontend/README.md) for frontend details.
 

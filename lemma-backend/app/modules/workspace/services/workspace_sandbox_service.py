@@ -140,7 +140,7 @@ class WorkspaceSandboxService:
         force_reconcile: bool,
     ) -> SandboxInfo:
         # A read is cheap and cannot consume create admission. Only issue the
-        # idempotent PUT when AgentBox says the sandbox is absent/not ready.
+        # idempotent PUT when the sandbox runtime says the sandbox is absent/not ready.
         existing = None if force_reconcile else await self._get_sandbox_info(user_id)
         if existing is not None and existing.status == "RUNNING":
             return existing
@@ -448,7 +448,7 @@ class WorkspaceSandboxService:
     def _get_manager_client(self) -> LocalSandboxClient:
         """The client the session and file operations run through.
 
-        In-process, with the surface the AgentBox HTTP client had -- which is
+        In-process, with the surface the sandbox HTTP client had -- which is
         why the session above it never needed to know the difference.
         """
         from app.modules.workspace.services.sandbox_composition import (

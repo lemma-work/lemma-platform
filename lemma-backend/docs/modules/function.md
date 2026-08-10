@@ -1,17 +1,17 @@
 # Function module
 
-**Status:** Canonical AgentBox-backed execution implemented; rollout verification in progress
+**Status:** Canonical the sandbox runtime-backed execution implemented; rollout verification in progress
 
 The function domain owns definitions, immutable revisions, permissions, public
 runs, schemas, durable attempts, scheduling, tickets, callbacks, cancellation,
-and completion events. It uses AgentBox only through the provider-neutral sandbox
+and completion events. It uses the sandbox runtime only through the provider-neutral sandbox
 and process API.
 
 The canonical target design is:
 
 - [Function execution](../../../docs/design/agentbox/function-execution.md)
-- [Function execution benchmark](../../../docs/operators/agentbox-function-benchmark.md)
-- [AgentBox overview](../../../docs/design/agentbox/README.md)
+- [Function execution benchmark](../../../docs/operators/sandbox-function-benchmark.md)
+- [Sandbox design overview](../../../docs/design/agentbox/README.md)
 - [Sandbox protocol](../../../docs/design/agentbox/sandbox-protocol.md)
 - [Testing strategy](../../../docs/design/agentbox/testing-strategy.md)
 - [Verification and rollout](../../../docs/design/agentbox/verification-and-rollout.md)

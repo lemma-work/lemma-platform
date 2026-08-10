@@ -26,7 +26,7 @@ Two integers do the fencing that a reconciler used to do:
 
 ``provider_volume_id`` is adopted, never derived. The pre-consolidation volume
 name is ``ab-ws-{token}`` where the token is a random uuid4 minted at row
-creation in AgentBox's own database, so no scheme keyed on any id in this table
+creation in the sandbox runtime's own database, so no scheme keyed on any id in this table
 can reconstruct it. Deriving a name here would have stranded every existing
 user's files on an orphaned volume. Instead the column starts NULL and the
 first ensure adopts the existing volume by its ``logical-id`` /
@@ -38,7 +38,7 @@ volume is adopted the id is free to be anything.
 
 Function sandbox rows are deliberately not backfilled. They hold no durable
 state, so the resolver creates one lazily on first invocation with
-``id = pod_id`` -- matching the logical id AgentBox already used, so a running
+``id = pod_id`` -- matching the logical id the sandbox runtime already used, so a running
 function container is recognised rather than duplicated.
 
 Revision ID: 0014_workspace_sandboxes

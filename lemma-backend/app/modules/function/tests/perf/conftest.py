@@ -396,10 +396,10 @@ async def function_benchmark_runtime(
     if provider == "e2b":
         required = (
             "E2B_API_KEY",
-            "AGENTBOX_E2B_WORKSPACE_TEMPLATE",
-            "AGENTBOX_E2B_WORKSPACE_BUILD_ID",
-            "AGENTBOX_E2B_FUNCTION_TEMPLATE",
-            "AGENTBOX_E2B_FUNCTION_BUILD_ID",
+            "E2B_WORKSPACE_TEMPLATE",
+            "E2B_WORKSPACE_BUILD_ID",
+            "E2B_FUNCTION_TEMPLATE",
+            "E2B_FUNCTION_BUILD_ID",
         )
         missing = [name for name in required if not _benchmark_environment(name)]
         if missing:
@@ -418,8 +418,8 @@ async def function_benchmark_runtime(
             selected_function_image = request.getfixturevalue("function_image")
             selected_workspace_image = request.getfixturevalue("workspace_image")
         else:
-            selected_function_image = "agentbox-function:unused-by-e2b"
-            selected_workspace_image = "agentbox-workspace:unused-by-e2b"
+            selected_function_image = "lemma-function:unused-by-e2b"
+            selected_workspace_image = "lemma-workspace:unused-by-e2b"
         # Two settings objects, restored separately: writing a workspace field
         # back onto the core settings would silently create an attribute there
         # and leave the real one overridden for the rest of the session.

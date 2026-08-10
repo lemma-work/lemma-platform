@@ -15,7 +15,7 @@ from sandbox_runtime.workspace.app import create_app
 
 pytestmark = pytest.mark.asyncio
 TOKEN = "runtime-python-test-token"
-HEADERS = {"X-AgentBox-Runtime-Token": TOKEN}
+HEADERS = {"X-Lemma-Runtime-Token": TOKEN}
 
 
 def deadline(seconds: float = 10) -> str:
