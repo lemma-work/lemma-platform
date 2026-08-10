@@ -10,11 +10,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from app.modules.workspace.config import (
-    RENAMED_ENV_VARS,
-    WorkspaceSettings,
-    workspace_settings,
-)
+from app.modules.workspace.config import WorkspaceSettings, workspace_settings
 from app.modules.workspace.providers.base import ProviderStorageKind
 
 
@@ -54,58 +50,6 @@ def test_the_e2b_surface_is_exactly_four_settings() -> None:
         "E2B_FUNCTION_TEMPLATE",
         "E2B_DOMAIN",
     }
-
-
-@pytest.mark.parametrize(("old", "new"), sorted(RENAMED_ENV_VARS.items()))
-def test_a_renamed_env_var_refuses_to_start_instead_of_defaulting(
-    monkeypatch, old: str, new: str
-) -> None:
-    """Every name this module used to read must fail loudly, not silently.
-
-    Pydantic never sees a name it does not declare, so without this the field
-    takes its default and the operator's value is discarded without a word.
-    `WORKSPACE_IMAGE` is the sharp one: its default is a tag `make init` builds
-    locally, so a stale name resolves to a real but old image rather than
-    failing to pull.
-    """
-    monkeypatch.setenv("LEMMA_DISABLE_DOTENV", "1")
-    monkeypatch.delenv(new, raising=False)
-    monkeypatch.setenv(old, "anything")
-
-    with pytest.raises(ValidationError) as caught:
-        WorkspaceSettings()
-
-    assert old in str(caught.value)
-    assert new in str(caught.value), "the message must name the replacement"
-
-
-def test_the_new_name_alone_is_accepted(monkeypatch) -> None:
-    """The guard fires on a leftover, not on a correctly configured process."""
-    monkeypatch.setenv("LEMMA_DISABLE_DOTENV", "1")
-    monkeypatch.delenv("AGENTBOX_WORKSPACE_IMAGE", raising=False)
-    monkeypatch.setenv("WORKSPACE_IMAGE", "lemma-workspace@sha256:" + "c" * 64)
-
-    assert WorkspaceSettings().workspace_image.endswith("c" * 64)
-
-
-def test_an_empty_valued_leftover_does_not_trip_the_guard(monkeypatch) -> None:
-    """Helm charts and compose files emit every key in a template whether or
-    not it was given a value. Refusing to start over `AGENTBOX_HOST_ALIAS=` is
-    refusing over something nobody configured."""
-    monkeypatch.setenv("LEMMA_DISABLE_DOTENV", "1")
-    monkeypatch.delenv("WORKSPACE_HOST_ALIAS", raising=False)
-    monkeypatch.setenv("AGENTBOX_HOST_ALIAS", "")
-
-    assert WorkspaceSettings().host_alias is None
-
-
-def test_a_sandbox_side_variable_does_not_trip_the_guard(monkeypatch) -> None:
-    """The backend can legitimately inherit a sandbox's own environment, and
-    those names were never settings here."""
-    monkeypatch.setenv("LEMMA_DISABLE_DOTENV", "1")
-    monkeypatch.setenv("AGENTBOX_RUNTIME_TOKEN", "inherited")
-
-    assert WorkspaceSettings().provider == "docker"
 
 
 def test_the_docker_provider_carries_the_host_gateway(monkeypatch) -> None:

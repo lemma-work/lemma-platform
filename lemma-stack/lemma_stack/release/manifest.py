@@ -34,15 +34,6 @@ APP_IMAGE_KEYS = (
     "function",
 )
 
-# What the sandbox image keys were called before the rename. A manifest is
-# published for clients that are already installed, so this end has to keep
-# reading the old spelling until no released client writes it. The release
-# workflow emits both; drop these once the last one that needs them is gone.
-LEGACY_IMAGE_KEYS = {
-    "workspace": "agentbox_workspace",
-    "function": "agentbox_function",
-}
-
 # Fresh installs get pg16; the dev stack stays on pg15 for volume compat.
 DEFAULT_INFRA_IMAGES = {
     "postgres": "docker.io/pgvector/pgvector:0.8.3-pg16",
@@ -83,8 +74,6 @@ class ReleaseManifest:
 
     def image(self, key: str) -> ImageRef:
         found = self.images.get(key)
-        if found is None:
-            found = self.images.get(LEGACY_IMAGE_KEYS.get(key, ""))
         if found is None:
             raise AdminError(f"release manifest is missing image {key!r}")
         return found
@@ -142,11 +131,7 @@ def parse(data: dict[str, Any]) -> ReleaseManifest:
             images[key] = ImageRef(ref=str(value["ref"]), digest=value.get("digest"))
         else:
             raise AdminError(f"invalid image entry for {key!r} in release manifest")
-    missing = [
-        key
-        for key in APP_IMAGE_KEYS
-        if key not in images and LEGACY_IMAGE_KEYS.get(key, "") not in images
-    ]
+    missing = [key for key in APP_IMAGE_KEYS if key not in images]
     if missing:
         raise AdminError(f"release manifest is missing images: {', '.join(missing)}")
     host_packs = _parse_artifacts(data.get("host_packs"), "host pack")

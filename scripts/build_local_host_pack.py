@@ -443,9 +443,8 @@ def main() -> None:
     release_manifest = args.release_manifest.resolve()
     release = json.loads(release_manifest.read_text(encoding="utf-8"))
     images = release.get("images", {})
-    # Manifests published before the rename carry only the agentbox_* keys.
-    workspace_image = images.get("workspace") or images.get("agentbox_workspace")
-    function_image = images.get("function") or images.get("agentbox_function")
+    workspace_image = images.get("workspace")
+    function_image = images.get("function")
     if not release.get("version") or not workspace_image or not function_image:
         raise SystemExit(
             "release manifest lacks version, workspace, or function image"

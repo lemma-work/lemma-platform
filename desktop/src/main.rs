@@ -1382,13 +1382,10 @@ fn spawn_locald() -> Result<(), String> {
         // Which container runtime to use -- docker, podman, lemma_local, or
         // "auto" to detect. Not the sandbox provider: the backend's
         // WORKSPACE_PROVIDER is derived from this separately and takes a
-        // narrower set of values. This is the one hop that reads the user's
-        // own shell, so it still honours the pre-rename name for now.
+        // narrower set of values.
         .env(
             "LEMMA_CONTAINER_RUNTIME",
-            std::env::var("LEMMA_CONTAINER_RUNTIME")
-                .or_else(|_| std::env::var("AGENTBOX_PROVIDER"))
-                .unwrap_or_else(|_| "auto".into()),
+            std::env::var("LEMMA_CONTAINER_RUNTIME").unwrap_or_else(|_| "auto".into()),
         )
         .stdin(Stdio::null())
         .stdout(Stdio::null())

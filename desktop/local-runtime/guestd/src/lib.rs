@@ -467,7 +467,6 @@ impl<E: Engine> GuestService<E> {
 
     fn ensure_core(&self, value: Value) -> Result<Value, GuestError> {
         let parameters = self.parse_core_parameters(value)?;
-        self.reap_pre_rename_sandboxes();
         self.ensure_core_images(&parameters)?;
         self.ensure_postgres(&parameters)?;
         self.ensure_redis(&parameters)?;
@@ -475,50 +474,10 @@ impl<E: Engine> GuestService<E> {
         self.core_status()
     }
 
-    /// Remove sandboxes created before the containers were renamed.
-    ///
-    /// They carry `app.kubernetes.io/name=agentbox-sandbox` and an
-    /// `agentbox-` name prefix, so nothing here can see them any more: the
-    /// sweep filters on the current label and would leave them running for as
-    /// long as the guest lives, holding memory this VM admits against a budget
-    /// it thinks is free. Their runtime also predates the in-image contract,
-    /// so there is nothing to adopt -- only to clean up.
-    ///
-    /// Best-effort by design. A guest that cannot reach its engine has a
-    /// bigger problem than a stale container, and failing bring-up over
-    /// cleanup would turn a leak into an outage. Delete once no guest can
-    /// still be carrying pre-rename sandboxes.
-    fn reap_pre_rename_sandboxes(&self) {
-        const LEGACY_LABEL: &str = "app.kubernetes.io/name=agentbox-sandbox";
-        let Ok(output) = self.run_checked(&[
-            "ps".into(),
-            "--all".into(),
-            "--filter".into(),
-            format!("label={LEGACY_LABEL}"),
-            "--format".into(),
-            "{{.Names}}".into(),
-        ]) else {
-            return;
-        };
-        for name in output
-            .lines()
-            .map(str::trim)
-            .filter(|line| !line.is_empty())
-        {
-            let _ = self.run_checked(&["rm".into(), "--force".into(), name.to_owned()]);
-        }
-    }
-
     fn ensure_core_stage(&self, value: Value, stage: CoreStage) -> Result<Value, GuestError> {
         let parameters = self.parse_core_parameters(value)?;
         match stage {
-            // locald brings the core up a stage at a time and never issues
-            // `core.ensure`, so the reap has to hang off the first stage it
-            // does call or it never runs in the shipped path at all.
-            CoreStage::Images => {
-                self.reap_pre_rename_sandboxes();
-                self.ensure_core_images(&parameters)?
-            }
+            CoreStage::Images => self.ensure_core_images(&parameters)?,
             CoreStage::Postgres => self.ensure_postgres(&parameters)?,
             CoreStage::Redis => self.ensure_redis(&parameters)?,
             CoreStage::SuperTokens => self.ensure_supertokens(&parameters)?,
@@ -2779,52 +2738,6 @@ mod tests {
         assert_eq!(commands[0][2], "psql");
         assert_eq!(commands[1][2], "createdb");
         assert_eq!(commands[2][2], "psql");
-    }
-
-    #[test]
-    fn pre_rename_sandboxes_are_removed_on_core_bring_up() {
-        // Nothing else can see them: every sweep filters on the current label,
-        // so without this they stay running for the life of the guest and are
-        // counted against nobody's memory budget.
-        let root = tempdir().unwrap();
-        let service = GuestService::new(
-            FakeEngine::new(vec![
-                output(true, "agentbox-box-1\nagentbox-box-2\n"),
-                output(true, ""),
-                output(true, ""),
-            ]),
-            root.path().into(),
-            "192.168.64.2".into(),
-            "192.168.64.1".into(),
-            None,
-        )
-        .unwrap();
-
-        service.reap_pre_rename_sandboxes();
-
-        let commands = service.engine.commands.lock().unwrap();
-        assert_eq!(commands.len(), 3);
-        assert!(commands[0].contains(&"label=app.kubernetes.io/name=agentbox-sandbox".to_owned()));
-        assert_eq!(commands[1], vec!["rm", "--force", "agentbox-box-1"]);
-        assert_eq!(commands[2], vec!["rm", "--force", "agentbox-box-2"]);
-    }
-
-    #[test]
-    fn reaping_pre_rename_sandboxes_never_fails_bring_up() {
-        // A guest that cannot reach its engine has a bigger problem than a
-        // stale container; refusing to start over cleanup turns a leak into
-        // an outage.
-        let root = tempdir().unwrap();
-        let service = GuestService::new(
-            FakeEngine::new(vec![output(false, "")]),
-            root.path().into(),
-            "192.168.64.2".into(),
-            "192.168.64.1".into(),
-            None,
-        )
-        .unwrap();
-
-        service.reap_pre_rename_sandboxes();
     }
 
     #[test]

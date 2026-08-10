@@ -179,7 +179,7 @@ async def test_fresh_workspace_token_authenticates_over_backend_http(
     reason="set E2E_LLM_MODE=real to run the live sandbox agent acceptance test",
 )
 @pytest.mark.skipif(not system_lemma_available(), reason=SYSTEM_LEMMA_SKIP_REASON)
-async def test_agent_uses_lemma_cli_through_selected_agentbox_provider(
+async def test_agent_uses_lemma_cli_through_selected_workspace_provider(
     authenticated_client,
     fixed_test_org,
     fixed_test_user,
@@ -329,7 +329,7 @@ async def test_agent_workspace_cli_tools_execute_through_a_real_sandbox(
         org_id=UUID(fixed_test_org["id"]),
         pod_id=UUID(pod["id"]),
         conversation_id=uuid4(),
-        agent_name="agentbox_workspace_tools_e2e",
+        agent_name="workspace_tools_e2e",
     )
 
     python_set = await execute_python_internal(

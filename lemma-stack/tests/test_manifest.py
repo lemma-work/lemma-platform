@@ -18,7 +18,6 @@ def sample(**overrides) -> dict:
             "backend": {"ref": "ghcr.io/lemma-work/lemma-backend:v1.4.0", "digest": "sha256:aa"},
             "frontend": {"ref": "ghcr.io/lemma-work/lemma-frontend:v1.4.0"},
             # Retained in published manifests only for old installer versions.
-            "agentbox": "ghcr.io/lemma-work/lemma-agentbox:v1.4.0",
             "workspace": {"ref": "ghcr.io/lemma-work/lemma-workspace:v1.4.0"},
             "function": {"ref": "ghcr.io/lemma-work/lemma-function:v1.4.0"},
         },
@@ -88,21 +87,6 @@ def test_missing_image_rejected():
     del data["images"]["function"]
     with pytest.raises(AdminError, match="function"):
         m.parse(data)
-
-
-def test_a_manifest_published_before_the_rename_still_resolves():
-    """A published manifest is read by clients that are already installed, so
-    this end has to keep understanding the spelling they were released with.
-    Dropping it would make an old client refuse to upgrade."""
-    data = sample()
-    images = data["images"]
-    images["agentbox_workspace"] = images.pop("workspace")
-    images["agentbox_function"] = images.pop("function")
-
-    release = m.parse(data)
-
-    assert "lemma-workspace" in release.image("workspace").pull_ref
-    assert "lemma-function" in release.image("function").pull_ref
 
 
 def test_wrong_schema_rejected():

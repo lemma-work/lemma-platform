@@ -870,7 +870,6 @@ mod tests {
 
         let environment = controller.backend_environment().unwrap();
         assert!(environment["DATABASE_URL"].contains("@192.168.64.10:5432/lemma"));
-        assert!(!environment.contains_key("AGENTBOX_STATE_DATABASE_URL"));
         assert_eq!(
             environment["SUPERTOKENS_CORE_URL"],
             "http://192.168.64.10:3567"

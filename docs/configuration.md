@@ -29,10 +29,7 @@ For the two managed paths you do not edit the environment directly. You edit
 `~/.lemma/local/config.toml` — `lemma-stack config set KEY value` — and the
 renderer produces the environment from it. Anything under `[backend.env]` is
 passed to the backend verbatim and applied last, so it overrides a rendered
-default. `[frontend.env]` does the same for the frontend. Configs written before
-sandbox provisioning moved into the backend may also carry an `[agentbox.env]`
-section; it is still read, and lands in the same backend environment, with
-`[backend.env]` winning on a conflict.
+default. `[frontend.env]` does the same for the frontend.
 
 ## Runtime and logging
 

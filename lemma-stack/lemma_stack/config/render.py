@@ -20,31 +20,6 @@ from tomlkit import TOMLDocument
 from lemma_stack.config import store
 from lemma_stack.paths import LocalPaths
 
-# What the backend used to call these settings. An installed config.toml can
-# still carry an override under an old name -- in [agentbox.env], or in
-# [backend.env] because `config set` routes any UPPER_SNAKE key there -- and
-# the backend now refuses to start on one rather than silently ignoring it.
-# Translating on the way out keeps that override doing what its author meant.
-# Drop this with the backend's own compatibility check.
-RENAMED_BACKEND_ENV = {
-    "AGENTBOX_WORKSPACE_IMAGE": "WORKSPACE_IMAGE",
-    "AGENTBOX_FUNCTION_IMAGE": "FUNCTION_IMAGE",
-    "AGENTBOX_WORKSPACE_PROFILE_NAME": "WORKSPACE_PROFILE_NAME",
-    "AGENTBOX_WORKSPACE_PROFILE_DIGEST": "WORKSPACE_PROFILE_DIGEST",
-    "AGENTBOX_FUNCTION_PROFILE_NAME": "FUNCTION_PROFILE_NAME",
-    "AGENTBOX_FUNCTION_PROFILE_DIGEST": "FUNCTION_PROFILE_DIGEST",
-    "AGENTBOX_RUNTIME_CREDENTIAL_KEY": "WORKSPACE_RUNTIME_CREDENTIAL_KEY",
-    "AGENTBOX_WORKSPACE_IDLE_SECONDS": "WORKSPACE_IDLE_RELEASE_SECONDS",
-    "AGENTBOX_DOCKER_SOCKET_PATH": "WORKSPACE_DOCKER_SOCKET_PATH",
-    "AGENTBOX_DOCKER_PRIVATE_NETWORK": "WORKSPACE_DOCKER_PRIVATE_NETWORK",
-    "AGENTBOX_DOCKER_ALLOW_MUTABLE_IMAGES": "WORKSPACE_DOCKER_ALLOW_MUTABLE_IMAGES",
-    "AGENTBOX_ADD_HOST_GATEWAY": "WORKSPACE_ADD_HOST_GATEWAY",
-    "AGENTBOX_HOST_ALIAS": "WORKSPACE_HOST_ALIAS",
-    "AGENTBOX_LOCAL_RUNTIME_CLI": "WORKSPACE_LOCAL_RUNTIME_CLI",
-    "AGENTBOX_LOCAL_CALLBACK_REQUIRED": "WORKSPACE_LOCAL_CALLBACK_REQUIRED",
-    "AGENTBOX_LOCAL_CALLBACK_URL": "WORKSPACE_LOCAL_CALLBACK_URL",
-}
-
 NETWORK_NAME = "lemma-local-net"
 CONTAINER_PREFIX = "lemma-local"
 POSTGRES_VOLUME = "lemma-local-postgres-data"
@@ -80,23 +55,9 @@ FILES_MOUNT = "/app/.local/files"
 
 
 def _user_backend_overrides(doc: TOMLDocument) -> dict[str, str]:
-    """User-authored backend settings, under the names the backend reads now.
+    """User-authored backend settings, from [backend.env]."""
 
-    [agentbox.env] predates the backend absorbing sandbox provisioning; it was
-    never a separate namespace -- both sections land in the one backend
-    environment -- so it is still read, with [backend.env] last.
-
-    An override that names a setting the backend has since renamed is applied
-    under the new name. Passing it through verbatim would hand the backend a
-    name it refuses to start on, turning someone's old override into a stack
-    that will not boot. An explicit new-name override always wins.
-    """
-
-    merged: dict[str, str] = {}
-    for section in ("agentbox", "backend"):
-        for key, value in store.env_overrides(doc, section).items():
-            merged[RENAMED_BACKEND_ENV.get(key, key)] = value
-    return merged
+    return dict(store.env_overrides(doc, "backend"))
 
 
 def frontend_origin(doc: TOMLDocument) -> str:

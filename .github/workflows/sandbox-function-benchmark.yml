@@ -108,10 +108,10 @@ jobs:
         run: test -n "$E2B_API_KEY"
       - name: Pin the immutable E2B templates
         env:
-          WORKSPACE_TEMPLATE: ${{ vars.E2B_WORKSPACE_TEMPLATE || vars.AGENTBOX_E2B_WORKSPACE_TEMPLATE }}
-          WORKSPACE_BUILD_ID: ${{ vars.E2B_WORKSPACE_BUILD_ID || vars.AGENTBOX_E2B_WORKSPACE_BUILD_ID }}
-          FUNCTION_TEMPLATE: ${{ vars.E2B_FUNCTION_TEMPLATE || vars.AGENTBOX_E2B_FUNCTION_TEMPLATE }}
-          FUNCTION_BUILD_ID: ${{ vars.E2B_FUNCTION_BUILD_ID || vars.AGENTBOX_E2B_FUNCTION_BUILD_ID }}
+          WORKSPACE_TEMPLATE: ${{ vars.E2B_WORKSPACE_TEMPLATE }}
+          WORKSPACE_BUILD_ID: ${{ vars.E2B_WORKSPACE_BUILD_ID }}
+          FUNCTION_TEMPLATE: ${{ vars.E2B_FUNCTION_TEMPLATE }}
+          FUNCTION_BUILD_ID: ${{ vars.E2B_FUNCTION_BUILD_ID }}
         run: |
           set -euo pipefail
           test -n "$WORKSPACE_TEMPLATE"

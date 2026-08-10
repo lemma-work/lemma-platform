@@ -41,15 +41,13 @@ pub(crate) struct ManagedManifestMaterial {
 
 /// The per-installation seed every derived local key hangs off.
 ///
-/// The alias is load-bearing: this file already exists on installed machines
-/// under the old field name, `deny_unknown_fields` would reject it, and the
-/// value cannot simply be regenerated -- it also derives the key that
-/// encrypts stored secrets, so a fresh one would leave every encrypted row in
-/// that installation unreadable.
+/// Never regenerate this for an existing installation: it also derives the key
+/// that encrypts stored secrets, so a fresh one leaves every encrypted row
+/// unreadable. `deny_unknown_fields` is deliberate — a field this does not
+/// recognise means the file was written by something else.
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct HostSecrets {
-    #[serde(alias = "agentbox_api_key")]
     installation_secret: String,
 }
 
@@ -281,17 +279,12 @@ fn build(
             ));
         }
     }
-    // Manifests published before the rename carry only the agentbox_* keys.
     let workspace_image = pull_ref(
-        release
-            .pointer("/images/workspace")
-            .or_else(|| release.pointer("/images/agentbox_workspace")),
+        release.pointer("/images/workspace"),
         "workspace sandbox image",
     )?;
     let function_image = pull_ref(
-        release
-            .pointer("/images/function")
-            .or_else(|| release.pointer("/images/agentbox_function")),
+        release.pointer("/images/function"),
         "function sandbox image",
     )?;
     let postgres_image = pull_ref(release.pointer("/infra/postgres"), "Postgres image")?;
@@ -820,11 +813,11 @@ mod tests {
               "schema_version": 1,
               "version": "6.2.0",
               "images": {
-                "agentbox_workspace": {
+                "workspace": {
                   "ref": "workspace",
                   "digest": "sha256:workspace"
                 },
-                "agentbox_function": {
+                "function": {
                   "ref": "function",
                   "digest": "sha256:function"
                 }
@@ -886,9 +879,6 @@ mod tests {
             manifest["services"][0]["env"]["WORKSPACE_CALLBACK_API_URL"],
             format!("http://host.lemma.internal:{backend_port}")
         );
-        assert!(manifest["services"][0]["env"]
-            .get("AGENTBOX_STATE_DATABASE_URL")
-            .is_none());
         assert!(manifest["services"][0]["env"]
             .get("FUNCTION_RUNTIME_SECRET")
             .is_none());

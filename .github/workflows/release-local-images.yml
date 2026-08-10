@@ -482,8 +482,6 @@ jobs:
                   # and raises if they are missing, and publishing a manifest
                   # cannot upgrade a client that has not run yet. Drop them once
                   # no released client reads them.
-                  "agentbox_workspace": image("lemma-workspace"),
-                  "agentbox_function": image("lemma-function"),
               },
               "infra": infra,
           }
@@ -708,8 +706,6 @@ jobs:
                   # Same refs under the pre-rename keys, for clients already
                   # installed when this ships. See the note in the host-release
                   # manifest above; drop both together.
-                  "agentbox_workspace": image("lemma-workspace"),
-                  "agentbox_function": image("lemma-function"),
               },
               # Keep schema-1 compatibility for older lemma-stack clients:
               # public infra entries remain strings, now pinned to the

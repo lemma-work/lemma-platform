@@ -40,10 +40,10 @@ jobs:
         # tick, which is exactly how this provider went unverified before.
         env:
           E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
-          E2B_WORKSPACE_TEMPLATE: ${{ vars.E2B_WORKSPACE_TEMPLATE || vars.AGENTBOX_E2B_WORKSPACE_TEMPLATE }}
-          E2B_WORKSPACE_BUILD_ID: ${{ vars.E2B_WORKSPACE_BUILD_ID || vars.AGENTBOX_E2B_WORKSPACE_BUILD_ID }}
-          E2B_FUNCTION_TEMPLATE: ${{ vars.E2B_FUNCTION_TEMPLATE || vars.AGENTBOX_E2B_FUNCTION_TEMPLATE }}
-          E2B_FUNCTION_BUILD_ID: ${{ vars.E2B_FUNCTION_BUILD_ID || vars.AGENTBOX_E2B_FUNCTION_BUILD_ID }}
+          E2B_WORKSPACE_TEMPLATE: ${{ vars.E2B_WORKSPACE_TEMPLATE }}
+          E2B_WORKSPACE_BUILD_ID: ${{ vars.E2B_WORKSPACE_BUILD_ID }}
+          E2B_FUNCTION_TEMPLATE: ${{ vars.E2B_FUNCTION_TEMPLATE }}
+          E2B_FUNCTION_BUILD_ID: ${{ vars.E2B_FUNCTION_BUILD_ID }}
         run: |
           missing=""
           for name in E2B_API_KEY \
@@ -61,10 +61,10 @@ jobs:
         timeout-minutes: 30
         env:
           E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
-          E2B_WORKSPACE_TEMPLATE: ${{ vars.E2B_WORKSPACE_TEMPLATE || vars.AGENTBOX_E2B_WORKSPACE_TEMPLATE }}
-          E2B_WORKSPACE_BUILD_ID: ${{ vars.E2B_WORKSPACE_BUILD_ID || vars.AGENTBOX_E2B_WORKSPACE_BUILD_ID }}
-          E2B_FUNCTION_TEMPLATE: ${{ vars.E2B_FUNCTION_TEMPLATE || vars.AGENTBOX_E2B_FUNCTION_TEMPLATE }}
-          E2B_FUNCTION_BUILD_ID: ${{ vars.E2B_FUNCTION_BUILD_ID || vars.AGENTBOX_E2B_FUNCTION_BUILD_ID }}
+          E2B_WORKSPACE_TEMPLATE: ${{ vars.E2B_WORKSPACE_TEMPLATE }}
+          E2B_WORKSPACE_BUILD_ID: ${{ vars.E2B_WORKSPACE_BUILD_ID }}
+          E2B_FUNCTION_TEMPLATE: ${{ vars.E2B_FUNCTION_TEMPLATE }}
+          E2B_FUNCTION_BUILD_ID: ${{ vars.E2B_FUNCTION_BUILD_ID }}
         run: >-
           uv run python -m pytest
           app/modules/workspace/tests/integration/test_e2b_provider_real.py
