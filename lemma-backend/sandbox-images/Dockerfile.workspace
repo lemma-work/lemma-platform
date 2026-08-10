@@ -12,8 +12,37 @@ ARG PYTHON_IMAGE=python:3.14.6-slim
 ARG NODE_IMAGE=node:24.18.0-slim
 ARG UV_VERSION=0.11.31
 ARG PNPM_VERSION=11.15.1
+ARG GH_VERSION=2.97.0
 
 FROM ghcr.io/astral-sh/uv:${UV_VERSION} AS uv-runtime
+
+# The GitHub CLI is not in Debian, and an agent working in a repo reaches for
+# `gh` as readily as `git` -- issues, PRs and releases have no plumbing
+# equivalent. Pinned and checksummed like Node above, because this fetches a
+# binary over the network at build time.
+FROM ${PYTHON_IMAGE} AS gh-runtime
+ARG GH_VERSION
+ARG TARGETARCH
+# The slim base has no curl; the final stage installs its own.
+RUN apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+    && rm -rf /var/lib/apt/lists/*
+RUN set -eu; \
+    runtime_arch="${TARGETARCH:-$(dpkg --print-architecture)}"; \
+    case "${runtime_arch}" in \
+        amd64) gh_sha=a2c9b8497e1f85b1ad0dfcb78b5a622e098801b8e461e459e88e1ee12f018112 ;; \
+        arm64) gh_sha=73ea440ecad9c9e284429997ee6f93577bc6f7bc6fba357ef62c53ad8fb641a5 ;; \
+        *) echo "unsupported GitHub CLI architecture: ${runtime_arch}" >&2; exit 1 ;; \
+    esac; \
+    archive="gh_${GH_VERSION}_linux_${runtime_arch}.tar.gz"; \
+    curl -fsSL "https://github.com/cli/cli/releases/download/v${GH_VERSION}/${archive}" \
+        -o /tmp/gh.tar.gz; \
+    echo "${gh_sha}  /tmp/gh.tar.gz" | sha256sum -c -; \
+    tar -xzf /tmp/gh.tar.gz -C /tmp; \
+    install -m 0755 "/tmp/gh_${GH_VERSION}_linux_${runtime_arch}/bin/gh" /usr/local/bin/gh; \
+    rm -rf /tmp/gh.tar.gz "/tmp/gh_${GH_VERSION}_linux_${runtime_arch}"
 
 FROM ${NODE_IMAGE} AS node-runtime
 ARG PNPM_VERSION
@@ -118,6 +147,7 @@ COPY --from=node-runtime /opt/lemma-node /opt/lemma-node
 COPY --from=python-runtime /opt/lemma-python /opt/lemma-python
 COPY --from=uv-runtime /uv /usr/local/bin/uv
 COPY --from=uv-runtime /uvx /usr/local/bin/uvx
+COPY --from=gh-runtime /usr/local/bin/gh /usr/local/bin/gh
 COPY lemma-backend/sandbox-images/scripts/lemma-node-tool /usr/local/lib/lemma-node-tool
 RUN ln -sf "$(command -v chromium)" /usr/local/bin/workspace-chrome \
     && ln -sf /opt/lemma-python/bin/lemma /usr/local/bin/lemma \
@@ -151,6 +181,7 @@ COPY lemma-cli /sdk/lemma-cli
 COPY lemma-typescript /sdk/lemma-typescript
 COPY lemma-skills /sdk/lemma-skills
 COPY lemma-backend/sandbox-images/templates/workspace-python/lemma-profile.sh /etc/profile.d/lemma-python.sh
+COPY lemma-backend/sandbox-images/templates/workspace-github/lemma-profile.sh /etc/profile.d/lemma-github.sh
 RUN chmod -R a+rX /sdk
 
 COPY --chown=10001:10001 lemma-backend/sandbox_runtime/__init__.py /app/sandbox_runtime/__init__.py

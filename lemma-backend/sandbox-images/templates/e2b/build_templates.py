@@ -16,6 +16,10 @@ NODE_LINUX_X64_SHA256 = (
     "55aa7153f9d88f28d765fcdad5ae6945b5c0f98a36881703817e4c450fa76742"
 )
 PNPM_VERSION = "11.15.1"
+GH_VERSION = "2.97.0"
+GH_LINUX_X64_SHA256 = (
+    "a2c9b8497e1f85b1ad0dfcb78b5a622e098801b8e461e459e88e1ee12f018112"
+)
 DEFAULT_CPU_COUNT = 1
 DEFAULT_MEMORY_MB = 2048
 
@@ -31,6 +35,26 @@ def _positive_int_environment(name: str, *, default: int) -> int:
     if value < 1:
         raise ValueError(f"{name} must be at least 1")
     return value
+
+
+def _install_gh_command() -> str:
+    """The GitHub CLI, which Debian does not package.
+
+    An agent working in a repo reaches for `gh` as readily as `git` -- issues,
+    PRs and releases have no plumbing equivalent -- and `lemma-github.sh` gives
+    it the same credential git already has.
+    """
+
+    directory = f"gh_{GH_VERSION}_linux_amd64"
+    archive = f"{directory}.tar.gz"
+    return (
+        f"curl -fsSL https://github.com/cli/cli/releases/download/"
+        f"v{GH_VERSION}/{archive} -o /tmp/{archive} && "
+        f"echo '{GH_LINUX_X64_SHA256}  /tmp/{archive}' | sha256sum -c - && "
+        f"tar -xzf /tmp/{archive} -C /tmp && "
+        f"install -m 0755 /tmp/{directory}/bin/gh /usr/local/bin/gh && "
+        f"rm -rf /tmp/{archive} /tmp/{directory}"
+    )
 
 
 def _install_uv_command() -> str:
@@ -109,7 +133,8 @@ def workspace_template():
             "/opt/node24/bin/corepack enable pnpm && "
             f"/opt/node24/bin/corepack prepare pnpm@{PNPM_VERSION} "
             "--activate && "
-            f"{_install_uv_command()}",
+            f"{_install_uv_command()} && "
+            f"{_install_gh_command()}",
             user="root",
         )
         .copy("lemma-python", "/build/lemma-python")
@@ -199,6 +224,11 @@ def workspace_template():
         .copy(
             "lemma-backend/sandbox-images/templates/workspace-python/lemma-profile.sh",
             "/etc/profile.d/lemma-python.sh",
+            mode=0o644,
+        )
+        .copy(
+            "lemma-backend/sandbox-images/templates/workspace-github/lemma-profile.sh",
+            "/etc/profile.d/lemma-github.sh",
             mode=0o644,
         )
         .copy(

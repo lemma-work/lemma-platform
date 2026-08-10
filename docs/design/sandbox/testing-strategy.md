@@ -1,15 +1,15 @@
-# AgentBox Testing Strategy
+# The sandbox runtime Testing Strategy
 
 **Status:** Implemented and verified for Docker and E2B; Kubernetes deferred
 
-**Parent:** [AgentBox](README.md)
+**Parent:** [the sandbox runtime](README.md)
 
 **Acceptance and rollout:** [Verification and rollout](verification-and-rollout.md)
 
 ## 1. Purpose and release boundary
 
-AgentBox is execution infrastructure, so a provider adapter is not accepted because
-its mocked methods pass. The initial AgentBox release is accepted only when the
+The sandbox runtime is execution infrastructure, so a provider adapter is not accepted because
+its mocked methods pass. The initial the sandbox runtime release is accepted only when the
 same observable workspace and function journeys pass against real Docker and real
 E2B using the exact images/templates, generated client, backend dispatcher, runtime
 gateway, and database schema intended for deployment.
@@ -22,7 +22,7 @@ The initial mandatory provider matrix is:
 | E2B | Required | Required | Required | Required | Passed |
 | Kubernetes | Designed, not initially required | Designed, not initially required | Designed, not initially required | Designed, not initially required | Deferred until dedicated cluster program |
 
-A Docker-only pass cannot validate an E2B profile. An AgentBox-only process test
+A Docker-only pass cannot validate an E2B profile. An the sandbox runtime-only process test
 cannot validate the backend function plane. An E2B workspace pass cannot stand in
 for an E2B function pass. All four required columns require evidence from the exact
 source and immutable profile builds under test.
@@ -38,12 +38,12 @@ protocol-v2 implementation branch:
 
 | Suite | Result | What it proves |
 | --- | ---: | --- |
-| AgentBox hermetic unit/contract suite | 143 passed, 6 skipped | Typed SQLAlchemy state, API, adapters, workspace runtime, resident function runtime, streaming files, fault paths, and exact cleanup reconciliation |
+| the sandbox runtime hermetic unit/contract suite | 143 passed, 6 skipped | Typed SQLAlchemy state, API, adapters, workspace runtime, resident function runtime, streaming files, fault paths, and exact cleanup reconciliation |
 | Real Docker adapter suite | 4 passed | Workspace lifecycle/volume, shell, PTY, Python, files, browser/port access, resident runtime health, exact destruction, and private-network manager topology |
 | Real E2B adapter suite | 2 passed | Immutable create, Node/pnpm/uv/LiteParse, shell/stdin, PTY/resize, native files, Code Interpreter state, headful browser, explicit pause/resume, resident runtime TLS port access, ten concurrent proxied runtime requests, and exact deletion |
 | Function backend and executor suites | 65 unit and 28 E2E passed | Direct API dispatch, durable JOB dispatch, canonical delegated-token authorization, token cache, revision artifacts, repository concurrency, schema prewarming, cancellation, exact-run invocation deduplication, and real Docker API/JOB execution |
 | Full backend unit suite | 2,607 passed, 1 skipped | The replacement preserves the wider backend contract; the sole skip is the existing optional MarkItDown test when that package is not installed |
-| Generated AgentBox client | 6 passed | The checked-in OpenAPI document and typed client are in sync with the server contract |
+| Generated the sandbox runtime client | 6 passed | The checked-in OpenAPI document and typed client are in sync with the server contract |
 | Lemma Python SDK compatibility | 2 passed | Invocation-local SDK context preserves `Pod.from_env()` behavior without leaking state between runs |
 | Docker benchmark | Passed at concurrency five | All 25 invocations succeeded; API no-op/read/write platform p95 was 0.178/0.185/0.284 s |
 | E2B benchmark through temporary ngrok | Passed at concurrency five | All 25 invocations succeeded; API no-op/read/write platform p95 was 0.385/0.362/0.445 s and JOB read/write was 1.032/0.732 s |
@@ -58,11 +58,11 @@ plus the relevant real-provider suite and benchmark. Kubernetes remains deferred
 1. **Behavior is provider-neutral.** Portable cases have one case ID and assertion
    set parameterized over Docker and E2B. Provider-only cases are additive.
 2. **The real public boundary matters.** Provider conformance enters through the
-   canonical AgentBox API/client. Full-stack cases enter through Lemma workspace tools or
+   canonical the sandbox runtime's API/client. Full-stack cases enter through Lemma workspace tools or
    public function-run APIs. Tests do not invoke a provider adapter as a shortcut.
 3. **Functions are tested where API/JOB semantics live.** Direct API dispatch,
    durable JOB queueing, function sessions, backend run starts, callbacks, and outbox
-   are part of the full-stack matrix. AgentBox remains a generic sandbox/lifecycle
+   are part of the full-stack matrix. The sandbox runtime remains a generic sandbox/lifecycle
    service and does not own function semantics.
 4. **Health is necessary, never sufficient.** The profile-owned resident runtime
    must pass its private port-8090 health probe, but acceptance additionally requires
@@ -86,12 +86,12 @@ plus the relevant real-provider suite and benchmark. Kubernetes remains deferred
 
 ## 3. Suite ownership and topology
 
-### 3.1 AgentBox repository suites
+### 3.1 sandbox repository suites
 
 Proposed structure:
 
 ```text
-agentbox/tests/
+sandbox/tests/
   unit/                    domain policies, errors, deadlines, admission
   state/                   SQLAlchemy repositories, UoW, Alembic, concurrency
   runtime/                 private workspace runtime and resident function runtime
@@ -103,7 +103,7 @@ agentbox/tests/
   support/                 manifests, harnesses, resource ledger, fixtures
 ```
 
-AgentBox owns proof that the canonical API lifecycle and generic ports behave identically. It
+The sandbox runtime owns proof that the canonical API lifecycle and generic ports behave identically. It
 does not manufacture API/JOB domain semantics inside these tests.
 
 ### 3.2 Backend full-stack suites
@@ -111,20 +111,20 @@ does not manufacture API/JOB domain semantics inside these tests.
 Proposed structure:
 
 ```text
-lemma-backend/app/modules/workspace/tests/agentbox/
+lemma-backend/app/modules/workspace/tests/sandbox/
   contract/                backend workspace adapter/client behavior
-  full_stack/              tools, browser, files through real AgentBox
+  full_stack/              tools, browser, files through real the sandbox runtime
 
-lemma-backend/app/modules/function/tests/agentbox/
+lemma-backend/app/modules/function/tests/sandbox/
   domain/                  direct API dispatch, JOB queue, sessions, runs
-  full_stack/              API and JOB through real AgentBox/provider
+  full_stack/              API and JOB through real the sandbox runtime/provider
   chaos/                   callback loss, restarts, ambiguous execution
 ```
 
 One CI orchestration job starts PostgreSQL, Redis/worker dependencies, backend API,
-runtime gateway, AgentBox, and the selected provider harness. It builds/loads a
+runtime gateway, the sandbox runtime, and the selected provider harness. It builds/loads a
 ready immutable function revision through the real build path, then calls the public
-backend endpoint. Fake AgentBox remains valuable for backend unit tests but cannot
+backend endpoint. Fake the sandbox runtime remains valuable for backend unit tests but cannot
 satisfy a provider release gate.
 
 ### 3.3 Markers and selection
@@ -150,7 +150,7 @@ Every real-provider run consumes one immutable manifest containing:
 
 ```text
 git SHA
-AgentBox protocol/client versions
+The sandbox runtime protocol/client versions
 database/Alembic revision
 workspace runtime protocol version
 function runtime ABI and builder digest
@@ -180,7 +180,7 @@ class ProviderTestHarness(Protocol):
 ```
 
 This harness prepares and observes tests; it does not replace calls through the
-AgentBox client. Its resource ledger records provider ID as soon as observable and
+The sandbox runtime client. Its resource ledger records provider ID as soon as observable and
 also records logical key, allocation token, operation ID, profile digest, and
 creation timestamp.
 
@@ -189,7 +189,7 @@ creation timestamp.
 - Require a reachable Docker Engine and supported API version.
 - Build exact workspace/function images from the checkout and resolve their content
   digests before tests.
-- Start AgentBox with PostgreSQL for protected conformance. SQLite is used only by
+- Start the sandbox runtime with PostgreSQL for protected conformance. SQLite is used only by
   the separate local-state lane.
 - Attach function containers only to the isolated test data-plane network where the
   runtime and egress gateways are reachable by service identity; the host's
@@ -210,7 +210,7 @@ creation timestamp.
 - Run the runtime gateway, controlled egress gateway, and artifact fixture behind
   ephemeral publicly reachable TLS test endpoints because an E2B sandbox cannot
   call CI localhost. Endpoints are uniquely namespaced to the run, accept only
-  run-bound capabilities, expose no AgentBox management API, and are removed
+  run-bound capabilities, expose no the sandbox runtime management API, and are removed
   after the suite.
 - Add unique `managed-by`, environment, run-scope, allocation-token, and case-ID
   metadata to every sandbox.
@@ -221,7 +221,7 @@ creation timestamp.
 - Redact API/access/traffic tokens from pytest representations, logs, exceptions,
   HTTP captures, and uploaded artifacts.
 - Configure the E2B function network allowlist to those exact gateway endpoints and
-  prove a direct connection to the backend database, AgentBox manager, metadata, or
+  prove a direct connection to the backend database, the sandbox manager, metadata, or
   arbitrary internet fails.
 - In the required CI lane, unavailable credentials/quota/templates are an
   infrastructure failure. Local developer runs may explicitly deselect E2B tests.
@@ -273,7 +273,7 @@ PostgreSQL-only concurrency cases prove:
 ### 5.2 Migration tests
 
 Alembic CI creates a database from empty and upgrades it to head, then separately
-restores the last shipped AgentBox schema fixture and upgrades it to head. Both paths
+restores the last shipped the sandbox runtime schema fixture and upgrades it to head. Both paths
 run repository smoke tests and downgrade is not required. CI also verifies:
 
 - one linear head unless an explicitly reviewed merge revision exists;
@@ -371,7 +371,7 @@ public-site availability never decides core correctness.
 
 - Explicit pause/resume reconnects the same sandbox ID under a new allocation epoch
   without duplicate create.
-- AgentBox-directed idle release quiesces code contexts, commands, PTYs, browser,
+- The sandbox runtime-directed idle release quiesces code contexts, commands, PTYs, browser,
   dynamic values, and port grants before pause.
 - Provider auto-resume is disabled; no command or file access bypasses the
   lifecycle controller.
@@ -462,7 +462,7 @@ Mandatory cases on Docker and E2B:
 | `CH-INVOKE-001` | Invocation accepted, HTTP response lost | Backend does not replay an ambiguous response; runtime deduplication still permits at most one execution if an explicit same-run retry is introduced |
 | `CH-CALLBACK-001` | Terminal callback duplicated | One terminal transition and one outbox event |
 | `CH-CALLBACK-002` | Terminal callback lost | Deadline reconciliation marks the same unfinished run failed without replay |
-| `CH-RESTART-001` | AgentBox exits after allocation intent commit | Restart reconciles the same allocation token and never blindly creates |
+| `CH-RESTART-001` | the sandbox runtime exits after allocation intent commit | Restart reconciles the same allocation token and never blindly creates |
 | `CH-RESTART-002` | Backend worker exits after starting a run | A redelivery observes `RUNNING` and never creates a second execution attempt |
 | `CH-DEATH-001` | Sandbox dies during run | The same run fails at deadline; later client-created run receives a fresh allocation if required |
 | `CH-STATE-001` | Late callback after terminal state | Late callback changes no public/domain state |
@@ -488,7 +488,7 @@ quota, profile digest, and sample count attached.
 
 The executable mixed API/JOB table workload, commands, report schema, current
 regression budgets, and initial Docker/E2B parity evidence are maintained in the
-[function execution benchmark runbook](../../operators/agentbox-function-benchmark.md).
+[function execution benchmark runbook](../../operators/sandbox-function-benchmark.md).
 Its five-sample p95 gate is an early regression detector; it does not replace the
 larger release distributions required by this design.
 
@@ -508,15 +508,15 @@ and duration. A shorter run cannot be labeled as the required soak gate.
 
 | Lane | Trigger | Contents | Blocking |
 | --- | --- | --- | ---: |
-| `agentbox-hermetic` | Every relevant PR | unit, state SQLite, contracts, deterministic faults, backend fake integration | Yes |
-| `agentbox-postgres` | Every relevant PR | real PostgreSQL repository/migration/concurrency contracts | Yes |
-| `agentbox-docker` | Protected PR/merge queue | real Docker portable + provider + full-stack API/JOB | Yes |
-| `agentbox-e2b` | Trusted protected PR/merge queue | real E2B portable + provider + full-stack API/JOB | Yes |
-| `agentbox-security` | Nightly and release candidate | malicious fixtures on Docker/E2B | Release blocking |
-| `agentbox-performance` | Nightly and release candidate | documented latency/capacity distributions | Release blocking |
-| `agentbox-soak` | Nightly and release candidate | lifecycle/load/restart/leak soak | Release blocking |
+| `sandbox-hermetic` | Every relevant PR | unit, state SQLite, contracts, deterministic faults, backend fake integration | Yes |
+| `sandbox-postgres` | Every relevant PR | real PostgreSQL repository/migration/concurrency contracts | Yes |
+| `sandbox-docker` | Protected PR/merge queue | real Docker portable + provider + full-stack API/JOB | Yes |
+| `sandbox-e2b` | Trusted protected PR/merge queue | real E2B portable + provider + full-stack API/JOB | Yes |
+| `sandbox-security` | Nightly and release candidate | malicious fixtures on Docker/E2B | Release blocking |
+| `sandbox-performance` | Nightly and release candidate | documented latency/capacity distributions | Release blocking |
+| `sandbox-soak` | Nightly and release candidate | lifecycle/load/restart/leak soak | Release blocking |
 
-“Relevant PR” includes AgentBox, generated client, workspace adapter/tools, function
+“Relevant PR” includes the sandbox runtime, generated client, workspace adapter/tools, function
 domain/dispatcher/gateway/runtime, database models/migrations, images/templates,
 build pipeline, or these suites. A release candidate reruns all lanes on one exact
 SHA/manifest even if individual PR results exist.

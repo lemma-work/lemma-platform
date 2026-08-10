@@ -1,16 +1,16 @@
-# AgentBox Lifecycle State Model
+# The sandbox runtime Lifecycle State Model
 
 **Status:** Implemented
 
-**Parent:** [AgentBox](README.md)
+**Parent:** [the sandbox runtime](README.md)
 
 ## Decision
 
-AgentBox durably stores control-plane lifecycle facts only. Process handles,
+The sandbox runtime durably stores control-plane lifecycle facts only. Process handles,
 interactive Python sessions, execution output, and stream cursors are data-plane
 facts owned by one live manager and one physical allocation incarnation.
 
-This is intentionally not an exactly-once execution system. If AgentBox loses the
+This is intentionally not an exactly-once execution system. If the sandbox runtime loses the
 outcome of non-idempotent work, it reports that ambiguity and does not replay the
 work. The caller or agent decides whether a new operation is appropriate.
 
@@ -28,7 +28,7 @@ looked durable without making the underlying operation durable. Stale rows also
 blocked release and cleanup, and execution history grew without being a business
 record or a reliable source of truth.
 
-Durability is useful only when it can support a real recovery invariant. AgentBox
+Durability is useful only when it can support a real recovery invariant. The sandbox runtime
 keeps the create-attempt journal because an ambiguous provider create can leak an
 entire billable sandbox and can be reconciled by allocation token. It does not keep
 an execution journal because provider process/Python state cannot be safely
@@ -83,10 +83,10 @@ calling the provider.
 | `stdin` delivery fails or its target PID no longer matches the operation | `PROCESS_NOT_RUNNING`/non-retryable failure | No |
 
 `stdin` and stateful Python execution are non-idempotent. Replaying either after an
-ambiguous network failure can duplicate input or mutations, so AgentBox never marks
+ambiguous network failure can duplicate input or mutations, so the sandbox runtime never marks
 them safe for an automatic retry.
 
-After an ambiguous Python execution, AgentBox best-effort removes the exact
+After an ambiguous Python execution, the sandbox runtime best-effort removes the exact
 interpreter context. If cleanup succeeds, a later explicit agent retry may create a
 fresh context; that retry can repeat an earlier unconfirmed side effect, but it
 cannot race a second live interpreter. If cleanup cannot be confirmed, an
@@ -95,7 +95,7 @@ until it changes or the tombstone expires. After a manager restart, the E2B adap
 removes interpreter contexts not owned by the new manager before admitting a fresh
 Python session.
 
-Function business runs remain durable in the backend's function-run model. AgentBox
+Function business runs remain durable in the backend's function-run model. The sandbox runtime
 does not duplicate that record. A lost runtime invocation outcome is surfaced to
 the backend; the backend does not transparently invoke the operation again.
 
@@ -123,7 +123,7 @@ not restoring the deleted execution tables.
 
 Live operation records are retained until their absolute request deadline. When
 the bounded cache is full of unexpired records, new work receives
-`CAPACITY_EXHAUSTED`; AgentBox never evicts a live idempotency record and then
+`CAPACITY_EXHAUSTED`; the sandbox runtime never evicts a live idempotency record and then
 replays the same operation ID.
 
 A stateful Python interpreter has a fixed working directory. Conversations have one
@@ -148,18 +148,18 @@ old directory.
 - Superseded `DRAINING` allocations are provider-finalized by exact ID before their
   admission ownership is released.
 - E2B activity-driven automatic resume is disabled, which E2B requires anyway for
-  the filesystem-only snapshots AgentBox uses. This does not make resume
-  exclusively AgentBox's to schedule: `connect()` resumes a paused sandbox
+  the filesystem-only snapshots the sandbox runtime uses. This does not make resume
+  exclusively the sandbox runtime's to schedule: `connect()` resumes a paused sandbox
   implicitly, so the control plane observes a resume and assigns the new
   allocation epoch rather than gating the transition.
 - The E2B workspace timeout is refreshed on every runtime operation. E2B's
   `timeout` is a continuous-runtime ceiling rather than an idle timer, so without
   a refresh the provider stops a busy workspace mid-session. Refreshing makes the
-  provider's pause an inactivity backstop consistent with AgentBox idle release.
+  provider's pause an inactivity backstop consistent with the sandbox runtime idle release.
 - E2B workspace storage is sandbox-native. It is co-located with that allocation;
   a replacement must not pretend the files were independently preserved. This is
   why a workspace profile change tolerates drift rather than replacing the
-  allocation — see [AgentBox](README.md) §6.
+  allocation — see [the sandbox runtime](README.md) §6.
 - A workspace pause is filesystem-only. Files persist; running processes and
   interpreter state do not, and callers must not treat them as recoverable.
 - Permanent deletion and recoverable compute release are separate operations.
@@ -181,7 +181,7 @@ Kubernetes controllers, finalizers, and leases:
 - [Finalizers](https://kubernetes.io/docs/concepts/overview/working-with-objects/finalizers/)
 - [Leases](https://kubernetes.io/docs/concepts/architecture/leases/)
 
-These sources do not imply provider-specific behavior in AgentBox's public API.
+These sources do not imply provider-specific behavior in the sandbox runtime's public API.
 They support the core separation: durable desired state and fenced reconciliation
 belong in the control plane; one runtime incarnation's mutable execution state does
 not.

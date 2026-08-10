@@ -267,10 +267,8 @@ Python and TypeScript SDKs (with 25+ React hooks) live in [`lemma-python/`](lemm
 
 | Path | Package | License |
 |------|---------|---------|
-| `lemma-backend/` | FastAPI backend, migrations, and infra Docker Compose | AGPLv3 |
+| `lemma-backend/` | FastAPI backend, sandbox images and runtime, migrations, and infra Docker Compose | AGPLv3 |
 | `lemma-frontend/` | Next.js frontend | AGPLv3 |
-| `lemma-backend/sandbox_runtime/` | The runtime that ships inside sandbox images, and its protocol | Apache-2.0 |
-| `lemma-backend/sandbox-images/` | Dockerfiles and templates for the sandbox images | Apache-2.0 |
 | `lemma-stack/` | `lemma-stack` — installer and manager for a self-contained local stack | Apache-2.0 |
 | `desktop/` | Tauri macOS desktop app (thin shell around the `lemma-stack` supervisor) | AGPLv3 |
 | `lemma-cli/` | `lemma-terminal` — the `lemma` CLI and terminal UI | Apache-2.0 |
@@ -327,7 +325,8 @@ The Lemma platform uses a dual-licensing model:
 
 **AGPLv3** (server-delivered core):
 
-- `lemma-backend/` — the FastAPI backend
+- `lemma-backend/` — the FastAPI backend, including the sandbox images and the
+  runtime that ships inside them
 - `lemma-frontend/` — the Next.js frontend and operator UI
 
 These are licensed under the [GNU Affero General Public License v3](LICENSE).
@@ -336,8 +335,6 @@ must release your modified source under the same terms.
 
 **Apache-2.0** (client-side developer tools):
 
-- `lemma-backend/sandbox_runtime/` — the runtime inside sandbox images, and its protocol
-- `lemma-backend/sandbox-images/` — Dockerfiles and templates for those images
 - `lemma-stack/` — local stack installer and manager
 - `lemma-cli/` — the `lemma` CLI and terminal UI
 - `lemma-python/` — the Python SDK

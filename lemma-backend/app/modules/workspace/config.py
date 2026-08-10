@@ -89,7 +89,10 @@ class WorkspaceSettings(BaseSettings):
         description="Immutable workspace profile name",
     )
     workspace_profile_digest: str = Field(
-        default=f"sha256:{'1' * 64}",
+        # Bumped when the workspace image changes, so a sandbox built from the
+        # previous one is replaced rather than reused. Last moved when the
+        # GitHub CLI was added to the image.
+        default=f"sha256:{'3' * 64}",
         pattern=r"^sha256:[0-9a-f]{64}$",
         validation_alias=AliasChoices("WORKSPACE_PROFILE_DIGEST"),
         description="Immutable workspace profile digest",

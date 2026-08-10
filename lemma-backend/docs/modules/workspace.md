@@ -8,11 +8,11 @@ will not own provider lifecycle or provider SDKs.
 
 The canonical target design is:
 
-- [Sandbox design overview](../../../docs/design/agentbox/README.md)
-- [Sandbox protocol](../../../docs/design/agentbox/sandbox-protocol.md)
-- [Provider adapters](../../../docs/design/agentbox/provider-adapters.md)
-- [Testing strategy](../../../docs/design/agentbox/testing-strategy.md)
-- [Verification and rollout](../../../docs/design/agentbox/verification-and-rollout.md)
+- [Sandbox design overview](../../../docs/design/sandbox/README.md)
+- [Sandbox protocol](../../../docs/design/sandbox/sandbox-protocol.md)
+- [Provider adapters](../../../docs/design/sandbox/provider-adapters.md)
+- [Testing strategy](../../../docs/design/sandbox/testing-strategy.md)
+- [Verification and rollout](../../../docs/design/sandbox/verification-and-rollout.md)
 
 Do not add lifecycle, retry, provider, persistence, or execution protocol rules to
 this module document. They belong in the canonical design set.

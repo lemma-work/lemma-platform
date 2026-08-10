@@ -1,8 +1,8 @@
-# AgentBox Provider Adapters
+# The sandbox runtime Provider Adapters
 
 **Status:** Docker and E2B implemented and verified; Kubernetes deferred
 
-**Parent:** [AgentBox](README.md)
+**Parent:** [the sandbox runtime](README.md)
 
 **Protocol:** [Sandbox protocol](sandbox-protocol.md)
 
@@ -10,7 +10,7 @@
 
 ## 1. Purpose
 
-This document maps the portable AgentBox ports onto Docker, Kubernetes, and E2B.
+This document maps the portable the sandbox runtime ports onto Docker, Kubernetes, and E2B.
 Adapters are allowed to use different data-plane transports. They are not allowed to
 change public semantics, invent their own retry policy, persist secrets, or expose a
 provider ID to callers.
@@ -49,7 +49,7 @@ optimizations and cannot become implicit caller requirements.
 Every physical allocation carries:
 
 ```text
-managed-by=agentbox
+managed-by=sandbox
 environment=<environment>
 owner=<deployment owner>
 workload-kind=workspace|function
@@ -106,7 +106,7 @@ operations are ready.
 All providers consume artifacts from one release manifest:
 
 ```text
-agentbox_release_id
+release_id
 workspace_profile_digest
 function_profile_digest
 workspace_runtime_protocol_version
@@ -119,12 +119,12 @@ e2b_workspace_template_build_id
 e2b_function_template_build_id
 ```
 
-AgentBox starts only a profile whose provider artifact matches the configured
+The sandbox runtime starts only a profile whose provider artifact matches the configured
 release manifest. Mutable image tags are rejected outside local development.
 
 ## 4. Private workspace runtime
 
-Docker and Kubernetes use a small `agentbox-workspace-runtime`; E2B does not.
+Docker and Kubernetes use a small `workspace-runtime`; E2B does not.
 
 The runtime provides adapter-private equivalents of the process, Python-session,
 filesystem, and health operations. It excludes function execution, queues, artifact
@@ -146,10 +146,10 @@ Requirements:
 - clean shutdown terminates all managed descendants;
 - no listening public interface and no provider credential.
 
-Network policy permits the AgentBox manager to reach the runtime. User processes may
+Network policy permits the sandbox manager to reach the runtime. User processes may
 share the sandbox network namespace but do not possess its credential. Compromise of
 the runtime affects that user's workspace, which is already the sandbox trust
-boundary; it must not grant access to AgentBox, the provider API, another sandbox,
+boundary; it must not grant access to the sandbox runtime, the provider API, another sandbox,
 or host control sockets.
 
 ## 5. Docker adapter
@@ -171,7 +171,7 @@ stdin/stdout/PTY streams. See the
 
 Create:
 
-1. reserve a provider allocation in AgentBox PostgreSQL;
+1. reserve a provider allocation in sandbox PostgreSQL;
 2. create or reuse the named volume recorded for the logical workspace storage row;
 3. create the container from the workspace image digest;
 4. mount the volume at `/workspace` and no host project paths;
@@ -190,14 +190,14 @@ credentials are passed per runtime operation.
 
 Release:
 
-1. AgentBox performs portable quiescence through the workspace runtime;
+1. The sandbox runtime performs portable quiescence through the workspace runtime;
 2. revoke port grants;
 3. stop the exact container with a bounded grace period;
 4. retain the named volume and container metadata;
 5. release active-compute admission.
 
 Resume starts the exact stopped container when its image/profile still matches.
-Otherwise AgentBox removes the old container, retains the volume, creates a new
+Otherwise the sandbox runtime removes the old container, retains the volume, creates a new
 container from the current profile, and increments the allocation epoch.
 
 Permanent deletion removes the exact container and then the exact volume from the
@@ -212,13 +212,13 @@ confirmed absent. Volume deletion never uses a broad name prefix.
   at `/run/lemma-function-cache` for digest-verified artifacts, because native
   wheels must map executable shared-library segments.
 - Start `lemma-function-runtime serve` as PID 1 behind `tini`.
-- Publish port 8090 only to the trusted service network shared by AgentBox and the
+- Publish port 8090 only to the trusted service network shared by the sandbox runtime and the
   backend in the installed topology, or through a loopback-bound random host port
   when both run on one standalone development host.
 - Probe `/healthz` before marking the allocation active.
 - Lease the current allocation's runtime address to the trusted backend. In the
   installed topology this is a private container-network address; standalone
-  development uses a loopback-published random port. AgentBox is not in the
+  development uses a loopback-published random port. The sandbox runtime is not in the
   per-invocation data path.
 - Keep revision worker processes inside the resident runtime. A worker imports one
   immutable revision once, handles one invocation at a time, and is reused only for
@@ -228,9 +228,9 @@ confirmed absent. Volume deletion never uses a broad name prefix.
 - Remove the container after its endpoint-lease protection and idle threshold
   expire, or on profile drain.
 
-The backend owns the public `function_run_id` and run transition. AgentBox owns
+The backend owns the public `function_run_id` and run transition. The sandbox runtime owns
 only the function allocation and direct runtime lease; it does not create a
-generic AgentBox process row for each function invocation.
+generic the sandbox runtime process row for each function invocation.
 
 ### 5.4 Files and port access
 
@@ -238,7 +238,7 @@ Workspace filesystem operations use the private workspace runtime, not shell/bas
 commands. Docker archive APIs may be used for bulk import/export only after path and
 symlink validation.
 
-User port access goes through an AgentBox signed reverse proxy. On the installed
+User port access goes through a sandbox signed reverse proxy. On the installed
 stack, the manager reaches the container IP over their shared private network and
 the sandbox port is not host-published. A standalone development fallback may proxy
 to a loopback-bound random host port. Raw host ports and Docker container addresses
@@ -302,8 +302,8 @@ The Pod template contains:
 - labels for network policy and exact allocation metadata;
 - required `RuntimeClass`, node selector, and tolerations in production.
 
-AgentBox connects to the private runtime through the Pod IP on the cluster network.
-A default-deny NetworkPolicy permits ingress only from the AgentBox manager identity
+The sandbox runtime connects to the private runtime through the Pod IP on the cluster network.
+A default-deny NetworkPolicy permits ingress only from the sandbox manager identity
 and egress according to the workspace profile. No Service or Ingress is created for
 the control runtime.
 
@@ -327,7 +327,7 @@ The function Pod differs deliberately:
   the egress gateway enforces revision-declared public HTTPS destinations.
 
 The container runs `lemma-function-runtime serve` continuously on port 8090.
-AgentBox reaches the Pod IP over the cluster network, validates `/healthz`, and
+The sandbox runtime reaches the Pod IP over the cluster network, validates `/healthz`, and
 proxies short-lived signed invocation/cancellation requests. No Kubernetes Service
 or Ingress is needed. Revision workers, exact-operation cancellation, artifact
 verification, and callbacks use the same runtime protocol as Docker and E2B.
@@ -389,7 +389,7 @@ The documented create request supports secured access, lifecycle, outbound netwo
 and public-traffic controls; see the
 [E2B create-sandbox API](https://e2b.dev/docs/api-reference/sandboxes/create-sandbox).
 
-The workspace template exposes no AgentBox control runtime. The function template
+The workspace template exposes no the sandbox runtime control runtime. The function template
 starts the private resident function runtime on port 8090 and proves it ready during
 the template build.
 
@@ -404,10 +404,10 @@ lifecycle={
 }
 ```
 
-AgentBox—not the provider timeout—is the five-minute logical idle scheduler. It
+The sandbox runtime—not the provider timeout—is the five-minute logical idle scheduler. It
 updates logical activity on accepted operations, then its distributed idle worker
 claims and quiesces the workspace before calling pause. Before an explicit or idle
-release, AgentBox:
+release, the sandbox runtime:
 
 1. blocks new work;
 2. deletes Code Interpreter contexts;
@@ -421,14 +421,14 @@ and delegated credentials expire before that bound. Provider timeout is a safety
 fallback, not a second lifecycle controller.
 
 Thus the paused sandbox contains the static clean template/runtime state plus
-workspace files, not live delegated credentials. Resume is an explicit AgentBox
+workspace files, not live delegated credentials. Resume is an explicit the sandbox runtime
 operation against the exact sandbox ID and produces a new allocation epoch before
 new data-plane work is accepted. Native file or command traffic cannot silently
 resume a sandbox behind the lifecycle controller. See
 [persistence](https://e2b.dev/docs/sandbox/persistence) and
 [automatic resume](https://e2b.dev/docs/sandbox/auto-resume).
 
-Paused E2B sandboxes are retained indefinitely by the provider, so AgentBox's
+Paused E2B sandboxes are retained indefinitely by the provider, so the sandbox runtime's
 configured retention worker must explicitly kill them.
 
 ### 7.3 Workspace profile replacement
@@ -445,7 +445,7 @@ preserves its filesystem.
 
 Map ports directly:
 
-| AgentBox port | E2B API |
+| the sandbox runtime port | E2B API |
 | --- | --- |
 | Foreground/background process | `sandbox.commands.run` |
 | Reconnect/inspect/list | command PID, `commands.connect`, `commands.list` |
@@ -466,7 +466,7 @@ manager-local handle records the acknowledged PID. Every stdin/resize/terminate
 operation verifies that the PID still carries the expected operation tag. An
 ambiguous start is reported as `UNKNOWN_DISPATCH` and is never resubmitted.
 
-One E2B Code Interpreter context maps to one AgentBox session. Context cwd matches
+One E2B Code Interpreter context maps to one sandbox session. Context cwd matches
 the session cwd; context restart maps to session restart. See
 [E2B code contexts](https://e2b.dev/docs/code-interpreting/contexts).
 
@@ -482,15 +482,15 @@ lifecycle={
 ```
 
 The immutable template starts `lemma-function-runtime serve` on port 8090 and waits
-for that port during build. On allocation readiness AgentBox connects by exact
+for that port during build. On allocation readiness the sandbox runtime connects by exact
 sandbox ID and validates the runtime health endpoint.
 
 For each direct endpoint lease and subsequent invocation:
 
-1. AgentBox resolves `sandbox.get_host(8090)`, obtains the sandbox's
+1. The sandbox runtime resolves `sandbox.get_host(8090)`, obtains the sandbox's
    `traffic_access_token`, and returns an HTTPS base URL plus an opaque
    `E2B-Traffic-Access-Token` request header to the trusted backend;
-2. AgentBox extends the sandbox timeout at lease acquisition to cover the lease
+2. The sandbox runtime extends the sandbox timeout at lease acquisition to cover the lease
    horizon; it does not proxy ordinary invocations;
 3. the backend caches the allocation/profile-fenced lease within its absolute
    expiry;
@@ -503,7 +503,7 @@ For each direct endpoint lease and subsequent invocation:
    the same bearer;
 6. cancellation uses the current direct lease and kills only the matching
    function/run worker group;
-7. AgentBox kills the exact sandbox after its protected lease/idle horizon.
+7. The sandbox runtime kills the exact sandbox after its protected lease/idle horizon.
 
 No runtime claim, callback capability, heartbeat, or provider process polling is
 used. The invocation response and durable JOB callback are guarded by the backend
@@ -512,7 +512,7 @@ gateway rejection invalidates the lease and permits one fresh-allocation retry.
 
 ### 7.6 Network and ports
 
-Workspace public app traffic uses E2B secured access and short-lived AgentBox grants.
+Workspace public app traffic uses E2B secured access and short-lived sandbox grants.
 Raw traffic tokens are resolved from the connected E2B handle, kept only in adapter
 memory for the upstream request, and never persisted or returned to backend callers.
 
@@ -527,7 +527,7 @@ unrestricted direct-internet fallback.
 
 ### 7.7 Create ambiguity, capacity, and events
 
-E2B assigns the sandbox ID and does not document a client idempotency key. AgentBox
+E2B assigns the sandbox ID and does not document a client idempotency key. The sandbox runtime
 therefore commits the allocation token before create and includes it in metadata.
 An ambiguous create is resolved through:
 
@@ -540,7 +540,7 @@ and deduplicate delivery IDs. See
 [E2B lifecycle webhooks](https://e2b.dev/docs/sandbox/lifecycle-events-webhooks)
 and [listing sandboxes](https://e2b.dev/docs/sandbox/list).
 
-Provider project concurrency and create rate are AgentBox admission inputs. E2B 429
+Provider project concurrency and create rate are the sandbox runtime admission inputs. E2B 429
 responses update one distributed provider-scope `blocked_until`; adapter-local retry
 loops are forbidden. See [E2B billing and limits](https://e2b.dev/docs/billing).
 
@@ -561,5 +561,5 @@ known deviations
 expiry/revalidation date
 ```
 
-AgentBox startup in production rejects a profile/provider combination without a
+The sandbox runtime startup in production rejects a profile/provider combination without a
 passing, nonexpired conformance record unless an explicit audited override exists.

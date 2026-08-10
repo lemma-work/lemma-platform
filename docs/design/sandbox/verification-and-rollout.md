@@ -1,12 +1,12 @@
-# AgentBox Verification and Rollout
+# The sandbox runtime Verification and Rollout
 
 **Status:** Docker and E2B implementation verified; Kubernetes rollout deferred
 
-**Parent:** [AgentBox](README.md)
+**Parent:** [the sandbox runtime](README.md)
 
 ## 1. Purpose
 
-AgentBox is accepted by behavior, failure semantics, and measured latency—not by
+The sandbox runtime is accepted by behavior, failure semantics, and measured latency—not by
 adapter method coverage alone. The executable suite and Docker/E2B case catalog live
 in [Testing strategy](testing-strategy.md). This document defines acceptance gates,
 security/performance evidence, breaking migration, rollback boundaries, and provider
@@ -32,7 +32,7 @@ digest and protocol version pass the complete required suite.
 | Fault adapter | Deterministic unknown, 429, disconnect, delayed state | None |
 | Runtime contract | Workspace and function runtime protocol | Local subprocess/container |
 | Provider conformance | Real adapter against real provider | Docker/E2B initially |
-| Backend integration | Workspace tools and function dispatcher through AgentBox | PostgreSQL + AgentBox |
+| Backend integration | Workspace tools and function dispatcher through the sandbox runtime | PostgreSQL + the sandbox runtime |
 | End-to-end | Agent/workflow/API/JOB behaviors | Full test stack |
 | Security | Isolation, credential, network, resource abuse | Provider-specific environment |
 | Performance | Warm/resume/cold latency and capacity behavior | Production-shaped environment |
@@ -71,7 +71,7 @@ duplicated, reordered, and delayed lifecycle events
 The adapter records every provider call so tests assert the number and identity of
 create/start/release/destroy operations.
 
-## 3. AgentBox domain and state tests
+## 3. The sandbox runtime domain and state tests
 
 ### 3.1 Logical identity
 
@@ -141,7 +141,7 @@ provider_create_calls(allocation_token) <= 1
   expected head and pass repository smoke tests.
 - Lifecycle/services/providers contain no raw SQL or direct engine/session access.
 - Tests create state through repositories/test builders and never mutate a private
-  connection owned by AgentBox.
+  connection owned by the sandbox runtime.
 
 ## 4. Portable workspace conformance
 
@@ -214,7 +214,7 @@ case IDs become mandatory for Kubernetes before that adapter is enabled.
 - Tests use the asynchronous Engine API path; the `docker` CLI may be absent.
 - Workspace volume survives container stop/start and container replacement.
 - Permanent delete removes exact container and volume.
-- Random loopback port mappings are reachable only through signed AgentBox proxy.
+- Random loopback port mappings are reachable only through signed the sandbox runtime proxy.
 - Function container has no named volume or published port and is removed after idle.
 - Manager socket/credentials are absent inside both profile containers.
 - Run under documented CPU/memory/PID/output limits.
@@ -235,7 +235,7 @@ Disposable-cluster suite:
 - permanent delete removes exact Pod/PVC;
 - watches handle resource-version expiration without creating again;
 - `409 AlreadyExists` validates the exact allocation token;
-- workspace runtime is inaccessible without AgentBox runtime credential;
+- workspace runtime is inaccessible without the sandbox runtime runtime credential;
 - function Pod has no PVC, Service, Ingress, or service-account token;
 - function Pod deletion loses all cache and a later cold run still succeeds;
 - NetworkPolicy denies cross-sandbox and private/control destinations.
@@ -252,16 +252,16 @@ selected in production configuration.
   post-create runtime bootstrap.
 - Explicit resume of the same sandbox ID restores native filesystem access under a
   new allocation epoch.
-- AgentBox quiescence removed contexts/processes/dynamic credentials before pause.
+- The sandbox runtime quiescence removed contexts/processes/dynamic credentials before pause.
 - File operations and commands cannot silently auto-resume a paused sandbox.
 - Command, PID/tag reconnect, stdin, list, kill, PTY, and code contexts satisfy the
   portable suite.
-- Secured app grant works and raw traffic token does not escape AgentBox.
+- Secured app grant works and raw traffic token does not escape the sandbox runtime.
 - Lost create response resolves through allocation metadata/webhook with one create.
 - Duplicate lifecycle deliveries are idempotent.
 - Function template exposes no unauthenticated public traffic. Its resident
   function HTTP service is reachable only through E2B's secured TLS gateway and an
-  allocation-fenced AgentBox lease; the manager key never reaches user code.
+  allocation-fenced sandbox lease; the manager key never reaches user code.
 - Function sandbox is killed, not paused, after its protected lease/idle horizon.
 - Long JOB sets one timeout past deadline and completes without heartbeat.
 - Provider 429 honors retry-after and does not cause adapter-local create retries.
@@ -275,7 +275,7 @@ than a skipped pass.
 
 ## 6. Function execution tests
 
-Run the same full backend function suite through AgentBox Docker and E2B profiles.
+Run the same full backend function suite through the sandbox runtime Docker and E2B profiles.
 It becomes a Kubernetes gate only when that deferred adapter is enabled.
 
 ### 6.1 Revision and artifact
@@ -480,7 +480,7 @@ diagnostics, not database records.
 
 ## 10. Breaking migration
 
-The AgentBox API is deployed atomically with the generated client and all backend
+The the sandbox runtime's API is deployed atomically with the generated client and all backend
 callers. There is no live compatibility facade for the experimental API.
 
 ### Phase 0: design and baselines
@@ -497,7 +497,7 @@ callers. There is no live compatibility facade for the experimental API.
 - Implement typed models and errors, SQLAlchemy 2.x repositories/unit of work, Alembic
   schema, lifecycle operations, operation wait/notification, distributed admission,
   and deterministic fault adapter.
-- Generate the breaking AgentBox client.
+- Generate the breaking the sandbox runtime client.
 - Implement all hermetic domain/port tests before real providers.
 
 ### Phase 2: workspace runtime and Docker
@@ -534,13 +534,13 @@ callers. There is no live compatibility facade for the experimental API.
 
 ### Phase 6: atomic development cutover
 
-- Drain experimental AgentBox sessions/jobs.
-- Delete and recreate the AgentBox-owned database/schema; no experimental rows are
+- Drain experimental sandbox sessions/jobs.
+- Delete and recreate the sandbox runtime-owned database/schema; no experimental rows are
   transformed, copied, or adopted.
 - Remove experimental Docker containers/volumes and E2B sandboxes by exact managed
   metadata. Keep a machine-readable deletion ledger and verify every exact ID is
   absent.
-- Deploy AgentBox, generated client, backend workspace callers, function
+- Deploy the sandbox runtime, generated client, backend workspace callers, function
   dispatcher/gateway, and profile release manifest as one coordinated release.
 - Create fresh workspace storage on first use. Existing workspace files and live
   Python/process state are intentionally not migrated.
@@ -574,7 +574,7 @@ callers. There is no live compatibility facade for the experimental API.
   claim is uncertain.
 - Unclaimed queued runs may be drained and resubmitted only through an explicit
   migration transaction preserving run identity and deadline.
-- The initial database operation is a destructive AgentBox-owned schema reset. Later
+- The initial database operation is a destructive the sandbox runtime-owned schema reset. Later
   changes use normal reviewed Alembic migrations.
 - Provider templates/images remain pinned and available for the full rollback and
   forensic-retention window.

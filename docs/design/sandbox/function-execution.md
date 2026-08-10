@@ -6,7 +6,7 @@
 
 One public `function_run_id` represents one user-requested execution. The
 backend owns authorization, the durable run, immutable artifacts, deadlines,
-cancellation and terminal events. AgentBox owns the provider-neutral sandbox,
+cancellation and terminal events. The sandbox runtime owns the provider-neutral sandbox,
 allocation lifecycle and allocation-fenced leases for its runtime endpoint.
 
 Each pod has at most one active `FUNCTION` sandbox. It runs a resident
@@ -37,11 +37,11 @@ boundary.
 | Backend dispatcher | run start, runtime invocation and direct API completion |
 | Durable worker | asynchronous JOB dispatch until runtime acceptance |
 | Runtime gateway | authenticated artifact reads and JOB terminal reports |
-| AgentBox | allocation, lifecycle, direct endpoint leases and provider reconciliation |
+| the sandbox runtime | allocation, lifecycle, direct endpoint leases and provider reconciliation |
 | Resident runtime | run deduplication, artifact cache and revision-worker pools |
 | Revision worker | one imported revision and isolated per-call SDK context |
 
-AgentBox does not understand functions, JOBs, artifacts, run statuses or
+The sandbox runtime does not understand functions, JOBs, artifacts, run statuses or
 delegated tokens. The backend does not import Docker or E2B provider SDKs.
 
 ## 3. Durable state
@@ -119,11 +119,11 @@ workspace and never passes the delegated token into user import code.
 
 ## 5. Invocation protocol v2
 
-The backend first uses the AgentBox manager API key on the control plane:
+The backend first uses the sandbox manager API key on the control plane:
 
 ```http
 POST /sandboxes/function/{pod_id}/runtime:lease
-X-API-Key: <AgentBox manager key>
+X-API-Key: <sandbox manager key>
 Content-Type: application/json
 
 {
@@ -132,10 +132,10 @@ Content-Type: application/json
 }
 ```
 
-AgentBox verifies the active allocation and immutable profile, protects its
+The sandbox runtime verifies the active allocation and immutable profile, protects its
 activity through the lease, and returns its direct base URL, allocation ID/epoch,
 profile, absolute expiry, and opaque provider request headers. Provider credentials
-are never stored in Git or the AgentBox database and are redacted from model
+are never stored in Git or sandbox database and are redacted from model
 representations.
 
 The backend caches this lease by `(pod_id, runtime_profile_digest)` for at most four
@@ -188,7 +188,7 @@ production.
 ## 6. API execution
 
 1. Authorize, validate and persist a `PENDING` run with its revision and deadline.
-2. Resolve the AgentBox endpoint, delegated token and organization concurrently.
+2. Resolve the sandbox runtime endpoint, delegated token and organization concurrently.
 3. In a short transaction, conditionally persist `PENDING -> RUNNING` and capture
    the complete immutable runtime context.
 4. POST the v2 envelope directly to the resident runtime.
@@ -304,7 +304,7 @@ The call carries the lease's opaque provider headers but no delegated function
 bearer. The runtime matches both function and run IDs, cancels the task and
 kills/discards its worker process group.
 
-Cancellation uses the cached lease when available. Otherwise it asks AgentBox to
+Cancellation uses the cached lease when available. Otherwise it asks the sandbox runtime to
 lease only an existing allocation without calling `ensure_sandbox`, so it never
 creates a sandbox. If the allocation is gone, its work is already gone. A late
 callback is acknowledged as a terminal duplicate and cannot overwrite
@@ -320,7 +320,7 @@ Every run snapshots `deadline_at`. The reconciler:
 
 No SQLAlchemy session or pooled PostgreSQL connection remains open during:
 
-- AgentBox calls or readiness waits;
+- The sandbox runtime calls or readiness waits;
 - delegated-token minting;
 - runtime HTTP;
 - artifact/object-store I/O;
@@ -336,7 +336,7 @@ short database transaction
 -> short database transaction
 ```
 
-There is no automatic business-level retry. AgentBox may repeat idempotent ensure
+There is no automatic business-level retry. The sandbox runtime may repeat idempotent ensure
 operations, the backend may retry one identical ambiguous invocation, and the
 runtime may retry an idempotent terminal callback. Functions that mutate external
 systems must use `function_run_id` or another application-level idempotency key.

@@ -37,8 +37,8 @@ The repository does not use submodules. Backend code depends on sibling packages
 | `../lemma-typescript/` | TypeScript SDK used by apps |
 | `../lemma-skills/` | Built-in agent skills loaded by the backend and workspace containers |
 | `lemma-connectors/` | Backend-local editable Python connector package |
-| `sandbox_runtime/` | The runtime inside sandbox images, and its protocol (Apache-2.0) |
-| `sandbox-images/` | Dockerfiles and templates for the sandbox images (Apache-2.0) |
+| `sandbox_runtime/` | The runtime inside sandbox images, and its protocol |
+| `sandbox-images/` | Dockerfiles and templates for the sandbox images |
 
 ## Development
 

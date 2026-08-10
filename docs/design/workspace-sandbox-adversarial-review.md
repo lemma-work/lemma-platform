@@ -1,8 +1,8 @@
 # Workspace Sandbox: Adversarial Review
 
 **Date:** 2026-08-03
-**Scope:** `agentbox/`, `agentbox-client/`, `lemma-backend/app/modules/workspace/`,
-`lemma-backend/app/modules/agent/tools/workspace_cli/`, `docs/design/agentbox/`
+**Scope:** `sandbox/`, `sandbox-client/`, `lemma-backend/app/modules/workspace/`,
+`lemma-backend/app/modules/agent/tools/workspace_cli/`, `docs/design/sandbox/`
 **Method:** static review of the code at `a6ef73e7`. Nothing was executed against a live
 provider. Each finding is marked **[code]** when it is directly readable from the source,
 or **[inferred]** when it depends on provider runtime behaviour I did not exercise.
@@ -15,7 +15,7 @@ The control plane is genuinely well built — the allocation-token journal, gene
 fencing, and unit-of-work boundary are careful work. The failure is not in that core. It
 is that **everything the user actually experiences as "the workspace" lives outside the
 part that was designed carefully**: the durable filesystem contract differs per provider,
-the provider's own lifecycle timer runs unmanaged alongside AgentBox's, the entire data
+the provider's own lifecycle timer runs unmanaged alongside the sandbox runtime's, the entire data
 plane is one process with fixed global caps, and the agent-facing session object is
 reconstructed from scratch on every tool call so nothing about a "session" is actually
 sessionful. The reported symptoms — "the sandbox keeps resetting", "the reset wiped the
@@ -38,7 +38,7 @@ Dev and prod disagree about the two questions that matter most to an agent: *doe
 `pip install` survive?* and *does anything outside `/workspace` survive?* On Docker,
 release is `stop_container` and the writable layer is preserved; on E2B it is a
 filesystem snapshot. They happen to agree for release and disagree completely for
-replacement. `docs/design/agentbox/README.md:98` states the goal "Preserve user files
+replacement. `docs/design/sandbox/README.md:98` states the goal "Preserve user files
 across workspace release on every supported provider" — true for *release* only, and the
 document never elevates the replacement case to the same prominence even though
 replacement is the common path in production.
@@ -60,7 +60,7 @@ Chain:
    E2B the sandbox *is* the storage.
 
 Net effect: **shipping a new workspace template/profile digest wipes every user's entire
-workspace filesystem.** `agentbox_workspace_profile_digest` is a plain config value
+workspace filesystem.** `workspace_profile_digest` is a plain config value
 (`config.py:88`), so this fires on an ordinary release, not an exotic migration.
 
 Worse, the behaviour is *asserted as correct*:
@@ -74,7 +74,7 @@ cost the user their files.
 
 ### A3. The data plane is one process with hard global caps **[code]**
 
-`docs/design/agentbox/lifecycle-state-model.md:118` states the manager is deliberately
+`docs/design/sandbox/lifecycle-state-model.md:118` states the manager is deliberately
 single-replica and single-process. The caps it lists are implemented as **process-global,
 not per-tenant**:
 
@@ -107,7 +107,7 @@ this and routing around the platform.
 
 ### A5. One sandbox per user, shared by everything **[code]**
 
-`agentbox_sandbox_id(user_id) = user_id` (`services/agentbox_manager.py:24-25`). Every
+`sandbox_id(user_id) = user_id` (`services/sandbox_manager.py:24-25`). Every
 conversation, every pod, every concurrent agent run, and every scheduled job for one user
 share a single sandbox — one CPU and 2 GiB on the Docker profile
 (`config.py:61-68`), one process-buffer namespace, one Python-context namespace, one
@@ -116,13 +116,13 @@ a user's own concurrent runs.
 
 ### A6. The declared source of truth diverges from the implementation
 
-`docs/design/agentbox/README.md:382` declares that directory the sole source of truth.
+`docs/design/sandbox/README.md:382` declares that directory the sole source of truth.
 At least three load-bearing statements in it are not true of the code:
 
 | Doc claim | Reality |
 | --- | --- |
-| "AgentBox deliberately disables automatic resume: pause/resume is an explicit, generation-fenced lifecycle event" (README.md:84) | `AsyncSandbox.connect()` auto-resumes a paused sandbox (e2b SDK `sandbox_async/main.py:262`), and `_connect` is on every runtime path. Resume is implicit and unfenced. See B2. |
-| "Run the same behavioral conformance suite against real Docker and E2B environments for the initial release" (README.md:105) | CI runs `AGENTBOX_RUN_DOCKER_TESTS=1` only (`.github/workflows/ci.yml:139-146`). Real E2B tests are skipped unless someone sets `AGENTBOX_RUN_E2B_TESTS=1` locally. See D1. |
+| "the sandbox runtime deliberately disables automatic resume: pause/resume is an explicit, generation-fenced lifecycle event" (README.md:84) | `AsyncSandbox.connect()` auto-resumes a paused sandbox (e2b SDK `sandbox_async/main.py:262`), and `_connect` is on every runtime path. Resume is implicit and unfenced. See B2. |
+| "Run the same behavioral conformance suite against real Docker and E2B environments for the initial release" (README.md:105) | CI runs `RUN_DOCKER_TESTS=1` only (`.github/workflows/ci.yml:139-146`). Real E2B tests are skipped unless someone sets `RUN_E2B_TESTS=1` locally. See D1. |
 | "Status: Implemented and verified for Docker and E2B" (README.md:3) | Verified for Docker in CI; E2B is unverified in any automated gate. |
 
 ---
@@ -145,7 +145,7 @@ provider (`e2b.py:1280-1282`), so a continuously-used workspace never even re-en
 `connect(timeout=…)` path that would have bumped it.
 
 Result: a workspace in continuous use is paused by E2B at T+3600 s from creation,
-regardless of activity. AgentBox's own idle release (300 s, `config.py:146`) never fires
+regardless of activity. The sandbox runtime's own idle release (300 s, `config.py:146`) never fires
 for it, so nothing in the control plane is watching.
 
 The config validator reasons about this incorrectly:
@@ -154,7 +154,7 @@ The config validator reasons about this incorrectly:
 # config.py:204-213 — only checks e2b_timeout > idle + 2*interval
 ```
 
-with the comment "It must comfortably exceed AgentBox idle cleanup so AgentBox remains
+with the comment "It must comfortably exceed the sandbox runtime idle cleanup so the sandbox runtime remains
 the normal pause/resume authority" (`config.py:140-144`). That reasoning holds only if
 the E2B timeout were an idle timer. It is an absolute lifetime, so the invariant the
 validator is trying to enforce is not the one it enforces.
@@ -177,7 +177,7 @@ before calling the provider" (`lifecycle-state-model.md:72`) — cannot see this
 at all, because the epoch never moved. After the implicit resume, the manager's
 `_ProcessBuffer` watchers, `handle`s, and `_python_contexts` still claim resources that
 the pause/resume cycle invalidated. **[inferred]** on exactly what E2B preserves through
-each pause variant; **[code]** on the fact that AgentBox records nothing.
+each pause variant; **[code]** on the fact that the sandbox runtime records nothing.
 
 Related inconsistency: explicit release uses `pause(keep_memory=False)` — a cold boot
 (`e2b.py:484-487`) — while `on_timeout: "pause"` uses the string form, which defaults
@@ -203,7 +203,7 @@ alive for a process that outlives its starting tool call. Nothing extends
 ### B4. Every manager restart silently destroys all live processes and kernels **[code]**
 
 Accepted by design (`lifecycle-state-model.md:68`), but the product consequence is not
-handled anywhere: a routine deploy of the AgentBox manager, mid-conversation, drops all
+handled anywhere: a routine deploy of the sandbox manager, mid-conversation, drops all
 `_ProcessBuffer`s, process records, and Python session handles. The agent's next call
 returns `PROCESS_NOT_RUNNING` or a fresh, empty kernel. There is no signal that
 distinguishes "your kernel was restarted by a deploy" from "your code failed", so the
@@ -244,13 +244,13 @@ confusion in the transcript.
 
 ### C1. Every re-poll of a process replays its entire output buffer **[code]**
 
-`AgentBoxWorkspaceSession._output_sequence` is instance state
-(`agentbox_session.py:108`), and `_collect_process` seeds `after_sequence` from it
-(`agentbox_session.py:533`).
+`SandboxWorkspaceSession._output_sequence` is instance state
+(`sandbox_session.py:108`), and `_collect_process` seeds `after_sequence` from it
+(`sandbox_session.py:533`).
 
 But the session object is **constructed fresh on every tool call** —
 `_get_workspace_session` → `WorkspaceToolRuntime.get_session` →
-`WorkspaceSandboxService.get_session` → `return AgentBoxWorkspaceSession(...)`
+`WorkspaceSandboxService.get_session` → `return SandboxWorkspaceSession(...)`
 (`workspace_sandbox_service.py:406`). There is no session cache.
 
 So `write_stdin` / any subsequent poll of a still-running process always sends
@@ -262,12 +262,12 @@ on each poll and burns tokens on it.
 ### C2. `cd` never persists; `set_cwd`/`get_cwd` are dead code **[code]**
 
 - `self._cwd` is initialised from `initial_cwd` in the constructor
-  (`agentbox_session.py:103`) and, per C1, the object is new on every tool call. So the
+  (`sandbox_session.py:103`) and, per C1, the object is new on every tool call. So the
   cwd resets to the conversation default every call.
-- `set_cwd` and `get_cwd` (`agentbox_session.py:450-459`) have no callers outside the
+- `set_cwd` and `get_cwd` (`sandbox_session.py:450-459`) have no callers outside the
   `ISandbox` interface declaration — verified across `lemma-backend/app`.
 - `get_cwd()` cannot work even if it were called: it runs `pwd` via `exec_command`, which
-  starts a **new** process with `cwd=self._cwd` (`agentbox_session.py:192`). It can only
+  starts a **new** process with `cwd=self._cwd` (`sandbox_session.py:192`). It can only
   ever return the value it already held, then assigns that value back to itself.
 
 Consequence: `cd /somewhere` in one `exec_command` has zero effect on the next one. The
@@ -278,8 +278,8 @@ use relative paths" advice reinforces a shell that does not exist.
 
 `workspace_cli.py:57-61` builds `default_python_session_id` with the cwd folded in but
 `default_shell_session_id` without it. Meanwhile
-`AgentBoxWorkspaceSession.python_session_id` is `uuid5(..., f"agentbox:{logical_id}:python:{session_id}")`
-(`agentbox_session.py:94-97`) — **no cwd**. The invariant in
+`SandboxWorkspaceSession.python_session_id` is `uuid5(..., f"sandbox:{logical_id}:python:{session_id}")`
+(`sandbox_session.py:94-97`) — **no cwd**. The invariant in
 `lifecycle-state-model.md:130-134` ("Backend session identity also includes that cwd, so
 … both runtimes move together") is satisfied only because the tool layer happens to encode
 cwd into the string it passes down. The adapter itself does not enforce it, and the shell
@@ -288,27 +288,27 @@ half does not participate at all.
 ### C4. Two contradictory definitions of "success" **[code]**
 
 `_collect_process` returns `success = state in {RUNNING, SUCCEEDED}`
-(`agentbox_session.py:568`) — a process that merely yielded early is "successful".
+(`sandbox_session.py:568`) — a process that merely yielded early is "successful".
 `execute_terminal_command` then computes `success = result.get("exit_code") == 0`
-(`agentbox_session.py:161`) — for the same yielded process, `exit_code` is `None`, so
+(`sandbox_session.py:161`) — for the same yielded process, `exit_code` is `None`, so
 success is `False`. Two callers of the same underlying call get opposite answers.
 
 ### C5. No backend-side handling of `CAPACITY_EXHAUSTED` **[code]**
 
-`exec_command` and `execute_code` catch `AgentBoxApiError` and convert it to a result dict
+`exec_command` and `execute_code` catch `SandboxApiError` and convert it to a result dict
 with "Retry the same operation if it is still needed."
-(`agentbox_session.py:206-211, 128-139`). Given A3's caps, the agent is the retry loop for
+(`sandbox_session.py:206-211, 128-139`). Given A3's caps, the agent is the retry loop for
 a platform-level capacity limit. `_ensure_python_session` does retry on `WAIT`
-(`agentbox_session.py:493-514`), so session creation is resilient while execution is not —
+(`sandbox_session.py:493-514`), so session creation is resilient while execution is not —
 an inconsistency, not a design.
 
 ### C6. `/tmp` has three contradictory contracts **[code]**
 
 - `_canonical_runtime_path` explicitly permits `/tmp` as a valid workspace path root
-  (`agentbox_session.py:29,44-48`).
+  (`sandbox_session.py:29,44-48`).
 - The system prompt tells the agent "Do NOT work in `/tmp` … it gets wiped"
   (`prompts.py:190-191`).
-- AgentBox itself stores process control state in `/tmp/.agentbox/processes`
+- The sandbox runtime itself stores process control state in `/tmp/.sandbox/processes`
   (`e2b.py:92`), and `_quiesce` deletes that tree on release (`e2b.py:1379-1385`).
 
 On E2B a filesystem pause actually *does* preserve `/tmp`, so the prompt's warning is
@@ -317,9 +317,9 @@ wrong for the production provider and right for the dev one.
 ### C7. The local no-Docker test harness was deleted and nothing replaced it **[code]**
 
 `lemma-backend/app/modules/workspace/testing/` now contains only an empty `__init__.py`;
-`fake_agentbox.py` was removed in `75eea642` (#214). Only stale `.pyc` files remain
-(`testing/__pycache__/fake_agentbox.cpython-314.pyc`,
-`tests/unit/__pycache__/test_fake_agentbox…`). The documented ability to exercise
+`fake_sandbox.py` was removed in `75eea642` (#214). Only stale `.pyc` files remain
+(`testing/__pycache__/fake_sandbox.cpython-314.pyc`,
+`tests/unit/__pycache__/test_fake_sandbox…`). The documented ability to exercise
 workspace tools with no Docker is gone, which pushes all workspace iteration onto a real
 provider.
 
@@ -330,7 +330,7 @@ provider.
 ### D1. The production provider has no automated conformance gate **[code]**
 
 `.github/workflows/ci.yml:139-146` runs `tests/adapters/test_docker_real.py` with
-`AGENTBOX_RUN_DOCKER_TESTS=1`. Nothing sets `AGENTBOX_RUN_E2B_TESTS`, so all 700 lines of
+`RUN_DOCKER_TESTS=1`. Nothing sets `RUN_E2B_TESTS`, so all 700 lines of
 `test_e2b_real.py` are skipped in CI. Every finding in §1–§2 that is E2B-specific
 (A1, A2, B1, B2, B5) is in code that CI never executes.
 
@@ -405,7 +405,7 @@ Ordered by (user-visible damage) × (confidence) ÷ (effort).
    pin the digest per existing allocation until the user's next natural release, or
    snapshot `/workspace` out before retiring. Add the missing assertion to
    `test_e2b_real.py:611`.
-3. **C1** — cache `AgentBoxWorkspaceSession` per `(user, session_id)`, or move
+3. **C1** — cache `SandboxWorkspaceSession` per `(user, session_id)`, or move
    `_output_sequence` into the process-binding store next to `bind_process_to_session`.
 4. **E1** — give each user one stable home (e.g. `/workspace/home`) and make the
    per-conversation dir a subdirectory of it, or tell the agent explicitly where prior
@@ -431,6 +431,6 @@ Ordered by (user-visible damage) × (confidence) ÷ (effort).
 11. **C2** — delete `set_cwd`/`get_cwd`, or implement a real persistent cwd.
 12. **C4, C5, C6, E3** — reconcile the contradictions; they are cheap and each one
     currently misleads either the agent or a maintainer.
-13. **A6** — update `docs/design/agentbox/` to describe what the code does. It is
+13. **A6** — update `docs/design/sandbox/` to describe what the code does. It is
     declared the source of truth and is currently wrong in ways that would mislead the
     next person to touch this.
