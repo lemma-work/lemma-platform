@@ -1,12 +1,13 @@
 # Build context is the monorepo root:
 #   docker build -f lemma-backend/sandbox-images/Dockerfile.function -t lemma-function:dev .
-# NOTE ON NAMING: the paths and env vars here (/opt/lemma-python,
-# /run/lemma-bootstrap, LEMMA_RUNTIME_TOKEN_FILE) are the contract between a
-# *running* sandbox and the backend that delivers its credential, not cosmetic
-# detail. Changing one requires every existing sandbox to be recreated, which
-# is what the profile digest is for: a sandbox is only reused when its recorded
-# digest matches the configured one, so bumping the digest in the same release
-# as an image change is what makes a rename here safe.
+# NOTE ON NAMING: the paths here (/opt/lemma-function, /opt/lemma-python) are
+# the contract between a *running* sandbox and the backend, not cosmetic
+# detail. Changing one requires every existing function sandbox to be
+# recreated, which is what the profile digest is for: a sandbox is only reused
+# when its recorded digest matches FUNCTION_PROFILE_DIGEST, so bumping that in
+# the same release as an image change is what makes a rename here safe.
+# The workspace image's bootstrap credential does not apply -- a function
+# runtime is reached through the gateway and authenticates per invocation.
 
 ARG PYTHON_IMAGE=python:3.14.6-slim
 ARG UV_VERSION=0.11.31

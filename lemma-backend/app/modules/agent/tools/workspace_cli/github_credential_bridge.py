@@ -40,6 +40,14 @@ logger = get_logger(__name__)
 
 _CONNECTOR_ID = "github"
 _CREDENTIALS_PATH = "/tmp/.git-credentials"
+# `gh` reads its own config; it does not understand git's credential file. The
+# alternative -- exporting GH_TOKEN from a shell profile -- would put the raw
+# token in the environment of every process the agent starts, so an ordinary
+# `env` would print it straight into a tool result and the transcript. Keeping
+# it in a file `gh` reads confines it to the same place git's copy already
+# lives. `GH_CONFIG_DIR` in the workspace image points here.
+_GH_CONFIG_DIR = "/tmp/lemma-gh"
+_GH_HOSTS_PATH = f"{_GH_CONFIG_DIR}/hosts.yml"
 _MARKER_KEY_PREFIX = "workspace:github-credentials:v1"
 # Re-provision periodically rather than trusting a stale/possibly-revoked
 # token forever. GitHub OAuth App tokens do not expire on their own, so this
@@ -117,10 +125,23 @@ async def ensure_github_credentials(ctx: BaseAgentContext, workspace_session) ->
         _CREDENTIALS_PATH,
         f"https://x-access-token:{credential.access_token}@github.com\n".encode(),
     )
+    # Same credential, in the form `gh` reads. Written rather than passed
+    # through a shell command so the token never appears in an argument list.
+    await workspace_session.write_file(
+        _GH_HOSTS_PATH,
+        (
+            "github.com:\n"
+            f"    oauth_token: {credential.access_token}\n"
+            f"    user: {credential.login or 'x-access-token'}\n"
+            "    git_protocol: https\n"
+        ).encode(),
+    )
 
     setup_commands = [
         f"git config --global credential.helper 'store --file={_CREDENTIALS_PATH}'",
         f"chmod 600 {_CREDENTIALS_PATH}",
+        f"chmod 700 {_GH_CONFIG_DIR}",
+        f"chmod 600 {_GH_HOSTS_PATH}",
     ]
     if credential.login:
         setup_commands.append(

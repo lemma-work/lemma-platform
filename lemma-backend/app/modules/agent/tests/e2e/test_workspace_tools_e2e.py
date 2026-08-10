@@ -98,7 +98,7 @@ async def test_fresh_workspace_token_authenticates_over_backend_http(
     backend_server,
     configure_workspace_api_url,
 ):
-    """A workspace token must survive both HTTP and the sandbox runtime process boundaries."""
+    """A workspace token must survive both HTTP and sandbox process boundaries."""
 
     service = WorkspaceSandboxService()
     try:
@@ -335,7 +335,7 @@ async def test_agent_workspace_cli_tools_execute_through_a_real_sandbox(
     python_set = await execute_python_internal(
         ctx,
         ExecutePythonRequest(
-            comment="compute through the sandbox runtime",
+            comment="compute through a sandbox",
             code="sandbox_value = 6 * 7\nsandbox_value",
         ),
     )
@@ -359,7 +359,7 @@ async def test_agent_workspace_cli_tools_execute_through_a_real_sandbox(
     shell = await exec_command_internal(
         ctx,
         ExecCommandRequest(
-            comment="verify shell env and Lemma CLI through the sandbox runtime",
+            comment="verify shell env and Lemma CLI through a sandbox",
             cmd=(
                 "pwd; "
                 'printf \'pod=%s user=%s\\n\' "$LEMMA_POD_ID" "$LEMMA_USER_ID"; '

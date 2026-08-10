@@ -1,30 +1,23 @@
 # shellcheck shell=sh
-# Make `gh` authenticate as whatever account `git` is already using.
+# Shell defaults for `gh` in a workspace.
 #
-# The credential bridge writes one file per session for git's `store` helper
-# (app/modules/agent/tools/workspace_cli/github_credential_bridge.py). `gh`
-# does not read that file -- it wants GH_TOKEN, or its own hosts.yml -- so
-# without this an agent gets working `git push` and a `gh` that claims it is
-# not logged in, which is a confusing place to land.
+# The credential itself is not here. `GH_CONFIG_DIR` points at the directory
+# the credential bridge writes `hosts.yml` into
+# (app/modules/agent/tools/workspace_cli/github_credential_bridge.py), so `gh`
+# authenticates as the same account `git` does without the token ever entering
+# the environment. Exporting GH_TOKEN would put it in the environment of every
+# process the agent starts, where an ordinary `env` prints it into a tool
+# result and the transcript, and any subprocess -- an npm postinstall hook, a
+# test harness -- inherits it.
 #
-# Derived here rather than written as a second file so the token exists in
-# exactly one place on disk, and so revoking it means deleting one thing.
-# Commands run through `bash -lc`, so this is evaluated per command and picks
-# up a credential the bridge provisioned after the sandbox started.
-if [ -r /tmp/.git-credentials ]; then
-    _lemma_gh_token="$(
-        sed -n 's|^https://x-access-token:\([^@]*\)@github\.com.*|\1|p' \
-            /tmp/.git-credentials | head -n 1
-    )"
-    if [ -n "${_lemma_gh_token}" ]; then
-        GH_TOKEN="${_lemma_gh_token}"
-        export GH_TOKEN
-    fi
-    unset _lemma_gh_token
-fi
+# /tmp, like git's credential file: a session-scoped credential must not
+# survive on the durable /workspace volume.
+GH_CONFIG_DIR=/tmp/lemma-gh
+export GH_CONFIG_DIR
 
 # An agent's shell is not a terminal anyone is watching: a background version
-# check just adds latency and stray stderr to every invocation.
+# check just adds latency and stray stderr, and a pager waits for a keypress
+# that never comes.
 GH_NO_UPDATE_NOTIFIER=1
 export GH_NO_UPDATE_NOTIFIER
 GH_PAGER=cat

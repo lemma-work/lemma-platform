@@ -151,6 +151,13 @@ LLM_OTEL_DEV_ENV = \
 # boundary below -- one name with two meanings there has ambiguous precedence.
 DEV_WORKSPACE_IMAGE ?= lemma-workspace:dev
 DEV_FUNCTION_IMAGE ?= lemma-function:dev
+# Split on ":" by hand. `basename`/`suffix` split on ".", so they return the
+# whole "name:tag" and an empty tag, and the sub-make then builds "-t name:tag:"
+# which docker rejects as an invalid reference.
+DEV_WORKSPACE_IMAGE_NAME := $(firstword $(subst :, ,$(DEV_WORKSPACE_IMAGE)))
+DEV_WORKSPACE_IMAGE_TAG  := $(lastword $(subst :, ,$(DEV_WORKSPACE_IMAGE)))
+DEV_FUNCTION_IMAGE_NAME  := $(firstword $(subst :, ,$(DEV_FUNCTION_IMAGE)))
+DEV_FUNCTION_IMAGE_TAG   := $(lastword $(subst :, ,$(DEV_FUNCTION_IMAGE)))
 
 COMMON_DEV_ENV := \
 	DEV_POSTGRES_PORT=$(DEV_POSTGRES_PORT) \
@@ -342,11 +349,11 @@ _ensure-sandbox-images:
 	else \
 		echo "→ Building canonical workspace/function sandbox images…"; \
 		$(MAKE) -C $(BACKEND_DIR) sandbox-image-workspace \
-			WORKSPACE_IMAGE="$(basename $(DEV_WORKSPACE_IMAGE))" \
-			SANDBOX_TAG="$(suffix $(DEV_WORKSPACE_IMAGE))"; \
+			WORKSPACE_IMAGE="$(DEV_WORKSPACE_IMAGE_NAME)" \
+			SANDBOX_TAG="$(DEV_WORKSPACE_IMAGE_TAG)"; \
 		$(MAKE) -C $(BACKEND_DIR) sandbox-image-function \
-			FUNCTION_IMAGE="$(basename $(DEV_FUNCTION_IMAGE))" \
-			SANDBOX_TAG="$(suffix $(DEV_FUNCTION_IMAGE))"; \
+			FUNCTION_IMAGE="$(DEV_FUNCTION_IMAGE_NAME)" \
+			SANDBOX_TAG="$(DEV_FUNCTION_IMAGE_TAG)"; \
 	fi
 
 _init-backend-env:

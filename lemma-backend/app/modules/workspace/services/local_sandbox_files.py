@@ -1,7 +1,7 @@
-"""The filesystem and Python-session half of the in-process the sandbox runtime client.
+"""The filesystem and Python-session half of the in-process sandbox client.
 
 Split from the client itself only by subject: the whole class exists to present
-the `the sandbox runtimeClient` surface without a network hop, and these are the calls that
+the `SandboxClient` surface without a network hop, and these are the calls that
 never touch process or port lifecycle.
 """
 

@@ -22,7 +22,7 @@ case "$tool" in
     pattern='*/node_modules/pnpm/bin/pnpm.mjs'
     ;;
   *)
-    echo "unsupported the sandbox runtime Node tool: $tool" >&2
+    echo "unsupported Lemma Node tool: $tool" >&2
     exit 64
     ;;
 esac
@@ -31,7 +31,7 @@ entrypoint="$(
   find "$NODE_PROJECT/node_modules/.pnpm" -path "$pattern" -print -quit
 )"
 if [ -z "$entrypoint" ]; then
-  echo "the sandbox runtime Node tool is not installed: $tool" >&2
+  echo "Lemma Node tool is not installed: $tool" >&2
   exit 127
 fi
 

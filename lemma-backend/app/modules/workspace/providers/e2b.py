@@ -42,6 +42,7 @@ from uuid import UUID
 from app.modules.workspace.domain.sandbox import SandboxKind
 from app.modules.workspace.providers.base import (
     ProviderCreateSpec,
+    ProviderGone,
     ProviderFailed,
     ProviderInstance,
     ProviderObject,
@@ -195,11 +196,20 @@ class E2BSandboxProvider(E2BOpsMixin):
             #
             # Not best-effort: if the stale sandbox survives, the fresh one
             # carries the same sandbox-id metadata and a later lookup could
-            # land on either. Failing the provision is better than stranding
-            # the user's files behind a duplicate.
-            sandbox = await self._connect(existing.provider_id)
-            with sdk_errors():
-                await sandbox.kill(**self._api())
+            # land on either. Failing the provision is better than leaving a
+            # duplicate behind.
+            #
+            # Already gone is the outcome this wanted, though, and it is a
+            # normal race -- the listing that found it can be stale, or E2B
+            # can reap it first. ProviderGone is a bare RuntimeError that
+            # `_provision` does not catch, so letting it escape would leave
+            # the instance row stuck in CREATING until the claim times out.
+            try:
+                sandbox = await self._connect(existing.provider_id)
+                with sdk_errors():
+                    await sandbox.kill(**self._api())
+            except ProviderGone:
+                pass
             existing = None
         if existing is not None:
             await self._stamp(existing.provider_id, spec)

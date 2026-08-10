@@ -234,7 +234,7 @@ class FunctionRuntimeRouteResolver:
             or parsed.query
             or parsed.fragment
         ):
-            raise ValueError("the sandbox runtime returned a mismatched function runtime lease")
+            raise ValueError("the sandbox returned a mismatched function runtime lease")
 
     @staticmethod
     def _runtime_request_headers(
@@ -253,7 +253,7 @@ class FunctionRuntimeRouteResolver:
                 or "\n" in item.value
                 or "\x00" in item.value
             ):
-                raise ValueError("the sandbox runtime returned an invalid runtime request header")
+                raise ValueError("the sandbox returned an invalid runtime request header")
             names.add(normalized)
             headers.append((item.name, item.value))
         return tuple(headers)

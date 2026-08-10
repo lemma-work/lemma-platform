@@ -88,6 +88,17 @@ def test_the_new_name_alone_is_accepted(monkeypatch) -> None:
     assert WorkspaceSettings().workspace_image.endswith("c" * 64)
 
 
+def test_an_empty_valued_leftover_does_not_trip_the_guard(monkeypatch) -> None:
+    """Helm charts and compose files emit every key in a template whether or
+    not it was given a value. Refusing to start over `AGENTBOX_HOST_ALIAS=` is
+    refusing over something nobody configured."""
+    monkeypatch.setenv("LEMMA_DISABLE_DOTENV", "1")
+    monkeypatch.delenv("WORKSPACE_HOST_ALIAS", raising=False)
+    monkeypatch.setenv("AGENTBOX_HOST_ALIAS", "")
+
+    assert WorkspaceSettings().host_alias is None
+
+
 def test_a_sandbox_side_variable_does_not_trip_the_guard(monkeypatch) -> None:
     """The backend can legitimately inherit a sandbox's own environment, and
     those names were never settings here."""

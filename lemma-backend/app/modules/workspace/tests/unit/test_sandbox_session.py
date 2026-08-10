@@ -70,7 +70,7 @@ class _CanonicalClient:
     async def send_process_input(
         self, *_args: Any, data: bytes | None = None, **_kwargs: Any
     ) -> None:
-        # the sandbox runtimeClient accepts data positionally; preserve either fake form.
+        # SandboxClient accepts data positionally; preserve either fake form.
         if data is not None:
             self.inputs.append(data)
 

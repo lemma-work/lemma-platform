@@ -211,7 +211,20 @@ class SandboxService:
 
         # A container that is already there is the common case, and answering
         # it costs one inspect rather than a provisioning round trip.
-        if instance is not None and instance.provider_id:
+        #
+        # Unless it was built from a profile that is no longer the configured
+        # one. This is the only place that check can live: reuse returns from
+        # here without ever reaching the provider's create, so a fence inside
+        # create would never see the sandbox this is about. A stale sandbox is
+        # running an image the backend may no longer be able to talk to at
+        # all -- the in-image credential path and the runtime's own headers
+        # travel with the image -- so adopting it produces a workspace that
+        # provisions successfully and then fails every operation.
+        if (
+            instance is not None
+            and instance.provider_id
+            and not self._profile_is_stale(sandbox)
+        ):
             name = naming.container_name(sandbox_id, sandbox.kind, sandbox.epoch)
             existing = await self._provider.inspect(name, deadline_at=deadline_at)
             if existing is not None:
@@ -267,6 +280,18 @@ class SandboxService:
         )
         return None
 
+    @staticmethod
+    def _profile_is_stale(sandbox: Sandbox) -> bool:
+        """Was this sandbox built from a profile that is no longer configured?
+
+        A row with no digest has never been provisioned (or was backfilled by
+        the migration), which is not stale -- there is nothing to compare and
+        the first provision adopts whatever is configured.
+        """
+
+        recorded = sandbox.profile_digest
+        return bool(recorded) and recorded != profile_for(sandbox.kind).digest
+
     async def _provision(
         self, sandbox: Sandbox, *, deadline_at: datetime
     ) -> SandboxHandle:
@@ -285,9 +310,14 @@ class SandboxService:
                 else sandbox.epoch
             )
             profile = profile_for(sandbox.kind)
-            if not sandbox.profile_digest:
-                # Backfilled rows carry no profile; the first ensure adopts
-                # whatever is configured rather than the migration freezing it.
+            # Record what this sandbox is actually being built from, every
+            # time. Writing it only once would freeze the row at whatever was
+            # configured on first provision, and the staleness check above
+            # would then compare that value against itself forever.
+            if (sandbox.profile_name, sandbox.profile_digest) != (
+                profile.name,
+                profile.digest,
+            ):
                 await repository.set_profile(
                     sandbox.id, name=profile.name, digest=profile.digest
                 )
@@ -307,8 +337,11 @@ class SandboxService:
             epoch=epoch,
             name=name,
             image=profile.image,
-            profile_name=sandbox.profile_name or profile.name,
-            profile_digest=sandbox.profile_digest or profile.digest,
+            # The configured profile, not the row's: the row was just brought
+            # up to date, and the container is stamped with this so the next
+            # ensure can tell whether it is still current.
+            profile_name=profile.name,
+            profile_digest=profile.digest,
             deadline_at=deadline_at,
             volume_name=volume_name,
             mounts=sandbox.mounts,

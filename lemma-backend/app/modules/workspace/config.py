@@ -42,17 +42,26 @@ RENAMED_ENV_VARS = {
 
 
 def _configured_names() -> set[str]:
-    """Every environment name this process would read a setting from.
+    """Every environment name this process would actually read a value from.
 
     The process environment is not enough. Pydantic reads the dotenv file too,
     and a hand-edited `lemma-backend/.env` is the likeliest place a renamed
     name survives, since every writer in this repo moved in the same change.
+
+    An empty value does not count. Helm charts and compose files routinely
+    emit every key in a template whether or not it was given a value, and
+    refusing to start over `AGENTBOX_HOST_ALIAS=` would be refusing over
+    something nobody configured.
     """
 
-    names = {key.upper() for key in os.environ}
+    names = {key.upper() for key, value in os.environ.items() if value.strip()}
     path = dotenv_path()
     if path:
-        names.update(key.upper() for key in dotenv_values(path))
+        names.update(
+            key.upper()
+            for key, value in dotenv_values(path).items()
+            if value and value.strip()
+        )
     return names
 
 

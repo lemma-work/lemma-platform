@@ -78,7 +78,7 @@ class FunctionExecutionRepository:
     ) -> FunctionRunRuntimeContext | None:
         """Atomically move the backend-authorized run into RUNNING.
 
-        The runtime is admitted through the sandbox runtime and receives the complete
+        The runtime is admitted through the sandbox and receives the complete
         immutable context after this transition; it never claims the run back.
         """
 

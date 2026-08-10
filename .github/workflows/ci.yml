@@ -78,6 +78,10 @@ jobs:
             repo_tooling:
               - 'Makefile'
               - 'tests/**'
+              # These tests assert on the env names the backend settings read,
+              # so the drift they exist to catch lands in the settings module,
+              # not only in the Makefile that writes it.
+              - 'lemma-backend/app/modules/workspace/config.py'
               - '.github/workflows/ci.yml'
             locald:
               - 'locald/**'

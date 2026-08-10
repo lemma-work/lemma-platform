@@ -135,6 +135,68 @@ async def test_ensure_provisions_once_and_then_reuses(
     assert first.has(SandboxCapability.FILESYSTEM)
 
 
+async def test_a_sandbox_from_a_superseded_profile_is_replaced(
+    service: SandboxService, provider: FakeProvider, monkeypatch
+) -> None:
+    """Moving the configured digest has to reach a sandbox that already exists.
+
+    This is the check that makes shipping a new sandbox image mean anything.
+    It cannot live in the provider: `ensure` answers an existing sandbox with
+    one `inspect` and returns, so a fence inside `create` never sees the case
+    it is for. A stale sandbox is running an image whose in-image credential
+    path and runtime headers travel with it, so adopting one yields a
+    workspace that provisions and then fails every operation.
+    """
+    from app.modules.workspace.providers import profiles
+
+    sandbox = await _workspace(service)
+    first = await service.ensure(sandbox.id)
+
+    monkeypatch.setattr(
+        profiles.workspace_settings,
+        "workspace_profile_digest",
+        "sha256:" + "f" * 64,
+    )
+    second = await service.ensure(sandbox.id)
+
+    assert second.provider_id != first.provider_id, "the stale one must not be reused"
+    assert len(provider.created) == 2
+    assert provider.created[1].profile_digest == "sha256:" + "f" * 64
+
+
+async def test_an_unchanged_profile_still_reuses(
+    service: SandboxService, provider: FakeProvider
+) -> None:
+    """The staleness check must not cost the common case its one inspect."""
+    sandbox = await _workspace(service)
+
+    first = await service.ensure(sandbox.id)
+    second = await service.ensure(sandbox.id)
+
+    assert first.provider_id == second.provider_id
+    assert len(provider.created) == 1
+
+
+async def test_the_recorded_profile_follows_the_configured_one(
+    service: SandboxService, provider: FakeProvider, monkeypatch
+) -> None:
+    """Recording it only on first provision would freeze the row, and the
+    staleness check would then compare that value against itself forever."""
+    from app.modules.workspace.providers import profiles
+
+    sandbox = await _workspace(service)
+    await service.ensure(sandbox.id)
+
+    for digest in ("sha256:" + "a" * 64, "sha256:" + "b" * 64):
+        monkeypatch.setattr(
+            profiles.workspace_settings, "workspace_profile_digest", digest
+        )
+        await service.ensure(sandbox.id)
+        assert provider.created[-1].profile_digest == digest
+
+    assert len(provider.created) == 3, "each move must replace, not accumulate no-ops"
+
+
 async def test_concurrent_ensures_produce_one_container(
     service: SandboxService, provider: FakeProvider
 ) -> None:

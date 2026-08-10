@@ -24,6 +24,34 @@ def test_an_existing_installation_keeps_its_pre_rename_secret(paths):
     assert store.installation_secret(doc) == "a" * 32
 
 
+def test_a_pre_rename_override_is_applied_under_the_new_name(paths):
+    """The backend refuses to start on a renamed name rather than ignoring it,
+    so passing one through verbatim would turn somebody's existing override
+    into a stack that will not boot."""
+    from lemma_stack.config import render
+
+    doc = store.load_or_create(paths)
+    store.set_value(doc, "AGENTBOX_HOST_ALIAS", "host.example.test")
+
+    resolved = render._user_backend_overrides(doc)
+
+    assert resolved == {"WORKSPACE_HOST_ALIAS": "host.example.test"}
+    assert "AGENTBOX_HOST_ALIAS" not in resolved
+
+
+def test_an_explicit_new_name_wins_over_a_translated_old_one(paths):
+    from lemma_stack.config import render
+
+    doc = store.load_or_create(paths)
+    doc["agentbox"] = {"env": {"AGENTBOX_HOST_ALIAS": "from-the-old-name"}}
+    store.set_value(doc, "WORKSPACE_HOST_ALIAS", "chosen-deliberately")
+
+    assert (
+        render._user_backend_overrides(doc)["WORKSPACE_HOST_ALIAS"]
+        == "chosen-deliberately"
+    )
+
+
 def test_the_pre_rename_env_section_still_reaches_the_backend(paths):
     """[agentbox.env] was never a separate namespace -- it and [backend.env]
     always landed in the one backend environment. Configs written before the

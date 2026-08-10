@@ -1,4 +1,4 @@
-"""Real backend -> the sandbox runtime -> Docker runner -> backend execution contract."""
+"""Real backend -> sandbox -> Docker runner -> backend execution contract."""
 
 from __future__ import annotations
 

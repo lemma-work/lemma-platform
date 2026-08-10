@@ -273,6 +273,10 @@ def workspace_template():
                 "AGENT_BROWSER_SESSION": "workspace",
                 "AGENT_BROWSER_HEADED": "true",
                 "LEMMA_NODE_BINARY": "/opt/node24/bin/node",
+                # Where the credential bridge writes gh's config.
+                "GH_CONFIG_DIR": "/tmp/lemma-gh",
+                "GH_NO_UPDATE_NOTIFIER": "1",
+                "GH_PAGER": "cat",
                 "NODE_PATH": "/opt/lemma-node/node_modules",
                 "PNPM_HOME": "/home/user/.local/share/pnpm",
                 "PIP_PREFIX": "/workspace/.python",

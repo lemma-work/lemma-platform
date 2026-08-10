@@ -508,7 +508,13 @@ impl<E: Engine> GuestService<E> {
     fn ensure_core_stage(&self, value: Value, stage: CoreStage) -> Result<Value, GuestError> {
         let parameters = self.parse_core_parameters(value)?;
         match stage {
-            CoreStage::Images => self.ensure_core_images(&parameters)?,
+            // locald brings the core up a stage at a time and never issues
+            // `core.ensure`, so the reap has to hang off the first stage it
+            // does call or it never runs in the shipped path at all.
+            CoreStage::Images => {
+                self.reap_pre_rename_sandboxes();
+                self.ensure_core_images(&parameters)?
+            }
             CoreStage::Postgres => self.ensure_postgres(&parameters)?,
             CoreStage::Redis => self.ensure_redis(&parameters)?,
             CoreStage::SuperTokens => self.ensure_supertokens(&parameters)?,

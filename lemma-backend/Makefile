@@ -84,7 +84,7 @@ help:
 	@echo "  make teams-manifest-zip OUTPUT=path"
 	@echo "                         # package Teams manifest zip"
 	@echo "  make docker-build      # build backend image from monorepo root"
-		@echo "  make benchmark-functions-docker # no-op + single/batch API/JOB benchmark on Docker"
+	@echo "  make benchmark-functions-docker # no-op + single/batch API/JOB benchmark on Docker"
 	@echo "  make benchmark-functions-e2b    # same benchmark on pinned E2B builds"
 	@echo ""
 	@echo "Load testing (WebSocket capacity on a simulated 2 CPU / 2 GB server):"

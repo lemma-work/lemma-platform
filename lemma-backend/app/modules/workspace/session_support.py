@@ -198,7 +198,7 @@ async def await_python_session_ready(create, deadline: datetime) -> None:
             delay = max(0.05, (exc.retry_after_ms or 250) / 1000)
             await asyncio.sleep(min(delay, remaining))
     detail = (
-        f"; last the sandbox runtime error was {last_error.code}: {last_error}"
+        f"; last sandbox error was {last_error.code}: {last_error}"
         if last_error is not None
         else ""
     )
