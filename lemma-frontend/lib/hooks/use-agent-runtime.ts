@@ -38,7 +38,7 @@ export type AgentHostPairing = AgentHostPairingCreated;
 // A machine that has just been paired takes a few seconds to poll in and
 // publish what it found, and neither query had a refetchInterval — so the page
 // only ever updated when the window regained focus. Sitting on it after
-// `make agent-host`, a computer stayed "Offline" indefinitely. Poll quickly
+// pairing it, a computer stayed "Offline" indefinitely. Poll quickly
 // while anything is still settling, then back off once every machine is online.
 const SETTLING_REFETCH_MS = 2000;
 const SETTLED_REFETCH_MS = 20000;
