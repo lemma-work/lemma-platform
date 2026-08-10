@@ -15,6 +15,7 @@ from app.core.net.url_guard import (
     UnsafeUrlError,
     assert_safe_host,
     assert_safe_url,
+    request_guarded,
 )
 
 pytestmark = [pytest.mark.unit, pytest.mark.asyncio]
@@ -199,3 +200,77 @@ class TestTheSelfHostingEscapeHatchIsNarrow:
         policy = GuardPolicy(allow_private=True, allow_http=True, allow_unresolvable=True)
         with pytest.raises(UnsafeUrlError):
             await assert_safe_host("169.254.169.254", 5432, policy=policy)
+
+
+class TestRedirectsAreFollowedWithoutCorruptingTheTarget:
+    """`request_guarded` re-issues each hop itself, so it decides what the next
+    request carries. Getting that wrong either leaks the caller's credentials to
+    whoever they were redirected to, or mangles a target that was perfectly
+    fine."""
+
+    @staticmethod
+    def _client(handler):
+        import httpx
+
+        return httpx.AsyncClient(transport=httpx.MockTransport(handler))
+
+    @pytest.mark.asyncio
+    async def test_a_signed_redirect_target_keeps_its_own_query(self):
+        """Regression: GitHub's archive endpoint redirects to a `codeload` URL
+        whose query string is the only thing authorizing it. Handing httpx an
+        empty param list made it rebuild the URL without that query, so every
+        real archive download came back 404."""
+        import httpx
+
+        seen: list[str] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen.append(str(request.url))
+            if request.url.host == "api.example.com":
+                return httpx.Response(
+                    302,
+                    headers={"location": "https://cdn.example.com/a.zip?token=signed"},
+                )
+            if request.url.params.get("token") != "signed":
+                return httpx.Response(404)
+            return httpx.Response(200, content=b"PK\x03\x04")
+
+        response = await request_guarded(
+            self._client(handler),
+            "GET",
+            "https://api.example.com/repos/o/r/zipball/main",
+            headers={"Authorization": "Bearer secret"},
+            credential_header_names=["Authorization"],
+        )
+
+        assert response.status_code == 200
+        assert response.content == b"PK\x03\x04"
+        assert seen[-1] == "https://cdn.example.com/a.zip?token=signed"
+
+    @pytest.mark.asyncio
+    async def test_credentials_still_do_not_survive_leaving_the_origin(self):
+        import httpx
+
+        forwarded: dict[str, object] = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.host == "api.example.com":
+                return httpx.Response(
+                    302, headers={"location": "https://elsewhere.example/collect"}
+                )
+            forwarded["auth"] = request.headers.get("authorization")
+            forwarded["api_key"] = request.url.params.get("api_key")
+            return httpx.Response(200)
+
+        await request_guarded(
+            self._client(handler),
+            "GET",
+            "https://api.example.com/thing",
+            headers={"Authorization": "Bearer secret"},
+            params=[("api_key", "secret"), ("page", "2")],
+            credential_header_names=["Authorization"],
+            credential_param_names=["api_key"],
+        )
+
+        assert forwarded["auth"] is None
+        assert forwarded["api_key"] is None
