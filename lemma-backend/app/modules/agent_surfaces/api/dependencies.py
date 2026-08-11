@@ -147,7 +147,7 @@ def _build_system_email_provisioner(uow: UoWDep):
 
     async def provision(
         pod_id: UUID, agent_id: UUID | None, agent_name: str | None
-    ) -> AgentSurfaceEntity | None:
+    ) -> tuple[AgentSurfaceEntity | None, str | None]:
         return await provision_email_surface(
             get_surface_service(uow),
             uow.session,

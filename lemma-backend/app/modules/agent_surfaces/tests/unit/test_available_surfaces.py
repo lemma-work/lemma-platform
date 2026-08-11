@@ -272,3 +272,33 @@ async def test_one_row_per_registry_platform(monkeypatch):
     platforms = [s.platform for s in resp.surfaces]
     assert set(platforms) == set(SURFACE_CONNECTOR_BINDINGS)
     assert len(platforms) == len(SURFACE_CONNECTOR_BINDINGS)
+
+
+async def test_email_is_never_claimed_because_its_key_is_not_an_identity(monkeypatch):
+    """The bug this rule caused: one mailbox blocking an organization.
+
+    A Slack app or a WhatsApp number can serve one pod, so whoever holds it
+    holds it. Resend's system credential is an API key over a catch-all domain
+    and every surface gets its own unique address off it — so a Resend surface
+    existing somewhere in the org says nothing about whether this pod may have
+    one. The catalog must agree with the writer, or it offers something that
+    then fails.
+    """
+    monkeypatch.setattr(mod, "has_native_credentials", lambda p: p in _NATIVE)
+    monkeypatch.setattr(mod, "AgentSurfaceEntity", SimpleNamespace)
+    holder = SimpleNamespace(pod_id=uuid4(), name="resend")
+
+    resp = await build_available_surfaces(
+        connector_service=_connector_service(),
+        pod_id=uuid4(),
+        # A repository that reports a conflict for *every* platform.
+        surface_repository=_claim_repository(holder),
+    )
+
+    by_platform = _by_platform(resp)
+    email_claim = by_platform[SurfacePlatform.RESEND].system_claim
+    assert email_claim is not None
+    assert email_claim.available is True
+    assert email_claim.claimed_by_pod_id is None
+    # The identity platforms are unchanged — this exempts email, not the rule.
+    assert by_platform[SurfacePlatform.WHATSAPP].system_claim.available is False

@@ -44,7 +44,8 @@ from app.modules.agent_surfaces.services.notification_delivery import (
 logger = get_logger(__name__)
 
 SurfaceProvisioner = Callable[
-    [UUID, UUID | None, str | None], Awaitable[AgentSurfaceEntity | None]
+    [UUID, UUID | None, str | None],
+    Awaitable[tuple[AgentSurfaceEntity | None, str | None]],
 ]
 
 
@@ -160,16 +161,25 @@ class NotificationChannelResolver:
         if not email_is_configured() or self.surface_provisioner is None:
             return None, UndeliverableReason.EMAIL_NOT_CONFIGURED
         try:
-            surface = await self.surface_provisioner(pod_id, agent_id, agent_name)
+            surface, cause = await self.surface_provisioner(
+                pod_id, agent_id, agent_name
+            )
         except (AgentSurfaceError, OSError) as exc:
+            # ``failure_type``/``failure_code``, not ``error``: the log pipeline
+            # strips any field named ``error``, so that is where the cause of a
+            # production failure goes to die.
             logger.warning(
                 "agent_surfaces.notification_channels.provision_failed.degraded",
                 pod_id=str(pod_id),
-                error=str(exc),
+                failure_type=type(exc).__name__,
             )
-            return None, f"{UndeliverableReason.MAILBOX_PROVISION_FAILED} ({exc})"
+            surface, cause = None, type(exc).__name__
         if surface is None:
-            return None, UndeliverableReason.MAILBOX_PROVISION_FAILED
+            return None, (
+                f"{UndeliverableReason.MAILBOX_PROVISION_FAILED} ({cause})"
+                if cause
+                else UndeliverableReason.MAILBOX_PROVISION_FAILED
+            )
         return surface, ""
 
     async def _channels_from(

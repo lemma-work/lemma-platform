@@ -437,7 +437,7 @@ async def test_a_pod_with_no_surface_is_given_the_system_mailbox(monkeypatch):
     _email_configured(monkeypatch)
 
     surface = _email_surface()
-    provisioner = AsyncMock(return_value=surface)
+    provisioner = AsyncMock(return_value=(surface, None))
     service = _notification_service(provisioner=provisioner, surfaces=())
 
     channels, reason = await service.resolve_channels(
@@ -462,7 +462,7 @@ async def test_the_pod_assistant_gets_a_mailbox_even_when_agents_have_theirs(
     _email_configured(monkeypatch)
 
     assistant_mailbox = _email_surface()
-    provisioner = AsyncMock(return_value=assistant_mailbox)
+    provisioner = AsyncMock(return_value=(assistant_mailbox, None))
     service = _notification_service(
         provisioner=provisioner,
         # A pod that is anything but empty — every surface belongs to a named
@@ -494,7 +494,7 @@ async def test_an_agent_from_before_per_agent_mailboxes_gets_one(monkeypatch):
     _email_configured(monkeypatch)
 
     mailbox = _email_surface()
-    provisioner = AsyncMock(return_value=mailbox)
+    provisioner = AsyncMock(return_value=(mailbox, None))
     older_agent = uuid4()
     service = _notification_service(
         provisioner=provisioner,
@@ -524,7 +524,7 @@ async def test_a_chat_only_agent_falls_back_to_email_it_does_not_yet_have(
 
     agent_id = uuid4()
     mailbox = _email_surface()
-    provisioner = AsyncMock(return_value=mailbox)
+    provisioner = AsyncMock(return_value=(mailbox, None))
     service = _notification_service(
         provisioner=provisioner,
         surfaces=(_surface_for(agent_id, SurfacePlatform.SLACK),),
@@ -549,7 +549,7 @@ async def test_an_agent_that_already_has_a_mailbox_is_not_given_a_second(
     _email_configured(monkeypatch)
 
     agent_id = uuid4()
-    provisioner = AsyncMock(return_value=_email_surface())
+    provisioner = AsyncMock(return_value=(_email_surface(), None))
     service = _notification_service(
         provisioner=provisioner,
         surfaces=(_surface_for(agent_id, SurfacePlatform.RESEND),),
@@ -578,7 +578,7 @@ async def test_unconfigured_email_says_so_rather_than_blaming_the_pod(monkeypatc
     monkeypatch.setattr(core_settings, "resend_api_key", None)
     monkeypatch.setattr(surface_settings, "resend_inbound_domain", None)
 
-    provisioner = AsyncMock(return_value=_email_surface())
+    provisioner = AsyncMock(return_value=(_email_surface(), None))
     service = _notification_service(provisioner=provisioner, surfaces=())
 
     channels, reason = await service.resolve_channels(
@@ -594,8 +594,12 @@ async def test_a_failed_provision_is_undeliverable_not_an_exception(monkeypatch)
     """Delivery already has a name for "we could not reach them".
 
     Letting a provisioning failure escape would turn a handled outcome — the row
-    exists, the inbox has it — into a raised send. The reason carries the
-    provider's own words, so the next incident is readable from the row.
+    exists, the inbox has it — into a raised send.
+
+    The reason names the *kind* of failure, never the exception's own text: that
+    text is free-form from a provider or the database and can carry a key or
+    somebody's address. A type is bounded and safe, and is what makes the row
+    readable when the log has had its ``error`` field stripped.
     """
     from app.modules.agent_surfaces.domain.errors import AgentSurfaceError
 
@@ -610,7 +614,8 @@ async def test_a_failed_provision_is_undeliverable_not_an_exception(monkeypatch)
 
     assert channels == []
     assert reason.startswith(UndeliverableReason.MAILBOX_PROVISION_FAILED)
-    assert "resend refused" in reason
+    assert "AgentSurfaceError" in reason
+    assert "resend refused" not in reason
 
 
 # --------------------------------------------------- routing follows the agent

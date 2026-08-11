@@ -522,3 +522,74 @@ async def test_a_pod_with_nothing_connected_mints_itself_a_readable_mailbox(
     # Readable, not pod-<32 hex chars>: people are asked to write to this.
     local_part = surface.surface_identity_email.split("@")[0]
     assert not local_part.startswith("pod-")
+
+
+async def test_a_second_pod_in_the_org_also_gets_a_mailbox(
+    authenticated_client: AsyncClient,
+    db_session: AsyncSession,
+    test_pod,
+    fixed_test_org,
+    fixed_test_user,
+    fake_resend,
+    monkeypatch,
+):
+    """The dev failure exactly: the org already has a mailbox, this pod wants one.
+
+    ``ensure_unique_org_credential_binding`` treated the system Resend key as a
+    claimable identity, like a Slack app or a WhatsApp number. It is not — it is
+    one API key over a catch-all domain, and every surface gets its own unique
+    address off it. So the first mailbox created anywhere in an organization
+    refused every mailbox after it, and the pod assistant that asked for one was
+    told "creating a mailbox for it failed" with the cause stripped from the log.
+
+    Two pods, one organization, one notification each.
+    """
+    from sqlalchemy import select
+
+    from app.core.config import settings as core_settings
+    from app.modules.agent_surfaces.config import surface_settings
+    from app.modules.agent_surfaces.infrastructure.models import AgentSurface
+
+    monkeypatch.setattr(core_settings, "resend_api_key", "re_test")
+    monkeypatch.setattr(surface_settings, "resend_inbound_domain", "ops.example.com")
+
+    second = await authenticated_client.post(
+        "/pods",
+        json={
+            "name": f"Second Pod {uuid4()}",
+            "slug": f"second-pod-{uuid4()}",
+            "type": "ASSISTANT",
+            "organization_id": fixed_test_org["id"],
+        },
+        follow_redirects=True,
+    )
+    assert second.status_code in (200, 201), second.text
+    second_pod_id = second.json()["id"]
+
+    # The first pod claims a mailbox, as it would on any deployment.
+    await _notify(authenticated_client, test_pod["id"], fixed_test_user["id"])
+    # The second pod asks for one while that claim exists.
+    created = await _notify(
+        authenticated_client, second_pod_id, fixed_test_user["id"]
+    )
+
+    assert "creating a mailbox" not in (created["undeliverable_reason"] or "")
+
+    await db_session.commit()
+    addresses = {
+        row.pod_id: row.surface_identity_email
+        for row in (
+            await db_session.execute(
+                select(AgentSurface).where(
+                    AgentSurface.pod_id.in_(
+                        [UUID(test_pod["id"]), UUID(second_pod_id)]
+                    )
+                )
+            )
+        ).scalars().all()
+    }
+
+    assert len(addresses) == 2, "both pods should hold a mailbox of their own"
+    # Distinct addresses are what makes sharing the key safe: inbound routes on
+    # the address, which carries a unique index.
+    assert len(set(addresses.values())) == 2

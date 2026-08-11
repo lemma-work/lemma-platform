@@ -85,8 +85,11 @@ class UndeliverableReason:
         "to reach people from. Set RESEND_API_KEY and RESEND_INBOUND_DOMAIN, or "
         "connect a chat surface."
     )
+    # "This agent" was read as the *recipient*, and sent someone looking for a
+    # person who had been resolved as an agent. The agent here is the sender —
+    # say whose mailbox failed, since that is what has to be fixed.
     MAILBOX_PROVISION_FAILED = (
-        "This agent has no surface, and creating a mailbox for it failed."
+        "The sending agent has no surface, and creating a mailbox for it failed."
     )
     COLD_OPEN_UNSUPPORTED = (
         "The pod's only mailbox surface cannot start a new email thread. Ask "

@@ -58,6 +58,20 @@ class PlatformCapabilities:
     # a send is refused unless it is a pre-approved template. None means no
     # window (every other platform).
     reply_window_hours: int | None = None
+    # Is the deployment's system credential for this platform an *identity*, or
+    # a shared service key?
+    #
+    # For every chat platform it is an identity: one Slack app, one Telegram
+    # bot, one WhatsApp number. Inbound arrives keyed on that identity and
+    # nothing else, so two pods claiming it would misroute each other's
+    # messages — which is what `ensure_unique_org_credential_binding` refuses.
+    #
+    # Resend is the opposite. The credential is an API key over a catch-all
+    # domain, and inbound routes on the surface's own `surface_identity_email`,
+    # which carries a unique index. Every pod and every agent getting its own
+    # address off one key *is* the design, so applying the identity rule here
+    # let the first mailbox in an organization block every one after it.
+    system_credential_is_identity: bool = True
 
     @property
     def attachment_byte_cap(self) -> int:
@@ -196,6 +210,9 @@ PLATFORM_CAPABILITIES: dict[str, PlatformCapabilities] = {
         soft_char_limit=6000,
         reply_tool="resend_reply_email",
         can_cold_open=True,
+        # One API key, a catch-all domain, and a unique address per surface.
+        # Sharing the key across pods is the point, not a conflict.
+        system_credential_is_identity=False,
     ),
 }
 
