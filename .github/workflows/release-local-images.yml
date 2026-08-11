@@ -28,6 +28,11 @@ on:
         required: true
         default: true
         type: boolean
+      share:
+        description: "With publish off: sign, notarize and attach the test DMG to a public prerelease so testers can install it."
+        required: false
+        default: false
+        type: boolean
 
 env:
   REGISTRY: ghcr.io
@@ -862,14 +867,29 @@ jobs:
         working-directory: desktop
         run: cargo test --locked
 
+      # A shared build has to open on machines that did not produce it, and an
+      # ad-hoc signature does not: Gatekeeper refuses it outright. Import the
+      # Developer ID identity so the helper, the app and the DMG all carry one
+      # Apple will accept, and so notarization below has something to staple to.
+      - name: Import Apple signing certificate
+        id: apple-signing
+        if: inputs.share
+        uses: ./.github/actions/setup-apple-signing
+        with:
+          certificate: ${{ secrets.APPLE_CERTIFICATE }}
+          certificate-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+
       - name: Sign virtualization helper with test entitlement
         shell: bash
+        env:
+          SIGNING_IDENTITY: ${{ steps.apple-signing.outputs.signing-identity }}
         run: |
           set -euo pipefail
           helper="desktop/binaries/lemma-vz-aarch64-apple-darwin"
+          # "-" is ad-hoc, which is fine for a build only its author installs.
           codesign --force --options runtime \
             --entitlements desktop/entitlements.plist \
-            --sign - \
+            --sign "${SIGNING_IDENTITY:--}" \
             "${helper}"
           codesign --verify --strict --verbose=2 "${helper}"
           codesign -d --entitlements :- "${helper}" 2>&1 \
@@ -882,10 +902,29 @@ jobs:
       - name: Build compressed macOS PR test DMG
         working-directory: desktop
         env:
-          APPLE_SIGNING_IDENTITY: "-"
+          # "-" is ad-hoc: fine for a build only its author installs, refused by
+          # Gatekeeper anywhere else. A shared build gets the real identity, and
+          # the Apple credentials beside it are what make the bundler notarize
+          # and staple as part of the same step.
+          APPLE_SIGNING_IDENTITY: ${{ steps.apple-signing.outputs.signing-identity || '-' }}
+          APPLE_ID: ${{ inputs.share && secrets.APPLE_ID || '' }}
+          APPLE_PASSWORD: ${{ inputs.share && secrets.APPLE_PASSWORD || '' }}
+          APPLE_TEAM_ID: ${{ inputs.share && secrets.APPLE_TEAM_ID || '' }}
         run: |
           set -euo pipefail
           npx -y "$TAURI_CLI" build --config tauri.dist.conf.json
+
+      # Proving it here means a tester never discovers it at their end, where
+      # the only symptom is a dialog telling them the app is damaged.
+      - name: Verify the shared build is notarized
+        if: inputs.share
+        shell: bash
+        run: |
+          set -euo pipefail
+          app="desktop/target/release/bundle/macos/Lemma.app"
+          codesign --verify --deep --strict --verbose=2 "${app}"
+          xcrun stapler validate "${app}"
+          xcrun stapler validate desktop/target/release/bundle/dmg/Lemma_*_aarch64.dmg
 
       - name: Verify compressed PR test application
         shell: bash
@@ -916,6 +955,47 @@ jobs:
           path: desktop/target/release/bundle/dmg/Lemma_*_aarch64.dmg
           if-no-files-found: error
           retention-days: 14
+
+      # A workflow artifact needs a GitHub account and repo access to download,
+      # which is the wrong shape for handing a build to testers. A prerelease is
+      # a plain public URL, and prereleases never become "Latest", so the real
+      # release channel is untouched. release-desktop.yml ignores these tags.
+      - name: Share the DMG as a public prerelease
+        if: inputs.share
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SHA: ${{ github.sha }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          short="${SHA:0:8}"
+          tag="desktop-nightly-${short}"
+          dmg="$(ls desktop/target/release/bundle/dmg/Lemma_*_aarch64.dmg)"
+          if ! gh release view "${tag}" >/dev/null 2>&1; then
+            gh release create "${tag}" \
+              --prerelease \
+              --target "${SHA}" \
+              --title "Lemma Desktop nightly — ${REF_NAME} ${short}" \
+              --notes "$(cat <<NOTES
+          Self-contained macOS build of \`${REF_NAME}\` at ${short}, signed with
+          Developer ID and notarized, so it opens without a Gatekeeper warning.
+
+          Apple silicon, macOS 14+. Download the DMG, drag Lemma to Applications,
+          open it, and choose **Local → Install local services**.
+
+          Not an official release: it is built on demand from a branch and carries
+          no upgrade or support guarantees.
+          NOTES
+          )"
+          fi
+          gh release upload "${tag}" "${dmg}" --clobber
+          url="$(gh release view "${tag}" --json assets --jq '.assets[] | select(.name | endswith(".dmg")) | .url')"
+          {
+            echo "### Lemma Desktop nightly"
+            echo
+            echo "[Download the DMG](${url})"
+          } >> "${GITHUB_STEP_SUMMARY}"
 
   # The Windows half of the pair. One `publish: false` dispatch now yields both
   # an installable macOS DMG and an installable Windows installer, cut from the
