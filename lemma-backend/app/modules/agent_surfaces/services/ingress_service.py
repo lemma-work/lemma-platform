@@ -28,6 +28,7 @@ from app.modules.agent.contracts import (
     DisplayResourceType,
 )
 from app.modules.agent_surfaces.platforms.attachment_limits import fits_inline
+from app.modules.agent_surfaces.services.inbound_enrichment import enrich_or_drop
 from app.modules.agent_surfaces.platforms.rendering import sanitize_user_visible_text
 from app.composition.surface_datastore import build_file_service
 from app.modules.agent_surfaces.domain.entities import (
@@ -1821,6 +1822,7 @@ class AgentSurfaceIngressService(SurfaceConfigurationMixin, SurfaceProgressMixin
             event_dedup_store=self.event_dedup_store,
         )
 
+
     async def _prepare_surface_context(
         self,
         *,
@@ -1839,28 +1841,12 @@ class AgentSurfaceIngressService(SurfaceConfigurationMixin, SurfaceProgressMixin
         fallback_agent_name = await self.agent_name_for_surface(surface)
         fallback_agent_display_name = fallback_agent_name or "Lemma"
 
-        try:
-            enriched = await adapter.enrich_inbound_event(
-                credentials=credentials,
-                event=parsed,
-            )
-            if enriched is None:
-                logger.debug(
-                    "agent_surfaces.ingress_service.agent_surface_dropped_event_after.observed",
-                    surface_type=surface.surface_type,
-                )
-                return None
-            parsed = enriched
-        except Exception:
-            # Never swallowed: for a provider whose webhook carries no body
-            # (Resend sends metadata only) enrichment *is* the message, so
-            # continuing drops the email permanently — the webhook already
-            # returned 200. Raising makes the delivery retryable.
-            logger.warning(
-                "agent_surfaces.ingress_service.inbound_enrichment_failed.degraded",
-                surface_type=surface.surface_type,
-            )
-            raise
+        enriched = await enrich_or_drop(
+            adapter=adapter, surface=surface, parsed=parsed, credentials=credentials
+        )
+        if enriched is None:
+            return None
+        parsed = enriched
 
         # Re-check after enrichment: email triggers (e.g. Outlook) deliver a
         # minimal payload with no sender, so the pre-enrich self-check above
