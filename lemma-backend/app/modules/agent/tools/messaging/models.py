@@ -90,3 +90,33 @@ class CheckMessagesRequest(BaseModel):
 class CheckMessagesResponse(BaseToolResponse):
     messages: list[NotificationStatusReport] = Field(default_factory=list)
     pending: int = Field(default=0, description="How many are still OPEN.")
+
+
+class ListPodMembersRequest(BaseModel):
+    search: str = Field(
+        default="",
+        description="Name or email fragment, e.g. 'priya'. Omit to list everyone.",
+    )
+    limit: int = Field(default=50, ge=1, le=200)
+
+
+class PodMemberSummary(BaseModel):
+    # Named `to` because that is the whole job: the model copies one value into
+    # message_user without having to know which of three id kinds it holds.
+    to: str = Field(description="Pass this verbatim as message_user's `to`.")
+    name: str | None = None
+    email: str | None = None
+    role: str | None = None
+    is_you: bool = Field(
+        default=False, description="True for the person this run belongs to."
+    )
+
+
+class ListPodMembersResponse(BaseToolResponse):
+    members: list[PodMemberSummary] = Field(default_factory=list)
+    total_matched: int = Field(
+        default=0, description="Matches found, which may exceed those returned."
+    )
+    truncated: bool = Field(
+        default=False, description="True when narrowing `search` would help."
+    )

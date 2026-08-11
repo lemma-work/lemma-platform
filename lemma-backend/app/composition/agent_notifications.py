@@ -46,6 +46,7 @@ async def send_notification(
     agent_name: str | None,
     origin_conversation_id: UUID | None,
     origin_agent_run_id: UUID | None,
+    origin_surface_id: UUID | None,
     background_instruction: str | None,
     expects_response: bool,
     expires_in_seconds: int | None,
@@ -70,6 +71,7 @@ async def send_notification(
             origin_kind=NotificationOriginKind.AGENT_RUN,
             origin_id=origin_agent_run_id,
             origin_conversation_id=origin_conversation_id,
+            origin_surface_id=origin_surface_id,
             actor_user_id=actor_user_id,
             actor_agent_id=actor_agent_id,
             agent_name=agent_name,
@@ -136,6 +138,28 @@ async def open_notifications_for_conversation(conversation_id: UUID) -> list[dic
         }
         for n in notifications
     ]
+
+
+async def notification_form_action(
+    *, pod_id: UUID, notification_id: UUID
+) -> dict | None:
+    """``{"run_id", "node_id"}`` when this ask is answered by a workflow form.
+
+    Read from the notification rather than taken as tool arguments on purpose:
+    the run and node are the asker's, and letting a recipient's agent name them
+    would let it submit against any run whose ids it could guess.
+    """
+    async with SessionUnitOfWorkFactory(async_session_maker)() as uow:
+        notification = await _service(uow).notifications.get(notification_id)
+    if notification is None or notification.pod_id != pod_id:
+        return None
+    if not notification.responds_through_action:
+        return None
+    action = notification.action or {}
+    run_id, node_id = action.get("run_id"), action.get("node_id")
+    if not run_id or not node_id:
+        return None
+    return {"run_id": UUID(str(run_id)), "node_id": str(node_id)}
 
 
 async def record_notification_response(

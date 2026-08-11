@@ -25,15 +25,19 @@ from app.composition.agent_notifications import (
     resolve_recipient,
     send_notification,
 )
+from app.composition.agent_pod_members import list_pod_members as list_members
 from app.core.log.log import get_logger
 from app.modules.agent.tools.context import BaseAgentContext
 from app.modules.agent.tools.messaging.models import (
     MAX_TITLE_LENGTH,
     CheckMessagesRequest,
     CheckMessagesResponse,
+    ListPodMembersRequest,
+    ListPodMembersResponse,
     MessageUserRequest,
     MessageUserResponse,
     NotificationStatusReport,
+    PodMemberSummary,
 )
 
 logger = get_logger(__name__)
@@ -79,8 +83,9 @@ async def message_user(
         return MessageUserResponse(
             success=False,
             error=(
-                f"No member of this pod matches '{request.to}'. Use their pod "
-                "member id, user id, or email address."
+                f"No member of this pod matches '{request.to}'. It takes a pod "
+                "member id, user id, or email address — a name will not "
+                "resolve. Call list_pod_members to look them up."
             ),
         )
 
@@ -99,10 +104,20 @@ async def message_user(
         title=_title_for(request),
         body=request.message,
         actor_user_id=deps.user_id,
-        actor_agent_id=deps.workload_id,
-        agent_name=deps.agent_display_name,
+        # The pod assistant's id is an authorization sentinel, not a row in
+        # `agents` — and `notifications.actor_agent_id` is a foreign key to that
+        # table, so passing it through fails the insert and loses the message.
+        # The column is nullable precisely for actors that are not agents.
+        actor_agent_id=None if deps.is_pod_default_agent else deps.workload_id,
+        # Display name first, but fall back to the pod-unique name: the display
+        # name comes from surface metadata and is None for any run that did not
+        # start on a surface, which would silently drop the attribution header.
+        agent_name=deps.agent_display_name or deps.agent_name,
         origin_conversation_id=deps.conversation_id,
         origin_agent_run_id=deps.agent_run_id,
+        # Reach out from the surface this run is already on, so the recipient
+        # hears from the same bot rather than another of the agent's surfaces.
+        origin_surface_id=deps.surface_id,
         background_instruction=request.background_instruction,
         expects_response=request.expects_response,
         expires_in_seconds=request.expires_in_seconds,
@@ -186,6 +201,60 @@ async def check_messages(
     )
 
 
+async def list_pod_members(
+    ctx: RunContext[BaseAgentContext], request: ListPodMembersRequest
+) -> ListPodMembersResponse:
+    """Look up who is in this pod, to find who to `message_user`.
+
+    `message_user` needs an id or an exact email address — a name won't resolve
+    — so start here whenever you know a person by name. Each result carries a
+    `to` value to pass straight through.
+
+    Searches names and email addresses; omit `search` to list everyone.
+    """
+    deps = ctx.deps
+
+    if deps.pod_id is None:
+        return ListPodMembersResponse(
+            success=False, error="list_pod_members is only available inside a pod."
+        )
+
+    result = await list_members(
+        pod_id=deps.pod_id,
+        requester_user_id=deps.user_id,
+        search=request.search,
+        limit=request.limit,
+    )
+    if result is None:
+        return ListPodMembersResponse(
+            success=False, error="You do not have access to this pod's member list."
+        )
+
+    members, total_matched, truncated = result
+    if not members:
+        detail = (
+            f" Nothing matched '{request.search}'."
+            if request.search
+            else " This pod has no members."
+        )
+        return ListPodMembersResponse(
+            success=True, message=f"No members found.{detail}"
+        )
+
+    return ListPodMembersResponse(
+        success=True,
+        members=[PodMemberSummary(**member) for member in members],
+        total_matched=total_matched,
+        truncated=truncated,
+        message=(
+            f"{total_matched} match(es); showing {len(members)}. "
+            "Pass a member's `to` value to message_user."
+            if truncated
+            else f"{len(members)} member(s). Pass a `to` value to message_user."
+        ),
+    )
+
+
 messaging_toolset = FunctionToolset[BaseAgentContext](
-    tools=[message_user, check_messages]
+    tools=[message_user, check_messages, list_pod_members]
 )

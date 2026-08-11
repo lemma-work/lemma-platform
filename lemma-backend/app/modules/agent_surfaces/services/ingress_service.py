@@ -59,10 +59,14 @@ from app.modules.agent_surfaces.domain.surface_event_metadata import (
     build_surface_event_metadata,
 )
 from app.modules.agent_surfaces.domain.ports import (
+    ColdEmailThread,
     SurfaceEventDedupStorePort,
     SurfaceInstallationRepositoryPort,
     SurfacePlatformAdapterPort,
     SurfacePodMembershipPort,
+)
+from app.modules.agent_surfaces.services.cold_email_thread import (
+    build_cold_email_thread,
 )
 from app.modules.agent_surfaces.infrastructure.adapters.redis_event_dedup_store import (
     get_surface_event_dedup_store,
@@ -553,6 +557,17 @@ class AgentSurfaceIngressService(SurfaceConfigurationMixin, SurfaceProgressMixin
     ):
         if context.pod_id is None:
             raise ValueError("Surface chat context requires a pod")
+        # An empty inbound is never something a person sent — it means a body we
+        # failed to fetch or parse. Starting a run on it burns a model call and
+        # produces an answer to nothing, which reads to the sender as the agent
+        # ignoring them. Every inbound Resend email looked like this.
+        if not str(message_text or "").strip():
+            logger.warning(
+                "agent_surfaces.ingress_service.inbound_message_empty.degraded",
+                conversation_id=str(context.conversation_id),
+                platform=context.platform,
+            )
+            return None
         auth_ctx = await create_authorization_data_service(uow).build_user_context(
             user_id=context.user_id,
             pod_id=context.pod_id,
@@ -840,6 +855,46 @@ class AgentSurfaceIngressService(SurfaceConfigurationMixin, SurfaceProgressMixin
             return False
         return await self.send_agent_message_for_conversation(
             conversation_id=link.conversation_id, message=message
+        )
+
+    async def open_cold_email_thread(
+        self,
+        *,
+        surface: AgentSurfaceEntity,
+        recipient_email: str,
+        subject: str,
+        message: str,
+        thread_seed_id: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> ColdEmailThread | None:
+        """Email somebody who has never written to us, and remember the thread.
+
+        Cannot reuse ``_resolve_egress_target``: that resolves a *stored link*,
+        and the whole point of a cold open is that there is not one yet. Returns
+        None when the surface is inactive, has no adapter, or sits on a platform
+        that cannot start a thread — all of which are "no", not failures.
+        """
+        if not surface.is_active:
+            return None
+        adapter = self.adapter_registry.get(surface.surface_type)
+        if adapter is None:
+            return None
+        clean_message = sanitize_user_visible_text(message)
+        if not clean_message:
+            return None
+        credentials = await self._resolve_credentials(surface)
+        sent = await adapter.send_cold_email(
+            credentials=credentials,
+            recipient_email=recipient_email,
+            subject=subject,
+            message=clean_message,
+            thread_seed_id=thread_seed_id,
+            metadata=metadata,
+        )
+        if sent is None:
+            return None
+        return build_cold_email_thread(
+            surface=surface, recipient_email=recipient_email, sent=sent
         )
 
     async def send_agent_message_for_conversation(
@@ -1728,7 +1783,7 @@ class AgentSurfaceIngressService(SurfaceConfigurationMixin, SurfaceProgressMixin
                 credentials=credentials,
             )
         agent_display_name = (
-            (await self._agent_name_for_surface(surface)) if surface else None
+            (await self.agent_name_for_surface(surface)) if surface else None
         ) or "Lemma"
         return await prepare_unrouted_context(
             platform=platform,
@@ -1770,7 +1825,7 @@ class AgentSurfaceIngressService(SurfaceConfigurationMixin, SurfaceProgressMixin
             return None
 
         credentials = await self._resolve_credentials(surface)
-        fallback_agent_name = await self._agent_name_for_surface(surface)
+        fallback_agent_name = await self.agent_name_for_surface(surface)
         fallback_agent_display_name = fallback_agent_name or "Lemma"
 
         try:
@@ -1921,10 +1976,18 @@ class AgentSurfaceIngressService(SurfaceConfigurationMixin, SurfaceProgressMixin
         agent_id = surface.agent_id
         return agent_id, await self._agent_name_for_agent_id(agent_id)
 
-    async def _agent_name_for_surface(
+    async def agent_name_for_surface(
         self,
         surface: AgentSurfaceEntity,
     ) -> str | None:
+        """Whose name a message on this surface goes out under.
+
+        Public because notification delivery names the agent when it opens a
+        conversation for a recipient — see ``SurfaceNotificationEgressPort``.
+        It was private for exactly as long as it took that cross-service call to
+        raise ``AttributeError`` in production; keeping the port and this method
+        in step is what stops the next rename doing the same.
+        """
         return await self._agent_name_for_agent_id(surface.agent_id)
 
     async def _agent_name_for_agent_id(
@@ -2238,7 +2301,7 @@ class AgentSurfaceIngressService(SurfaceConfigurationMixin, SurfaceProgressMixin
             "route_key": route_key,
             "conversation_kind": conversation_kind,
             "routed_agent_id": str(routed_agent_id) if routed_agent_id else None,
-            "agent_display_name": await self._agent_name_for_surface(surface)
+            "agent_display_name": await self.agent_name_for_surface(surface)
             or "Lemma",
             "surface_event_metadata": (
                 surface_event_metadata.model_dump(mode="json")

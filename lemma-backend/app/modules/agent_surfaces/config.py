@@ -144,16 +144,35 @@ class SurfaceSettings(BaseSettings):
     resend_api_key: Optional[str] = Field(
         default=None, description="Resend API key for the system email surface"
     )
-    resend_inbound_domain: str = Field(
-        default="ops.lemma.work",
-        description="Domain for per-pod inbound addresses (pod.org@<domain>)",
+    # No default. A fallback domain looks like configuration and is not: it
+    # mints addresses on a domain nobody owns, which deliver nowhere and whose
+    # replies match no surface. Absent means "email is not set up", which the
+    # code says out loud rather than papering over.
+    resend_inbound_domain: Optional[str] = Field(
+        default=None,
+        description=(
+            "Verified catch-all domain for agent inbound addresses "
+            "(agent.pod@<domain>). Required to use the Resend surface."
+        ),
     )
     resend_from_name: str = Field(
         default="Lemma", description="Display name on outbound Resend emails"
     )
-    resend_inbound_signing_secret: Optional[str] = Field(
+    resend_webhook_secret: Optional[str] = Field(
         default=None,
-        description="Secret for verifying Resend inbound webhook signatures",
+        description=(
+            "Svix signing secret for verifying Resend inbound webhooks. Without "
+            "it every inbound email is rejected, so it is required to receive."
+        ),
+    )
+    resend_auto_provision_enabled: bool = Field(
+        default=False,
+        description=(
+            "Give a pod with no active surface a system Resend email surface the "
+            "first time it tries to notify someone. Off by default because it is "
+            "outward-facing: every pod that turns it on sends mail from the same "
+            "Resend domain, so deliverability and abuse reputation are shared."
+        ),
     )
 
     # Surface webhook ingress + runtime

@@ -115,7 +115,7 @@ class AgentService:
         if existing is not None:
             raise AgentAlreadyExistsError(normalized_name)
 
-        return await self.agent_repository.create(
+        agent = await self.agent_repository.create(
             Agent(
                 pod_id=pod_id,
                 user_id=user_id,
@@ -131,6 +131,19 @@ class AgentService:
                 metadata=metadata,
             )
         )
+
+        # Give it a mailbox so the UI can offer "email this agent at …" from the
+        # moment it exists. Best-effort by design: a deployment with no mail
+        # domain still gets a perfectly good agent, just not an emailable one.
+        from app.composition.agent_email_surface import provision_agent_email_surface
+
+        await provision_agent_email_surface(
+            self.agent_repository.uow,
+            pod_id=pod_id,
+            agent_id=agent.id,
+            agent_name=agent.name,
+        )
+        return agent
 
     async def list_agents(
         self,

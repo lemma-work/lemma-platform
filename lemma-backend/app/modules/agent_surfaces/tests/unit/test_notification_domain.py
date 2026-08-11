@@ -238,28 +238,67 @@ def test_chat_outranks_email():
         link=_link(datetime.now(timezone.utc)),
     )
 
-    ordered = rank_candidates([email, chat], preferred_surface_ids=set())
+    ordered = rank_candidates([email, chat])
     assert ordered[0] is chat
 
 
-def test_a_surface_the_person_chose_outranks_one_we_merely_observed():
+def test_the_surface_the_agent_is_running_on_wins():
+    """Reach out from the bot they are already talking to this agent through.
+
+    Replaces the old rule, which preferred the *recipient's* chosen surface.
+    That borrowed trust the sender never had: a person who set Slack as their
+    default would get messaged there by an agent they only know on Telegram.
+    """
     now = datetime.now(timezone.utc)
-    chosen_id = uuid4()
-    chosen = DeliveryChannel(
-        surface=_surface(SurfacePlatform.SLACK, chosen_id),
+    here_id = uuid4()
+    here = DeliveryChannel(
+        surface=_surface(SurfacePlatform.SLACK, here_id),
         external_user_id="u1",
         # Deliberately the *staler* of the two, so freshness alone cannot explain
         # the result.
         link=_link(now - timedelta(days=3)),
     )
-    observed = DeliveryChannel(
+    elsewhere = DeliveryChannel(
         surface=_surface(SurfacePlatform.TELEGRAM),
         external_user_id="u2",
         link=_link(now),
     )
 
-    ordered = rank_candidates([observed, chosen], preferred_surface_ids={chosen_id})
-    assert ordered[0] is chosen
+    ordered = rank_candidates([elsewhere, here], origin_surface_id=here_id)
+    assert ordered[0] is here
+
+
+def test_surfaces_are_scoped_to_the_sending_agent():
+    """A pod's other agents have their own bots, and their own relationships."""
+    from app.modules.agent_surfaces.services.notification_delivery import (
+        surfaces_for_agent,
+    )
+
+    mine_id, theirs_id = uuid4(), uuid4()
+    mine = _surface(SurfacePlatform.TELEGRAM)
+    mine.agent_id = mine_id
+    theirs = _surface(SurfacePlatform.SLACK)
+    theirs.agent_id = theirs_id
+
+    assert surfaces_for_agent([mine, theirs], actor_agent_id=mine_id) == [mine]
+
+
+def test_the_pod_assistant_gets_the_surfaces_with_no_agent():
+    """"No agent" is a deliberate choice on a surface, not an absence.
+
+    Reading it as "any surface" would send the pod assistant out through a named
+    agent's bot, over that agent's name.
+    """
+    from app.modules.agent_surfaces.services.notification_delivery import (
+        surfaces_for_agent,
+    )
+
+    unowned = _surface(SurfacePlatform.RESEND)
+    unowned.agent_id = None
+    owned = _surface(SurfacePlatform.TELEGRAM)
+    owned.agent_id = uuid4()
+
+    assert surfaces_for_agent([unowned, owned], actor_agent_id=None) == [unowned]
 
 
 def test_among_observed_channels_the_freshest_inbound_wins():
@@ -275,7 +314,7 @@ def test_among_observed_channels_the_freshest_inbound_wins():
         link=_link(now - timedelta(minutes=5)),
     )
 
-    ordered = rank_candidates([stale, fresh], preferred_surface_ids=set())
+    ordered = rank_candidates([stale, fresh])
     assert ordered[0] is fresh
 
 
@@ -293,7 +332,7 @@ def test_freshness_falls_back_to_updated_at_for_pre_migration_rows():
         link=_link(now - timedelta(days=5)),
     )
 
-    ordered = rank_candidates([stale, legacy_fresh], preferred_surface_ids=set())
+    ordered = rank_candidates([stale, legacy_fresh])
     assert ordered[0] is legacy_fresh
 
 
@@ -370,3 +409,20 @@ def test_surface_send_policy_does_not_gate_reaching_other_members():
 def test_surface_send_policy_round_trips_through_stored_json():
     stored = SurfaceSendPolicy(allow_send=True).model_dump(mode="json")
     assert SurfaceSendPolicy.model_validate(stored).allow_send is True
+
+
+def test_the_ingress_service_answers_every_call_delivery_makes():
+    """One line that would have caught both shipped AttributeErrors.
+
+    Notification delivery holds the ingress service through a port. Two of the
+    methods it declared were never written on the implementation, and nothing
+    noticed: the attribute was untyped, so mypy saw nothing, and every existing
+    test ran in a pod with no surface, so delivery returned before calling
+    either. A structural check costs nothing and fails the moment the two drift.
+    """
+    from app.modules.agent_surfaces.domain.ports import (
+        SurfaceNotificationEgressPort,
+    )
+
+    service = AgentSurfaceIngressService.__new__(AgentSurfaceIngressService)
+    assert isinstance(service, SurfaceNotificationEgressPort)

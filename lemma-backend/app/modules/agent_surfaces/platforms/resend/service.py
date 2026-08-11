@@ -18,6 +18,7 @@ from app.core.log.log import get_logger
 from app.modules.agent.contracts import ConversationContext
 from app.modules.agent_surfaces.domain.entities import ParsedInboundSurfaceEvent
 from app.modules.agent_surfaces.domain.models import (
+    ColdEmailSendResult,
     SurfaceDisplayRenderPlan,
     SurfaceSenderProfile,
 )
@@ -78,6 +79,67 @@ class ResendPlatformService:
             display_resource_plans=coerce_display_resource_plans(
                 (metadata or {}).get("display_resource_plans")
             ),
+        )
+
+    async def fetch_received_email(self, email_id: str) -> dict[str, Any]:
+        """Retrieve a received email's body, headers and attachment metadata.
+
+        Resend's ``email.received`` webhook is metadata only — it carries no
+        body and no headers beyond ``message_id`` — so this call is not an
+        enrichment nicety, it is the only way to learn what the person wrote.
+        """
+        if not self._api_key:
+            raise ValueError("Resend receive requires an api_key.")
+        if not email_id:
+            raise ValueError("Resend receive requires an email id.")
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.get(
+                f"{self._api_base.rstrip('/')}/emails/receiving/{email_id}",
+                headers={"Authorization": f"Bearer {self._api_key}"},
+            )
+            response.raise_for_status()
+            return response.json() if response.content else {}
+
+    async def send_cold_email(
+        self,
+        *,
+        recipient_email: str,
+        subject: str,
+        message: str,
+        thread_seed_id: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> ColdEmailSendResult:
+        """First contact: no thread to reply into, so address the mailbox.
+
+        The seed goes in ``References`` and ``In-Reply-To`` stays empty. A reply's
+        ``References`` is the original's plus the original's ``Message-ID``, so
+        the seed lands first and the inbound parser — which reads
+        ``references[0]`` as the thread root — recognises it. Resend generates
+        the ``Message-ID`` itself and its response ``id`` is a Resend object id,
+        not an RFC one, so seeding the chain is the only handle we get.
+        """
+        response = await self._send_email(
+            recipient_email=recipient_email,
+            subject=subject,
+            in_reply_to=None,
+            references=[thread_seed_id],
+            content=message,
+            content_type="markdown",
+            attachments=[],
+            display_resource_plans=coerce_display_resource_plans(
+                (metadata or {}).get("display_resource_plans")
+            ),
+            is_reply=False,
+        )
+        return ColdEmailSendResult(
+            external_thread_id=thread_seed_id,
+            external_message_id=str((response or {}).get("id") or "").strip() or None,
+            reply_target={
+                "recipient_email": recipient_email,
+                "subject": subject,
+                # Keeps a follow-up we send before they reply on the same thread.
+                "references": [thread_seed_id],
+            },
         )
 
     async def send_display_resource(
@@ -162,6 +224,7 @@ class ResendPlatformService:
         content_type: str,
         attachments: list[tuple[str, bytes, str]],
         display_resource_plans: list[SurfaceDisplayRenderPlan] | None = None,
+        is_reply: bool = True,
     ) -> dict[str, Any]:
         if not recipient_email or not self._api_key or not self._from_address:
             raise ValueError("Resend send requires api_key, from_address and a recipient.")
@@ -179,7 +242,10 @@ class ResendPlatformService:
         payload: dict[str, Any] = {
             "from": sender,
             "to": [recipient_email],
-            "subject": reply_subject(subject),
+            # ``reply_subject`` prefixes "Re:", which is right for a reply and
+            # wrong for first contact — a notification nobody has ever seen
+            # arriving as "Re: Standup" reads as a message you have lost.
+            "subject": reply_subject(subject) if is_reply else (subject or "").strip(),
             "text": plain_text,
         }
         if html_body:

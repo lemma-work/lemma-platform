@@ -1125,7 +1125,7 @@ async def test_resend_signed_webhook_replies_via_worker(
     monkeypatch.setattr(surface_settings, "surface_webhook_security_enabled", True)
     monkeypatch.setattr(
         surface_settings,
-        "resend_inbound_signing_secret",
+        "resend_webhook_secret",
         _RESEND_SIGNING_SECRET,
     )
 

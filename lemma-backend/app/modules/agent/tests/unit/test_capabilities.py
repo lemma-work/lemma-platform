@@ -734,3 +734,144 @@ async def test_pod_default_gains_view_image_toolset_when_vision_supported():
         and c.get_serialization_name() == "workspace_cli"
         for c in vision_caps
     )
+
+
+@pytest.mark.anyio
+async def test_pod_default_messaging_is_deferred_but_keeps_its_contract(monkeypatch):
+    """Deferral hides a toolset's schemas. It must not hide what the tool means.
+
+    `message_user` returns immediately and the reply never comes back as a tool
+    result, so an agent that only learns the tool exists — from the hint — and
+    not how it behaves will send a message and then wait for something that
+    cannot arrive. Wrapping the deferred toolset in a plain ToolsetCapability
+    drops the messaging fragment and produces exactly that agent.
+    """
+    from app.modules.agent.capabilities import todo_storage as storage_mod
+    from app.modules.agent.capabilities.assembler import build_lemma_harness_tooling
+    from app.modules.agent.capabilities.instructed_toolset import (
+        InstructedToolsetCapability,
+    )
+    from app.modules.agent.tools.context import BaseAgentContext
+    from app.modules.agent.tools.registry import POD_DEFAULT_AGENT_TOOLSETS
+    from app.modules.agent.tools.tool_assembler import RunToolAssembler
+
+    monkeypatch.setattr(
+        storage_mod, "ConversationRepository", lambda _uow: _FakeRepo({})
+    )
+
+    deps = BaseAgentContext(
+        user_id=uuid4(), pod_id=uuid4(), conversation_id=uuid4(),
+        is_pod_default_agent=True,
+    )
+    full_toolsets = await RunToolAssembler(lambda: _FakeUoW()).assemble(
+        agent=None,
+        conversation=SimpleNamespace(id=deps.conversation_id, metadata={}),
+    )
+    capabilities = await build_lemma_harness_tooling(
+        uow_factory=lambda: _FakeUoW(),
+        agent=SimpleNamespace(toolsets=list(POD_DEFAULT_AGENT_TOOLSETS)),
+        ctx=deps,
+        full_toolsets=full_toolsets,
+        agent_run_id=uuid4(),
+        model_name="m",
+        enable_prompt_caching=False,
+    )
+
+    captured: dict = {}
+
+    def model_fn(messages, info: AgentInfo):
+        captured["visible"] = {
+            t.name for t in info.function_tools if not t.defer_loading
+        }
+        captured["deferred"] = {t.name for t in info.function_tools if t.defer_loading}
+        return ModelResponse(parts=[TextPart("done")])
+
+    agent = Agent(FunctionModel(model_fn), capabilities=capabilities)
+    await agent.run("hi", deps=deps)
+
+    # Hidden from the prefix — an interactive assistant should not reach for
+    # "message a colleague" or "go to sleep" without going looking first.
+    assert {"message_user", "check_messages", "list_pod_members", "snooze"} <= captured[
+        "deferred"
+    ]
+    assert not ({"message_user", "snooze"} & captured["visible"])
+
+    # ...but the contract still rides in the prefix.
+    messaging = [
+        c
+        for c in capabilities
+        if isinstance(c, InstructedToolsetCapability)
+        and c.get_serialization_name() == "messaging"
+    ]
+    assert len(messaging) == 1, "deferring messaging dropped its instructions"
+    instructions = messaging[0].get_instructions()
+    assert "snooze" in instructions
+    assert "background_instruction" in instructions
+
+
+@pytest.mark.anyio
+async def test_every_deferred_group_is_labelled(monkeypatch):
+    """An unlabelled group renders as "Additional tools", which says nothing.
+
+    CONNECTORS shipped that way: deferred, advertised, and described in terms
+    that give the model no reason to search for it.
+    """
+    from app.modules.agent.capabilities.deferred_hint import build_deferred_tools_hint
+    from app.modules.agent.tools.registry import EXTRA_TOOLSET_OBJECTS
+
+    hint = build_deferred_tools_hint(list(EXTRA_TOOLSET_OBJECTS))
+
+    assert hint is not None
+    assert "Additional tools" not in hint
+    # The member lookup has to be discoverable, or message_user stays unusable
+    # for anyone the agent only knows by name.
+    assert "list_pod_members" in hint
+
+
+@pytest.mark.anyio
+async def test_a_user_created_agent_keeps_messaging_visible(monkeypatch):
+    """Deferral is a pod-default concession, not a change to granted toolsets.
+
+    An agent someone deliberately gave MESSAGING chose a scoped toolset already;
+    hiding it behind a search would just cost that agent a round trip.
+    """
+    from app.modules.agent.capabilities import todo_storage as storage_mod
+    from app.modules.agent.capabilities.assembler import build_lemma_harness_tooling
+    from app.modules.agent.domain.value_objects import AgentToolset
+    from app.modules.agent.tools.context import BaseAgentContext
+    from app.modules.agent.tools.registry import resolve_agent_toolsets
+
+    monkeypatch.setattr(
+        storage_mod, "ConversationRepository", lambda _uow: _FakeRepo({})
+    )
+
+    deps = BaseAgentContext(
+        user_id=uuid4(), pod_id=uuid4(), conversation_id=uuid4(),
+        is_pod_default_agent=False,
+    )
+    agent_entity = SimpleNamespace(
+        id=uuid4(), pod_id=deps.pod_id, toolsets=[AgentToolset.MESSAGING]
+    )
+    full_toolsets = list(resolve_agent_toolsets(agent_entity.toolsets))
+    capabilities = await build_lemma_harness_tooling(
+        uow_factory=lambda: _FakeUoW(),
+        agent=agent_entity,
+        ctx=deps,
+        full_toolsets=full_toolsets,
+        agent_run_id=uuid4(),
+        model_name="m",
+        enable_prompt_caching=False,
+    )
+
+    captured: dict = {}
+
+    def model_fn(messages, info: AgentInfo):
+        captured["visible"] = {
+            t.name for t in info.function_tools if not t.defer_loading
+        }
+        return ModelResponse(parts=[TextPart("done")])
+
+    agent = Agent(FunctionModel(model_fn), capabilities=capabilities)
+    await agent.run("hi", deps=deps)
+
+    assert {"message_user", "list_pod_members"} <= captured["visible"]

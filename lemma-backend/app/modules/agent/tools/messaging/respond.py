@@ -19,7 +19,11 @@ from pydantic import BaseModel, Field
 from pydantic_ai.tools import RunContext
 from pydantic_ai.toolsets import FunctionToolset
 
-from app.composition.agent_notifications import record_notification_response
+from app.composition.agent_notifications import (
+    notification_form_action,
+    record_notification_response,
+)
+from app.composition.agent_workflow_forms import submit_workflow_form as submit_form
 from app.core.log.log import get_logger
 from app.modules.agent.tools.context import BaseAgentContext, BaseToolResponse
 
@@ -81,4 +85,66 @@ async def respond_to_notification(
     )
 
 
-respond_toolset = FunctionToolset[BaseAgentContext](tools=[respond_to_notification])
+class SubmitWorkflowFormRequest(BaseModel):
+    notification_id: UUID = Field(description="Id of the open request.")
+    inputs: dict = Field(
+        description=(
+            "The form's fields, using the exact names from its schema. Only "
+            "what they actually told you — omitted fields fall back to schema "
+            "defaults, invented ones are rejected."
+        )
+    )
+
+
+class SubmitWorkflowFormResponse(BaseToolResponse):
+    pass
+
+
+async def submit_workflow_form(
+    ctx: RunContext[BaseAgentContext], request: SubmitWorkflowFormRequest
+) -> SubmitWorkflowFormResponse:
+    """Complete a workflow form this person was asked to fill in.
+
+    Only for requests shown as answered by a form — those name their fields
+    above. Collect the values conversationally, then submit them here; a
+    free-text `respond_to_notification` will not advance the workflow.
+
+    Values are validated against the form's schema, so a guess is refused
+    rather than written into the run. If it comes back invalid, ask them for the
+    field it names — never substitute your own value.
+    """
+    deps = ctx.deps
+    if deps.pod_id is None:
+        return SubmitWorkflowFormResponse(
+            success=False, error="This tool is only available inside a pod."
+        )
+
+    action = await notification_form_action(
+        pod_id=deps.pod_id, notification_id=request.notification_id
+    )
+    if action is None:
+        return SubmitWorkflowFormResponse(
+            success=False,
+            error=(
+                "That request is not answered by a workflow form. Use "
+                "respond_to_notification instead."
+            ),
+        )
+
+    submitted, message = await submit_form(
+        run_id=action["run_id"],
+        node_id=action["node_id"],
+        inputs=request.inputs,
+        # The conversation owner. The engine re-checks that the form is theirs.
+        requester_user_id=deps.user_id,
+    )
+    return SubmitWorkflowFormResponse(
+        success=submitted,
+        message=message if submitted else None,
+        error=None if submitted else message,
+    )
+
+
+respond_toolset = FunctionToolset[BaseAgentContext](
+    tools=[respond_to_notification, submit_workflow_form]
+)

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Any, Protocol
+from typing import Any, Protocol, runtime_checkable
 from uuid import UUID
 
 from pydantic import BaseModel
@@ -364,6 +364,70 @@ class SurfacePlatformAdapterPort(Protocol):
     # Non-None → send this reply instead of starting a chat (identity-link events).
 
 
+class ColdEmailThread(BaseModel):
+    """What a cold-opened email thread leaves behind, so the reply can find it.
+
+    Delivery writes these onto a conversation link. The three ``external_*``
+    fields are not bookkeeping: they are precisely the tuple
+    ``get_by_external_thread`` will query with when the person replies, so
+    getting one of them wrong means the reply silently starts a new
+    conversation and the asker waits forever.
+    """
+
+    external_thread_id: str
+    external_channel_id: str | None = None
+    external_message_id: str | None = None
+    # A serialized ParsedInboundSurfaceEvent. Stored as ``link.last_event``
+    # because ``_resolve_egress_target`` refuses to send on a link whose last
+    # event is missing or unparseable — without it the agent's own next message
+    # in this conversation would quietly go nowhere.
+    last_event: dict[str, Any] = {}
+
+
+@runtime_checkable
+class SurfaceNotificationEgressPort(Protocol):
+    """Exactly what notification delivery needs from the ingress service.
+
+    It exists because delivery used to hold this collaborator as an untyped
+    constructor kwarg and called two methods on it that were never written —
+    ``agent_name_for_surface`` and a cold-email send. Both were invisible to
+    mypy and to every test, and both raised ``AttributeError`` in production on
+    the first message that found a channel. Naming the contract is what makes
+    that a typecheck failure instead of an outage.
+    """
+
+    async def agent_name_for_surface(
+        self, surface: AgentSurfaceEntity
+    ) -> str | None: ...
+
+    async def send_agent_message_for_conversation(
+        self,
+        *,
+        conversation_id: UUID,
+        message: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> bool: ...
+
+    async def open_cold_email_thread(
+        self,
+        *,
+        surface: AgentSurfaceEntity,
+        recipient_email: str,
+        subject: str,
+        message: str,
+        thread_seed_id: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> ColdEmailThread | None:
+        """First contact by email, returning the thread the reply will land in.
+
+        ``None`` means this platform cannot start a thread it has no prior
+        message for — Outlook and Composio-backed Gmail both reply through
+        endpoints keyed by a provider message id. That is a clean "no", not a
+        failure to be retried on another channel.
+        """
+        ...
+
+
 class SurfaceEventDedupStorePort(Protocol):
     async def claim_message(
         self,
@@ -405,15 +469,6 @@ class SurfacePodMembershipPort(Protocol):
     ) -> None:
         """Persist the user's explicit platform-to-surface choice."""
         ...
-
-    async def get_user_default_surface_ids(self, user_id: UUID) -> list[UUID]:
-        """Every surface the user has chosen as a default, across platforms.
-
-        Ingress asks "which surface for *this* platform"; egress has no platform
-        in hand yet — choosing one is the whole job — so it needs the set. A
-        surface the person deliberately picked outranks one we merely observed
-        them use.
-        """
 
     async def get_pod_member_id(self, user_id: UUID, pod_id: UUID) -> UUID | None:
         """The pod-scoped member id, or None when they are not in the pod.

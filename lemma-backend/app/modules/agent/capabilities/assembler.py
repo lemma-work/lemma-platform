@@ -19,6 +19,8 @@ still reach the same tools through the per-conversation MCP server unchanged.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from pydantic_ai.capabilities import ToolSearch
 from pydantic_ai.capabilities import Toolset as ToolsetCapability
 from pydantic_ai.toolsets import AbstractToolset
@@ -78,6 +80,15 @@ def configure_caching_capability(cls: type[PromptCachingCapability]) -> None:
 
 _EXTRA_TOOLSET_IDS = frozenset(id(obj) for obj in EXTRA_TOOLSET_OBJECTS)
 
+# Toolsets whose usage guidance is part of their contract. Workspace CLI is
+# matched by predicate rather than identity, so it is handled separately in
+# ``_instructions_for``.
+_INSTRUCTED_TOOLSETS: tuple[tuple[object, str, Callable[[], str]], ...] = (
+    (skills_toolset, "skills", load_skills_prompt),
+    (speech_toolset, "speech", load_speech_prompt),
+    (messaging_toolset, "messaging", load_messaging_prompt),
+)
+
 
 def _agent_has_toolset(agent: Agent, toolset: AgentToolset) -> bool:
     for name in agent.toolsets:
@@ -121,59 +132,65 @@ def _graceful(toolset: object) -> object:
     return toolset  # pragma: no cover - defensive
 
 
+def _instructions_for(toolset: object) -> tuple[str, Callable[[], str]] | None:
+    """The usage guidance a toolset carries, whether it ends up visible or deferred.
+
+    One lookup for both wrappers, because deferral is supposed to hide a
+    toolset's *schemas*, never its *contract*. Messaging is the case that proves
+    it: ``message_user`` does not pause the turn, so an agent that was never
+    taught the send → snooze → check_messages loop sends a message and then sits
+    waiting for a reply that arrives as a tool result never. Advertising the
+    tool in the deferred hint while withholding that is the worst of both.
+    """
+    if is_workspace_cli_toolset(toolset):
+        return "workspace_cli", load_workspace_cli_prompt
+    for candidate, name, loader in _INSTRUCTED_TOOLSETS:
+        if toolset is candidate:
+            return name, loader
+    return None
+
+
 def _visible_capability(toolset: object) -> object:
     """Wrap one visible toolset as a capability.
 
     Toolsets that carry usage guidance get an instructions-bearing capability
-    (web search and todo have bespoke ones; workspace CLI and skills use the
-    generic ``InstructedToolsetCapability``); everything else is a plain toolset
+    (web search and todo have bespoke ones; the rest use the generic
+    ``InstructedToolsetCapability``); everything else is a plain toolset
     capability. Every wrapped toolset is made graceful first so a tool failure
     never crashes the run.
     """
     if toolset is web_search_toolset:
         return WebSearchCapability()
-    if is_workspace_cli_toolset(toolset):
-        return InstructedToolsetCapability(
-            _graceful(toolset),
-            name="workspace_cli",
-            instructions_loader=load_workspace_cli_prompt,
-        )
-    if toolset is skills_toolset:
-        return InstructedToolsetCapability(
-            _graceful(toolset),
-            name="skills",
-            instructions_loader=load_skills_prompt,
-        )
-    if toolset is speech_toolset:
-        return InstructedToolsetCapability(
-            _graceful(toolset),
-            name="speech",
-            instructions_loader=load_speech_prompt,
-        )
-    if toolset is messaging_toolset:
-        # The guidance matters more here than for most toolsets: the tool does
-        # not pause, so an agent that has not been taught the send/snooze/check
-        # loop will send a message and then sit waiting for a reply that arrives
-        # as a tool result never.
-        return InstructedToolsetCapability(
-            _graceful(toolset),
-            name="messaging",
-            instructions_loader=load_messaging_prompt,
-        )
     if getattr(toolset, "id", None) == TODO_TOOLSET_ID:
         return TodoCapability(_graceful(toolset))
-    return ToolsetCapability(_graceful(toolset))
+    guidance = _instructions_for(toolset)
+    if guidance is None:
+        return ToolsetCapability(_graceful(toolset))
+    name, loader = guidance
+    return InstructedToolsetCapability(
+        _graceful(toolset), name=name, instructions_loader=loader
+    )
 
 
 def _deferred_capability(toolset: object) -> object:
     """Wrap one extra toolset as a deferred-loading capability.
 
     Graceful wrapping is applied INNER and deferral OUTER, so ``ToolSearch`` still
-    sees the deferred-loading marker while tool failures stay graceful.
+    sees the deferred-loading marker while tool failures stay graceful. The
+    instructions ride along either way — ``defer_loading()`` returns an
+    ``AbstractToolset``, so an instruction-bearing deferred capability is just
+    the ordinary one wrapping a deferred toolset.
     """
-    if isinstance(toolset, AbstractToolset):
-        return ToolsetCapability(GracefulToolset(toolset).defer_loading())
-    return ToolsetCapability(toolset)  # pragma: no cover - defensive
+    if not isinstance(toolset, AbstractToolset):
+        return ToolsetCapability(toolset)  # pragma: no cover - defensive
+    deferred = GracefulToolset(toolset).defer_loading()
+    guidance = _instructions_for(toolset)
+    if guidance is None:
+        return ToolsetCapability(deferred)
+    name, loader = guidance
+    return InstructedToolsetCapability(
+        deferred, name=name, instructions_loader=loader
+    )
 
 
 async def build_lemma_harness_tooling(

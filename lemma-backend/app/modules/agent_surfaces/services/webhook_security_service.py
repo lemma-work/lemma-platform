@@ -277,7 +277,7 @@ class SurfaceWebhookSecurityService:
         self._verify_svix_signature(
             headers=headers,
             raw_body=raw_body,
-            signing_secret=surface_settings.resend_inbound_signing_secret,
+            signing_secret=surface_settings.resend_webhook_secret,
         )
 
     def _verify_svix_signature(

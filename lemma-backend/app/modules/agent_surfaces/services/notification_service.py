@@ -13,15 +13,15 @@ recipient's own thread, under the recipient's own authority.
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
 from app.core.config import settings
+from app.modules.agent_surfaces.config import surface_settings
 from app.core.log.log import get_logger
-from app.modules.agent.domain.value_objects import MessageDraft
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
-    SurfaceMode,
 )
 from httpx import HTTPError
 
@@ -38,12 +38,15 @@ from app.modules.agent_surfaces.domain.notification import (
 from app.modules.agent_surfaces.platforms.platform_capabilities import (
     get_platform_capabilities,
 )
+from app.modules.agent_surfaces.domain.ports import SurfaceNotificationEgressPort
 from app.modules.agent_surfaces.services.notification_delivery import (
     DeliveryChannel,
     UndeliverableReason,
     rank_candidates,
     reply_window_open,
+    surfaces_for_agent,
 )
+from app.modules.agent_surfaces.services.notification_egress import NotificationEgress
 
 logger = get_logger(__name__)
 
@@ -84,14 +87,6 @@ def attribute(
 class NotificationService:
     """Creates notifications, delivers them, and owns their lifecycle."""
 
-    # A conversation touched more recently than this is still "the thread we are
-    # in"; anything colder starts a new one. Much tighter than the surface's 24h
-    # DM reset on purpose — that setting exists to stop threads living forever,
-    # not to decide whether a new subject belongs in an old one. A standup ping
-    # arriving the morning after yesterday's support chat is a new subject, and
-    # appending it there reads as a non-sequitur.
-    CONTINUE_CONVERSATION_WITHIN = timedelta(minutes=30)
-
     def __init__(
         self,
         *,
@@ -101,9 +96,12 @@ class NotificationService:
         conversation_link_repository,
         external_user_repository,
         conversation_service,
-        ingress_service,
+        ingress_service: SurfaceNotificationEgressPort,
         pod_membership_port,
         rate_limiter=None,
+        surface_provisioner: (
+            Callable[[UUID], Awaitable[AgentSurfaceEntity | None]] | None
+        ) = None,
     ):
         self.uow = uow
         self.notifications = notification_repository
@@ -114,6 +112,18 @@ class NotificationService:
         self.ingress = ingress_service
         self.membership = pod_membership_port
         self.rate_limiter = rate_limiter
+        # Injected rather than built here: creating a surface is the surface
+        # service's job, and it already owns address provisioning, credential
+        # checks and receiver registration.
+        self.surface_provisioner = surface_provisioner
+        # Getting a message onto a platform is a separate job from owning what
+        # the notification means, and it is the half with all the surface
+        # coupling. See ``notification_egress``.
+        self.egress = NotificationEgress(
+            egress=ingress_service,
+            conversation_service=conversation_service,
+            conversation_link_repository=conversation_link_repository,
+        )
 
     # ------------------------------------------------------------------ create
 
@@ -127,6 +137,9 @@ class NotificationService:
         origin_kind: NotificationOriginKind,
         origin_id: UUID | None = None,
         origin_conversation_id: UUID | None = None,
+        # The surface this run is answering on, when it is on one. Lets the
+        # agent reach out from the same bot the person is already talking to.
+        origin_surface_id: UUID | None = None,
         actor_user_id: UUID | None = None,
         actor_agent_id: UUID | None = None,
         agent_name: str | None = None,
@@ -199,6 +212,7 @@ class NotificationService:
             notification,
             agent_name=agent_name,
             actor_display_name=actor_display_name,
+            origin_surface_id=origin_surface_id,
         )
 
     # ---------------------------------------------------------------- delivery
@@ -209,10 +223,13 @@ class NotificationService:
         *,
         agent_name: str | None = None,
         actor_display_name: str | None = None,
+        origin_surface_id: UUID | None = None,
     ) -> NotificationEntity:
         channels, fallback_reason = await self.resolve_channels(
             pod_id=notification.pod_id,
             recipient_user_id=notification.recipient_user_id,
+            actor_agent_id=notification.actor_agent_id,
+            origin_surface_id=origin_surface_id,
         )
         if not channels:
             notification.mark_undeliverable(fallback_reason)
@@ -234,7 +251,7 @@ class NotificationService:
         last_error: str | None = None
         for channel in channels:
             try:
-                conversation_id = await self._conversation_for(
+                conversation_id = await self.egress.conversation_for(
                     channel, notification=notification
                 )
                 if conversation_id is None:
@@ -244,19 +261,23 @@ class NotificationService:
                 # Persist before send: a failed platform call must still leave
                 # the person a message they can read, and the agent handling
                 # their reply a record of what was asked.
-                await self._persist_outbound(
+                await self.egress.persist_outbound(
                     conversation_id=conversation_id,
                     notification=notification,
                     message=message,
                 )
-                sent = await self._send(
+                sent = await self.egress.send(
                     channel,
                     conversation_id=conversation_id,
                     notification=notification,
                     message=message,
                 )
                 if not sent:
-                    last_error = f"{channel.platform.value} send returned no delivery."
+                    last_error = (
+                        UndeliverableReason.COLD_OPEN_UNSUPPORTED
+                        if channel.link is None
+                        else f"{channel.platform.value} send returned no delivery."
+                    )
                     continue
 
                 notification.mark_delivered(
@@ -281,44 +302,20 @@ class NotificationService:
         )
         return await self.notifications.update(notification)
 
-    async def _send(
-        self,
-        channel: DeliveryChannel,
-        *,
-        conversation_id: UUID,
-        notification: NotificationEntity,
-        message: str,
-    ) -> bool:
-        """Hand the message to the platform.
-
-        The fork is not chat-vs-email, it is *do we have a thread*. Every normal
-        egress path replies to a stored inbound event; a cold open has none, so
-        it addresses the mailbox directly. That is only possible on platforms
-        whose ``can_cold_open`` says so, which is why a chat channel never
-        reaches the second branch — it would have had no candidate without a
-        link in the first place.
-        """
-        metadata = {"notification_id": str(notification.id)}
-        if channel.link is not None:
-            return await self.ingress.send_agent_message_for_conversation(
-                conversation_id=conversation_id,
-                message=message,
-                metadata=metadata,
-            )
-        if not channel.email_address:
-            return False
-        return await self.ingress.send_cold_email(
-            surface=channel.surface,
-            recipient_email=channel.email_address,
-            subject=notification.title,
-            message=message,
-            metadata=metadata,
-        )
-
     async def resolve_channels(
-        self, *, pod_id: UUID, recipient_user_id: UUID
+        self,
+        *,
+        pod_id: UUID,
+        recipient_user_id: UUID,
+        actor_agent_id: UUID | None = None,
+        origin_surface_id: UUID | None = None,
     ) -> tuple[list[DeliveryChannel], str]:
-        """Every way this pod can reach this person, best first.
+        """Every way *this agent* can reach this person, best first.
+
+        Scoped to the sending agent's own surfaces rather than the pod's: the
+        recipient should hear from the bot they already know this agent as. See
+        ``notification_delivery`` for why that beats the recipient's own
+        preferred surface.
 
         Returns the reason alongside, so an empty list is never a silent no.
         """
@@ -326,13 +323,21 @@ class NotificationService:
         # with more surfaces than one page is not a real shape — they are bots a
         # human connected by hand — so the first page is the whole set.
         all_surfaces, _ = await self.surfaces.list_by_pod(pod_id)
-        surfaces = [surface for surface in all_surfaces if surface.is_active]
-        if not surfaces:
-            return [], UndeliverableReason.NO_ACTIVE_SURFACE
+        active = [surface for surface in all_surfaces if surface.is_active]
+        if not active:
+            # A pod with no surface can reach nobody, and asking someone to go
+            # and connect one before their first notification will send is a
+            # poor trade when we already run a system mailbox. Provisioned
+            # lazily rather than at pod creation: most pods never message
+            # anyone, and an address handed out is an address to keep working.
+            provisioned = await self._auto_provision_email_surface(pod_id)
+            if provisioned is None:
+                return [], UndeliverableReason.NO_ACTIVE_SURFACE
+            active = [provisioned]
 
-        preferred = set(
-            await self.membership.get_user_default_surface_ids(recipient_user_id)
-        )
+        surfaces = surfaces_for_agent(active, actor_agent_id=actor_agent_id)
+        if not surfaces:
+            return [], UndeliverableReason.NO_SURFACE_FOR_AGENT
 
         candidates: list[DeliveryChannel] = []
         saw_chat_surface = False
@@ -348,34 +353,15 @@ class NotificationService:
                 continue
 
             saw_chat_surface = True
-            external = await self.external_users.get_by_resolved_user(
-                platform=surface.surface_type.value,
-                resolved_user_id=recipient_user_id,
-            )
-            if external is None or not external.external_user_id:
-                continue
-            link = await self.links.get_latest_by_surface_and_external_user(
-                surface_id=surface.id,
-                external_user_id=external.external_user_id,
-            )
-            if link is None:
-                continue
-            if not reply_window_open(
-                platform=surface.surface_type,
-                last_inbound_at=link.inbound_activity_at,
-            ):
-                window_closed = True
-                continue
-            candidates.append(
-                DeliveryChannel(
-                    surface=surface,
-                    external_user_id=external.external_user_id,
-                    link=link,
-                )
-            )
+            channel, closed = await self._chat_channel(surface, recipient_user_id)
+            window_closed = window_closed or closed
+            if channel is not None:
+                candidates.append(channel)
 
         if candidates:
-            return rank_candidates(candidates, preferred_surface_ids=preferred), ""
+            return rank_candidates(
+                candidates, origin_surface_id=origin_surface_id
+            ), ""
 
         # Reasons are ordered by how actionable they are. "Their window closed"
         # tells someone to wait; "they never messaged the bot" tells them what to
@@ -386,6 +372,69 @@ class NotificationService:
             return [], UndeliverableReason.NEVER_INTERACTED
         return [], UndeliverableReason.NO_EMAIL_ADDRESS
 
+    async def _auto_provision_email_surface(
+        self, pod_id: UUID,
+    ) -> AgentSurfaceEntity | None:
+        """Give this pod the system mailbox, or None if that is not on offer.
+
+        Off unless configured, and silent when it fails. A notification that
+        cannot be delivered is already a handled outcome — the row exists and
+        the inbox has it — so a provisioning problem must degrade to
+        ``NO_ACTIVE_SURFACE`` rather than turn a send into an exception.
+        """
+        if not (
+            surface_settings.resend_auto_provision_enabled
+            and surface_settings.resend_api_key
+        ):
+            return None
+        if self.surface_provisioner is None:
+            return None
+        try:
+            return await self.surface_provisioner(pod_id)
+        except (AgentSurfaceError, OSError) as exc:
+            logger.warning(
+                "agent_surfaces.notification_service.auto_provision_failed.degraded",
+                pod_id=str(pod_id),
+                error=str(exc),
+            )
+            return None
+
+    async def _chat_channel(
+        self, surface: AgentSurfaceEntity, recipient_user_id: UUID
+    ) -> tuple[DeliveryChannel | None, bool]:
+        """``(channel, window_closed)`` for a chat surface.
+
+        A bot cannot start a conversation, so this only yields a channel when
+        the person has written to that surface before. ``window_closed`` is
+        reported separately because "they went quiet too long ago" is a
+        different thing to tell somebody than "they have never messaged us".
+        """
+        external = await self.external_users.get_by_resolved_user(
+            platform=surface.surface_type.value,
+            resolved_user_id=recipient_user_id,
+        )
+        if external is None or not external.external_user_id:
+            return None, False
+        link = await self.links.get_latest_by_surface_and_external_user(
+            surface_id=surface.id,
+            external_user_id=external.external_user_id,
+        )
+        if link is None:
+            return None, False
+        if not reply_window_open(
+            platform=surface.surface_type,
+            last_inbound_at=link.inbound_activity_at,
+        ):
+            return None, True
+        return (
+            DeliveryChannel(
+                surface=surface,
+                external_user_id=external.external_user_id,
+                link=link,
+            ),
+            False,
+        )
+
     async def _email_channel(
         self, surface: AgentSurfaceEntity, recipient_user_id: UUID
     ) -> DeliveryChannel | None:
@@ -393,103 +442,6 @@ class NotificationService:
         if not address:
             return None
         return DeliveryChannel(surface=surface, email_address=address)
-
-    async def _conversation_for(
-        self, channel: DeliveryChannel, *, notification: NotificationEntity
-    ) -> UUID | None:
-        """The recipient's conversation this notification lands in.
-
-        A live thread is continued; anything colder opens a new conversation and
-        repoints the link with a compare-and-set, so an inbound arriving in the
-        same instant cannot leave one platform thread split across two
-        conversations.
-
-        A message you cannot reply to is an alert, not a conversation — which is
-        why this always resolves to a conversation the *recipient* owns, never
-        the asker's. Their reply runs under their own permissions.
-        """
-        if channel.link is None:
-            # Cold-open email: no prior thread exists by definition.
-            return await self._open_conversation(channel, notification=notification)
-
-        conversation = await self.conversation_service.conversation_repository.get_conversation(
-            channel.link.conversation_id
-        )
-        if conversation is not None:
-            touched = conversation.updated_at
-            if touched.tzinfo is None:
-                touched = touched.replace(tzinfo=timezone.utc)
-            if (
-                datetime.now(timezone.utc) - touched
-                <= self.CONTINUE_CONVERSATION_WITHIN
-            ):
-                return conversation.id
-
-        opened = await self._open_conversation(channel, notification=notification)
-        if opened is None:
-            return channel.link.conversation_id
-        repointed = await self.links.repoint_conversation_for_outbound(
-            link_id=channel.link.id,
-            conversation_id=opened,
-            expected_conversation_id=channel.link.conversation_id,
-        )
-        if repointed is None:
-            # An inbound won the race and already repointed the link. Deliver
-            # into the conversation it created rather than stealing the thread.
-            current = await self.links.get_by_conversation_id(opened)
-            logger.info(
-                "agent_surfaces.notification_service.link_repoint_lost_race.observed",
-                notification_id=str(notification.id),
-                link_id=str(channel.link.id),
-            )
-            return current.conversation_id if current else opened
-        return opened
-
-    async def _open_conversation(
-        self, channel: DeliveryChannel, *, notification: NotificationEntity
-    ) -> UUID | None:
-        surface = channel.surface
-        conversation = await self.conversation_service.create_conversation(
-            pod_id=notification.pod_id,
-            agent_name=await self.ingress.agent_name_for_surface(surface),
-            user_id=notification.recipient_user_id,
-            title=notification.title,
-            metadata={
-                "source": "notification",
-                "notification_id": str(notification.id),
-                "surface_id": str(surface.id),
-                "surface_platform": surface.surface_type.value,
-                "external_user_id": channel.external_user_id,
-                "conversation_kind": (
-                    "EMAIL" if surface.mode is SurfaceMode.EMAIL else "DM"
-                ),
-            },
-            require_execute_grant=False,
-        )
-        return conversation.id if conversation else None
-
-    async def _persist_outbound(
-        self,
-        *,
-        conversation_id: UUID,
-        notification: NotificationEntity,
-        message: str,
-    ) -> None:
-        """Write the outbound into the recipient's thread before it is sent.
-
-        ``MessageKind.NOTIFICATION`` already exists and is already replayed into
-        model history, so this costs a write rather than a migration — and it is
-        what makes the recipient's agent able to answer "yes" six hours later
-        against a question it can actually see.
-        """
-        await self.conversation_service.conversation_repository.append_message(
-            conversation_id=conversation_id,
-            agent_run_id=None,
-            draft=MessageDraft.of_notification(
-                message,
-                metadata={"notification_id": str(notification.id)},
-            ),
-        )
 
     # --------------------------------------------------------------- lifecycle
 
