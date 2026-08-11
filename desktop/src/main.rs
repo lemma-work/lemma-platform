@@ -4441,7 +4441,10 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
         .icon_as_template(false)
         .menu(&menu)
         .show_menu_on_left_click(true)
-        .on_menu_event(|app, event| handle_menu_action(app, event.id().as_ref()))
+        // No handler here. `app.on_menu_event` in setup already receives menu
+        // events from every menu this app owns, the tray's included, so
+        // registering a second one meant every tray verb ran twice -- two
+        // confirmation dialogs stacked on each other, two stops, two restarts.
         .build(app)?;
     Ok(())
 }
@@ -5290,6 +5293,20 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use std::fs::File;
+
+    #[test]
+    fn a_menu_verb_runs_once() {
+        // `app.on_menu_event` receives events from every menu the app owns, the
+        // tray's included. The tray builder registered a second handler on top,
+        // so every tray verb ran twice: two confirmation dialogs stacked on each
+        // other, two stops, two restarts.
+        let source = include_str!("main.rs").replace("\r\n", "\n");
+        assert_eq!(
+            source.matches("on_menu_event(").count(),
+            1,
+            "exactly one menu event handler, or every verb fires once per handler"
+        );
+    }
 
     #[test]
     fn the_splash_draws_something_for_every_state() {
