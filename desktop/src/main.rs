@@ -128,6 +128,11 @@ struct Shell {
     ui: Mutex<UiState>,
     locald_writer: Mutex<Option<SendHalf>>,
     locald_connect: Mutex<()>,
+    /// Installing the runtime is single-flighted separately from connecting
+    /// to the daemon. It used to share `locald_connect`, which meant one
+    /// caller's multi-hundred-megabyte download blocked every other caller
+    /// -- including Local settings' heartbeat -- for the whole install.
+    runtime_install: Mutex<()>,
     quit_after_stop: AtomicBool,
     // The tray is built once, so its Agent Host entries are kept here to be
     // rewritten as status arrives.
@@ -171,6 +176,7 @@ impl Shell {
             ui: Mutex::new(ui),
             locald_writer: Mutex::new(None),
             locald_connect: Mutex::new(()),
+            runtime_install: Mutex::new(()),
             quit_after_stop: AtomicBool::new(false),
             tray_agent_host: Mutex::new(None),
             tray_status: Mutex::new(None),
@@ -966,12 +972,18 @@ fn ensure_locald(app: &AppHandle) -> Result<(), String> {
     if shell.locald_writer.lock().unwrap().is_some() {
         return Ok(());
     }
+    // Deliberately before the connect guard, under a lock of its own. This can
+    // take minutes on a first run, and holding `locald_connect` across it turned
+    // every unrelated caller into a hang of the same length.
+    {
+        let _install_guard = shell.runtime_install.lock().unwrap();
+        ensure_runtime_artifacts(app)?;
+    }
+
     let _connect_guard = shell.locald_connect.lock().unwrap();
     if shell.locald_writer.lock().unwrap().is_some() {
         return Ok(());
     }
-
-    ensure_runtime_artifacts(app)?;
 
     let required_root = host_pack_root();
     let required_release = required_root.as_deref().and_then(host_pack_release);
@@ -1968,11 +1980,27 @@ fn handle_locald_event(app: &AppHandle, event: &Value) {
                         ui.api_url = api_url.to_string();
                         // Record what is serving, and under which generation,
                         // so the next launch can skip straight to it.
-                        write_resume_target(
-                            url,
-                            api_url,
-                            event["runtime_generation"].as_str().unwrap_or_default(),
+                        //
+                        // On a worker, because this writes the config with two
+                        // fsyncs and we are holding `shell.ui` -- a lock the main
+                        // thread takes in `navigation_context` (on every
+                        // navigation, subframes included), `get_state`,
+                        // `current_mode`, `refresh_tray_status` and
+                        // `quit_impact`. Holding it across a disk sync stalled
+                        // WebKit's navigation delegate, worst exactly when the
+                        // disk is busy unpacking a runtime. The resume target is
+                        // advisory, so late is fine and lost is survivable.
+                        let (url, api_url, generation) = (
+                            url.to_string(),
+                            api_url.to_string(),
+                            event["runtime_generation"]
+                                .as_str()
+                                .unwrap_or_default()
+                                .to_string(),
                         );
+                        std::thread::spawn(move || {
+                            write_resume_target(&url, &api_url, &generation);
+                        });
                     }
                 }
                 // Stay on the splash: the user proceeds via its CTA.
@@ -3229,9 +3257,18 @@ fn refresh_agent_host_tray(app: &AppHandle, status: &Value) {
         let shell: State<Shell> = app.state();
         shell.ui.lock().unwrap().agent_host_running = running;
     }
-    let shell: State<Shell> = app.state();
-    let items = shell.tray_agent_host.lock().unwrap();
-    let Some((state_item, toggle_item)) = items.as_ref() else {
+    // Clone the handles out and drop the guard before touching them. Every
+    // `set_*` below is a blocking round-trip to the main thread, and this runs on
+    // the locald reader thread -- so holding the lock across them meant a busy
+    // main thread stopped daemon events being read at all. Progress stopped
+    // updating and `ready` was never handled, which is how a slow start became a
+    // permanently dead-looking splash. `refresh_tray_status` already does this.
+    let items = {
+        let shell: State<Shell> = app.state();
+        let guard = shell.tray_agent_host.lock().unwrap();
+        guard.clone()
+    };
+    let Some((state_item, toggle_item)) = items else {
         return;
     };
     let _ = state_item.set_text(state);
@@ -5230,6 +5267,51 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use std::fs::File;
+
+    #[test]
+    fn no_lock_is_held_across_the_runtime_install() {
+        // `ensure_locald` used to take `locald_connect` and then install the
+        // runtime -- hundreds of megabytes -- while holding it. Local settings'
+        // heartbeat takes the same path, so opening settings during a first
+        // install blocked for the whole install. The install has its own
+        // single-flight now, and it must come first.
+        let source = include_str!("main.rs");
+        let body = function_body(source, "fn ensure_locald(app: &AppHandle)");
+        let install = body
+            .find("ensure_runtime_artifacts(app)")
+            .expect("ensure_locald installs the runtime");
+        let connect = body
+            .find("locald_connect.lock()")
+            .expect("ensure_locald takes the connect guard");
+        assert!(
+            install < connect,
+            "the runtime install must happen before the connect guard is taken, \
+             not inside it"
+        );
+        assert!(
+            body.contains("runtime_install.lock()"),
+            "the install still needs its own single-flight so two callers cannot \
+             download at once"
+        );
+    }
+
+    #[test]
+    fn the_tray_lock_is_not_held_across_main_thread_round_trips() {
+        // Every `set_*` on a menu item blocks until the main thread is free, and
+        // this runs on the locald reader thread -- so holding the lock across
+        // them stopped daemon events being read whenever the main thread was
+        // busy. Progress froze and `ready` was never handled.
+        let source = include_str!("main.rs");
+        let body = function_body(source, "fn refresh_agent_host_tray(");
+        let guard_end = body
+            .find("guard.clone()")
+            .expect("the handles are cloned out of the guard");
+        let first_set = body.find(".set_text(").expect("the tray text is set");
+        assert!(
+            guard_end < first_set,
+            "clone the menu handles and drop the guard before any set_* call"
+        );
+    }
 
     #[test]
     fn every_command_that_is_not_pure_ui_is_async() {
