@@ -45,6 +45,19 @@ lit parse input.pdf --target-pages "1-5,10" --format json -o out.json
 lit screenshot input.pdf --target-pages "1-3" --dpi 200 -o shots
 ```
 
+## Long-running commands
+
+Installs, builds and test suites routinely outlive a single `exec_command` call, and that is fine. When one does, you get `completed: false` and a `process_id`; the command is still running, nothing was cancelled, and no output is lost. Poll until it finishes:
+
+```
+exec_command(cmd="npm ci && npm run build", timeout_seconds=300)
+manage_process(action="input", process_id="<id>", chars="")   # repeat until completed: true
+```
+
+Each poll returns only the output produced since the last one, so polling a quiet build is cheap. Read `exit_code` to know whether it actually succeeded — `completed: true` only means it stopped.
+
+Two things to avoid: never re-run a command because it hasn't finished (you get a second build racing the first), and don't kill a slow build to "retry" it. If you lose a `process_id`, `manage_process(action="list")` recovers it. Start long-lived servers (`npm run dev`) with `tty=true` and leave them running rather than polling them to completion.
+
 ## Sandbox
 
 The workspace is private to this conversation. Work in your working directory (below) and create subfolders under it; never create a parallel root under `/workspace`, and don't scatter work into `/tmp`. `localhost` is this container, not the Lemma backend.

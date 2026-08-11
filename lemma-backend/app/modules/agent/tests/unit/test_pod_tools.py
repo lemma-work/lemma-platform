@@ -17,6 +17,7 @@ import pytest
 
 from app.core.domain.errors import DomainError
 from app.modules.agent.domain.value_objects import AgentToolset
+from app.modules.agent.domain.vision import AgentVisionMode
 from app.modules.agent.tools.context import BaseAgentContext
 from app.modules.agent.tools.pod import pydantic_adapter as pod_adapter
 from app.modules.agent.tools.pod.models import (
@@ -32,12 +33,19 @@ from app.modules.agent.tools.registry import resolve_agent_toolsets
 from app.modules.datastore.domain.errors import DatastoreConflictError
 
 
-def _run_ctx(*, pod_cwd: str | None = None) -> SimpleNamespace:
+def _run_ctx(
+    *,
+    pod_cwd: str | None = None,
+    vision_mode: AgentVisionMode = AgentVisionMode.DIRECT,
+) -> SimpleNamespace:
+    # DIRECT by default: most pod tools are unaffected by vision, and the ones
+    # that are were written against a model that reads images itself.
     return SimpleNamespace(
         deps=BaseAgentContext(
             user_id=uuid4(),
             pod_id=uuid4(),
             conversation_id=uuid4(),
+            vision_mode=vision_mode,
             pod_cwd=pod_cwd,
         )
     )

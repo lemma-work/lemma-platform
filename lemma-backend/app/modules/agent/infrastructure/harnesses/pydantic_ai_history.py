@@ -27,6 +27,7 @@ from pydantic_ai.messages import (
 
 from app.core.log.log import get_logger
 from app.modules.agent.domain.entities import Message
+from app.modules.agent.domain.pausing_tools import PAUSING_TOOL_NAMES
 from app.modules.agent.domain.value_objects import (
     TEXTUAL_MESSAGE_KINDS,
     MessageKind,
@@ -187,38 +188,65 @@ def _build_tool_batch(
 
     for msg in call_entries:
         matched = matched_returns.get(getattr(msg, "tool_call_id", None))
-        if matched is None:
-            logger.debug(
-                'agent.pydantic_ai.skipping_tool_call_without_matching.diagnostic',
-                tool_call_id=msg.tool_call_id,
-            )
-            continue
-
         parsed_args = parse_tool_call_args(getattr(msg, "tool_args", None))
-        if parsed_args is None:
-            logger.debug(
-                'agent.pydantic_ai.skipping_malformed_persisted_tool_call.diagnostic',
-                tool_call_id=msg.tool_call_id,
-            )
-            continue
 
-        return_index, return_msg = matched
-        consumed_indexes.add(return_index)
-        if request_timestamp is None:
+        # A call with no result, or with arguments that never parsed, used to be
+        # erased from the reconstructed history entirely. The agent then had no
+        # memory of having tried, so it either re-issued the call blind or
+        # reasoned as though it had never happened. Telling it what went wrong
+        # is strictly more useful — and it keeps the tool_use/tool_result
+        # pairing that Anthropic requires.
+        #
+        # Pausing tools are the exception: an unmatched `ask_user` /
+        # `request_approval` / `snooze` is not a failure, it is the marker that
+        # the conversation is waiting on a human (see
+        # `services/pause_resume.PAUSING_TOOL_NAMES`, and the pending-approval
+        # detection that keys on exactly this shape). Synthesizing a failure
+        # there would tell the model its question failed while the user is still
+        # being asked it.
+        synthetic_error: str | None = None
+        if matched is None:
+            if getattr(msg, "tool_name", None) in PAUSING_TOOL_NAMES:
+                logger.debug(
+                    'agent.pydantic_ai.skipping_tool_call_without_matching.diagnostic',
+                    tool_call_id=msg.tool_call_id,
+                )
+                continue
+            synthetic_error = (
+                "This tool call was interrupted before a result was recorded, "
+                "so it returned nothing. Run it again if you still need the "
+                "result."
+            )
+        elif parsed_args is None:
+            synthetic_error = (
+                "The arguments recorded for this call could not be parsed, so "
+                "it never ran. Re-issue it with valid arguments."
+            )
+
+        return_index, return_msg = matched if matched is not None else (None, None)
+        if return_index is not None:
+            consumed_indexes.add(return_index)
+        if request_timestamp is None and return_msg is not None:
             request_timestamp = getattr(return_msg, "created_at", None)
 
         response_parts.append(
             ToolCallPart(
                 tool_name=msg.tool_name,
                 tool_call_id=msg.tool_call_id,
-                args=parsed_args,
+                # Keep the raw arguments when they did not parse: the model can
+                # see what it sent and correct it.
+                args=parsed_args if parsed_args is not None else {},
             )
         )
         request_parts.append(
             ToolReturnPart(
                 tool_name=getattr(return_msg, "tool_name", None) or msg.tool_name,
                 tool_call_id=msg.tool_call_id,
-                content=getattr(return_msg, "tool_result", None),
+                content=(
+                    {"success": False, "error": synthetic_error}
+                    if synthetic_error is not None
+                    else getattr(return_msg, "tool_result", None)
+                ),
             )
         )
 

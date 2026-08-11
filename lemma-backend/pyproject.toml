@@ -40,10 +40,17 @@ dependencies = [
     "opentelemetry-instrumentation-fastapi>=0.60b1",
     "opentelemetry-instrumentation-httpx>=0.60b1",
     "opentelemetry-instrumentation-sqlalchemy>=0.60b1",
-    "pydantic-deep>=0.2.20",
     "authlib>=1.6.6",
     "apscheduler>=3.11.2",
-    "pydantic-ai-slim[anthropic,fastmcp,mcp,openai,retries]>=1.104.0",
+    # Upper-bounded on purpose: the agent harness reaches into a few pydantic-ai
+    # internals (see infrastructure/pydantic_ai_compat.py), so a major bump is a
+    # deliberate migration rather than something `uv lock --upgrade` should do.
+    "pydantic-ai-slim[anthropic,mcp,openai,retries]>=2.27.1,<3",
+    # Direct dependency of app/mcp_server.py. It used to arrive via the
+    # pydantic-ai `fastmcp` extra, which 2.x dropped.
+    "fastmcp>=3.4.2",
+    # History compaction for providers with no native CompactionPart support.
+    "summarization-pydantic-ai>=0.1.11",
     "websockets>=16.0",
     "uvicorn[standard]>=0.42.0",
     "supertokens-python==0.31.3",
@@ -54,6 +61,10 @@ dependencies = [
     "fastembed>=0.7.4",
     "pypdfium2>=5.10.1",
     "pillow>=12.3.0",
+    # Boilerplate-stripping article extraction for `web_fetch` (Apache-2.0).
+    # Emits markdown directly, so a fetched page never becomes raw HTML in the
+    # agent's context.
+    "trafilatura>=2.2.0",
     "lemma-pod-bundle",
 ]
 

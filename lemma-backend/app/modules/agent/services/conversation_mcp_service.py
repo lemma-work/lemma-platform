@@ -21,6 +21,8 @@ from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.modules.agent.domain.entities import Agent, Conversation
+from app.modules.agent.domain.vision import vision_mode_from_runtime_profile
+from app.modules.agent.services.mcp_content import image_contents, text_content
 from app.modules.agent.domain.value_objects import JsonObject, to_json_value
 from app.modules.agent.infrastructure.mcp import (
     exported_tool_name,
@@ -177,6 +179,9 @@ class ConversationMCPService:
                 run = await conversation_repo.get_active_agent_run(conversation_id)
             agent_id = conversation.agent_id or (run.agent_id if run else None)
             agent = await agent_repo.get(agent_id) if agent_id is not None else None
+            runtime_profile = (
+                run.agent_runtime.model_dump(mode="json") if run else None
+            )
             ctx = BaseAgentContext(
                 user_id=conversation.user_id,
                 org_id=conversation.organization_id,
@@ -184,27 +189,28 @@ class ConversationMCPService:
                 conversation_id=conversation.id,
                 agent_name=agent.name if agent is not None else None,
                 agent_run_id=agent_run_id or (run.id if run is not None else None),
-                runtime_profile=(
-                    run.agent_runtime.model_dump(mode="json") if run else None
-                ),
+                runtime_profile=runtime_profile,
+                # The runner computes this for the in-process harness; the MCP
+                # bridge has to derive it too, or every remote harness looks
+                # text-only and delegates images it could have read itself.
+                vision_mode=vision_mode_from_runtime_profile(runtime_profile),
                 **_surface_context_from_conversation(conversation),
             )
             return agent, conversation, ctx
 
     def _mcp_result(self, result: object) -> CallToolResult:
+        # Images ride alongside the text. Remote harnesses (Codex, Claude Code)
+        # are vision-capable, but every result used to be flattened to text, so
+        # `view_image` and `pod_view_document_pages` reached them as JSON
+        # describing a picture they never received.
+        images = image_contents(result)
         payload = to_json_value(result)
         if isinstance(payload, dict):
             return CallToolResult(
-                content=[
-                    TextContent(
-                        type="text",
-                        text=json.dumps(payload, default=str),
-                    )
-                ],
+                content=[text_content(payload), *images],
                 structuredContent=payload,
             )
-        text = payload if isinstance(payload, str) else json.dumps(payload, default=str)
-        return CallToolResult(content=[TextContent(type="text", text=text)])
+        return CallToolResult(content=[text_content(payload), *images])
 
     def _mcp_error_result(self, name: str, exc: Exception) -> CallToolResult:
         payload = format_tool_error(name, exc)

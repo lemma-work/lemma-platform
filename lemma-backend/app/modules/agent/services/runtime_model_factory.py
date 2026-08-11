@@ -1,19 +1,143 @@
-"""Build Pydantic AI models from resolved agent runtime profiles."""
+"""Build Pydantic AI models from resolved agent runtime profiles.
+
+The HTTP client behind each provider is pooled per endpoint rather than rebuilt
+per run. Building one per agent run meant a fresh connection pool every time —
+no keep-alive reuse across a conversation's many model requests, a new TLS
+handshake per turn, and a pool that was never closed. Half-open sockets left
+behind by that churn are a plausible source of the mid-stream ``ReadError``s the
+harness now has to recover from, so this is the other half of that fix.
+"""
 
 from __future__ import annotations
 
 from collections.abc import Mapping
 
+import httpx
 from openai import AsyncOpenAI
 from pydantic_ai.models import Model
 from pydantic_ai.models.anthropic import AnthropicModel
 from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.anthropic import AnthropicProvider
 from pydantic_ai.providers.openai import OpenAIProvider
+from pydantic_ai.retries import AsyncTenacityTransport, RetryConfig, wait_retry_after
+from tenacity import stop_after_attempt, wait_exponential
 
+from app.core.log.log import get_logger
+from app.modules.agent.config import agent_settings
+from app.modules.agent.infrastructure.transport_errors import (
+    RETRYABLE_STATUS_CODES,
+)
 from app.modules.agent.services.openai_schema_compat import (
     openai_compatible_model_profile,
 )
+
+logger = get_logger(__name__)
+
+_provider_clients: dict[str, httpx.AsyncClient] = {}
+
+
+# Opaque per-process labels standing in for credentials in cache keys. The
+# first version hashed the key instead, which is the wrong shape twice over: a
+# digest of a secret is still derived from the secret (and offline-comparable),
+# and the cache only ever needs to know whether two credentials are the *same*,
+# never anything about them. A counter answers that exactly, and leaves nothing
+# to leak if a key ever reaches a log line or a traceback.
+_credential_labels: dict[str, str] = {}
+
+
+def _credential_label(api_key: str | None) -> str:
+    if not api_key:
+        return "anonymous"
+    label = _credential_labels.get(api_key)
+    if label is None:
+        label = f"credential-{len(_credential_labels) + 1}"
+        _credential_labels[api_key] = label
+    return label
+
+
+def _client_cache_key(
+    protocol: str, base_url: str, api_key: str | None, headers: Mapping[str, object]
+) -> str:
+    """Identify an endpoint+credential pair without putting the key in the key.
+
+    Two profiles pointing at the same base URL with different credentials must
+    not share a client — same endpoint, different tenant.
+    """
+    header_sig = ",".join(f"{k}={v}" for k, v in sorted(headers.items()))
+    return f"{protocol}|{base_url}|{_credential_label(api_key)}|{header_sig}"
+
+
+def _should_retry_status(response: httpx.Response) -> None:
+    """Raise (so tenacity retries) only for statuses that mean "try again".
+
+    Deliberately silent for 400/401/402/404: in production those are a malformed
+    request, a bad key, an account out of credit, and a model that doesn't exist.
+    Retrying any of them burns the same failure three times and delays the error
+    the user actually needs to read.
+    """
+    if response.status_code in RETRYABLE_STATUS_CODES or response.status_code >= 500:
+        response.raise_for_status()
+
+
+def _build_provider_client(headers: Mapping[str, object]) -> httpx.AsyncClient:
+    return httpx.AsyncClient(
+        # Split timeouts: the read timeout is per-chunk, so it is the "provider
+        # has gone away" threshold rather than a budget for the whole turn — a
+        # long tool-using answer streams for minutes without tripping it.
+        timeout=httpx.Timeout(
+            connect=agent_settings.agent_model_http_connect_timeout_seconds,
+            read=agent_settings.agent_model_http_read_timeout_seconds,
+            write=30.0,
+            pool=10.0,
+        ),
+        limits=httpx.Limits(
+            max_connections=agent_settings.agent_model_http_max_connections,
+            max_keepalive_connections=agent_settings.agent_model_http_max_connections,
+            keepalive_expiry=30.0,
+        ),
+        headers={str(key): str(value) for key, value in headers.items()},
+        transport=AsyncTenacityTransport(
+            config=RetryConfig(
+                retry=lambda state: isinstance(
+                    state.outcome.exception() if state.outcome else None,
+                    (httpx.TransportError, httpx.HTTPStatusError),
+                ),
+                wait=wait_retry_after(
+                    fallback_strategy=wait_exponential(multiplier=1, max=30),
+                    max_wait=60,
+                ),
+                stop=stop_after_attempt(3),
+                reraise=True,
+            ),
+            validate_response=_should_retry_status,
+        ),
+    )
+
+
+def get_provider_http_client(
+    *, protocol: str, base_url: str, api_key: str | None, headers: Mapping[str, object]
+) -> httpx.AsyncClient:
+    """The shared client for one provider endpoint, created on first use."""
+    key = _client_cache_key(protocol, base_url, api_key, headers)
+    client = _provider_clients.get(key)
+    if client is None or client.is_closed:
+        client = _build_provider_client(headers)
+        _provider_clients[key] = client
+    return client
+
+
+async def close_agent_provider_clients() -> None:
+    """Close every pooled provider client. Called on application shutdown."""
+    clients = list(_provider_clients.values())
+    _provider_clients.clear()
+    for client in clients:
+        try:
+            await client.aclose()
+        except Exception:  # pragma: no cover - shutdown is best-effort
+            logger.debug(
+                "agent.runtime_model_factory.provider_client_close_failed.diagnostic",
+                exc_info=True,
+            )
 
 
 def pydantic_ai_model_from_runtime_profile(
@@ -68,7 +192,16 @@ def pydantic_ai_model_from_runtime_profile(
         client = AsyncOpenAI(
             base_url=base_url,
             api_key=api_key or "EMPTY",
-            default_headers={str(key): str(value) for key, value in headers.items()},
+            # Connection reuse, split timeouts and transport-level retries all
+            # come from the shared client; the SDK's own retry layer would only
+            # duplicate it.
+            http_client=get_provider_http_client(
+                protocol="openai",
+                base_url=base_url,
+                api_key=api_key,
+                headers=headers,
+            ),
+            max_retries=0,
         )
         return OpenAIChatModel(
             model_name_value,
@@ -80,9 +213,18 @@ def pydantic_ai_model_from_runtime_profile(
 
     if protocol == "ANTHROPIC_COMPATIBLE":
         base_url = config.get("base_url")
+        resolved_base_url = (
+            base_url if isinstance(base_url, str) and base_url else None
+        )
         provider = AnthropicProvider(
             api_key=api_key,
-            base_url=base_url if isinstance(base_url, str) and base_url else None,
+            base_url=resolved_base_url,
+            http_client=get_provider_http_client(
+                protocol="anthropic",
+                base_url=resolved_base_url or "https://api.anthropic.com",
+                api_key=api_key,
+                headers=headers,
+            ),
         )
         return AnthropicModel(model_name_value, provider=provider)
 

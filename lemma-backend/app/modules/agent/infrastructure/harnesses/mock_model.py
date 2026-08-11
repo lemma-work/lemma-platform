@@ -26,6 +26,8 @@ import re
 from collections.abc import AsyncIterator, Sequence
 from typing import Any
 
+import httpx
+
 from pydantic_ai.messages import (
     ModelMessage,
     ModelRequest,
@@ -183,13 +185,16 @@ def _resolve_turn(
     messages: Sequence[ModelMessage],
     info: AgentInfo,
     script: list[dict[str, Any]] | None,
+    drop_counts: dict[int, int] | None = None,
 ) -> tuple[str | None, list[dict[str, Any]]]:
     """Return ``(text, tool_calls)`` for the current model request."""
     turn_index = _current_run_turn_index(messages)
     if script is not None:
         if turn_index < len(script):
             turn = script[turn_index]
-            _raise_scripted_error(turn.get("error"))
+            _raise_scripted_error(
+                turn.get("error"), turn_index=turn_index, drop_counts=drop_counts
+            )
             tool_calls = [
                 {**call, "args": _resolve_references(call.get("args") or {}, messages)}
                 for call in (turn.get("tool_calls") or [])
@@ -215,7 +220,12 @@ def _resolve_turn(
     return (f"[mock] {user_text}" if user_text else "[mock] ok"), []
 
 
-def _raise_scripted_error(error: object) -> None:
+def _raise_scripted_error(
+    error: object,
+    *,
+    turn_index: int = 0,
+    drop_counts: dict[int, int] | None = None,
+) -> None:
     """Translate the E2E DSL's failure control into real model exceptions."""
     if not isinstance(error, dict):
         return
@@ -231,16 +241,46 @@ def _raise_scripted_error(error: object) -> None:
         raise UnexpectedModelBehavior(message)
     if kind == "usage_limit":
         raise UsageLimitExceeded(message)
+    if kind == "stream_drop":
+        # Only fail the first N attempts at this turn; the retry has to be
+        # able to succeed or the journey proves nothing.
+        seen = (drop_counts or {}).get(turn_index, 0)
+        if seen >= _drop_after_turns(error):
+            return
+        if drop_counts is not None:
+            drop_counts[turn_index] = seen + 1
+        # The production failure this exists to reproduce: the provider accepts
+        # the request and then drops the connection mid-answer. The harness
+        # retries from the messages already recorded, so a journey scripting
+        # this should still complete cleanly.
+        raise httpx.ReadError(message)
     raise RuntimeError(message)
+
+
+def _drop_after_turns(error: object) -> int:
+    """How many attempts a `stream_drop` should fail before succeeding.
+
+    Defaults to 1 so a scripted drop is transient — the point is to prove the
+    run recovers, not that it gives up.
+    """
+    if not isinstance(error, dict):
+        return 0
+    try:
+        return max(0, int(error.get("times") or 1))
+    except (TypeError, ValueError):
+        return 1
 
 
 def build_mock_model(conversation: Any) -> FunctionModel:
     """Build a deterministic FunctionModel (text + tool calls) for one run."""
     script = _extract_script(conversation)
+    # Per-run, so a scripted stream drop fails an attempt rather than a turn:
+    # the retry re-enters with the same history and must be allowed through.
+    drop_counts: dict[int, int] = {}
 
     async def _fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
         await _emulate_model_latency()
-        text, tool_calls = _resolve_turn(messages, info, script)
+        text, tool_calls = _resolve_turn(messages, info, script, drop_counts)
         parts: list[Any] = []
         if text:
             parts.append(TextPart(content=text))
@@ -260,7 +300,7 @@ def build_mock_model(conversation: Any) -> FunctionModel:
         messages: list[ModelMessage], info: AgentInfo
     ) -> AsyncIterator[str | dict[int, DeltaToolCall]]:
         await _emulate_model_latency()
-        text, tool_calls = _resolve_turn(messages, info, script)
+        text, tool_calls = _resolve_turn(messages, info, script, drop_counts)
         if text:
             yield text
         if tool_calls:

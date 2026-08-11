@@ -48,6 +48,51 @@ class AgentSettings(BaseSettings):
         default=None,
         description="Optional model used to generate conversation titles.",
     )
+    vision_model: str | None = Field(
+        default=None,
+        description=(
+            "Model used to look at images on behalf of agents whose own model "
+            "cannot. Must be a model this deployment lists as accepting images. "
+            "Unset means agents on text-only models cannot see images at all."
+        ),
+    )
+    history_summarization_model: str | None = Field(
+        default=None,
+        description=(
+            "Optional model used to compact conversation history. Defaults to "
+            "the run's own model, which means every compaction is a ~70k-token "
+            "request on the most expensive model in play; a small fast model is "
+            "usually the better choice."
+        ),
+    )
+
+    # Model-request resilience. A provider that drops the SSE stream mid-response
+    # used to fail the whole conversation run; the harness now resumes from the
+    # messages already recorded instead.
+    agent_model_stream_max_attempts: int = Field(
+        default=3,
+        ge=1,
+        description=(
+            "How many times a single agent run may re-enter the model graph after "
+            "a transient transport failure. 1 disables retrying."
+        ),
+    )
+    agent_model_http_connect_timeout_seconds: float = Field(
+        default=10.0,
+        description="Connect timeout for provider HTTP calls.",
+    )
+    agent_model_http_read_timeout_seconds: float = Field(
+        default=180.0,
+        description=(
+            "Per-chunk read timeout for provider HTTP calls. This is the 'the "
+            "provider has gone away' threshold, not a budget for the whole turn: "
+            "httpx resets it on every chunk of a streamed response."
+        ),
+    )
+    agent_model_http_max_connections: int = Field(
+        default=100,
+        description="Connection-pool ceiling per provider endpoint.",
+    )
     local_agent_runtime_config_path: str = Field(
         default_factory=_default_local_runtime_config_path,
         description="Local file containing the persisted system agent runtime default.",

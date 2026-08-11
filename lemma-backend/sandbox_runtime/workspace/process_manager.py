@@ -103,6 +103,7 @@ class ManagedProcess:
         master_fd: int | None,
         pty_queue: asyncio.Queue[bytes | None] | None,
         started_at: datetime,
+        deadline_at: datetime | None = None,
     ) -> None:
         self.operation_id = operation_id
         self.process = process
@@ -110,6 +111,11 @@ class ManagedProcess:
         self.master_fd = master_fd
         self.pty_queue = pty_queue
         self.started_at = started_at
+        # When this process must be gone by. Until the reaper existed, the
+        # deadline was only validated at spawn and never enforced, so an
+        # abandoned `npm run dev` outlived its conversation and kept the sandbox
+        # looking busy forever.
+        self.deadline_at = deadline_at
         self.completed_at: datetime | None = None
         self.exit_code: int | None = None
         self.state = ProcessState.RUNNING
@@ -275,6 +281,30 @@ class ProcessManager:
         )
         return len(running)
 
+    async def reap_expired(self) -> tuple[UUID, ...]:
+        """Terminate processes that have outlived their deadline.
+
+        The deadline used to be checked only at spawn, so nothing ever stopped a
+        forgotten `npm run dev`: it kept running, and the idle sweeper — which
+        refuses to release a sandbox with live processes — kept the whole
+        sandbox alive around it. Enforcing the deadline is what lets a genuinely
+        long build run for as long as it needs while still bounding the leak.
+        """
+        now = datetime.now(timezone.utc)
+        expired = tuple(
+            item
+            for item in await self.list()
+            if item.deadline_at is not None
+            and item.deadline_at <= now
+            and item.needs_quiesce
+        )
+        if not expired:
+            return ()
+        await asyncio.gather(
+            *(item.terminate(5) for item in expired), return_exceptions=True
+        )
+        return tuple(item.operation_id for item in expired)
+
     def _validate_request(self, request: StartProcessRequest) -> None:
         if request.deadline_at <= datetime.now(timezone.utc):
             raise ValueError("process deadline has elapsed")
@@ -335,6 +365,7 @@ class ProcessManager:
                 master_fd=master_fd,
                 pty_queue=queue,
                 started_at=datetime.now(timezone.utc),
+                deadline_at=request.deadline_at,
             )
             managed.bind_tasks((pty_task,))
         else:
@@ -360,6 +391,7 @@ class ProcessManager:
                 master_fd=None,
                 pty_queue=None,
                 started_at=datetime.now(timezone.utc),
+                deadline_at=request.deadline_at,
             )
             managed.bind_tasks((stdout_task, stderr_task))
         if request.initial_input is not None:

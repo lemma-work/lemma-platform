@@ -389,8 +389,10 @@ _NAME_TO_MODULE = {
     'ScheduledWorkflowStartConfigType': 'scheduled_workflow_start_config_type',
     'ScheduledWorkflowStartInput': 'scheduled_workflow_start_input',
     'ScheduledWorkflowStartOutput': 'scheduled_workflow_start_output',
+    'SearchFreshness': 'search_freshness',
     'SearchMethod': 'search_method',
     'SearchResult': 'search_result',
+    'SearchVertical': 'search_vertical',
     'SendMessageRequest': 'send_message_request',
     'SendMessageRequestMetadataType0': 'send_message_request_metadata_type_0',
     'SetDefaultSurfaceRequest': 'set_default_surface_request',
@@ -898,8 +900,10 @@ if TYPE_CHECKING:
     from .scheduled_workflow_start_config_type import ScheduledWorkflowStartConfigType
     from .scheduled_workflow_start_input import ScheduledWorkflowStartInput
     from .scheduled_workflow_start_output import ScheduledWorkflowStartOutput
+    from .search_freshness import SearchFreshness
     from .search_method import SearchMethod
     from .search_result import SearchResult
+    from .search_vertical import SearchVertical
     from .send_message_request import SendMessageRequest
     from .send_message_request_metadata_type_0 import SendMessageRequestMetadataType0
     from .set_default_surface_request import SetDefaultSurfaceRequest
@@ -1420,8 +1424,10 @@ __all__ = [
     'ScheduledWorkflowStartConfigType',
     'ScheduledWorkflowStartInput',
     'ScheduledWorkflowStartOutput',
+    'SearchFreshness',
     'SearchMethod',
     'SearchResult',
+    'SearchVertical',
     'SendMessageRequest',
     'SendMessageRequestMetadataType0',
     'SetDefaultSurfaceRequest',

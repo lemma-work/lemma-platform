@@ -53,8 +53,13 @@ class ExecCommandRequest(BaseModel):
         ge=10,
         le=300,
         description=(
-            "Block up to this many seconds instead of the default 30s yield "
-            "window; always returns `completed: true` with no `process_id`."
+            "How long to wait for the command before returning, instead of the "
+            "default 30s. This is THIS CALL'S patience, not a limit on the "
+            "command: if the command is still running when the wait is up you "
+            "get `completed: false` and a `process_id`, and the command keeps "
+            "running in the background. Poll it with "
+            "`manage_process(action='input', process_id=..., chars='')` until "
+            "`completed: true` — never re-run the command."
         ),
     )
 
@@ -175,6 +180,16 @@ class ViewImageRequest(BaseModel):
             "artifacts you just produced. Set this or `pod_file_path`, not both."
         ),
     )
+    instructions: Optional[str] = Field(
+        default=None,
+        description=(
+            "What you need from this image — 'read the axis labels', "
+            "'transcribe the table', 'describe the architecture diagram and "
+            "which way the arrows point'. Always set it: if this agent's model "
+            "cannot read images itself, this is the question a vision model "
+            "answers on your behalf, and a vague question gets a vague answer."
+        ),
+    )
     # NB: the "exactly one path" rule is enforced in view_image_internal, not via a
     # model_validator. A raising validator is an argument-validation error that
     # bypasses the graceful tool-error boundary, burns the agent's retry budget,
@@ -197,15 +212,19 @@ class ExecCommandResult(BaseToolResponse):
     completed: bool = Field(
         default=True,
         description=(
-            "Whether the process has finished. Interactive TTY sessions usually "
-            "return `false` until exited."
+            "Whether the process has finished. `false` whenever the command "
+            "outlived this call's wait window — a long build or test run as "
+            "much as an interactive TTY session. The command is still running; "
+            "it was not cancelled."
         ),
     )
     process_id: Optional[str] = Field(
         default=None,
         description=(
-            "Process ID to reuse with `write_stdin` for follow-up interaction "
-            "when this interactive process is still running."
+            "Handle for a process that is still running. Poll it with "
+            "`manage_process(action='input', process_id=..., chars='')` to "
+            "collect more output, or send input the same way. Present whenever "
+            "`completed` is false."
         ),
     )
 

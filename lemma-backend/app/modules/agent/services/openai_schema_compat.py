@@ -22,15 +22,13 @@ exactly as before.
 
 from __future__ import annotations
 
-from pydantic_ai._json_schema import (
+from pydantic_ai.profiles import ModelProfile, merge_profile
+from pydantic_ai.profiles.openai import OpenAIJsonSchemaTransformer
+
+from app.modules.agent.infrastructure.pydantic_ai_compat import (
     InlineDefsJsonSchemaTransformer,
     JsonSchema,
     JsonSchemaTransformer,
-)
-from pydantic_ai.profiles import DEFAULT_PROFILE, ModelProfile
-from pydantic_ai.profiles.openai import (
-    OpenAIJsonSchemaTransformer,
-    openai_model_profile,
 )
 
 
@@ -53,13 +51,17 @@ class InlineDefsOpenAIJsonSchemaTransformer(JsonSchemaTransformer):
         return result
 
 
-def openai_compatible_model_profile(model_name: str) -> ModelProfile:
-    """Default OpenAI profile, but with ``$defs`` inlined in tool schemas.
+def openai_compatible_model_profile(resolved: ModelProfile) -> ModelProfile:
+    """The provider's own profile, but with ``$defs`` inlined in tool schemas.
 
-    Keeps every other trait pydantic-ai picks for the model and only overrides
-    the JSON-schema transformer.
+    pydantic-ai hands a ``profile=`` callable the profile it already resolved
+    from the provider and model name, so every trait it picked is preserved and
+    only the JSON-schema transformer is overridden. (In pydantic-ai 1.x the
+    callable received the model *name* and had to re-derive the base profile
+    itself; 2.x resolves it first, and the callable's return value bypasses
+    ``merge_profile``, so merging here is what keeps the rest of the profile.)
     """
-    base = openai_model_profile(model_name) or DEFAULT_PROFILE
-    return base.update(
-        ModelProfile(json_schema_transformer=InlineDefsOpenAIJsonSchemaTransformer)
+    return merge_profile(
+        resolved,
+        ModelProfile(json_schema_transformer=InlineDefsOpenAIJsonSchemaTransformer),
     )
