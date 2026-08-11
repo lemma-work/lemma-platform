@@ -237,6 +237,30 @@ jobs:
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
 
+
+      # Tauri notarizes and staples the .app, then builds the DMG from it and
+      # only *signs* the DMG -- it never submits the DMG itself. An unstapled
+      # DMG still passes Gatekeeper while Apple is reachable, because the app
+      # inside carries its own ticket, but it fails closed on a machine that is
+      # offline or behind a filtering proxy. Submitting the disk image too costs
+      # seconds (everything inside it is already notarized) and makes the
+      # download self-contained.
+      - name: Notarize and staple the disk image
+        shell: bash
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          dmg="$(ls desktop/target/release/release-artifacts/Lemma_*_aarch64-online.dmg)"
+          xcrun notarytool submit "${dmg}" \
+            --apple-id "${APPLE_ID}" \
+            --password "${APPLE_PASSWORD}" \
+            --team-id "${APPLE_TEAM_ID}" \
+            --wait
+          xcrun stapler staple "${dmg}"
+
       - name: Verify Developer ID signatures and notarization staples
         shell: bash
         run: |
