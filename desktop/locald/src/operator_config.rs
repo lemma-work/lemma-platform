@@ -13,12 +13,14 @@ use crate::provider_probe::{HttpModelProviderProbe, ModelProviderProbe};
 const CONFIG_SCHEMA_VERSION: u64 = 1;
 const VAULT_SERVICE: &str = "work.lemma.local";
 
-const SECRET_NAMES: [&str; 16] = [
+const SECRET_NAMES: [&str; 18] = [
     "ai.api_key",
     "integrations.composio_api_key",
     "integrations.composio_webhook_secret",
     "integrations.google_client_secret",
     "integrations.microsoft_client_secret",
+    "integrations.github_client_secret",
+    "integrations.slack_client_secret",
     "surfaces.slack_app_token",
     "surfaces.slack_bot_token",
     "surfaces.slack_signing_secret",
@@ -64,6 +66,18 @@ pub struct IntegrationConfig {
     pub composio_enabled: bool,
     pub google_client_id: String,
     pub microsoft_client_id: String,
+    /// The OAuth app a GitHub connector authenticates through.
+    ///
+    /// Named for the environment the backend reads rather than the vendor,
+    /// because that name is declared by the connector catalog itself
+    /// (scripts/lemma_apps_config.json) and not by anything here.
+    #[serde(default)]
+    pub github_client_id: String,
+    /// Slack's connector OAuth app, which is not the same thing as the Slack
+    /// *surface* below: a surface talks to one workspace with a bot token, a
+    /// connector connects each user's own account.
+    #[serde(default)]
+    pub slack_client_id: String,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -559,6 +573,16 @@ impl OperatorConfigStore {
         );
         insert_nonempty(
             &mut environment,
+            "CONNECTOR_GITHUB_CLIENT_ID",
+            &config.integrations.github_client_id,
+        );
+        insert_nonempty(
+            &mut environment,
+            "SLACK_CLIENT_ID",
+            &config.integrations.slack_client_id,
+        );
+        insert_nonempty(
+            &mut environment,
             "MICROSOFT_BOT_APP_ID",
             &config.surfaces.teams_app_id,
         );
@@ -824,7 +848,7 @@ fn readiness(config: &OperatorConfig, secrets: &BTreeMap<String, bool>) -> Value
     })
 }
 
-fn secret_environment() -> [(&'static str, &'static str); 15] {
+fn secret_environment() -> [(&'static str, &'static str); 17] {
     [
         ("integrations.composio_api_key", "COMPOSIO_API_KEY"),
         (
@@ -839,6 +863,11 @@ fn secret_environment() -> [(&'static str, &'static str); 15] {
             "integrations.microsoft_client_secret",
             "CONNECTOR_MICROSOFT_CLIENT_SECRET",
         ),
+        (
+            "integrations.github_client_secret",
+            "CONNECTOR_GITHUB_CLIENT_SECRET",
+        ),
+        ("integrations.slack_client_secret", "SLACK_CLIENT_SECRET"),
         ("surfaces.slack_app_token", "SLACK_APP_TOKEN"),
         ("surfaces.slack_bot_token", "SLACK_BOT_TOKEN"),
         ("surfaces.slack_signing_secret", "SLACK_SIGNING_SECRET"),

@@ -275,6 +275,8 @@ function fillConfiguration() {
   $("composio-enabled").checked = config.integrations.composio_enabled;
   $("google-id").value = config.integrations.google_client_id;
   $("microsoft-id").value = config.integrations.microsoft_client_id;
+  $("github-id").value = config.integrations.github_client_id || "";
+  $("slack-connector-id").value = config.integrations.slack_client_id || "";
   $("slack-enabled").checked = config.surfaces.slack_socket_mode;
   $("telegram-enabled").checked = config.surfaces.telegram_polling;
   $("teams-id").value = config.surfaces.teams_app_id;
@@ -316,6 +318,8 @@ function collectConfiguration() {
     composio_enabled: $("composio-enabled").checked,
     google_client_id: $("google-id").value.trim(),
     microsoft_client_id: $("microsoft-id").value.trim(),
+    github_client_id: $("github-id").value.trim(),
+    slack_client_id: $("slack-connector-id").value.trim(),
   };
   config.surfaces = {
     ...config.surfaces,

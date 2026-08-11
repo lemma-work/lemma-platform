@@ -187,6 +187,14 @@
             <div class="drawer-body"><div class="form-grid"><div class="field"><label for="google-id">Client ID</label><input id="google-id" /></div><div class="field"><label for="google-secret">Client secret</label><div class="secret-wrap"><input id="google-secret" type="password" data-secret="integrations.google_client_secret" /><button class="secret-clear">Remove</button></div></div></div><p class="hint">Callback: <code id="connector-callback">Available after startup</code></p></div>
           </details>
           <details class="config-drawer">
+            <summary><span><strong>GitHub</strong><small>Repositories, issues, and pull requests</small></span><span class="status">Optional</span></summary>
+            <div class="drawer-body"><div class="form-grid"><div class="field"><label for="github-id">Client ID</label><input id="github-id" /></div><div class="field"><label for="github-secret">Client secret</label><div class="secret-wrap"><input id="github-secret" type="password" data-secret="integrations.github_client_secret" /><button class="secret-clear">Remove</button></div></div></div><p class="hint">From a GitHub OAuth app. Needed before a GitHub account can be connected.</p></div>
+          </details>
+          <details class="config-drawer">
+            <summary><span><strong>Slack</strong><small>Slack connector OAuth app</small></span><span class="status">Optional</span></summary>
+            <div class="drawer-body"><div class="form-grid"><div class="field"><label for="slack-connector-id">Client ID</label><input id="slack-connector-id" /></div><div class="field"><label for="slack-connector-secret">Client secret</label><div class="secret-wrap"><input id="slack-connector-secret" type="password" data-secret="integrations.slack_client_secret" /><button class="secret-clear">Remove</button></div></div></div><p class="hint">Connects each person&rsquo;s own Slack account. The bot that posts as Lemma is configured under Channels.</p></div>
+          </details>
+          <details class="config-drawer">
             <summary><span><strong>Microsoft</strong><small>Microsoft connector OAuth app</small></span><span class="status">Optional</span></summary>
             <div class="drawer-body"><div class="form-grid"><div class="field"><label for="microsoft-id">Client ID</label><input id="microsoft-id" /></div><div class="field"><label for="microsoft-secret">Client secret</label><div class="secret-wrap"><input id="microsoft-secret" type="password" data-secret="integrations.microsoft_client_secret" /><button class="secret-clear">Remove</button></div></div></div></div>
           </details>
