@@ -256,8 +256,10 @@ nothing in the logs to explain it. Set it, or leave Resend unconfigured.
 ### Agent email surfaces
 
 Separate from the transactional mail above: this is how *agents* send and
-receive email. Each agent gets its own address at creation, which the UI shows
-as "email this agent at …" and which people can reply to.
+receive email. Each agent gets its own address at creation, which people can
+write to and reply to. The address is returned as `surface_identity_email` on
+the surfaces API; no screen displays it yet, so today you read it from the API
+or from the `agent_surfaces` row.
 
 ```dotenv
 RESEND_API_KEY=re_...              # shared with transactional mail above

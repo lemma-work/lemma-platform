@@ -275,13 +275,11 @@ class SurfaceWebhookSecurityService:
         only covers the four chat platforms with a shared webhook), so the
         controller calls this directly before enqueuing the inbound email.
 
-        Falls back to the shared ``RESEND_WEBHOOK_SECRET`` — the one the bounce
-        endpoint already uses — so a deployment pointing both event types at one
-        signing secret needs a single variable. Svix issues a secret per
-        *endpoint*, though, so if inbound and bounces are separate endpoints in
-        Resend their secrets differ, and
-        ``RESEND_INBOUND_WEBHOOK_SECRET`` is how you say so without disturbing
-        bounces.
+        Reads ``RESEND_WEBHOOK_SECRET``, the single secret for the Resend
+        webhook. Svix issues one per *endpoint*, so the only case needing a
+        second variable is bounces configured as their own Resend endpoint —
+        ``RESEND_BOUNCE_WEBHOOK_SECRET``, read by the bounce controller and
+        defaulting to this one. Nothing overrides the inbound side on its own.
         """
         if not self.verification_enabled():
             return

@@ -5,7 +5,7 @@ title = "lemma-platform gitleaks config"
 [extend]
 useDefault = true
 
-[allowlist]
+[[allowlists]]
 description = '''
 GitHub's own official REST API OpenAPI description (fetched on demand by
 lemma-backend/scripts/generate_github_static_operations.py, no longer
@@ -17,4 +17,20 @@ leaked credentials. Path-allowlisted rather than purged from history.
 '''
 paths = [
   '''lemma-backend/lemma-connectors/openapi_specs/github\.json''',
+]
+
+[[allowlists]]
+description = '''
+Svix's own published signature-verification vector, which Resend's inbound
+webhook signing is built on. The secret, message id, timestamp, payload and
+expected signature are all printed in Svix's public documentation; the pair
+below is that vector and a one-character mutation of it used as the negative
+control, so a verifier that accepts everything fails the test.
+
+Allowlisted by exact value rather than by path: any other high-entropy string
+in the same test file is still a finding, and this vector is public knowledge
+in every repository that verifies a Svix-signed webhook.
+'''
+regexes = [
+  '''whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaS[wx]''',
 ]

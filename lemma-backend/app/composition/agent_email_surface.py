@@ -1,9 +1,11 @@
 """Giving a new agent its own mailbox.
 
 An agent that can be emailed needs an address before anyone can email it, and
-the UI wants to show that address the moment the agent exists — "email this
-agent at …" is how a person starts the first conversation. So provisioning
-happens at creation rather than lazily on first send.
+that address has to exist the moment the agent does — someone writing to the
+agent is how the first conversation starts, and it cannot be conditional on the
+agent having sent something first. So provisioning happens at creation rather
+than lazily on first send. The address is already on the surfaces API as
+``surface_identity_email``; showing it in the UI is a separate change.
 
 Everything here is best-effort. Creating an agent must not fail because a mail
 domain is unset or Resend is unreachable: the agent is still perfectly usable
