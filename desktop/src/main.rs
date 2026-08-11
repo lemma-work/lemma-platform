@@ -4807,18 +4807,41 @@ fn main() {
                     let handle = handle.clone();
                     let resumed_url = target.url.clone();
                     std::thread::spawn(move || {
+                        // The seed above told the shell this workspace was up.
+                        // Any path out of here that does not confirm that has
+                        // to take it back: the splash reads `ready` on load and
+                        // navigates straight to `ui.url` if it is set and there
+                        // is no error, so handing it the splash while the state
+                        // still claims success just bounces the user back to
+                        // the workspace they were rescued from -- against a
+                        // port nothing is listening on, in a loop.
+                        let stand_down = |failure: Option<String>| {
+                            let shell: State<Shell> = handle.state();
+                            let snapshot = {
+                                let mut ui = shell.ui.lock().unwrap();
+                                ui.ready = false;
+                                if let Some(error) = failure {
+                                    eprintln!("[desktop-resume] {error}");
+                                    ui.running = false;
+                                    ui.error = true;
+                                    ui.error_code = "resume-failed".into();
+                                    ui.status = error;
+                                }
+                                ui.clone()
+                            };
+                            let _ = handle.emit("lemma:state", snapshot);
+                            show_splash(&handle);
+                        };
                         if let Err(error) = ensure_locald(&handle) {
-                            eprintln!("[desktop-resume] {error}");
                             // The stack is serving but the daemon is not
                             // reachable, so the shell cannot supervise it. Say
                             // so on the splash rather than leaving a workspace
                             // that silently has no controls behind it.
-                            show_splash(&handle);
+                            stand_down(Some(error));
                             return;
                         }
                         if let Err(error) = start_impl(handle.clone()) {
-                            eprintln!("[desktop-resume] {error}");
-                            show_splash(&handle);
+                            stand_down(Some(error));
                             return;
                         }
                         // Connecting can itself invalidate what the window is
@@ -4829,7 +4852,12 @@ fn main() {
                         // listening on — so hand it the splash, which is what
                         // reports the restart it is waiting for.
                         if !resume_still_serving(&handle, &resumed_url) {
-                            show_splash(&handle);
+                            // Not a failure: the daemon was replaced and the
+                            // stack is coming back on new ports. But `ready`
+                            // still points at the old ones, so it has to come
+                            // down here too, or the splash re-opens the stale
+                            // URL before the real `ready` event arrives.
+                            stand_down(None);
                         }
                     });
                 } else {
@@ -4941,6 +4969,44 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use std::fs::File;
+
+    #[test]
+    fn a_resume_that_did_not_pan_out_stops_claiming_the_workspace_is_ready() {
+        // The optimistic resume seeds ready/running/url before it has checked
+        // anything, so the workspace can be on screen with no latency. The
+        // splash opens `ui.url` whenever it loads and finds ready set with no
+        // error -- so every path that gives up and shows the splash has to
+        // clear `ready` first, or the two bounce the user between a splash and
+        // a dead workspace.
+        let source = include_str!("main.rs");
+        let setup = {
+            let start = source.find(".setup(move |app| {").expect("setup exists");
+            let end = source[start..]
+                .find("\n        .build(")
+                .or_else(|| source[start..].find("\n        .run("))
+                .map_or(source.len(), |offset| start + offset);
+            &source[start..end]
+        };
+        let resume = {
+            let start = setup
+                .find("if let Some(target) = resume.clone()")
+                .expect("the resume branch exists");
+            let end = setup[start..]
+                .find("\n                } else {")
+                .map_or(setup.len(), |offset| start + offset);
+            &setup[start..end]
+        };
+        assert!(
+            resume.contains("ui.ready = false;"),
+            "giving up on a resume must clear the optimistic ready flag"
+        );
+        assert_eq!(
+            resume.matches("show_splash(&handle);").count(),
+            1,
+            "the resume branch must reach the splash only through stand_down, \
+             which is what clears the state the splash reads"
+        );
+    }
 
     #[test]
     fn nothing_in_setup_installs_the_runtime_on_the_main_thread() {
