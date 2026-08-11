@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import hmac
@@ -206,24 +207,68 @@ def test_neither_configured_is_reported_as_unconfigured(monkeypatch):
     assert resolve_resend_inbound_secret() is None
 
 
-def test_our_svix_signature_matches_the_published_reference_vector():
-    """Guards the algorithm itself against a self-confirming test.
+def test_the_verifier_accepts_svix_s_own_published_vector(monkeypatch):
+    """Runs the *real* verifier against Svix's documented example.
 
-    Signing the payload with our own code and then verifying it proves only
-    that we agree with ourselves. This is Svix's documented vector, so it fails
-    if the secret decoding, the signed-content layout, or the digest ever drift
-    from what Resend actually sends.
+    The previous version recomputed HMAC-SHA256 inline and compared against its
+    own output — it proved only that the test agreed with itself, and would have
+    passed unchanged if the secret decoding, the signed-content layout, or the
+    digest had drifted from what Resend actually sends. Calling
+    ``verify_resend_request`` is what makes that drift fail here.
     """
-    import base64
-    import hashlib
-    import hmac
+    from app.core.config import settings as core_config
 
-    secret = "whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw"
-    signed = b"msg_p5jXN8AQM9LWM0D4loKWxJek.1614265330." + b'{"test": 2432232314}'
-    key = base64.b64decode(secret[len("whsec_") :])
+    msg_id = "msg_p5jXN8AQM9LWM0D4loKWxJek"
+    timestamp = "1614265330"
+    body = b'{"test": 2432232314}'
 
-    digest = base64.b64encode(
-        hmac.new(key, signed, hashlib.sha256).digest()
-    ).decode()
+    monkeypatch.setattr(
+        core_config, "resend_webhook_secret", "whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw"
+    )
+    # The vector is from 2021; freeze the clock so the replay window is not what
+    # this test is measuring.
+    monkeypatch.setattr(
+        "app.modules.agent_surfaces.services.webhook_security_service.time.time",
+        lambda: float(timestamp),
+    )
 
-    assert digest == "g0hM9SsE+OTPJTGt/tmIKtSyZlE3uFJELVlNIOLJ1OE="
+    # No exception means verified.
+    asyncio.run(
+        SurfaceWebhookSecurityService().verify_resend_request(
+            headers={
+                "svix-id": msg_id,
+                "svix-timestamp": timestamp,
+                "svix-signature": (
+                    "v1,g0hM9SsE+OTPJTGt/tmIKtSyZlE3uFJELVlNIOLJ1OE="
+                ),
+            },
+            raw_body=body,
+        )
+    )
+
+
+def test_the_verifier_rejects_that_vector_under_a_different_secret(monkeypatch):
+    """The other half: a verifier that accepts everything would also pass above."""
+    from app.core.config import settings as core_config
+
+    monkeypatch.setattr(
+        core_config, "resend_webhook_secret", "whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSx"
+    )
+    monkeypatch.setattr(
+        "app.modules.agent_surfaces.services.webhook_security_service.time.time",
+        lambda: 1614265330.0,
+    )
+
+    with pytest.raises(SurfaceWebhookAuthenticationError):
+        asyncio.run(
+            SurfaceWebhookSecurityService().verify_resend_request(
+                headers={
+                    "svix-id": "msg_p5jXN8AQM9LWM0D4loKWxJek",
+                    "svix-timestamp": "1614265330",
+                    "svix-signature": (
+                        "v1,g0hM9SsE+OTPJTGt/tmIKtSyZlE3uFJELVlNIOLJ1OE="
+                    ),
+                },
+                raw_body=b'{"test": 2432232314}',
+            )
+        )

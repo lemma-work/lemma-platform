@@ -314,15 +314,26 @@ async def test_a_channel_with_a_live_thread_replies_into_it():
 
 
 def _notification_service(*, provisioner=None, surfaces=()):
-    """A NotificationService with only the collaborators channel resolution uses."""
+    """A NotificationService with only the collaborators channel resolution uses.
+
+    Autospecced against the real classes for the same reason as
+    ``_egress_double`` above — and this file previously did the opposite while
+    its own docstring condemned it. A bare ``AsyncMock`` answers any attribute,
+    so a renamed or never-written method reads as a passing test, which is the
+    exact failure this suite exists to catch.
+    """
+    from app.modules.agent_surfaces.domain.ports import SurfacePodMembershipPort
+    from app.modules.agent_surfaces.infrastructure.repositories.surface_repository import (
+        SurfaceRepository,
+    )
     from app.modules.agent_surfaces.services.notification_service import (
         NotificationService,
     )
 
-    surface_repo = AsyncMock()
-    surface_repo.list_by_pod = AsyncMock(return_value=(list(surfaces), None))
-    membership = AsyncMock()
-    membership.get_user_email = AsyncMock(return_value="bob@example.com")
+    surface_repo = create_autospec(SurfaceRepository, instance=True)
+    surface_repo.list_by_pod.return_value = (list(surfaces), None)
+    membership = create_autospec(SurfacePodMembershipPort, instance=True)
+    membership.get_user_email.return_value = "bob@example.com"
 
     return NotificationService(
         uow=AsyncMock(),
@@ -476,6 +487,11 @@ async def test_the_recipients_own_preference_no_longer_steers_delivery():
     genuinely "which of our surfaces did this person mean to talk to".
     """
     service = _notification_service(surfaces=(_surface_for(None, SurfacePlatform.RESEND),))
+
+    # Autospecced against the Protocol: reading a method it no longer declares
+    # raises, so this is what proves the lookup is gone rather than just unused.
+    with pytest.raises(AttributeError):
+        service.membership.get_user_default_surface_ids
 
     channels, _ = await service.resolve_channels(
         pod_id=uuid4(), recipient_user_id=uuid4(), actor_agent_id=None

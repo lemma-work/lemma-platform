@@ -96,6 +96,35 @@ def references_of(data: dict, headers: dict[str, str]) -> list[str]:
     return [ref for ref in _header_value(raw).split() if ref]
 
 
+def normalize_attachments(raw: Any) -> list[dict[str, Any]]:
+    """Resend's attachment metadata in the shape the rest of the code expects.
+
+    Resend calls it ``filename``; every consumer here reads ``name`` — the file
+    ingest service, the attachment validator, and the path the agent is shown.
+    Left unmapped the attachment survived validation on its id alone and then
+    landed with no name at all, so nothing downstream could describe it.
+    """
+    if not isinstance(raw, list):
+        return []
+    normalized: list[dict[str, Any]] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        name = item.get("filename") or item.get("name")
+        normalized.append(
+            {
+                "id": str(item.get("id") or "").strip() or None,
+                "name": str(name).strip() if name else None,
+                "content_type": item.get("content_type") or item.get("contentType"),
+                "size": item.get("size"),
+                "content_id": item.get("content_id") or item.get("contentId"),
+                "is_inline": str(item.get("content_disposition") or "").lower()
+                == "inline",
+            }
+        )
+    return normalized
+
+
 def normalize_resend_inbound(payload: dict) -> dict:
     """Flatten the webhook envelope into the flat dict the parser consumes.
 
@@ -130,12 +159,13 @@ def normalize_resend_inbound(payload: dict) -> dict:
         "message_id": data.get("message_id") or headers.get("message-id"),
         "in_reply_to": data.get("in_reply_to") or headers.get("in-reply-to"),
         "references": references_of(data, headers),
-        "attachments": data.get("attachments") or [],
+        "attachments": normalize_attachments(data.get("attachments")),
     }
 
 
 __all__ = [
     "all_addresses",
+    "normalize_attachments",
     "email_address",
     "header_map",
     "normalize_resend_inbound",

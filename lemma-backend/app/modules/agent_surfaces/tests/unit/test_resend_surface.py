@@ -625,3 +625,111 @@ def test_the_unique_email_index_is_declared_on_the_model_too():
         if i.name == "uq_agent_surface_identity_email"
     )
     assert index.unique is True
+
+
+def test_an_inbound_attachment_keeps_its_filename():
+    """Resend calls it `filename`; everything downstream reads `name`.
+
+    Unmapped, the attachment passed the identifiable check on its id alone and
+    arrived nameless, so the ingest service could not save it under anything a
+    person would recognise and the agent was told a file existed with no way to
+    refer to it.
+    """
+    from app.modules.agent_surfaces.platforms.resend.inbound import (
+        normalize_attachments,
+    )
+
+    [attachment] = normalize_attachments(
+        [
+            {
+                "id": "att-1",
+                "filename": "invoice.pdf",
+                "content_type": "application/pdf",
+                "content_disposition": "attachment",
+                "size": 4096,
+            }
+        ]
+    )
+
+    assert attachment["name"] == "invoice.pdf"
+    assert attachment["id"] == "att-1"
+    assert attachment["content_type"] == "application/pdf"
+    assert attachment["is_inline"] is False
+
+
+def test_an_inline_image_is_marked_inline():
+    """Signature logos arrive as attachments; the agent should not treat them
+    as files the person deliberately sent."""
+    from app.modules.agent_surfaces.platforms.resend.inbound import (
+        normalize_attachments,
+    )
+
+    [attachment] = normalize_attachments(
+        [{"id": "a", "filename": "logo.png", "content_disposition": "inline"}]
+    )
+
+    assert attachment["is_inline"] is True
+
+
+@pytest.mark.asyncio
+async def test_an_attachment_is_downloaded_through_its_signed_url():
+    """Resend serves attachment bytes from a signed CDN URL, not from its API.
+
+    Two hops: the attachment endpoint returns metadata with `download_url`, and
+    the content comes from there. The adapter previously had no
+    `download_attachment` at all, so inbound files were named and never fetched.
+    """
+    import httpx
+    from unittest.mock import patch
+
+    from app.modules.agent_surfaces.platforms.resend.adapter import (
+        ResendSurfaceAdapter,
+    )
+
+    event = ResendInboundParser().parse(
+        _normalize_resend_inbound(
+            _real_webhook(
+                attachments=[
+                    {"id": "att-1", "filename": "invoice.pdf",
+                     "content_type": "application/pdf", "size": 10}
+                ]
+            )
+        )
+    )
+    seen: dict = {}
+
+    class _Resp:
+        def __init__(self, payload=None, content=b""):
+            self._payload, self.content = payload, content
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return self._payload
+
+    async def _fake_get(self, url, **kwargs):  # noqa: ANN001
+        seen.setdefault("urls", []).append(url)
+        seen.setdefault("auth", []).append((kwargs.get("headers") or {}).get("Authorization"))
+        if "/attachments/" in url:
+            return _Resp(
+                {"filename": "invoice.pdf", "content_type": "application/pdf",
+                 "download_url": "https://cdn.resend.test/signed"},
+                b"{}",
+            )
+        return _Resp(None, b"%PDF-1.4 real bytes")
+
+    with patch.object(httpx.AsyncClient, "get", new=_fake_get):
+        downloaded = await ResendSurfaceAdapter().download_attachment(
+            credentials={"api_key": "re_test"},
+            event=event,
+            attachment=event.metadata["attachments"][0],
+        )
+
+    content, name, mime = downloaded
+    assert content == b"%PDF-1.4 real bytes"
+    assert name == "invoice.pdf"
+    assert mime == "application/pdf"
+    # The API call is authenticated; the signed URL must not carry our key.
+    assert seen["auth"][0] == "Bearer re_test"
+    assert seen["auth"][1] is None

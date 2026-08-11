@@ -37,6 +37,23 @@ class ResendSurfaceAdapter(BaseSurfaceAdapter):
     ) -> SurfaceSenderProfile | None:
         return await ResendPlatformService(credentials).fetch_sender_profile(event)
 
+    async def download_attachment(
+        self,
+        *,
+        credentials: dict[str, Any],
+        event: ParsedInboundSurfaceEvent,
+        attachment: dict[str, Any],
+    ) -> tuple[bytes, str, str] | None:
+        """Let inbound email attachments become pod files like every other surface.
+
+        Without this the base class returned None, so a file somebody emailed to
+        an agent was named in the metadata and never fetched — the agent was told
+        an attachment existed and had no way to open it.
+        """
+        return await ResendPlatformService(credentials).download_attachment_bytes(
+            event, attachment
+        )
+
     async def enrich_inbound_event(
         self, *, credentials: dict[str, Any], event: ParsedInboundSurfaceEvent
     ) -> ParsedInboundSurfaceEvent | None:

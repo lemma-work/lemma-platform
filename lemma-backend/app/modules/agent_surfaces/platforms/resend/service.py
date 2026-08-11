@@ -125,6 +125,47 @@ class ResendPlatformService:
             response.raise_for_status()
             return response.json() if response.content else {}
 
+    async def download_attachment_bytes(
+        self,
+        event: ParsedInboundSurfaceEvent,
+        attachment: dict[str, Any],
+    ) -> tuple[bytes, str, str] | None:
+        """Fetch one inbound attachment, so the agent gets a real file.
+
+        Two hops, because Resend does not serve the bytes from its API: the
+        attachment endpoint returns metadata with a short-lived signed
+        ``download_url``, and the content comes from there. ``email_id`` is the
+        same handle the body fetch uses, carried on the event's metadata.
+        """
+        email_id = str((event.metadata or {}).get("email_id") or "").strip()
+        attachment_id = str(attachment.get("id") or "").strip()
+        if not (self._api_key and email_id and attachment_id):
+            return None
+
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            described = await client.get(
+                f"{self._api_base.rstrip('/')}/emails/receiving/"
+                f"{email_id}/attachments/{attachment_id}",
+                headers={"Authorization": f"Bearer {self._api_key}"},
+            )
+            described.raise_for_status()
+            payload = described.json() if described.content else {}
+            url = str(payload.get("download_url") or "").strip()
+            if not url:
+                return None
+            # The signed URL is not the Resend API and must not carry the key.
+            content = await client.get(url)
+            content.raise_for_status()
+            name = str(
+                payload.get("filename") or attachment.get("name") or "attachment"
+            )
+            mime = str(
+                payload.get("content_type")
+                or attachment.get("content_type")
+                or "application/octet-stream"
+            )
+            return content.content, name, mime
+
     async def send_cold_email(
         self,
         *,

@@ -20,7 +20,10 @@ from app.modules.agent_surfaces.platforms.email_common import (
     normalize_email_address,
     parse_email_identity,
 )
-from app.modules.agent_surfaces.platforms.resend.inbound import header_map
+from app.modules.agent_surfaces.platforms.resend.inbound import (
+    header_map,
+    normalize_attachments,
+)
 
 
 def merge_received_email(
@@ -50,7 +53,8 @@ def merge_received_email(
     metadata = dict(event.metadata or {})
     metadata.update(thread)
     metadata["attachments"] = _first_non_empty(
-        received.get("attachments"), metadata.get("attachments")
+        normalize_attachments(received.get("attachments")),
+        metadata.get("attachments"),
     )
 
     reply_target = dict(event.reply_target or {})
