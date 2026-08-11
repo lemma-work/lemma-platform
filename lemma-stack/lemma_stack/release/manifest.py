@@ -37,9 +37,11 @@ APP_IMAGE_KEYS = (
 # Fresh installs get pg16; the dev stack stays on pg15 for volume compat.
 DEFAULT_INFRA_IMAGES = {
     "postgres": "docker.io/pgvector/pgvector:0.8.3-pg16",
-    # Server-only retains RedisJSON/Search/etc. without bundling RedisInsight,
-    # which Desktop does not expose and should not make every user download.
-    "redis": "docker.io/redis/redis-stack-server:7.2.0-v19",
+    # Plain Redis. Nothing issues a JSON.* or FT.* command -- RedisJsonCache
+    # stores JSON as an ordinary string, and vector search is Postgres -- so the
+    # Stack image was ~200 MB of modules nothing loaded, downloaded on every
+    # first launch.
+    "redis": "docker.io/redis:7.4-alpine",
     "supertokens": "docker.io/supertokens/supertokens-postgresql:11.4.5",
 }
 

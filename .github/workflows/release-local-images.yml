@@ -260,7 +260,7 @@ jobs:
     needs: protected-e2e-gate
     env:
       POSTGRES_IMAGE: docker.io/pgvector/pgvector:0.8.3-pg16
-      REDIS_IMAGE: docker.io/redis/redis-stack-server:7.2.0-v19
+      REDIS_IMAGE: docker.io/redis:7.4-alpine
       SUPERTOKENS_IMAGE: docker.io/supertokens/supertokens-postgresql:11.4.5
     steps:
       - name: Set up Docker Buildx

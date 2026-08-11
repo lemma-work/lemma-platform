@@ -574,18 +574,32 @@ impl<E: Engine> GuestService<E> {
 
     fn ensure_redis(&self, parameters: &CoreParameters) -> Result<(), GuestError> {
         self.ensure_volume("lemma-redis-data")?;
-        let redis_env = BTreeMap::from([(
-            "REDIS_ARGS".into(),
-            format!(
-                "--bind 0.0.0.0 --protected-mode yes --appendonly yes --dir /data --requirepass {}",
-                parameters.credentials.redis_password
-            ),
-        )]);
+        // Passed as argv rather than through REDIS_ARGS: that variable is read
+        // by redis-stack-server's own entrypoint script, and plain redis
+        // ignores it entirely -- which would start an unauthenticated,
+        // non-persistent Redis rather than failing loudly.
+        let redis_command: Vec<String> = [
+            "--bind",
+            "0.0.0.0",
+            "--protected-mode",
+            "yes",
+            "--appendonly",
+            "yes",
+            "--dir",
+            "/data",
+            "--requirepass",
+            parameters.credentials.redis_password.as_str(),
+        ]
+        .iter()
+        .map(|value| (*value).to_owned())
+        .collect();
         self.ensure_core_container(
             "lemma-core-redis",
             &parameters.images.redis,
-            "redis-stack-server-v2",
-            &redis_env,
+            // Bumped so an existing Stack container is replaced rather than
+            // adopted: the configuration moved from the environment to argv.
+            "redis-v3",
+            &BTreeMap::new(),
             &[
                 "--network".into(),
                 "host".into(),
@@ -596,7 +610,7 @@ impl<E: Engine> GuestService<E> {
                 "--volume".into(),
                 "lemma-redis-data:/data".into(),
             ],
-            &[],
+            &redis_command,
         )?;
         self.wait_redis(&parameters.credentials.redis_password, 120)
     }
@@ -1105,7 +1119,7 @@ impl<E: Engine> GuestService<E> {
     fn wait_redis(&self, password: &str, timeout: u64) -> Result<(), GuestError> {
         let deadline = Instant::now() + Duration::from_secs(timeout);
         while Instant::now() < deadline {
-            if redis_stack_ready(&self.current_endpoint_host(), password).is_ok() {
+            if redis_ready(&self.current_endpoint_host(), password).is_ok() {
                 return Ok(());
             }
             thread::sleep(Duration::from_millis(250));
@@ -2071,7 +2085,14 @@ fn validate_secret(name: &str, value: &str) -> Result<(), GuestError> {
     Ok(())
 }
 
-fn redis_stack_ready(host: &str, password: &str) -> io::Result<()> {
+/// AUTH and PING, and deliberately nothing about modules.
+///
+/// This used to require `MODULE LIST` to report `search` and `rejson`, which
+/// tied the guest to a Redis Stack image. Nothing in the product ever issued a
+/// `JSON.*` or `FT.*` command -- `RedisJsonCache` stores JSON as an ordinary
+/// string through GET/SET, and vector search is Postgres -- so the assertion
+/// only made a smaller Redis impossible to adopt.
+fn redis_ready(host: &str, password: &str) -> io::Result<()> {
     validate_secret("redis_password", password)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error.message))?;
     let address = (host, 6379)
@@ -2083,7 +2104,7 @@ fn redis_stack_ready(host: &str, password: &str) -> io::Result<()> {
     stream.set_write_timeout(Some(Duration::from_secs(2)))?;
     write!(
         stream,
-        "*2\r\n$4\r\nAUTH\r\n${}\r\n{}\r\n*1\r\n$4\r\nPING\r\n*2\r\n$6\r\nMODULE\r\n$4\r\nLIST\r\n*1\r\n$4\r\nQUIT\r\n",
+        "*2\r\n$4\r\nAUTH\r\n${}\r\n{}\r\n*1\r\n$4\r\nPING\r\n*1\r\n$4\r\nQUIT\r\n",
         password.len(),
         password
     )?;
@@ -2093,16 +2114,10 @@ fn redis_stack_ready(host: &str, password: &str) -> io::Result<()> {
     let response = std::str::from_utf8(&response)
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "Redis returned non-UTF8"))?;
     let response = response.to_ascii_lowercase();
-    if response.contains("+ok\r\n")
-        && response.contains("+pong\r\n")
-        && response.contains("search")
-        && response.contains("rejson")
-    {
+    if response.contains("+ok\r\n") && response.contains("+pong\r\n") {
         Ok(())
     } else {
-        Err(io::Error::other(
-            "Redis authentication, ping, or required modules failed",
-        ))
+        Err(io::Error::other("Redis authentication or ping failed"))
     }
 }
 
