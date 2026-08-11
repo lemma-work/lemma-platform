@@ -102,6 +102,16 @@ pub struct HostSetupSpec {
     pub max_attempts: usize,
     #[serde(default = "default_setup_retry_backoff")]
     pub retry_backoff_seconds: u64,
+    /// Whether failing this step should stop the whole stack from starting.
+    ///
+    /// Migrations are not optional: a backend running against a schema it does
+    /// not expect is worse than one that refuses to start. Seeding the
+    /// connector catalog is — it reaches the network when a Composio key is
+    /// set, and a workspace that cannot start because a third-party catalog
+    /// was unreachable would be a bad trade for a feature the user may not be
+    /// using in this session.
+    #[serde(default)]
+    pub optional: bool,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -588,11 +598,18 @@ impl HostProcessManager {
                             continue 'setups;
                         }
                         if attempt == setup.max_attempts {
-                            return Err(io::Error::other(format!(
+                            let detail = format!(
                                 "{} setup exited with {status} after {attempt} attempts; see {}",
                                 setup.id,
                                 self.log_dir.join(format!("{}.log", setup.id)).display()
-                            )));
+                            );
+                            if setup.optional {
+                                // Logged rather than raised: the log line is the
+                                // record, and the stack still comes up.
+                                eprintln!("locald: {detail}");
+                                continue 'setups;
+                            }
+                            return Err(io::Error::other(detail));
                         }
                         let backoff = Duration::from_secs(
                             setup.retry_backoff_seconds.saturating_mul(attempt as u64),
@@ -2013,6 +2030,7 @@ mod tests {
             timeout_seconds: 10,
             max_attempts: 3,
             retry_backoff_seconds: 0,
+            optional: false,
         }
     }
 
@@ -2320,6 +2338,46 @@ mod tests {
 
         let log = std::fs::read_to_string(root.path().join("migrations.log")).unwrap();
         assert!(log.contains("DATABASE_URL=postgresql://private-guest/lemma"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_optional_setup_that_fails_does_not_stop_the_stack() {
+        // Seeding the connector catalog reaches the network whenever a Composio
+        // key is set. A workspace that will not start because a third-party
+        // catalog was unreachable would be a bad trade for a feature this
+        // session may not even use, so the failure is logged and the start
+        // continues. Migrations stay required: a backend running against a
+        // schema it does not expect is worse than one that refuses to start.
+        let root = tempdir().unwrap();
+        let mut value = manifest(vec![
+            service("frontend", &["backend"]),
+            service("backend", &[]),
+        ]);
+        value.setup[0].command = vec!["/bin/sh".into(), "-c".into(), "exit 9".into()];
+        value.setup[0].max_attempts = 1;
+        value.setup[0].optional = true;
+        let manager = HostProcessManager::new(value, root.path().to_path_buf()).unwrap();
+
+        manager
+            .run_setups()
+            .expect("an optional setup must not fail the start");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_required_setup_that_fails_still_stops_the_stack() {
+        let root = tempdir().unwrap();
+        let mut value = manifest(vec![
+            service("frontend", &["backend"]),
+            service("backend", &[]),
+        ]);
+        value.setup[0].command = vec!["/bin/sh".into(), "-c".into(), "exit 9".into()];
+        value.setup[0].max_attempts = 1;
+        value.setup[0].optional = false;
+        let manager = HostProcessManager::new(value, root.path().to_path_buf()).unwrap();
+
+        assert!(manager.run_setups().is_err());
     }
 
     #[cfg(unix)]

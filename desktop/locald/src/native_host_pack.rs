@@ -566,10 +566,39 @@ fn build(
                 "id": "migrations",
                 "command": argv(&bindings.python, &["-m", "alembic", "-c", "alembic.ini", "upgrade", "head"]),
                 "cwd": path_text(&backend_dir)?,
-                "env": backend_env,
+                "env": backend_env.clone(),
                 "timeout_seconds": 300,
                 "max_attempts": 5,
                 "retry_backoff_seconds": 3,
+            },
+            // Seeds the connector catalog. Without it a packaged install has no
+            // connectors at all: `make dev` seeds one and the shipped app never
+            // did, so this ran only on developer machines.
+            //
+            // No --provider flag on purpose. The importer always syncs the
+            // native apps and adds the Composio ones only when
+            // COMPOSIO_API_KEY is set, skipping them cleanly when it is not --
+            // which is also what makes adding a key later work: the step runs
+            // on every start, so the next one picks the Composio apps up
+            // without anything else to remember.
+            //
+            // Optional, because it reaches the network when a key is set and a
+            // workspace that will not start because a third-party catalog was
+            // unreachable is a bad trade for a feature this session may not
+            // even use. One attempt for the same reason: retrying a slow
+            // import four more times would hold the whole start open.
+            {
+                "id": "connector-catalog",
+                "command": argv(
+                    &bindings.python,
+                    &["scripts/import_connector_catalog.py"],
+                ),
+                "cwd": path_text(&backend_dir)?,
+                "env": backend_env,
+                "timeout_seconds": 600,
+                "max_attempts": 1,
+                "retry_backoff_seconds": 0,
+                "optional": true,
             },
         ],
         "services": [
@@ -863,9 +892,21 @@ mod tests {
 
         assert_eq!(manifest["release"], "6.2.0");
         assert_eq!(manifest["services"].as_array().unwrap().len(), 2);
-        // One migration chain: the manager's own database is gone.
-        assert_eq!(manifest["setup"].as_array().unwrap().len(), 1);
+        // One migration chain: the manager's own database is gone. The
+        // connector catalog is seeded straight after it, because a packaged
+        // install has no connectors at all until something does.
+        assert_eq!(manifest["setup"].as_array().unwrap().len(), 2);
         assert_eq!(manifest["setup"][0]["id"], "migrations");
+        assert_eq!(manifest["setup"][1]["id"], "connector-catalog");
+        // Seeding reaches the network when a Composio key is set, and a
+        // workspace must not fail to start because a third-party catalog was
+        // unreachable.
+        assert_eq!(manifest["setup"][1]["optional"], true);
+        assert_ne!(manifest["setup"][0]["optional"], serde_json::json!(true));
+        // No --provider flag: native always, Composio only when a key is set,
+        // which is what lets adding a key later work on the next start.
+        let catalog = manifest["setup"][1]["command"].as_array().unwrap();
+        assert!(catalog.iter().all(|arg| arg.as_str() != Some("--provider")));
         assert_eq!(
             manifest["services"][0]["env"]["WORKSPACE_PROVIDER"],
             "lemma_local"

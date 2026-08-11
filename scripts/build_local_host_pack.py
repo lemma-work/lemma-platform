@@ -242,6 +242,26 @@ def copy_backend_assets(output: Path) -> None:
     shutil.copytree(REPO_ROOT / "lemma-skills", backend / "assets/lemma-skills")
     shutil.copytree(REPO_ROOT / "lemma-backend/migrations", backend / "migrations")
     shutil.copy2(REPO_ROOT / "lemma-backend/alembic.ini", backend / "alembic.ini")
+    copy_catalog_importer(backend)
+
+
+def copy_catalog_importer(backend: Path) -> None:
+    """The connector catalog seeder, which locald runs beside the migrations.
+
+    Without this a packaged install has no connector catalog at all: `make dev`
+    seeds one, and nothing in the shipped app ever did, so every connector was
+    missing on a machine that had only ever run the installer.
+
+    The importer is a script rather than part of the backend package, so it is
+    copied next to the migrations it runs after — and its native app definitions
+    come with it, since that JSON *is* the catalog for everything that does not
+    come from Composio.
+    """
+    scripts = backend / "scripts"
+    scripts.mkdir(parents=True, exist_ok=True)
+    source = REPO_ROOT / "lemma-backend/scripts"
+    for name in ("import_connector_catalog.py", "lemma_apps_config.json"):
+        shutil.copy2(source / name, scripts / name)
 
 
 def node_root(explicit: Path | None) -> Path:

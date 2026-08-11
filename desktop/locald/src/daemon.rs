@@ -1592,7 +1592,7 @@ impl Daemon {
                 "migrations" => (
                     "Checking workspace data",
                     68,
-                    "applying native database migrations",
+                    "applying database migrations and seeding connectors",
                     "migrations",
                 ),
                 "backend" => (
