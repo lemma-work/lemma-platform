@@ -563,3 +563,18 @@ async def test_chat_platforms_do_not_pay_for_an_extra_surface_read():
 
     service.surface_repository.get.assert_not_awaited()
     service.credential_resolver.for_platform.assert_awaited_once()
+
+
+def test_references_unwrap_applies_to_the_data_field_too():
+    """The sibling path the first unwrap fix missed.
+
+    `references_of` reads a top-level `data.references` before falling back to
+    headers, and that copy was read raw — so the JSON-in-a-string shape was only
+    handled on one of the two routes. The test that was supposed to cover this
+    passed an empty `data`, which is exactly why it did not.
+    """
+    from app.modules.agent_surfaces.platforms.resend.inbound import references_of
+
+    refs = references_of({"references": '["<seed@ops.asur.work>","<gen@ses>"]'}, {})
+
+    assert refs == ["<seed@ops.asur.work>", "<gen@ses>"]

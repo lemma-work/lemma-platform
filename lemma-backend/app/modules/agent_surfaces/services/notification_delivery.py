@@ -152,8 +152,19 @@ def surfaces_for_agent(
     notifications API — passes ``None`` and gets the same set, which is the pod's
     own surfaces. That is the right answer for them too: nobody's agent identity
     is being borrowed.
+
+    **Falls back to the pod's own surfaces when the agent has none.** The common
+    existing shape is a single pod-level Slack or Telegram bot with no agent of
+    its own, routed to named agents by channel; without this an agent in such a
+    pod could reach nobody, which is a regression rather than a policy. Sending
+    from the pod's own bot borrows no other agent's identity, and ``attribute()``
+    still names the agent in the message — it is exactly what happened before
+    delivery became agent-scoped.
     """
-    return [surface for surface in surfaces if surface.agent_id == actor_agent_id]
+    own = [surface for surface in surfaces if surface.agent_id == actor_agent_id]
+    if own or actor_agent_id is None:
+        return own
+    return [surface for surface in surfaces if surface.agent_id is None]
 
 
 def sort_key_for_link(link: AgentSurfaceConversationLink) -> datetime:

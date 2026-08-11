@@ -63,7 +63,6 @@ def test_the_quoted_original_is_dropped_from_a_reply():
     [
         "-----Original Message-----",
         "________________________________",
-        "From: Ops <ops@example.com>",
     ],
 )
 def test_each_client_s_quote_header_is_recognised(marker):
@@ -128,3 +127,30 @@ def test_a_first_contact_is_its_own_thread_root():
     )
 
     assert root == "<first@example.com>"
+
+
+def test_a_pasted_log_followed_by_a_question_is_not_truncated():
+    """Pasting output and then asking about it is a core thing people do.
+
+    Cutting at the first `>` deleted the actual question and left only the
+    preamble, so the agent answered a message it could not see.
+    """
+    body = "Here is the log:\n> ERROR connection refused\n> retrying\nWhat should I do?"
+
+    assert strip_quoted_reply(body) == body
+
+
+def test_a_quote_running_to_the_end_is_still_trimmed():
+    """The genuine reply case the trimming exists for."""
+    assert strip_quoted_reply("Done.\n> earlier question\n> more quote") == "Done."
+
+
+def test_ordinary_prose_beginning_with_from_survives():
+    """`From:` and `Sent from my …` occur mid-message in real mail.
+
+    Both were quote markers and both truncated messages that had not been
+    quoted at all.
+    """
+    assert strip_quoted_reply("Sure.\nSent from my iPhone\n\nPS the PO is 8812") == (
+        "Sure.\nSent from my iPhone\n\nPS the PO is 8812"
+    )

@@ -85,11 +85,15 @@ def header_map(raw_headers: Any) -> dict[str, str]:
 
 
 def references_of(data: dict, headers: dict[str, str]) -> list[str]:
-    """The References chain, whether it arrives as a list or a header string."""
+    """The References chain, however this provider encoded it.
+
+    Both sources go through ``_header_value``. The top-level ``data`` copy used
+    to be read raw, so the JSON-in-a-string shape was only unwrapped when it
+    arrived via headers — the same bug, still live on the sibling path, because
+    the test that covered it passed an empty ``data``.
+    """
     raw = data.get("references") or headers.get("references") or ""
-    if isinstance(raw, str):
-        return [ref for ref in raw.split() if ref]
-    return [str(ref) for ref in (raw or [])]
+    return [ref for ref in _header_value(raw).split() if ref]
 
 
 def normalize_resend_inbound(payload: dict) -> dict:

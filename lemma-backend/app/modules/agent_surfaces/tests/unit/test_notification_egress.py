@@ -475,7 +475,6 @@ async def test_the_recipients_own_preference_no_longer_steers_delivery():
     """
     service = _notification_service(surfaces=(_surface_for(None, SurfacePlatform.RESEND),))
 
-    assert not hasattr(service.membership, "get_user_default_surface_ids") or True
     channels, _ = await service.resolve_channels(
         pod_id=uuid4(), recipient_user_id=uuid4(), actor_agent_id=None
     )

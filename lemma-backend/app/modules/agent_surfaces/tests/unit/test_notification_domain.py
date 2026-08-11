@@ -426,3 +426,37 @@ def test_the_ingress_service_answers_every_call_delivery_makes():
 
     service = AgentSurfaceIngressService.__new__(AgentSurfaceIngressService)
     assert isinstance(service, SurfaceNotificationEgressPort)
+
+
+def test_an_agent_falls_back_to_the_pods_own_surface():
+    """The shape almost every existing pod has, and the regression that broke it.
+
+    One pod-level Slack or Telegram bot with no agent of its own, routed to
+    named agents by channel. Scoping strictly to `surface.agent_id == actor`
+    resolved to nothing, so every agent in every pod predating per-agent
+    mailboxes could suddenly reach nobody. The pod's own bot borrows no other
+    agent's identity, and the message still names the agent.
+    """
+    from app.modules.agent_surfaces.services.notification_delivery import (
+        surfaces_for_agent,
+    )
+
+    pod_surface = _surface(SurfacePlatform.SLACK)
+    pod_surface.agent_id = None
+
+    assert surfaces_for_agent([pod_surface], actor_agent_id=uuid4()) == [pod_surface]
+
+
+def test_an_agent_with_its_own_surface_does_not_borrow_the_pods():
+    """The fallback must not weaken the identity rule it sits behind."""
+    from app.modules.agent_surfaces.services.notification_delivery import (
+        surfaces_for_agent,
+    )
+
+    agent_id = uuid4()
+    pod_surface = _surface(SurfacePlatform.SLACK)
+    pod_surface.agent_id = None
+    own = _surface(SurfacePlatform.TELEGRAM)
+    own.agent_id = agent_id
+
+    assert surfaces_for_agent([pod_surface, own], actor_agent_id=agent_id) == [own]

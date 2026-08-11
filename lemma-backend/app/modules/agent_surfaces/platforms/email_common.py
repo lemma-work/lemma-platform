@@ -125,12 +125,15 @@ def plain_text_from_html(value: str | None) -> str:
 # Where a mail client starts quoting the message being replied to. Deliberately
 # anchored to line starts: "On ... wrote:" appearing mid-sentence is prose, not
 # a quote header.
+# Deliberately only the markers that *open a quoted block*. `From:` and
+# `Sent from my …` were here too and were actively destructive: both occur
+# mid-message in ordinary mail ("From: the numbers you sent, I agree"), and both
+# already sit inside the block that `On … wrote:` or `-----Original Message-----`
+# anchors, so they bought nothing and truncated real content.
 _QUOTE_MARKERS = (
     re.compile(r"^\s*On .{0,200}?wrote:\s*$", re.IGNORECASE | re.MULTILINE),
     re.compile(r"^\s*-{2,}\s*Original Message\s*-{2,}\s*$", re.IGNORECASE | re.MULTILINE),
     re.compile(r"^\s*_{5,}\s*$", re.MULTILINE),
-    re.compile(r"^\s*From:\s.+$", re.IGNORECASE | re.MULTILINE),
-    re.compile(r"^\s*Sent from my \w+", re.IGNORECASE | re.MULTILINE),
 )
 
 
@@ -157,13 +160,19 @@ def strip_quoted_reply(text: str | None) -> str:
         if match is not None:
             earliest = min(earliest, match.start())
 
-    # "> " quoting: cut from the first quoted line, but only once real content
-    # precedes it, so a reply that is *entirely* a quote is left intact.
+    # "> " quoting: only cut when the quoted run reaches the end of the message.
+    # A quote with prose after it is somebody pasting a log or an excerpt and
+    # then saying something about it — cutting there deletes the actual message,
+    # which is worse than carrying a few quoted lines into the prompt.
     lines = body.split("\n")
     offset = 0
-    for line in lines:
+    for index, line in enumerate(lines):
         if line.lstrip().startswith(">") and body[:offset].strip():
-            earliest = min(earliest, offset)
+            rest = lines[index:]
+            if all(
+                not text.strip() or text.lstrip().startswith(">") for text in rest
+            ):
+                earliest = min(earliest, offset)
             break
         offset += len(line) + 1
 
