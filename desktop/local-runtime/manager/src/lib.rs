@@ -43,7 +43,15 @@ impl NoConsoleWindow for Command {
     }
 }
 
-const WSL_DISTRIBUTION: &str = "LemmaRuntime";
+/// The distribution name used when a caller does not choose one.
+///
+/// It used to be the only name: a bare constant, while the daemon's own control
+/// endpoint is keyed to the state root. So two installations -- a second user
+/// profile, a dev root, a reinstall pointed elsewhere -- got two daemons and
+/// then quietly shared one guest, which means one install's capability file
+/// overwriting the other's, one install's stop terminating the other's runtime,
+/// and the second install's pods running against the first install's data disk.
+pub const DEFAULT_WSL_DISTRIBUTION: &str = "LemmaRuntime";
 #[cfg(target_os = "macos")]
 const DATA_DISK_BYTES: u64 = 24 * 1024 * 1024 * 1024;
 #[cfg(target_os = "macos")]
@@ -68,6 +76,8 @@ struct ProcessIdentity {
 #[derive(Clone, Debug)]
 pub struct ManagedRuntimeConfig {
     pub local_root: PathBuf,
+    /// Which private WSL distribution this installation owns.
+    pub wsl_distribution: String,
     pub artifact_root: PathBuf,
     pub bridge_executable: PathBuf,
     #[cfg(target_os = "macos")]
@@ -171,7 +181,7 @@ impl ManagedRuntime {
             .arg("request")
             .env("LEMMA_GUEST_CAPABILITY_FILE", &self.capability_file)
             .env("LEMMA_GUEST_CONTROL_SOCKET", &self.control_socket)
-            .env("LEMMA_WSL_DISTRIBUTION", WSL_DISTRIBUTION)
+            .env("LEMMA_WSL_DISTRIBUTION", &self.config.wsl_distribution)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -233,7 +243,7 @@ impl ManagedRuntime {
             let output = self.wsl(
                 &[
                     "--distribution",
-                    WSL_DISTRIBUTION,
+                    self.distribution(),
                     "--user",
                     "root",
                     "--exec",
@@ -329,10 +339,10 @@ impl ManagedRuntime {
             let _ = self.request("system.shutdown", json!({}));
             let output = Command::new(&self.config.wsl_executable)
                 .no_console_window()
-                .args(["--terminate", WSL_DISTRIBUTION])
+                .args(["--terminate", self.distribution()])
                 .output()?;
             if !output.status.success() {
-                return Err(io::Error::other(first_line(&output.stderr)));
+                return Err(io::Error::other(wsl_message(&output.stderr)));
             }
         }
         Ok(())
@@ -514,6 +524,111 @@ impl ManagedRuntime {
     }
 
     #[cfg(windows)]
+    fn distribution(&self) -> &str {
+        &self.config.wsl_distribution
+    }
+
+    /// Where the identity of the imported guest is recorded.
+    #[cfg(windows)]
+    fn guest_release_marker(&self) -> PathBuf {
+        self.config
+            .local_root
+            .join("runtime/wsl/.lemma-guest-release")
+    }
+
+    /// A cheap identity for the rootfs archive an installed guest came from.
+    ///
+    /// Length and modification time answer "is this the same file" without
+    /// reading a gigabyte on every launch. They can differ for a file whose
+    /// contents did not change -- a reinstall of the same release rewrites the
+    /// archive -- so a mismatch is a reason to look closer, not a conclusion.
+    #[cfg(windows)]
+    fn rootfs_stamp(rootfs: &Path) -> io::Result<String> {
+        let metadata = fs::metadata(rootfs)?;
+        let modified = metadata
+            .modified()?
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(io::Error::other)?
+            .as_secs();
+        Ok(format!("{}:{}", metadata.len(), modified))
+    }
+
+    /// Run wsl.exe and hand back whatever it produced, exit code included.
+    ///
+    /// `wsl()` turns a non-zero exit into an error, which is right for a command
+    /// whose success is the point. It is wrong for a query whose failure is
+    /// itself an answer.
+    #[cfg(windows)]
+    fn wsl_allowing_failure(
+        &self,
+        arguments: &[&str],
+        input: Option<&[u8]>,
+    ) -> io::Result<std::process::Output> {
+        match self.wsl(arguments, input) {
+            Ok(output) => Ok(output),
+            Err(error) if error.kind() == io::ErrorKind::Other => Err(error),
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Refuse to run this release's host against a guest from another one.
+    ///
+    /// The distribution is only ever created once, and its name says nothing
+    /// about which release built it, so an upgrade used to skip the import and
+    /// leave the new host talking to the old guestd. Every guest operation then
+    /// failed as "could not reach Lemma's private runtime", with nothing
+    /// pointing at the cause.
+    ///
+    /// This does not re-import. Under WSL there is no second data disk: unlike
+    /// the VZ guest, /var/lib/lemma and the container store live inside the
+    /// distribution's own ext4.vhdx, so `--import` over it would take every
+    /// workspace and database with it. Replacing the guest is therefore a
+    /// decision for the user, not something an upgrade does on its own.
+    #[cfg(windows)]
+    fn check_installed_guest_is_current(&self, rootfs: &Path) -> io::Result<()> {
+        if !rootfs.is_file() {
+            // Nothing to compare against. An installed guest with no artifact
+            // is the repair path's problem, not this one's.
+            return Ok(());
+        }
+        let marker = self.guest_release_marker();
+        let recorded = fs::read_to_string(&marker).unwrap_or_default();
+        let current = Self::rootfs_stamp(rootfs)?;
+        if recorded == current {
+            return Ok(());
+        }
+        if recorded.is_empty() {
+            // A distribution imported before this marker existed. Adopt it
+            // rather than declaring every existing installation broken.
+            fs::write(&marker, &current)?;
+            return Ok(());
+        }
+        Err(io::Error::other(format!(
+            "Lemma's private runtime was installed by a different release and \
+             cannot be upgraded in place, because your workspaces and databases \
+             live inside it. Open Local settings and reset the Windows runtime \
+             to rebuild it from this release ({}).",
+            self.distribution()
+        )))
+    }
+
+    /// Remove the private distribution, and everything inside it.
+    ///
+    /// The only lifecycle verbs used to be `--import` and `--terminate`, so a
+    /// corrupt guest could not be rebuilt from inside the app and uninstalling
+    /// Lemma left a registered distribution and a multi-gigabyte ext4.vhdx that
+    /// only `wsl --unregister` from a terminal could remove.
+    ///
+    /// This destroys guest state. Callers must have asked first.
+    #[cfg(windows)]
+    pub fn unregister_windows_guest(&self) -> io::Result<()> {
+        let _ = self.wsl_allowing_failure(&["--terminate", self.distribution()], None);
+        self.wsl(&["--unregister", self.distribution()], None)?;
+        let _ = fs::remove_file(self.guest_release_marker());
+        Ok(())
+    }
+
+    #[cfg(windows)]
     fn start_windows(&self) -> io::Result<()> {
         if !self.windows_wsl_ready() {
             let pending = self.wsl_setup_marker().is_file();
@@ -529,12 +644,25 @@ impl ManagedRuntime {
         let _ = fs::remove_file(self.wsl_setup_marker());
         let install = self.config.local_root.join("runtime/wsl");
         fs::create_dir_all(&install)?;
-        let distributions = self.wsl(&["--list", "--quiet"], None)?;
-        let installed = decode_wsl_output(&distributions.stdout)
-            .lines()
-            .any(|line| line.trim() == WSL_DISTRIBUTION);
+        // Deliberately not `?`. `wsl --list --quiet` exits non-zero when there
+        // are no distributions at all -- which is exactly the state
+        // prepare_windows_host engineers with `--install --no-distribution` --
+        // so treating that as fatal aborted the very first start before the
+        // import below could ever run, permanently.
+        //
+        // Listing is only ever asked whether *our* distribution is there. If
+        // the question cannot be answered, assume it is not and let the import
+        // report the real problem.
+        let installed = self
+            .wsl_allowing_failure(&["--list", "--quiet"], None)
+            .map(|output| {
+                decode_wsl_output(&output.stdout)
+                    .lines()
+                    .any(|line| line.trim() == self.distribution())
+            })
+            .unwrap_or(false);
+        let rootfs = self.config.artifact_root.join("windows-x86_64/rootfs.tar");
         if !installed {
-            let rootfs = self.config.artifact_root.join("windows-x86_64/rootfs.tar");
             if !rootfs.is_file() {
                 return Err(io::Error::new(
                     io::ErrorKind::NotFound,
@@ -546,7 +674,7 @@ impl ManagedRuntime {
             self.wsl(
                 &[
                     "--import",
-                    WSL_DISTRIBUTION,
+                    self.distribution(),
                     &install_path,
                     &rootfs_path,
                     "--version",
@@ -554,12 +682,16 @@ impl ManagedRuntime {
                 ],
                 None,
             )?;
+            let stamp = Self::rootfs_stamp(&rootfs)?;
+            fs::write(self.guest_release_marker(), stamp)?;
+        } else {
+            self.check_installed_guest_is_current(&rootfs)?;
         }
         let capability = fs::read(&self.capability_file)?;
         self.wsl(
             &[
                 "--distribution",
-                WSL_DISTRIBUTION,
+                self.distribution(),
                 "--user",
                 "root",
                 "--exec",
@@ -572,7 +704,7 @@ impl ManagedRuntime {
         self.wsl(
             &[
                 "--distribution",
-                WSL_DISTRIBUTION,
+                self.distribution(),
                 "--user",
                 "root",
                 "--exec",
@@ -696,11 +828,8 @@ impl ManagedRuntime {
                 output.status
             )?;
             if !output.stderr.is_empty() {
-                writeln!(log, "{}", first_line(&output.stderr))?;
+                writeln!(log, "{}", wsl_message(&output.stderr))?;
             }
-        }
-        if !output.status.success() {
-            return Err(io::Error::other(first_line(&output.stderr)));
         }
         Ok(output)
     }
@@ -965,19 +1094,9 @@ fn last_diagnostic(value: &[u8], fallback: &str) -> String {
         .to_owned()
 }
 
-#[cfg(windows)]
-fn first_line(value: &[u8]) -> String {
-    String::from_utf8_lossy(value)
-        .lines()
-        .next()
-        .unwrap_or("managed runtime command failed")
-        .trim()
-        .to_owned()
-}
-
-#[cfg(windows)]
+#[cfg(any(windows, test))]
 fn decode_wsl_output(value: &[u8]) -> String {
-    if value.len() >= 2 && value.iter().skip(1).step_by(2).any(|byte| *byte == 0) {
+    let decoded = if value.len() >= 2 && value.iter().skip(1).step_by(2).any(|byte| *byte == 0) {
         let words: Vec<u16> = value
             .chunks_exact(2)
             .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
@@ -985,11 +1104,69 @@ fn decode_wsl_output(value: &[u8]) -> String {
         String::from_utf16_lossy(&words).replace('\0', "")
     } else {
         String::from_utf8_lossy(value).into_owned()
-    }
+    };
+    // A UTF-16 BOM survives decoding as U+FEFF, and it is not whitespace, so
+    // `trim()` leaves it on the first line -- enough to stop the first
+    // distribution listed from ever matching its own name.
+    decoded.replace('\u{feff}', "")
+}
+
+/// The first line of something wsl.exe said, in a form a person can read.
+///
+/// wsl.exe writes UTF-16LE. Decoding that as UTF-8 succeeds -- the NUL halves
+/// are valid, they just become U+0000 -- so every WSL error reached the user as
+/// text with a NUL between each letter. It also defeated the substring matching
+/// that turns a message into an actionable error code, so no WSL failure could
+/// ever be recognised as one.
+#[cfg(any(windows, test))]
+fn wsl_message(value: &[u8]) -> String {
+    decode_wsl_output(value)
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or("managed runtime command failed")
+        .to_owned()
 }
 
 #[cfg(test)]
 mod tests {
+
+    /// wsl.exe writes UTF-16LE. Decoding it as UTF-8 succeeds -- the NUL halves
+    /// are valid code points -- so the result was text with a NUL between every
+    /// letter, and `trim()` does not remove NUL because it is not whitespace.
+    /// Every WSL error reached the user that way, and the substring matching
+    /// that turns a message into an actionable error code never fired.
+    #[test]
+    fn wsl_errors_are_decoded_from_utf16_before_anyone_reads_them() {
+        let utf16: Vec<u8> = "There is no distribution with the supplied name.\r\n"
+            .encode_utf16()
+            .flat_map(u16::to_le_bytes)
+            .collect();
+        assert_eq!(
+            wsl_message(&utf16),
+            "There is no distribution with the supplied name."
+        );
+        assert!(!wsl_message(&utf16).contains('\0'));
+    }
+
+    #[test]
+    fn a_byte_order_mark_does_not_survive_into_a_distribution_name() {
+        // With the BOM left on, the first distribution listed could never match
+        // its own name -- so an existing guest looked absent and Lemma tried to
+        // import over it.
+        let mut bytes = vec![0xFF, 0xFE];
+        bytes.extend("LemmaRuntime\r\n".encode_utf16().flat_map(u16::to_le_bytes));
+        let listed = decode_wsl_output(&bytes);
+        assert!(
+            listed.lines().any(|line| line.trim() == "LemmaRuntime"),
+            "decoded as {listed:?}"
+        );
+    }
+
+    #[test]
+    fn plain_utf8_output_is_left_alone() {
+        assert_eq!(wsl_message(b"docker: not found\n"), "docker: not found");
+    }
     use super::*;
     use tempfile::tempdir;
 
@@ -1024,6 +1201,7 @@ mod tests {
         let artifacts = root.path().join("artifacts/macos-aarch64");
         fs::create_dir_all(&artifacts).unwrap();
         let config = ManagedRuntimeConfig {
+            wsl_distribution: DEFAULT_WSL_DISTRIBUTION.to_string(),
             local_root: root.path().join("local"),
             artifact_root: root.path().join("artifacts"),
             bridge_executable: root.path().join("lemma-runtime"),
@@ -1100,6 +1278,7 @@ mod tests {
     fn refreshes_private_host_epoch_for_direct_boot_guests() {
         let root = tempdir().unwrap();
         let runtime = ManagedRuntime::new(ManagedRuntimeConfig {
+            wsl_distribution: DEFAULT_WSL_DISTRIBUTION.to_string(),
             local_root: root.path().join("local"),
             artifact_root: root.path().join("artifacts"),
             bridge_executable: root.path().join("lemma-runtime"),
@@ -1123,6 +1302,7 @@ mod tests {
     fn reclaims_only_the_exact_recorded_vm_helper_across_daemon_replacement() {
         let root = tempdir().unwrap();
         let runtime = ManagedRuntime::new(ManagedRuntimeConfig {
+            wsl_distribution: DEFAULT_WSL_DISTRIBUTION.to_string(),
             local_root: root.path().join("local"),
             artifact_root: root.path().join("artifacts"),
             bridge_executable: root.path().join("lemma-runtime"),

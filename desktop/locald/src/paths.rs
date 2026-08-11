@@ -22,15 +22,28 @@ impl LocalPaths {
         if let Some(root) = env::var_os("LEMMA_LOCALD_ROOT").filter(|value| !value.is_empty()) {
             return Ok(Self::new(PathBuf::from(root)));
         }
+        Ok(Self::new(Self::default_root()?))
+    }
 
+    /// Where an installation keeps its state when nobody has said otherwise.
+    ///
+    /// Split out of `discover` because more than one thing needs to recognise
+    /// the default installation -- notably the Windows guest, which keeps its
+    /// historic name there and a per-root one everywhere else.
+    pub fn default_root() -> io::Result<PathBuf> {
         #[cfg(target_os = "macos")]
         let root = home_dir()?.join("Library/Application Support/Lemma/locald");
 
+        // Joined segment by segment, not as "Lemma/locald". The path is hashed
+        // into the control endpoint's name, and a forward slash there produced
+        // a different string -- and so a different pipe -- from the same
+        // directory spelled the way Windows spells it.
         #[cfg(target_os = "windows")]
         let root = env::var_os("LOCALAPPDATA")
             .map(PathBuf::from)
             .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "LOCALAPPDATA is not set"))?
-            .join("Lemma/locald");
+            .join("Lemma")
+            .join("locald");
 
         #[cfg(all(unix, not(target_os = "macos")))]
         let root = env::var_os("XDG_STATE_HOME")
@@ -38,7 +51,7 @@ impl LocalPaths {
             .unwrap_or(home_dir()?.join(".local/state"))
             .join("lemma/locald");
 
-        Ok(Self::new(root))
+        Ok(root)
     }
 
     pub fn new(root: PathBuf) -> Self {
@@ -85,9 +98,19 @@ fn home_dir() -> io::Result<PathBuf> {
         .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "home directory is not set"))
 }
 
+/// A stable identity for a state root, for naming things keyed to it.
+///
+/// Normalised first: Windows paths are case-insensitive and accept either
+/// separator, so the same directory can be spelled several ways and each
+/// spelling used to hash differently -- which meant a daemon started without
+/// LEMMA_LOCALD_ROOT could open an endpoint the app would never look for, and
+/// the app would start a second daemon beside it.
 #[cfg(windows)]
-fn stable_hash(path: &Path) -> u64 {
+pub(crate) fn stable_hash(path: &Path) -> u64 {
     path.to_string_lossy()
+        .replace('/', "\\")
+        .trim_end_matches('\\')
+        .to_ascii_lowercase()
         .bytes()
         .fold(0xcbf29ce484222325, |hash, byte| {
             (hash ^ u64::from(byte)).wrapping_mul(0x100000001b3)

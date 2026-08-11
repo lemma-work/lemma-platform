@@ -9,7 +9,9 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use lemma_runtime_manager::{ManagedRuntime, ManagedRuntimeConfig, ManagedRuntimeStatus};
+use lemma_runtime_manager::{
+    ManagedRuntime, ManagedRuntimeConfig, ManagedRuntimeStatus, DEFAULT_WSL_DISTRIBUTION,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -110,6 +112,7 @@ impl ManagedRuntimeBootstrap {
             ));
         }
         let runtime = ManagedRuntime::new(ManagedRuntimeConfig {
+            wsl_distribution: wsl_distribution_for(&paths.root),
             local_root: paths.root.clone(),
             artifact_root: self.artifact_root.clone(),
             bridge_executable: self.bridge_executable.clone(),
@@ -343,6 +346,43 @@ impl ManagedRuntimeController {
 
 const PRIVATE_SERVICE_PORTS: [(&str, u16); 3] =
     [("PostgreSQL", 5432), ("Redis", 6379), ("SuperTokens", 3567)];
+
+/// Which private WSL distribution this installation owns.
+///
+/// The default installation keeps the historic name, so an upgrade finds the
+/// guest it already imported rather than orphaning a multi-gigabyte disk full
+/// of the user's workspaces. Every other root -- a second Windows profile, a
+/// dev root, a relocated install -- gets its own, because the distribution
+/// holds that installation's databases and workspaces and two installations
+/// sharing one guest means each overwrites the other's capability file, either
+/// one's stop kills the other's runtime, and the second silently runs against
+/// the first's data.
+fn wsl_distribution_for(root: &Path) -> String {
+    #[cfg(windows)]
+    {
+        if let Some(name) = env::var_os("LEMMA_RUNTIME_WSL_DISTRIBUTION")
+            .map(|value| value.to_string_lossy().into_owned())
+            .filter(|value| !value.trim().is_empty())
+        {
+            return name;
+        }
+        let is_default = crate::paths::LocalPaths::default_root().is_ok_and(|default| {
+            crate::paths::stable_hash(&default) == crate::paths::stable_hash(root)
+        });
+        if is_default {
+            return DEFAULT_WSL_DISTRIBUTION.to_string();
+        }
+        return format!(
+            "{DEFAULT_WSL_DISTRIBUTION}-{:016x}",
+            crate::paths::stable_hash(root)
+        );
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = root;
+        DEFAULT_WSL_DISTRIBUTION.to_string()
+    }
+}
 
 fn wait_for_private_services(status: &ManagedRuntimeStatus, timeout: Duration) -> io::Result<()> {
     let host = private_ipv4(&status.endpoint_host, "guest endpoint")?;
@@ -830,6 +870,7 @@ mod tests {
         let root = tempdir().unwrap();
         let controller = ManagedRuntimeController {
             runtime: ManagedRuntime::new(ManagedRuntimeConfig {
+                wsl_distribution: DEFAULT_WSL_DISTRIBUTION.to_string(),
                 local_root: root.path().join("local"),
                 artifact_root: root.path().join("artifacts"),
                 bridge_executable: root.path().join("lemma-runtime"),
