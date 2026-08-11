@@ -4832,26 +4832,42 @@ fn main() {
                             show_splash(&handle);
                         }
                     });
-                } else if let Err(error) = ensure_locald(&handle) {
-                    let shell: State<Shell> = handle.state();
-                    let snapshot = {
-                        let mut ui = shell.ui.lock().unwrap();
-                        ui.error = true;
-                        ui.status = error;
-                        ui.clone()
-                    };
-                    let _ = handle.emit("lemma:state", snapshot);
-                } else if let Err(error) = start_impl(handle.clone()) {
-                    let shell: State<Shell> = handle.state();
-                    let snapshot = {
-                        let mut ui = shell.ui.lock().unwrap();
-                        ui.error = true;
-                        ui.error_code = "startup-request-failed".into();
-                        ui.status = error;
-                        ui.ready = false;
-                        ui.clone()
-                    };
-                    let _ = handle.emit("lemma:state", snapshot);
+                } else {
+                    // Same rule as the resume branch above: nothing here may
+                    // hold up a window the user can already see.
+                    //
+                    // `ensure_locald` installs the runtime artifacts before it
+                    // can spawn anything, which on a first run or an upgrade is
+                    // an unpack of hundreds of megabytes, and it then waits up
+                    // to LOCALD_START_BUDGET for the daemon to answer. Running
+                    // that here ran it inside `setup`, before the event loop
+                    // started pumping — so the splash the user was looking at
+                    // froze on "Starting Lemma." for the whole install, with no
+                    // progress and no way to tell it apart from a hang.
+                    let handle = handle.clone();
+                    std::thread::spawn(move || {
+                        let report = |error: String, code: Option<&str>| {
+                            let shell: State<Shell> = handle.state();
+                            let snapshot = {
+                                let mut ui = shell.ui.lock().unwrap();
+                                ui.error = true;
+                                ui.status = error;
+                                if let Some(code) = code {
+                                    ui.error_code = code.into();
+                                    ui.ready = false;
+                                }
+                                ui.clone()
+                            };
+                            let _ = handle.emit("lemma:state", snapshot);
+                        };
+                        if let Err(error) = ensure_locald(&handle) {
+                            report(error, None);
+                            return;
+                        }
+                        if let Err(error) = start_impl(handle.clone()) {
+                            report(error, Some("startup-request-failed"));
+                        }
+                    });
                 }
             }
             if std::env::var("LEMMA_DESKTOP_OPEN_CONTROL").as_deref() == Ok("1") {
@@ -4925,6 +4941,35 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use std::fs::File;
+
+    #[test]
+    fn nothing_in_setup_installs_the_runtime_on_the_main_thread() {
+        // `setup` runs before the event loop begins pumping, so anything slow
+        // there freezes a window that is already on screen. `ensure_locald`
+        // unpacks the runtime on a first run or an upgrade -- hundreds of
+        // megabytes -- and then waits for the daemon, which is how the splash
+        // came to sit on "Starting Lemma." with no progress for minutes.
+        //
+        // Both launch paths, resume and cold start, must hand that to a worker.
+        let source = include_str!("main.rs");
+        let setup = {
+            let start = source.find(".setup(move |app| {").expect("setup exists");
+            let end = source[start..]
+                .find("\n        .build(")
+                .or_else(|| source[start..].find("\n        .run("))
+                .map_or(source.len(), |offset| start + offset);
+            &source[start..end]
+        };
+        for (index, _) in setup.match_indices("ensure_locald(&handle)") {
+            let preceding = &setup[..index];
+            let spawned = preceding.rfind("std::thread::spawn");
+            let closed = preceding.rfind("});");
+            assert!(
+                spawned.is_some() && spawned > closed,
+                "an ensure_locald in setup is not inside a spawned thread"
+            );
+        }
+    }
 
     #[test]
     fn local_settings_never_gates_a_button_on_a_webview_confirm() {
