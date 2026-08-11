@@ -265,6 +265,75 @@ export function EmptyState({
   );
 }
 
+/**
+ * The one line style for anything collapsible in the transcript.
+ *
+ * A run rollup ("Worked for 1m 7s"), a thought ("Thought"), a tool group
+ * ("Terminal command ×8") are the same object to a reader: a summary you can
+ * open. They had four separate implementations — two chevron sizes, one with no
+ * chevron at all, one with a rule under it — so a single turn showed four
+ * treatments of one idea. One component, one size, one colour, one chevron.
+ */
+export function TraceDisclosureLine({
+  label,
+  isExpanded,
+  onToggle,
+  shimmer = false,
+  rule = false,
+}: {
+  label: string;
+  isExpanded?: boolean;
+  onToggle?: () => void;
+  shimmer?: boolean;
+  rule?: boolean;
+}) {
+  const body = (
+    <>
+      {shimmer
+        ? <ThinkingIndicator label={label} shimmer />
+        : <span className="min-w-0 break-words">{label}</span>}
+      {onToggle ? (
+        <ChevronDown
+          className={cn(
+            "size-3.5 shrink-0 text-[var(--text-tertiary)] transition-transform",
+            !isExpanded && "-rotate-90",
+          )}
+          aria-hidden="true"
+        />
+      ) : null}
+    </>
+  );
+
+  const lineClassName = "lemma-assistant-run-trace-header flex w-fit max-w-full items-center gap-1.5 border-0 bg-transparent p-0 text-left text-sm leading-5 text-[var(--text-secondary)] transition-colors";
+
+  return (
+    <div className="flex min-w-0 flex-col gap-2">
+      {onToggle ? (
+        <button
+          type="button"
+          className={cn(lineClassName, "cursor-pointer hover:text-[var(--text-primary)]")}
+          onClick={onToggle}
+          aria-expanded={isExpanded}
+        >
+          {body}
+        </button>
+      ) : (
+        <div className={lineClassName}>{body}</div>
+      )}
+      {/* A hairline, not a divider. This separates a run's trace from the answer
+          under it — a hint of structure, not a horizontal rule drawn across the
+          reading column. At full `--row-border` it read as the heavier of the
+          two, louder than the label it sits beneath. */}
+      {rule ? (
+        <div
+          className="h-px w-full bg-[color:color-mix(in_srgb,var(--row-border)_45%,transparent)]"
+          aria-hidden="true"
+        />
+      ) : null}
+    </div>
+  );
+}
+
 export function ReasoningPartCard({
   text,
   isStreaming,
@@ -276,30 +345,45 @@ export function ReasoningPartCard({
   durationMs?: number;
   showSummary?: boolean;
 }) {
-  const label = reasoningPartLabel(isStreaming, durationMs);
+  const label = reasoningPartLabel(false, durationMs);
+  // Italic, muted, and set as prose — the same voice whether the thought is
+  // arriving or being re-read, so opening one does not change its typeface.
+  // Identical to trace narration in `defaultMessageContent`, deliberately: a
+  // thought and a line of narration are the same agent talking to itself on the
+  // way to an answer, and rendering them as two different things was part of why
+  // a run read as a stack of unrelated fragments.
   const content = (
-    <div className={cn(showSummary && "mt-1 border-l border-[color:var(--row-border)] pl-4")}>
-      <pre className="whitespace-pre-wrap font-mono text-xs text-[var(--text-secondary)]">{text}</pre>
-    </div>
+    <p className={cn(
+      "whitespace-pre-wrap break-words text-sm italic leading-relaxed text-[var(--text-secondary)]",
+      showSummary && "mt-1",
+    )}>
+      {text}
+    </p>
   );
 
   if (!showSummary) return content;
 
+  // A thought that is still arriving is shown, not filed. It used to render as a
+  // closed drawer labelled "Thinking" — beside a transcript whose one activity
+  // indicator also said "Thinking", which is where the doubled label came from.
+  // While it streams, the prose is the indicator.
+  if (isStreaming) return content;
+
+  return <CollapsedThought label={label}>{content}</CollapsedThought>;
+}
+
+function CollapsedThought({ label, children }: { label: string; children: ReactNode }) {
+  const [isExpanded, setIsExpanded] = useState(false);
+
   return (
-    <details className="group flex flex-col gap-1">
-      <summary className="flex w-fit cursor-pointer list-none items-center gap-1.5 text-sm leading-5 text-[var(--text-secondary)] [&::-webkit-details-marker]:hidden">
-        {isStreaming ? (
-          <ThinkingIndicator label={label} shimmer />
-        ) : (
-          <span className="font-normal text-[var(--text-secondary)]">{label}</span>
-        )}
-        <ChevronDown
-          className="-rotate-90 size-3.5 shrink-0 text-[var(--text-tertiary)] transition-transform group-open:rotate-0"
-          aria-hidden="true"
-        />
-      </summary>
-      {content}
-    </details>
+    <div className="flex flex-col gap-1">
+      <TraceDisclosureLine
+        label={label}
+        isExpanded={isExpanded}
+        onToggle={() => setIsExpanded((previous) => !previous)}
+      />
+      {isExpanded ? children : null}
+    </div>
   );
 }
 

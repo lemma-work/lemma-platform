@@ -398,6 +398,9 @@ describe("collectCompletedRunTraceGroups", () => {
       text("n1", "Let me grab the session items."),
       tool("t2", { toolCallId: "c2", toolName: "build_session", args: {}, state: "result", result: {} }),
       text("final", "We're live. Here's card 1 of 12."),
+      // A later turn, so the run above is no longer the most recent one and folds.
+      { id: "u2", role: "user", content: "thanks" },
+      text("ack", "Any time."),
     ];
     const rows = buildDisplayMessageRows(messages);
     const { groupsByStartIndex, groupedIndexes } = collectCompletedRunTraceGroups(rows, messages, false);
@@ -419,13 +422,15 @@ describe("collectCompletedRunTraceGroups", () => {
       text("n2", "Now I've got everything I need."),
       tool("t3", { toolCallId: "c3", toolName: "build_session", args: {}, state: "result", result: {} }),
       text("final", "We're live."),
+      { id: "u2", role: "user", content: "thanks" },
+      text("ack", "Any time."),
     ];
     const rows = buildDisplayMessageRows(messages);
     const { groupsByStartIndex } = collectCompletedRunTraceGroups(rows, messages, false);
     expect(groupsByStartIndex.size).toBe(1);
   });
 
-  it("never folds the active/streaming run", () => {
+  it("folds the most recent run once it finishes, but not while it runs", () => {
     const streaming: AssistantRenderableMessage[] = [
       { id: "u", role: "user", content: "go" },
       tool("t1", { toolCallId: "c1", toolName: "search_cards", args: {}, state: "result", result: {} }),
@@ -435,7 +440,7 @@ describe("collectCompletedRunTraceGroups", () => {
     const streamingRows = buildDisplayMessageRows(streaming);
     expect(collectCompletedRunTraceGroups(streamingRows, streaming, true).groupsByStartIndex.size).toBe(0);
 
-    // The same shape, now finished with an answer, folds into one group.
+    // Finished: it folds under "Worked for …" like any other completed run.
     const done: AssistantRenderableMessage[] = [
       ...streaming.slice(0, 3),
       tool("t2", { toolCallId: "c2", toolName: "build_session", args: {}, state: "result", result: {} }),
@@ -443,6 +448,15 @@ describe("collectCompletedRunTraceGroups", () => {
     ];
     const doneRows = buildDisplayMessageRows(done);
     expect(collectCompletedRunTraceGroups(doneRows, done, false).groupsByStartIndex.size).toBe(1);
+
+    // …and stays folded once a later turn exists.
+    const superseded: AssistantRenderableMessage[] = [
+      ...done,
+      { id: "u2", role: "user", content: "thanks" },
+      text("ack", "Any time."),
+    ];
+    const supersededRows = buildDisplayMessageRows(superseded);
+    expect(collectCompletedRunTraceGroups(supersededRows, superseded, false).groupsByStartIndex.size).toBe(1);
   });
 });
 
