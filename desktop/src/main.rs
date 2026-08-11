@@ -2360,9 +2360,16 @@ fn open_developer_tools(window: Webview, app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn start(window: Webview, app: AppHandle) -> Result<(), String> {
+/// Runs off the UI thread. A synchronous `#[tauri::command]` is dispatched on
+/// the main thread, so any command that waits on the daemon, the network or a
+/// child process freezes the window for its whole duration -- which is how a
+/// first launch showed a black, unresponsive app for minutes while the runtime
+/// installed and the daemon came up.
+async fn start(window: Webview, app: AppHandle) -> Result<(), String> {
     require_local_native_window(&window)?;
-    start_impl(app)
+    tauri::async_runtime::spawn_blocking(move || start_impl(app))
+        .await
+        .map_err(|error| error.to_string())?
 }
 
 fn start_impl(app: AppHandle) -> Result<(), String> {
@@ -2383,9 +2390,16 @@ fn start_impl(app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn stop(window: Webview, app: AppHandle, include_infra: Option<bool>) -> Result<(), String> {
+/// Runs off the UI thread. A synchronous `#[tauri::command]` is dispatched on
+/// the main thread, so any command that waits on the daemon, the network or a
+/// child process freezes the window for its whole duration -- which is how a
+/// first launch showed a black, unresponsive app for minutes while the runtime
+/// installed and the daemon came up.
+async fn stop(window: Webview, app: AppHandle, include_infra: Option<bool>) -> Result<(), String> {
     require_local_native_window(&window)?;
-    stop_impl(app, include_infra)
+    tauri::async_runtime::spawn_blocking(move || stop_impl(app, include_infra))
+        .await
+        .map_err(|error| error.to_string())?
 }
 
 fn stop_impl(app: AppHandle, include_infra: Option<bool>) -> Result<(), String> {
@@ -2406,9 +2420,16 @@ fn stop_impl(app: AppHandle, include_infra: Option<bool>) -> Result<(), String> 
 }
 
 #[tauri::command]
-fn restart(window: Webview, app: AppHandle) -> Result<(), String> {
+/// Runs off the UI thread. A synchronous `#[tauri::command]` is dispatched on
+/// the main thread, so any command that waits on the daemon, the network or a
+/// child process freezes the window for its whole duration -- which is how a
+/// first launch showed a black, unresponsive app for minutes while the runtime
+/// installed and the daemon came up.
+async fn restart(window: Webview, app: AppHandle) -> Result<(), String> {
     require_local_native_window(&window)?;
-    restart_impl(app)
+    tauri::async_runtime::spawn_blocking(move || restart_impl(app))
+        .await
+        .map_err(|error| error.to_string())?
 }
 
 fn restart_impl(app: AppHandle) -> Result<(), String> {
@@ -2744,8 +2765,19 @@ fn require_local_native_window(window: &Webview) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn prepare_runtime(window: Webview, app: AppHandle) -> Result<(), String> {
+/// Runs off the UI thread. A synchronous `#[tauri::command]` is dispatched on
+/// the main thread, so any command that waits on the daemon, the network or a
+/// child process freezes the window for its whole duration -- which is how a
+/// first launch showed a black, unresponsive app for minutes while the runtime
+/// installed and the daemon came up.
+async fn prepare_runtime(window: Webview, app: AppHandle) -> Result<(), String> {
     require_local_native_window(&window)?;
+    tauri::async_runtime::spawn_blocking(move || prepare_runtime_impl(app))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+fn prepare_runtime_impl(app: AppHandle) -> Result<(), String> {
     if current_mode(&app) != "local" {
         return Err("choose the local workspace before preparing its runtime".into());
     }
@@ -2763,8 +2795,19 @@ fn runtime_info(window: Webview) -> Result<RuntimeInfo, String> {
 }
 
 #[tauri::command]
-fn repair_runtime(window: Webview, app: AppHandle) -> Result<(), String> {
+/// Runs off the UI thread. A synchronous `#[tauri::command]` is dispatched on
+/// the main thread, so any command that waits on the daemon, the network or a
+/// child process freezes the window for its whole duration -- which is how a
+/// first launch showed a black, unresponsive app for minutes while the runtime
+/// installed and the daemon came up.
+async fn repair_runtime(window: Webview, app: AppHandle) -> Result<(), String> {
     require_control_window(&window)?;
+    tauri::async_runtime::spawn_blocking(move || repair_runtime_impl(app))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+fn repair_runtime_impl(app: AppHandle) -> Result<(), String> {
     if current_mode(&app) != "local" {
         return Err("runtime repair is available only for a local workspace".into());
     }
@@ -3315,7 +3358,7 @@ fn close_local_settings(window: Webview, app: AppHandle) -> Result<(), String> {
 /// The prompt text is chosen in the page, but the dialog is native, so it is
 /// the same one the tray and the quit path already use.
 #[tauri::command]
-fn confirm_destructive_action(
+async fn confirm_destructive_action(
     window: Webview,
     app: AppHandle,
     title: String,
@@ -3323,6 +3366,22 @@ fn confirm_destructive_action(
     confirm_label: String,
 ) -> Result<bool, String> {
     require_control_window(&window)?;
+    // Async because this waits for a dialog that can only be *shown* from
+    // the main thread. As a synchronous command it ran there itself, so it
+    // blocked the very thread that had to draw what it was waiting for.
+    tauri::async_runtime::spawn_blocking(move || {
+        confirm_destructive_action_impl(app, title, message, confirm_label)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+fn confirm_destructive_action_impl(
+    app: AppHandle,
+    title: String,
+    message: String,
+    confirm_label: String,
+) -> Result<bool, String> {
     // `show` hands the dialog to the main thread and returns; commands run off
     // it, so waiting here blocks a worker rather than the UI.
     let (sender, receiver) = std::sync::mpsc::sync_channel(1);
@@ -3343,8 +3402,19 @@ fn confirm_destructive_action(
 }
 
 #[tauri::command]
-fn set_connection_mode(window: Webview, app: AppHandle, mode: String) -> Result<(), String> {
+/// Runs off the UI thread. A synchronous `#[tauri::command]` is dispatched on
+/// the main thread, so any command that waits on the daemon, the network or a
+/// child process freezes the window for its whole duration -- which is how a
+/// first launch showed a black, unresponsive app for minutes while the runtime
+/// installed and the daemon came up.
+async fn set_connection_mode(window: Webview, app: AppHandle, mode: String) -> Result<(), String> {
     require_local_native_window(&window)?;
+    tauri::async_runtime::spawn_blocking(move || set_connection_mode_impl(app, mode))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+fn set_connection_mode_impl(app: AppHandle, mode: String) -> Result<(), String> {
     if mode != "local" && mode != "hosted" {
         return Err(format!("unknown mode {mode:?}"));
     }
@@ -3362,7 +3432,18 @@ fn set_connection_mode(window: Webview, app: AppHandle, mode: String) -> Result<
 }
 
 #[tauri::command]
-fn choose_connection_mode(app: AppHandle) -> Result<String, String> {
+/// Runs off the UI thread. A synchronous `#[tauri::command]` is dispatched on
+/// the main thread, so any command that waits on the daemon, the network or a
+/// child process freezes the window for its whole duration -- which is how a
+/// first launch showed a black, unresponsive app for minutes while the runtime
+/// installed and the daemon came up.
+async fn choose_connection_mode(app: AppHandle) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || choose_connection_mode_impl(app))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+fn choose_connection_mode_impl(app: AppHandle) -> Result<String, String> {
     let current = current_mode(&app);
     if current == "undecided" {
         show_splash(&app);
@@ -3768,7 +3849,7 @@ fn confirm_then_switch_connection(app: AppHandle) {
             }
             let inner = handle.clone();
             menu_attempt(&inner, "Switch connection", || {
-                choose_connection_mode(handle).map(|_| ())
+                choose_connection_mode_impl(handle).map(|_| ())
             });
         });
 }
@@ -4997,6 +5078,42 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use std::fs::File;
+
+    #[test]
+    fn commands_that_wait_on_anything_are_async() {
+        // A synchronous #[tauri::command] is dispatched on the main thread, so
+        // one that waits on the daemon, the network or a child process freezes
+        // the window for its whole duration. That is what made a first launch a
+        // black, unresponsive app for minutes: the splash called prepare_runtime,
+        // which installed the runtime and then polled for the daemon, all on the
+        // thread that had to draw the splash.
+        //
+        // spawn_blocking is what keeps them off it; async is what gets them onto
+        // the async runtime in the first place.
+        const BLOCKING: &[&str] = &[
+            "start",
+            "stop",
+            "restart",
+            "prepare_runtime",
+            "repair_runtime",
+            "set_connection_mode",
+            "choose_connection_mode",
+            "confirm_destructive_action",
+        ];
+        let source = include_str!("main.rs");
+        for name in BLOCKING {
+            let signature = format!("async fn {name}(");
+            assert!(
+                source.contains(&signature),
+                "{name} waits on something slow, so it must be an async command"
+            );
+            let body = function_body(source, &signature);
+            assert!(
+                body.contains("spawn_blocking"),
+                "{name} must hand its blocking work to spawn_blocking"
+            );
+        }
+    }
 
     #[test]
     fn a_resume_that_did_not_pan_out_stops_claiming_the_workspace_is_ready() {
