@@ -5300,9 +5300,11 @@ mod tests {
         // tray's included. The tray builder registered a second handler on top,
         // so every tray verb ran twice: two confirmation dialogs stacked on each
         // other, two stops, two restarts.
+        // Counting the registration itself, not the words -- the previous
+        // version of this assertion matched its own message.
         let source = include_str!("main.rs").replace("\r\n", "\n");
         assert_eq!(
-            source.matches("on_menu_event(").count(),
+            source.matches("on_menu_event(|app, event|").count(),
             1,
             "exactly one menu event handler, or every verb fires once per handler"
         );
