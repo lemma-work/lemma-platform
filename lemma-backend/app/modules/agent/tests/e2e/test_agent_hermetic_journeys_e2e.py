@@ -211,7 +211,9 @@ async def test_public_sse_sanitizes_provider_failure_matrix_and_persists_failure
         (
             "model_http",
             429,
-            "The model provider returned an error (HTTP 429).",
+            # Rate limiting is retried, so the message says "try again shortly"
+            # rather than sending the reader to the runtime configuration.
+            "rate limiting this workspace (HTTP 429)",
         ),
         (
             "unexpected_model_behavior",
@@ -1378,3 +1380,87 @@ async def test_public_runtime_profile_edit_archive_and_restore(
 
     back = await authenticated_client.get(base)
     assert profile_id in {item["id"] for item in back.json()["items"]}
+
+
+@pytest.mark.asyncio
+async def test_a_dropped_model_stream_does_not_end_the_conversation(
+    authenticated_client,
+    fixed_test_org,
+    e2e_settings,
+    worker,
+):
+    """The production failure, driven end to end through the public API.
+
+    ~20 runs a week died to an `httpx.ReadError` raised while iterating the
+    provider's SSE stream: the request was accepted, the connection dropped
+    mid-answer, and the whole conversation run failed. The harness now resumes
+    from the messages already recorded — so the caller sees one clean answer,
+    not an error, and not the abandoned half-response glued onto the retry.
+    """
+    del worker  # session fixture keeps the production streaq worker alive
+    runtime = await _create_runtime_profile(
+        authenticated_client, fixed_test_org, e2e_settings
+    )
+    pod = await _create_pod(authenticated_client, fixed_test_org)
+    pod_id = pod["id"]
+    agent_name = f"streamdrop_{uuid4().hex[:8]}"
+    create_agent = await authenticated_client.post(
+        f"/pods/{pod_id}/agents",
+        json={
+            "name": agent_name,
+            "instruction": "Reply using the scripted deterministic model.",
+            "agent_runtime": {
+                "profile_id": runtime["id"],
+                "model_name": "mock-safe-model",
+            },
+            "toolsets": [],
+        },
+    )
+    assert create_agent.status_code == status.HTTP_201_CREATED, create_agent.text
+
+    conversation = await authenticated_client.post(
+        f"/pods/{pod_id}/conversations",
+        json={
+            "agent_name": agent_name,
+            "metadata": {
+                "mock_llm_script": [
+                    {
+                        "text": "The complete answer.",
+                        "tool_calls": [],
+                        # Fails the first attempt only; the retry must get through.
+                        "error": {"kind": "stream_drop", "times": 1},
+                    }
+                ],
+            },
+        },
+    )
+    assert conversation.status_code == status.HTTP_201_CREATED, conversation.text
+    conversation_id = conversation.json()["id"]
+
+    events = await _send_message(
+        authenticated_client,
+        pod_id,
+        conversation_id,
+        "Answer despite a bad connection.",
+    )
+
+    assert events[-1]["type"] == "completed", events
+    assert not [event for event in events if event["type"] == "error"], events
+
+    # The client was told to discard whatever it had streamed before the drop.
+    assert any(
+        event["type"] == "token" and event.get("kind") == "stream_reset"
+        for event in events
+    ), events
+
+    messages = await authenticated_client.get(
+        f"/pods/{pod_id}/conversations/{conversation_id}/messages"
+    )
+    assert messages.status_code == status.HTTP_200_OK, messages.text
+    assistant_texts = [
+        item["text"]
+        for item in messages.json()["items"]
+        if item["role"] == "assistant" and item["kind"] == "TEXT"
+    ]
+    # Exactly one answer persisted: the abandoned attempt left nothing behind.
+    assert assistant_texts == ["The complete answer."], assistant_texts

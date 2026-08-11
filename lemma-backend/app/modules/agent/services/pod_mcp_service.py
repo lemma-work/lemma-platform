@@ -26,6 +26,7 @@ from app.core.config import settings
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.core.log.log import get_logger
+from app.modules.agent.services.mcp_content import image_contents, text_content
 from app.modules.agent.domain.value_objects import to_json_value
 from app.modules.agent.infrastructure.mcp import (
     exported_tool_name,
@@ -142,16 +143,16 @@ class PodMCPService:
         )
 
     def _mcp_result(self, result: object) -> CallToolResult:
+        # See `conversation_mcp_service._mcp_result`: images ride alongside the
+        # text so a vision-capable remote harness actually receives them.
+        images = image_contents(result)
         payload = to_json_value(result)
         if isinstance(payload, dict):
             return CallToolResult(
-                content=[
-                    TextContent(type="text", text=json.dumps(payload, default=str))
-                ],
+                content=[text_content(payload), *images],
                 structuredContent=payload,
             )
-        text = payload if isinstance(payload, str) else json.dumps(payload, default=str)
-        return CallToolResult(content=[TextContent(type="text", text=text)])
+        return CallToolResult(content=[text_content(payload), *images])
 
     def _mcp_error_result(self, name: str, exc: Exception) -> CallToolResult:
         payload = format_tool_error(name, exc)

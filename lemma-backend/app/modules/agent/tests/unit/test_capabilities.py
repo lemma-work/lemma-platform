@@ -20,6 +20,7 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 from pydantic_ai.models.function import AgentInfo, FunctionModel
+from pydantic_ai.profiles import ModelProfile
 from pydantic_ai.toolsets import FunctionToolset
 
 from app.modules.agent.capabilities.assembler import (
@@ -36,6 +37,21 @@ from app.modules.agent.tools.registry import (
     web_search_toolset,
     workspace_cli_toolset,
 )
+
+
+def _deferring_model(model_fn) -> FunctionModel:
+    """A stand-in model that honours deferred tools like a real provider does.
+
+    pydantic-ai only puts `defer_loading` on the wire when the model profile
+    declares a deferral mode; a bare ``FunctionModel`` has none, so every
+    deferred tool is dropped before the request and the assembler looks broken.
+    Both models Lemma actually runs resolve to ``'with_tool_search'`` — the
+    OpenAI-compatible profile via `openai_compatible_model_profile`, Anthropic
+    natively — so that is what these tests assert against.
+    """
+    return FunctionModel(model_fn, profile=ModelProfile(
+        tool_deferral_mode="with_tool_search"
+    ))
 
 
 def test_partition_core_extra_splits_pod_into_extra_for_pod_default():
@@ -94,7 +110,7 @@ def test_web_search_capability_bundles_tool_and_prompt():
     toolset = cap.get_toolset()
     assert isinstance(toolset, GracefulToolset)
     assert toolset.wrapped is web_search_toolset
-    assert "Web Search" in cap.get_instructions()
+    assert "Web research" in cap.get_instructions()
 
 
 @pytest.mark.anyio
@@ -457,7 +473,7 @@ async def test_current_time_and_deferral_in_real_run():
 
     conversation_id = uuid4()
     agent = Agent(
-        FunctionModel(model_fn),
+        _deferring_model(model_fn),
         toolsets=[visible, extra.defer_loading()],
         capabilities=[
             CurrentTimeCapability(),
@@ -529,6 +545,9 @@ _EXPECTED_VISIBLE_POD_DEFAULT_TOOLS = {
     "manage_process",
     "execute_python",
     "web_search",
+    # Capturing a page into the workspace is core research, not an extra: the
+    # alternative was a shell script the model had to be told about in prose.
+    "web_fetch",
     "list_skills",
     "load_skill",
     "display_resource",
@@ -586,7 +605,7 @@ async def test_pod_default_visible_toolset_is_slim(monkeypatch):
         }
         return ModelResponse(parts=[TextPart("done")])
 
-    agent = Agent(FunctionModel(model_fn), capabilities=capabilities)
+    agent = Agent(_deferring_model(model_fn), capabilities=capabilities)
     await agent.run("hi", deps=deps)
 
     assert captured["visible"] == _EXPECTED_VISIBLE_POD_DEFAULT_TOOLS
@@ -606,8 +625,10 @@ async def test_pod_default_visible_toolset_is_slim(monkeypatch):
     hint_caps = [c for c in capabilities if isinstance(c, DeferredToolsHintCapability)]
     assert len(hint_caps) == 1
     hint = hint_caps[0].get_instructions()
-    assert "search_tools" in hint
     assert "pod_tables" in hint and "spawn_subagent" in hint
+    # Each name carries a one-line description: a bare name says a tool exists
+    # but not when to reach for it.
+    assert "Render PDF pages as images" in hint
     # Speech is a visible toolset (not deferred) and is not advertised in the hint.
     assert "say" not in captured["deferred"] and "listen" not in captured["deferred"]
     assert "Speech" not in hint
@@ -710,7 +731,7 @@ async def test_pod_default_gains_view_image_toolset_when_vision_supported():
             }
             return ModelResponse(parts=[TextPart("done")])
 
-        agent = Agent(FunctionModel(model_fn), capabilities=capabilities)
+        agent = Agent(_deferring_model(model_fn), capabilities=capabilities)
         await agent.run("hi", deps=deps)
         return captured["visible"]
 
@@ -786,7 +807,7 @@ async def test_pod_default_messaging_is_deferred_but_keeps_its_contract(monkeypa
         captured["deferred"] = {t.name for t in info.function_tools if t.defer_loading}
         return ModelResponse(parts=[TextPart("done")])
 
-    agent = Agent(FunctionModel(model_fn), capabilities=capabilities)
+    agent = Agent(_deferring_model(model_fn), capabilities=capabilities)
     await agent.run("hi", deps=deps)
 
     # Hidden from the prefix — an interactive assistant should not reach for
@@ -871,7 +892,63 @@ async def test_a_user_created_agent_keeps_messaging_visible(monkeypatch):
         }
         return ModelResponse(parts=[TextPart("done")])
 
-    agent = Agent(FunctionModel(model_fn), capabilities=capabilities)
+    agent = Agent(_deferring_model(model_fn), capabilities=capabilities)
     await agent.run("hi", deps=deps)
 
     assert {"message_user", "list_pod_members"} <= captured["visible"]
+
+
+def test_the_deferred_hint_is_byte_stable_across_builds():
+    """This block rides in the cached prompt prefix.
+
+    A listing whose order came from set iteration would differ between turns and
+    invalidate the prompt cache on every request — which costs far more than the
+    ~300 tokens the descriptions add.
+    """
+    from app.modules.agent.capabilities.deferred_hint import build_deferred_tools_hint
+    from app.modules.agent.tools.registry import EXTRA_TOOLSET_OBJECTS
+
+    toolsets = list(EXTRA_TOOLSET_OBJECTS)
+    assert build_deferred_tools_hint(toolsets) == build_deferred_tools_hint(toolsets)
+
+
+def test_tool_names_are_sorted_within_each_group():
+    """Group order follows the caller's list; names within a group must not."""
+    from app.modules.agent.capabilities.deferred_hint import _tool_summaries
+    from app.modules.agent.tools.registry import pod_toolset
+
+    names = [name for name, _summary in _tool_summaries(pod_toolset)]
+    assert names == sorted(names)
+
+
+def test_every_deferred_tool_carries_a_description():
+    """A name with no summary is the failure mode this replaced."""
+    from app.modules.agent.capabilities.deferred_hint import _tool_summaries
+    from app.modules.agent.tools.registry import EXTRA_TOOLSET_OBJECTS
+
+    for toolset in EXTRA_TOOLSET_OBJECTS:
+        for name, summary in _tool_summaries(toolset):
+            assert summary, f"{name} has no description to show the model"
+            assert len(summary) <= 100, f"{name} summary is too long: {summary!r}"
+            assert "\n" not in summary
+
+
+def test_the_hint_stays_within_a_token_budget():
+    """It is only worth carrying while it stays a rounding error against the
+    schemas it stands in for."""
+    from app.modules.agent.capabilities.deferred_hint import build_deferred_tools_hint
+    from app.modules.agent.services.history_tokens import count_text_tokens
+    from app.modules.agent.tools.registry import EXTRA_TOOLSET_OBJECTS
+
+    hint = build_deferred_tools_hint(list(EXTRA_TOOLSET_OBJECTS))
+    assert count_text_tokens(hint) < 900
+
+
+def test_the_hint_does_not_name_a_provider_specific_search_tool():
+    """`search_tools` is only the local fallback: on Anthropic and OpenAI the
+    reveal is provider-native and no such tool exists to call."""
+    from app.modules.agent.capabilities.deferred_hint import build_deferred_tools_hint
+    from app.modules.agent.tools.registry import EXTRA_TOOLSET_OBJECTS
+
+    hint = build_deferred_tools_hint(list(EXTRA_TOOLSET_OBJECTS))
+    assert "search_tools" not in hint

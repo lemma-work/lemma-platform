@@ -517,7 +517,7 @@
   {
     "tool_name": "exec_command",
     "toolset": "WORKSPACE_CLI",
-    "description": "Run a shell command in the private conversation workspace.\n\nUse it for repo inspection, builds, tests, file edits, and `lemma` CLI calls\n(pod credentials are pre-injected). `localhost` is this container, not the\nLemma backend.\n\nDefault (`tty=false`) returns after a short wait; a command still running\nreturns a `process_id` instead of blocking. `tty=true` starts a real terminal\nfor interactive commands. Either way, drive the process afterwards with\n`manage_process` \u2014 poll or send input with `action=\"input\"`, stop it with\n`action=\"kill\"`, and use `action=\"list\"` to find processes started earlier.",
+    "description": "Run a shell command in the private conversation workspace.\n\nUse it for repo inspection, builds, tests, file edits, and `lemma` CLI calls\n(pod credentials are pre-injected). `localhost` is this container, not the\nLemma backend.\n\nDefault (`tty=false`) returns after a short wait; a command still running\nreturns a `process_id` instead of blocking. `tty=true` starts a real terminal\nfor interactive commands. Either way, drive the process afterwards with\n`manage_process` \u2014 poll or send input with `action=\"input\"`, stop it with\n`action=\"kill\"`, and use `action=\"list\"` to find processes started earlier.\n\nLong commands (installs, builds, test suites) are normal and supported. When\none outlives the wait window you get `completed: false` plus a `process_id`,\nand the command carries on running \u2014 nothing was cancelled and no output is\nlost. Keep polling until it finishes:\n\n    exec_command(cmd=\"npm ci && npm run build\", timeout_seconds=300)\n    -> completed: false, process_id: \"abc\"\n    manage_process(action=\"input\", process_id=\"abc\", chars=\"\")\n    -> completed: false        # repeat; each poll returns new output\n    manage_process(action=\"input\", process_id=\"abc\", chars=\"\")\n    -> completed: true, exit_code: 0\n\nNever re-run a command because it did not finish \u2014 that starts a second\nbuild alongside the first. If you lose a `process_id`, `action=\"list\"`\nrecovers it.",
     "input_schema": {
       "properties": {
         "cmd": {
@@ -596,7 +596,7 @@
             }
           ],
           "default": null,
-          "description": "Block up to this many seconds instead of the default 30s yield window; always returns `completed: true` with no `process_id`."
+          "description": "How long to wait for the command before returning, instead of the default 30s. This is THIS CALL'S patience, not a limit on the command: if the command is still running when the wait is up you get `completed: false` and a `process_id`, and the command keeps running in the background. Poll it with `manage_process(action='input', process_id=..., chars='')` until `completed: true` \u2014 never re-run the command."
         }
       },
       "required": [
@@ -674,7 +674,7 @@
         },
         "completed": {
           "default": true,
-          "description": "Whether the process has finished. Interactive TTY sessions usually return `false` until exited.",
+          "description": "Whether the process has finished. `false` whenever the command outlived this call's wait window \u2014 a long build or test run as much as an interactive TTY session. The command is still running; it was not cancelled.",
           "type": "boolean"
         },
         "process_id": {
@@ -687,7 +687,7 @@
             }
           ],
           "default": null,
-          "description": "Process ID to reuse with `write_stdin` for follow-up interaction when this interactive process is still running."
+          "description": "Handle for a process that is still running. Poll it with `manage_process(action='input', process_id=..., chars='')` to collect more output, or send input the same way. Present whenever `completed` is false."
         }
       },
       "title": "ExecCommandResult",
@@ -1981,7 +1981,7 @@
   {
     "tool_name": "pod_view_document_pages",
     "toolset": "POD",
-    "description": "Render PDF pages as images so you can *see* them (layout, tables, figures).\n\nPages are 1-based. Only PDFs can be rendered visually; for other document\ntypes use ``pod_read_file`` with ``format=\"markdown\"`` to read the page text.\nYou receive the page images inline; the transcript keeps only short-lived URLs.",
+    "description": "Render PDF pages as images so you can *see* them (layout, tables, figures).\n\nPages are 1-based. Only PDFs can be rendered visually; for other document\ntypes use ``pod_read_file`` with ``format=\"markdown\"`` to read the page text.\n\nSet ``instructions`` to say what you need from the pages. If this agent's\nmodel reads images itself you get the page images inline; otherwise a vision\nmodel reads them and returns a description, so this tool works either way.",
     "input_schema": {
       "properties": {
         "path": {
@@ -2005,6 +2005,18 @@
           ],
           "default": null,
           "description": "Last page (1-based, inclusive). Defaults to page_start."
+        },
+        "instructions": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "What you need from these pages \u2014 'transcribe the pricing table', 'describe the architecture diagram and its arrows'. Always set it: if this agent's model cannot read images itself, this is the question a vision model answers on your behalf."
         }
       },
       "required": [
@@ -2150,7 +2162,7 @@
           "type": "object"
         },
         "CachePoint": {
-          "description": "A cache point marker for prompt caching.\n\nCan be inserted into UserPromptPart.content to mark cache boundaries.\nModels that don't support caching will filter these out.\n\nSupported by:\n\n- Anthropic\n- Amazon Bedrock (Converse API)\n- OpenRouter (Anthropic and Gemini models)",
+          "description": "A cache point marker for prompt caching.\n\nCan be inserted into UserPromptPart.content to mark cache boundaries.\nModels that don't support caching will filter these out.\n\nSupported by:\n\n- Anthropic\n- Amazon Bedrock (Converse API)\n- OpenAI (GPT-5.6 models)\n- OpenRouter (Anthropic and Gemini models via `OpenRouterModel`, plus OpenAI GPT-5.6 models when\n  using `OpenAIChatModel` or `OpenAIResponsesModel` with `OpenRouterProvider`)",
           "properties": {
             "kind": {
               "const": "cache-point",
@@ -2367,6 +2379,20 @@
             "metadata": {
               "default": null
             },
+            "tools": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
             "kind": {
               "const": "tool-return",
               "default": "tool-return",
@@ -2380,53 +2406,20 @@
           "type": "object"
         },
         "ToolReturnContent": {
-          "anyOf": [
-            {
-              "discriminator": {
-                "mapping": {
-                  "audio-url": "#/$defs/AudioUrl",
-                  "binary": "#/$defs/BinaryContent",
-                  "document-url": "#/$defs/DocumentUrl",
-                  "image-url": "#/$defs/ImageUrl",
-                  "uploaded-file": "#/$defs/UploadedFile",
-                  "video-url": "#/$defs/VideoUrl"
-                },
-                "propertyName": "kind"
-              },
-              "oneOf": [
-                {
-                  "$ref": "#/$defs/ImageUrl"
-                },
-                {
-                  "$ref": "#/$defs/AudioUrl"
-                },
-                {
-                  "$ref": "#/$defs/DocumentUrl"
-                },
-                {
-                  "$ref": "#/$defs/VideoUrl"
-                },
-                {
-                  "$ref": "#/$defs/BinaryContent"
-                },
-                {
-                  "$ref": "#/$defs/UploadedFile"
-                }
-              ]
-            },
-            {
-              "items": {
-                "$ref": "#/$defs/ToolReturnContent"
-              },
-              "type": "array"
-            },
+          "oneOf": [
+            {},
             {
               "additionalProperties": {
                 "$ref": "#/$defs/ToolReturnContent"
               },
               "type": "object"
             },
-            {}
+            {
+              "items": {
+                "$ref": "#/$defs/ToolReturnContent"
+              },
+              "type": "array"
+            }
           ]
         },
         "UploadedFile": {
@@ -3375,6 +3368,18 @@
           ],
           "default": null,
           "description": "Image in the workspace sandbox, e.g. `images/output.png` \u2014 for artifacts you just produced. Set this or `pod_file_path`, not both."
+        },
+        "instructions": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "What you need from this image \u2014 'read the axis labels', 'transcribe the table', 'describe the architecture diagram and which way the arrows point'. Always set it: if this agent's model cannot read images itself, this is the question a vision model answers on your behalf, and a vague question gets a vague answer."
         }
       },
       "title": "ViewImageRequest",
@@ -3383,20 +3388,285 @@
     "output_schema": {}
   },
   {
+    "tool_name": "web_fetch",
+    "toolset": "WEB_SEARCH",
+    "description": "Capture web pages into your workspace so you can read them properly.\n\nTakes a *list* of URLs \u2014 fetch everything a question needs in one call.\nEach page is saved as readable markdown (optionally also PDF and a\nfull-page screenshot) under `out_dir`, and you get back the file paths and\na short preview, not the page text: twenty articles inline would bury the\ntask you are working on.\n\nThen work with the files: `exec_command` to grep or read them,\n`view_image` for a screenshot, `pod_view_document_pages` for a captured\nPDF. This is the right way to read anything longer than a search snippet.",
+    "input_schema": {
+      "properties": {
+        "urls": {
+          "description": "Pages to capture, in one call. Batching is the point: research usually means reading ten sources, not one.",
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 20,
+          "minItems": 1,
+          "type": "array"
+        },
+        "formats": {
+          "description": "What to save per page. `markdown` is the readable article text and is what you normally want; `pdf` and `jpeg`/`png` preserve the rendered layout \u2014 useful when the page is a chart, a table, or a design you need to *look* at with `view_image`.",
+          "items": {
+            "enum": [
+              "markdown",
+              "pdf",
+              "jpeg",
+              "png"
+            ],
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "out_dir": {
+          "default": "research",
+          "description": "Directory in the workspace to write into, relative to your working directory. Files land here; nothing large is returned inline.",
+          "type": "string"
+        },
+        "render": {
+          "default": false,
+          "description": "Force the full browser. Off by default because a plain fetch is seconds faster; turn it on for pages that build their content with JavaScript, or when the plain fetch came back near-empty. Always used for `pdf`/`jpeg`/`png`, which need a real render.",
+          "type": "boolean"
+        },
+        "comment": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "One line on why you are fetching these, for the activity log."
+        }
+      },
+      "required": [
+        "urls"
+      ],
+      "title": "WebFetchRequest",
+      "type": "object"
+    },
+    "output_schema": {
+      "$defs": {
+        "WebFetchPage": {
+          "properties": {
+            "url": {
+              "type": "string"
+            },
+            "success": {
+              "type": "boolean"
+            },
+            "title": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "files": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "description": "Saved workspace paths, keyed by format.",
+              "type": "object"
+            },
+            "preview": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "First few hundred characters of the extracted text \u2014 enough to tell whether the page is worth reading in full."
+            },
+            "characters": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Length of the extracted markdown."
+            },
+            "fetched_with": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "http",
+                    "browser"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "error": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            }
+          },
+          "required": [
+            "url",
+            "success"
+          ],
+          "title": "WebFetchPage",
+          "type": "object"
+        }
+      },
+      "properties": {
+        "success": {
+          "type": "boolean"
+        },
+        "out_dir": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "pages": {
+          "items": {
+            "$ref": "#/$defs/WebFetchPage"
+          },
+          "type": "array"
+        },
+        "message": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "error": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "title": "WebFetchResponse",
+      "type": "object"
+    }
+  },
+  {
     "tool_name": "web_search",
     "toolset": "WEB_SEARCH",
     "description": "Search the web; returns titles, snippets, and URLs.\n\nUse it for current information, news, and finding online assets. Query with\nspecific keywords rather than questions.",
     "input_schema": {
+      "$defs": {
+        "SearchFreshness": {
+          "enum": [
+            "day",
+            "week",
+            "month",
+            "year"
+          ],
+          "title": "SearchFreshness",
+          "type": "string"
+        },
+        "SearchVertical": {
+          "description": "What kind of result the caller wants.\n\nNot every provider serves every vertical, so `BaseSearchClient` advertises\nwhat it supports and the caller degrades honestly rather than silently\nreturning web pages for a video query.",
+          "enum": [
+            "web",
+            "news",
+            "images",
+            "videos"
+          ],
+          "title": "SearchVertical",
+          "type": "string"
+        }
+      },
       "description": "Request model for standard web search",
       "properties": {
         "query": {
-          "description": "Search query string",
+          "description": "Search query. Use specific keywords rather than a question, and prefer `include_domains`/`exclude_domains` over typing `site:` yourself.",
           "type": "string"
         },
         "max_results": {
           "default": 10,
           "description": "Maximum number of search results to return",
           "type": "integer"
+        },
+        "vertical": {
+          "$ref": "#/$defs/SearchVertical",
+          "default": "web",
+          "description": "What to search: `web` pages, `news` articles, `images`, or `videos`. Not every provider serves every vertical; if the one configured here cannot, you get web results and a note saying so."
+        },
+        "freshness": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SearchFreshness"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Only results from the past `day`, `week`, `month`, or `year`. Use it for anything time-sensitive \u2014 search engines happily return five-year-old pages for current questions."
+        },
+        "include_domains": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Restrict results to these domains, e.g. ['arxiv.org']."
+        },
+        "exclude_domains": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Drop results from these domains, e.g. ['pinterest.com']."
         }
       },
       "required": [
@@ -3425,6 +3695,61 @@
               "anyOf": [
                 {
                   "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "published_at": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "publisher": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "thumbnail_url": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "image_url": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "duration": {
+              "anyOf": [
+                {
+                  "type": "string"
                 },
                 {
                   "type": "null"
@@ -3467,6 +3792,18 @@
           ],
           "default": null,
           "description": "Status message"
+        },
+        "note": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Set when the search could not be run exactly as asked \u2014 for example a vertical this provider does not serve."
         },
         "error": {
           "anyOf": [

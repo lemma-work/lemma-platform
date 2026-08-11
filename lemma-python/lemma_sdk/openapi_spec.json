@@ -12149,6 +12149,16 @@
         "title": "ScheduledWorkflowStartOutput",
         "type": "object"
       },
+      "SearchFreshness": {
+        "enum": [
+          "day",
+          "week",
+          "month",
+          "year"
+        ],
+        "title": "SearchFreshness",
+        "type": "string"
+      },
       "SearchMethod": {
         "enum": [
           "VECTOR",
@@ -12160,6 +12170,50 @@
       },
       "SearchResult": {
         "properties": {
+          "duration": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration"
+          },
+          "image_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Image Url"
+          },
+          "published_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Published At"
+          },
+          "publisher": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Publisher"
+          },
           "score": {
             "anyOf": [
               {
@@ -12179,6 +12233,17 @@
             "title": "Source",
             "type": "string"
           },
+          "thumbnail_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Thumbnail Url"
+          },
           "title": {
             "title": "Title",
             "type": "string"
@@ -12196,6 +12261,17 @@
         ],
         "title": "SearchResult",
         "type": "object"
+      },
+      "SearchVertical": {
+        "description": "What kind of result the caller wants.\n\nNot every provider serves every vertical, so `BaseSearchClient` advertises\nwhat it supports and the caller degrades honestly rather than silently\nreturning web pages for a video query.",
+        "enum": [
+          "web",
+          "news",
+          "images",
+          "videos"
+        ],
+        "title": "SearchVertical",
+        "type": "string"
       },
       "SendMessageRequest": {
         "properties": {
@@ -15590,6 +15666,47 @@
       "WebSearchRequest": {
         "description": "Request model for standard web search",
         "properties": {
+          "exclude_domains": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Drop results from these domains, e.g. ['pinterest.com'].",
+            "title": "Exclude Domains"
+          },
+          "freshness": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SearchFreshness"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Only results from the past `day`, `week`, `month`, or `year`. Use it for anything time-sensitive \u2014 search engines happily return five-year-old pages for current questions."
+          },
+          "include_domains": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Restrict results to these domains, e.g. ['arxiv.org'].",
+            "title": "Include Domains"
+          },
           "max_results": {
             "default": 10,
             "description": "Maximum number of search results to return",
@@ -15597,9 +15714,14 @@
             "type": "integer"
           },
           "query": {
-            "description": "Search query string",
+            "description": "Search query. Use specific keywords rather than a question, and prefer `include_domains`/`exclude_domains` over typing `site:` yourself.",
             "title": "Query",
             "type": "string"
+          },
+          "vertical": {
+            "$ref": "#/components/schemas/SearchVertical",
+            "default": "web",
+            "description": "What to search: `web` pages, `news` articles, `images`, or `videos`. Not every provider serves every vertical; if the one configured here cannot, you get web results and a note saying so."
           }
         },
         "required": [
@@ -15634,6 +15756,18 @@
             ],
             "description": "Status message",
             "title": "Message"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Set when the search could not be run exactly as asked \u2014 for example a vertical this provider does not serve.",
+            "title": "Note"
           },
           "results": {
             "description": "List of search results",

@@ -192,6 +192,15 @@ class ViewDocumentPagesRequest(BaseModel):
         ge=1,
         description="Last page (1-based, inclusive). Defaults to page_start.",
     )
+    instructions: str | None = Field(
+        default=None,
+        description=(
+            "What you need from these pages — 'transcribe the pricing table', "
+            "'describe the architecture diagram and its arrows'. Always set it: "
+            "if this agent's model cannot read images itself, this is the "
+            "question a vision model answers on your behalf."
+        ),
+    )
 
 
 class GetFileUrlRequest(BaseModel):
