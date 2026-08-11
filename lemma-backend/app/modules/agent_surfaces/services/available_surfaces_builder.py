@@ -39,6 +39,9 @@ from app.modules.agent_surfaces.domain.surface_connectors import (
 from app.modules.agent_surfaces.services.credential_resolver import (
     has_native_credentials,
 )
+from app.modules.agent_surfaces.platforms.platform_capabilities import (
+    get_platform_capabilities,
+)
 from app.modules.connectors.contracts import AuthProvider, ConnectorNotFoundError
 from app.composition.surface_connectors import ConnectorService
 
@@ -108,9 +111,17 @@ async def _system_claim(
     by ``_ensure_unique_org_credential_binding``); returning it here lets the
     setup UI disable the option up front rather than surfacing a failed save.
     Only meaningful when the platform actually has a SYSTEM mode; best-effort,
-    because a catalog read must not fail on a repository hiccup."""
+    because a catalog read must not fail on a repository hiccup.
+
+    Nothing to claim when the credential is not an identity — Resend hands every
+    pod and every agent its own address off one key. This mirrors the write-side
+    exemption on purpose: a catalog that disagrees with the writer either offers
+    something that then fails, or hides something that would have worked."""
     if SurfaceCredentialMode.SYSTEM not in modes:
         return None
+    capabilities = get_platform_capabilities(platform.value)
+    if capabilities is not None and not capabilities.system_credential_is_identity:
+        return SurfaceSystemClaim(available=True)
     if pod_id is None or surface_repository is None:
         return SurfaceSystemClaim(available=True)
     try:

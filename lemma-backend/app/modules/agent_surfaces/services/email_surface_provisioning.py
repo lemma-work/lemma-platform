@@ -75,8 +75,12 @@ async def provision_email_surface(
     agent_id: UUID | None,
     agent_name: str | None,
     pod_name: str | None,
-) -> AgentSurfaceEntity | None:
-    """Create the mailbox and return the surface, or None if we could not.
+) -> tuple[AgentSurfaceEntity | None, str | None]:
+    """``(surface, failure)`` — the failure is a short, safe cause for a None.
+
+    The cause is returned rather than only logged because the log pipeline
+    strips ``error`` fields, so a caller that wants to *tell somebody* why has
+    no other way to find out.
 
     Best-effort by construction. Creating an agent must not fail because a mail
     domain is unset, and a notification that cannot be delivered is already a
@@ -86,11 +90,11 @@ async def provision_email_surface(
     than inventing a domain.
     """
     if not email_is_configured():
-        return None
+        return None, "not_configured"
 
     domain = surface_settings.resend_inbound_domain
     if not domain:  # pragma: no cover - email_is_configured already requires it
-        return None
+        return None, "not_configured"
 
     addresses = candidate_addresses(
         agent_name=agent_name, pod_name=pod_name, domain=domain
@@ -108,7 +112,7 @@ async def provision_email_surface(
     for address in addresses:
         try:
             async with session.begin_nested():
-                return await service.create_surface(
+                surface = await service.create_surface(
                     pod_id=pod_id,
                     platform=SurfacePlatform.RESEND,
                     agent_id=agent_id,
@@ -117,6 +121,7 @@ async def provision_email_surface(
                     credential_mode=SurfaceCredentialMode.SYSTEM,
                     surface_identity_email=address,
                 )
+            return surface, None
         except IntegrityError:
             # The address (or the surface name) is taken. Try the next candidate;
             # the savepoint means the outer transaction is still usable.
@@ -127,20 +132,38 @@ async def provision_email_surface(
             # already taken. A ``TypeError`` from our own code is not that, and
             # swallowing it would turn a bug into agents that quietly have no
             # mailbox for as long as nobody looks.
+            #
+            # Type and code, never ``error=str(exc)``: the log pipeline strips
+            # any field named ``error`` outright, because exception text can
+            # carry keys and personal data. So the one line that said why
+            # provisioning failed arrived in production with the cause removed,
+            # and diagnosing it needed a database. These two are bounded,
+            # non-secret, and enough to name the branch that refused.
             logger.warning(
                 "agent_surfaces.email_surface_provisioning.failed.degraded",
                 pod_id=str(pod_id),
                 agent_id=str(agent_id) if agent_id else None,
-                error=str(exc),
+                failure_type=type(exc).__name__,
+                failure_code=str(getattr(exc, "code", "") or "") or None,
             )
-            return None
+            return None, _cause_of(exc)
 
     logger.warning(
         "agent_surfaces.email_surface_provisioning.address_unavailable.degraded",
         pod_id=str(pod_id),
         agent_id=str(agent_id) if agent_id else None,
     )
-    return None
+    return None, "every candidate address was already taken"
+
+
+def _cause_of(exc: Exception) -> str:
+    """A short cause safe to show a person.
+
+    The exception's own message is deliberately not used: it is free text from a
+    provider or the database and can carry a key or somebody's address.
+    """
+    code = str(getattr(exc, "code", "") or "")
+    return code or type(exc).__name__
 
 
 __all__ = [

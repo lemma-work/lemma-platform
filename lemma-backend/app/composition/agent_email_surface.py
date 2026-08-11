@@ -32,7 +32,7 @@ async def provision_agent_email_surface(
         provision_email_surface,
     )
 
-    surface = await provision_email_surface(
+    surface, _ = await provision_email_surface(
         get_surface_service(uow),
         uow.session,
         pod_id=pod_id,
