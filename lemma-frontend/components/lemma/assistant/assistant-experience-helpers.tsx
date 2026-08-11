@@ -273,7 +273,18 @@ export function defaultMessageContent({ message }: AssistantMessageRenderArgs): 
   const segments = splitAssistantMessageSegments(displayContent);
 
   return (
-    <div className={cn("min-w-0 overflow-hidden break-words text-sm font-normal leading-6 tracking-normal text-[var(--text-primary)]", isUserMessage ? "max-w-prose" : "max-w-full")}>
+    <div className={cn(
+      "min-w-0 overflow-hidden break-words text-sm font-normal leading-relaxed tracking-normal text-[var(--text-primary)]",
+      // What the agent *says* is set one way, whenever it says it.
+      //
+      // This used to depend on whether the message was currently the run's last
+      // text — which is a fact about the run's progress, not about the message.
+      // So an answer streamed in as muted italic "narration" and snapped to
+      // roman ink the moment the run ended. The distinction that matters is
+      // speech vs thought, and that never changes: thoughts are `THINKING`
+      // messages and render as reasoning, which is the one italic voice here.
+      isUserMessage ? "max-w-prose" : "max-w-full",
+    )}>
       {segments.map((segment, index) => (
         segment.kind === "json" ? (
           <AssistantJsonBlock key={`json-${index}`} json={segment.json} isUserMessage={isUserMessage} />

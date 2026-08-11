@@ -6,6 +6,7 @@ import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { ArrowRight, ArrowUp, ChevronDown, ChevronUp, Plus, UserPlus, X } from '@/components/ui/icons';
 
 import { useAIAssistant } from '@/components/ai/ai-assistant-context';
+import { ProjectBranchChip } from '@/components/lemma/assistant/project-branch';
 import { ProjectPicker } from '@/components/lemma/assistant/project-picker';
 import { useGithubProjects } from '@/lib/hooks/use-github-projects';
 import { ProtectedRoute } from '@/components/auth/protected-route';
@@ -444,6 +445,15 @@ function PodBlankChatHome({ podId }: { podId: string }) {
                                 connectHref={`/pod/${encodeURIComponent(podId)}/connectors`}
                             />
                         ) : null}
+                        {canWriteConversations && assistant.pendingProject ? (
+                            <ProjectBranchChip
+                                project={assistant.pendingProject}
+                                onChange={(ref) => assistant.setPendingProject({
+                                    ...assistant.pendingProject!,
+                                    ref,
+                                })}
+                            />
+                        ) : null}
                         <button
                             type="submit"
                             aria-label="Send"
@@ -570,7 +580,12 @@ function PodHomePanelsSkeleton() {
 function PodJoinRequestsHomePanel({ podId }: { podId: string }) {
     const podAccess = usePodAccess(podId);
     const canManageMembers = podAccess.can('pod.member.manage');
-    const { data, isLoading } = usePodJoinRequests(podId, 'PENDING');
+    // Pod home renders for everyone, so this has to stay off the wire until the
+    // permission is known. `can()` is false while permissions are still loading,
+    // which is the answer we want: ask once, after we know we are allowed to.
+    const { data, isLoading } = usePodJoinRequests(podId, 'PENDING', {
+        enabled: canManageMembers,
+    });
     const requests = data?.items || [];
 
     if (!canManageMembers || isLoading || requests.length === 0) return null;

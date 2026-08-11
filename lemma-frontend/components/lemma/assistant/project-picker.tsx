@@ -39,14 +39,13 @@ import { projectLabel, type ProjectSelection } from "@/lib/assistant/project-sel
 const CHIP_CLASS =
   "inline-flex h-8 min-w-0 max-w-[14rem] items-center gap-1.5 rounded-md px-2 text-xs text-[var(--text-secondary)]";
 
+// The branch is deliberately absent: `ProjectBranchChip` sits next to this one
+// and names it, and printing it in both places says the same thing twice.
 function ChipBody({ project }: { project: ProjectSelection | null }) {
   return project ? (
     <>
       <Github className="size-3.5 shrink-0" />
       <span className="truncate">{projectLabel(project)}</span>
-      {project.ref ? (
-        <span className="hidden shrink-0 text-[var(--text-tertiary)] sm:inline">{project.ref}</span>
-      ) : null}
     </>
   ) : (
     <>

@@ -16,7 +16,7 @@ import {
   isRenderableUserInteractionInvocation,
   userApprovalResolvedDecision,
 } from "lemma-sdk";
-import { Check, ChevronDown, Copy } from "@/components/ui/icons";
+import { Check, Copy } from "@/components/ui/icons";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import {
@@ -30,10 +30,11 @@ import {
   humanizeKey,
   pickPreferredEntries,
   summarizeToolPayload,
+  toolCallLabelParts,
   toolCallPrimaryLabel,
 } from "./assistant-format";
 import { DetailsWithCopy, contextualToolDetails } from "./assistant-tool-cards";
-import { ReasoningPartCard, ThinkingIndicator } from "./assistant-parts";
+import { ReasoningPartCard, TraceDisclosureLine } from "./assistant-parts";
 import { SubagentActivityRollup } from "./assistant-subagent-activity";
 import { isSubagentLifecycleToolName } from "@/lib/assistant/subagent-activity";
 import {
@@ -56,7 +57,6 @@ import type {
   ToolCardResult,
   UserApprovalDecision,
 } from "./assistant-experience";
-import { ToolCallIcon } from "./assistant-tool-icon";
 
 export function ToolDetailsPanel({
   toolCallId,
@@ -289,28 +289,26 @@ function InlineToolCall({
   const resultData = (invocation.result || {}) as ToolCardResult;
   const isExecuting = isToolInvocationActive(invocation);
   const isFailed = !isExecuting && invocation.state === "result" && resultData.success === false;
-  const primaryLabel = toolCallPrimaryLabel(invocation.toolName, invocation.args);
+  const { verb, object } = toolCallLabelParts(invocation.toolName, invocation.args);
 
   return (
     <button
       type="button"
       onClick={onClick}
-      className="lemma-assistant-inline-tool-button inline-flex max-w-full items-center gap-2 border-0 bg-transparent p-0 text-left transition-colors"
+      className="lemma-assistant-inline-tool-button inline-flex max-w-full items-baseline gap-1.5 border-0 bg-transparent p-0 text-left transition-colors"
       data-state={isExecuting ? "executing" : isFailed ? "failed" : "complete"}
       data-selected={isSelected}
     >
-      <ToolCallIcon
-        toolName={invocation.toolName}
-        className="size-3.5 shrink-0 text-current opacity-80"
-      />
-      <span
-        className={cn(
-          "min-w-0 truncate",
-          isExecuting && "lemma-assistant-thinking-shimmer bg-clip-text text-transparent animate-[lemma-skeleton-breathe_1.5s_ease-in-out_infinite]",
-        )}
-      >
-        {primaryLabel}
-      </span>
+      {/* No icon. A glyph in front of every row added a column of noise down the
+          left of the trace without saying anything the label did not, and it was
+          the widest source of crowding once a run had a dozen steps.
+
+          Wraps, and reads the same whether or not it is the one running: a
+          per-row shimmer made the executing row a different weight and colour
+          from the rows above it, so a list of tool calls never looked like one
+          list. Activity is the transcript's single bottom indicator's job. */}
+      {verb ? <span className="shrink-0 opacity-70">{verb}</span> : null}
+      <span className="min-w-0 break-words">{object}</span>
       {isFailed ? (
         <span
           className="shrink-0 text-xs font-medium leading-none text-[var(--state-error)]"
@@ -328,15 +326,8 @@ export function pluralize(count: number, singular: string, plural = `${singular}
   return `${count} ${count === 1 ? singular : plural}`;
 }
 
-function joinActivityPhrases(phrases: string[]): string {
-  if (phrases.length <= 1) return phrases[0] ?? "";
-  if (phrases.length === 2) return `${phrases[0]} and ${phrases[1]}`;
-  return `${phrases.slice(0, -1).join(", ")} and ${phrases[phrases.length - 1]}`;
-}
-
-/** A human "did x, y and z" line for a block of tool calls — tallied by the
- * tool's display name (so repeats collapse to "×N"), preserving call order,
- * and capped so a long block reads "a, b, c, d +K more" instead of a wall. */
+/** A one-line summary for a block of tool calls: the tool's own name when the
+ * block is all one kind ("Terminal command ×3"), otherwise a plain count. */
 function formatToolActivitySummary(toolParts: Array<Extract<AssistantMessagePart, { type: "tool" }>>): string | null {
   if (toolParts.length === 0) return null;
 
@@ -356,12 +347,11 @@ function formatToolActivitySummary(toolParts: Array<Extract<AssistantMessagePart
     return count > 1 ? `${name} ×${count}` : name;
   };
 
-  const MAX_NAMED = 4;
-  if (order.length <= MAX_NAMED) {
-    return joinActivityPhrases(order.map(phraseFor));
-  }
-  const shown = order.slice(0, MAX_NAMED).map(phraseFor);
-  return `${shown.join(", ")} +${order.length - MAX_NAMED} more`;
+  // One kind of tool names itself ("Terminal command ×3"). Several kinds used to
+  // be glued together — "Updated plan and Terminal command ×2" — which is longer
+  // than the rows it summarises and harder to read than counting them.
+  if (order.length === 1) return phraseFor(order[0]);
+  return `Ran ${pluralize(toolParts.length, "step")}`;
 }
 
 type ToolActivityPart = Extract<AssistantMessagePart, { type: "tool" }>;
@@ -410,39 +400,16 @@ export function RunTraceHeader({
   isInteractive?: boolean;
   onToggle?: () => void;
 }) {
-  const content = (
-    <>
-      <span className="min-w-0 truncate">{label}</span>
-      {isInteractive ? (
-        <ChevronDown
-          className={cn(
-            "size-4 shrink-0 text-[var(--text-tertiary)] transition-transform",
-            !isExpanded && "-rotate-90",
-          )}
-          aria-hidden="true"
-        />
-      ) : null}
-    </>
-  );
-
+  // The run rollup is the same disclosure line as a thought or a tool group; it
+  // is only distinguished by the rule under it, which separates a whole run's
+  // trace from the answer that follows.
   return (
-    <div className="flex min-w-0 flex-col gap-2">
-      {isInteractive ? (
-        <button
-          type="button"
-          className="lemma-assistant-run-trace-header flex w-fit max-w-full items-center gap-1.5 border-0 bg-transparent p-0 text-left transition-colors"
-          onClick={onToggle}
-          aria-expanded={isExpanded}
-        >
-          {content}
-        </button>
-      ) : (
-        <div className="lemma-assistant-run-trace-header flex w-fit max-w-full items-center gap-1.5">
-          {content}
-        </div>
-      )}
-      <div className="h-px w-full bg-[var(--row-border)]" aria-hidden="true" />
-    </div>
+    <TraceDisclosureLine
+      label={label}
+      isExpanded={isExpanded}
+      onToggle={isInteractive ? onToggle : undefined}
+      rule
+    />
   );
 }
 
@@ -470,6 +437,9 @@ export function ToolActivityRollup({
 }) {
   const [activeDetailId, setActiveDetailId] = useState<string | null>(null);
   const [expandedGroupId, setExpandedGroupId] = useState<string | null>(null);
+  // Closed, and it stays closed until the reader opens it. The header line above
+  // names what happened ("Ran 3 commands"), which is the summary — the cards are
+  // the detail behind it.
   const [isExpanded, setIsExpanded] = useState(false);
   const subagentToolParts = detailParts.filter((part): part is ToolActivityPart => (
     part.type === "tool" && isSubagentLifecycleToolName(part.toolInvocation.toolName)
@@ -499,9 +469,16 @@ export function ToolActivityRollup({
     const resultData = (invocation.result || {}) as ToolCardResult;
     return invocation.state !== "result" && !userApprovalResolvedDecision(resultData);
   });
-  const shouldShowHeader = hasRunHeader
-    || hasLongToolGroup
-    || (Boolean(isRunActive) && !hasPendingUserInteraction);
+  // A header summarises several things. One tool call is already its own
+  // summary, so wrapping it in "Terminal command ⌄" asks the reader to open a
+  // drawer to find the single line it was hiding.
+  //
+  // Deliberately not a function of `isRunActive`: that made a rollup unfurl its
+  // cards the instant a run ended. What a rollup looks like depends only on how
+  // much it holds, which does not change when the run does.
+  void hasRunHeader;
+  void hasLongToolGroup;
+  const shouldShowHeader = visibleDetailParts.length + subagentToolParts.length > 1;
   const failedCount = toolParts.filter((part) => (
     part.toolInvocation.state === "result"
     && !isLongRunningToolResult(part.toolInvocation)
@@ -620,28 +597,26 @@ export function ToolActivityRollup({
           onToggle={() => setIsExpanded((prev) => !prev)}
         />
       ) : shouldShowHeader ? (
-        <button
-          type="button"
-          className="lemma-assistant-tool-rollup-toggle-button inline-flex max-w-full cursor-pointer items-center gap-2.5 border-0 bg-transparent p-0 text-[var(--text-secondary)] transition-colors hover:text-[var(--text-primary)]"
-          onClick={() => setIsExpanded((prev) => !prev)}
-          aria-expanded={isTraceExpanded}
-          aria-label={isTraceExpanded ? "Hide tool activity details" : "Show tool activity details"}
-        >
-          {isWorking ? (
-            <ThinkingIndicator label={collapsedSummary} shimmer />
-          ) : (
-            <span className="truncate text-sm">{collapsedSummary}</span>
-          )}
-        </button>
+        <TraceDisclosureLine
+          label={collapsedSummary}
+          isExpanded={isTraceExpanded}
+          onToggle={() => setIsExpanded((prev) => !prev)}
+        />
       ) : null}
 
       {!shouldShowHeader || isTraceExpanded ? (
+        // No frame here. A tool's own detail card already draws one — a terminal
+        // card brings its own chrome, title bar and status — so wrapping the
+        // group in a second box produced a box inside a box inside a box. The
+        // group's extent is shown by the indent below and by its header above,
+        // both of which cost nothing.
         <div className={cn(
-          "flex flex-col gap-1.5",
+          "flex flex-col gap-1",
           isSingleDetail && "gap-1",
+          shouldShowHeader && "border-l border-[color:var(--row-border)] pl-3",
         )}>
           {activityBlocks.length === 1 && activityBlocks[0].type === "tool-group" ? (
-            <div className="flex flex-col gap-1.5">
+            <div className="flex flex-col gap-1">
               {activityBlocks[0].parts.map(renderToolActivityPart)}
             </div>
           ) : activityBlocks.map((block) => {
@@ -667,7 +642,7 @@ export function ToolActivityRollup({
 
             if (hasUnresolvedApproval) {
               return (
-                <div key={block.id} className="flex flex-col gap-1.5">
+                <div key={block.id} className="flex flex-col gap-1">
                   {block.parts.map(renderToolActivityPart)}
                 </div>
               );
@@ -675,7 +650,7 @@ export function ToolActivityRollup({
 
             if (block.parts.length <= 2) {
               return (
-                <div key={block.id} className="flex flex-col gap-1.5">
+                <div key={block.id} className="flex flex-col gap-1">
                   {block.parts.map(renderToolActivityPart)}
                 </div>
               );
@@ -684,16 +659,14 @@ export function ToolActivityRollup({
             const groupSummary = formatToolActivitySummary(block.parts) || `Used ${pluralize(block.parts.length, "tool")}`;
             const isGroupSelected = expandedGroupId === block.id;
             return (
-              <div key={block.id} className="flex flex-col gap-1.5">
-                <button
-                  type="button"
-                  onClick={() => setExpandedGroupId((prev) => (prev === block.id ? null : block.id))}
-                  className="lemma-assistant-tool-group-button inline-flex max-w-full items-center gap-2 border-0 bg-transparent p-0 text-left text-sm text-[var(--text-secondary)] transition-colors hover:text-[var(--text-primary)]"
-                >
-                  <span className="truncate">{groupSummary}</span>
-                </button>
+              <div key={block.id} className="flex flex-col gap-1">
+                <TraceDisclosureLine
+                  label={groupSummary}
+                  isExpanded={isGroupSelected}
+                  onToggle={() => setExpandedGroupId((prev) => (prev === block.id ? null : block.id))}
+                />
                 {isGroupSelected ? (
-                  <div className="flex flex-col gap-1.5">
+                  <div className="flex flex-col gap-1">
                     {block.parts.map(renderToolActivityPart)}
                   </div>
                 ) : null}

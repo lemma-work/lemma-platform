@@ -2,7 +2,6 @@
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { AgentRuntimeConfig, AvailableModelInfo } from 'lemma-sdk';
 import {
     useAssistantController,
@@ -13,7 +12,7 @@ import {
     type AssistantToolInvocation as SdkAssistantToolInvocation,
 } from 'lemma-sdk/react';
 import type { AssistantContext, PodContext, AIAction } from '@/lib/types/ai';
-import type { Conversation, ConversationModel, Message as RawConversationMessage } from '@/lib/types';
+import type { Conversation, ConversationModel } from '@/lib/types';
 import { getLemmaClient } from '@/lib/sdk/lemma-client';
 import {
     buildDisplayResourceHref,
@@ -48,92 +47,6 @@ export type ToolInvocation = SdkAssistantToolInvocation;
 export type StreamingTool = SdkAssistantStreamingTool;
 export type PendingFileUpload = SdkAssistantPendingFileUpload;
 export type AssistantMessagePart = SdkAssistantMessagePart;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-    return !!value && typeof value === 'object' && !Array.isArray(value);
-}
-
-function normalizedToolResult(value: unknown): Record<string, unknown> {
-    if (isRecord(value)) return value;
-    if (typeof value === 'undefined' || value === null) return {};
-    return { output: value };
-}
-
-function rawToolReturnPayload(message: RawConversationMessage): {
-    toolCallId: string;
-    toolName?: string;
-    result: Record<string, unknown>;
-} | null {
-    const metadata = isRecord(message.metadata) ? message.metadata : null;
-    const messageMetadata = isRecord(message.message_metadata) ? message.message_metadata : null;
-    // Flat message shape: tool fields live at the top level of the message.
-    const kind = typeof message.kind === 'string'
-        ? message.kind
-        : metadata?.message_type ?? messageMetadata?.message_type;
-    const isToolReturn = kind === 'TOOL_RETURN' || kind === 'tool_return' || message.role === 'tool';
-
-    if (!isToolReturn) return null;
-
-    const toolCallId = (typeof message.tool_call_id === 'string' ? message.tool_call_id : undefined)
-        ?? metadata?.tool_call_id ?? messageMetadata?.tool_call_id;
-    if (typeof toolCallId !== 'string' || !toolCallId.trim()) return null;
-
-    const toolName = (typeof message.tool_name === 'string' ? message.tool_name : undefined)
-        ?? metadata?.tool_name ?? messageMetadata?.tool_name;
-    const rawResult = message.tool_result ?? metadata?.result ?? messageMetadata?.result;
-
-    return {
-        toolCallId,
-        toolName: typeof toolName === 'string' && toolName.trim() ? toolName : undefined,
-        result: normalizedToolResult(rawResult),
-    };
-}
-
-function hydrateToolReturnMessages(
-    messages: SdkAssistantRenderableMessage[],
-    rawMessages: RawConversationMessage[],
-): SdkAssistantRenderableMessage[] {
-    if (messages.length === 0 || rawMessages.length === 0) return messages;
-
-    const rawReturnsByToolCallId = new Map<string, NonNullable<ReturnType<typeof rawToolReturnPayload>>>();
-    rawMessages.forEach((message) => {
-        const payload = rawToolReturnPayload(message);
-        if (payload) rawReturnsByToolCallId.set(payload.toolCallId, payload);
-    });
-
-    if (rawReturnsByToolCallId.size === 0) return messages;
-
-    let changed = false;
-    const nextMessages = messages.map((message) => {
-        const hydrateInvocation = (invocation: SdkAssistantToolInvocation): SdkAssistantToolInvocation => {
-            const payload = rawReturnsByToolCallId.get(invocation.toolCallId);
-            if (!payload) return invocation;
-            changed = true;
-            return {
-                ...invocation,
-                toolName: invocation.toolName === 'tool' && payload.toolName ? payload.toolName : invocation.toolName,
-                state: 'result',
-                result: payload.result,
-            };
-        };
-        const nextToolInvocations = message.toolInvocations?.map(hydrateInvocation);
-        const nextParts = message.parts?.map((part) => (
-            part.type === 'tool'
-                ? { ...part, toolInvocation: hydrateInvocation(part.toolInvocation) }
-                : part
-        ));
-
-        if (nextToolInvocations === message.toolInvocations && nextParts === message.parts) return message;
-
-        return {
-            ...message,
-            toolInvocations: nextToolInvocations,
-            parts: nextParts,
-        };
-    });
-
-    return changed ? nextMessages : messages;
-}
 
 interface AIAssistantContextType {
     isOpen: boolean;
@@ -271,8 +184,6 @@ export function AIAssistantProvider({
     const [isOpen, setIsOpen] = useState(false);
     const [hasActivatedController, setHasActivatedController] = useState(false);
     const [lastCreatedResource, setLastCreatedResource] = useState<{ type: string; id: string } | null>(null);
-    const [sideViewMessageLoadGeneration, setSideViewMessageLoadGeneration] = useState(0);
-    const [readySideViewMessageLoadGeneration, setReadySideViewMessageLoadGeneration] = useState(-1);
     const [pendingProject, setPendingProjectState] = useState<ProjectSelection | null>(null);
     // Mirrored into a ref so `sendMessage` can read the current selection
     // without taking it as a dependency and changing identity on every pick.
@@ -363,50 +274,10 @@ export function AIAssistantProvider({
         || hasAssistantLaunchRequest
     );
     const controllerGates = resolveAssistantControllerGates(isProviderEnabled, isControllerEnabled);
-    const shouldPrepareSideViewMessages = isProviderEnabled && !isConversationRoute && isOpen;
 
-    const queryClient = useQueryClient();
-    // When the side view opens for a conversation whose transcript is already
-    // cached (e.g. clicking a display resource from the conversation page), load
-    // it immediately instead of deferring. The deferral keeps a *cold* first paint
-    // smooth, but with a warm cache it just makes the messages visibly reload.
-    const activeConversationMessagesCached = Boolean(
-        conversationScope.podId
-        && urlAssistantConversationId
-        && queryClient.getQueryData([
-            'assistant-raw-conversation-messages',
-            conversationScope.podId,
-            urlAssistantConversationId,
-        ]),
-    );
-
-    useEffect(() => {
-        if (!shouldPrepareSideViewMessages) {
-            return;
-        }
-
-        // Give sidebar and display-resource side views a clean first paint before hydrating transcripts.
-        let frameId = window.requestAnimationFrame(() => {
-            frameId = window.requestAnimationFrame(() => {
-                setReadySideViewMessageLoadGeneration(sideViewMessageLoadGeneration);
-            });
-        });
-
-        return () => {
-            window.cancelAnimationFrame(frameId);
-        };
-    }, [shouldPrepareSideViewMessages, sideViewMessageLoadGeneration]);
-
-    // Keep loading enabled continuously whenever the transcript is already cached
-    // — including the brief window after navigation where the side panel hasn't
-    // re-opened yet (isOpen false). Without this, the gate dips to false for a
-    // render, the controller drops its messages, and the side view shows a
-    // "Loading messages" spinner before re-hydrating identical data. Cold opens
-    // (no cache) still defer for a clean first paint.
-    const shouldLoadActiveConversationMessages = isConversationRoute
-        || activeConversationMessagesCached
-        || (shouldPrepareSideViewMessages && readySideViewMessageLoadGeneration === sideViewMessageLoadGeneration);
-
+    // The controller loads a transcript once and keeps the last few resident, so
+    // there is nothing left to gate: deferring the load only ever bought a clean
+    // first paint against a store that used to discard itself. It no longer does.
     const controller = useAssistantController({
         client: controllerClient,
         podId: conversationScope.podId ?? undefined,
@@ -414,29 +285,9 @@ export function AIAssistantProvider({
         organizationId: conversationScope.organizationId ?? undefined,
         enabled: controllerGates.enabled,
         autoLoad: controllerGates.autoLoad,
-        autoLoadMessages: shouldLoadActiveConversationMessages,
+        autoLoadMessages: isControllerEnabled,
     });
 
-    const rawMessagesQuery = useQuery({
-        queryKey: ['assistant-raw-conversation-messages', conversationScope.podId, controller.openedConversationId],
-        queryFn: async () => {
-            if (!conversationScope.podId || !controller.openedConversationId) {
-                return [] as RawConversationMessage[];
-            }
-            const response = await controllerClient.conversations.messages.list(
-                controller.openedConversationId,
-                {
-                    pod_id: conversationScope.podId,
-                    limit: 100,
-                },
-            );
-            return (response.items || []) as RawConversationMessage[];
-        },
-        enabled: !!conversationScope.podId && !!controller.openedConversationId && isControllerEnabled && shouldLoadActiveConversationMessages,
-        refetchOnWindowFocus: false,
-    });
-    const rawMessages = useMemo(() => rawMessagesQuery.data ?? [], [rawMessagesQuery.data]);
-    const refetchRawMessages = rawMessagesQuery.refetch;
     const controllerRef = useRef(controller);
 
     useEffect(() => {
@@ -454,7 +305,6 @@ export function AIAssistantProvider({
         setHasActivatedController(true);
         if (isOpenRef.current) return;
         isOpenRef.current = true;
-        setSideViewMessageLoadGeneration((generation) => generation + 1);
         setIsOpen(true);
     }, [onOpenAssistant]);
     const closeAssistant = useCallback((options?: { skipUrlSync?: boolean; suppressUrlRestore?: boolean }) => {
@@ -471,7 +321,6 @@ export function AIAssistantProvider({
             if (next) {
                 onOpenAssistant?.();
                 setHasActivatedController(true);
-                setSideViewMessageLoadGeneration((generation) => generation + 1);
             }
             return next;
         });
@@ -627,16 +476,10 @@ export function AIAssistantProvider({
         }
     }, [navigateToResolvedResource, pathname, podContext?.pod?.id, router, urlAssistantConversationId]);
 
-    const displayMessages = useMemo(
-        () => hydrateToolReturnMessages(controller.messages, rawMessages),
-        [controller.messages, rawMessages],
-    );
-
-    useEffect(() => {
-        if (!shouldLoadActiveConversationMessages) return;
-        if (!controller.openedConversationId || controller.isLoading) return;
-        void refetchRawMessages();
-    }, [controller.openedConversationId, controller.isLoading, refetchRawMessages, shouldLoadActiveConversationMessages]);
+    // The controller's messages are the transcript. There is no second copy to
+    // merge and nothing to refetch when a run ends: the stream already delivered
+    // every message, tool returns folded into their calls.
+    const displayMessages = controller.messages;
 
     useEffect(() => {
         const successfulTools = latestSuccessfulToolInvocations(displayMessages);
@@ -779,8 +622,7 @@ export function AIAssistantProvider({
         markToolInvocationsSeen(seenAutoNavigationToolCallIds.current, displayMessages);
         allowAutoNavigationRef.current = true;
         await controllerRef.current.resolveUserApproval(approvalId, decision, response);
-        await refetchRawMessages();
-    }, [displayMessages, refetchRawMessages]);
+    }, [displayMessages]);
 
     const pendingActions = useMemo(() => controller.pendingActions as AIAction[], [controller.pendingActions]);
     const completedActions = useMemo(() => controller.completedActions as AIAction[], [controller.completedActions]);

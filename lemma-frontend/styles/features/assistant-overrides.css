@@ -231,30 +231,44 @@
   }
 }
 
+/* ── The three voices of a turn ──────────────────────────────────────────────
+   A transcript answers three questions — what did it conclude, what was it
+   working through, and what did it actually run — and it used to answer all
+   three in one grey at one size, so a long run arrived as a flat ladder.
+
+   The fix is not a type scale. Sizes that step apart turn one turn into two
+   typographic systems stacked on each other, which is how this last went
+   wrong: 12px mono steps under 16px answers read as two different products.
+
+   Everything stays at 14px. The whole hierarchy is ink:
+
+     Answer      primary    roman     the conclusion — the only thing at full ink
+     Narration   secondary  italic    the working-out, including thoughts
+     Step        tertiary   roman     what actually ran
+     Group       tertiary   roman     structure, skimmed past
+
+   Three levels of grey and one italic. Nothing jumps, and the eye can still
+   find the answer without reading a word. */
+
+/* A step: what the agent ran. Recessive, and the same size as everything else. */
 .lemma-assistant-inline-tool-button,
 .lemma-assistant-inline-approval-button {
-  color: var(--text-secondary);
-  font-family: var(--font-body-family);
-  font-size: var(--text-xs);
-  font-weight: 400;
-  letter-spacing: 0;
-  line-height: 1.25rem;
-}
-
-.lemma-assistant-inline-tool-button:hover,
-.lemma-assistant-inline-tool-button[data-selected="true"],
-.lemma-assistant-inline-approval-button:hover,
-.lemma-assistant-inline-approval-button[data-selected="true"] {
-  color: var(--text-primary);
-}
-
-.lemma-assistant-run-trace-header {
-  color: var(--text-secondary);
+  color: var(--text-tertiary);
   font-family: var(--font-body-family);
   font-size: var(--text-sm);
   font-weight: 400;
   letter-spacing: 0;
-  line-height: 1.5rem;
+  line-height: 1.5;
+}
+
+/* A group label: structure, not content — same ink as the steps it heads. */
+.lemma-assistant-run-trace-header {
+  color: var(--text-tertiary);
+  font-family: var(--font-body-family);
+  font-size: var(--text-sm);
+  font-weight: 400;
+  letter-spacing: 0;
+  line-height: 1.5;
 }
 
 button.lemma-assistant-run-trace-header:hover {

@@ -23,7 +23,6 @@ import {
 } from '@/lib/assistant/conversation-presentation';
 import { useAgentRuntimes } from '@/lib/hooks/use-agent-runtime';
 import { useAgent, useAgents } from '@/lib/hooks/use-agents';
-import { useConversation } from '@/lib/hooks/use-assistants';
 import { usePod } from '@/lib/hooks/use-pods';
 import { usePodAccess } from '@/lib/hooks/use-pod-access';
 import { parseConversationMetadataParam } from '@/lib/pods/composer-launch';
@@ -82,21 +81,19 @@ export default function PodConversationPage({
     );
     const isNewConversation = conversationId === 'new';
     const newConversationScopeKey = scopedAgentName ?? '__pod_default__';
-    const { data: fetchedConversation } = useConversation(
-        podId,
-        isNewConversation ? '' : conversationId,
-    );
     const newWorkspaceRef = useRef<HTMLDivElement>(null);
     const newRouteScopeRef = useRef<string | null>(null);
     const ignoredConversationIdAfterNewRef = useRef<string | null>(null);
     const openedConversationIdRef = useRef<string | null>(openedConversationId);
     const handledAssistantMessageRef = useRef<string | null>(null);
-    const listedConversation = useMemo(() => {
+    // Opening the route conversation makes the controller fetch it and keep it
+    // in this list, so reading it from there is the same record a second
+    // request would have returned — one route, one GET of the conversation.
+    const activeConversation = useMemo(() => {
         const resolvedConversationId = isNewConversation ? null : conversationId;
         if (!resolvedConversationId) return null;
         return assistant.conversations.find((conversation) => conversation.id === resolvedConversationId) ?? null;
     }, [assistant.conversations, conversationId, isNewConversation]);
-    const activeConversation = listedConversation ?? fetchedConversation ?? null;
     const agents = useMemo(() => agentsData?.items ?? [], [agentsData?.items]);
     const persistedAgentName = useMemo(
         () => resolveConversationAgentName(activeConversation?.agent_id, agents),

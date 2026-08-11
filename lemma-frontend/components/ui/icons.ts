@@ -54,6 +54,7 @@ export {
     FolderPlus,
     Footprints,
     GitBranch,
+    GitPullRequest,
     Handshake,
     Headphones,
     Image,
