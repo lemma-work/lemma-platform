@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any, Iterable, TypeVar
 from urllib.parse import urlparse
 
@@ -313,3 +314,56 @@ def _normalize_attachments(
             continue
         normalized.append(attachment)
     return normalized
+
+
+# A provider refusing this credential. Retrying cannot change the answer: no
+# number of attempts turns a send-only API key into one that may read inbound
+# mail, or an expired token into a live one. 429 and 5xx are deliberately not
+# here — those *do* change on their own.
+UNRETRYABLE_PROVIDER_STATUS = frozenset({401, 403})
+
+
+@dataclass(frozen=True, slots=True)
+class ProviderFailure:
+    """Safe, structured facts about a failed provider call.
+
+    A value rather than a dict because the logging contract forbids ``**kwargs``
+    at a log call — every field has to be named where it is emitted, so the
+    static checker can hold the call to the catalog. Splatting a dict would have
+    hidden these fields from exactly the gate that keeps logs honest.
+    """
+
+    failure_type: str
+    status_code: int | None = None
+    provider_error: str | None = None
+
+
+def provider_failure(exc: Exception) -> ProviderFailure:
+    """What went wrong, in terms safe to write to a log.
+
+    Never ``str(exc)``. The logging pipeline strips any field named ``error``
+    outright, because exception text can carry keys and personal data — so the
+    one line explaining a production failure arrives with the explanation
+    removed. A Resend key restricted to sending presented for hours as an
+    unexplained "enrichment failed", while the provider had been answering
+    ``restricted_api_key`` the whole time.
+
+    The HTTP status and the provider's own machine-readable error name are
+    bounded, carry no secrets, and usually name the fix by themselves.
+    """
+    response = getattr(exc, "response", None)
+    status = getattr(response, "status_code", None)
+    if not isinstance(status, int):
+        return ProviderFailure(failure_type=type(exc).__name__)
+    try:
+        body = response.json()
+    except ValueError:
+        # An HTML error page or an empty body. Not itself a failure — the status
+        # is the useful half, and it has already been captured.
+        body = None
+    name = body.get("name") if isinstance(body, dict) else None
+    return ProviderFailure(
+        failure_type=type(exc).__name__,
+        status_code=status,
+        provider_error=name if isinstance(name, str) and name else None,
+    )
