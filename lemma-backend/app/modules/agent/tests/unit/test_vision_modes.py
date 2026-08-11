@@ -17,6 +17,7 @@ import pytest
 from pydantic_ai import ToolReturn
 
 from app.modules.agent.domain.vision import AgentVisionMode, resolve_vision_mode
+from app.modules.agent.tools import vision_delegation
 from app.modules.agent.tools.pod import pydantic_adapter as pod_adapter
 from app.modules.agent.tools.pod.models import ViewDocumentPagesRequest
 from app.modules.agent.tools.context import BaseAgentContext
@@ -133,7 +134,10 @@ class TestPdfPagesRespectTheMode:
             seen["instructions"] = instructions
             return "A flowchart: Ingest -> Validate -> Store."
 
-        monkeypatch.setattr(pod_adapter, "describe_images", fake_describe)
+        # Delegation now lives in one shared module, so patch it there.
+        monkeypatch.setattr(
+            vision_delegation, "describe_images", fake_describe
+        )
 
         result = await pod_adapter.pod_view_document_pages(
             _ctx(AgentVisionMode.DELEGATED),
@@ -201,7 +205,9 @@ class TestViewImageRespectsTheMode:
         async def fake_describe(images, *, instructions, organization_id, user_id):
             return "A bar chart with four bars."
 
-        monkeypatch.setattr(workspace_cli, "describe_images", fake_describe)
+        monkeypatch.setattr(
+            vision_delegation, "describe_images", fake_describe
+        )
 
         result = await workspace_cli.view_image_internal(
             SimpleNamespace(

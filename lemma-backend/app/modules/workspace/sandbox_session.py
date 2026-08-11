@@ -3,7 +3,6 @@ from __future__ import annotations
 from collections.abc import AsyncIterable, AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
-import time
 from typing import Any
 from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
@@ -19,10 +18,14 @@ from sandbox_runtime.protocol import (
     TerminalSize,
     WorkloadKind,
 )
-from sandbox_runtime.protocol import ProcessState, PythonExecutionState
+from sandbox_runtime.protocol import PythonExecutionState
 from app.core.log.log import get_logger
 from app.modules.workspace.config import workspace_settings
 from app.modules.workspace.contracts import PythonExecutionResult, ShellCommandResult
+from app.modules.workspace.process_output import (
+    TERMINAL_PROCESS_STATES,
+    collect_process_output,
+)
 from app.modules.workspace.session_support import (
     OutputCursor,
     resize_process_terminal,
@@ -40,21 +43,6 @@ logger = get_logger(__name__)
 # 35s deadline.
 _POLL_YIELD_MS = 30_000
 
-# The in-sandbox runtime caps a single output wait at 30s, and the runtime HTTP
-# client caps a request at 35s. Waiting the full 30 keeps the number of requests
-# for a quiet process to a minimum.
-_MAX_OUTPUT_WAIT_SECONDS = 30.0
-
-# Headroom between how long the server is asked to hold a response and how long
-# the client will wait for it, so a wait never expires in transit.
-_POLL_SAFETY_MARGIN_SECONDS = 1.0
-
-_TERMINAL_PROCESS_STATES = {
-    ProcessState.SUCCEEDED,
-    ProcessState.FAILED,
-    ProcessState.CANCELLED,
-    ProcessState.TIMED_OUT,
-}
 
 
 class SandboxWorkspaceSession:
@@ -175,12 +163,11 @@ class SandboxWorkspaceSession:
         rows: int = 40,
     ) -> dict[str, Any]:
         operation_id = uuid4()
-        # Two different clocks, deliberately. `wait_until` is how long THIS call
-        # waits for output before handing back a process_id; `process_deadline`
-        # is how long the command may live. Conflating them (as this did) meant a
-        # 60s default wait also stamped a 60s lifetime on a ten-minute build —
-        # harmless only because nothing enforced it. Now that the runtime reaps
-        # past-deadline processes, the lifetime has to be the generous one.
+        # Two clocks, deliberately: `wait_until` is how long THIS call waits for
+        # output, `process_deadline` is how long the command may live. They used
+        # to be one number, so a 60s wait also stamped a 60s lifetime on a
+        # ten-minute build — harmless only because nothing enforced it, which
+        # the reaper now does.
         wait_until = self._deadline(timeout or 300)
         process_deadline = self._deadline(
             workspace_settings.process_max_lifetime_seconds
@@ -362,7 +349,7 @@ class SandboxWorkspaceSession:
                 "started_at": (
                     process.started_at.timestamp() if process.started_at else 0
                 ),
-                "completed": process.state in _TERMINAL_PROCESS_STATES,
+                "completed": process.state in TERMINAL_PROCESS_STATES,
                 "exit_code": process.exit_code,
             }
             for process in processes
@@ -534,92 +521,14 @@ class SandboxWorkspaceSession:
         deadline_at: datetime,
         yield_time_ms: int | None,
     ) -> dict[str, Any]:
-        started = time.monotonic()
-        yield_seconds = None if yield_time_ms is None else yield_time_ms / 1000
-        after_sequence = await self._output_cursor.load(operation_id)
-        initial_sequence = after_sequence
-        stdout = bytearray()
-        stderr = bytearray()
-        state = ProcessState.RUNNING
-        exit_code: int | None = None
-        polled = False
-        while datetime.now(timezone.utc) < deadline_at:
-            elapsed = time.monotonic() - started
-            if yield_seconds is not None and elapsed >= yield_seconds:
-                break
-
-            # Wait for as much of the remaining window as the transport allows,
-            # rather than a fixed one-second tick. The server returns the moment
-            # new output appears, so a chatty process is just as responsive —
-            # but a quiet 30s wait is now ONE request instead of thirty, and a
-            # five-minute blocking wait is ten instead of three hundred.
-            #
-            # The margin matters: the HTTP timeout is derived from the same
-            # deadline, so asking the server to hold longer than the client will
-            # wait turns an ordinary "still running" into a transport error.
-            # Blocking mode runs right up to the deadline and hit that every
-            # time.
-            remaining_before_deadline = (
-                deadline_at - datetime.now(timezone.utc)
-            ).total_seconds()
-            window = remaining_before_deadline
-            if yield_seconds is not None:
-                window = min(window, yield_seconds - elapsed)
-            wait_seconds = (
-                min(window, _MAX_OUTPUT_WAIT_SECONDS) - _POLL_SAFETY_MARGIN_SECONDS
-            )
-            if wait_seconds <= 0:
-                # No room left to wait. Read once anyway if we have not yet —
-                # a caller asking for a very short yield still wants whatever is
-                # already buffered — but never spin: a second zero-wait read
-                # would be the busy loop this replaced.
-                if polled:
-                    break
-                wait_seconds = 0.0
-
-            polled = True
-            snapshot = await self.client.read_process_output(
-                WorkloadKind.WORKSPACE,
-                self.logical_id,
-                operation_id,
-                deadline_at=deadline_at,
-                after_sequence=after_sequence,
-                wait_seconds=wait_seconds,
-            )
-            state = snapshot.state
-            exit_code = snapshot.exit_code
-            for chunk in snapshot.chunks:
-                after_sequence = max(after_sequence, chunk.sequence)
-                if chunk.channel.value == "stderr":
-                    stderr.extend(chunk.data)
-                else:
-                    stdout.extend(chunk.data)
-            self._output_cursor.remember_locally(operation_id, after_sequence)
-            if state in _TERMINAL_PROCESS_STATES:
-                break
-        completed = state in _TERMINAL_PROCESS_STATES
-        if after_sequence != initial_sequence:
-            await self._output_cursor.save(operation_id, after_sequence)
-        # Each poll's bytes are decoded as a unit, so a chunk boundary inside
-        # one poll is handled correctly. A multi-byte character split across
-        # two polls still yields one replacement character; holding the partial
-        # sequence back is not worth it, because the output cursor is a single
-        # sequence over interleaved stdout/stderr chunks and rewinding it could
-        # duplicate or drop real output.
-        return {
-            "success": state in {ProcessState.RUNNING, ProcessState.SUCCEEDED},
-            "stdout": stdout.decode("utf-8", errors="replace"),
-            "stderr": stderr.decode("utf-8", errors="replace"),
-            "exit_code": exit_code,
-            "completed": completed,
-            "process_id": None if completed else str(operation_id),
-            "error": None
-            if state in {ProcessState.RUNNING, ProcessState.SUCCEEDED}
-            else state.value,
-        }
-
-
-
+        return await collect_process_output(
+            self.client,
+            self.logical_id,
+            self._output_cursor,
+            operation_id,
+            deadline_at=deadline_at,
+            yield_time_ms=yield_time_ms,
+        )
 
     @staticmethod
     def _deadline(seconds: int | float) -> datetime:

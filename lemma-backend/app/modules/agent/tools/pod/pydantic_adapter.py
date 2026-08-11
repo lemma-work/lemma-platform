@@ -18,15 +18,7 @@ from pydantic_ai.toolsets import FunctionToolset
 from app.core.domain.errors import DomainError
 from app.modules.agent.domain.value_objects import JsonObject, to_json_value
 from app.modules.agent.domain.vision import AgentVisionMode
-from app.modules.agent.services.vision_service import (
-    MAX_IMAGES_PER_CALL as VISION_MAX_IMAGES_PER_CALL,
-)
-from app.modules.agent.services.vision_service import (
-    VisionDescriptionError,
-    VisionImage,
-    VisionUnavailableError,
-    describe_images,
-)
+from app.modules.agent.tools.vision_delegation import describe_document_pages
 from app.modules.agent.tools.context import BaseAgentContext
 from app.modules.agent.tools.pod.models import (
     GetFileUrlRequest,
@@ -481,65 +473,6 @@ async def pod_read_file(
     )
 
 
-async def _describe_pages_via_delegate(
-    deps: BaseAgentContext,
-    *,
-    path: str,
-    pages: list[Any],
-    page_refs: list[dict[str, Any]],
-    instructions: str | None,
-) -> "JsonObject":
-    """Read rendered pages with a vision model and return words, not pixels.
-
-    Chunked because a request may span up to `pdf_render_max_pages_per_call`
-    pages, which is more than one vision call should carry.
-    """
-    descriptions: list[dict[str, Any]] = []
-    chunk_size = VISION_MAX_IMAGES_PER_CALL
-    for start in range(0, len(pages), chunk_size):
-        chunk = pages[start : start + chunk_size]
-        try:
-            text = await describe_images(
-                [
-                    VisionImage(
-                        data=page.jpeg_bytes,
-                        media_type="image/jpeg",
-                        label=f"page {page.page_number} of {path}",
-                    )
-                    for page in chunk
-                ],
-                instructions=instructions,
-                organization_id=getattr(deps, "organization_id", None),
-                user_id=deps.user_id,
-            )
-        except VisionUnavailableError as exc:
-            return {
-                "success": False,
-                "path": path,
-                "error": (
-                    f"{exc} This agent's model cannot read images, so PDF pages "
-                    "cannot be viewed. Use `pod_read_file` with "
-                    "format='markdown' to read the page text instead."
-                ),
-            }
-        except VisionDescriptionError as exc:
-            return {"success": False, "path": path, "error": str(exc)}
-        descriptions.append(
-            {
-                "pages": [page.page_number for page in chunk],
-                "description": text,
-            }
-        )
-
-    return {
-        "success": True,
-        "path": path,
-        "pages": page_refs,
-        "viewed_by": "vision_model",
-        "descriptions": descriptions,
-    }
-
-
 async def pod_view_document_pages(
     ctx: RunContext[BaseAgentContext],
     request: ViewDocumentPagesRequest,
@@ -570,21 +503,18 @@ async def pod_view_document_pages(
             }
 
         page_refs = []
-        content: list[Any] = []
         for page in pages:
             url, _expires = await build_object_url(
                 services.file.storage, page.storage_key
             )
             page_refs.append({"page_number": page.page_number, "url": url})
-            content.append(BinaryContent(data=page.jpeg_bytes, media_type="image/jpeg"))
 
         # This tool used to hand BinaryContent to whatever model was running.
         # `view_image` was withheld from text-only models for exactly that
         # reason; this one was not, so a text-only model asked for a PDF page
         # and the provider rejected the entire request.
-        vision_mode = getattr(ctx.deps, "vision_mode", AgentVisionMode.UNAVAILABLE)
-        if vision_mode is not AgentVisionMode.DIRECT:
-            return await _describe_pages_via_delegate(
+        if getattr(ctx.deps, "vision_mode", None) is not AgentVisionMode.DIRECT:
+            return await describe_document_pages(
                 ctx.deps,
                 path=entity.path,
                 pages=pages,
@@ -600,7 +530,10 @@ async def pod_view_document_pages(
                 "rendered_pages": [p.page_number for p in pages if not p.cached],
                 "cached_pages": [p.page_number for p in pages if p.cached],
             },
-            content=content,
+            content=[
+                BinaryContent(data=page.jpeg_bytes, media_type="image/jpeg")
+                for page in pages
+            ],
         )
 
     return await _run(

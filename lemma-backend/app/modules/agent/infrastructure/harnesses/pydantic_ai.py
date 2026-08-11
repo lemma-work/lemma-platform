@@ -147,6 +147,66 @@ DEFAULT_TOOL_RETRIES = 5
 _RETRY_BACKOFF_CAP_SECONDS = 6.0
 
 
+async def _drive_with_retry(
+    drive_once,
+    *,
+    queue,
+    max_attempts: int,
+    stream_reset,
+    stopped,
+    should_stop,
+) -> None:
+    """Run one agent-graph pass, re-entering it after a transient stream drop.
+
+    Lives at module level rather than nested in `_execute` so the retry policy
+    can be read — and reasoned about — without the several hundred lines of
+    streaming machinery it sits inside.
+
+    `drive_once` publishes the live run and a pre-request history snapshot into
+    the `state` dict it is handed. Both are required to resume: the run carries
+    the usage already spent, and the snapshot is the history as it stood
+    *before* the failing request, which is what keeps a retry from replaying a
+    half-written response or re-executing a completed tool.
+    """
+    carried_usage: dict[str, int] = {}
+    resume_history: list[object] | None = None
+    attempt = 0
+    while True:
+        state: dict[str, object] = {}
+        try:
+            await drive_once(resume_history, state, carried_usage)
+            return
+        except BaseException as exc:  # noqa: BLE001 — re-raised below
+            run = state.get("run")
+            snapshot = state.get("resume_from")
+            if (
+                run is None
+                or snapshot is None
+                or attempt + 1 >= max_attempts
+                or not is_retryable_stream_error(exc)
+            ):
+                raise
+            # Resuming re-asks only the request that failed. Completed tool
+            # results are replayed from the snapshot rather than re-executed,
+            # so no tool ever runs twice.
+            _accumulate_usage(carried_usage, getattr(run, "usage", None))
+            resume_history = list(snapshot)  # type: ignore[arg-type]
+            attempt += 1
+            logger.warning(
+                "agent.pydantic_ai.model_stream_retry.degraded",
+                attempt=attempt,
+                max_attempts=max_attempts,
+                error_type=type(exc).__name__,
+            )
+            # Tell the client to drop the half-streamed bubble; the replacement
+            # response streams from scratch.
+            await queue.put(("event", stream_reset()))
+            if await should_stop():
+                await queue.put(("event", stopped()))
+                return
+            await asyncio.sleep(retry_after_seconds(exc) or _retry_backoff(attempt))
+
+
 class PydanticAIHarness:
     """Execute an agent through PydanticAI and emit domain events."""
 
@@ -545,50 +605,15 @@ class PydanticAIHarness:
                 )
 
         async def _drive() -> None:
-            carried_usage: dict[str, int] = {}
-            resume_history: list[object] | None = None
-            attempt = 0
             try:
-                while True:
-                    state: dict[str, object] = {}
-                    try:
-                        await _drive_once(resume_history, state, carried_usage)
-                        return
-                    except BaseException as exc:  # noqa: BLE001 — re-raised below
-                        run = state.get("run")
-                        snapshot = state.get("resume_from")
-                        if (
-                            run is None
-                            or snapshot is None
-                            or attempt + 1 >= max_stream_attempts
-                            or not is_retryable_stream_error(exc)
-                        ):
-                            raise
-                        # Resuming re-asks only the request that failed. Completed
-                        # tool results are replayed from the snapshot rather than
-                        # re-executed, so no tool ever runs twice.
-                        _accumulate_usage(carried_usage, getattr(run, "usage", None))
-                        resume_history = list(snapshot)  # type: ignore[arg-type]
-                        attempt += 1
-                        logger.warning(
-                            "agent.pydantic_ai.model_stream_retry.degraded",
-                            attempt=attempt,
-                            max_attempts=max_stream_attempts,
-                            error_type=type(exc).__name__,
-                        )
-                        # Tell the client to drop the half-streamed bubble; the
-                        # replacement response streams from scratch.
-                        await queue.put(
-                            ("event", self._stream_reset_event(agent_run_id))
-                        )
-                        if await self._should_stop(should_stop):
-                            await queue.put(
-                                ("event", self._stopped_event(agent_run_id))
-                            )
-                            return
-                        await asyncio.sleep(
-                            retry_after_seconds(exc) or _retry_backoff(attempt)
-                        )
+                await _drive_with_retry(
+                    _drive_once,
+                    queue=queue,
+                    max_attempts=max_stream_attempts,
+                    stream_reset=lambda: self._stream_reset_event(agent_run_id),
+                    stopped=lambda: self._stopped_event(agent_run_id),
+                    should_stop=lambda: self._should_stop(should_stop),
+                )
             except BaseException as exc:  # noqa: BLE001 — relayed to parent below
                 # Includes CancelledError from our own task.cancel(). pydantic's
                 # scopes are unwound by the `async with` above, in THIS task.

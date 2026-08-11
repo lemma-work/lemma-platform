@@ -16,6 +16,10 @@ export type WebSearchResponse = {
      */
     message?: (string | null);
     /**
+     * Set when the search could not be run exactly as asked — for example a vertical this provider does not serve.
+     */
+    note?: (string | null);
+    /**
      * List of search results
      */
     results?: Array<SearchResult>;
