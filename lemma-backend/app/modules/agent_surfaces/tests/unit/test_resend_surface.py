@@ -384,3 +384,59 @@ def test_a_forwarded_email_is_routed_by_who_it_was_delivered_for():
     )
 
     assert "agent.pod@ops.asur.work" in normalized["recipients"]
+
+
+def test_a_multi_valued_references_header_is_not_stringified_as_a_list():
+    """Caught in live testing against a real reply, not by any fixture.
+
+    Resend's Received Emails API returns `references` as a JSON **array**.
+    Stringifying it produced `'["<a>","<b>"]'`, which survives `.split()` as one
+    token, so the thread root became the entire serialized list and the reply
+    opened a new conversation instead of rejoining the one it answered. RFC 5322
+    defines References as whitespace-separated message ids, so joining is both
+    the fix and the correct reading.
+    """
+    from app.modules.agent_surfaces.platforms.resend.inbound import (
+        header_map,
+        references_of,
+    )
+
+    headers = header_map(
+        {
+            "References": [
+                "<lemma-notification-abc@ops.asur.work>",
+                "<0106-generated@ap-northeast-1.amazonses.com>",
+            ],
+            "In-Reply-To": "<0106-generated@ap-northeast-1.amazonses.com>",
+        }
+    )
+
+    refs = references_of({}, headers)
+
+    assert refs == [
+        "<lemma-notification-abc@ops.asur.work>",
+        "<0106-generated@ap-northeast-1.amazonses.com>",
+    ]
+    assert not refs[0].startswith("["), "the array was stringified, not joined"
+
+
+def test_a_real_reply_threads_back_onto_our_seed():
+    """End-to-end of the contract, using the exact shapes Resend sent us live."""
+    seed = "<lemma-notification-019fef11@ops.asur.work>"
+    event = ResendInboundParser().parse(_normalize_resend_inbound(_real_webhook()))
+
+    merged = merge_received_email(
+        event,
+        _received_email(
+            text="I worked on giving every agent its own email address",
+            headers={
+                "from": "Anukul <anukul@lemma.work>",
+                "message-id": "<reply-outlook@outlook.com>",
+                # The array shape, as observed from the live API.
+                "references": [seed, "<generated@amazonses.com>"],
+                "in-reply-to": "<generated@amazonses.com>",
+            },
+        ),
+    )
+
+    assert merged.external_thread_id == seed

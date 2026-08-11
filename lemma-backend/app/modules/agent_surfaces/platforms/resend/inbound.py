@@ -40,6 +40,21 @@ def all_addresses(value: Any) -> list[str]:
     return [single] if single else []
 
 
+def _header_value(value: Any) -> str:
+    """One header as a string, joining multi-valued headers with spaces.
+
+    ``References`` comes back from the Received Emails API as a JSON **array**,
+    and ``str(["<a>", "<b>"])`` yields ``'["<a>","<b>"]'`` — which then survives
+    ``.split()`` as a single token, so the thread root became the entire
+    serialized list and no reply ever matched the thread it belonged to. Joining
+    is also the correct reading: RFC 5322 defines References as a
+    whitespace-separated sequence of message ids.
+    """
+    if isinstance(value, (list, tuple)):
+        return " ".join(str(item).strip() for item in value if str(item).strip())
+    return str(value or "")
+
+
 def header_map(raw_headers: Any) -> dict[str, str]:
     """Lower-cased header lookup from a dict or a ``[{name, value}]`` list.
 
@@ -48,12 +63,12 @@ def header_map(raw_headers: Any) -> dict[str, str]:
     shape most other providers use.
     """
     if isinstance(raw_headers, dict):
-        return {str(k).lower(): str(v) for k, v in raw_headers.items()}
+        return {str(k).lower(): _header_value(v) for k, v in raw_headers.items()}
     mapped: dict[str, str] = {}
     if isinstance(raw_headers, list):
         for header in raw_headers:
             if isinstance(header, dict) and header.get("name"):
-                mapped[str(header["name"]).lower()] = str(header.get("value") or "")
+                mapped[str(header["name"]).lower()] = _header_value(header.get("value"))
     return mapped
 
 
