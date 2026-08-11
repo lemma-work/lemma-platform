@@ -15,6 +15,34 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 const CAPABILITY_BYTES: usize = 32;
 const MAX_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
+/// Spawn a child without flashing up a console window.
+///
+/// The packaged app is a GUI process with no console of its own, and nearly
+/// everything the runtime spawns -- the guest bridge, wsl.exe, powershell.exe
+/// -- is a console-subsystem program. Creating one of those from a process that
+/// has no console makes Windows allocate a fresh conhost window for it, which
+/// the user sees sitting next to the app and can close, taking the child with
+/// it. Redirecting stdio does not suppress that window; only this flag does.
+///
+/// A no-op everywhere else, so call sites stay platform-neutral.
+trait NoConsoleWindow {
+    fn no_console_window(&mut self) -> &mut Self;
+}
+
+impl NoConsoleWindow for Command {
+    #[cfg(windows)]
+    fn no_console_window(&mut self) -> &mut Self {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        self.creation_flags(CREATE_NO_WINDOW)
+    }
+
+    #[cfg(not(windows))]
+    fn no_console_window(&mut self) -> &mut Self {
+        self
+    }
+}
+
 const WSL_DISTRIBUTION: &str = "LemmaRuntime";
 #[cfg(target_os = "macos")]
 const DATA_DISK_BYTES: u64 = 24 * 1024 * 1024 * 1024;
@@ -139,6 +167,7 @@ impl ManagedRuntime {
         });
         let encoded = serde_json::to_vec(&request)?;
         let mut child = Command::new(&self.config.bridge_executable)
+            .no_console_window()
             .arg("request")
             .env("LEMMA_GUEST_CAPABILITY_FILE", &self.capability_file)
             .env("LEMMA_GUEST_CONTROL_SOCKET", &self.control_socket)
@@ -299,6 +328,7 @@ impl ManagedRuntime {
             // container first so databases and sandboxes flush cleanly.
             let _ = self.request("system.shutdown", json!({}));
             let output = Command::new(&self.config.wsl_executable)
+                .no_console_window()
                 .args(["--terminate", WSL_DISTRIBUTION])
                 .output()?;
             if !output.status.success() {
@@ -556,6 +586,7 @@ impl ManagedRuntime {
     #[cfg(windows)]
     fn windows_wsl_ready(&self) -> bool {
         Command::new(&self.config.wsl_executable)
+            .no_console_window()
             .arg("--status")
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -593,6 +624,7 @@ impl ManagedRuntime {
             "catch { Write-Error 'Windows administrator approval was cancelled or failed'; exit 1223 }"
         );
         let status = match Command::new("powershell.exe")
+            .no_console_window()
             .args([
                 "-NoLogo",
                 "-NoProfile",
@@ -637,6 +669,7 @@ impl ManagedRuntime {
         rotate_log(&log_path, 5 * 1024 * 1024)?;
         let mut command = Command::new(&self.config.wsl_executable);
         command
+            .no_console_window()
             .args(arguments)
             .stdin(if input.is_some() {
                 Stdio::piped()

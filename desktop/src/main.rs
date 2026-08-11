@@ -1329,6 +1329,33 @@ fn locald_binary() -> Option<PathBuf> {
         })
 }
 
+/// Spawn a child without flashing up a console window.
+///
+/// A release build sets windows_subsystem to windows, so the app has no
+/// console at all. lemma-locald.exe is a console program, and starting one
+/// from a process with no console makes Windows allocate a visible conhost
+/// window for it -- one the user can close, which kills the daemon.
+/// Redirecting stdio does not suppress it.
+///
+/// A no-op everywhere else, so call sites stay platform-neutral.
+trait NoConsoleWindow {
+    fn no_console_window(&mut self) -> &mut Self;
+}
+
+impl NoConsoleWindow for Command {
+    #[cfg(windows)]
+    fn no_console_window(&mut self) -> &mut Self {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        self.creation_flags(CREATE_NO_WINDOW)
+    }
+
+    #[cfg(not(windows))]
+    fn no_console_window(&mut self) -> &mut Self {
+        self
+    }
+}
+
 fn spawn_locald() -> Result<Child, String> {
     let root = runtime_root();
     let have_checkout = root.join("desktop/locald/Cargo.toml").exists();
@@ -1390,6 +1417,7 @@ fn spawn_locald() -> Result<Child, String> {
         );
     }
     command
+        .no_console_window()
         .spawn()
         .map_err(|e| format!("failed to spawn lemma-locald: {e}"))
 }

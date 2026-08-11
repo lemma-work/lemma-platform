@@ -1,3 +1,4 @@
+use crate::NoConsoleWindow;
 use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
 use std::io;
@@ -653,6 +654,7 @@ impl SharingController {
         let error_log = log.try_clone()?;
         let mut command = Command::new(&executable);
         command
+            .no_console_window()
             .arg("http")
             .arg(gateway_origin)
             .arg("--config")
@@ -791,6 +793,7 @@ impl SharingController {
         let error_log = log.try_clone()?;
         let mut command = Command::new(&executable);
         command
+            .no_console_window()
             .arg("tunnel")
             .arg("--config")
             .arg(&config)
@@ -909,6 +912,7 @@ impl SharingController {
             ensure_private_directory(&credentials_dir)?;
             let mut command = Command::new(executable);
             command
+                .no_console_window()
                 .arg("tunnel")
                 .arg("--no-autoupdate")
                 .arg("create")
@@ -964,6 +968,7 @@ impl SharingController {
             }
             let mut command = Command::new(executable);
             command
+                .no_console_window()
                 .arg("tunnel")
                 .arg("--no-autoupdate")
                 .arg("route")
@@ -1313,6 +1318,7 @@ fn preflight_cloudflare() -> ProviderReadiness {
         .ok()
         .map(first_line);
     match Command::new(&executable)
+        .no_console_window()
         .args(["tunnel", "list", "--output", "json"])
         .output()
     {
@@ -1597,6 +1603,7 @@ fn executable_name(name: &str) -> String {
 
 fn command_text(executable: &Path, args: &[&str]) -> Result<String, String> {
     let output = Command::new(executable)
+        .no_console_window()
         .args(args)
         .output()
         .map_err(|error| error.to_string())?;

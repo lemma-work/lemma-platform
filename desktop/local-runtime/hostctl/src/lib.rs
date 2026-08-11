@@ -22,6 +22,28 @@ pub enum Transport {
     },
 }
 
+/// Spawn a child without flashing up a console window.
+///
+/// wsl.exe is a console program and this bridge runs under locald, which the
+/// GUI app starts without a console. Without this flag every guest command
+/// would open a console window of its own.
+///
+/// Windows-only here: the bridge only shells out to wsl.exe, and that call
+/// site does not exist on other platforms.
+#[cfg(windows)]
+trait NoConsoleWindow {
+    fn no_console_window(&mut self) -> &mut Self;
+}
+
+#[cfg(windows)]
+impl NoConsoleWindow for std::process::Command {
+    fn no_console_window(&mut self) -> &mut Self {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        self.creation_flags(CREATE_NO_WINDOW)
+    }
+}
+
 pub struct BridgeConfig {
     pub capability_file: PathBuf,
     pub transport: Transport,
@@ -182,6 +204,7 @@ fn exchange(transport: &Transport, request: &[u8]) -> io::Result<Vec<u8>> {
         ));
     }
     let mut child = Command::new(executable)
+        .no_console_window()
         .args([
             "--distribution",
             distribution,

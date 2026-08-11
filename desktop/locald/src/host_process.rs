@@ -1740,9 +1740,14 @@ fn spawn_command(
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
-        // CREATE_NEW_PROCESS_GROUP. The Windows provider upgrades this to a
-        // Job Object before host packs become the default.
-        command.creation_flags(0x0000_0200);
+        // CREATE_NEW_PROCESS_GROUP so the group can be signalled as a unit --
+        // the Windows provider upgrades this to a Job Object before host packs
+        // become the default -- plus CREATE_NO_WINDOW, because these are
+        // console programs (python.exe, node.exe) started by a GUI app with no
+        // console and each would otherwise be given a conhost window.
+        //
+        // Spelled out together because creation_flags replaces the flag set.
+        command.creation_flags(crate::CREATE_NO_WINDOW | crate::CREATE_NEW_PROCESS_GROUP);
     }
     command.spawn()
 }

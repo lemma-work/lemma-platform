@@ -1,5 +1,6 @@
 //! Pinned ACP adapter manifest and local harness discovery.
 
+use crate::NoConsoleWindow;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::env;
 use std::path::{Path, PathBuf};
@@ -354,6 +355,7 @@ fn install_npm_adapter(spec: &AdapterSpec, staging: &Path) -> anyhow::Result<()>
         .ok_or_else(|| anyhow::anyhow!("npm is required to install ACP adapters"))?;
     std::fs::create_dir_all(staging)?;
     let status = Command::new(npm)
+        .no_console_window()
         .args([
             "install",
             "--ignore-scripts",
@@ -471,6 +473,7 @@ fn snapshot_unavailable(spec: &AdapterSpec, reason: &str) -> HarnessSnapshot {
 fn probe_version(executable: &Path, arguments: &[String]) -> Option<String> {
     let mut command = Command::new(executable);
     command
+        .no_console_window()
         .args(arguments)
         .stdin(Stdio::null())
         .stderr(Stdio::piped())

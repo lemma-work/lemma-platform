@@ -1,5 +1,8 @@
 //! Per-user headless service installation and lifecycle.
 
+// Only the Windows scheduled-task calls need it.
+#[cfg(windows)]
+use crate::NoConsoleWindow;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
@@ -428,7 +431,7 @@ mod platform {
             paths.root.display()
         );
         run_checked(
-            Command::new("schtasks").args([
+            Command::new("schtasks").no_console_window().args([
                 "/Create", "/TN", TASK_NAME, "/TR", &action, "/SC", "ONLOGON", "/RL", "LIMITED",
                 "/F",
             ]),
@@ -440,7 +443,9 @@ mod platform {
     pub fn uninstall() -> anyhow::Result<()> {
         if status()?.installed {
             run_checked(
-                Command::new("schtasks").args(["/Delete", "/TN", TASK_NAME, "/F"]),
+                Command::new("schtasks")
+                    .no_console_window()
+                    .args(["/Delete", "/TN", TASK_NAME, "/F"]),
                 "removing Agent Host scheduled task",
             )?;
         }
@@ -449,7 +454,9 @@ mod platform {
 
     pub fn start() -> anyhow::Result<()> {
         run_checked(
-            Command::new("schtasks").args(["/Run", "/TN", TASK_NAME]),
+            Command::new("schtasks")
+                .no_console_window()
+                .args(["/Run", "/TN", TASK_NAME]),
             "starting Agent Host scheduled task",
         )?;
         Ok(())
@@ -458,7 +465,9 @@ mod platform {
     pub fn stop() -> anyhow::Result<()> {
         if status()?.running {
             run_checked(
-                Command::new("schtasks").args(["/End", "/TN", TASK_NAME]),
+                Command::new("schtasks")
+                    .no_console_window()
+                    .args(["/End", "/TN", TASK_NAME]),
                 "stopping Agent Host scheduled task",
             )?;
         }
@@ -467,6 +476,7 @@ mod platform {
 
     pub fn status() -> anyhow::Result<ServiceStatus> {
         let output = Command::new("schtasks")
+            .no_console_window()
             .args(["/Query", "/TN", TASK_NAME, "/FO", "LIST", "/V"])
             .output()?;
         let text = String::from_utf8_lossy(&output.stdout);

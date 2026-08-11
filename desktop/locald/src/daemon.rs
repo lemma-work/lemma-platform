@@ -1,3 +1,4 @@
+use crate::NoConsoleWindow;
 use std::collections::HashMap;
 use std::env;
 use std::io::{self, BufReader, Write};
@@ -2147,7 +2148,9 @@ fn supervisor_base_command() -> io::Result<Command> {
         .map(PathBuf::from)
         .filter(|path| path.exists())
     {
-        return Ok(Command::new(path));
+        let mut command = Command::new(path);
+        command.no_console_window();
+        return Ok(command);
     }
 
     if let Ok(executable) = env::current_exe() {
@@ -2158,7 +2161,9 @@ fn supervisor_base_command() -> io::Result<Command> {
                 "lemma-supervisor"
             });
             if sibling.exists() {
-                return Ok(Command::new(sibling));
+                let mut command = Command::new(sibling);
+                command.no_console_window();
+                return Ok(command);
             }
         }
     }
@@ -2183,9 +2188,12 @@ fn supervisor_base_command() -> io::Result<Command> {
     }
 
     let mut command = Command::new("uv");
-    command
-        .current_dir(root)
-        .args(["run", "--project", "lemma-stack", "lemma-stack"]);
+    command.no_console_window().current_dir(root).args([
+        "run",
+        "--project",
+        "lemma-stack",
+        "lemma-stack",
+    ]);
     Ok(command)
 }
 
@@ -2235,8 +2243,22 @@ fn transitional_provider(managed_runtime_available: bool) -> String {
             provider
         }
         _ if managed_runtime_available => "lemma_local".into(),
-        _ if Command::new("podman").arg("--version").output().is_ok() => "podman".into(),
-        _ if Command::new("docker").arg("--version").output().is_ok() => "docker".into(),
+        _ if Command::new("podman")
+            .no_console_window()
+            .arg("--version")
+            .output()
+            .is_ok() =>
+        {
+            "podman".into()
+        }
+        _ if Command::new("docker")
+            .no_console_window()
+            .arg("--version")
+            .output()
+            .is_ok() =>
+        {
+            "docker".into()
+        }
         // The compatibility supervisor can install Podman when neither CLI is
         // present. Render the matching backend profile in advance.
         _ => "podman".into(),

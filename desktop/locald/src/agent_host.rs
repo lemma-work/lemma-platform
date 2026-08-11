@@ -1,3 +1,4 @@
+use crate::NoConsoleWindow;
 use std::fs::{File, OpenOptions};
 use std::io;
 use std::path::{Path, PathBuf};
@@ -289,6 +290,7 @@ impl AgentHostSupervisor {
         })?;
         std::fs::create_dir_all(&self.data_dir)?;
         let mut child = Command::new(executable)
+            .no_console_window()
             .arg("--data-dir")
             .arg(&self.data_dir)
             .args(arguments)
@@ -374,6 +376,7 @@ impl AgentHostSupervisor {
         let stderr = stdout.try_clone()?;
         let mut command = Command::new(executable);
         command
+            .no_console_window()
             .arg("--data-dir")
             .arg(&self.data_dir)
             .arg("serve")
@@ -581,6 +584,7 @@ fn terminate_process_tree(child: &mut Child) -> io::Result<Option<i32>> {
 #[cfg(windows)]
 fn terminate_process_tree(child: &mut Child) -> io::Result<Option<i32>> {
     let status = Command::new("taskkill")
+        .no_console_window()
         .args(["/PID", &child.id().to_string(), "/T", "/F"])
         .status()?;
     if !status.success() {
