@@ -7,12 +7,10 @@ import {
   dedupToolInvocations,
   findPendingUserApprovalInvocation,
   formatDurationCompact,
-  isRunClosingMessage,
   isPlanToolName,
   isToolInvocationActive,
   latestUserIndex,
   messageHasToolActivity,
-  messageTextContent,
   messageTimeMs,
   normalizeAgentToolName,
   planStepsFromToolInvocation,
@@ -174,6 +172,35 @@ export function toolCallPrimaryLabel(toolName: string, args: ToolCardArgs): stri
   }
 
   return formatToolDisplayName(toolName);
+}
+
+/**
+ * The same label, split so a tool line can be set in two tones.
+ *
+ * A row rendered in one flat colour is a blob the eye has to read word by word.
+ * Split into what was done and what it was done to — "Terminal command" ·
+ * "npm test" — the line scans in one pass, the way "Edited display.ts" does.
+ * A row whose label is the agent's own description of the step is already that
+ * sentence, so it is all object and takes no verb.
+ */
+export function toolCallLabelParts(toolName: string, args: ToolCardArgs): { verb?: string; object: string } {
+  const comment = commentLabelFromArgs(args);
+  if (comment) return { object: comment };
+
+  const normalized = normalizeToolNameForDisplay(toolName);
+  if (isCommandDetailTool(normalized)) {
+    const cmd = firstToolArgString(args, ["cmd", "command"]);
+    if (cmd) return { verb: formatToolDisplayName(toolName), object: formatCommandPreview(cmd) };
+    const chars = asString(toolArg(args, "chars"));
+    if (chars) {
+      return {
+        verb: formatToolDisplayName(toolName),
+        object: truncateLabel(chars.replace(/\s+/g, " ").trim(), 48),
+      };
+    }
+  }
+
+  return { object: formatToolDisplayName(toolName) };
 }
 
 export function formatActiveToolSummary(toolName: string, args: ToolCardArgs): string {
@@ -359,28 +386,23 @@ export function currentRunStatusLabel({
 
   if (!isConversationBusy) return null;
 
-  const currentAssistantRows = rows.filter((row) => row.message.role === "assistant" && rowIsAfterIndex(row, latestUser));
   const currentMessages = messages.slice(latestUser + 1);
   const assistantMessages = currentMessages.filter((message) => message.role === "assistant");
-  const hasClosingAnswer = assistantMessages.some(isRunClosingMessage);
-  const hasAssistantText = assistantMessages.some((message) => messageTextContent(message).length > 0);
   const hasToolActivity = assistantMessages.some(messageHasToolActivity);
 
-  if (currentAssistantRows.length === 0) {
-    return { label: "Thinking", shimmer: true };
+  // A busy run always says so. This used to fall through to `null` whenever the
+  // run had produced rows but not yet both text and tool activity — which is
+  // most of a run that is only calling tools — so the transcript sat there with
+  // nothing moving and no indication anything was happening.
+  const startMs = assistantMessages
+    .map(messageTimeMs)
+    .find((value): value is number => value !== null);
+
+  if (hasToolActivity && startMs) {
+    return { label: `Working for ${formatDurationCompact(Math.max(1000, nowMs - startMs))}`, shimmer: false };
   }
 
-  if (assistantMessages.length > 0 && hasAssistantText && hasToolActivity && !hasClosingAnswer) {
-    const startMs = assistantMessages
-      .filter(messageHasToolActivity)
-      .map(messageTimeMs)
-      .find((value): value is number => value !== null);
-    if (startMs) {
-      return { label: `Working for ${formatDurationCompact(Math.max(1000, nowMs - startMs))}`, shimmer: false };
-    }
-  }
-
-  return null;
+  return { label: "Thinking", shimmer: true };
 }
 
 export function currentToolStatusLabel({
@@ -477,47 +499,6 @@ export function isInlineToolStatusAlreadyVisible({
   return false;
 }
 
-/** Which element gets to say "Thinking" for the current run.
- *
- * Three places can render that word - the run-status placeholder near the
- * composer, a reasoning card's summary, and a tool rollup's collapsed header -
- * and any two of them on screen at once read as the assistant thinking twice.
- * They are ranked rather than individually suppressed so exactly one wins:
- *
- * - `reasoning` whenever a thought is streaming. It owns the label because it
- *   is the one the user can click to watch the tokens arrive.
- * - `tool-rollup` when the run is working through tools. Its header already
- *   summarizes the activity and collapses the thought behind it.
- * - `run-status` only when the run has produced nothing to attach a label to.
- */
-export type ThinkingOwner = "reasoning" | "tool-rollup" | "run-status";
-
-export function resolveThinkingOwner({
-  rows,
-  latestUser,
-  hasRunStatus,
-}: {
-  rows: DisplayMessageRow[];
-  latestUser: number;
-  hasRunStatus: boolean;
-}): ThinkingOwner | null {
-  const currentRows = rows.filter((row) => (
-    row.message.role === "assistant" && rowIsAfterIndex(row, latestUser)
-  ));
-
-  const hasStreamingReasoning = currentRows.some((row) => row.message.parts?.some((part) => (
-    part.type === "reasoning" && part.state === "streaming"
-  )));
-  if (hasStreamingReasoning) return "reasoning";
-
-  const hasToolActivity = currentRows.some((row) => (
-    (row.message.toolInvocations?.length || 0) > 0
-    || row.message.parts?.some((part) => part.type === "tool")
-  ));
-  if (hasToolActivity) return "tool-rollup";
-
-  return hasRunStatus ? "run-status" : null;
-}
 
 export function getActiveToolBanner(messages: AssistantRenderableMessage[]): ActiveToolBanner | null {
   const displayMessages = prepareMessagesForDisplay(messages).map((entry) => entry.message);

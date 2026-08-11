@@ -24,8 +24,6 @@ import {
   findPendingUserApprovalInvocation,
   latestPlanSummary,
   latestUserIndex,
-  messageTextContent,
-  rowIsAfterIndex,
 } from "lemma-sdk";
 import { cn } from "@/lib/utils";
 import type {
@@ -49,7 +47,6 @@ import {
 import {
   currentRunStatusLabel,
   currentToolStatusLabel,
-  resolveThinkingOwner,
   isInlineToolStatusAlreadyVisible,
   stringifyAssistantError,
 } from "./assistant-format";
@@ -336,14 +333,13 @@ export function AssistantExperienceView({
     const el = messagesContainerRef.current;
     if (!el) return;
 
+    // Always instant. Following the bottom of a growing transcript is not an
+    // animation — it is the viewport staying where it already was. Switching to
+    // "smooth" once the run settled meant every turn ended with a slide the
+    // reader did not ask for, on top of the layout settling at the same moment.
+    // Smooth belongs to the explicit jump-to-latest control, and nowhere else.
     if (isPinnedToBottomRef.current) {
-      if (isConversationBusy) {
-        scrollToLatest("auto");
-      } else {
-        requestAnimationFrame(() => {
-          scrollToLatest("smooth");
-        });
-      }
+      scrollToLatest("auto");
     }
   }, [controllerMessages, isConversationBusy, scrollToLatest]);
 
@@ -361,6 +357,7 @@ export function AssistantExperienceView({
   }, [draft, resizeComposer]);
 
   const displayMessageRows = useMemo(() => buildDisplayMessageRows(controllerMessages), [controllerMessages]);
+
   const completedRunTraceGroups = useMemo(
     () => collectCompletedRunTraceGroups(displayMessageRows, controllerMessages, isRunActive),
     [controllerMessages, displayMessageRows, isRunActive],
@@ -398,13 +395,6 @@ export function AssistantExperienceView({
   useEffect(() => {
     setIsPlanHidden(false);
   }, [activeConversationId, latestUserMessageId, planIdentity]);
-  const lastAssistantTextHasContent = useMemo(() => {
-    if (controllerMessages.length === 0) return false;
-    const lastMsg = controllerMessages[controllerMessages.length - 1];
-    if (lastMsg.role !== "assistant") return false;
-    return messageTextContent(lastMsg).length > 0;
-  }, [controllerMessages]);
-
   const inlineRunStatus = useMemo(
     () => currentRunStatusLabel({
       messages: controllerMessages,
@@ -528,18 +518,11 @@ export function AssistantExperienceView({
   const headerTone: AssistantSurfaceTone = resolvedChromeStyle === "elevated" ? "default" : resolvedChromeStyle === "flat" ? "flat" : "subtle";
   const composerTone: AssistantSurfaceTone = resolvedChromeStyle === "flat" ? "flat" : resolvedChromeStyle === "subtle" ? "subtle" : "default";
   const currentRunLatestUserIndex = latestUserIndex(controllerMessages);
-  const thinkingOwner = resolveThinkingOwner({
-    rows: displayMessageRows,
-    latestUser: currentRunLatestUserIndex,
-    hasRunStatus: !!inlineRunStatus,
-  });
-  // Progress labels ("Working for 12s", "Waiting for your input") describe the
-  // run rather than competing for the word "Thinking", so they stay whoever
-  // owns the thought. Only the bare placeholder yields.
-  const showThinkingStatus = !!inlineRunStatus
-    && (inlineRunStatus.label !== "Thinking"
-      ? true
-      : thinkingOwner === "run-status" && !lastAssistantTextHasContent);
+  // No arbitration left to do. Nothing in the transcript competes for the word
+  // "Thinking" any more — a streaming thought renders as prose and a tool group
+  // renders as "Ran 3 commands" — so this line simply shows whenever the run is
+  // doing something.
+  const showThinkingStatus = !!inlineRunStatus;
   const showInlineStatus = statusPlacement === "inline" && showThinkingStatus;
   const showComposerStatus = statusPlacement === "composer" && showThinkingStatus;
   const uploadStatusLabel = controller.isUploadingFiles
@@ -577,10 +560,15 @@ export function AssistantExperienceView({
     }),
     [activeConversationId, controllerMessages, displayMessageRows, displayResourcePodId, isConversationBusy],
   );
-  const inlineRunStatusRowIndex = showInlineStatus
-    ? displayMessageRows.findIndex((row) => row.message.role === "assistant" && rowIsAfterIndex(row, currentRunLatestUserIndex))
-    : -1;
-  const showInlineStatusAtBottom = showInlineStatus && inlineRunStatusRowIndex < 0;
+  // One indicator, at the end of the transcript, and nowhere else.
+  //
+  // There used to be three placements — a header injected above the first row of
+  // the live run, a line at the bottom, and a separate tool status — each with
+  // its own suppression rules, and they still collided: a streaming thought drew
+  // "Thinking" in its own card while one of these drew "Thinking" underneath it.
+  // Content blocks say what they are; this line says what the run is doing.
+  const inlineRunStatusRowIndex = -1;
+  const showInlineStatusAtBottom = showInlineStatus;
   const showInlineToolStatus = statusPlacement === "inline"
     && !!inlineToolStatus
     && !showInlineStatusAtBottom

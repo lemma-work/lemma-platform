@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { AssistantRenderableMessage, AssistantToolInvocation } from "lemma-sdk/react";
+import { buildDisplayMessageRows } from "lemma-sdk";
 import {
   currentToolStatusLabel,
   isInlineToolStatusAlreadyVisible,
-  resolveThinkingOwner,
+  currentRunStatusLabel,
   type InlineToolStatus,
 } from "@/components/lemma/assistant/assistant-format";
 import type { DisplayMessageRow } from "@/components/lemma/assistant/assistant-experience";
@@ -128,93 +129,67 @@ describe("inline tool-status handoff", () => {
   });
 });
 
-describe("who owns the Thinking label", () => {
-  function reasoningRow(state: "streaming" | "done", sourceIndex = 1): DisplayMessageRow {
-    const message: AssistantRenderableMessage = {
-      id: `reasoning-message-${state}`,
+// The arbitration this file used to test is gone. Nothing in the transcript
+// competes for the word "Thinking" any more — a streaming thought renders as
+// prose and a tool group renders as one "Ran 3 commands" line — so there is one
+// status line and its only job is never to go quiet mid-run.
+describe("the run status line", () => {
+  function assistantToolMessage(sequence: number): AssistantRenderableMessage {
+    return {
+      id: `tool-message-${sequence}`,
       role: "assistant",
       content: "",
       createdAt: new Date("2026-07-11T00:00:01.000Z"),
-      parts: [{
-        id: `reasoning-part-${state}`,
-        type: "reasoning",
-        text: state === "streaming" ? "Inspecting the workspace" : "Inspected the workspace",
-        state,
+      toolInvocations: [{
+        toolCallId: `call-${sequence}`,
+        toolName: "list_tables",
+        args: {},
+        state: "call",
       }],
     };
-
-    return { id: `reasoning-row-${state}`, message, sourceIndexes: [sourceIndex] };
   }
 
-  it("gives a streaming thought the label, so the placeholder yields", () => {
-    expect(resolveThinkingOwner({
-      rows: [reasoningRow("streaming")],
-      latestUser: 0,
-      hasRunStatus: true,
-    })).toBe("reasoning");
-  });
+  const userMessage: AssistantRenderableMessage = {
+    id: "user-1",
+    role: "user",
+    content: "list the tables",
+    createdAt: new Date("2026-07-11T00:00:00.000Z"),
+  };
 
-  it("gives the tool rollup the label once tools are running", () => {
-    const row = toolRow({
-      toolCallId: "call-1",
-      toolName: "list_tables",
-      args: {},
-      state: "call",
+  const nowMs = new Date("2026-07-11T00:00:09.000Z").getTime();
+
+  it("says something while the run is only calling tools", () => {
+    // The old implementation returned null here — a run working through tools
+    // with no assistant text yet — so the transcript showed no sign of life.
+    const messages = [userMessage, assistantToolMessage(1)];
+    const status = currentRunStatusLabel({
+      messages,
+      rows: buildDisplayMessageRows(messages),
+      isConversationBusy: true,
+      nowMs,
     });
 
-    expect(resolveThinkingOwner({
-      rows: [row],
-      latestUser: 0,
-      hasRunStatus: true,
-    })).toBe("tool-rollup");
+    expect(status).not.toBeNull();
+    expect(status?.label).toMatch(/^Working for /);
   });
 
-  it("still prefers the thought when a run has both a thought and tools", () => {
-    const tool = toolRow({
-      toolCallId: "call-2",
-      toolName: "list_tables",
-      args: {},
-      state: "call",
-    }, 2);
-
-    expect(resolveThinkingOwner({
-      rows: [reasoningRow("streaming"), tool],
-      latestUser: 0,
-      hasRunStatus: true,
-    })).toBe("reasoning");
+  it("says Thinking before the run has produced anything", () => {
+    const messages = [userMessage];
+    expect(currentRunStatusLabel({
+      messages,
+      rows: buildDisplayMessageRows(messages),
+      isConversationBusy: true,
+      nowMs,
+    })).toEqual({ label: "Thinking", shimmer: true });
   });
 
-  it("falls back to the run-status placeholder while the run is still empty", () => {
-    expect(resolveThinkingOwner({
-      rows: [],
-      latestUser: 0,
-      hasRunStatus: true,
-    })).toBe("run-status");
-  });
-
-  it("hands the label back to the placeholder once the thought settles", () => {
-    // The durable THINKING message renders "Thought for Ns", not "Thinking",
-    // so it no longer competes for the streaming label.
-    expect(resolveThinkingOwner({
-      rows: [reasoningRow("done")],
-      latestUser: 0,
-      hasRunStatus: true,
-    })).toBe("run-status");
-  });
-
-  it("ignores reasoning that belongs to an earlier run", () => {
-    expect(resolveThinkingOwner({
-      rows: [reasoningRow("streaming")],
-      latestUser: 1,
-      hasRunStatus: true,
-    })).toBe("run-status");
-  });
-
-  it("names nobody when there is no run status to place", () => {
-    expect(resolveThinkingOwner({
-      rows: [],
-      latestUser: 0,
-      hasRunStatus: false,
+  it("goes quiet once the run is no longer busy", () => {
+    const messages = [userMessage, assistantToolMessage(1)];
+    expect(currentRunStatusLabel({
+      messages,
+      rows: buildDisplayMessageRows(messages),
+      isConversationBusy: false,
+      nowMs,
     })).toBeNull();
   });
 });

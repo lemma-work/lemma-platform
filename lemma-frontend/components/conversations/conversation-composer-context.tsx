@@ -8,6 +8,7 @@ import type {
 import { useAIAssistant } from '@/components/ai/ai-assistant-context';
 import { resolveRuntimeModelName, shortModelName } from '@/components/agents/agent-runtime-helpers';
 import { RuntimeModelPicker } from '@/components/lemma/assistant/model-picker';
+import { ProjectBranchChip } from '@/components/lemma/assistant/project-branch';
 import { ProjectPicker } from '@/components/lemma/assistant/project-picker';
 import type { ProjectSelection } from '@/lib/assistant/project-selection';
 import { useGithubProjects } from '@/lib/hooks/use-github-projects';
@@ -81,16 +82,22 @@ export function ConversationComposerContext({
                     {modelLabel}
                 </span>
                 {boundProject ? (
-                    <ProjectPicker
-                        value={boundProject}
-                        onChange={() => undefined}
-                        projects={[]}
-                        isConnected
-                        isLoadingProjects={false}
-                        readOnly
-                        connectHref="#"
-                        className="h-auto px-0"
-                    />
+                    <>
+                        <ProjectPicker
+                            value={boundProject}
+                            onChange={() => undefined}
+                            projects={[]}
+                            isConnected
+                            isLoadingProjects={false}
+                            readOnly
+                            connectHref="#"
+                            className="h-auto px-0"
+                        />
+                        {/* The branch is settled, but what happened to it is not:
+                            a pull request can open, fill up and merge while this
+                            conversation is still going. */}
+                        <ProjectBranchChip project={boundProject} readOnly />
+                    </>
                 ) : null}
             </div>
         );
@@ -152,6 +159,12 @@ export function ConversationComposerContext({
                         accountId={githubProjects.accountId}
                         connectHref={`/pod/${encodeURIComponent(podId)}/connectors`}
                     />
+                    {pendingProject ? (
+                        <ProjectBranchChip
+                            project={pendingProject}
+                            onChange={(ref) => setPendingProject({ ...pendingProject, ref })}
+                        />
+                    ) : null}
                 </>
             ) : null}
         </div>

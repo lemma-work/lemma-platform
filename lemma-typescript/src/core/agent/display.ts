@@ -617,7 +617,11 @@ export function buildDisplayMessageRows(messages: AssistantRenderableMessage[]):
     }
 
     if (cluster.length === 1) {
-      rows.push({ id: message.id, message, sourceIndexes: clusterSourceIndexes });
+      // Same id shape as the multi-message cluster below. A lone collapsible
+      // message keyed by `message.id` would be re-keyed to `tool-cluster-…` the
+      // moment a second one joined it, remounting the row mid-run and throwing
+      // away whatever the reader had expanded.
+      rows.push({ id: `tool-cluster-${message.id}`, message, sourceIndexes: clusterSourceIndexes });
       i = j - 1;
       continue;
     }
@@ -692,6 +696,25 @@ function rowSourceTimesMs(row: DisplayMessageRow, messages: AssistantRenderableM
  * everything before it. The active/streaming run is never folded — its work
  * stays visible while it runs (pass `isRunActive`).
  */
+/**
+ * Fold finished runs under a "Worked for …" rollup — except the most recent one,
+ * which always stays open.
+ *
+ * The rule is a property of the transcript, not of how the reader got to it.
+ * That matters twice. Folding a run at the moment it ends is the single largest
+ * jerk in the transcript: the thinking and tool steps that were on screen a
+ * frame earlier are re-parented into a collapsed group and vanish, taking the
+ * scroll position with them. And keying the decision off which runs *this
+ * session* happened to watch — the first attempt at fixing that — meant the same
+ * conversation rendered one way live and another way after a reload.
+ *
+ * The last run is the one being read, live or not, so it is the one left open.
+ *
+ * `traceIndexes` is computed for *every* run, folded or not: it marks the rows
+ * that are a run's working-out rather than its answer. An unfolded run still
+ * needs that distinction, or its intermediate narration renders at the same
+ * weight as the answer and reads as a second answer.
+ */
 export function collectCompletedRunTraceGroups(
   rows: DisplayMessageRow[],
   messages: AssistantRenderableMessage[],
@@ -699,9 +722,12 @@ export function collectCompletedRunTraceGroups(
 ): {
   groupsByStartIndex: Map<number, CompletedRunTraceGroupState>;
   groupedIndexes: Set<number>;
+  /** Assistant rows that are working-out rather than a run's answer. */
+  traceIndexes: Set<number>;
 } {
   const groupsByStartIndex = new Map<number, CompletedRunTraceGroupState>();
   const groupedIndexes = new Set<number>();
+  const traceIndexes = new Set<number>();
 
   let index = 0;
   while (index < rows.length) {
@@ -718,19 +744,38 @@ export function collectCompletedRunTraceGroups(
     }
     index = blockEnd + 1;
 
-    // Never collapse the live run — its activity should stay visible while working.
-    if (isRunActive && blockEnd === rows.length - 1) continue;
-
     // The final answer is the last run-closing (real answer / text) row; the
     // trace before it is what folds. No closing row → a pure-tool run folds whole.
+    //
+    // A run that is still going has no answer yet. Without this, the newest line
+    // of narration is provisionally "the answer" simply by being last, so it is
+    // set at answer weight and given the answer's copy/timestamp footer — which
+    // then sits stranded in the middle of the run as more tool calls arrive, and
+    // is demoted again the moment the next line of narration lands.
+    const isLiveRun = isRunActive && blockEnd === rows.length - 1;
     let answerIndex = -1;
-    for (let i = blockEnd; i >= blockStart; i -= 1) {
+    for (let i = blockEnd; i >= blockStart && !isLiveRun; i -= 1) {
       if (isRunClosingMessage(rows[i].message)) {
         answerIndex = i;
         break;
       }
     }
     const foldEnd = answerIndex === -1 ? blockEnd : answerIndex - 1;
+
+    // Everything before the answer is this run's working-out, whether or not the
+    // run folds.
+    for (let i = blockStart; i <= foldEnd; i += 1) {
+      traceIndexes.add(i);
+    }
+
+    // The most recent run stays open, running or finished. `isRunActive` is no
+    // longer consulted: if it were, this block would fold the instant the run
+    // ended, which is the jerk, and it would also make a live transcript differ
+    // from the same transcript reloaded.
+    // Every finished run folds under "Worked for …", the most recent included.
+    // Only a run that is still going stays open — while it works, its steps are
+    // the thing being read.
+    if (isRunActive && blockEnd === rows.length - 1) continue;
     if (foldEnd < blockStart) continue; // answer is the whole run; nothing to fold
 
     // Only fold runs that actually did work (tool activity); time the rollup.
@@ -760,7 +805,7 @@ export function collectCompletedRunTraceGroups(
     }
   }
 
-  return { groupsByStartIndex, groupedIndexes };
+  return { groupsByStartIndex, groupedIndexes, traceIndexes };
 }
 
 function rowIsAfterIndex(row: DisplayMessageRow, index: number): boolean {

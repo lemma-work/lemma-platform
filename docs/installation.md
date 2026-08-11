@@ -311,10 +311,11 @@ state directory if a destructive reset is intended.
 
 ## Test an unreleased pull request
 
-The `Release Local Images` workflow can be manually dispatched on a PR branch
-with `publish=false`. It produces
-`lemma-desktop-macos-pr-test-<commit>`, an ad-hoc-signed DMG containing the
-branch’s compressed, digest-verified host and guest archives.
+The `Release Local Images` workflow can be manually dispatched on any branch
+with `publish=false` and `share=true`. It publishes the branch's
+digest-verified runtime archives to a prerelease tagged
+`desktop-nightly-<short-sha>`, then attaches a signed, notarized online DMG
+built against them — installable by anyone, with no version tag cut.
 
 This is not a public offline installer. It exercises the same first-launch
 installer using trusted application resources, while infrastructure and

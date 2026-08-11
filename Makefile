@@ -983,9 +983,13 @@ desktop-runtime-fetch:
 # worth handing someone to try a branch — CI's build-check DMG points at
 # unresolvable URLs on purpose and refuses to install.
 #
-# Every step mirrors release-local-images.yml's macos-test-desktop job and
-# shares its staging engine, so a green local build and a green CI build mean
-# the same thing.
+# Self-contained builds live here and only here. CI used to package one too,
+# but Apple's notary service unpacks host-runtime.zip and rejects the bundled
+# CPython and node_modules inside it, so a self-contained DMG can never be
+# notarized -- which makes it useless for handing to anyone else, and not worth
+# half a gigabyte a run. CI publishes the signed online DMG instead
+# (`release-local-images.yml` with `share`); this is the one you install
+# yourself, from the runtime artifacts that workflow uploads.
 desktop-dmg:
 	@test "$$(uname -s)" = "Darwin" || ( \
 		echo "  ✗ desktop-dmg builds a macOS DMG"; \

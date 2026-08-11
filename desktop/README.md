@@ -218,29 +218,29 @@ they build against a placeholder manifest with unresolvable URLs, so the
 resulting app refuses to install and says so. Their artifacts are named
 `lemma-desktop-macos-buildcheck-<sha>`.
 
-For anything you intend to run, cut a **Release Local Images** run with:
-
-- `version`: the Desktop version, currently `0.7.0`;
-- `publish`: `false`.
-
-One run builds and verifies both platforms' runtimes and uploads two
-self-contained installers:
-
-```text
-lemma-desktop-macos-pr-test-<full-commit-sha>
-lemma-desktop-windows-pr-test-<full-commit-sha>
-```
+For a build someone else can install, cut a **Release Local Images** run with
+`share`:
 
 ```bash
-gh workflow run release-local-images.yml -f version=0.7.0 -f publish=false
-gh run list --workflow release-local-images.yml --branch "$(git branch --show-current)"
-
-sha="$(git rev-parse HEAD)"
-gh run download RUN_ID -n "lemma-desktop-macos-pr-test-${sha}" -D /tmp/lemma-pr
-gh run download RUN_ID -n "lemma-desktop-windows-pr-test-${sha}" -D /tmp/lemma-pr
+gh workflow run release-local-images.yml -f version=0.7.0 -f publish=false -f share=true
 ```
 
-The Windows installer is unsigned, so SmartScreen warns on first run.
+That publishes the runtime archives and the manifest to a prerelease tagged
+`desktop-nightly-<short-sha>`, then builds the **online** DMG against it —
+signed with Developer ID, notarized and stapled — and attaches it there. The
+download link is printed to the job summary. Prereleases never become "Latest",
+so the version-tag release channel is untouched.
+
+It has to be the online DMG. Apple's notary service unpacks `host-runtime.zip`
+and rejects everything inside: a bundled CPython and `node_modules` are not
+Developer ID signed and never will be. So a self-contained DMG cannot be
+notarized, and an un-notarized one is refused by Gatekeeper on any machine that
+did not build it. CI does not package self-contained apps at all — half a
+gigabyte a run, for something nobody can hand to a tester.
+
+Without `share`, a `publish: false` run still builds and verifies both
+platforms' runtimes and uploads them as workflow artifacts, which is what the
+local self-contained builds below consume.
 
 ### Or build one locally
 

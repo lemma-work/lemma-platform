@@ -778,3 +778,50 @@ async def test_a_chat_channel_does_not_spend_the_email_budget(monkeypatch):
 
     assert delivered.delivery_status == NotificationDeliveryStatus.DELIVERED
     assert redis.counts == {}
+
+
+async def test_the_pod_assistant_mailbox_is_named_for_the_pod_not_the_assistant(
+    monkeypatch,
+):
+    """`acme@`, not `pod-default.acme@`.
+
+    The name carried on a notification from the assistant is its internal one,
+    `pod_default`. Passing it through produced `pod-default.personal@…` on dev —
+    a working address, but not one to ask a person to type, and not the shape
+    the pod's own mailbox is supposed to have.
+    """
+    _email_configured(monkeypatch)
+
+    provisioner = AsyncMock(return_value=(_email_surface(), None))
+    service = _notification_service(provisioner=provisioner, surfaces=())
+
+    await service.resolve_channels(
+        pod_id=uuid4(),
+        recipient_user_id=uuid4(),
+        actor_agent_id=None,
+        agent_name="pod_default",
+    )
+
+    _, agent_id, agent_name = provisioner.await_args.args
+    assert agent_id is None
+    assert agent_name is None
+
+
+async def test_a_named_agent_still_gets_its_own_name_in_the_address(monkeypatch):
+    """The exemption is for the assistant only — `curator.acme@` is right."""
+    _email_configured(monkeypatch)
+
+    agent_id = uuid4()
+    provisioner = AsyncMock(return_value=(_email_surface(), None))
+    service = _notification_service(provisioner=provisioner, surfaces=())
+
+    await service.resolve_channels(
+        pod_id=uuid4(),
+        recipient_user_id=uuid4(),
+        actor_agent_id=agent_id,
+        agent_name="curator",
+    )
+
+    _, passed_agent_id, agent_name = provisioner.await_args.args
+    assert passed_agent_id == agent_id
+    assert agent_name == "curator"

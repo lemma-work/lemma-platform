@@ -160,9 +160,14 @@ class NotificationChannelResolver:
         """
         if not email_is_configured() or self.surface_provisioner is None:
             return None, UndeliverableReason.EMAIL_NOT_CONFIGURED
+        # No agent id means the pod assistant, and its mailbox is the pod's own:
+        # `acme@`, not `pod-default.acme@`. The name travelling with a
+        # notification is the assistant's internal one ("pod_default"), which is
+        # not something to ask a person to type — and passing it produced
+        # exactly that address on dev.
         try:
             surface, cause = await self.surface_provisioner(
-                pod_id, agent_id, agent_name
+                pod_id, agent_id, agent_name if agent_id is not None else None
             )
         except (AgentSurfaceError, OSError) as exc:
             # ``failure_type``/``failure_code``, not ``error``: the log pipeline
