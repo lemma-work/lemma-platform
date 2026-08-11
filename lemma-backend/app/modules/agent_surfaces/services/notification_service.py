@@ -13,19 +13,11 @@ recipient's own thread, under the recipient's own authority.
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
 from app.core.config import settings
-from app.modules.agent_surfaces.config import (
-    resolve_resend_api_key,
-    surface_settings,
-)
 from app.core.log.log import get_logger
-from app.modules.agent_surfaces.domain.entities import (
-    AgentSurfaceEntity,
-)
 from httpx import HTTPError
 
 from app.modules.agent_surfaces.domain.errors import (
@@ -38,20 +30,23 @@ from app.modules.agent_surfaces.domain.notification import (
     NotificationOriginKind,
     NotificationStatus,
 )
-from app.modules.agent_surfaces.platforms.platform_capabilities import (
-    get_platform_capabilities,
-)
 from app.modules.agent_surfaces.domain.ports import SurfaceNotificationEgressPort
 from app.modules.agent_surfaces.services.notification_delivery import (
     DeliveryChannel,
     UndeliverableReason,
-    rank_candidates,
-    reply_window_open,
-    surfaces_for_agent,
+)
+from app.modules.agent_surfaces.services.notification_channels import (
+    NotificationChannelResolver,
+    SurfaceProvisioner,
+    can_cold_open,
 )
 from app.modules.agent_surfaces.services.notification_egress import NotificationEgress
+from app.modules.agent_surfaces.services.notification_rate_limiter import (
+    EmailSendLimitExceeded,
+)
 
 logger = get_logger(__name__)
+
 
 # Notifications inherit the human wait ceiling rather than inventing a second
 # number: 6h machine ceiling x 12 = 72h. A question asked at 18:00 that dies at
@@ -102,9 +97,7 @@ class NotificationService:
         ingress_service: SurfaceNotificationEgressPort,
         pod_membership_port,
         rate_limiter=None,
-        surface_provisioner: (
-            Callable[[UUID], Awaitable[AgentSurfaceEntity | None]] | None
-        ) = None,
+        surface_provisioner: SurfaceProvisioner | None = None,
     ):
         self.uow = uow
         self.notifications = notification_repository
@@ -115,10 +108,15 @@ class NotificationService:
         self.ingress = ingress_service
         self.membership = pod_membership_port
         self.rate_limiter = rate_limiter
-        # Injected rather than built here: creating a surface is the surface
-        # service's job, and it already owns address provisioning, credential
-        # checks and receiver registration.
-        self.surface_provisioner = surface_provisioner
+        # Which surface can carry this to this person, and minting one when the
+        # agent has none. See ``notification_channels``.
+        self.channels = NotificationChannelResolver(
+            surface_repository=surface_repository,
+            external_user_repository=external_user_repository,
+            conversation_link_repository=conversation_link_repository,
+            pod_membership_port=pod_membership_port,
+            surface_provisioner=surface_provisioner,
+        )
         # Getting a message onto a platform is a separate job from owning what
         # the notification means, and it is the half with all the surface
         # coupling. See ``notification_egress``.
@@ -233,6 +231,7 @@ class NotificationService:
             recipient_user_id=notification.recipient_user_id,
             actor_agent_id=notification.actor_agent_id,
             origin_surface_id=origin_surface_id,
+            agent_name=agent_name,
         )
         if not channels:
             notification.mark_undeliverable(fallback_reason)
@@ -254,6 +253,19 @@ class NotificationService:
         last_error: str | None = None
         for channel in channels:
             try:
+                if can_cold_open(channel.surface) and self.rate_limiter is not None:
+                    # Charged per email, not per notification: a message that
+                    # went out on Slack costs the shared sending domain nothing.
+                    # Refusing here rather than raising leaves the notification
+                    # in the recipient's inbox with an explanation, which is the
+                    # right outcome for a budget being spent — the thing is real,
+                    # we just will not mail it.
+                    try:
+                        await self.rate_limiter.check_email(pod_id=notification.pod_id)
+                    except EmailSendLimitExceeded as exc:
+                        last_error = str(exc)
+                        continue
+
                 conversation_id = await self.egress.conversation_for(
                     channel, notification=notification
                 )
@@ -312,139 +324,20 @@ class NotificationService:
         recipient_user_id: UUID,
         actor_agent_id: UUID | None = None,
         origin_surface_id: UUID | None = None,
+        agent_name: str | None = None,
     ) -> tuple[list[DeliveryChannel], str]:
         """Every way *this agent* can reach this person, best first.
 
-        Scoped to the sending agent's own surfaces rather than the pod's: the
-        recipient should hear from the bot they already know this agent as. See
-        ``notification_delivery`` for why that beats the recipient's own
-        preferred surface.
-
-        Returns the reason alongside, so an empty list is never a silent no.
+        Kept as a method because it is part of this service's contract and has
+        callers; the routing itself lives in ``notification_channels``.
         """
-        # ``list_by_pod`` is paginated and returns ``(items, next_cursor)``. A pod
-        # with more surfaces than one page is not a real shape — they are bots a
-        # human connected by hand — so the first page is the whole set.
-        all_surfaces, _ = await self.surfaces.list_by_pod(pod_id)
-        active = [surface for surface in all_surfaces if surface.is_active]
-        if not active:
-            # A pod with no surface can reach nobody, and asking someone to go
-            # and connect one before their first notification will send is a
-            # poor trade when we already run a system mailbox. Provisioned
-            # lazily rather than at pod creation: most pods never message
-            # anyone, and an address handed out is an address to keep working.
-            provisioned = await self._auto_provision_email_surface(pod_id)
-            if provisioned is None:
-                return [], UndeliverableReason.NO_ACTIVE_SURFACE
-            active = [provisioned]
-
-        surfaces = surfaces_for_agent(active, actor_agent_id=actor_agent_id)
-        if not surfaces:
-            return [], UndeliverableReason.NO_SURFACE_FOR_AGENT
-
-        candidates: list[DeliveryChannel] = []
-        saw_chat_surface = False
-        window_closed = False
-
-        for surface in surfaces:
-            capabilities = get_platform_capabilities(surface.surface_type.value)
-            if capabilities is not None and capabilities.can_cold_open:
-                # No prior thread needed: the address *is* the channel.
-                email_channel = await self._email_channel(surface, recipient_user_id)
-                if email_channel is not None:
-                    candidates.append(email_channel)
-                continue
-
-            saw_chat_surface = True
-            channel, closed = await self._chat_channel(surface, recipient_user_id)
-            window_closed = window_closed or closed
-            if channel is not None:
-                candidates.append(channel)
-
-        if candidates:
-            return rank_candidates(
-                candidates, origin_surface_id=origin_surface_id
-            ), ""
-
-        # Reasons are ordered by how actionable they are. "Their window closed"
-        # tells someone to wait; "they never messaged the bot" tells them what to
-        # go and do, and is the one that will actually be hit in practice.
-        if window_closed:
-            return [], UndeliverableReason.REPLY_WINDOW_CLOSED
-        if saw_chat_surface:
-            return [], UndeliverableReason.NEVER_INTERACTED
-        return [], UndeliverableReason.NO_EMAIL_ADDRESS
-
-    async def _auto_provision_email_surface(
-        self, pod_id: UUID,
-    ) -> AgentSurfaceEntity | None:
-        """Give this pod the system mailbox, or None if that is not on offer.
-
-        Off unless configured, and silent when it fails. A notification that
-        cannot be delivered is already a handled outcome — the row exists and
-        the inbox has it — so a provisioning problem must degrade to
-        ``NO_ACTIVE_SURFACE`` rather than turn a send into an exception.
-        """
-        if not (
-            surface_settings.resend_auto_provision_enabled
-            and resolve_resend_api_key()
-        ):
-            return None
-        if self.surface_provisioner is None:
-            return None
-        try:
-            return await self.surface_provisioner(pod_id)
-        except (AgentSurfaceError, OSError) as exc:
-            logger.warning(
-                "agent_surfaces.notification_service.auto_provision_failed.degraded",
-                pod_id=str(pod_id),
-                error=str(exc),
-            )
-            return None
-
-    async def _chat_channel(
-        self, surface: AgentSurfaceEntity, recipient_user_id: UUID
-    ) -> tuple[DeliveryChannel | None, bool]:
-        """``(channel, window_closed)`` for a chat surface.
-
-        A bot cannot start a conversation, so this only yields a channel when
-        the person has written to that surface before. ``window_closed`` is
-        reported separately because "they went quiet too long ago" is a
-        different thing to tell somebody than "they have never messaged us".
-        """
-        external = await self.external_users.get_by_resolved_user(
-            platform=surface.surface_type.value,
-            resolved_user_id=recipient_user_id,
+        return await self.channels.resolve(
+            pod_id=pod_id,
+            recipient_user_id=recipient_user_id,
+            actor_agent_id=actor_agent_id,
+            origin_surface_id=origin_surface_id,
+            agent_name=agent_name,
         )
-        if external is None or not external.external_user_id:
-            return None, False
-        link = await self.links.get_latest_by_surface_and_external_user(
-            surface_id=surface.id,
-            external_user_id=external.external_user_id,
-        )
-        if link is None:
-            return None, False
-        if not reply_window_open(
-            platform=surface.surface_type,
-            last_inbound_at=link.inbound_activity_at,
-        ):
-            return None, True
-        return (
-            DeliveryChannel(
-                surface=surface,
-                external_user_id=external.external_user_id,
-                link=link,
-            ),
-            False,
-        )
-
-    async def _email_channel(
-        self, surface: AgentSurfaceEntity, recipient_user_id: UUID
-    ) -> DeliveryChannel | None:
-        address = await self.membership.get_user_email(recipient_user_id)
-        if not address:
-            return None
-        return DeliveryChannel(surface=surface, email_address=address)
 
     # --------------------------------------------------------------- lifecycle
 

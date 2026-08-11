@@ -36,10 +36,10 @@ EXPECTED = [
     ),
     ("resend_inbound_domain", "RESEND_INBOUND_DOMAIN", None),
     ("resend_from_name", "RESEND_FROM_NAME", "Lemma"),
-    # Default False on purpose: turning this on gives every pod outbound mail
-    # from one shared Resend domain, so the deliverability and abuse reputation
-    # are pooled. That is a deployment decision, not a default.
-    ("resend_auto_provision_enabled", "RESEND_AUTO_PROVISION_ENABLED", False),
+    # RESEND_AUTO_PROVISION_ENABLED was here. Whether a mailbox can be minted is
+    # now the same key-and-domain question the surfaces catalog asks, so the UI
+    # and the send path cannot disagree — and the shared-domain reputation it was
+    # guarding is bounded by the per-pod daily send cap instead.
     ("surface_webhook_security_enabled", "SURFACE_WEBHOOK_SECURITY_ENABLED", True),
     ("surface_event_dedupe_ttl_seconds", "SURFACE_EVENT_DEDUPE_TTL_SECONDS", 900),
     (

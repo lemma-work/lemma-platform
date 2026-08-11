@@ -459,3 +459,66 @@ async def test_a_notification_cold_opens_an_email_thread_the_reply_can_find(
     )
     assert threaded is not None, "the reply did not land in the notification's thread"
     assert (threaded.get("metadata") or {}).get("notification_id") == created["id"]
+
+
+async def test_a_pod_with_nothing_connected_mints_itself_a_readable_mailbox(
+    authenticated_client: AsyncClient,
+    db_session: AsyncSession,
+    test_pod,
+    fixed_test_user,
+    fake_resend,
+    monkeypatch,
+):
+    """The dev failure, against a real database and the real surface service.
+
+    A personal pod with no surfaces at all, asked to message a member, reported
+    "the pod has no active surface to reach anyone on" and created nothing. The
+    unit tests around this stub the provisioner, so they can prove routing
+    *asks* for a mailbox but not that a usable one comes back.
+
+    This asserts the surface that actually lands: owned by the pod rather than
+    any named agent — which is what the pod assistant reaches for — and carrying
+    an address a person could be asked to type.
+    """
+    from sqlalchemy import select
+
+    from app.core.config import settings as core_settings
+    from app.modules.agent_surfaces.config import surface_settings
+    from app.modules.agent_surfaces.infrastructure.models import AgentSurface
+
+    monkeypatch.setattr(core_settings, "resend_api_key", "re_test")
+    monkeypatch.setattr(surface_settings, "resend_inbound_domain", "ops.example.com")
+
+    pod_id = test_pod["id"]
+    before = (
+        await db_session.execute(
+            select(AgentSurface).where(AgentSurface.pod_id == UUID(pod_id))
+        )
+    ).scalars().all()
+    assert before == [], "this test is only meaningful in a pod with no surfaces"
+
+    created = await _notify(
+        authenticated_client, pod_id, fixed_test_user["id"]
+    )
+
+    # Not undeliverable for want of a surface: one was created to carry it.
+    assert created["undeliverable_reason"] != (
+        "The pod has no active surface to reach anyone on."
+    )
+
+    await db_session.commit()
+    surfaces = (
+        await db_session.execute(
+            select(AgentSurface).where(AgentSurface.pod_id == UUID(pod_id))
+        )
+    ).scalars().all()
+
+    assert len(surfaces) == 1
+    surface = surfaces[0]
+    assert surface.surface_type == "RESEND"
+    # The pod's own, not an agent's — this is the surface the assistant uses.
+    assert surface.agent_id is None
+    assert surface.surface_identity_email.endswith("@ops.example.com")
+    # Readable, not pod-<32 hex chars>: people are asked to write to this.
+    local_part = surface.surface_identity_email.split("@")[0]
+    assert not local_part.startswith("pod-")

@@ -263,26 +263,45 @@ RESEND_API_KEY=re_...              # shared with transactional mail above
 RESEND_INBOUND_DOMAIN=ops.example.com   # verified, catch-all inbound
 RESEND_WEBHOOK_SECRET=whsec_...    # Svix secret for the inbound webhook
 RESEND_FROM_NAME=Lemma
-RESEND_AUTO_PROVISION_ENABLED=false
 ```
 
 Point a Resend webhook at `POST /surfaces/webhooks/resend` and select
 `email.received`. Two things are worth knowing:
 
 - **`RESEND_INBOUND_DOMAIN` has no default and must be a domain you own.** Agent
-  addresses are minted on it (`{agent}.{pod}@{domain}`) and inbound routing
-  matches on it, so a wrong value means mail that bounces on the way out and
-  matches no surface on the way back.
+  addresses are minted on it (`{agent}.{pod}@{domain}`, and `{pod}@{domain}` for
+  the pod's own assistant) and inbound routing matches on it, so a wrong value
+  means mail that bounces on the way out and matches no surface on the way back.
+- **The key and the domain together are the switch.** Set both and agents get
+  mailboxes; leave either unset and they do not. There is no separate enable
+  flag — there was one, and being read per process it could be on where the
+  surfaces catalog runs and off where sends run, which presents as the UI
+  offering email while delivery reports that the pod has no surface.
 - **`RESEND_WEBHOOK_SECRET` is per *endpoint*.** Svix derives the signature from
   the secret of the endpoint that sent the request, so if bounces are a separate
   Resend endpoint, its secret differs — set `RESEND_BOUNCE_WEBHOOK_SECRET` for
   that one and leave this as the main webhook's. A single endpoint carrying both
   event types needs only `RESEND_WEBHOOK_SECRET`.
 
-`RESEND_AUTO_PROVISION_ENABLED` gives a pod with no surface at all a system
-mailbox the first time it tries to notify someone. Off by default because it is
-outward-facing: every pod that turns it on sends from the same domain, so
-deliverability and abuse reputation are pooled.
+A mailbox is created when an agent first needs one and has no other way to reach
+anyone — including the pod's own assistant, and agents that predate per-agent
+mailboxes. Nothing is minted for a pod that never messages anybody.
+
+Because every pod sends from that one verified domain, its deliverability and
+abuse reputation are shared. Two limits bound that, both in Redis and both
+fixed-window:
+
+| Limit | Scope | Default |
+| --- | --- | --- |
+| Notifications | per pod, per recipient, per hour | 20 |
+| Outbound emails | per pod, per day | 200 |
+
+The second is the one that matters for a shared domain: an agent messaging five
+hundred different people once each never trips the first. Both fail *open* if
+Redis is unreachable — "nobody can be told anything while Redis is down" is the
+wrong way for a notification system to fail. Over the email budget the
+notification is still created and still in the recipient's Lemma inbox; only the
+mail is declined.
 
 ## Storage
 

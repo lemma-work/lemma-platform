@@ -30,6 +30,17 @@ logger = get_logger(__name__)
 DEFAULT_MAX_PER_RECIPIENT_PER_HOUR = 20
 _WINDOW_SECONDS = 3600
 
+# Every pod with an auto-provisioned mailbox sends from the *same* verified
+# domain, so one pod blasting mail spends a reputation all of them share. The
+# per-recipient limit above does not bound that at all: a runaway agent
+# messaging five hundred different people never trips it. This does.
+#
+# Generous on purpose. It is a ceiling on absurdity, not a quota — a pod doing
+# real work with a few dozen colleagues will never see it, and a pod that does
+# see it is doing something nobody asked for.
+DEFAULT_MAX_EMAILS_PER_POD_PER_DAY = 200
+_DAY_SECONDS = 86_400
+
 
 class NotificationRateLimitExceeded(AgentSurfaceError):
     def __init__(self, limit: int):
@@ -43,15 +54,71 @@ class NotificationRateLimitExceeded(AgentSurfaceError):
         )
 
 
+class EmailSendLimitExceeded(AgentSurfaceError):
+    """Distinct from the per-recipient limit: different budget, different fix.
+
+    Not raised out of ``notify``. Running out of email budget is a *delivery*
+    outcome — the notification is still real and still in the person's inbox —
+    so it reads as an undeliverable reason rather than a failed tool call.
+    """
+
+    def __init__(self, limit: int):
+        super().__init__(
+            message=(
+                f"This pod has already sent {limit} emails today. The "
+                "notification is in their Lemma inbox."
+            ),
+            code="EMAIL_SEND_LIMIT_EXCEEDED",
+            status_code=429,
+        )
+
+
 class NotificationRateLimiter:
     def __init__(
         self,
         *,
         limit: int = DEFAULT_MAX_PER_RECIPIENT_PER_HOUR,
+        email_limit: int = DEFAULT_MAX_EMAILS_PER_POD_PER_DAY,
         redis=None,
     ):
         self._limit = limit
+        self._email_limit = email_limit
         self._redis = redis
+
+    async def _count(self, key: str, ttl: int) -> int | None:
+        """Increment a fixed window, or None when Redis could not be reached.
+
+        Fails **open** — see ``check``. One INCR plus a first-write EXPIRE, so a
+        window costs a single round trip after it opens.
+        """
+        client = self._redis or get_redis()
+        try:
+            count = await client.incr(key)
+            if count == 1:
+                await client.expire(key, ttl)
+        except (RedisError, OSError) as exc:
+            logger.warning(
+                "agent_surfaces.notification_rate_limiter.unavailable.degraded",
+                error=str(exc),
+            )
+            return None
+        return count
+
+    async def check_email(self, *, pod_id: UUID) -> None:
+        """Count this outbound email against the pod's day, and refuse over it.
+
+        Called at the point of an email send rather than in ``notify``: a
+        notification that lands on Slack costs the shared sending domain
+        nothing, and should not spend a budget that exists to protect it.
+        """
+        count = await self._count(f"notify:rate:email:{pod_id}", _DAY_SECONDS)
+        if count is not None and count > self._email_limit:
+            logger.warning(
+                "agent_surfaces.notification_rate_limiter.email_exceeded.degraded",
+                pod_id=str(pod_id),
+                limit=self._email_limit,
+            )
+            raise EmailSendLimitExceeded(self._email_limit)
 
     async def check(self, *, pod_id: UUID, recipient_user_id: UUID) -> None:
         """Count this send, and refuse it if the hour's budget is spent.
@@ -63,21 +130,12 @@ class NotificationRateLimiter:
         to fail on for a notification system whose entire premise is that people
         get told.
         """
-        client = self._redis or get_redis()
         # Pod-scoped: two pods messaging the same person are two different
         # relationships, and one pod's runaway loop should not mute the other.
-        key = f"notify:rate:{pod_id}:{recipient_user_id}"
-        try:
-            count = await client.incr(key)
-            if count == 1:
-                await client.expire(key, _WINDOW_SECONDS)
-        except (RedisError, OSError) as exc:
-            logger.warning(
-                "agent_surfaces.notification_rate_limiter.unavailable.degraded",
-                error=str(exc),
-            )
-            return
-        if count > self._limit:
+        count = await self._count(
+            f"notify:rate:{pod_id}:{recipient_user_id}", _WINDOW_SECONDS
+        )
+        if count is not None and count > self._limit:
             logger.warning(
                 "agent_surfaces.notification_rate_limiter.exceeded.degraded",
                 pod_id=str(pod_id),

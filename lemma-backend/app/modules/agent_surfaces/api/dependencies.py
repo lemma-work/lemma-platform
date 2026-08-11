@@ -5,11 +5,9 @@ from uuid import UUID
 
 from fastapi import Depends
 
-from app.modules.agent_surfaces.domain.entities import (
-    AgentSurfaceEntity,
-    SurfaceConfig,
-    SurfaceCredentialMode,
-    SurfacePlatform,
+from app.modules.agent_surfaces.domain.entities import AgentSurfaceEntity
+from app.modules.agent_surfaces.services.email_surface_provisioning import (
+    provision_email_surface,
 )
 
 from app.core.api.dependencies import UoWDep, get_uow_factory
@@ -134,24 +132,40 @@ def get_notification_service(
 
 
 def _build_system_email_provisioner(uow: UoWDep):
-    """Create the pod's system mailbox on first use, if that is enabled.
+    """Give an agent that has no way to reach anyone a mailbox, on first use.
 
-    Goes through ``create_surface`` rather than writing a row directly so the
-    surface gets the same per-pod address, credential checks and receiver
-    registration as one a human connected — an auto-provisioned surface that
-    inbound routing does not recognise would deliver mail nobody can reply to.
+    Delegates to the same function agent creation uses, so a lazily-provisioned
+    mailbox is indistinguishable from an eagerly-provisioned one: same readable
+    address, same credential checks, same receiver registration. An
+    auto-provisioned surface that inbound routing did not recognise would
+    deliver mail nobody could reply to.
+
+    Injected as a callable rather than imported by the service, which keeps
+    surface *creation* the surface service's job and avoids a new import edge
+    into notification delivery.
     """
 
-    async def provision(pod_id: UUID) -> AgentSurfaceEntity | None:
-        return await get_surface_service(uow).create_surface(
+    async def provision(
+        pod_id: UUID, agent_id: UUID | None, agent_name: str | None
+    ) -> AgentSurfaceEntity | None:
+        return await provision_email_surface(
+            get_surface_service(uow),
+            uow.session,
             pod_id=pod_id,
-            platform=SurfacePlatform.RESEND,
-            agent_id=None,
-            config=SurfaceConfig(),
-            credential_mode=SurfaceCredentialMode.SYSTEM,
+            agent_id=agent_id,
+            agent_name=agent_name,
+            pod_name=await _pod_name(uow, pod_id),
         )
 
     return provision
+
+
+async def _pod_name(uow: UoWDep, pod_id: UUID) -> str | None:
+    """The pod's name, for the readable half of the address."""
+    from app.modules.pod.infrastructure.pod_repositories import PodRepository
+
+    pod = await PodRepository(uow).get(pod_id)
+    return getattr(pod, "name", None)
 
 
 def get_surface_webhook_security_service(
