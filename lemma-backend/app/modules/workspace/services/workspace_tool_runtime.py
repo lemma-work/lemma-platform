@@ -18,6 +18,7 @@ from app.modules.workspace.services.workspace_env_cache import (
     WorkspaceEnvCachePort,
     get_default_workspace_env_ttl_seconds,
 )
+from app.modules.workspace.config import workspace_settings
 from app.modules.workspace.services.workspace_process_store import WorkspaceProcessStore
 from app.modules.workspace.services.interfaces import IWorkspaceSession
 
@@ -197,12 +198,25 @@ class WorkspaceToolRuntime:
         *,
         process_id: str,
         session_id: str,
-        ttl_seconds: int = 60 * 30,
+        ttl_seconds: int | None = None,
     ) -> None:
+        """Remember which shell session owns a process.
+
+        The TTL tracks the process's own maximum lifetime. It used to be a flat
+        30 minutes, so a build that ran longer lost its binding while still
+        running: `resolve_session_for_process` returned None, the next poll
+        silently fell back to the default shell session, and the agent was told
+        its process had vanished. Re-bound on every successful poll, so an
+        actively watched process never expires.
+        """
         await self.process_store.set_session_id(
             process_id=process_id,
             session_id=session_id,
-            ttl_seconds=ttl_seconds,
+            ttl_seconds=(
+                workspace_settings.process_max_lifetime_seconds
+                if ttl_seconds is None
+                else ttl_seconds
+            ),
         )
 
     async def resolve_session_for_process(self, process_id: str) -> str | None:

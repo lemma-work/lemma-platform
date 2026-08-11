@@ -189,11 +189,17 @@ async def lifespan(app: FastAPI):
             # opened against customer databases. Closed explicitly so a reload
             # does not leak sockets into the next process.
             from app.core.net.http_client import close_shared_http_client
+            from app.modules.agent.services.runtime_model_factory import (
+                close_agent_provider_clients,
+            )
             from app.modules.connectors.infrastructure.adapters.sql_executor import (
                 dispose_shared_sql_engines,
             )
 
             await close_shared_http_client()
+            # Per-endpoint LLM provider pools, kept alive across runs for
+            # connection reuse.
+            await close_agent_provider_clients()
             await dispose_shared_sql_engines()
             await close_redis_json_caches()
             await close_redis_clients()

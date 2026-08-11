@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager, suppress
 import hmac
 import os
 from pathlib import Path
@@ -22,6 +23,7 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from sandbox_runtime.protocol import ByteRange, ProcessState
+from sandbox_runtime.tasks import create_inherited_task
 
 from .models import (
     OutputChannel,
@@ -62,6 +64,10 @@ _TERMINAL_PROCESS_STATES = {
     ProcessState.TIMED_OUT,
 }
 
+# How often to check for processes past their deadline. Coarse on purpose: the
+# deadline is an hour-scale leak guard, not a precise command budget.
+_REAP_INTERVAL_SECONDS = 60.0
+
 
 def _load_token(explicit_token: str | None) -> str:
     if explicit_token:
@@ -101,7 +107,28 @@ def create_app(
     )
     python_sessions = PythonSessionManager(allowed_roots=allowed_roots)
     quiescer = WorkspaceQuiescer()
-    app = FastAPI(title="Lemma Workspace Runtime")
+
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        # Nothing else enforces a process deadline, so without this sweep a
+        # forgotten long-running process keeps the sandbox permanently "busy"
+        # and the idle reclaimer never gets to release it.
+        async def _reap_forever() -> None:
+            while True:
+                await asyncio.sleep(_REAP_INTERVAL_SECONDS)
+                with suppress(Exception):
+                    # One bad sweep must not end the loop; the next tick retries.
+                    await manager.reap_expired()
+
+        reaper = create_inherited_task(_reap_forever(), name="process-deadline-reaper")
+        try:
+            yield
+        finally:
+            reaper.cancel()
+            with suppress(asyncio.CancelledError):
+                await reaper
+
+    app = FastAPI(title="Lemma Workspace Runtime", lifespan=lifespan)
     app.state.process_manager = manager
     app.state.filesystem_manager = filesystem
     app.state.python_session_manager = python_sessions

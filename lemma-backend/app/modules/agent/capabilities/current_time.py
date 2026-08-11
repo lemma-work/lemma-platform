@@ -25,9 +25,10 @@ message the provider has already seen and invalidate everything after it.
 from __future__ import annotations
 
 from pydantic_ai import RunContext
-from pydantic_ai._agent_graph import ModelRequestContext
 from pydantic_ai.capabilities import AbstractCapability
 from pydantic_ai.messages import ModelRequest, ModelResponse, UserPromptPart
+
+from app.modules.agent.infrastructure.pydantic_ai_compat import ModelRequestContext
 
 from app.modules.agent.domain.runtime_notes import build_runtime_notes
 

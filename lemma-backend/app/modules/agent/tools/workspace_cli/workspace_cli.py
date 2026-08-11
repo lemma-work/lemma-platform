@@ -6,6 +6,13 @@ from uuid import NAMESPACE_URL, uuid5
 
 from app.core.domain.errors import DomainError
 from app.core.log.log import get_logger
+from app.modules.agent.domain.vision import AgentVisionMode
+from app.modules.agent.services.vision_service import (
+    VisionDescriptionError,
+    VisionImage,
+    VisionUnavailableError,
+    describe_images,
+)
 from app.modules.agent.tools.context import BaseAgentContext
 from app.modules.agent.tools.file_access import (
     read_pod_file_bytes,
@@ -565,6 +572,26 @@ async def view_image_internal(
             size_bytes=len(content),
         )
 
+    # Only a model that can actually accept image parts is given them. Handing
+    # BinaryContent to a text-only model poisons the whole request, and the
+    # provider rejects the turn rather than the tool call.
+    if getattr(ctx, "vision_mode", AgentVisionMode.UNAVAILABLE) is not (
+        AgentVisionMode.DIRECT
+    ):
+        return await _describe_image_via_delegate(
+            ctx,
+            images=[
+                VisionImage(
+                    data=content, media_type=media_type, label=f"image {file_path}"
+                )
+            ],
+            instructions=request.instructions,
+            file_path=file_path,
+            media_type=media_type,
+            source=source,
+            size_bytes=len(content),
+        )
+
     return ToolReturn(
         return_value=ViewImageResponse(
             success=True,
@@ -577,6 +604,56 @@ async def view_image_internal(
         content=[
             BinaryContent(data=content, media_type=media_type),
         ],
+    )
+
+
+async def _describe_image_via_delegate(
+    ctx: BaseAgentContext,
+    *,
+    images: list[VisionImage],
+    instructions: str | None,
+    file_path: str,
+    media_type: str,
+    source: str,
+    size_bytes: int,
+) -> ViewImageResponse:
+    """Answer with words instead of pixels, for a model that cannot see."""
+    try:
+        description = await describe_images(
+            images,
+            instructions=instructions,
+            organization_id=getattr(ctx, "organization_id", None),
+            user_id=ctx.user_id,
+        )
+    except VisionUnavailableError as exc:
+        return ViewImageResponse(
+            success=False,
+            error=(
+                f"{exc} This agent's model cannot read images directly, so a "
+                "separate vision model is required to look at one."
+            ),
+            file_path=file_path,
+            media_type=media_type,
+            source=source,
+            size_bytes=size_bytes,
+        )
+    except VisionDescriptionError as exc:
+        return ViewImageResponse(
+            success=False,
+            error=str(exc),
+            file_path=file_path,
+            media_type=media_type,
+            source=source,
+            size_bytes=size_bytes,
+        )
+
+    return ViewImageResponse(
+        success=True,
+        message=description,
+        file_path=file_path,
+        media_type=media_type,
+        source=source,
+        size_bytes=size_bytes,
     )
 
 

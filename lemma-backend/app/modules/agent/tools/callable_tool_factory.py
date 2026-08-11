@@ -8,11 +8,14 @@ from typing import Any, cast
 from uuid import UUID
 
 from pydantic import TypeAdapter
-from pydantic_ai._function_schema import FunctionSchema
-from pydantic_ai._json_schema import InlineDefsJsonSchemaTransformer
 from pydantic_ai.tools import RunContext, Tool
 from pydantic_ai.toolsets import FunctionToolset
 from pydantic_core import SchemaValidator
+
+from app.modules.agent.infrastructure.pydantic_ai_compat import (
+    FunctionSchema,
+    InlineDefsJsonSchemaTransformer,
+)
 
 from app.modules.agent.config import agent_settings
 from app.core.log.log import get_logger

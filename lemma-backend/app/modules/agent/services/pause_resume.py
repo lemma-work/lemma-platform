@@ -18,6 +18,9 @@ from uuid import UUID
 from app.core.log.log import get_logger
 from app.modules.agent.domain.entities import Conversation
 from app.modules.agent.domain.events import AgentRunStartedEvent
+from app.modules.agent.domain.pausing_tools import (
+    PAUSING_TOOL_NAMES as _PAUSING_TOOL_NAMES_DOMAIN,
+)
 from app.modules.agent.domain.value_objects import MessageDraft, MessageKind
 from app.modules.agent.services.realtime import (
     message_payload,
@@ -27,12 +30,9 @@ from app.modules.agent.services.serialization import message_to_payload
 
 logger = get_logger(__name__)
 
-# Tools that end their run by pausing rather than returning. Each persists its
-# tool call and is resolved later by synthesizing that call's return and starting
-# a fresh run that replays it. ask_user/request_approval resolve through the
-# approvals endpoint; snooze resolves on a timer, with no person involved — but
-# the resume is the same, which is why they share a list.
-PAUSING_TOOL_NAMES = ("ask_user", "request_approval", "snooze")
+# Defined in the domain because history reconstruction needs the same list —
+# see `domain/pausing_tools`. Re-exported here so existing callers are unchanged.
+PAUSING_TOOL_NAMES = _PAUSING_TOOL_NAMES_DOMAIN
 
 
 class PauseResumeMixin:

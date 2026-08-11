@@ -158,3 +158,71 @@ async def test_generic_exception_emits_sanitized_ui_message(monkeypatch) -> None
     assert "sk-secret-key" not in events[0].data
     assert "Authorization" not in events[0].data
     assert "Please check the agent runtime configuration." in events[0].data
+
+
+def test_provider_error_identifiers_extract_the_code_not_the_prose() -> None:
+    """A 400 is undiagnosable without knowing *which* 400 it was.
+
+    The logging contract forbids logging bodies, so only the short enum-like
+    identifiers are pulled out — never the message, which echoes the request.
+    """
+    from app.modules.agent.infrastructure.harnesses.provider_error_log import (
+        provider_error_identifiers,
+    )
+
+    # OpenAI-compatible shape (Fireworks, OpenAI, most gateways).
+    kind, code = provider_error_identifiers(
+        {
+            "error": {
+                "type": "invalid_request_error",
+                "code": "context_length_exceeded",
+                "message": "This model's maximum context length is 128000 tokens",
+            }
+        }
+    )
+    assert (kind, code) == ("invalid_request_error", "context_length_exceeded")
+
+    # Anthropic shape puts the envelope type at the top level.
+    kind, code = provider_error_identifiers(
+        {"type": "error", "error": {"type": "overloaded_error"}}
+    )
+    assert kind == "overloaded_error"
+
+
+def test_provider_error_identifiers_refuse_prose_and_secrets() -> None:
+    """Anything long enough to be prose is dropped rather than truncated."""
+    from app.modules.agent.infrastructure.harnesses.provider_error_log import (
+        provider_error_identifiers,
+    )
+
+    kind, code = provider_error_identifiers(
+        {
+            "error": {
+                "type": "Incorrect API key provided: sk-secret-should-not-appear",
+                "code": "a b c",
+            }
+        }
+    )
+    assert kind is None
+    assert code is None
+    assert provider_error_identifiers("not a dict") == (None, None)
+    assert provider_error_identifiers(None) == (None, None)
+
+
+def test_quota_exhaustion_reads_as_a_limit_not_a_misconfiguration() -> None:
+    """154 runs a week hit this; "check the configuration" sent people hunting
+    a bug in a system that was working exactly as designed."""
+    import httpx
+
+    from app.modules.agent.services.agent_runner_service import _run_failure_message
+    from app.modules.usage.domain.errors import UsageLimitExceededError
+
+    quota = _run_failure_message(UsageLimitExceededError("over limit"))
+    assert "usage allowance" in quota
+    assert "runtime configuration" not in quota
+
+    dropped = _run_failure_message(httpx.ReadError("connection reset"))
+    assert "Nothing you sent was lost" in dropped
+
+    generic = _run_failure_message(ValueError("something else"))
+    assert "Agent run failed" in generic

@@ -86,20 +86,47 @@ def test_malformed_dependency_url_cannot_break_logging(captured_stdout) -> None:
     assert "CANARY" not in json.dumps(record)
 
 
-def test_exception_contains_only_deterministic_safe_descriptor(captured_stdout) -> None:
-    canary = "CANARY-EXCEPTION-SECRET"
+def test_an_exception_is_logged_with_everything_needed_to_diagnose_it(
+    captured_stdout,
+) -> None:
+    """An error you cannot diagnose is not protected, it is lost.
+
+    This used to assert the opposite — that the exception's message and
+    traceback were stripped — which left "ValueError somewhere in this module"
+    and nothing about *which* value. The message and the full traceback are the
+    diagnosis, so they are emitted.
+    """
+    detail = "row 41 has no tenant_id"
     try:
-        raise ValueError(f"{canary}\n/private/source/path.py")
+        raise ValueError(detail)
     except ValueError:
         get_logger("app.demo").error("http.request.failed", exc_info=True)
+
     record = captured_stdout()[0]
-    rendered = json.dumps(record)
     assert record["error_type"] == "ValueError"
     assert len(record["error_stack_hash"]) == 64
     assert len(record.get("error_frames", [])) <= 8
-    assert canary not in rendered
-    assert "/private/source/path.py" not in rendered
+    assert record["error_message"] == detail
+    # A real traceback, with its frames and newlines intact.
+    assert record["error_traceback"].startswith("Traceback (most recent call last):")
+    assert "ValueError: row 41 has no tenant_id" in record["error_traceback"]
+    assert "\n" in record["error_traceback"], "a one-line traceback is useless"
     assert "exception" not in record
+
+
+def test_credential_named_fields_are_still_dropped(captured_stdout) -> None:
+    """Widening diagnostics must not turn into logging the secrets themselves."""
+    get_logger("app.demo").error(
+        "http.request.failed",
+        authorization="Bearer sk-should-not-appear",
+        cookie="session=should-not-appear",
+        password="hunter2",
+        secret="should-not-appear",
+    )
+
+    rendered = json.dumps(captured_stdout()[0])
+    assert "should-not-appear" not in rendered
+    assert "hunter2" not in rendered
 
 
 def test_unregistered_event_and_field_fail_in_explicit_local_strict_mode(
@@ -443,11 +470,18 @@ def test_preserved_handlers_never_receive_raw_exception_data() -> None:
         logging.getLogger().removeHandler(capture)
 
     assert len(records) == 1
+    # The point of the filter: a third-party handler never gets a live exception
+    # object (with its frames and locals) to export however it likes. What it
+    # gets is the structured descriptor we built.
     assert records[0].exc_info is None
+    assert records[0].exc_text is None
     safe = getattr(records[0], "lemma_safe_exception")
     assert safe["error_type"] == "RuntimeError"
     assert len(safe["error_stack_hash"]) == 64
-    assert "CANARY" not in json.dumps(safe)
+    # And that descriptor carries the diagnosis, for foreign loggers too — a
+    # dependency's failure is usually the one you most need to read.
+    assert "CANARY-RAW-EXCEPTION" in safe["error_message"]
+    assert "RuntimeError" in safe["error_traceback"]
 
 
 def test_release_and_trace_identity_are_top_level(monkeypatch, captured_stdout) -> None:

@@ -121,20 +121,24 @@ async def test_web_search_api_uses_configured_provider_boundary(
     )
 
     assert response.status_code == status.HTTP_200_OK, response.text
-    assert response.json() == {
-        "success": True,
-        "results": [
-            {
-                "title": "Lemma documentation",
-                "url": "https://example.test/lemma",
-                "snippet": "Deterministic fake-provider result.",
-                "source": "searxng",
-                "score": 0.95,
-            }
-        ],
-        "message": "Web search completed successfully",
-        "error": None,
-    }
+    payload = response.json()
+    assert payload["success"] is True
+    assert payload["message"] == "Web search completed successfully"
+    assert payload["error"] is None
+    # `note` reports a request that could not be served as asked (e.g. a vertical
+    # this provider does not offer). A plain web search has nothing to report.
+    assert payload["note"] is None
+    assert len(payload["results"]) == 1
+    result = payload["results"][0]
+    assert result["title"] == "Lemma documentation"
+    assert result["url"] == "https://example.test/lemma"
+    assert result["snippet"] == "Deterministic fake-provider result."
+    assert result["source"] == "searxng"
+    assert result["score"] == 0.95
+    # Per-vertical extras stay unset for a web result rather than being invented.
+    assert result["published_at"] is None
+    assert result["thumbnail_url"] is None
+    assert result["duration"] is None
     assert fake_search_provider.queries == ["Lemma architecture"]
 
 

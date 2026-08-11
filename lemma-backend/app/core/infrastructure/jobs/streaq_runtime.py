@@ -64,6 +64,10 @@ meter = metrics.get_meter(__name__)
 job_counter = meter.create_counter("lemma.worker.jobs")
 job_duration = meter.create_histogram("lemma.worker.job.duration", unit="ms")
 
+# Headroom between task concurrency and the DB pool, leaving room for the
+# crons, event handlers and reconcilers that share the worker.
+_DB_POOL_SAFETY_FACTOR = 0.8
+
 JOB_TIMEOUT_SECONDS = 1800
 # An agent run is the one task whose ceiling is not ours to pick freely: it
 # advertises a deadline to something outside this process (an Agent Host on a
@@ -269,10 +273,21 @@ async def worker_lifespan() -> AsyncGenerator[AppWorkerContext]:
     # connection checkout — which looks like the whole worker hanging. Warn (not
     # fail, to keep dev flexible) when the margin is too thin so it can't
     # silently regress.
+    # The shipped defaults sit exactly on this line: concurrency 20 against a
+    # pool of 20. `worker_concurrency`'s own docstring calls that acceptable
+    # ("should not exceed"), but equal is not enough — the worker also runs
+    # crons, event-bus handlers and reconcilers that each need a connection, so
+    # at parity the first one of those blocks behind a full pool. Hence the 0.8
+    # margin, and hence logging the numbers: a bare "degraded" event tells an
+    # operator nothing about which of the two knobs to move.
     pool_capacity = settings.db_pool_size + settings.db_max_overflow
-    if pool_capacity and settings.worker_concurrency > pool_capacity * 0.8:
+    safe_concurrency = int(pool_capacity * _DB_POOL_SAFETY_FACTOR)
+    if pool_capacity and settings.worker_concurrency > safe_concurrency:
         logger.warning(
-            "infrastructure.streaq_runtime.worker_concurrency_exceeds_safe_db.degraded"
+            "infrastructure.streaq_runtime.worker_concurrency_exceeds_safe_db.degraded",
+            configured_concurrency=settings.worker_concurrency,
+            pool_capacity=pool_capacity,
+            safe_concurrency=safe_concurrency,
         )
     # Pre-create Redis consumer groups BEFORE the broker starts its subscribers.
     # Several subscribers share a stream (e.g. workflow + surface both consume
