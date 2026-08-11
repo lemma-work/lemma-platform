@@ -1844,12 +1844,25 @@ fn rotate_log(path: &Path, max_bytes: u64) -> io::Result<()> {
 
 #[cfg(unix)]
 fn terminate_process_group(child: &mut Child) -> io::Result<()> {
+    // Reap first. A child that has already exited still reports its old pid,
+    // and on a busy machine that number gets recycled quickly -- so signalling
+    // `-pid` here would reach whatever process group inherited it, which is at
+    // best somebody else's processes and at worst our own unrelated services.
+    // There is nothing to terminate in that case anyway.
+    if child.try_wait()?.is_some() {
+        return Ok(());
+    }
     let process_group = -(child.id() as i32);
     // SAFETY: kill is called with a process group created for this exact child.
     let result = unsafe { libc::kill(process_group, libc::SIGTERM) };
     if result != 0 {
         let error = io::Error::last_os_error();
-        if error.raw_os_error() != Some(libc::ESRCH) {
+        // ESRCH means the group went away between the check above and the
+        // signal. EPERM means the id now names processes that are not ours,
+        // which says the same thing: ours are gone. Neither is a reason to
+        // fail the stop -- doing so aborted `stop_all` partway through and
+        // left the rest of the stack running.
+        if !matches!(error.raw_os_error(), Some(libc::ESRCH) | Some(libc::EPERM)) {
             return Err(error);
         }
     }
