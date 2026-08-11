@@ -2303,6 +2303,18 @@ fn create_listener(paths: &LocalPaths) -> io::Result<LocalSocketListener> {
             std::fs::remove_file(socket)?;
             create()
         }
+        #[cfg(windows)]
+        Err(error) if error.kind() == io::ErrorKind::AddrInUse => {
+            // A named pipe leaves no remnant to clean up: if the name is taken,
+            // a server owns it right now. There is nothing to recover, only
+            // something to say plainly -- this recovery was unix-only, so on
+            // Windows the raw OS error reached the user instead of the one
+            // sentence that explains it.
+            Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "lemma-locald is already running",
+            ))
+        }
         Err(error) => Err(error),
     }
 }

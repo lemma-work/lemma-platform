@@ -653,8 +653,24 @@ fn argv(prefix: &[String], rest: &[&str]) -> Vec<String> {
 /// "could not record ownership of backend" and local mode never starts.
 fn resolve_on_path(tool: &str) -> io::Result<PathBuf> {
     let path = std::env::var_os("PATH").ok_or_else(|| invalid("PATH is not set"))?;
+    // On Windows the thing on PATH is uv.exe or node.exe -- never the bare
+    // name -- so joining `tool` alone found neither and source mode could not
+    // resolve its toolchain at all.
+    #[cfg(windows)]
+    let names: Vec<String> = ["", ".exe", ".cmd", ".bat"]
+        .iter()
+        .map(|suffix| format!("{tool}{suffix}"))
+        .collect();
+    #[cfg(not(windows))]
+    let names: Vec<String> = vec![tool.to_owned()];
+
     std::env::split_paths(&path)
-        .map(|directory| directory.join(tool))
+        .flat_map(|directory| {
+            names
+                .iter()
+                .map(|name| directory.join(name))
+                .collect::<Vec<_>>()
+        })
         .find(|candidate| candidate.is_file())
         .ok_or_else(|| {
             invalid(format!(

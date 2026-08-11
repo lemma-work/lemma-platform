@@ -1829,9 +1829,15 @@ fn rotate_log(path: &Path, max_bytes: u64) -> io::Result<()> {
         .metadata()
         .is_ok_and(|metadata| metadata.len() >= max_bytes)
     {
-        let previous = path.with_extension("previous.log");
-        let _ = fs::remove_file(&previous);
-        fs::rename(path, previous)?;
+        // Copy aside and truncate in place, rather than rename and let a new
+        // file appear. The writer is a running child holding this handle: after
+        // a rename it keeps writing into the rotated file, so the live log
+        // stops growing and the rotated one never stops. Removing the previous
+        // file first also fails outright on Windows if anything still has it
+        // open. Truncating the file the writer already holds moves it back to
+        // zero without either problem.
+        fs::copy(path, path.with_extension("previous.log"))?;
+        OpenOptions::new().write(true).open(path)?.set_len(0)?;
     }
     Ok(())
 }
