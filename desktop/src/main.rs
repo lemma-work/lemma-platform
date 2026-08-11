@@ -2003,7 +2003,10 @@ fn handle_locald_event(app: &AppHandle, event: &Value) {
                         });
                     }
                 }
-                // Stay on the splash: the user proceeds via its CTA.
+                // Navigation is not decided here. The tail of this
+                // function owns ready -> workspace, for every event kind
+                // that can carry readiness; deciding it in two places is
+                // how one of them ended up never running.
             }
             "sharing.changed" => {
                 if let (Some(url), Some(api_url)) =
@@ -2114,10 +2117,14 @@ fn handle_locald_event(app: &AppHandle, event: &Value) {
             // Prefer the route the last session ended on. Opening the root
             // instead means loading the app once to authenticate and resolve
             // the last pod, then loading it again at the pod it resolved to.
+            // A cold first run has no resume target and no account, so the
+            // root would load once to discover that, redirect to signup, and
+            // load again. Go straight there: one page load, and the first
+            // screen is deterministic instead of depending on a client redirect.
             let target = read_resume_target()
                 .filter(|target| target.url == url)
                 .map(|target| resume_entry_url(&target))
-                .unwrap_or(url);
+                .unwrap_or_else(|| local_auth_url(&url, "signup"));
             let _ = open_app_window(app, &target);
         }
     }
@@ -5267,6 +5274,37 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use std::fs::File;
+
+    #[test]
+    fn the_splash_draws_something_for_every_state() {
+        // `renderState` is the only thing that paints the splash and the only
+        // thing that schedules the move to the workspace. It used to return
+        // early for a state with no phase, and again for an undecided
+        // connection mode -- so those states left the bare static logo on
+        // screen indefinitely, which is what a stuck first run looked like.
+        let splash = include_str!("../ui/index.html");
+        let body = {
+            let start = splash
+                .find("function renderState(s) {")
+                .expect("renderState exists");
+            let end = splash[start..]
+                .find("\n  function ")
+                .map_or(splash.len(), |offset| start + offset);
+            &splash[start..end]
+        };
+        assert!(
+            !body.contains("if (!s || !s.phaseKey) return;"),
+            "a state without a phase must still render"
+        );
+        assert!(
+            !body.contains(r#"if (s.mode === "undecided") return;"#),
+            "an undecided mode must show the chooser, not an empty screen"
+        );
+        assert!(
+            body.contains("showChooser();"),
+            "the undecided branch must offer the connection choice"
+        );
+    }
 
     #[test]
     fn no_lock_is_held_across_the_runtime_install() {

@@ -962,8 +962,21 @@
     }, 650);
   }
   function renderState(s) {
-    if (!s || !s.phaseKey) return;
-    if (s.mode === "undecided") return;
+    if (!s) return;
+    // Neither of these may return silently. This function is the only thing that
+    // draws the screen and the only thing that schedules the move to the
+    // workspace, so a state it declines to handle leaves the bare static logo up
+    // for good -- which is exactly what a stuck first run looked like.
+    //
+    // A state with no phase is still a state: fall back to the boot phase rather
+    // than rendering nothing.
+    if (!s.phaseKey) s = { ...s, phaseKey: lastPhase || "boot" };
+    // Undecided means the user has not picked a connection mode. Show them the
+    // choice instead of an empty screen.
+    if (s.mode === "undecided") {
+      showChooser();
+      return;
+    }
     lastState = s;
     switchModeBtn.hidden = s.mode !== "local";
     if (s.running || s.ready) hideConnectionChoice();
