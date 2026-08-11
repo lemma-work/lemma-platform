@@ -38,10 +38,13 @@ Download Lemma Desktop, choose **Local**, and select **Install local services**.
 <summary>Desktop installation and local runtime details</summary>
 
 Download the signed **online** package from the latest release for macOS 14+
-on Apple silicon or Windows 11 23H2+ on x86-64. On macOS, drag Lemma to
-Applications before opening it; on Windows, run the signed setup executable.
-The small installer downloads digest-verified runtime components on first use;
-public offline packages are not offered in this release.
+on Apple silicon, and drag Lemma to Applications before opening it. The small
+installer downloads digest-verified runtime components on first use; public
+offline packages are not offered in this release.
+
+Windows 11 23H2+ on x86-64 builds and is signed every release, but it is
+experimental and not published as a release asset yet — see
+[docs/installation.md](docs/installation.md) for how to get a build.
 
 Choose **Local**, select **Install local services**, and create the local owner
 inside the app. Lemma owns its lightweight VZ/WSL2 runtime; the normal path
@@ -75,20 +78,13 @@ Open the generated `my-team/` directory in Claude Code, Codex, OpenCode, Cursor,
 To let the pod dispatch runs through your local Claude Code, Codex, OpenCode, or Cursor login, pair this machine as an Agent Host and point a runtime profile at one of its harnesses.
 
 In [Lemma Desktop](docs/installation.md), open **Models** and press **Connect
-this computer**, then **Add to chat models** on the agents it finds. Headless,
-the same thing from the CLI:
+this computer**, then **Add to chat models** on the agents it finds. Desktop
+supervises Agent Host, so pairing, starting, and stopping all happen there;
+`lemma runtime profiles list` shows the profiles it created, and any agent can
+be pointed at one (`lemma agent update <name> --data '{"agent_runtime":
+{"profile_id": "<profile_id>"}}'`).
 
-```bash
-lemma agent-host connect                 # pairs using your existing CLI login
-lemma agent-host harnesses               # lists harness_id per detected tool
-lemma runtime profiles create AGENT_HOST \
-  --name "Codex on my laptop" --harness-id <harness_id>
-```
-
-Then select that profile on an agent (`lemma agent update <name> --data
-'{"agent_runtime": {"profile_id": "<profile_id>"}}'`) and chat as usual.
-`lemma agent-host status` shows the paired targets and whether the host service
-is running.
+Agent Host runs on the machines Desktop runs on — macOS and Windows.
 
 Agent Host drives each tool over the [Agent Client Protocol](https://agentclientprotocol.com).
 Antigravity (`agy`) has no ACP mode yet, so it can install Lemma's skills and
@@ -227,19 +223,13 @@ lemma apps deploy my-app ./index.html   # deploy a no-build HTML app (or a Vite 
 
 **Or run your agent inside Lemma.** Agent Host connects your local Claude Code, Codex, OpenCode, or Cursor to the pod: it picks up tasks from a durable queue, streams its work back through the pod, and pauses at approval gates before protected actions. Two agents working the same pod share persistent state, a task queue, and run history.
 
-```bash
-lemma auth login
-lemma agent-host connect         # pair this machine (one command, no code to copy)
-lemma agent-host harnesses       # harness_id for each detected coding agent
-lemma runtime profiles create AGENT_HOST \
-  --name "Codex on my laptop" --harness-id <harness_id>
-lemma agent-host status          # paired targets, service state, queue depth
-```
+Install [Lemma Desktop](docs/installation.md), sign in, then open **Models** →
+**Connect this computer**. The app pairs itself as you — there is no code to
+carry — and lists every coding agent it finds, each one a click away from being
+a chat model.
 
-Pairing from the CLI installs Agent Host as a per-user background service, so
-it survives logout and reboot. Lemma Desktop supervises it instead and runs it
-while the app is open, so `lemma agent-host start|stop|restart` route through
-Desktop rather than installing a second service. See
+Desktop compiles, ships, and supervises Agent Host, which is why there is no
+separate install and no background service to manage. See
 [Agent Host in the desktop app](docs/design/agent-host-desktop.md).
 
 Any agent operates a pod directly through the CLI:

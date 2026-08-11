@@ -19,7 +19,8 @@ import {
     harnessProfileChanges,
     hydrateRuntimeModel,
     isArchivedProfile,
-    pairingCommands,
+    isDiscoveringHarnesses,
+    HARNESS_DISCOVERY_WINDOW_MS,
     resolveDefaultAgentRuntime,
     resolveRuntimeModelName,
     runtimeAvailabilityLabel,
@@ -150,34 +151,37 @@ describe('formatAgentRuntime', () => {
     });
 });
 
-describe('pairing commands', () => {
-    const pairing = { pairing_code: 'code-123', display_name: 'Ana"s laptop' };
+describe('harness discovery', () => {
+    const host = (overrides: Partial<{ status: string; created_at: string }> = {}) => ({
+        status: 'ONLINE',
+        created_at: new Date().toISOString(),
+        ...overrides,
+    }) as Parameters<typeof isDiscoveringHarnesses>[0];
 
-    it('does not ask for a separate install step', () => {
-        // `connect` resolves the binary itself, and `install` only ever downloads
-        // a release asset - which does not exist for a self-hosted or dev build,
-        // so the first line of the old instructions stopped those users outright.
-        expect(pairingCommands(pairing, 'https://api.lemma.work').join('\n')).not.toContain(
-            'agent-host install',
-        );
+    it('treats an empty list on a freshly paired computer as still looking', () => {
+        // The reported bug: the page concluded "No agents published yet" within
+        // two seconds of the first empty response, while the host was still
+        // installing an adapter package per agent against an empty npm cache.
+        expect(isDiscoveringHarnesses(host(), 0)).toBe(true);
     });
 
-    it('installs the CLI, pairs, then verifies', () => {
-        expect(pairingCommands(pairing, 'https://api.lemma.work')).toEqual([
-            'uv tool install lemma-terminal',
-            'lemma agent-host connect --url https://api.lemma.work --pairing-code code-123 --name "Ana\\"s laptop"',
-            'lemma agent-host status',
-        ]);
+    it('stops looking once the computer has published something', () => {
+        expect(isDiscoveringHarnesses(host(), 1)).toBe(false);
     });
 
-    it('opts in to plain HTTP only when the CLI would refuse the URL', () => {
-        const connectFor = (apiBaseUrl: string) => pairingCommands(pairing, apiBaseUrl)[1];
+    it('stops looking once discovery has had long enough', () => {
+        const old = new Date(Date.now() - HARNESS_DISCOVERY_WINDOW_MS - 1_000).toISOString();
+        expect(isDiscoveringHarnesses(host({ created_at: old }), 0)).toBe(false);
+    });
 
-        expect(connectFor('http://10.0.0.4:8710')).toContain('--allow-insecure-http');
-        // Loopback is already trusted, so the flag would be noise.
-        expect(connectFor('http://127.0.0.1:8710')).not.toContain('--allow-insecure-http');
-        expect(connectFor('http://localhost:8710')).not.toContain('--allow-insecure-http');
-        expect(connectFor('https://api.example.com')).not.toContain('--allow-insecure-http');
+    it('covers the host\'s own connect timeout, which is what makes it slow', () => {
+        // agent-host's CONNECT_TIMEOUT is 600s; a window shorter than that
+        // would call discovery finished while the host was still working.
+        expect(HARNESS_DISCOVERY_WINDOW_MS).toBeGreaterThanOrEqual(600_000);
+    });
+
+    it('never claims a revoked computer is still looking', () => {
+        expect(isDiscoveringHarnesses(host({ status: 'REVOKED' }), 0)).toBe(false);
     });
 });
 

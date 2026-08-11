@@ -12,7 +12,7 @@ use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -241,10 +241,7 @@ static LAUNCH_START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
 /// shows up as a number, and so the startup targets have evidence behind them
 /// rather than a stopwatch and an opinion.
 fn launch_trace(stage: &str) {
-    let elapsed = LAUNCH_START
-        .get_or_init(Instant::now)
-        .elapsed()
-        .as_millis();
+    let elapsed = LAUNCH_START.get_or_init(Instant::now).elapsed().as_millis();
     append_bounded_log(&launch_log_path(), &format!("{elapsed:>6}ms {stage}"));
 }
 
@@ -441,7 +438,11 @@ fn resume_entry_url(target: &ResumeTarget) -> String {
     format!(
         "{}{}",
         target.url.trim_end_matches('/'),
-        if target.route == "/" { "" } else { &target.route }
+        if target.route == "/" {
+            ""
+        } else {
+            &target.route
+        }
     )
 }
 
@@ -487,9 +488,7 @@ fn generation_matches(client: &reqwest::blocking::Client, url: &str, generation:
     if !response.status().is_success() {
         return false;
     }
-    response
-        .text()
-        .is_ok_and(|body| body.contains(generation))
+    response.text().is_ok_and(|body| body.contains(generation))
 }
 
 fn write_config(update: impl FnOnce(&mut Value)) -> Result<(), String> {
@@ -932,6 +931,8 @@ fn locald_matches_host_pack(
 }
 
 fn enriched_path() -> String {
+    // Only the unix arm below appends to this.
+    #[cfg_attr(not(unix), expect(unused_mut, reason = "extended on unix only"))]
     let mut parts: Vec<PathBuf> = std::env::var_os("PATH")
         .map(|value| std::env::split_paths(&value).collect())
         .unwrap_or_default();
@@ -994,20 +995,10 @@ fn ensure_locald(app: &AppHandle) -> Result<(), String> {
         replace_locald(connection)?;
     }
 
-    spawn_locald()?;
-    let mut last_error = "daemon did not create its control endpoint".to_string();
-    for _ in 0..80 {
-        match connect_locald() {
-            Ok(connection) if acceptable(&connection.hello) => {
-                install_locald_connection(app, connection);
-                return Ok(());
-            }
-            Ok(_) => last_error = "daemon started with the wrong native host pack".into(),
-            Err(error) => last_error = error,
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    }
-    Err(format!("could not connect to lemma-locald: {last_error}"))
+    let child = spawn_locald()?;
+    let connection = await_locald(child, |connection| acceptable(&connection.hello))?;
+    install_locald_connection(app, connection);
+    Ok(())
 }
 
 /// Bring up locald for a workspace that has no local stack.
@@ -1042,20 +1033,12 @@ fn ensure_locald_without_host_pack(app: &AppHandle) -> Result<(), String> {
         replace_locald(connection)?;
     }
 
-    spawn_locald()?;
-    let mut last_error = "daemon did not create its control endpoint".to_string();
-    for _ in 0..80 {
-        match connect_locald() {
-            Ok(connection) if locald_is_this_build(&connection.hello, expected.as_deref()) => {
-                install_locald_connection(app, connection);
-                return Ok(());
-            }
-            Ok(_) => last_error = "another build's daemon holds the control socket".into(),
-            Err(error) => last_error = error,
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    }
-    Err(format!("could not connect to lemma-locald: {last_error}"))
+    let child = spawn_locald()?;
+    let connection = await_locald(child, |connection| {
+        locald_is_this_build(&connection.hello, expected.as_deref())
+    })?;
+    install_locald_connection(app, connection);
+    Ok(())
 }
 
 fn ensure_runtime_artifacts(app: &AppHandle) -> Result<(), String> {
@@ -1072,7 +1055,7 @@ fn ensure_runtime_artifacts(app: &AppHandle) -> Result<(), String> {
 }
 
 fn ensure_runtime_artifacts_inner(app: &AppHandle) -> Result<(), String> {
-    if runtime_root().join("locald/Cargo.toml").is_file() {
+    if runtime_root().join("desktop/locald/Cargo.toml").is_file() {
         return Ok(());
     }
     let config = read_config();
@@ -1165,11 +1148,11 @@ fn ensure_runtime_artifacts_inner(app: &AppHandle) -> Result<(), String> {
         &runtime_install_root(),
         env!("CARGO_PKG_VERSION"),
         &mut |progress| {
-            let fraction = if progress.total == 0 {
-                0
-            } else {
-                progress.current.saturating_mul(1000) / progress.total
-            };
+            let fraction = progress
+                .current
+                .saturating_mul(1000)
+                .checked_div(progress.total)
+                .unwrap_or(0);
             let percent = match progress.stage {
                 "download" => 2 + fraction.saturating_mul(44) / 1000,
                 "verify" => 47,
@@ -1336,18 +1319,46 @@ fn locald_binary() -> Option<PathBuf> {
         .filter(|p| p.exists())
         .or_else(bundled_locald)
         .or_else(|| {
+            // One workspace under desktop/, so one target directory.
             let candidate = runtime_root().join(if cfg!(windows) {
-                "locald/target/debug/lemma-locald.exe"
+                "desktop/target/debug/lemma-locald.exe"
             } else {
-                "locald/target/debug/lemma-locald"
+                "desktop/target/debug/lemma-locald"
             });
             candidate.exists().then_some(candidate)
         })
 }
 
-fn spawn_locald() -> Result<(), String> {
+/// Spawn a child without flashing up a console window.
+///
+/// A release build sets windows_subsystem to windows, so the app has no
+/// console at all. lemma-locald.exe is a console program, and starting one
+/// from a process with no console makes Windows allocate a visible conhost
+/// window for it -- one the user can close, which kills the daemon.
+/// Redirecting stdio does not suppress it.
+///
+/// A no-op everywhere else, so call sites stay platform-neutral.
+trait NoConsoleWindow {
+    fn no_console_window(&mut self) -> &mut Self;
+}
+
+impl NoConsoleWindow for Command {
+    #[cfg(windows)]
+    fn no_console_window(&mut self) -> &mut Self {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        self.creation_flags(CREATE_NO_WINDOW)
+    }
+
+    #[cfg(not(windows))]
+    fn no_console_window(&mut self) -> &mut Self {
+        self
+    }
+}
+
+fn spawn_locald() -> Result<Child, String> {
     let root = runtime_root();
-    let have_checkout = root.join("locald/Cargo.toml").exists();
+    let have_checkout = root.join("desktop/locald/Cargo.toml").exists();
     let locald_bin = locald_binary();
 
     let mut command = match &locald_bin {
@@ -1364,7 +1375,7 @@ fn spawn_locald() -> Result<(), String> {
                 "run",
                 "--quiet",
                 "--manifest-path",
-                "locald/Cargo.toml",
+                "desktop/locald/Cargo.toml",
                 "--",
                 "serve",
             ]);
@@ -1382,13 +1393,10 @@ fn spawn_locald() -> Result<(), String> {
         // Which container runtime to use -- docker, podman, lemma_local, or
         // "auto" to detect. Not the sandbox provider: the backend's
         // WORKSPACE_PROVIDER is derived from this separately and takes a
-        // narrower set of values. This is the one hop that reads the user's
-        // own shell, so it still honours the pre-rename name for now.
+        // narrower set of values.
         .env(
             "LEMMA_CONTAINER_RUNTIME",
-            std::env::var("LEMMA_CONTAINER_RUNTIME")
-                .or_else(|_| std::env::var("AGENTBOX_PROVIDER"))
-                .unwrap_or_else(|_| "auto".into()),
+            std::env::var("LEMMA_CONTAINER_RUNTIME").unwrap_or_else(|_| "auto".into()),
         )
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -1409,9 +1417,48 @@ fn spawn_locald() -> Result<(), String> {
         );
     }
     command
+        .no_console_window()
         .spawn()
-        .map(|_| ())
         .map_err(|e| format!("failed to spawn lemma-locald: {e}"))
+}
+
+/// How long a freshly spawned locald gets to open its control endpoint.
+///
+/// This was 8 seconds, which is generous for a warm start and nowhere near
+/// enough for the one that matters. On a machine's first launch macOS verifies
+/// the newly installed binary before it will run, locald creates its state
+/// root, and asking the credential vault for the installation secret can put a
+/// system prompt in front of all of it. Missing that window reported "could not
+/// connect to lemma-locald" over a daemon that was starting perfectly normally
+/// -- and Try again then worked instantly, because by then it had.
+///
+/// A longer budget costs nothing when the daemon is healthy: the wait returns
+/// on the first successful connect. A daemon that dies is now noticed directly
+/// rather than by running out the clock.
+const LOCALD_START_BUDGET: Duration = Duration::from_secs(45);
+const LOCALD_POLL_INTERVAL: Duration = Duration::from_millis(100);
+
+/// Wait for the control endpoint, giving up early if the daemon exited.
+fn await_locald<F>(mut child: Child, accept: F) -> Result<LocaldConnection, String>
+where
+    F: Fn(&LocaldConnection) -> bool,
+{
+    let deadline = Instant::now() + LOCALD_START_BUDGET;
+    let mut last_error = "daemon did not create its control endpoint".to_string();
+    while Instant::now() < deadline {
+        match connect_locald() {
+            Ok(connection) if accept(&connection) => return Ok(connection),
+            Ok(_) => last_error = "daemon started with the wrong native host pack".into(),
+            Err(error) => last_error = error,
+        }
+        // A daemon that has already exited will never open the endpoint, so say
+        // why instead of spending the rest of the budget waiting for it.
+        if let Ok(Some(status)) = child.try_wait() {
+            return Err(format!("lemma-locald exited during startup ({status})"));
+        }
+        std::thread::sleep(LOCALD_POLL_INTERVAL);
+    }
+    Err(format!("could not connect to lemma-locald: {last_error}"))
 }
 
 fn connect_locald() -> Result<LocaldConnection, String> {
@@ -1665,12 +1712,24 @@ fn send_to_locald(app: &AppHandle, message: Value) -> Result<(), String> {
         .map_err(|e| format!("locald flush failed: {e}"))
 }
 
+/// What a refused operation says. Callers match on it to tell "the daemon is
+/// busy" apart from "the daemon is broken", so it is one string in one place.
+const LOCALD_BUSY: &str =
+    "Lemma is still finishing another operation. Wait for that to finish, then try again.";
+
 fn send_local_operation(app: &AppHandle, mut request: Value, id: String) -> Result<(), String> {
     {
         let shell: State<Shell> = app.state();
         let mut ui = shell.ui.lock().unwrap();
         if !ui.active_operation_id.is_empty() {
-            return Ok(());
+            // This used to return Ok(()) and drop the request. The daemon takes
+            // one operation at a time, so that is a real condition -- but
+            // reporting it as success made every caller believe a command had
+            // been sent that never was. A menu click did nothing at all, and
+            // `stop_then_quit` armed `quit_after_stop` and then waited forever
+            // for the completion of an operation it had not started, which is
+            // how Cmd-Q could leave the app running.
+            return Err(LOCALD_BUSY.to_string());
         }
         ui.active_operation_id = id.clone();
     }
@@ -1982,15 +2041,13 @@ fn handle_locald_event(app: &AppHandle, event: &Value) {
                             .into();
                 }
             }
-            "done" => {
-                if event_operation_id.is_some_and(|id| id == ui.active_operation_id) {
-                    let completed_operation_id = ui.active_operation_id.clone();
-                    ui.completed_operation_ids.push(completed_operation_id);
-                    if ui.completed_operation_ids.len() > 16 {
-                        ui.completed_operation_ids.remove(0);
-                    }
-                    ui.active_operation_id.clear();
+            "done" if event_operation_id.is_some_and(|id| id == ui.active_operation_id) => {
+                let completed_operation_id = ui.active_operation_id.clone();
+                ui.completed_operation_ids.push(completed_operation_id);
+                if ui.completed_operation_ids.len() > 16 {
+                    ui.completed_operation_ids.remove(0);
                 }
+                ui.active_operation_id.clear();
             }
             _ => {}
         }
@@ -2335,13 +2392,17 @@ fn stop_impl(app: AppHandle, include_infra: Option<bool>) -> Result<(), String> 
     if current_mode(&app) != "local" {
         return Err("local services are not active in Lemma Cloud mode".into());
     }
-    show_splash_with_intent(&app, "stop");
     ensure_locald(&app)?;
+    // Only put the splash up once the daemon has actually taken the stop.
+    // Showing it first meant a refused operation left a "stopping Lemma"
+    // screen in front of a stack that was never asked to stop.
     send_local_operation(
         &app,
         json!({"cmd": "stop", "infra": include_infra.unwrap_or(false)}),
         operation_id("shell-stop"),
-    )
+    )?;
+    show_splash_with_intent(&app, "stop");
+    Ok(())
 }
 
 #[tauri::command]
@@ -2354,13 +2415,14 @@ fn restart_impl(app: AppHandle) -> Result<(), String> {
     if current_mode(&app) != "local" {
         return Err("local services are not active in Lemma Cloud mode".into());
     }
-    show_splash(&app);
     ensure_locald(&app)?;
     send_local_operation(
         &app,
         json!({"cmd": "restart"}),
         operation_id("shell-restart"),
-    )
+    )?;
+    show_splash(&app);
+    Ok(())
 }
 
 #[tauri::command]
@@ -2489,7 +2551,7 @@ fn diagnostic_logs(
     };
     let metadata = file.metadata().map_err(|error| error.to_string())?;
     let length = metadata.len();
-    let identity = diagnostic_file_identity(&metadata);
+    let identity = diagnostic_file_identity(&file);
     let start = cursor
         .as_deref()
         .and_then(parse_diagnostic_cursor)
@@ -2525,24 +2587,47 @@ fn parse_diagnostic_cursor(cursor: &str) -> Option<(String, u64)> {
 }
 
 #[cfg(unix)]
-fn diagnostic_file_identity(metadata: &std::fs::Metadata) -> String {
+fn diagnostic_file_identity(file: &std::fs::File) -> String {
     use std::os::unix::fs::MetadataExt;
-    format!("{:x}-{:x}", metadata.dev(), metadata.ino())
+    match file.metadata() {
+        Ok(metadata) => format!("{:x}-{:x}", metadata.dev(), metadata.ino()),
+        Err(_) => String::new(),
+    }
 }
 
 #[cfg(windows)]
-fn diagnostic_file_identity(metadata: &std::fs::Metadata) -> String {
-    use std::os::windows::fs::MetadataExt;
-    format!(
-        "{:x}-{:x}",
-        metadata.volume_serial_number().unwrap_or_default(),
-        metadata.file_index().unwrap_or_default()
-    )
+fn diagnostic_file_identity(file: &std::fs::File) -> String {
+    // (volume serial, file index) is the Windows spelling of (device, inode).
+    // `Metadata` only exposes it behind the unstable `windows_by_handle`
+    // feature, but the same fields are on the stable Win32 call, and we are
+    // holding the open handle it wants.
+    //
+    // Anything derived from the file's *contents* -- size, last write -- is
+    // wrong here even though it compiles: an identity that changes whenever
+    // the log is appended to invalidates the cursor on every poll, which
+    // re-sends the whole tail exactly while the user is watching a live log.
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::{
+        GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
+    };
+
+    let mut information = unsafe { std::mem::zeroed::<BY_HANDLE_FILE_INFORMATION>() };
+    // SAFETY: the handle is live for as long as `file` is borrowed, and
+    // `information` is a correctly sized, writable destination.
+    if unsafe { GetFileInformationByHandle(file.as_raw_handle() as _, &mut information) } == 0 {
+        // An empty identity never matches a cursor, so the caller falls back
+        // to re-reading the tail -- the same behaviour as a rotated file.
+        return String::new();
+    }
+    let index =
+        (u64::from(information.nFileIndexHigh) << 32) | u64::from(information.nFileIndexLow);
+    format!("{:x}-{:x}", information.dwVolumeSerialNumber, index)
 }
 
 #[cfg(not(any(unix, windows)))]
-fn diagnostic_file_identity(metadata: &std::fs::Metadata) -> String {
-    format!("{:x}", metadata.len())
+fn diagnostic_file_identity(_file: &std::fs::File) -> String {
+    // No portable file identity, so every poll re-reads the tail.
+    String::new()
 }
 
 fn redact_diagnostic_text(mut text: String) -> String {
@@ -3156,11 +3241,7 @@ fn discover_provider_models(
 /// and restarts the backend, and both of those can fail in ways the user needs
 /// the actual message for.
 #[tauri::command]
-fn configure_ai_provider(
-    window: Webview,
-    app: AppHandle,
-    payload: Value,
-) -> Result<Value, String> {
+fn configure_ai_provider(window: Webview, app: AppHandle, payload: Value) -> Result<Value, String> {
     require_agent_host_caller(&window, &app)?;
     if current_mode(&app) != "local" {
         return Err("the local AI provider is configured only on a local install".into());
@@ -3223,6 +3304,44 @@ fn close_local_settings(window: Webview, app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// Ask the user to confirm something destructive, from the settings page.
+///
+/// `window.confirm()` is not usable here: WKWebView routes it through a
+/// WKUIDelegate panel that wry does not implement, so it returns false without
+/// ever drawing anything. Local settings used that to gate "Stop everything"
+/// and "Verify & repair runtime", which made both buttons look inert on macOS
+/// -- the click was received and then silently discarded.
+///
+/// The prompt text is chosen in the page, but the dialog is native, so it is
+/// the same one the tray and the quit path already use.
+#[tauri::command]
+fn confirm_destructive_action(
+    window: Webview,
+    app: AppHandle,
+    title: String,
+    message: String,
+    confirm_label: String,
+) -> Result<bool, String> {
+    require_control_window(&window)?;
+    // `show` hands the dialog to the main thread and returns; commands run off
+    // it, so waiting here blocks a worker rather than the UI.
+    let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+    app.dialog()
+        .message(message)
+        .title(title)
+        .kind(MessageDialogKind::Warning)
+        .buttons(MessageDialogButtons::OkCancelCustom(
+            confirm_label,
+            "Cancel".into(),
+        ))
+        .show(move |confirmed| {
+            let _ = sender.send(confirmed);
+        });
+    receiver
+        .recv()
+        .map_err(|_| "the confirmation dialog closed unexpectedly".to_string())
+}
+
 #[tauri::command]
 fn set_connection_mode(window: Webview, app: AppHandle, mode: String) -> Result<(), String> {
     require_local_native_window(&window)?;
@@ -3283,6 +3402,7 @@ fn set_mode(app: &AppHandle, mode: &str) -> Result<(), String> {
         config["connectionMode"] = json!(mode);
         config["connectionModePromptRevision"] = json!(CONNECTION_MODE_PROMPT_REVISION);
     })?;
+    refresh_menus_for_connection_mode(app);
     {
         let shell: State<Shell> = app.state();
         let mut ui = shell.ui.lock().unwrap();
@@ -3900,14 +4020,12 @@ fn build_app_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     let about = PredefinedMenuItem::about(
         app,
         Some("About Lemma"),
-        Some(
-            AboutMetadata {
-                name: Some("Lemma".into()),
-                version: Some(env!("CARGO_PKG_VERSION").into()),
-                website: Some("https://lemma.work".into()),
-                ..Default::default()
-            },
-        ),
+        Some(AboutMetadata {
+            name: Some("Lemma".into()),
+            version: Some(env!("CARGO_PKG_VERSION").into()),
+            website: Some("https://lemma.work".into()),
+            ..Default::default()
+        }),
     )?;
     let settings = MenuItem::with_id(app, "control", "Settings…", local, Some("CmdOrCtrl+,"))?;
     let connection = MenuItem::with_id(app, "mode", "Connection…", true, None::<&str>)?;
@@ -4030,13 +4148,43 @@ fn build_app_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
 }
 
 fn build_tray(app: &AppHandle) -> tauri::Result<()> {
+    let menu = build_tray_menu(app)?;
+    TrayIconBuilder::with_id("lemma-tray")
+        .icon(tauri::include_image!("icons/tray-icon.png"))
+        .icon_as_template(false)
+        .menu(&menu)
+        .show_menu_on_left_click(true)
+        .on_menu_event(|app, event| handle_menu_action(app, event.id().as_ref()))
+        .build(app)?;
+    Ok(())
+}
+
+/// Both menus gate their local-only verbs on the connection mode, and both are
+/// built during setup — which on a machine's first launch is before the user
+/// has chosen one. Everything gated was created disabled and stayed that way
+/// for the whole session, so picking Local left "Local settings…" greyed out in
+/// the tray and ⌘, dead in the app menu until Lemma was restarted.
+///
+/// Rebuilding is what makes the choice take effect. It also picks up anything
+/// else that reads state at construction, such as the Start at Login check.
+fn refresh_menus_for_connection_mode(app: &AppHandle) {
+    if let Ok(menu) = build_app_menu(app) {
+        let _ = app.set_menu(menu);
+    }
+    if let (Some(tray), Ok(menu)) = (app.tray_by_id("lemma-tray"), build_tray_menu(app)) {
+        let _ = tray.set_menu(Some(menu));
+    }
+}
+
+fn build_tray_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     let local = connection_mode() == "local";
     // A glance and a few verbs. This menu used to carry eighteen items of
     // supervisor vocabulary — starting and stopping named services, switching
     // connection mode — which is a maintainer's console, not the thing you
     // reach for from the menu bar. Everything operational moved into
     // Troubleshoot; everything standard moved into the app menu.
-    let status_item = MenuItem::with_id(app, "tray-state", "Lemma: checking…", false, None::<&str>)?;
+    let status_item =
+        MenuItem::with_id(app, "tray-state", "Lemma: checking…", false, None::<&str>)?;
     let open_item = MenuItem::with_id(app, "open", "Open Lemma", true, None::<&str>)?;
     let login_item = MenuItem::with_id(app, "login", "Log In…", true, None::<&str>)?;
     let control_item = MenuItem::with_id(app, "control", "Local settings…", local, None::<&str>)?;
@@ -4075,11 +4223,23 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
             &MenuItem::with_id(app, "start", "Start Lemma", local, None::<&str>)?,
             &MenuItem::with_id(app, "restart", "Restart Lemma", local, None::<&str>)?,
             &MenuItem::with_id(app, "stop", "Stop Lemma", local, None::<&str>)?,
-            &MenuItem::with_id(app, "stop-all", "Stop the local server", local, None::<&str>)?,
+            &MenuItem::with_id(
+                app,
+                "stop-all",
+                "Stop the local server",
+                local,
+                None::<&str>,
+            )?,
             &PredefinedMenuItem::separator(app)?,
             &MenuItem::with_id(app, "diagnostics", "Diagnostics…", local, None::<&str>)?,
             &MenuItem::with_id(app, "logs", "Open Logs", local, None::<&str>)?,
-            &MenuItem::with_id(app, "agent-host-log", "Open Agent Host Log", true, None::<&str>)?,
+            &MenuItem::with_id(
+                app,
+                "agent-host-log",
+                "Open Agent Host Log",
+                true,
+                None::<&str>,
+            )?,
             &PredefinedMenuItem::separator(app)?,
             &MenuItem::with_id(app, "reload", "Reload", true, None::<&str>)?,
             &MenuItem::with_id(app, "devtools", "Developer Tools", true, None::<&str>)?,
@@ -4114,14 +4274,7 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
         ],
     )?;
 
-    TrayIconBuilder::with_id("lemma-tray")
-        .icon(tauri::include_image!("icons/tray-icon.png"))
-        .icon_as_template(false)
-        .menu(&menu)
-        .show_menu_on_left_click(true)
-        .on_menu_event(|app, event| handle_menu_action(app, event.id().as_ref()))
-        .build(app)?;
-    Ok(())
+    Ok(menu)
 }
 
 fn disconnect_locald(app: &AppHandle) {
@@ -4255,9 +4408,13 @@ fn stop_then_quit(app: &AppHandle) {
     let shell: State<Shell> = app.state();
     shell.quit_confirmed.store(true, Ordering::Release);
     shell.quit_after_stop.store(true, Ordering::Release);
-    if stop_impl(app.clone(), Some(true)).is_err() {
+    if let Err(error) = stop_impl(app.clone(), Some(true)) {
         shell.quit_after_stop.store(false, Ordering::Release);
         shell.quit_confirmed.store(false, Ordering::Release);
+        // Confirming "Stop and Quit" and then getting neither, silently, is the
+        // worst version of this. Say why the quit did not happen; the dialog
+        // also tells the user that trying again is the next move.
+        report_action_failure(app, "Stop Lemma and quit", &error);
     }
 }
 
@@ -4453,6 +4610,7 @@ fn main() {
             configure_ai_provider,
             sharing_action,
             close_local_settings,
+            confirm_destructive_action,
             open_developer_tools
         ])
         .setup(move |app| {
@@ -4599,7 +4757,9 @@ fn main() {
 
             #[cfg(target_os = "macos")]
             if desktop_vibrancy_enabled() {
-                use window_vibrancy::{apply_vibrancy, NSVisualEffectMaterial, NSVisualEffectState};
+                use window_vibrancy::{
+                    apply_vibrancy, NSVisualEffectMaterial, NSVisualEffectState,
+                };
 
                 // Sidebar is the material AppKit itself uses behind source
                 // lists, which is what the pod shell rail is.
@@ -4615,9 +4775,8 @@ fn main() {
                     None,
                 ) {
                     eprintln!("lemma: could not apply window vibrancy: {error}");
-                    let _ = main.eval(
-                        "document.documentElement.removeAttribute('data-desktop-vibrancy')",
-                    );
+                    let _ = main
+                        .eval("document.documentElement.removeAttribute('data-desktop-vibrancy')");
                 }
             }
 
@@ -4633,7 +4792,7 @@ fn main() {
                             event,
                             tauri::WindowEvent::Focused(true) | tauri::WindowEvent::ThemeChanged(_)
                         ) {
-                            let _ = window.eval(&format!(
+                            let _ = window.eval(format!(
                                 "document.documentElement.style.setProperty('--accent-rgb','{}')",
                                 accent_channel_triple(),
                             ));
@@ -4676,18 +4835,41 @@ fn main() {
                     let handle = handle.clone();
                     let resumed_url = target.url.clone();
                     std::thread::spawn(move || {
+                        // The seed above told the shell this workspace was up.
+                        // Any path out of here that does not confirm that has
+                        // to take it back: the splash reads `ready` on load and
+                        // navigates straight to `ui.url` if it is set and there
+                        // is no error, so handing it the splash while the state
+                        // still claims success just bounces the user back to
+                        // the workspace they were rescued from -- against a
+                        // port nothing is listening on, in a loop.
+                        let stand_down = |failure: Option<String>| {
+                            let shell: State<Shell> = handle.state();
+                            let snapshot = {
+                                let mut ui = shell.ui.lock().unwrap();
+                                ui.ready = false;
+                                if let Some(error) = failure {
+                                    eprintln!("[desktop-resume] {error}");
+                                    ui.running = false;
+                                    ui.error = true;
+                                    ui.error_code = "resume-failed".into();
+                                    ui.status = error;
+                                }
+                                ui.clone()
+                            };
+                            let _ = handle.emit("lemma:state", snapshot);
+                            show_splash(&handle);
+                        };
                         if let Err(error) = ensure_locald(&handle) {
-                            eprintln!("[desktop-resume] {error}");
                             // The stack is serving but the daemon is not
                             // reachable, so the shell cannot supervise it. Say
                             // so on the splash rather than leaving a workspace
                             // that silently has no controls behind it.
-                            show_splash(&handle);
+                            stand_down(Some(error));
                             return;
                         }
                         if let Err(error) = start_impl(handle.clone()) {
-                            eprintln!("[desktop-resume] {error}");
-                            show_splash(&handle);
+                            stand_down(Some(error));
                             return;
                         }
                         // Connecting can itself invalidate what the window is
@@ -4698,29 +4880,50 @@ fn main() {
                         // listening on — so hand it the splash, which is what
                         // reports the restart it is waiting for.
                         if !resume_still_serving(&handle, &resumed_url) {
-                            show_splash(&handle);
+                            // Not a failure: the daemon was replaced and the
+                            // stack is coming back on new ports. But `ready`
+                            // still points at the old ones, so it has to come
+                            // down here too, or the splash re-opens the stale
+                            // URL before the real `ready` event arrives.
+                            stand_down(None);
                         }
                     });
-                } else if let Err(error) = ensure_locald(&handle) {
-                    let shell: State<Shell> = handle.state();
-                    let snapshot = {
-                        let mut ui = shell.ui.lock().unwrap();
-                        ui.error = true;
-                        ui.status = error;
-                        ui.clone()
-                    };
-                    let _ = handle.emit("lemma:state", snapshot);
-                } else if let Err(error) = start_impl(handle.clone()) {
-                    let shell: State<Shell> = handle.state();
-                    let snapshot = {
-                        let mut ui = shell.ui.lock().unwrap();
-                        ui.error = true;
-                        ui.error_code = "startup-request-failed".into();
-                        ui.status = error;
-                        ui.ready = false;
-                        ui.clone()
-                    };
-                    let _ = handle.emit("lemma:state", snapshot);
+                } else {
+                    // Same rule as the resume branch above: nothing here may
+                    // hold up a window the user can already see.
+                    //
+                    // `ensure_locald` installs the runtime artifacts before it
+                    // can spawn anything, which on a first run or an upgrade is
+                    // an unpack of hundreds of megabytes, and it then waits up
+                    // to LOCALD_START_BUDGET for the daemon to answer. Running
+                    // that here ran it inside `setup`, before the event loop
+                    // started pumping — so the splash the user was looking at
+                    // froze on "Starting Lemma." for the whole install, with no
+                    // progress and no way to tell it apart from a hang.
+                    let handle = handle.clone();
+                    std::thread::spawn(move || {
+                        let report = |error: String, code: Option<&str>| {
+                            let shell: State<Shell> = handle.state();
+                            let snapshot = {
+                                let mut ui = shell.ui.lock().unwrap();
+                                ui.error = true;
+                                ui.status = error;
+                                if let Some(code) = code {
+                                    ui.error_code = code.into();
+                                    ui.ready = false;
+                                }
+                                ui.clone()
+                            };
+                            let _ = handle.emit("lemma:state", snapshot);
+                        };
+                        if let Err(error) = ensure_locald(&handle) {
+                            report(error, None);
+                            return;
+                        }
+                        if let Err(error) = start_impl(handle.clone()) {
+                            report(error, Some("startup-request-failed"));
+                        }
+                    });
                 }
             }
             if std::env::var("LEMMA_DESKTOP_OPEN_CONTROL").as_deref() == Ok("1") {
@@ -4748,6 +4951,9 @@ fn main() {
                     handle_deep_link(app, &url);
                 }
             }
+            // Clicking the Dock icon with every window closed. macOS-only:
+            // the variant does not exist on other platforms.
+            #[cfg(target_os = "macos")]
             tauri::RunEvent::Reopen { .. } => {
                 if let Some(window) = app.get_webview_window("main") {
                     let _ = window.show();
@@ -4790,6 +4996,197 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
+    use std::fs::File;
+
+    #[test]
+    fn a_resume_that_did_not_pan_out_stops_claiming_the_workspace_is_ready() {
+        // The optimistic resume seeds ready/running/url before it has checked
+        // anything, so the workspace can be on screen with no latency. The
+        // splash opens `ui.url` whenever it loads and finds ready set with no
+        // error -- so every path that gives up and shows the splash has to
+        // clear `ready` first, or the two bounce the user between a splash and
+        // a dead workspace.
+        let source = include_str!("main.rs");
+        let setup = {
+            let start = source.find(".setup(move |app| {").expect("setup exists");
+            let end = source[start..]
+                .find("\n        .build(")
+                .or_else(|| source[start..].find("\n        .run("))
+                .map_or(source.len(), |offset| start + offset);
+            &source[start..end]
+        };
+        let resume = {
+            let start = setup
+                .find("if let Some(target) = resume.clone()")
+                .expect("the resume branch exists");
+            let end = setup[start..]
+                .find("\n                } else {")
+                .map_or(setup.len(), |offset| start + offset);
+            &setup[start..end]
+        };
+        assert!(
+            resume.contains("ui.ready = false;"),
+            "giving up on a resume must clear the optimistic ready flag"
+        );
+        assert_eq!(
+            resume.matches("show_splash(&handle);").count(),
+            1,
+            "the resume branch must reach the splash only through stand_down, \
+             which is what clears the state the splash reads"
+        );
+    }
+
+    #[test]
+    fn nothing_in_setup_installs_the_runtime_on_the_main_thread() {
+        // `setup` runs before the event loop begins pumping, so anything slow
+        // there freezes a window that is already on screen. `ensure_locald`
+        // unpacks the runtime on a first run or an upgrade -- hundreds of
+        // megabytes -- and then waits for the daemon, which is how the splash
+        // came to sit on "Starting Lemma." with no progress for minutes.
+        //
+        // Both launch paths, resume and cold start, must hand that to a worker.
+        let source = include_str!("main.rs");
+        let setup = {
+            let start = source.find(".setup(move |app| {").expect("setup exists");
+            let end = source[start..]
+                .find("\n        .build(")
+                .or_else(|| source[start..].find("\n        .run("))
+                .map_or(source.len(), |offset| start + offset);
+            &source[start..end]
+        };
+        for (index, _) in setup.match_indices("ensure_locald(&handle)") {
+            let preceding = &setup[..index];
+            let spawned = preceding.rfind("std::thread::spawn");
+            let closed = preceding.rfind("});");
+            assert!(
+                spawned.is_some() && spawned > closed,
+                "an ensure_locald in setup is not inside a spawned thread"
+            );
+        }
+    }
+
+    #[test]
+    fn local_settings_never_gates_a_button_on_a_webview_confirm() {
+        // WKWebView routes window.confirm() through a WKUIDelegate panel wry
+        // does not implement, so it returns false without drawing anything:
+        // the click is received and discarded, and the button looks inert.
+        // Destructive actions go through the native dialog command instead.
+        let script = include_str!("../ui/control.js");
+        assert!(
+            !script.contains("window.confirm("),
+            "a destructive button is gated on a confirm() that always says no"
+        );
+        assert!(
+            script.contains("confirm_destructive_action"),
+            "the native confirmation command is how those buttons ask"
+        );
+    }
+
+    /// The source of one free function, for the cases where asserting on
+    /// behaviour would need a running AppHandle.
+    fn function_body<'a>(source: &'a str, signature: &str) -> &'a str {
+        let start = source.find(signature).expect("the function exists");
+        let end = source[start..]
+            .find("\nfn ")
+            .map_or(source.len(), |offset| start + offset);
+        &source[start..end]
+    }
+
+    #[test]
+    fn a_busy_daemon_refuses_an_operation_rather_than_dropping_it() {
+        // locald runs one operation at a time, so "busy" is a real answer. It
+        // used to be reported as Ok(()), which told every caller a command had
+        // been sent that never was: menu items did nothing at all, and
+        // stop_then_quit armed the quit flags and then waited forever for the
+        // completion of an operation it had not started.
+        let source = include_str!("main.rs");
+        let body = function_body(source, "fn send_local_operation(");
+        assert!(
+            body.contains("return Err(LOCALD_BUSY.to_string());"),
+            "a busy daemon must refuse the operation"
+        );
+        assert!(
+            !body.contains("return Ok(());"),
+            "no path may report an unsent operation as sent"
+        );
+    }
+
+    #[test]
+    fn a_refused_stop_leaves_no_splash_behind() {
+        // The splash used to go up before the stop was sent, so a refusal left
+        // a "stopping Lemma" screen in front of a stack nobody had asked to
+        // stop, with no way back.
+        let source = include_str!("main.rs");
+        let body = function_body(source, "fn stop_impl(");
+        let sent = body.find("send_local_operation").expect("stop_impl sends");
+        let splash = body
+            .find("show_splash_with_intent")
+            .expect("stop_impl shows a splash");
+        assert!(
+            sent < splash,
+            "the splash must follow the accepted operation, not precede it"
+        );
+    }
+
+    #[test]
+    fn giving_up_on_quit_says_so() {
+        // Confirming "Stop and Quit" and then getting neither, silently, is the
+        // failure this guards.
+        let source = include_str!("main.rs");
+        let body = function_body(source, "fn stop_then_quit(");
+        assert!(
+            body.contains("report_action_failure"),
+            "a quit that cannot start its stop must tell the user why"
+        );
+    }
+
+    #[test]
+    fn a_growing_log_keeps_its_identity_so_the_tail_cursor_survives() {
+        // The identity exists to answer "is this still the same file", and the
+        // cursor is thrown away whenever it changes. Deriving it from anything
+        // that grows with the log -- size, last write time -- compiles fine and
+        // then re-sends the whole tail on every poll of an active log, i.e. it
+        // breaks precisely when someone is watching a failure happen.
+        use std::io::Write;
+
+        let directory = tempfile::tempdir().expect("temp dir");
+        let path = directory.path().join("backend.log");
+        std::fs::write(&path, b"first\n").expect("seed the log");
+
+        let before = super::diagnostic_file_identity(&File::open(&path).expect("open"));
+        assert_ne!(
+            before, "",
+            "the identity should be readable on this platform"
+        );
+
+        let mut appended = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .expect("append to the log");
+        appended.write_all(b"second\n").expect("write");
+        appended.flush().expect("flush");
+        drop(appended);
+
+        let after = super::diagnostic_file_identity(&File::open(&path).expect("reopen"));
+        assert_eq!(before, after, "appending to a log must not re-identify it");
+    }
+
+    #[test]
+    fn replacing_a_log_changes_its_identity_so_a_stale_cursor_is_dropped() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let path = directory.path().join("backend.log");
+        std::fs::write(&path, b"old\n").expect("seed the log");
+        let rotated = super::diagnostic_file_identity(&File::open(&path).expect("open"));
+
+        std::fs::rename(&path, directory.path().join("backend.log.1")).expect("rotate");
+        std::fs::write(&path, b"new\n").expect("fresh log");
+
+        let fresh = super::diagnostic_file_identity(&File::open(&path).expect("reopen"));
+        assert_ne!(
+            rotated, fresh,
+            "a rotated log is a different file and must reset the cursor"
+        );
+    }
     use super::*;
 
     fn capability(name: &str) -> Value {
@@ -5133,10 +5530,50 @@ mod tests {
         );
 
         // And the tokens themselves must be the product's, not a parallel set.
-        assert!(css.contains("--accent-rgb: 90 63 212"), "light accent is the action violet");
-        assert!(css.contains("--accent-rgb: 139 122 245"), "dark accent is the action violet");
-        assert!(css.contains("--canvas: #f2efe7"), "light canvas is the product's paper");
-        assert!(!css.contains("Bricolage"), "the page no longer carries its own display face");
+        assert!(
+            css.contains("--accent-rgb: 90 63 212"),
+            "light accent is the action violet"
+        );
+        assert!(
+            css.contains("--accent-rgb: 139 122 245"),
+            "dark accent is the action violet"
+        );
+        assert!(
+            css.contains("--canvas: #f2efe7"),
+            "light canvas is the product's paper"
+        );
+        assert!(
+            !css.contains("Bricolage"),
+            "the page no longer carries its own display face"
+        );
+    }
+
+    #[test]
+    fn choosing_a_connection_mode_re_enables_the_menus_it_gates() {
+        // Both menus gate their local-only verbs on `local`, and both are built
+        // during setup — which on a first launch is before anyone has chosen.
+        // Every gated item was created disabled and never revisited, so picking
+        // Local left "Local settings…" greyed out in the tray and Cmd-, dead in
+        // the app menu until Lemma was restarted.
+        //
+        // Asserted on the source because the alternative needs a running
+        // AppHandle, and the thing worth pinning is that the one function every
+        // mode change goes through is what rebuilds them.
+        let source = include_str!("main.rs");
+        let set_mode = {
+            let start = source
+                .find("fn set_mode(app: &AppHandle, mode: &str)")
+                .expect("set_mode exists");
+            let end = source[start..]
+                .find("\nfn ")
+                .map_or(source.len(), |offset| start + offset);
+            &source[start..end]
+        };
+        assert!(
+            set_mode.contains("refresh_menus_for_connection_mode(app)"),
+            "set_mode must rebuild the menus, or the choice does not take effect \
+             until the next launch"
+        );
     }
 
     #[test]
@@ -5152,7 +5589,9 @@ mod tests {
             let start = source
                 .find("fn build_app_menu")
                 .expect("the app menu builder exists");
-            let end = source.find("fn disconnect_locald").expect("tray builder ends");
+            let end = source
+                .find("fn disconnect_locald")
+                .expect("tray builder ends");
             &source[start..end]
         };
 
@@ -5187,7 +5626,11 @@ mod tests {
         );
 
         // The operator vocabulary this replaced must not come back.
-        for retired in ["Stop Services and Infra", "Switch Connection Mode", "Start Services"] {
+        for retired in [
+            "Stop Services and Infra",
+            "Switch Connection Mode",
+            "Start Services",
+        ] {
             assert!(
                 !menus.contains(retired),
                 "{retired:?} is supervisor vocabulary, not a product menu item"
@@ -5212,7 +5655,8 @@ mod tests {
         // The whole point of the prompt is that none of this is on screen. A
         // warning that says "are you sure?" and nothing else would be worse than
         // no warning, because it teaches people to dismiss it.
-        let running_host = json!({"running": true, "targets": [{"name": "work"}, {"name": "home"}]});
+        let running_host =
+            json!({"running": true, "targets": [{"name": "work"}, {"name": "home"}]});
         let lines = quit_impact_lines(true, Some(&running_host), Some("public"));
         assert_eq!(
             lines,

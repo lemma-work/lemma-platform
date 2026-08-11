@@ -39,15 +39,18 @@ __pycache__/
 *.dev-infra.pid
 .dev-cloudflared-*.pid
 .dev-logs/
-# Rust build outputs (desktop and local daemon)
+# Rust build outputs. The native stack is one cargo workspace under desktop/,
+# so **/target/ now covers a single desktop/target/ rather than six.
 **/target/
 **/.build/
-/local-runtime/guestd/target-linux/
 
-# Packaged Desktop runtime archives are reproducible release artifacts. Keep
-# their signed manifests and build inputs in git, but never commit the large
-# generated ZIP payloads.
-/desktop/runtime/bundled/*.zip
+# Packaged Desktop runtime archives are reproducible release artifacts, and a
+# bundled build stages both the payloads and the manifest that names them as
+# app resources. None of that belongs in git — and the tracked
+# desktop/runtime/lemma-local.json must stay the online-shaped placeholder, not
+# whatever the last local `make desktop-dmg` produced.
+/desktop/runtime/bundled/
+/desktop/runtime/download/
 
 # Local scratch output from screenshot/PDF tooling
 /out/

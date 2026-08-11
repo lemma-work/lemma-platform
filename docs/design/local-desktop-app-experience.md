@@ -51,7 +51,7 @@ for, the health gate was always paid for, and the web app always booted twice.
 
 ### What happens now
 
-**Warm health gate deleted** ([host_process.rs](../../locald/src/host_process.rs)).
+**Warm health gate deleted** ([host_process.rs](../../desktop/locald/src/host_process.rs)).
 In the already-running branch, the per-service `wait_process_health` call is
 gone and `verify_all_health_now` — same probes, same retry budget, no
 stabilization dwell — carries it. The dwell exists to catch a process that dies
@@ -211,7 +211,7 @@ The important part is *what* it branches on. A LAN or public-link visitor
 arrives in an ordinary browser with no `__LEMMA_DESKTOP__` global, so the shell
 marker does not cover them. locald sets `NEXT_PUBLIC_LEMMA_DEPLOYMENT=local` on
 the frontend process it supervises
-([native_host_pack.rs](../../locald/src/native_host_pack.rs)), surfaced as
+([native_host_pack.rs](../../desktop/locald/src/native_host_pack.rs)), surfaced as
 `config.DEPLOYMENT` / `isLocalDeployment()` in
 [lib/config.ts](../../lemma-frontend/lib/config.ts). That marks the deployment,
 not the client, so all three visitors are covered by one branch.
@@ -261,7 +261,7 @@ different window for the answer. The boundary moved instead (below).
 model per line" plus a free-text default — the user was expected to know their
 provider's model ids from memory, and a correct provider could be applied with a
 model it does not serve. `config.discover-models`
-([operator_config.rs](../../locald/src/operator_config.rs)) runs the same probe
+([operator_config.rs](../../desktop/locald/src/operator_config.rs)) runs the same probe
 `apply` runs with no write behind it. Connect, list, pick. Local runners —
 Ollama and LM Studio, no key and no account — lead the presets.
 

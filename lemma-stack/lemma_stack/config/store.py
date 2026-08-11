@@ -208,14 +208,13 @@ def env_overrides(doc: TOMLDocument, section: str) -> dict[str, str]:
 def installation_secret(doc: TOMLDocument) -> str:
     """The per-installation seed every derived local key hangs off.
 
-    Reads the pre-rename ``agentbox_api_key`` when that is what an existing
-    config carries. This value cannot be regenerated: it also derives the key
-    that encrypts stored secrets, so a fresh one would leave every encrypted
-    row in that installation unreadable.
+    Never regenerate this for an existing config: it also derives the key that
+    encrypts stored secrets, so a fresh one leaves every encrypted row in that
+    installation unreadable.
     """
 
     internal = doc.setdefault("internal", tomlkit.table())
-    key = internal.get("installation_secret") or internal.get("agentbox_api_key")
+    key = internal.get("installation_secret")
     if not key:
         key = secrets.token_hex(16)
         internal["installation_secret"] = key

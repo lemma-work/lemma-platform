@@ -62,6 +62,11 @@ def _e2b_environment(key: str) -> str | None:
     return None
 
 
+# Signs the per-sandbox token the in-sandbox runtime accepts. Any stable value
+# works; it only has to be the same one the worker subprocess and the
+# in-process provider factory sign with.
+_RUNTIME_CREDENTIAL_KEY = "test-runtime-credential-key-32-bytes"
+
 _NGROK_URL = re.compile(r"https://[a-z0-9-]+\.(?:ngrok-free\.app|ngrok\.app)")
 _CLOUDFLARE_URL = re.compile(r"https://[a-z0-9-]+\.trycloudflare\.com")
 
@@ -318,7 +323,7 @@ def workspace_provisioning_env() -> dict[str, str]:
         "WORKSPACE_DOCKER_ALLOW_MUTABLE_IMAGES": "true",
         "WORKSPACE_ADD_HOST_GATEWAY": "true",
         "WORKSPACE_HOST_ALIAS": "host.docker.internal",
-        "WORKSPACE_RUNTIME_CREDENTIAL_KEY": "test-runtime-credential-key-32-bytes",
+        "WORKSPACE_RUNTIME_CREDENTIAL_KEY": _RUNTIME_CREDENTIAL_KEY,
     }
 
 
@@ -482,10 +487,19 @@ async def local_sandbox_server(
 
     provider_name = e2e_settings.e2e_sandbox_mode
     # Attribute names on WorkspaceSettings, not the env names below.
-    overrides: dict[str, object] = {"provider": provider_name}
+    #
+    # The credential key has to appear in both. The env copy is inherited by
+    # the worker subprocess; the attribute is what the in-process provider
+    # factory reads, and without it every provisioning call raises
+    # "WORKSPACE_RUNTIME_CREDENTIAL_KEY is required" no matter what the
+    # environment says.
+    overrides: dict[str, object] = {
+        "provider": provider_name,
+        "runtime_credential_key": _RUNTIME_CREDENTIAL_KEY,
+    }
     env_updates: dict[str, str] = {
         "WORKSPACE_PROVIDER": provider_name,
-        "WORKSPACE_RUNTIME_CREDENTIAL_KEY": "test-runtime-credential-key-32-bytes",
+        "WORKSPACE_RUNTIME_CREDENTIAL_KEY": _RUNTIME_CREDENTIAL_KEY,
     }
 
     if provider_name == "docker":

@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { useCallback, useState } from 'react';
 import { RuntimeProfileKind, RuntimeProfileScope } from 'lemma-sdk';
 import type { AgentRuntimeProfileResponse } from 'lemma-sdk';
-import { Copy, Cpu, Download, KeyRound, Pencil, Plus, RefreshCw, RotateCcw, Sparkles, TerminalSquare, Trash2 } from '@/components/ui/icons';
+import { Cpu, Download, KeyRound, Pencil, Plus, RefreshCw, RotateCcw, Sparkles, TerminalSquare, Trash2 } from '@/components/ui/icons';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
@@ -24,8 +24,6 @@ import {
     DropdownMenuSeparator,
     DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
 import { Switch, SwitchThumb, SwitchTrack } from '@/components/ui/switch';
 import { DestructiveConfirmationDialog } from '@/components/shared/destructive-confirmation-dialog';
 import { DestructiveResourceActionItem, ResourceActionsMenu } from '@/components/shared/resource-actions-menu';
@@ -37,15 +35,12 @@ import {
     useAgentHostHarnessOwners,
     useAgentHosts,
     useArchiveAgentRuntime,
-    useCreateAgentHostPairing,
     useManagedAgentRuntimes,
     useRestoreAgentRuntime,
     useRevokeAgentHost,
     type AgentHost,
     type AgentHostHarness,
-    type AgentHostPairing,
 } from '@/lib/hooks/use-agent-runtime';
-import { getLemmaApiBaseUrl } from '@/lib/sdk/lemma-client';
 import { ThisComputerCard } from './this-computer-card';
 import { HarnessProfileDialog, type HarnessDialogTarget } from './harness-profile-dialog';
 import { ProviderProfileDialog, type ProviderDialogTarget } from './provider-profile-dialog';
@@ -56,7 +51,7 @@ import {
     agentHostHarnessModelCount,
     agentHostStatusLabel,
     isArchivedProfile,
-    pairingCommands,
+    isDiscoveringHarnesses,
     harnessLogo,
     profileHarnessKey,
     runtimeAvailabilityLabel,
@@ -600,7 +595,6 @@ function ComputersSection({
             <ConnectComputerDialog
                 open={connecting}
                 onClose={() => setConnecting(false)}
-                onConnected={onRefresh}
             />
         </SettingsPanel>
     );
@@ -644,174 +638,52 @@ function GetTheAppCard() {
 function ConnectComputerDialog({
     open,
     onClose,
-    onConnected,
 }: {
     open: boolean;
     onClose: () => void;
-    onConnected?: () => void;
 }) {
-    const createPairing = useCreateAgentHostPairing();
-    const [headless, setHeadless] = useState(false);
-    const [displayName, setDisplayName] = useState('My computer');
-    const [pairing, setPairing] = useState<(AgentHostPairing & { display_name: string }) | null>(null);
-
-    const close = () => {
-        setHeadless(false);
-        setPairing(null);
-        onClose();
-    };
-
-    const create = async () => {
-        const name = displayName.trim();
-        if (!name) return toast.error('Name this computer');
-        try {
-            const created = await createPairing.mutateAsync({ displayName: name });
-            setPairing({ ...created, display_name: name });
-        } catch (error) {
-            toast.error(
-                `Couldn't create a pairing code: ${error instanceof Error ? error.message : 'Unknown error'}`,
-            );
-        }
-    };
-
+    // There used to be a second path here for a machine with no screen: mint a
+    // single-use code, carry it over, and paste it into a CLI that downloaded
+    // the Agent Host binary and registered it as an OS service. That channel is
+    // gone — Desktop compiles and supervises the only copy of Agent Host — so a
+    // computer with no screen has nothing to pair, and offering it a code would
+    // hand out a credential nothing can spend.
     return (
-        <Dialog
-            open={open}
-            onOpenChange={(next) => {
-                if (!next && !createPairing.isPending) close();
-            }}
-        >
+        <Dialog open={open} onOpenChange={(next) => !next && onClose()}>
             <DialogContent className="gap-5">
                 <DialogHeader>
                     <DialogTitle>Connect a computer</DialogTitle>
                     <DialogDescription>
-                        {headless
-                            ? 'A machine with no screen cannot sign in, so it needs a code carried to it. The code stands in for your session and is single-use.'
-                            : 'The app signs in as you and connects itself. There is no code to carry and nothing to copy.'}
+                        The app signs in as you and connects itself. There is no code to carry and
+                        nothing to copy.
                     </DialogDescription>
                 </DialogHeader>
 
-                {headless ? (
-                    pairing ? (
-                        <PairingCommands pairing={pairing} />
-                    ) : (
-                        <Field label="Computer name">
-                            <Input
-                                value={displayName}
-                                onChange={(event) => setDisplayName(event.target.value)}
-                            />
-                        </Field>
-                    )
-                ) : (
-                    <ol className="flex flex-col gap-3">
-                        {[
-                            'Install the Lemma app on that computer.',
-                            'Open it and sign in to this workspace.',
-                            'Models → Computers → Connect this computer.',
-                        ].map((step, index) => (
-                            <li key={step} className="flex items-baseline gap-3">
-                                <span className="min-w-5 font-mono text-xs text-[var(--text-tertiary)]">
-                                    {(index + 1).toString().padStart(2, '0')}
-                                </span>
-                                <span className="text-sm text-[var(--text-secondary)]">{step}</span>
-                            </li>
-                        ))}
-                    </ol>
-                )}
+                <ol className="flex flex-col gap-3">
+                    {[
+                        'Install the Lemma app on that computer.',
+                        'Open it and sign in to this workspace.',
+                        'Models → Computers → Connect this computer.',
+                    ].map((step, index) => (
+                        <li key={step} className="flex items-baseline gap-3">
+                            <span className="min-w-5 font-mono text-xs text-[var(--text-tertiary)]">
+                                {(index + 1).toString().padStart(2, '0')}
+                            </span>
+                            <span className="text-sm text-[var(--text-secondary)]">{step}</span>
+                        </li>
+                    ))}
+                </ol>
 
-                <DialogFooter className="sm:justify-between">
-                    {/*
-                     * The two paths are mutually exclusive, so only one of them
-                     * may mint anything. Offering a download link beside a live
-                     * pairing code meant every person who took the easy path
-                     * burned a single-use credential on the way past it — and
-                     * left wondering what the code had been for.
-                     */}
-                    <Button
-                        type="button"
-                        variant="quiet"
-                        size="sm"
-                        onClick={() => {
-                            setPairing(null);
-                            setHeadless(!headless);
-                        }}
-                    >
-                        {headless ? 'That computer has a screen' : 'That computer has no screen'}
+                <DialogFooter>
+                    <Button asChild variant="primary" className="gap-1.5">
+                        <Link href="/download">
+                            <Download className="size-3.5" />
+                            Get the Lemma app
+                        </Link>
                     </Button>
-
-                    {!headless ? (
-                        <Button asChild variant="primary" className="gap-1.5">
-                            <Link href="/download">
-                                <Download className="size-3.5" />
-                                Get the Lemma app
-                            </Link>
-                        </Button>
-                    ) : pairing ? (
-                        <Button
-                            type="button"
-                            variant="secondary"
-                            onClick={() => {
-                                onConnected?.();
-                                close();
-                            }}
-                        >
-                            Done
-                        </Button>
-                    ) : (
-                        <Button
-                            type="button"
-                            variant="primary"
-                            onClick={() => void create()}
-                            loading={createPairing.isPending}
-                            loadingLabel="Creating code"
-                        >
-                            Create pairing code
-                        </Button>
-                    )}
                 </DialogFooter>
             </DialogContent>
         </Dialog>
-    );
-}
-
-function PairingCommands({ pairing }: { pairing: AgentHostPairing & { display_name: string } }) {
-    const commands = pairingCommands(pairing, getLemmaApiBaseUrl());
-    const expiresAt = new Date(pairing.expires_at);
-
-    const copy = async () => {
-        try {
-            await navigator.clipboard.writeText(commands.join('\n'));
-            toast.success('Commands copied');
-        } catch {
-            toast.error('Copy the commands manually — the browser blocked clipboard access');
-        }
-    };
-
-    return (
-        <div className="flex flex-col gap-2">
-            <div className="flex items-center justify-between gap-3">
-                <span className="text-sm font-medium text-[var(--text-primary)]">
-                    Run these on {pairing.display_name}
-                </span>
-                <Button type="button" variant="quiet" size="sm" onClick={() => void copy()} className="gap-1.5">
-                    <Copy className="size-3.5" />
-                    Copy
-                </Button>
-            </div>
-            {commands.map((command) => (
-                <code
-                    key={command}
-                    className="overflow-x-auto rounded bg-[var(--surface-1)] px-3 py-2 font-mono text-xs whitespace-pre text-[var(--text-secondary)]"
-                >
-                    {command}
-                </code>
-            ))}
-            <p className="text-xs text-[var(--text-tertiary)]">
-                Skip the first line if that computer already has the Lemma CLI. This code works once,
-                and expires{' '}
-                {Number.isNaN(expiresAt.valueOf()) ? 'shortly' : expiresAt.toLocaleTimeString()}.
-            </p>
-        </div>
     );
 }
 
@@ -829,6 +701,8 @@ function AgentHostCard({
     onRefresh?: () => void;
 }) {
     const harnesses = useAgentHostHarnesses(host.id);
+    // An empty list means "still looking" for as long as looking is plausible.
+    const discovering = isDiscoveringHarnesses(host, harnesses.data?.items.length ?? 0);
     const revoke = useRevokeAgentHost();
     const [confirmDisconnect, setConfirmDisconnect] = useState(false);
     const activeRuns = host.capacity?.active_runs ?? 0;
@@ -905,8 +779,20 @@ function AgentHostCard({
                 />
             </div>
             <div className="flex flex-col gap-2 border-t border-[var(--border-subtle)] p-3">
-                {harnesses.isLoading ? (
-                    <p className="px-1 text-xs text-[var(--text-tertiary)]">Looking for agents on this computer…</p>
+                {/*
+                  * `isLoading` alone was the bug: it is only true for the very
+                  * first fetch, and that fetch returns an empty list straight
+                  * away because the computer has not published anything yet.
+                  * The page then stated "No agents published yet" as fact while
+                  * the host was still installing adapter packages, which takes
+                  * minutes on a machine's first pairing.
+                  */}
+                {harnesses.isLoading || discovering ? (
+                    <p className="flex items-center gap-2 px-1 text-xs text-[var(--text-tertiary)]">
+                        <RefreshCw className="size-3 lemma-spin" />
+                        Looking for agents on this computer…
+                        {isThisComputer ? ' The first time takes a few minutes.' : null}
+                    </p>
                 ) : null}
                 {(harnesses.data?.items ?? []).map((harness) => (
                     <AgentHostHarnessRow
@@ -918,7 +804,7 @@ function AgentHostCard({
                         onRefresh={onRefresh}
                     />
                 ))}
-                {!harnesses.isLoading && !(harnesses.data?.items.length ?? 0) ? (
+                {!harnesses.isLoading && !discovering && !(harnesses.data?.items.length ?? 0) ? (
                     <p className="px-1 text-xs text-[var(--text-tertiary)]">
                         No agents published yet. {isThisComputer
                             ? 'Use "Recheck agents" above to look again now.'
@@ -1061,17 +947,5 @@ function StatusBadge({ label, tone }: { label: string; tone: 'ok' | 'muted' }) {
         >
             {label}
         </span>
-    );
-}
-
-function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
-    return (
-        <div className="flex flex-col gap-1.5">
-            <Label className="text-[var(--text-secondary)]">
-                {label}
-                {hint ? <span className="ml-1 font-normal text-[var(--text-tertiary)]">{hint}</span> : null}
-            </Label>
-            {children}
-        </div>
     );
 }

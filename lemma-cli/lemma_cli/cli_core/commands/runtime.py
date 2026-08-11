@@ -69,7 +69,7 @@ def create_profile(
         "--harness-id",
         help=(
             "Agent Host harness UUID (AGENT_HOST only). "
-            "List them with `lemma agent-host harnesses`."
+            "Lemma Desktop lists them under Models."
         ),
     ),
     base_url: str | None = typer.Option(

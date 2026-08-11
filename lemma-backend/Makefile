@@ -420,11 +420,8 @@ SANDBOX_NODE_IMAGE   ?= node:24.18.0-slim
 
 WORKSPACE_IMAGE := $(SANDBOX_REGISTRY)/lemma-workspace
 FUNCTION_IMAGE  := $(SANDBOX_REGISTRY)/lemma-function
-# Renaming a published image is safe here only because lemma-local.json still
-# carries the old `agentbox_workspace`/`agentbox_function` manifest *keys*: an
-# already-installed client looks the image up by key and gets whatever ref it
-# points at. Those keys are what must not move until no released client reads
-# them -- see the note in .github/workflows/release-local-images.yml.
+# A client looks these up by their manifest key and gets whatever ref the key
+# points at, so the published image name can move; the keys cannot.
 
 IMAGES_DIR := sandbox-images
 

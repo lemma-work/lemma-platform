@@ -26,8 +26,6 @@ jobs:
       frontend: ${{ steps.filter.outputs.frontend }}
       codegen: ${{ steps.filter.outputs.codegen }}
       desktop: ${{ steps.filter.outputs.desktop }}
-      locald: ${{ steps.filter.outputs.locald }}
-      agent_host: ${{ steps.filter.outputs.agent_host }}
       repo_tooling: ${{ steps.filter.outputs.repo_tooling }}
     steps:
       - uses: actions/checkout@v7
@@ -65,31 +63,29 @@ jobs:
               - 'lemma-typescript/scripts/patch_generated_imports.mjs'
               - '.github/workflows/ci.yml'
             desktop:
+              # desktop/** is now every Rust crate the app ships: the shell,
+              # locald, the Agent Host, and the runtime helpers, all one cargo
+              # workspace. That is what stopped local-runtime/hostctl and the
+              # Swift VZ helper being invisible to CI — they were always built
+              # by the desktop job through build-sidecar.sh, and nothing ever
+              # triggered it.
               - 'desktop/**'
               - 'lemma-stack/**'
               - 'lemma-frontend/lib/education/concepts.ts'
+              - 'scripts/prepare_desktop_test_runtime.py'
+              - 'scripts/build_local_guest_runtime.sh'
               - '.github/actions/setup-apple-signing/**'
               - '.github/workflows/ci.yml'
               - '.github/workflows/release-desktop.yml'
-            agent_host:
-              - 'agent-host/**'
-              - '.github/workflows/ci.yml'
-              - '.github/workflows/release-agent-host.yml'
+              - '.github/workflows/release-local-images.yml'
             repo_tooling:
               - 'Makefile'
               - 'tests/**'
+              - 'scripts/check_version_consistency.py'
               # These tests assert on the env names the backend settings read,
               # so the drift they exist to catch lands in the settings module,
               # not only in the Makefile that writes it.
               - 'lemma-backend/app/modules/workspace/config.py'
-              - '.github/workflows/ci.yml'
-            locald:
-              - 'locald/**'
-              - 'local-runtime/manager/**'
-              # guestd names and adopts the guest containers locald provisions,
-              # so a change here can strand them. It used to compile only in
-              # release-local-images.yml, which is far too late to find out.
-              - 'local-runtime/guestd/**'
               - '.github/workflows/ci.yml'
   backend-unit:
     name: lemma-backend unit
@@ -407,8 +403,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
       - name: Run dev workflow tests
         run: python3 -m unittest tests.test_dev_workflow -v
+      # tests/ has always been in this job's path filter, but only the dev
+      # workflow file was ever run. The other two cover the scripts that build
+      # the host pack and stage a bundled runtime -- both of which the desktop
+      # installers now depend on.
+      - name: Run repo tooling tests
+        run: uv run --with pytest python -m pytest tests/ -q
 
   install-experience:
     name: Install experience (Linux Docker)
@@ -474,87 +479,15 @@ jobs:
           if ($content -notmatch "ErrorActionPreference") { Write-Error "install.ps1 missing error handling"; exit 1 }
           Write-Host "install.ps1 validation passed"
 
-  agent-host:
-    name: Agent Host crate
-    timeout-minutes: 45
-    needs: changes
-    if: needs.changes.outputs.agent_host == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy, rustfmt
-
-      - name: Cache Cargo
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            agent-host/target
-          key: agent-host-cargo-${{ runner.os }}-${{ hashFiles('agent-host/Cargo.lock') }}
-          restore-keys: agent-host-cargo-${{ runner.os }}-
-
-      # reqwest is built with native-tls, so the crate links against the system
-      # OpenSSL rather than vendoring one.
-      - name: Install OpenSSL headers
-        run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev
-
-      - name: Check formatting
-        working-directory: agent-host
-        run: cargo fmt --check
-
-      - name: Lint
-        working-directory: agent-host
-        run: cargo clippy --locked --all-targets -- -D warnings
-
-      - name: Test
-        working-directory: agent-host
-        run: cargo test --locked
-
-  # macOS, not Linux, because that is a platform locald ships on. Most of
-  # managed_runtime.rs is behind macOS/Windows cfgs, so a Linux build compiles
-  # it down to an unused parameter and a pile of dead helpers - failing the lint
-  # over code that never ships, while never once linting the code that does.
-  locald:
-    name: locald crate
-    timeout-minutes: 45
-    needs: changes
-    if: needs.changes.outputs.locald == 'true'
-    runs-on: macos-14
-    steps:
-      - uses: actions/checkout@v7
-
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy, rustfmt
-
-      - name: Cache Cargo
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            locald/target
-          key: locald-cargo-${{ runner.os }}-${{ hashFiles('locald/Cargo.lock') }}
-          restore-keys: locald-cargo-${{ runner.os }}-
-
-      - name: Check formatting
-        working-directory: locald
-        run: cargo fmt --check
-
-      - name: Lint
-        working-directory: locald
-        run: cargo clippy --locked --all-targets -- -D warnings
-
-      - name: Test
-        working-directory: locald
-        run: cargo test --locked
-
+  # One job for the whole desktop workspace. locald had its own because of the
+  # runner OS - "macOS, not Linux, because that is a platform locald ships on;
+  # most of managed_runtime.rs is behind macOS/Windows cfgs, so a Linux build
+  # lints code that never ships while never linting the code that does" - and
+  # folding it in here satisfies that rather than contradicting it, since this
+  # job already runs on macos-14. The Agent Host followed: it is Desktop-only
+  # now, so ubuntu was testing a platform it no longer ships on.
   desktop:
-    name: macOS desktop build + codesign
+    name: Desktop workspace (fmt, clippy, tests, macOS build + codesign)
     timeout-minutes: 90
     needs: changes
     if: needs.changes.outputs.desktop == 'true'
@@ -570,7 +503,32 @@ jobs:
         with:
           enable-cache: true
 
+      # The Agent Host's ACP integration tests spawn a scripted Python agent
+      # over stdio, and panic outright when there is no interpreter to spawn.
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      # rustfmt compiles nothing, so --all covers lemma-guestd too.
+      # The Tauri CLI version is pinned in one file and read from it by the
+      # Makefile, desktop.ps1, and four workflows. A reintroduced literal is a
+      # version the next upgrade will miss.
+      - name: Tauri CLI version is pinned in one place
+        run: |
+          if git grep -n "@tauri-apps/cli@[0-9]" -- ':!desktop/scripts/tauri-cli-version.txt'; then
+            echo "::error::Read the pin from desktop/scripts/tauri-cli-version.txt instead."
+            exit 1
+          fi
+
+      # rustfmt compiles nothing, so it can run before the cache is warm and
+      # before the sidecars exist. --all covers lemma-guestd too.
+      - name: Check formatting
+        working-directory: desktop
+        run: cargo fmt --all --check
 
       - name: Cache Cargo
         uses: actions/cache@v4
@@ -610,57 +568,29 @@ jobs:
       - name: Verify baked splash concepts are committed
         run: git diff --exit-code desktop/ui/concepts.gen.json
 
+      # tauri-build resolves the externalBin sidecars at build-script time and
+      # fails when they are absent, so clippy and the tests need them just as
+      # much as bundling does. Nothing that compiles lemma-desktop may run
+      # before this step.
       - name: Build native local sidecars
         run: desktop/scripts/build-sidecar.sh
 
-      - name: Run desktop tests
+      - name: Lint
         working-directory: desktop
-        run: cargo test --locked
+        run: cargo clippy --workspace --locked --all-targets -- -D warnings
 
-      # Placeholder on purpose: this job proves the app builds and codesigns,
-      # it does not produce an installer. The URLs are unresolvable and the
-      # digests are zero, and `artifact_source` says so out loud so the app can
-      # refuse with a useful message instead of a connection error. The
-      # installable PR DMG comes from release-local-images.yml with
-      # publish: false -- see desktop/README.md.
-      - name: Stage CI build-check runtime manifest
-        shell: bash
-        run: |
-          set -euo pipefail
-          version="$(node -p "require('./desktop/tauri.conf.json').version")"
-          mkdir -p desktop/runtime
-          jq -n \
-            --arg version "${version}" \
-            '{
-              schema_version: 1,
-              version: $version,
-              artifact_source: "ci-build-check",
-              host_packs: {
-                "aarch64-apple-darwin": {
-                  url: "https://downloads.example.invalid/lemma-host-pack.zip",
-                  sha256: ("0" * 64),
-                  size: 1,
-                  expanded_size: 1,
-                  format: "zip",
-                  platform: "macos",
-                  architecture: "aarch64",
-                  runtime_version: $version
-                }
-              },
-              guest_runtimes: {
-                "macos-aarch64": {
-                  url: "https://downloads.example.invalid/lemma-guest-runtime.zip",
-                  sha256: ("0" * 64),
-                  size: 1,
-                  expanded_size: 1,
-                  format: "zip",
-                  platform: "linux",
-                  architecture: "aarch64",
-                  runtime_version: $version
-                }
-              }
-            }' > desktop/runtime/lemma-local.json
+      - name: Test
+        working-directory: desktop
+        run: cargo test --workspace --locked
 
+      # desktop/runtime/lemma-local.json is committed as an online-shaped
+      # placeholder: unresolvable URLs, zero digests, and `artifact_source:
+      # ci-build-check` so the app refuses with a useful message instead of a
+      # connection error. That is what this job builds against -- it proves the
+      # app builds and codesigns, it does not produce an installer. The
+      # installable test builds come from release-local-images.yml with
+      # publish: false. `make version-check` keeps the placeholder's version
+      # pinned to Desktop's.
       - name: Sign virtualization helper
         shell: bash
         run: |
@@ -680,9 +610,13 @@ jobs:
           codesign -d --entitlements :- "${helper}" 2>&1 \
             | grep -F "com.apple.security.virtualization"
 
+      - name: Read the pinned Tauri CLI
+        run: |
+          echo "TAURI_CLI=@tauri-apps/cli@$(tr -d '[:space:]' < desktop/scripts/tauri-cli-version.txt)" >> "$GITHUB_ENV"
+
       - name: Build and codesign online DMG
         working-directory: desktop
-        run: npx -y @tauri-apps/cli@2.11.4 build --config tauri.online.conf.json
+        run: npx -y "$TAURI_CLI" build --config tauri.online.conf.json
 
       - name: Verify application signature
         shell: bash
@@ -732,6 +666,133 @@ jobs:
         if: always() && steps.apple-signing.outcome == 'success'
         run: security delete-keychain "${{ steps.apple-signing.outputs.keychain-path }}"
 
+  # guestd's vsock listener is behind a Linux cfg that only a Linux build ever
+  # compiles, so the macOS workspace run says nothing about the code that
+  # actually runs inside the guest. Before the workspace, a change under
+  # local-runtime/guestd triggered the locald job, which never compiled it.
+  desktop-guestd:
+    name: Guest daemon (Linux)
+    timeout-minutes: 30
+    needs: changes
+    if: needs.changes.outputs.desktop == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            desktop/target
+          key: desktop-guestd-cargo-${{ runner.os }}-${{ hashFiles('desktop/Cargo.lock') }}
+          restore-keys: desktop-guestd-cargo-${{ runner.os }}-
+
+      - name: Lint
+        working-directory: desktop
+        run: cargo clippy -p lemma-guestd --locked --all-targets -- -D warnings
+
+      - name: Test
+        working-directory: desktop
+        run: cargo test -p lemma-guestd --locked
+
+  # Windows is a platform Desktop ships on, and until now the Tauri/NSIS path
+  # and every cfg(windows) branch in locald and the runtime manager were only
+  # exercised at release - which is a bad time to find out. This is also the
+  # only job that compiles the WSL runtime driver at all.
+  desktop-windows:
+    name: Windows desktop build check
+    timeout-minutes: 90
+    needs: changes
+    if: needs.changes.outputs.desktop == 'true'
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+          targets: x86_64-pc-windows-msvc
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            desktop/target
+          key: desktop-win-cargo-${{ runner.os }}-${{ hashFiles('desktop/Cargo.lock') }}
+          restore-keys: desktop-win-cargo-${{ runner.os }}-
+
+      - name: Bake splash concepts
+        run: node desktop/scripts/extract-concepts.mjs
+
+      - name: Verify baked splash concepts are committed
+        run: git diff --exit-code desktop/ui/concepts.gen.json
+
+      # Before clippy and the tests, not after: tauri-build resolves the
+      # externalBin sidecars at build-script time, so nothing that compiles
+      # lemma-desktop can run until they exist.
+      - name: Build Windows sidecars
+        run: desktop/scripts/build-sidecar.ps1
+
+      # lemma-guestd is the Linux guest daemon and reaches for std::os::unix
+      # unconditionally, so it does not compile for Windows at all. The macOS
+      # and Linux jobs cover it.
+      - name: Lint the Windows code paths
+        working-directory: desktop
+        run: cargo clippy --workspace --exclude lemma-guestd --locked --all-targets -- -D warnings
+
+      - name: Test
+        working-directory: desktop
+        run: cargo test --workspace --exclude lemma-guestd --locked
+
+      - name: Read the pinned Tauri CLI
+        run: |
+          $v = (Get-Content desktop/scripts/tauri-cli-version.txt).Trim()
+          "TAURI_CLI=@tauri-apps/cli@$v" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+
+      # Unsigned: the Authenticode path needs release secrets. This proves the
+      # bundler runs and the payload stays within budget, not that the artifact
+      # is installable.
+      - name: Build online NSIS installer
+        working-directory: desktop
+        run: |
+          npx -y $env:TAURI_CLI build --config tauri.online.conf.json --bundles nsis
+          if ($LASTEXITCODE -ne 0) { throw "Online NSIS build failed" }
+
+      - name: Enforce small online application payload
+        run: |
+          $ErrorActionPreference = "Stop"
+          $payload = @(
+            "desktop/target/release/lemma-desktop.exe",
+            "desktop/binaries/lemma-locald-x86_64-pc-windows-msvc.exe",
+            "desktop/binaries/lemma-runtime-x86_64-pc-windows-msvc.exe",
+            "desktop/runtime/lemma-local.json"
+          )
+          $bytes = ($payload | ForEach-Object {
+            if (-not (Test-Path $_)) { throw "Online payload is missing: $_" }
+            (Get-Item $_).Length
+          } | Measure-Object -Sum).Sum
+          # The online application downloads its runtime on first launch, so the
+          # installed payload is the shell plus the daemon and nothing else.
+          if ($bytes -gt 25MB) {
+            throw "Online application payload is $bytes bytes; the limit is 25 MiB"
+          }
+          Write-Host "online payload ok: $bytes bytes"
+
   ci:
     name: CI passed
     timeout-minutes: 10
@@ -751,8 +812,8 @@ jobs:
       - install-experience
       - windows-cli
       - desktop
-      - agent-host
-      - locald
+      - desktop-guestd
+      - desktop-windows
     runs-on: ubuntu-latest
     steps:
       - name: Fail if any required suite failed

@@ -2,68 +2,15 @@
 
 Everything about provisioning and reaching a sandbox. The names are the
 module's own -- `WORKSPACE_*`, plus `FUNCTION_*` for the function runtime and
-`E2B_*` for that provider's credentials. The `AGENTBOX_*` spellings these
-fields used to accept are gone; `_reject_renamed_env_vars` below turns a
-leftover into a refusal to boot rather than a silent fallback to the default.
+`E2B_*` for that provider's credentials.
 """
 
-import os
 from typing import Literal, Optional
 
-from dotenv import dotenv_values
-from pydantic import AliasChoices, Field, SecretStr, model_validator
+from pydantic import AliasChoices, Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.core.settings_env import dotenv_path
-
-# Every environment variable this module used to read, and what replaced it.
-# Nothing in the repo writes the old names any more, so one that is still set
-# is hand-authored -- a deployment config or a `.env` -- and silently ignoring
-# it would mean booting on a default the operator did not choose. Remove this
-# once no environment on any release still carries them.
-RENAMED_ENV_VARS = {
-    "AGENTBOX_WORKSPACE_IMAGE": "WORKSPACE_IMAGE",
-    "AGENTBOX_FUNCTION_IMAGE": "FUNCTION_IMAGE",
-    "AGENTBOX_WORKSPACE_PROFILE_NAME": "WORKSPACE_PROFILE_NAME",
-    "AGENTBOX_WORKSPACE_PROFILE_DIGEST": "WORKSPACE_PROFILE_DIGEST",
-    "AGENTBOX_FUNCTION_PROFILE_NAME": "FUNCTION_PROFILE_NAME",
-    "AGENTBOX_FUNCTION_PROFILE_DIGEST": "FUNCTION_PROFILE_DIGEST",
-    "AGENTBOX_RUNTIME_CREDENTIAL_KEY": "WORKSPACE_RUNTIME_CREDENTIAL_KEY",
-    "AGENTBOX_WORKSPACE_IDLE_SECONDS": "WORKSPACE_IDLE_RELEASE_SECONDS",
-    "AGENTBOX_DOCKER_SOCKET_PATH": "WORKSPACE_DOCKER_SOCKET_PATH",
-    "AGENTBOX_DOCKER_PRIVATE_NETWORK": "WORKSPACE_DOCKER_PRIVATE_NETWORK",
-    "AGENTBOX_DOCKER_ALLOW_MUTABLE_IMAGES": "WORKSPACE_DOCKER_ALLOW_MUTABLE_IMAGES",
-    "AGENTBOX_ADD_HOST_GATEWAY": "WORKSPACE_ADD_HOST_GATEWAY",
-    "AGENTBOX_HOST_ALIAS": "WORKSPACE_HOST_ALIAS",
-    "AGENTBOX_LOCAL_RUNTIME_CLI": "WORKSPACE_LOCAL_RUNTIME_CLI",
-    "AGENTBOX_LOCAL_CALLBACK_REQUIRED": "WORKSPACE_LOCAL_CALLBACK_REQUIRED",
-    "AGENTBOX_LOCAL_CALLBACK_URL": "WORKSPACE_LOCAL_CALLBACK_URL",
-}
-
-
-def _configured_names() -> set[str]:
-    """Every environment name this process would actually read a value from.
-
-    The process environment is not enough. Pydantic reads the dotenv file too,
-    and a hand-edited `lemma-backend/.env` is the likeliest place a renamed
-    name survives, since every writer in this repo moved in the same change.
-
-    An empty value does not count. Helm charts and compose files routinely
-    emit every key in a template whether or not it was given a value, and
-    refusing to start over `AGENTBOX_HOST_ALIAS=` would be refusing over
-    something nobody configured.
-    """
-
-    names = {key.upper() for key, value in os.environ.items() if value.strip()}
-    path = dotenv_path()
-    if path:
-        names.update(
-            key.upper()
-            for key, value in dotenv_values(path).items()
-            if value and value.strip()
-        )
-    return names
-
 
 class WorkspaceSettings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -228,38 +175,6 @@ class WorkspaceSettings(BaseSettings):
         validation_alias=AliasChoices("WORKSPACE_LOCAL_CALLBACK_URL"),
         description="URL the guest calls back on",
     )
-
-    @model_validator(mode="after")
-    def _reject_renamed_env_vars(self) -> "WorkspaceSettings":
-        """Refuse to start on a environment variable that no longer configures
-        anything.
-
-        Pydantic only reads names it declares, so a leftover `AGENTBOX_*` is
-        not an ignored extra -- it is invisible, and the field quietly takes
-        its default. That default is rarely harmless: `WORKSPACE_IMAGE` falls
-        back to a tag `make init` builds locally, so a stale name resolves to a
-        real but months-old image rather than failing to pull, and
-        `WORKSPACE_ADD_HOST_GATEWAY` falls back to False, where provisioning
-        succeeds and every call the sandbox makes afterwards does not.
-
-        Only the names this module used to read are checked. The sandbox's own
-        variables are deliberately absent: a workspace container legitimately
-        has them set, and inheriting one must not stop the backend.
-        """
-
-        configured = _configured_names()
-        stale = sorted(
-            f"{old} (now {new})"
-            for old, new in RENAMED_ENV_VARS.items()
-            if old in configured and new not in configured
-        )
-        if stale:
-            raise ValueError(
-                "These environment variables were renamed and no longer "
-                "configure anything; set the new name instead: "
-                + ", ".join(stale)
-            )
-        return self
 
 
 workspace_settings = WorkspaceSettings()

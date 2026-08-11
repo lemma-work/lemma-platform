@@ -1,0 +1,37 @@
+[package]
+name = "lemma-locald"
+version.workspace = true
+description = "Durable local control plane for Lemma Desktop and lemma-stack"
+edition = "2021"
+license = "AGPL-3.0-or-later"
+
+[dependencies]
+base64 = "0.22"
+getrandom = "0.3"
+hyper = { version = "0.14", features = ["client", "http1", "server", "stream", "tcp"] }
+if-addrs = "0.13"
+interprocess = "2.4"
+keyring = "4.1.5"
+lemma-runtime-manager = { path = "../local-runtime/manager" }
+qrcode = { version = "0.14", default-features = false, features = ["svg"] }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+socket2 = "0.6"
+tokio = { version = "1", features = ["io-util", "net", "rt-multi-thread", "sync"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = [
+    "Win32_Foundation",
+    "Win32_Networking_WinSock",
+    "Win32_Storage_FileSystem",
+    "Win32_System_JobObjects",
+    "Win32_System_Threading",
+] }
+
+[dev-dependencies]
+tempfile = { workspace = true }

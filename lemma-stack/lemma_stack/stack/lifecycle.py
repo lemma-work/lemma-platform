@@ -20,7 +20,7 @@ from lemma_stack.stack.specs import (
     run_args,
 )
 
-OBSOLETE_SERVICE_NAMES = ("agentbox", "kreuzberg")
+OBSOLETE_SERVICE_NAMES = ("kreuzberg",)
 
 
 def remove_obsolete_containers(runtime: Runtime) -> list[str]:

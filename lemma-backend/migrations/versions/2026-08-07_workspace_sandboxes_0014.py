@@ -1,7 +1,7 @@
 """Give sandboxes a table, so a workspace stops being a user id.
 
 Until now the workspace module owned no tables at all. Workspace identity was
-literally ``agentbox_sandbox_id(user_id) -> user_id``: one sandbox per user,
+literally a function of the user id -- one sandbox per user,
 with pods and conversations reduced to directories inside it. That made a
 second workspace per user unrepresentable, and it left the durable state
 describing running compute in a different database from everything else the
@@ -27,13 +27,9 @@ Two integers do the fencing that a reconciler used to do:
 ``provider_volume_id`` is adopted, never derived. The pre-consolidation volume
 name is ``ab-ws-{token}`` where the token is a random uuid4 minted at row
 creation in the sandbox runtime's own database, so no scheme keyed on any id in this table
-can reconstruct it. Deriving a name here would have stranded every existing
-user's files on an orphaned volume. Instead the column starts NULL and the
-first ensure adopts the existing volume by its ``logical-id`` /
-``managed-by=agentbox`` labels, falling back to creating a fresh one. That is
-why the backfill below sets ``id = users.id``: the label carries the old
-logical id, which was the user id, so the adoption lookup needs the new sandbox
-id to match it. It is the only place that equality is load-bearing, and once a
+can reconstruct it, so the column starts NULL and the first ensure creates one.
+The backfill below sets ``id = users.id`` because workspace identity used to be
+the user id itself. It is the only place that equality is load-bearing, and once a
 volume is adopted the id is free to be anything.
 
 Function sandbox rows are deliberately not backfilled. They hold no durable

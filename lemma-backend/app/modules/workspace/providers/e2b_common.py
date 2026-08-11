@@ -39,11 +39,6 @@ META_SANDBOX_KIND = meta_sandbox_kind(DEFAULT_METADATA_NAMESPACE)
 META_EPOCH = meta_epoch(DEFAULT_METADATA_NAMESPACE)
 META_PROFILE_DIGEST = meta_profile_digest(DEFAULT_METADATA_NAMESPACE)
 
-# What AgentBox stamped on the same sandboxes. Read-only: matched so existing
-# production workspaces are adopted, never written.
-LEGACY_MANAGED_BY_KEY = "managed-by"
-LEGACY_MANAGED_BY = "agentbox"
-LEGACY_LOGICAL_ID = "logical-id"
 
 
 def classify(exc: Exception) -> Exception:

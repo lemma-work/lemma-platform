@@ -21,12 +21,6 @@ LAZY_GROUPS: dict[str, LazyEntry] = {
     "auth": (f"{_CMD}.system", "auth_app", "Authentication commands.", False),
     "config": (f"{_CMD}.system", "config_app", "CLI context and per-server defaults (pod/org).", False),
     "servers": (f"{_CMD}.system", "server_app", "Show and manage Lemma CLI servers.", False),
-    "agent-host": (
-        "lemma_cli.agent_host.commands",
-        "app",
-        "Manage the durable local Agent Host.",
-        False,
-    ),
     "runtime": (f"{_CMD}.runtime", "app", "Agent runtime profiles.", False),
     "org": (f"{_CMD}.organizations", "app", "Organization commands.", False),
     "orgs": (f"{_CMD}.organizations", "app", "Organization commands.", False),

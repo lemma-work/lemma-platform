@@ -1,7 +1,7 @@
 """ACP permission requests expressed as ordinary Lemma approvals.
 
 An Agent Host run pauses when its ACP agent asks to use a native tool. The host
-holds that request open (``agent-host/src/permissions.rs``) until a decision
+holds that request open (``desktop/agent-host/src/permissions.rs``) until a decision
 comes back as a ``RESOLVE_PERMISSION`` command, so the pause sits *inside* a
 live run rather than at a run boundary — unlike ``ask_user`` /
 ``request_approval``, which end their run and resume through a new one.

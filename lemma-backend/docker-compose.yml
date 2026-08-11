@@ -22,11 +22,10 @@ services:
       - ./installer/postgres-init:/docker-entrypoint-initdb.d:ro
 
   redis:
-    image: docker.io/redis/redis-stack:7.2.0-v19
+    image: docker.io/redis:7.4-alpine
     restart: unless-stopped
     ports:
       - "${DEV_REDIS_PORT:-6379}:6379"
-      - "${DEV_REDIS_UI_PORT:-8001}:8001"
     depends_on:
       db:
         condition: service_healthy

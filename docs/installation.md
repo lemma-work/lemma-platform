@@ -17,7 +17,8 @@ first needed, so this release is not an air-gapped installer.
 | macOS | macOS 14 | Apple silicon | Apple Virtualization.framework |
 | Windows | Windows 11 23H2 | x86-64 | Private WSL2 distribution |
 
-Intel Macs, Windows on Arm, and Desktop Linux are not release targets yet.
+Intel Macs, Windows on Arm, and Desktop Linux are not release targets yet,
+and Windows on x86-64 is experimental rather than published — see below.
 
 Allow at least the expanded runtime size shown during setup plus 4 GiB of
 working headroom. The immutable host and guest runtimes are gated at 2.25 GiB
@@ -36,10 +37,18 @@ Run Lemma from Applications, not from the mounted DMG. The public application
 contains only the Desktop shell, `lemma-locald`, native runtime helpers, and
 runtime metadata; CI rejects an installed public app larger than 25 MiB.
 
-## Windows installation
+## Windows installation (experimental)
 
-1. Open the [latest Lemma release](https://github.com/lemma-work/lemma-platform/releases/latest).
-2. Download `Lemma_<version>_x64-online-setup.exe`.
+Windows is not a published platform yet. The installer is built and signed on
+every release, but it is kept as a workflow artifact rather than attached to
+the release, because attaching it would be an offer of support we cannot make
+until the Windows paths have been tested end to end.
+
+To try it:
+
+1. Open the most recent **Release Lemma Desktop** run in
+   [Actions](https://github.com/lemma-work/lemma-platform/actions/workflows/release-desktop.yml).
+2. Download the `lemma-desktop-windows-<version>` artifact and unzip it.
 3. Run the signed installer and open Lemma.
 4. Choose **Local** and select **Install local services**.
 

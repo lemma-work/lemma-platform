@@ -260,7 +260,7 @@ jobs:
     needs: protected-e2e-gate
     env:
       POSTGRES_IMAGE: docker.io/pgvector/pgvector:0.8.3-pg16
-      REDIS_IMAGE: docker.io/redis/redis-stack-server:7.2.0-v19
+      REDIS_IMAGE: docker.io/redis:7.4-alpine
       SUPERTOKENS_IMAGE: docker.io/supertokens/supertokens-postgresql:11.4.5
     steps:
       - name: Set up Docker Buildx
@@ -343,14 +343,14 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y zstd
 
       - name: Build guest control daemon
-        run: cargo build --manifest-path local-runtime/guestd/Cargo.toml --release
+        run: cargo build --manifest-path desktop/Cargo.toml -p lemma-guestd --release
 
       - name: Assemble private guest artifact
         shell: bash
         run: |
           bash scripts/build_local_guest_runtime.sh \
             --target "${{ matrix.target }}" \
-            --guestd local-runtime/guestd/target/release/lemma-guestd \
+            --guestd desktop/target/release/lemma-guestd \
             --output "guest-runtime-out/lemma-guest-runtime-${{ matrix.target }}.zip"
 
       - name: Upload managed guest runtime
@@ -482,8 +482,6 @@ jobs:
                   # and raises if they are missing, and publishing a manifest
                   # cannot upgrade a client that has not run yet. Drop them once
                   # no released client reads them.
-                  "agentbox_workspace": image("lemma-workspace"),
-                  "agentbox_function": image("lemma-function"),
               },
               "infra": infra,
           }
@@ -708,8 +706,6 @@ jobs:
                   # Same refs under the pre-rename keys, for clients already
                   # installed when this ships. See the note in the host-release
                   # manifest above; drop both together.
-                  "agentbox_workspace": image("lemma-workspace"),
-                  "agentbox_function": image("lemma-function"),
               },
               # Keep schema-1 compatibility for older lemma-stack clients:
               # public infra entries remain strings, now pinned to the
@@ -838,54 +834,20 @@ jobs:
           name: lemma-local-test-manifest-${{ github.sha }}
           path: desktop/runtime/download
 
+      # One staging engine for CI and for `make desktop-dmg`, so a locally
+      # built test DMG and this one are produced by the same code.
       - name: Verify and stage compressed PR test runtime
         shell: bash
-        env:
-          VERSION: ${{ inputs.version }}
-          TARGET: aarch64-apple-darwin
-          GUEST_TARGET: macos-aarch64
         run: |
           set -euo pipefail
-          python3 - <<'PY'
-          import hashlib
-          import json
-          import os
-          from pathlib import Path
-
-          root = Path("desktop/runtime/download")
-          manifest = json.loads((root / "lemma-local.json").read_text())
-          version = os.environ["VERSION"].removeprefix("v")
-          if manifest["version"] != version:
-              raise SystemExit("branch-test manifest version does not match Desktop")
-          for group, prefix, target in (
-              ("host_packs", "lemma-host-pack", os.environ["TARGET"]),
-              ("guest_runtimes", "lemma-guest-runtime", os.environ["GUEST_TARGET"]),
-          ):
-              archive = root / f"{prefix}-{target}.zip"
-              expected = manifest[group][target]
-              actual = hashlib.sha256(archive.read_bytes()).hexdigest()
-              if archive.stat().st_size != expected["size"] or actual != expected["sha256"]:
-                  raise SystemExit(f"{archive.name} digest/size mismatch")
-          host = manifest["host_packs"][os.environ["TARGET"]]
-          guest = manifest["guest_runtimes"][os.environ["GUEST_TARGET"]]
-          manifest["host_packs"] = {os.environ["TARGET"]: {
-              **host, "url": None, "resource": "host-runtime.zip"
-          }}
-          manifest["guest_runtimes"] = {os.environ["GUEST_TARGET"]: {
-              **guest, "url": None, "resource": "guest-runtime.zip"
-          }}
-          Path("desktop/runtime/lemma-local.json").write_text(
-              json.dumps(manifest, indent=2) + "\n"
-          )
-          PY
-
-          mkdir -p desktop/runtime/bundled
-          cp "desktop/runtime/download/lemma-host-pack-${TARGET}.zip" \
-            desktop/runtime/bundled/host-runtime.zip
-          cp "desktop/runtime/download/lemma-guest-runtime-${GUEST_TARGET}.zip" \
-            desktop/runtime/bundled/guest-runtime.zip
-          test ! -e desktop/runtime/local-runtime
-          test ! -e desktop/runtime/managed-runtime
+          python3 scripts/prepare_desktop_test_runtime.py \
+            --artifacts-dir desktop/runtime/download \
+            --mode bundled \
+            --expect-version "${{ inputs.version }}" \
+            --host-target aarch64-apple-darwin \
+            --guest-target macos-aarch64 \
+            --stage-dir desktop/runtime/bundled \
+            --output desktop/runtime/bundled/lemma-local.json
 
       - name: Bake splash concepts
         run: node desktop/scripts/extract-concepts.mjs
@@ -913,13 +875,17 @@ jobs:
           codesign -d --entitlements :- "${helper}" 2>&1 \
             | grep -F "com.apple.security.virtualization"
 
+      - name: Read the pinned Tauri CLI
+        run: |
+          echo "TAURI_CLI=@tauri-apps/cli@$(tr -d '[:space:]' < desktop/scripts/tauri-cli-version.txt)" >> "$GITHUB_ENV"
+
       - name: Build compressed macOS PR test DMG
         working-directory: desktop
         env:
           APPLE_SIGNING_IDENTITY: "-"
         run: |
           set -euo pipefail
-          npx -y @tauri-apps/cli@2.11.4 build --config tauri.dist.conf.json
+          npx -y "$TAURI_CLI" build --config tauri.dist.conf.json
 
       - name: Verify compressed PR test application
         shell: bash
@@ -948,5 +914,162 @@ jobs:
         with:
           name: lemma-desktop-macos-pr-test-${{ github.sha }}
           path: desktop/target/release/bundle/dmg/Lemma_*_aarch64.dmg
+          if-no-files-found: error
+          retention-days: 14
+
+  # The Windows half of the pair. One `publish: false` dispatch now yields both
+  # an installable macOS DMG and an installable Windows installer, cut from the
+  # same host packs, guest runtimes, and manifest.
+  windows-test-desktop:
+    name: Package self-contained Windows test app
+    if: github.event_name == 'workflow_dispatch' && !inputs.publish
+    runs-on: windows-latest
+    needs: manifest
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            desktop/target
+          key: desktop-test-cargo-${{ runner.os }}-${{ hashFiles('desktop/Cargo.lock') }}
+          restore-keys: desktop-test-cargo-${{ runner.os }}-
+
+      - name: Download Windows native host pack
+        uses: actions/download-artifact@v8
+        with:
+          name: host-pack-x86_64-pc-windows-msvc
+          path: desktop/runtime/download
+
+      - name: Download Windows managed guest runtime
+        uses: actions/download-artifact@v8
+        with:
+          name: guest-runtime-windows-x86_64
+          path: desktop/runtime/download
+
+      - name: Download exact branch-test manifest
+        uses: actions/download-artifact@v8
+        with:
+          name: lemma-local-test-manifest-${{ github.sha }}
+          path: desktop/runtime/download
+
+      # The same staging engine the macOS job and `desktop.ps1 exe` use.
+      - name: Verify and stage compressed PR test runtime
+        run: |
+          python scripts/prepare_desktop_test_runtime.py `
+            --artifacts-dir desktop/runtime/download `
+            --mode bundled `
+            --expect-version "${{ inputs.version }}" `
+            --host-target x86_64-pc-windows-msvc `
+            --guest-target windows-x86_64 `
+            --stage-dir desktop/runtime/bundled `
+            --output desktop/runtime/bundled/lemma-local.json
+          if ($LASTEXITCODE -ne 0) { throw "Staging the bundled runtime failed" }
+
+      - name: Bake splash concepts
+        run: node desktop/scripts/extract-concepts.mjs
+
+      - name: Verify baked splash concepts are committed
+        run: git diff --exit-code desktop/ui/concepts.gen.json
+
+      - name: Build Windows sidecars
+        run: desktop/scripts/build-sidecar.ps1
+
+      - name: Run Desktop tests
+        working-directory: desktop
+        run: cargo test -p lemma-desktop --locked
+
+      - name: Read the pinned Tauri CLI
+        run: |
+          $v = (Get-Content desktop/scripts/tauri-cli-version.txt).Trim()
+          "TAURI_CLI=@tauri-apps/cli@$v" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+
+      - name: Build compressed Windows PR test installer
+        working-directory: desktop
+        run: |
+          npx -y $env:TAURI_CLI build --config tauri.dist.conf.json --bundles nsis
+          if ($LASTEXITCODE -ne 0) { throw "Bundled NSIS build failed" }
+
+      # A publish:false host pack is unsigned end to end, so there is no
+      # Authenticode to verify. NSIS is an LZMA self-extractor, so unlike the
+      # macOS .app the payload cannot be walked with Expand-Archive either -
+      # 7-Zip understands the container and ships on windows-latest, which makes
+      # it the only way to prove the runtime archives actually got inside.
+      - name: Verify compressed PR test installer
+        run: |
+          $ErrorActionPreference = "Stop"
+          $payload = @(
+            "desktop/target/release/lemma-desktop.exe",
+            "desktop/binaries/lemma-locald-x86_64-pc-windows-msvc.exe",
+            "desktop/binaries/lemma-agent-host-x86_64-pc-windows-msvc.exe",
+            "desktop/binaries/lemma-runtime-x86_64-pc-windows-msvc.exe",
+            "desktop/runtime/bundled/lemma-local.json",
+            "desktop/runtime/bundled/host-runtime.zip",
+            "desktop/runtime/bundled/guest-runtime.zip"
+          )
+          $bytes = ($payload | ForEach-Object {
+            if (-not (Test-Path $_)) { throw "Bundled payload is missing: $_" }
+            (Get-Item $_).Length
+          } | Measure-Object -Sum).Sum
+          # The same hard gate the bundled macOS app is held to. On Windows the
+          # installed application only exists post-install, so the staged
+          # payload is the honest analogue of `du -sk Lemma.app`.
+          if ($bytes -gt 850MB) {
+            throw "Bundled application payload is $bytes bytes; the limit is 850 MiB"
+          }
+
+          $installers = @(Get-ChildItem desktop/target/release/bundle/nsis/Lemma_*-setup.exe `
+            -ErrorAction SilentlyContinue)
+          if ($installers.Count -ne 1) {
+            throw "Expected exactly one bundled NSIS installer, found $($installers.Count)"
+          }
+          $installer = $installers[0]
+
+          $sevenZip = "$env:ProgramFiles\7-Zip\7z.exe"
+          if (Test-Path $sevenZip) {
+            $listing = & $sevenZip l $installer.FullName | Out-String
+            foreach ($entry in @("lemma-desktop.exe", "lemma-locald", "lemma-runtime",
+                                 "lemma-local.json", "host-runtime.zip", "guest-runtime.zip")) {
+              if ($listing -notmatch [regex]::Escape($entry)) {
+                throw "NSIS installer does not contain $entry"
+              }
+            }
+            Write-Host "installer contents verified with 7-Zip"
+          } else {
+            # Do not fail the build over a missing inspector: the payload check
+            # above already proves what went in. Say so, so a silently weaker
+            # gate is visible in the log.
+            Write-Warning "7-Zip not found; skipped inspecting the installer contents"
+          }
+
+          $manifest = Get-Content desktop/runtime/bundled/lemma-local.json | ConvertFrom-Json
+          $conf = Get-Content desktop/tauri.conf.json | ConvertFrom-Json
+          if ($manifest.version -ne $conf.version) {
+            throw "The bundled runtime manifest and Desktop disagree on the version"
+          }
+          Write-Host "installer verified: $($installer.Name) ($($installer.Length) bytes)"
+
+      - name: Upload compressed Windows PR test installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: lemma-desktop-windows-pr-test-${{ github.sha }}
+          path: desktop/target/release/bundle/nsis/Lemma_*-setup.exe
           if-no-files-found: error
           retention-days: 14

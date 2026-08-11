@@ -1,4 +1,5 @@
 import { HarnessKind } from 'lemma-sdk';
+import type { AgentHostResponse } from 'lemma-sdk';
 import type {
     AgentRuntimeConfig,
     AgentRuntimeProfileListResponse,
@@ -16,13 +17,49 @@ export function isLocalAgentKind(kind?: string | null): boolean {
 }
 
 // Keyed by the `harness_key` Agent Host publishes for each adapter it ships
-// (see agent-host/agent-adapters.lock.json), which is also what a runtime
+// (see desktop/agent-host/agent-adapters.lock.json), which is also what a runtime
 // profile created from a harness records in its metadata.
 export const HARNESS_LOGOS: Partial<Record<string, string>> = {
     'claude-code': '/harnesslogos/claudecode.png',
     codex: '/harnesslogos/codex.png',
     cursor: '/harnesslogos/cursor.png',
     opencode: '/harnesslogos/opencode.png',
+};
+
+/**
+ * How long a computer may plausibly still be finding its coding agents.
+ *
+ * Ninety seconds, borrowed from the window above, was far too short. The first
+ * pairing on a machine does not probe agents, it *installs* them: the host
+ * fetches and verifies a pinned adapter package per certified agent against an
+ * empty npm cache, which is why its own connect timeout is ten minutes. A
+ * re-probe afterwards spawns each agent and opens an ACP session with a
+ * twenty-second ceiling of its own.
+ *
+ * So the list is legitimately empty for minutes on a fresh machine, and the
+ * page used to conclude "No agents published yet" within two seconds of the
+ * first empty response and then poll only every twenty seconds — which is
+ * exactly how Claude Code appeared to be missing until someone hit Recheck.
+ */
+export const HARNESS_DISCOVERY_WINDOW_MS = 10 * 60_000;
+
+/**
+ * Whether an empty harness list means "still looking" rather than "found none".
+ *
+ * Nothing on the wire distinguishes the two — a host only publishes once it has
+ * at least one harness — so this is inferred from how long the computer has
+ * been paired. Anchored on `created_at`, because the expensive step is the
+ * first install on a machine, not the re-probe on later launches.
+ */
+export const isDiscoveringHarnesses = (
+    host: Pick<AgentHostResponse, 'status' | 'created_at'>,
+    harnessCount: number,
+): boolean => {
+    if (harnessCount > 0) return false;
+    if (host.status === 'REVOKED') return false;
+    const pairedAt = Date.parse(host.created_at);
+    if (Number.isNaN(pairedAt)) return false;
+    return Date.now() - pairedAt < HARNESS_DISCOVERY_WINDOW_MS;
 };
 
 export function harnessLogo(harnessKey?: string | null): string | undefined {
@@ -312,7 +349,7 @@ export type HarnessConfigControl = {
 
 // Options whose value decides how much the agent may do unattended, and the
 // values Agent Host refuses for them. Mirrors `is_policy_bearing_option` /
-// `is_disallowed_policy_value` (agent-host/src/acp.rs) and the same pair in the
+// `is_disallowed_policy_value` (desktop/agent-host/src/acp.rs) and the same pair in the
 // backend domain. Harnesses *do* enumerate these — Claude Code lists
 // `bypassPermissions` among its permission modes — and the host rejects them
 // anyway at session setup, so offering one here would be a dead choice.
@@ -506,38 +543,8 @@ export function splitModelNames(value: string): string[] {
         .filter(Boolean);
 }
 
-// The CLI auto-trusts plain HTTP only on loopback, so a self-hosted API on a
-// LAN address needs the flag spelled out or `connect` refuses the URL.
-function needsInsecureHttpOptIn(apiBaseUrl: string): boolean {
-    try {
-        const url = new URL(apiBaseUrl);
-        if (url.protocol !== 'http:') return false;
-        return !['localhost', '127.0.0.1', '::1', '[::1]'].includes(url.hostname);
-    } catch {
-        return false;
-    }
-}
-
-export function pairingCommands(
-    pairing: { pairing_code: string; display_name: string },
-    apiBaseUrl: string,
-): string[] {
-    const name = pairing.display_name.replaceAll('"', '\\"');
-    // `connect` already resolves the binary itself - PATH, a dev checkout, then
-    // a managed download - so there is no separate install step. Asking for one
-    // would also fail outright on any build whose release assets aren't
-    // published, which is every self-hosted and development install.
-    const connect = [
-        'lemma agent-host connect',
-        `--url ${apiBaseUrl}`,
-        `--pairing-code ${pairing.pairing_code}`,
-        `--name "${name}"`,
-        ...(needsInsecureHttpOptIn(apiBaseUrl) ? ['--allow-insecure-http'] : []),
-    ].join(' ');
-
-    return [
-        'uv tool install lemma-terminal',
-        connect,
-        'lemma agent-host status',
-    ];
-}
+// Agent Host used to have a second install channel: a CLI that downloaded the
+// binary from a release and registered it as an OS service, which is what the
+// pairing-code path here was for. Desktop supervises the only copy now, so a
+// machine connects by running Desktop and signing in — there is no code to
+// carry, and nothing that could consume one.

@@ -4,8 +4,8 @@ Deliberately parses the builder as text instead of importing it. The other two
 E2B template tests `importorskip("e2b")`, so they are skipped in the unit job
 and only run in the conformance workflow -- and they drive the builder through
 a recording fake that never touches the filesystem. That combination is how the
-templates came to reference `agentbox/...` for a whole release after `agentbox/`
-was deleted: nothing that ran on every commit ever resolved a copy source.
+templates once came to reference a directory for a whole release after it was
+deleted: nothing that ran on every commit ever resolved a copy source.
 
 This test needs no SDK and no network, so it runs everywhere and fails the
 moment a source path stops existing.
@@ -61,4 +61,3 @@ def test_function_runtime_lands_where_its_entrypoint_imports_it() -> None:
     text = BUILDER.read_text(encoding="utf-8")
     assert '"/app/sandbox_runtime/__init__.py"' in text
     assert '"/app/sandbox_runtime/function"' in text
-    assert "/app/agentbox" not in text

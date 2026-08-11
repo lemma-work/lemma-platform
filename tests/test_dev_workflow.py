@@ -148,7 +148,7 @@ class DevWorkflowTests(unittest.TestCase):
             self.assertIn("uv run --extra local uvicorn local_app:app", result.stdout)
             # There is no separate manager process, and so no database or URL
             # of its own to reach it on.
-            self.assertNotIn("AGENTBOX", result.stdout)
+            self.assertNotIn("MANAGER_URL", result.stdout)
 
     def test_public_mode_tunnels_only_api_and_keeps_frontend_local(self):
         with tempfile.TemporaryDirectory() as raw_tmp:

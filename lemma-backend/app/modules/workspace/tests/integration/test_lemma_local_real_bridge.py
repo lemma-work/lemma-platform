@@ -12,7 +12,7 @@ everything between the provider and the guest boundary; it does not cover the
 guest itself.
 
 Build the bridge with:
-    cargo build --release --manifest-path local-runtime/hostctl/Cargo.toml
+    cargo build --release --manifest-path desktop/Cargo.toml -p lemma-runtime
 
 A stub is not the guest, and the difference has already cost one bug: this
 file's fake agreed with the provider that `sandbox.list` returns a top-level
@@ -61,7 +61,7 @@ def _bridge_binary() -> Path | None:
     # Walk up to the repo root rather than counting directories, which is
     # brittle and was already wrong once.
     for parent in Path(__file__).resolve().parents:
-        built = parent / "local-runtime/hostctl/target/release/lemma-runtime"
+        built = parent / "desktop/target/release/lemma-runtime"
         if built.is_file():
             return built
     found = shutil.which("lemma-runtime")
@@ -179,7 +179,7 @@ async def real_bridge(monkeypatch) -> AsyncIterator[tuple]:
     if binary is None:
         pytest.skip(
             "build the bridge first: cargo build --release "
-            "--manifest-path local-runtime/hostctl/Cargo.toml"
+            "--manifest-path desktop/Cargo.toml -p lemma-runtime"
         )
 
     # A unix socket path is capped near 104 bytes, and pytest's tmp_path under

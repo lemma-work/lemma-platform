@@ -103,8 +103,8 @@ def test_managed_runtime_contract_is_explicit(paths, tmp_path, monkeypatch):
             "images": {
                 "backend": "backend:test",
                 "frontend": "frontend:test",
-                "workspace": "workspace@sha256:agentbox",
-                "function": "function@sha256:agentbox",
+                "workspace": "workspace@sha256:sandbox",
+                "function": "function@sha256:sandbox",
             },
             "infra": {
                 "postgres": "postgres@sha256:postgres",
@@ -138,10 +138,10 @@ def test_managed_runtime_contract_is_explicit(paths, tmp_path, monkeypatch):
         "http://host.lemma.internal:8711"
     )
     assert backend["env"]["WORKSPACE_IMAGE"] == (
-        "workspace@sha256:agentbox"
+        "workspace@sha256:sandbox"
     )
     assert backend["env"]["FUNCTION_IMAGE"] == (
-        "function@sha256:agentbox"
+        "function@sha256:sandbox"
     )
     assert backend["env"]["WORKSPACE_ADD_HOST_GATEWAY"] == "false"
     assert backend["env"]["DATABASE_URL"].startswith("postgresql+asyncpg://postgres:" + "a" * 64)

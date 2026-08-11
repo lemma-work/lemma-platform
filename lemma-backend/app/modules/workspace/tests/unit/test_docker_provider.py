@@ -10,8 +10,6 @@ from app.modules.workspace.providers import naming
 from app.modules.workspace.providers.base import (
     LABEL_MANAGED_BY,
     LABEL_SANDBOX_ID,
-    LEGACY_LOGICAL_ID,
-    LEGACY_MANAGED_BY,
     MANAGED_BY,
     ProviderCreateAmbiguous,
     ProviderCreateSpec,
@@ -66,57 +64,6 @@ def _spec(sandbox_id, *, epoch: int = 1, **overrides) -> ProviderCreateSpec:
 # ---------------------------------------------------------------------------
 
 
-async def test_a_pre_cutover_volume_is_adopted_by_its_legacy_label() -> None:
-    """This is the test that stands between the migration and data loss.
-
-    The volume holding a user's files is named `ab-ws-{token}` from a random
-    uuid4 minted in the sandbox runtime's database. Nothing in the new schema can derive
-    it, so it has to be found by the `logical-id` label -- which is the user
-    id, which is exactly what the migration set the sandbox id to.
-    """
-    engine = FakeDockerEngine()
-    user_id = uuid4()
-    engine.volumes["ab-ws-0123456789abcdef0123456789abcdef"] = (
-        DockerVolume.model_validate(
-            {
-                "Name": "ab-ws-0123456789abcdef0123456789abcdef",
-                "Labels": {
-                    LABEL_MANAGED_BY: LEGACY_MANAGED_BY,
-                    LEGACY_LOGICAL_ID: str(user_id),
-                    "workload-kind": "workspace",
-                },
-            }
-        )
-    )
-
-    adopted = await _provider(engine).find_volume(
-        sandbox_id=user_id, deadline_at=_deadline()
-    )
-
-    assert adopted == "ab-ws-0123456789abcdef0123456789abcdef"
-    # The derived name must never be what we go looking for.
-    assert adopted != naming.volume_name(user_id, 1)
-
-
-async def test_a_volume_belonging_to_another_user_is_never_adopted() -> None:
-    engine = FakeDockerEngine()
-    someone_else = uuid4()
-    engine.volumes["ab-ws-theirs"] = DockerVolume.model_validate(
-        {
-            "Name": "ab-ws-theirs",
-            "Labels": {
-                LABEL_MANAGED_BY: LEGACY_MANAGED_BY,
-                LEGACY_LOGICAL_ID: str(someone_else),
-            },
-        }
-    )
-
-    assert (
-        await _provider(engine).find_volume(sandbox_id=uuid4(), deadline_at=_deadline())
-        is None
-    )
-
-
 async def test_a_volume_created_after_cutover_is_preferred() -> None:
     engine = FakeDockerEngine()
     sandbox_id = uuid4()
@@ -129,16 +76,6 @@ async def test_a_volume_created_after_cutover_is_preferred() -> None:
             },
         }
     )
-    engine.volumes["ab-ws-old"] = DockerVolume.model_validate(
-        {
-            "Name": "ab-ws-old",
-            "Labels": {
-                LABEL_MANAGED_BY: LEGACY_MANAGED_BY,
-                LEGACY_LOGICAL_ID: str(sandbox_id),
-            },
-        }
-    )
-
     adopted = await _provider(engine).find_volume(
         sandbox_id=sandbox_id, deadline_at=_deadline()
     )
@@ -304,39 +241,6 @@ async def test_an_operation_against_a_destroyed_container_is_definitively_gone()
         await provider._runtime_client(
             instance.provider_id, deadline_at=_deadline()
         )
-
-
-async def test_the_sweep_recognises_pre_cutover_containers() -> None:
-    """A container created before the cutover carries the old labels and no
-    epoch. If the sweep did not claim it, it would run forever unowned."""
-    engine = FakeDockerEngine()
-    provider = _provider(engine)
-    legacy_owner = uuid4()
-
-    from app.modules.workspace.testing.fake_docker_engine import FakeContainer
-
-    engine.containers["ab-w-abc123-def456"] = FakeContainer(
-        container_id="legacy-1",
-        name="ab-w-abc123-def456",
-        image=PINNED_IMAGE,
-        labels={
-            LABEL_MANAGED_BY: LEGACY_MANAGED_BY,
-            LEGACY_LOGICAL_ID: str(legacy_owner),
-        },
-        running=True,
-    )
-    ours = await provider.create(_spec(uuid4()))
-
-    objects = await provider.list_objects(deadline_at=_deadline())
-    by_name = {obj.name: obj for obj in objects}
-
-    assert set(by_name) == {"ab-w-abc123-def456", ours.name}
-    legacy = by_name["ab-w-abc123-def456"]
-    assert legacy.legacy is True
-    assert legacy.sandbox_id == legacy_owner
-    assert legacy.epoch is None  # nothing to compare, so it is swept on identity
-    assert by_name[ours.name].legacy is False
-    assert by_name[ours.name].epoch == 1
 
 
 async def test_the_sweep_ignores_containers_that_are_not_ours() -> None:

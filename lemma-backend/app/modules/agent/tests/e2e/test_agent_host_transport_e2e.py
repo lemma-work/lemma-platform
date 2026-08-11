@@ -78,7 +78,7 @@ async def test_re_pairing_the_same_machine_updates_it_instead_of_duplicating(
 
     Identity is (user_id, installation_id) — the machine's own id, with no
     organization in it. Pairing again rotates the secret on the row that is
-    already there, which is what lets `make agent-host` be safely re-runnable
+    already there, which is what lets re-pairing be safe to repeat
     and what stops one laptop appearing twice in a workspace's list.
     """
     machine = hello()

@@ -1,0 +1,14 @@
+[package]
+name = "lemma-guestd"
+version.workspace = true
+description = "Private guest control service for Lemma's managed local runtime"
+edition = "2021"
+license = "AGPL-3.0-or-later"
+
+[dependencies]
+libc = "0.2"
+serde = { workspace = true }
+serde_json = { workspace = true }
+tempfile = { workspace = true }
+
+[dev-dependencies]

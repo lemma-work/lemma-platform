@@ -19,8 +19,6 @@ import pytest_asyncio
 from app.modules.workspace.providers.base import (
     LABEL_MANAGED_BY,
     LABEL_SANDBOX_ID,
-    LEGACY_LOGICAL_ID,
-    LEGACY_MANAGED_BY,
     MANAGED_BY,
 )
 from app.modules.workspace.providers.docker import (
@@ -65,39 +63,6 @@ async def provider(engine: DockerEngineClient) -> DockerSandboxProvider:
         DockerProviderConfig(allow_mutable_images=True),
         RuntimeCredentialSigner(key=b"k" * 32),
     )
-
-
-async def test_a_real_legacy_volume_is_adopted(
-    engine: DockerEngineClient, provider: DockerSandboxProvider
-) -> None:
-    """Reproduces exactly what the sandbox runtime leaves behind.
-
-    The volume name embeds a random storage token while the label carries the
-    logical id, and the two are unrelated UUIDs -- which is precisely why the
-    name cannot be derived and the label lookup has to work.
-    """
-    sandbox_id = uuid4()
-    storage_token = uuid4()
-    name = f"ab-ws-{storage_token.hex}"
-    await engine.create_volume(
-        DockerVolumeCreateRequest(
-            name=name,
-            labels={
-                LABEL_MANAGED_BY: LEGACY_MANAGED_BY,
-                LEGACY_LOGICAL_ID: str(sandbox_id),
-                "workload-kind": "workspace",
-                "storage-token": str(storage_token),
-            },
-        ),
-        deadline_at=_deadline(),
-    )
-    try:
-        adopted = await provider.find_volume(
-            sandbox_id=sandbox_id, deadline_at=_deadline()
-        )
-        assert adopted == name
-    finally:
-        await engine.delete_volume(name, deadline_at=_deadline())
 
 
 async def test_a_real_volume_created_by_this_module_is_found(

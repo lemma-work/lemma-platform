@@ -275,6 +275,8 @@ function fillConfiguration() {
   $("composio-enabled").checked = config.integrations.composio_enabled;
   $("google-id").value = config.integrations.google_client_id;
   $("microsoft-id").value = config.integrations.microsoft_client_id;
+  $("github-id").value = config.integrations.github_client_id || "";
+  $("slack-connector-id").value = config.integrations.slack_client_id || "";
   $("slack-enabled").checked = config.surfaces.slack_socket_mode;
   $("telegram-enabled").checked = config.surfaces.telegram_polling;
   $("teams-id").value = config.surfaces.teams_app_id;
@@ -316,6 +318,8 @@ function collectConfiguration() {
     composio_enabled: $("composio-enabled").checked,
     google_client_id: $("google-id").value.trim(),
     microsoft_client_id: $("microsoft-id").value.trim(),
+    github_client_id: $("github-id").value.trim(),
+    slack_client_id: $("slack-connector-id").value.trim(),
   };
   config.surfaces = {
     ...config.surfaces,
@@ -352,6 +356,11 @@ async function saveConfiguration(button) {
   }
 }
 
+// A plain confirm() returns false without drawing anything in this webview, so
+// destructive buttons ask the shell for a native dialog instead.
+const confirmAction = (title, message, confirmLabel) =>
+  invoke("confirm_destructive_action", { title, message, confirmLabel });
+
 async function runDesktopAction(button) {
   try {
     const action = button.dataset.action;
@@ -359,7 +368,12 @@ async function runDesktopAction(button) {
     if (action === "restart") await invoke("restart");
     if (action === "stop") await invoke("stop", { includeInfra: false });
     if (action === "stop-all") {
-      if (!window.confirm("Stop the Lemma application and its private runtime? Workspace data is preserved.")) return;
+      const stopEverything = await confirmAction(
+        "Stop everything?",
+        "Stop the Lemma application and its private runtime? Workspace data is preserved.",
+        "Stop Everything",
+      );
+      if (!stopEverything) return;
       await invoke("stop", { includeInfra: true });
     }
     if (action === "logs") await invoke("open_logs");
@@ -374,7 +388,12 @@ async function runDesktopAction(button) {
     if (action === "agent-host-restart") await invoke("agent_host_action", { action: "restart" });
     if (action === "agent-host-log") await invoke("open_logs");
     if (action === "repair-runtime") {
-      if (!window.confirm("Stop Lemma briefly and verify or replace only signed runtime files?")) return;
+      const repair = await confirmAction(
+        "Verify and repair the runtime?",
+        "Stop Lemma briefly and verify or replace only signed runtime files?",
+        "Verify & Repair",
+      );
+      if (!repair) return;
       document.querySelectorAll('[data-action="repair-runtime"]').forEach((item) => {
         item.disabled = true;
         item.textContent = "Repairing…";

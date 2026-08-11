@@ -30,11 +30,13 @@ def _contract() -> dict:
     exists to prevent.
     """
     for parent in Path(__file__).resolve().parents:
-        candidate = parent / "agent-host" / "tests" / "fixtures" / "wire_contract.json"
+        candidate = (
+            parent / "desktop" / "agent-host" / "tests" / "fixtures" / "wire_contract.json"
+        )
         if candidate.exists():
             return json.loads(candidate.read_text())
     raise AssertionError(
-        "agent-host/tests/fixtures/wire_contract.json was not found; the "
+        "desktop/agent-host/tests/fixtures/wire_contract.json was not found; the "
         "backend and the host must be checked out together to verify the wire "
         "contract they share"
     )

@@ -1,0 +1,12 @@
+[package]
+name = "lemma-runtime"
+version.workspace = true
+description = "Host bridge for Lemma's app-owned Linux runtime"
+edition = "2021"
+license = "AGPL-3.0-or-later"
+
+[dependencies]
+serde_json = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

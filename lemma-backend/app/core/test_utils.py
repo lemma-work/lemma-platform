@@ -12,7 +12,7 @@ import psycopg
 # Use same images as docker-compose.yml for consistency. pgvector 0.8.3 is
 # required for the halfvec vector indexes the search service now builds.
 POSTGRES_IMAGE = "docker.io/pgvector/pgvector:0.8.3-pg15"
-REDIS_IMAGE = "redis/redis-stack:7.2.0-v19"
+REDIS_IMAGE = "redis:7.4-alpine"
 SUPERTOKENS_IMAGE = "docker.io/supertokens/supertokens-postgresql:11.4.5"
 # The project moved orgs (kreuzberg-dev -> xberg-io); the old
 # ghcr.io/kreuzberg-dev/kreuzberg:4.9.9 tag now 404s ("manifest unknown"). This

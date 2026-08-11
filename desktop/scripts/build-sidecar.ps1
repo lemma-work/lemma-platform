@@ -7,12 +7,15 @@ $Triple = if ($env:LEMMA_SIDECAR_TRIPLE) { $env:LEMMA_SIDECAR_TRIPLE } else { "x
 $OutDir = Join-Path $RepoRoot "desktop/binaries"
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 
-cargo build --manifest-path locald/Cargo.toml --release --target $Triple
-Copy-Item "locald/target/$Triple/release/lemma-locald.exe" "$OutDir/lemma-locald-$Triple.exe"
-cargo build --manifest-path agent-host/Cargo.toml --release --target $Triple
-Copy-Item "agent-host/target/$Triple/release/lemma-agent-host.exe" "$OutDir/lemma-agent-host-$Triple.exe"
-cargo build --manifest-path local-runtime/hostctl/Cargo.toml --release --target $Triple
-Copy-Item "local-runtime/hostctl/target/$Triple/release/lemma-runtime.exe" "$OutDir/lemma-runtime-$Triple.exe"
+# One invocation, not three: they share a target directory now, and asking for
+# them separately resolves features over three package sets and rebuilds the
+# common dependency tree each time.
+cargo build --manifest-path desktop/Cargo.toml --release --target $Triple `
+  -p lemma-locald -p lemma-agent-host -p lemma-runtime
+$Built = "desktop/target/$Triple/release"
+Copy-Item "$Built/lemma-locald.exe" "$OutDir/lemma-locald-$Triple.exe"
+Copy-Item "$Built/lemma-agent-host.exe" "$OutDir/lemma-agent-host-$Triple.exe"
+Copy-Item "$Built/lemma-runtime.exe" "$OutDir/lemma-runtime-$Triple.exe"
 
 & "$OutDir/lemma-locald-$Triple.exe" --version | Out-Null
 & "$OutDir/lemma-agent-host-$Triple.exe" --version | Out-Null
