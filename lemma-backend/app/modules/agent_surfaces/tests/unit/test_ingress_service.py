@@ -2384,3 +2384,93 @@ async def test_send_processing_indicator_for_conversation_stops_without_link():
 
     assert sent is False
     adapter.add_processing_indicator.assert_not_awaited()
+
+
+def _resend_surface() -> AgentSurfaceEntity:
+    return AgentSurfaceEntity(
+        id=uuid4(),
+        pod_id=uuid4(),
+        name="resend",
+        surface_type=SurfacePlatform.RESEND,
+        mode=SurfaceMode.EMAIL,
+        config=SurfaceConfig(),
+        surface_identity_email="agent.pod@ops.test",
+        is_active=True,
+    )
+
+
+async def test_a_permanent_credential_refusal_is_not_retried_forever():
+    """A 401 does not become a 200 by trying again.
+
+    On dev a Resend key restricted to sending answered `GET /emails/receiving`
+    with 401. Enrichment raised to make the delivery retryable — correct for a
+    timeout or a 429 — and the worker spent eight attempts on an answer that
+    could not change, burying the cause under repeats of itself.
+    """
+    import httpx
+
+    surface = _resend_surface()
+    event = ParsedInboundSurfaceEvent(
+        platform="RESEND",
+        conversation_type=ConversationType.EXTERNAL_DM,
+        external_channel_id="agent.pod@ops.test",
+        external_thread_id="<seed@ops.test>",
+        external_message_id="<reply-1@example.com>",
+        sender_external_user_id="bob@example.com",
+        sender_email="bob@example.com",
+        message_text="",
+        is_dm=True,
+        mentioned_agent=True,
+        reply_target={},
+    )
+    refused = httpx.HTTPStatusError(
+        "401",
+        request=httpx.Request("GET", "https://api.resend.com/emails/receiving/x"),
+        response=httpx.Response(401, json={"name": "restricted_api_key"}),
+    )
+    adapter = AsyncMock()
+    adapter.enrich_inbound_event.side_effect = refused
+
+    service = _build_service(adapter=AsyncMock(), surfaces=[surface])
+    service._resolve_credentials = AsyncMock(return_value={})
+
+    context = await service._prepare_surface_context(
+        surface=surface, parsed=event, adapter=adapter
+    )
+
+    # Dropped, not raised: raising is what schedules the next identical attempt.
+    assert context is None
+
+
+async def test_a_transient_failure_is_still_raised_so_it_retries():
+    """The distinction that makes the above safe: 429 and 5xx do change."""
+    import httpx
+
+    surface = _resend_surface()
+    event = ParsedInboundSurfaceEvent(
+        platform="RESEND",
+        conversation_type=ConversationType.EXTERNAL_DM,
+        external_channel_id="agent.pod@ops.test",
+        external_thread_id="<seed@ops.test>",
+        external_message_id="<reply-2@example.com>",
+        sender_external_user_id="bob@example.com",
+        sender_email="bob@example.com",
+        message_text="",
+        is_dm=True,
+        mentioned_agent=True,
+        reply_target={},
+    )
+    adapter = AsyncMock()
+    adapter.enrich_inbound_event.side_effect = httpx.HTTPStatusError(
+        "429",
+        request=httpx.Request("GET", "https://api.resend.com/emails/receiving/x"),
+        response=httpx.Response(429, json={"name": "rate_limit_exceeded"}),
+    )
+
+    service = _build_service(adapter=AsyncMock(), surfaces=[surface])
+    service._resolve_credentials = AsyncMock(return_value={})
+
+    with pytest.raises(httpx.HTTPStatusError):
+        await service._prepare_surface_context(
+            surface=surface, parsed=event, adapter=adapter
+        )

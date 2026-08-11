@@ -10,6 +10,7 @@ import json
 from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 from uuid import UUID, uuid4
 
 import pytest
@@ -279,6 +280,21 @@ async def _create_surface(
     # creates its surface directly and therefore still verifies the pending
     # state and rejection paths before activation.
     if platform == "TEAMS":
+        # `state` is a surface id *and* a single-use nonce. The callback is
+        # unauthenticated, so the nonce is the only thing distinguishing a real
+        # Microsoft round-trip from anyone who saw a surface id — and it is
+        # minted when the consent URL is built, not guessable here.
+        #
+        # This helper used to post a bare surface id, which every Teams journey
+        # then failed on with "This consent link is no longer valid". Asking the
+        # setup endpoint for the URL is what an admin's browser does, and it
+        # keeps the fixture honest about the handshake it is standing in for.
+        setup = await client.get(f"/pods/{pod_id}/surfaces/{surface['name']}/setup")
+        assert setup.status_code == 200, setup.text
+        consent_url = (setup.json().get("admin_consent") or {}).get("consent_url")
+        assert consent_url, f"no consent URL to follow: {setup.text}"
+        state = parse_qs(urlparse(consent_url).query)["state"][0]
+
         consent = await client.get(
             "/surfaces/teams/admin-consent/callback",
             params={
@@ -287,7 +303,7 @@ async def _create_surface(
                 # one stable tenant across all Teams fixtures.
                 "tenant": REAL_TEAMS_TENANT_ID,
                 "admin_consent": "True",
-                "state": surface["id"],
+                "state": state,
             },
         )
         assert consent.status_code == 200, consent.text

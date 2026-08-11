@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from httpx import HTTPError
+
 from app.modules.agent_surfaces.domain.entities import ParsedInboundSurfaceEvent
 from app.modules.agent_surfaces.domain.models import (
     ColdEmailSendResult,
@@ -12,6 +14,7 @@ from app.modules.agent_surfaces.domain.models import (
 )
 from app.core.log.log import get_logger
 from app.modules.agent_surfaces.platforms.base import BaseSurfaceAdapter
+from app.modules.agent_surfaces.platforms.common import provider_failure
 from app.modules.agent_surfaces.platforms.resend.parser import (
     ResendInboundParser,
     merge_received_email,
@@ -57,28 +60,57 @@ class ResendSurfaceAdapter(BaseSurfaceAdapter):
     async def enrich_inbound_event(
         self, *, credentials: dict[str, Any], event: ParsedInboundSurfaceEvent
     ) -> ParsedInboundSurfaceEvent | None:
-        """Fetch the body the webhook did not carry.
+        """Fetch the body when the webhook did not carry one.
 
-        Returning ``None`` drops the event, and that is the right failure: the
-        alternative is starting an agent run whose user message is the empty
-        string, which is what shipped and what made every inbound email look
-        like the agent ignoring people.
+        Returning ``None`` drops the event, and for an email we cannot read that
+        is the right failure: the alternative is starting an agent run whose
+        user message is the empty string, which is what shipped and what made
+        every inbound email look like the agent ignoring people.
 
-        Also re-derives the thread root, because ``References`` only exists once
-        the headers arrive — without this every reply opens a new conversation
-        no matter what we seeded the outbound with.
+        The fetch is **not** unconditional, and that is the point. When the
+        webhook already carries the body, asking the API for it again puts a
+        working message behind a call that can fail — and it did: a Resend key
+        restricted to sending answers ``GET /emails/receiving`` with 401, so a
+        reply we had already been handed in full was dropped and retried eight
+        times while the person who sent it heard nothing.
+
+        So: keep what arrived, use the fetch to fill what is missing, and only
+        fail when there is nothing to work with.
+
+        The fetch also re-derives the thread root from ``References``. When the
+        webhook carries headers that is already done by the parser; when it does
+        not, this is the only way a reply rejoins its conversation instead of
+        opening a new one.
         """
+        service = ResendPlatformService(credentials)
         email_id = str((event.metadata or {}).get("email_id") or "").strip()
+        has_body = bool(event.message_text.strip())
+
         if not email_id:
             logger.warning(
                 "agent_surfaces.resend.inbound_missing_email_id.degraded",
                 thread_id=event.external_thread_id,
             )
-            return None if not event.message_text.strip() else event
+            return event if has_body else None
 
-        received = await ResendPlatformService(credentials).fetch_received_email(
-            email_id
-        )
+        try:
+            received = await service.fetch_received_email(email_id)
+        except (HTTPError, OSError) as exc:
+            if has_body:
+                # We can already read it. Losing a message we hold because a
+                # secondary call failed is strictly worse than proceeding on
+                # what the provider pushed us.
+                failure = provider_failure(exc)
+                logger.warning(
+                    "agent_surfaces.resend.inbound_fetch_skipped.degraded",
+                    thread_id=event.external_thread_id,
+                    failure_type=failure.failure_type,
+                    status_code=failure.status_code,
+                    provider_error=failure.provider_error,
+                )
+                return event
+            raise
+
         return merge_received_email(event, received)
 
     async def send_message(

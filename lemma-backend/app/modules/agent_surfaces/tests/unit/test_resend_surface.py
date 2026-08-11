@@ -733,3 +733,131 @@ async def test_an_attachment_is_downloaded_through_its_signed_url():
     # The API call is authenticated; the signed URL must not carry our key.
     assert seen["auth"][0] == "Bearer re_test"
     assert seen["auth"][1] is None
+
+
+# ------------------------------------- a body we already hold is never lost
+
+
+def _webhook_carrying_a_body() -> dict:
+    """A delivery that already includes what the person wrote.
+
+    Observed in production: the `email.received` payload arrived with `text`,
+    `html` *and* `headers` — the `references` seed among them. Fetching the body
+    again is then a second chance to fail, not a way to learn anything.
+    """
+    return _real_webhook(
+        text="Let's do it today?",
+        html="<div>Let's do it today?</div>",
+        headers={
+            "message-id": "<reply-1@example.com>",
+            "references": '["<lemma-notification-abc@ops.asur.work>"]',
+            "subject": "Re: Standup",
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_restricted_api_key_does_not_lose_a_reply_we_can_already_read():
+    """The dev incident, as a test.
+
+    A Resend key restricted to sending answers `GET /emails/receiving` with 401.
+    Enrichment fetched unconditionally, the failure propagated, and the reply was
+    dropped and retried eight times — while the webhook had handed us the body in
+    full and the person who wrote it heard nothing back.
+    """
+    import httpx
+    from unittest.mock import AsyncMock, patch
+
+    from app.modules.agent_surfaces.platforms.resend.adapter import (
+        ResendSurfaceAdapter,
+    )
+
+    event = ResendInboundParser().parse(
+        _normalize_resend_inbound(_webhook_carrying_a_body())
+    )
+    refused = httpx.HTTPStatusError(
+        "401",
+        request=httpx.Request("GET", "https://api.resend.com/emails/receiving/x"),
+        response=httpx.Response(
+            401,
+            json={
+                "statusCode": 401,
+                "message": "This API key is restricted to only send emails",
+                "name": "restricted_api_key",
+            },
+        ),
+    )
+
+    with patch.object(
+        ResendPlatformService, "fetch_received_email", new=AsyncMock(side_effect=refused)
+    ):
+        enriched = await ResendSurfaceAdapter().enrich_inbound_event(
+            credentials={"api_key": "re_test"}, event=event
+        )
+
+    assert enriched is not None
+    assert "Let's do it today?" in enriched.message_text
+    # The seed the reply threads on came from the webhook's own headers, so the
+    # conversation is still found without the fetch.
+    assert enriched.external_thread_id == "<lemma-notification-abc@ops.asur.work>"
+
+
+@pytest.mark.asyncio
+async def test_a_failed_fetch_still_raises_when_there_is_no_body_to_keep():
+    """The original guarantee, unchanged.
+
+    When the webhook carries metadata only, enrichment *is* the message — a
+    transient failure must retry rather than run an agent on an empty prompt.
+    """
+    from unittest.mock import AsyncMock, patch
+
+    from app.modules.agent_surfaces.platforms.resend.adapter import (
+        ResendSurfaceAdapter,
+    )
+
+    event = ResendInboundParser().parse(_normalize_resend_inbound(_real_webhook()))
+
+    with patch.object(
+        ResendPlatformService,
+        "fetch_received_email",
+        new=AsyncMock(side_effect=OSError("connection reset")),
+    ):
+        with pytest.raises(OSError):
+            await ResendSurfaceAdapter().enrich_inbound_event(
+                credentials={"api_key": "re_test"}, event=event
+            )
+
+
+def test_a_provider_refusal_is_reported_by_status_and_name():
+    """What has to reach the log, since ``error`` fields are stripped from it.
+
+    ``restricted_api_key`` names the fix on its own; "enrichment failed" sent us
+    to Log Analytics, then to a database, then to the provider's API.
+    """
+    import httpx
+
+    from app.modules.agent_surfaces.platforms.common import provider_failure
+
+    failure = provider_failure(
+        httpx.HTTPStatusError(
+            "401",
+            request=httpx.Request("GET", "https://api.resend.com/x"),
+            response=httpx.Response(401, json={"name": "restricted_api_key"}),
+        )
+    )
+
+    assert failure.status_code == 401
+    assert failure.provider_error == "restricted_api_key"
+    assert failure.failure_type == "HTTPStatusError"
+    # No free text: a provider message can carry a key or somebody's address.
+    assert "restricted to only send" not in str(failure)
+
+
+def test_a_non_http_failure_still_reports_something_usable():
+    from app.modules.agent_surfaces.platforms.common import provider_failure
+
+    failure = provider_failure(OSError("connection reset"))
+
+    assert failure.failure_type == "OSError"
+    assert failure.status_code is None
+    assert failure.provider_error is None
