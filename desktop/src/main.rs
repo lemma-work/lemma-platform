@@ -4233,12 +4233,17 @@ fn handle_menu_action(app: &AppHandle, id: &str) {
             confirm_then_switch_connection(app);
         }
         "autostart" => {
-            let autolaunch = app.autolaunch();
-            if autolaunch.is_enabled().unwrap_or(false) {
-                let _ = autolaunch.disable();
-            } else {
-                let _ = autolaunch.enable();
-            }
+            // Reading and writing a launch-agent plist.
+            let handle = app.clone();
+            menu_background(&app, "Open Lemma at login", move || {
+                let autolaunch = handle.autolaunch();
+                if autolaunch.is_enabled().unwrap_or(false) {
+                    let _ = autolaunch.disable();
+                } else {
+                    let _ = autolaunch.enable();
+                }
+                Ok(())
+            });
         }
         "control" => {
             menu_attempt(&app, "Local settings", || show_control_center(&app));
@@ -4262,13 +4267,18 @@ fn handle_menu_action(app: &AppHandle, id: &str) {
             menu_background(&app, action, move || toggle_agent_host_from_tray(&handle));
         }
         "agent-host-log" => {
-            let _ = reveal_path(&agent_host_log_path());
+            menu_background(&app, "Open Agent Host log", || {
+                reveal_path(&agent_host_log_path())
+            });
         }
         "logs" => {
-            let _ = open_logs_impl();
+            menu_background(&app, "Open logs", open_logs_impl);
         }
         "docs" => {
-            open_external(&format!("{}/docs", hosted_url().trim_end_matches('/')));
+            menu_background(&app, "Open documentation", || {
+                open_external(&format!("{}/docs", hosted_url().trim_end_matches('/')));
+                Ok(())
+            });
         }
         "devtools" => {
             if let Some(window) = app.get_webview_window("main") {
@@ -4761,8 +4771,12 @@ fn remember_workspace_route(app: &AppHandle) {
     let Some(target) = read_resume_target() else {
         return;
     };
+    // Reading the route needs the live webview, so that part stays here. The
+    // write does not: it syncs the config to disk twice, and on the close path
+    // that ran before the window was hidden -- a visible hitch between clicking
+    // the red button and the window going away, seconds of it on a busy disk.
     if let Some(route) = current_workspace_route(app, &target) {
-        write_resume_route(&route);
+        std::thread::spawn(move || write_resume_route(&route));
     }
 }
 
@@ -5214,9 +5228,11 @@ fn main() {
                 // was on the way out — closing the window is the most common
                 // way a session ends, and it is the last chance to read the
                 // route off a live webview.
-                remember_workspace_route(window.app_handle());
+                // Hidden first. The route is still readable from a hidden
+                // webview, and the user asked for the window to go away now.
                 api.prevent_close();
                 let _ = window.hide();
+                remember_workspace_route(window.app_handle());
             }
         })
         .build(tauri::generate_context!())
