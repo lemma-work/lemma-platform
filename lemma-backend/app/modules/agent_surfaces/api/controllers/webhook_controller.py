@@ -32,6 +32,9 @@ from app.modules.identity.services.whatsapp_mobile_verification import (
     is_whatsapp_verification_configured,
     parse_reserved_verification_message,
 )
+from app.modules.agent_surfaces.platforms.resend.inbound import (
+    normalize_resend_inbound as _normalize_resend_inbound,
+)
 from app.modules.agent_surfaces.services import teams_consent
 from app.modules.agent_surfaces.services.surface_service import (
     AgentSurfaceService,
@@ -160,57 +163,6 @@ async def _verify_inbound_request(
     return None
 
 
-def _email_address(value) -> str | None:
-    """Pull a bare email address out of a string / {address} / list shape."""
-    if isinstance(value, list):
-        return _email_address(value[0]) if value else None
-    if isinstance(value, dict):
-        return _email_address(value.get("address") or value.get("email"))
-    if isinstance(value, str):
-        text = value.strip()
-        if "<" in text and ">" in text:
-            text = text[text.index("<") + 1 : text.index(">")].strip()
-        return text or None
-    return None
-
-
-def _normalize_resend_inbound(payload: dict) -> dict:
-    """Normalize a Resend inbound webhook into the flat dict the parser expects.
-
-    Tolerates both a flat body and a Svix-style ``{type, data: {...}}`` envelope,
-    and address fields shaped as strings, ``{address}`` dicts, or lists.
-    """
-    data = payload.get("data") if isinstance(payload.get("data"), dict) else payload
-    raw_headers = data.get("headers") or []
-    header_map: dict[str, str] = {}
-    if isinstance(raw_headers, list):
-        for h in raw_headers:
-            if isinstance(h, dict) and h.get("name"):
-                header_map[str(h["name"]).lower()] = str(h.get("value") or "")
-    elif isinstance(raw_headers, dict):
-        header_map = {str(k).lower(): str(v) for k, v in raw_headers.items()}
-
-    references_raw = data.get("references") or header_map.get("references") or ""
-    if isinstance(references_raw, str):
-        references = [r for r in references_raw.split() if r]
-    else:
-        references = [str(r) for r in (references_raw or [])]
-
-    return {
-        "from": _email_address(data.get("from")),
-        "from_name": (data.get("from") or {}).get("name")
-        if isinstance(data.get("from"), dict)
-        else None,
-        "to": _email_address(data.get("to")),
-        "subject": data.get("subject") or header_map.get("subject"),
-        "text": data.get("text"),
-        "html": data.get("html"),
-        "message_id": data.get("message_id") or header_map.get("message-id"),
-        "in_reply_to": data.get("in_reply_to") or header_map.get("in-reply-to"),
-        "references": references,
-    }
-
-
 @router.post(
     "/webhooks/telegram-manager",
     operation_id="surface.webhook.handle_telegram_manager",
@@ -265,12 +217,20 @@ async def handle_platform_webhook(
         # of it (Resend does not go through assert_platform_request_allowed).
         await security_service.verify_resend_request(headers=headers, raw_body=raw_body)
         normalized = _normalize_resend_inbound(payload)
-        to_address = normalized.get("to")
-        if not to_address:
+        recipients = normalized.get("recipients") or []
+        if not recipients:
             return {"message": "Ignored: no destination address"}
-        surface = await service.surface_repository.get_active_by_address(
-            platform="RESEND", address=to_address
-        )
+        # Try every address the message was delivered for, not just the one the
+        # sender typed: under aliasing or forwarding the pod's address is in
+        # ``received_for`` and matching on ``to`` alone loses the mail.
+        surface = None
+        for address in recipients:
+            surface = await service.surface_repository.get_active_by_address(
+                platform="RESEND", address=address
+            )
+            if surface is not None:
+                normalized["to"] = address
+                break
         if surface is None:
             return {"message": "Ignored: no surface for address"}
         source_event_id = _surface_source_event_id("resend", normalized, raw_body)

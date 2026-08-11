@@ -64,19 +64,26 @@ def _describe_fields(schema: dict[str, Any] | None) -> str:
 def build_form_instruction(*, run_id: UUID, node_id: str, fields: str) -> str:
     """What the recipient's agent is told to do with their reply.
 
-    It points at ``submit-form`` rather than inviting a free-text answer,
-    because a form is validated against its node's schema and a prose reply
-    cannot be. The notification refuses ``respond`` for the same reason.
+    It points at ``submit_workflow_form`` rather than inviting a free-text
+    answer, because a form is validated against its node's schema and a prose
+    reply cannot be. The notification refuses ``respond`` for the same reason.
+
+    The tool, not the CLI: this instruction is read by whichever agent happens
+    to be handling the reply, and on an email or chat surface that agent may
+    have no shell and no authenticated CLI. ``submit_workflow_form`` is attached
+    automatically whenever a form is open, so it is always reachable.
     """
+    del run_id, node_id  # read from the notification at submit time, not retyped
     asked = f" It asks for: {fields}." if fields else ""
     return (
         "This person is being asked to complete a workflow form."
         f"{asked}\n\n"
         "Collect the values conversationally, then submit them with "
-        f"`lemma workflows runs submit-form {run_id} --node {node_id} "
-        "--data '{...}'`. Do not invent values they did not give you. If they "
-        "decline or go quiet, leave the form unsubmitted — it stays in their "
-        "queue in the app."
+        "`submit_workflow_form`, using the field names listed with this "
+        "request. Do not invent values they did not give you — submission is "
+        "validated against the form's schema and a guess will be rejected. If "
+        "they decline or go quiet, leave the form unsubmitted; it stays in "
+        "their queue in the app."
     )
 
 

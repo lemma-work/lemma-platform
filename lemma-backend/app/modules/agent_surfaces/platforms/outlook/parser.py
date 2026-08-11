@@ -7,6 +7,7 @@ from app.modules.agent_surfaces.domain.entities import ConversationType
 from app.modules.agent_surfaces.platforms.email_common import (
     parse_email_identity,
     plain_text_from_html,
+    strip_quoted_reply,
 )
 
 
@@ -130,7 +131,9 @@ class OutlookMessageParser:
 
         if thread_id and external_message_id and sender_identity.email:
             subject = str(data.get("subject") or "").strip()
-            body = _body_text(data).strip()
+            # Quoted original trimmed for the same reason as every other
+            # provider: a reply should be what the person just wrote.
+            body = strip_quoted_reply(_body_text(data).strip(), subject)
             message_text = f"Email subject: {subject}\n\n{body}".strip()
             header_references = [
                 ref.strip()

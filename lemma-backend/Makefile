@@ -228,6 +228,7 @@ typecheck-critical:
 		app/core/api/schemas.py \
 		app/core/api/uploads.py \
 		app/core/infrastructure/events \
+		app/modules/agent_surfaces/domain/ports.py \
 		app/modules/pod/domain \
 		app/modules/pod_bundle/domain \
 		app/modules/schedule/domain \

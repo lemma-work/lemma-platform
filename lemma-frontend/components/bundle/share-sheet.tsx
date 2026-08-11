@@ -33,6 +33,9 @@ import {
     type PublishMode,
 } from '@/lib/hooks/use-pod-bundle';
 import { usePod } from '@/lib/hooks/use-pods';
+import { useTables } from '@/lib/hooks/use-datastores';
+import { useQuery } from '@tanstack/react-query';
+import { getLemmaClient } from '@/lib/sdk/lemma-client';
 
 interface ShareSheetProps {
     podId: string;
@@ -58,6 +61,56 @@ function Toggle({
                 <SwitchThumb className={checked ? 'translate-x-4' : undefined} />
             </SwitchTrack>
         </Switch>
+    );
+}
+
+/** Names the caller picked, as checkboxes. Nothing is selected by default:
+ *  rows and files leave a pod only where someone asked for them. */
+function NamePicker({
+    label,
+    hint,
+    options,
+    selected,
+    onToggle,
+    emptyText,
+    disabled,
+}: {
+    label: string;
+    hint: string;
+    options: string[];
+    selected: string[];
+    onToggle: (name: string) => void;
+    emptyText: string;
+    disabled?: boolean;
+}) {
+    return (
+        <div className="mt-4">
+            <div className="text-sm text-[var(--text-secondary)]">
+                {label}
+                <span className="block text-xs text-[var(--text-tertiary)]">{hint}</span>
+            </div>
+            {options.length === 0 ? (
+                <p className="mt-2 text-xs text-[var(--text-tertiary)]">{emptyText}</p>
+            ) : (
+                <div className="mt-2 max-h-36 overflow-y-auto rounded-md border border-[var(--border-subtle)] p-2">
+                    {options.map((name) => (
+                        <label
+                            key={name}
+                            className="flex cursor-pointer items-center gap-2 py-1 text-sm text-[var(--text-primary)]"
+                        >
+                            <input
+                                type="checkbox"
+                                className="accent-[var(--action-primary)]"
+                                checked={selected.includes(name)}
+                                onChange={() => onToggle(name)}
+                                disabled={disabled}
+                            />
+                            <span className="truncate">{name}</span>
+                        </label>
+                    ))}
+                </div>
+            )}
+        </div>
     );
 }
 
@@ -102,10 +155,44 @@ function githubImportPath(repoUrl: string): string | null {
 
 export function ShareSheet({ podId, podName, open, onOpenChange, canPublish = true }: ShareSheetProps) {
     const { data: pod } = usePod(podId);
+    const { data: tables } = useTables(podId, undefined, { enabled: open });
+    const { data: folderTree } = useQuery({
+        queryKey: ['bundle-export-folders', podId],
+        queryFn: () => getLemmaClient(podId).files.tree({ rootPath: '/', filesPerDirectory: 0 }),
+        enabled: open && Boolean(podId),
+        staleTime: 60_000,
+    });
     const defaultRepo = useMemo(() => toRepoSlug(podName || 'my-pod') || 'my-pod', [podName]);
+    const tableNames = useMemo(
+        () =>
+            ((tables as { name?: string }[] | undefined) ?? [])
+                .map((t) => t.name)
+                .filter((name): name is string => Boolean(name))
+                .sort(),
+        [tables],
+    );
+    /** Every folder in the tree, flattened to full paths so a nested one can be
+     *  picked on its own. The pod root is not offered: "everything" is exactly
+     *  what naming folders exists to avoid. */
+    const folderPaths = useMemo(() => {
+        const out: string[] = [];
+        const walk = (node: unknown) => {
+            if (!node || typeof node !== 'object') return;
+            const entry = node as { path?: string; kind?: string; children?: unknown[] };
+            const path = entry.path ?? '';
+            if (String(entry.kind ?? '').toUpperCase() === 'FOLDER' && path && path !== '/') {
+                out.push(path);
+            }
+            for (const child of entry.children ?? []) walk(child);
+        };
+        walk((folderTree as { root?: unknown } | undefined)?.root ?? folderTree);
+        return Array.from(new Set(out)).sort();
+    }, [folderTree]);
 
-    // Export
-    const [withData, setWithData] = useState(true);
+    // Export. Both selections start empty — a bundle carries the pod's shape
+    // unless rows/files are explicitly named.
+    const [dataTables, setDataTables] = useState<string[]>([]);
+    const [fileFolders, setFileFolders] = useState<string[]>([]);
     const [exporting, setExporting] = useState(false);
     const [exportView, setExportView] = useState<BundleProgressView | null>(null);
 
@@ -130,7 +217,10 @@ export function ShareSheet({ podId, podName, open, onOpenChange, canPublish = tr
         setExporting(true);
         setExportView({ status: 'QUEUED', done: 0, total: 0 });
         try {
-            const started = await startExport(podId, { with_data: withData });
+            const started = await startExport(podId, {
+                data_tables: dataTables.length > 0 ? dataTables : null,
+                file_folders: fileFolders.length > 0 ? fileFolders : null,
+            });
             const final = await pollExport(podId, started.export_id, {
                 onTick: (s) =>
                     setExportView({ status: s.status, done: s.progress.done, total: s.progress.total }),
@@ -240,18 +330,40 @@ export function ShareSheet({ podId, podName, open, onOpenChange, canPublish = tr
                             Download bundle
                         </div>
                         <p className="mt-1 text-xs text-[var(--text-tertiary)]">
-                            A <code>.zip</code> of the whole pod — tables, agents, functions, workflows, apps and
-                            surfaces. Anyone can import it from Lemma.
+                            A <code>.zip</code> of the pod — tables, agents, functions, workflows, apps and
+                            surfaces. Rows and files come only from what you pick below. Anyone can import it
+                            from Lemma.
                         </p>
-                        <div className="mt-4 flex items-center justify-between gap-3">
-                            <div className="text-sm text-[var(--text-secondary)]">
-                                Include table data
-                                <span className="block text-xs text-[var(--text-tertiary)]">
-                                    Off exports the schema only.
-                                </span>
-                            </div>
-                            <Toggle checked={withData} onCheckedChange={setWithData} disabled={exporting} />
-                        </div>
+                        <NamePicker
+                            label="Include rows from these tables"
+                            hint="Pick none to export table structure only."
+                            options={tableNames}
+                            selected={dataTables}
+                            onToggle={(name) =>
+                                setDataTables((current) =>
+                                    current.includes(name)
+                                        ? current.filter((n) => n !== name)
+                                        : [...current, name],
+                                )
+                            }
+                            emptyText="This pod has no tables."
+                            disabled={exporting}
+                        />
+                        <NamePicker
+                            label="Include these folders"
+                            hint="Each folder travels with everything inside it."
+                            options={folderPaths}
+                            selected={fileFolders}
+                            onToggle={(path) =>
+                                setFileFolders((current) =>
+                                    current.includes(path)
+                                        ? current.filter((p) => p !== path)
+                                        : [...current, path],
+                                )
+                            }
+                            emptyText="This pod has no folders."
+                            disabled={exporting}
+                        />
                         {exporting && exportView ? (
                             <BundleProgressBar
                                 className="mt-4"

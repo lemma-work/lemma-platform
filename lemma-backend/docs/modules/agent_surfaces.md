@@ -69,6 +69,17 @@ be downloaded, stored through datastore, transcribed, or referenced depending on
 size/type. Email surfaces use subject/thread/address semantics rather than chat
 streaming.
 
+`enrich_inbound_event` is optional for most adapters and **mandatory for
+Resend**: its `email.received` webhook carries metadata only — no body, no
+headers — so the adapter fetches the message from the Received Emails API and
+drops the event if that fails. Running on what the webhook alone provides means
+starting an agent on an empty prompt.
+
+Each agent is provisioned its own inbound address, `{agent}.{pod}@{domain}` on
+`RESEND_INBOUND_DOMAIN`, at creation. Inbound routing matches the surface by
+that address, so it is unique-indexed: two pods colliding would silently deliver
+one pod's mail into the other's.
+
 ### Interactive tools and indicators
 
 `ask_user` and `request_approval` pause the agent run (`WAITING`); the run
@@ -120,6 +131,10 @@ represented as contacts. Redis dedup guards repeat provider deliveries.
 
 The large unit/e2e matrix uses real payload fixtures and mock provider servers
 for platform parsing, signatures, conversation reuse, identity, attachments,
-approvals/forms, progress, and delivery. Current unit coverage is 65.8% (5,629
-of 8,556 statements). Its legacy in-module README has stale route examples;
-event-loss, complexity, and boundary findings are in [issues.md](issues.md).
+approvals/forms, progress, and delivery. Current unit coverage is 69% (8,737 of
+12,722 statements), from
+`uv run pytest -m "not e2e" app/modules/agent_surfaces --cov=app/modules/agent_surfaces`
+— re-measure rather than trusting this line, since nothing checks it.
+The in-module README is a pointer back here and
+deliberately carries no route examples of its own. Event-loss, complexity, and
+boundary findings are in [issues.md](issues.md).

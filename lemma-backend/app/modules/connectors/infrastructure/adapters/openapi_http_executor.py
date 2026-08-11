@@ -331,10 +331,26 @@ class OpenApiHttpExecutor:
     ):
         payload = payload or {}
         path = execution["path"]
+        # A path parameter is one URL segment, so its own `/` is escaped. A few
+        # APIs contradict that: GitHub's git-ref endpoints take a multi-segment
+        # ref (`heads/main`) in a single `{ref}` placeholder and 404 on the
+        # percent-encoded form. The descriptor names those explicitly rather
+        # than the executor guessing from the value.
+        multi_segment = set(execution.get("multi_segment_path_params") or [])
         for name in execution.get("path_params", []):
             if name not in payload or payload[name] is None:
                 raise OpenApiHttpExecutionError(f"Missing required path parameter '{name}'.")
-            path = path.replace("{" + name + "}", quote(_scalar(payload[name]), safe=""))
+            value = _scalar(payload[name])
+            if name in multi_segment:
+                # Keeping `/` literal also keeps `..` literal, which would let a
+                # parameter climb out of the endpoint it belongs to.
+                if any(segment in {".", ".."} for segment in value.split("/")):
+                    raise OpenApiHttpExecutionError(
+                        f"Path parameter '{name}' must not contain relative segments."
+                    )
+                path = path.replace("{" + name + "}", quote(value, safe="/"))
+                continue
+            path = path.replace("{" + name + "}", quote(value, safe=""))
 
         params: list[tuple[str, str]] = list(auth_query.items())
         for spec in execution.get("query_params", []):

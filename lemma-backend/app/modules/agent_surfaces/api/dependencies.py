@@ -1,8 +1,16 @@
 from __future__ import annotations
 
 from typing import Annotated
+from uuid import UUID
 
 from fastapi import Depends
+
+from app.modules.agent_surfaces.domain.entities import (
+    AgentSurfaceEntity,
+    SurfaceConfig,
+    SurfaceCredentialMode,
+    SurfacePlatform,
+)
 
 from app.core.api.dependencies import UoWDep, get_uow_factory
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
@@ -121,7 +129,29 @@ def get_notification_service(
         ingress_service=get_surface_event_handler(uow, conversation_service),
         pod_membership_port=SqlAlchemySurfaceRoutingResolutionAdapter(uow),
         rate_limiter=NotificationRateLimiter(),
+        surface_provisioner=_build_system_email_provisioner(uow),
     )
+
+
+def _build_system_email_provisioner(uow: UoWDep):
+    """Create the pod's system mailbox on first use, if that is enabled.
+
+    Goes through ``create_surface`` rather than writing a row directly so the
+    surface gets the same per-pod address, credential checks and receiver
+    registration as one a human connected — an auto-provisioned surface that
+    inbound routing does not recognise would deliver mail nobody can reply to.
+    """
+
+    async def provision(pod_id: UUID) -> AgentSurfaceEntity | None:
+        return await get_surface_service(uow).create_surface(
+            pod_id=pod_id,
+            platform=SurfacePlatform.RESEND,
+            agent_id=None,
+            config=SurfaceConfig(),
+            credential_mode=SurfaceCredentialMode.SYSTEM,
+        )
+
+    return provision
 
 
 def get_surface_webhook_security_service(

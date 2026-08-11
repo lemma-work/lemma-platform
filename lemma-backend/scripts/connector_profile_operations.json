@@ -19,8 +19,7 @@
     "COMPOSIO": ["LINEAR_GET_CURRENT_USER"]
   },
   "github": {
-    "LEMMA": ["users_get_authenticated"],
-    "COMPOSIO": ["GITHUB_GET_THE_AUTHENTICATED_USER"]
+    "LEMMA": ["users_get_authenticated"]
   },
   "discord": {
     "COMPOSIO": ["DISCORD_GET_MY_USER"]

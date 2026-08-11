@@ -13,6 +13,7 @@ from app.modules.connectors.domain.connector import (
 )
 from app.modules.connectors.domain.errors import (
     OperationExecutionError,
+    OperationExecutionNotFoundError,
 )
 from app.modules.connectors.domain.connector_operation import (
     ConnectorOperationEntity,
@@ -413,6 +414,61 @@ async def test_execute_operation_wraps_unexpected_errors_in_domain_error():
     assert exc_info.value.code == "OPERATION_EXECUTION_ERROR"
     assert exc_info.value.details == {"error_type": "RuntimeError"}
     assert "provider exploded" not in str(exc_info.value)
+
+
+async def test_execute_operation_keeps_the_status_an_executor_reported():
+    # The http/sql/mcp executors raise their own exception type carrying the
+    # provider's status. Without honouring it, a resource that simply does not
+    # exist would read as "our fault, 500" -- and a caller could not tell a repo
+    # that was never created from a connector that is broken.
+    class _HttpFailure(Exception):
+        def __init__(self):
+            super().__init__("GitHub said: Not Found for /repos/acme/crm")
+            self.status_code = 404
+
+    operation_repository = AsyncMock()
+    operation_repository.get_by_connector_and_name.return_value = (
+        ConnectorOperationEntity(
+            id="github:repos_get",
+            connector_id="github",
+            name="repos_get",
+            provider_operation_name="repos_get",
+            input_schema={"type": "object"},
+        )
+    )
+    account = SimpleNamespace(id=uuid4(), credentials={"access_token": "token"})
+    service = ConnectorOperationService(
+        connector_repository=AsyncMock(
+            get=AsyncMock(
+                return_value=ConnectorEntity(
+                    id="github",
+                    auth_provider=AuthProvider.LEMMA,
+                )
+            )
+        ),
+        operation_repository=operation_repository,
+        operation_gateway=AsyncMock(
+            execute_operation=AsyncMock(side_effect=_HttpFailure())
+        ),
+        account_resolution_service=AsyncMock(
+            resolve_account=AsyncMock(return_value=account)
+        ),
+    )
+
+    with pytest.raises(OperationExecutionNotFoundError) as exc_info:
+        await service.execute_operation(
+            connector_id="github",
+            operation_name="repos_get",
+            payload={"owner": "acme", "repo": "crm"},
+            user_id=uuid4(),
+        )
+
+    assert exc_info.value.status_code == 404
+    assert exc_info.value.details == {
+        "error_type": "_HttpFailure",
+        "upstream_status": 404,
+    }
+    assert "acme/crm" not in str(exc_info.value)
 
 
 class _BinaryResult(BaseModel):

@@ -234,3 +234,46 @@ async def test_platform_tool_factory_adds_outlook_tools_for_surface_conversation
     assert len(toolsets) == 1
     assert "outlook_reply_email" in toolsets[0].tools
     assert "outlook_download_attachment" not in toolsets[0].tools
+
+
+@pytest.mark.asyncio
+async def test_the_resend_reply_tool_is_given_the_surfaces_from_address(monkeypatch):
+    """`from_address` belongs to the surface row, not to the platform.
+
+    The factory used to take a native-credentials shortcut whenever the
+    deployment had a Resend api key — which is always — and that shortcut knows
+    nothing about the surface, so the reply tool was built without a sender.
+    Every `resend_reply_email` call then failed with "Resend send requires
+    api_key, from_address and a recipient", including the acknowledgement that
+    tells somebody their answer was recorded.
+    """
+    from uuid import uuid4
+
+    from app.modules.agent_surfaces.domain.entities import (
+        AgentSurfaceEntity,
+        SurfaceConfig,
+        SurfacePlatform,
+    )
+    from app.modules.agent_surfaces.services.credential_resolver import (
+        SurfaceCredentialResolver,
+    )
+
+    surface = AgentSurfaceEntity(
+        id=uuid4(),
+        pod_id=uuid4(),
+        name="resend-ops",
+        surface_type=SurfacePlatform.RESEND,
+        config=SurfaceConfig(),
+        surface_identity_email="ops.acme@ops.asur.work",
+    )
+
+    monkeypatch.setattr(
+        "app.core.config.settings.resend_api_key", "re_test"
+    )
+
+    credentials = await SurfaceCredentialResolver(
+        session=None, connector_service=None
+    ).for_surface(surface, prefer_native=True)
+
+    assert credentials["api_key"] == "re_test"
+    assert credentials["from_address"] == "ops.acme@ops.asur.work"

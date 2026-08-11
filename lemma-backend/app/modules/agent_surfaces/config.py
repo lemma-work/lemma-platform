@@ -141,19 +141,28 @@ class SurfaceSettings(BaseSettings):
     )
 
     # Resend (system email surface)
-    resend_api_key: Optional[str] = Field(
-        default=None, description="Resend API key for the system email surface"
-    )
-    resend_inbound_domain: str = Field(
-        default="ops.lemma.work",
-        description="Domain for per-pod inbound addresses (pod.org@<domain>)",
+    # No default. A fallback domain looks like configuration and is not: it
+    # mints addresses on a domain nobody owns, which deliver nowhere and whose
+    # replies match no surface. Absent means "email is not set up", which the
+    # code says out loud rather than papering over.
+    resend_inbound_domain: Optional[str] = Field(
+        default=None,
+        description=(
+            "Verified catch-all domain for agent inbound addresses "
+            "(agent.pod@<domain>). Required to use the Resend surface."
+        ),
     )
     resend_from_name: str = Field(
         default="Lemma", description="Display name on outbound Resend emails"
     )
-    resend_inbound_signing_secret: Optional[str] = Field(
-        default=None,
-        description="Secret for verifying Resend inbound webhook signatures",
+    resend_auto_provision_enabled: bool = Field(
+        default=False,
+        description=(
+            "Give a pod with no active surface a system Resend email surface the "
+            "first time it tries to notify someone. Off by default because it is "
+            "outward-facing: every pod that turns it on sends mail from the same "
+            "Resend domain, so deliverability and abuse reputation are shared."
+        ),
     )
 
     # Surface webhook ingress + runtime
@@ -212,3 +221,23 @@ class SurfaceSettings(BaseSettings):
 
 
 surface_settings = SurfaceSettings()
+
+
+def resolve_resend_inbound_secret() -> str | None:
+    """The signing secret for the Resend webhook carrying inbound email.
+
+    One setting, ``RESEND_WEBHOOK_SECRET``, owned by core because the API key
+    and sender identity already live there and splitting a provider's config
+    across two Settings classes is what produced two secrets, two API keys and
+    two answers to "which domain do we send from".
+    """
+    from app.core.config import reveal_secret, settings
+
+    return (reveal_secret(settings.resend_webhook_secret) or "").strip() or None
+
+
+def resolve_resend_api_key() -> str | None:
+    """The Resend API key, read from its single home in core settings."""
+    from app.core.config import reveal_secret, settings
+
+    return (reveal_secret(settings.resend_api_key) or "").strip() or None

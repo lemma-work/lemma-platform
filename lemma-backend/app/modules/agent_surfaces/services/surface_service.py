@@ -165,6 +165,7 @@ class AgentSurfaceService(SurfaceSetupReadMixin, TelegramMiniAppSyncMixin):
         external_workspace_id: str | None = None,
         external_tenant_id: str | None = None,
         external_channel_id: str | None = None,
+        surface_identity_email: str | None = None,
         ctx: Context | None = None,
     ) -> AgentSurfaceEntity:
         # A surface is addressed by its pod-unique name (defaults to the
@@ -201,12 +202,15 @@ class AgentSurfaceService(SurfaceSetupReadMixin, TelegramMiniAppSyncMixin):
             external_channel_id=external_channel_id,
             surface_identity_id=surface_identity_id,
         )
-        # Resend is a system-credentialed email surface: provision a unique
-        # per-pod inbound/outbound address that inbound routing matches on and
-        # outbound uses as the From. (Other email surfaces get this from their
-        # connected account.)
+        # Resend is a system-credentialed email surface: it needs an inbound
+        # address that routing matches on and outbound uses as the From. (Other
+        # email surfaces get this from their connected account.) Callers that
+        # allocate a readable per-agent address pass it in; the pod-level
+        # fallback derives one that cannot collide.
         if platform is SurfacePlatform.RESEND and not entity.surface_identity_email:
-            entity.surface_identity_email = self._provision_resend_address(pod_id)
+            entity.surface_identity_email = (
+                surface_identity_email or self._provision_resend_address(pod_id)
+            )
         self._validate_runtime_supported(entity)
         await self._ensure_unique_org_credential_binding(entity)
         telegram_credentials: dict[str, Any] | None = None
@@ -235,7 +239,12 @@ class AgentSurfaceService(SurfaceSetupReadMixin, TelegramMiniAppSyncMixin):
         pod's inbound mail to the other. ``pod-`` + 32 hex = 36 chars, within the
         64-char local-part limit.
         """
-        domain = surface_settings.resend_inbound_domain or "ops.lemma.work"
+        domain = surface_settings.resend_inbound_domain
+        if not domain:
+            raise AgentSurfaceValidationError(
+                "Email is not configured for this deployment: set "
+                "RESEND_INBOUND_DOMAIN to a verified catch-all domain."
+            )
         return f"pod-{pod_id.hex}@{domain}"
 
     async def get_surface(self, surface_id: UUID) -> AgentSurfaceEntity:

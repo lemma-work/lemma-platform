@@ -13,6 +13,7 @@ from app.modules.agent_surfaces.domain.entities import (
     ParsedSurfaceInteraction,
 )
 from app.modules.agent_surfaces.domain.models import (
+    ColdEmailSendResult,
     StreamAppendResult,
     SurfaceApprovalRenderPlan,
     SurfaceChannelInfo,
@@ -104,6 +105,32 @@ class BaseSurfaceAdapter:
         on most platforms)."""
         del credentials, event, file_name, audio_bytes, mime, caption
         return False
+
+    async def send_cold_email(
+        self,
+        *,
+        credentials: dict[str, Any],
+        recipient_email: str,
+        subject: str,
+        message: str,
+        thread_seed_id: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> "ColdEmailSendResult | None":
+        """Start an email thread with somebody who has never written to us.
+
+        The one thing email can do that chat cannot: address a mailbox with no
+        prior message to reply to. Default: not supported → None, which is a
+        clean "this platform can't", not an error — Outlook and Composio-backed
+        Gmail both reply through endpoints keyed by a provider message id they
+        would not have.
+
+        ``thread_seed_id`` is the Message-ID the caller will key the reply on;
+        an implementation must ensure the recipient's reply carries it (in
+        ``References``) or return a thread id its own parser will derive
+        instead.
+        """
+        del credentials, recipient_email, subject, message, thread_seed_id, metadata
+        return None
 
     async def parse_inbound_interaction(
         self, payload: dict[str, Any], headers: dict[str, str] | None = None

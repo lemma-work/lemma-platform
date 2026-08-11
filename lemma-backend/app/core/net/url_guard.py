@@ -281,11 +281,17 @@ async def request_guarded(
                 for key, value in dict(headers or {}).items()
                 if key.lower() not in dropped_headers
             }
+            # `or None`, never an empty list: httpx rebuilds the URL's query
+            # from whatever `params` it is given, so handing it `[]` erases the
+            # query the URL already carries. A redirect target's query is often
+            # the only thing authorizing it -- GitHub's archive download
+            # redirects to a signed `codeload` URL -- and erasing it turns a
+            # working download into a 404.
             request_params = [
                 (key, value)
                 for key, value in _as_param_pairs(params)
                 if key not in dropped_params
-            ]
+            ] or None
 
         response = await client.request(
             current_method,

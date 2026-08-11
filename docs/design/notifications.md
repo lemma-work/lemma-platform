@@ -129,16 +129,32 @@ notify → membership check (FAILS CLOSED)
 ```
 
 Channel order — a read model over tables that already exist, not a new
-`member_reaches` table (it is derivable):
+`member_reaches` table (it is derivable).
 
-1. **A surface they chose** (`UserPreferences.default_surfaces`), already
-   authoritative for *inbound* routing. Same precedence for egress means people
-   are reached where they already talk to us.
-2. **A surface we've seen them on**, freshest `last_inbound_at` first — where
-   they last spoke *to us*, not where we last spoke *at them*.
+The candidate set is **the sending agent's own surfaces**: those whose
+`agent_id` is the agent, or the pod-level surfaces when the sender is the pod
+assistant or there is no agent at all (a workflow FORM assignment, or the API
+endpoint). Identity is the reason. Pods connect their own Telegram bots and
+Slack apps, and a message from the agent you already talk to on Telegram
+carries trust that a message from some other bot in the same pod does not.
+
+1. **The surface the run is on** (`origin_surface_id`) — an agent answering on
+   Telegram reaches out from that same bot.
+2. **Its other chat surfaces**, freshest `last_inbound_at` first — where they
+   last spoke *to us*, not where we last spoke *at them*.
 3. **Email**, the only family that can address someone who never wrote first.
 4. **Nothing** — a legitimate outcome, never a silent one. The reason travels to
    the API so the UI can say *"Priya hasn't connected Telegram yet."*
+   `NO_SURFACE_FOR_AGENT` is the case where the pod can be reached but this
+   agent has nothing of its own to reach with.
+
+An earlier revision ranked by the recipient's `UserPreferences.default_surfaces`
+on the grounds that egress should mirror inbound routing. That is now removed
+from egress entirely (`get_user_default_surface_ids` with it). A preference
+records where someone wants to be reached, but not by whom — honouring it meant
+an agent could send from a bot that had never spoken to that person, and the
+symmetry argument was the whole justification for it. Inbound routing still uses
+the singular `get_user_default_surface_id`; that one is untouched.
 
 **First success wins.** Three copies across three apps is how a useful feature
 comes to read as spam.
@@ -149,15 +165,32 @@ phone that the pod has no memory of.
 
 Reusing the recipient's existing platform *thread* is why no cold-open is needed
 for chat — and why PR #264's `SurfaceTarget` refactor (134 adapter signature
-sites) is **not** here. Email gets its own narrow ~40-line path.
+sites) is **not** here. Email gets its own path, still narrow but no longer
+tiny: `cold_email_thread.py` derives the coordinates a reply must match,
+`notification_egress.py` opens the conversation and persists the link, and the
+Resend adapter sends. Each notification opens a **new** email thread rather than
+appending to one — over email, a fresh subject line is what makes an unanswered
+ask visible in an inbox, and a reply lands against the question it answers.
 
 ## Reaching someone else is a different act
 
 The recipient sees the pod's bot and extends it the trust they extend to Lemma.
 That is a phishing primitive if shipped carelessly.
 
-- **`MESSAGING` is its own opt-in toolset**, not in `POD_DEFAULT_AGENT_TOOLSETS`,
-  and withheld from sub-agents.
+- **`MESSAGING` is its own opt-in toolset** for user-created agents, which get
+  exactly the toolsets they were created with. It is withheld from sub-agents
+  entirely: a sub-agent is an implementation detail of its parent's turn, and a
+  colleague receiving a message from one has no way to place it.
+
+  The pod assistant is the exception, and it is a deliberate one: it runs with
+  the user's own permissions, so "message a colleague on my behalf" is authority
+  it already has. `MESSAGING` and `SNOOZE` are in `POD_DEFAULT_AGENT_TOOLSETS`
+  together, because `message_user` does not block — without `snooze` the agent
+  is told to send and then has no way to be around when the reply lands. Both
+  are **deferred** (`EXTRA_TOOLSETS`), so they sit behind ToolSearch instead of
+  the visible prompt prefix; an assistant that carries "message a colleague" in
+  front of it reaches for it. Their instructions still ride in the prefix, since
+  advertising the tool while hiding the contract is the worst of both.
 - **Attribution is mandatory** — every message names both the agent and the human
   whose authority the run carries.
 - **The toolset grant is the whole permission.** There is deliberately no

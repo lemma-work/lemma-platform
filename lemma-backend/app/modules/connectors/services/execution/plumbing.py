@@ -66,12 +66,48 @@ def _upstream_details(exc: Exception) -> dict[str, Any]:
     return details
 
 
+def _status_classified(exc: Exception):
+    """The domain error an upstream HTTP status deserves, if it carries one.
+
+    The http/sql/mcp executors raise their own exception types carrying the
+    provider's status code. Without this they would all land in the catch-all
+    below and read as "our fault, 500" -- so a caller could not tell a repo that
+    does not exist from a connector that is broken, which is the difference
+    between a normal branch and a failed publish. The package and Composio
+    gateways already classify their own errors this way; this gives the same
+    contract to every other kind.
+    """
+    from app.modules.connectors.domain.errors import (
+        OperationExecutionAccessDeniedError,
+        OperationExecutionNotFoundError,
+        OperationExecutionUnauthorizedError,
+        OperationExecutionValidationError,
+    )
+
+    status_code = getattr(exc, "status_code", None)
+    if not isinstance(status_code, int):
+        return None
+    error_cls = {
+        400: OperationExecutionValidationError,
+        401: OperationExecutionUnauthorizedError,
+        403: OperationExecutionAccessDeniedError,
+        404: OperationExecutionNotFoundError,
+        422: OperationExecutionValidationError,
+    }.get(status_code)
+    if error_cls is None:
+        return None
+    # The message is fixed by the error class; the exception's own text may
+    # carry provider request bodies or credentials and never travels.
+    return error_cls("", details=_upstream_details(exc))
+
+
 @contextlib.contextmanager
 def execution_failures_translated():
     """Turn whatever escapes an executor into an honest domain error.
 
-    Transport failures are transient and say so. Anything else is a fault on
-    this side: it is still bounded here, so no traceback and no upstream
+    Transport failures are transient and say so. A failure the provider itself
+    described with a status code is reported as that. Anything else is a fault
+    on this side: it is still bounded here, so no traceback and no upstream
     message reaches the caller, but it is not reported as a provider outage --
     that invites a retry which cannot succeed, and files our own bug under
     someone else's name.
@@ -92,6 +128,9 @@ def execution_failures_translated():
             details=_upstream_details(exc),
         ) from exc
     except Exception as exc:
+        classified = _status_classified(exc)
+        if classified is not None:
+            raise classified from exc
         raise OperationExecutionError(
             "The connector operation could not be completed.",
             details=_upstream_details(exc),

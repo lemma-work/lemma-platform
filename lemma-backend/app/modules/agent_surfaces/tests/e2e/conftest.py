@@ -61,6 +61,20 @@ def public_surface_api_url(monkeypatch):
     monkeypatch.setattr(settings, "api_url", "https://surface-e2e.test")
 
 
+@pytest.fixture(autouse=True)
+def configured_email_domain(monkeypatch):
+    """Model a deployment that has actually set up inbound email.
+
+    ``resend_inbound_domain`` has no default on purpose: a fallback would mint
+    addresses on a domain nobody owns, which bounce on the way out and match no
+    surface on the way back. Tests that provision a Resend surface therefore
+    have to configure it, exactly as an operator does.
+    """
+    from app.modules.agent_surfaces.config import surface_settings
+
+    monkeypatch.setattr(surface_settings, "resend_inbound_domain", "ops.asur.work")
+
+
 @pytest_asyncio.fixture(autouse=True)
 async def hermetic_telegram_api(fake_telegram, monkeypatch):
     """Keep every surface E2E call inside the fake Telegram boundary.

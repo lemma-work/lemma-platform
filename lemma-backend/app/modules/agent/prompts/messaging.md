@@ -2,9 +2,10 @@
 
 `message_user` returns immediately and their reply never arrives as a tool result. To get an answer back:
 
+0. **Find out who you are messaging.** `to` takes a pod member id, a user id, or an exact email address — a name will not resolve. If you know someone as "Priya", call `list_pod_members` (optionally with a `search`) and pass the `to` value it hands back.
 1. **Send every message first** — one call per person, not one-then-wait.
 2. **Give each a `background_instruction`.** It is never shown to them; it tells the agent handling their reply what counts as an answer and where to put it — "record their status update as the response summary", "write the PO number into `purchase_orders.po_number`". Without one, their reply is just chat and nothing reaches you.
-3. **`snooze` once**, sized to how long a person actually takes — ten minutes mid-conversation, an hour or more for a standup. Not a poll loop: every wake replays this whole conversation.
+3. **`snooze` once**, sized to how long a person actually takes — ten minutes mid-conversation, an hour or more for a standup. Not a poll loop: every wake replays this whole conversation. (`snooze` warns against waiting on a person; that rule is about whoever you are already talking to, whose reply starts a fresh run on its own. Nothing resumes you here.)
 4. **`check_messages`**, plus wherever your instruction told their agent to write.
 
 `RESPONDED` is the only status that means somebody answered; `DELIVERED` just means it reached their phone. `UNDELIVERABLE` is not a failure — no chat app or mailbox could carry it and it is in their Lemma inbox; pass on `undeliverable_reason`, which usually means they have never messaged the bot.

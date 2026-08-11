@@ -1235,6 +1235,96 @@ async def test_deactivate_excluded_composio_connectors_deactivates_microsoft_tea
     assert updated.is_active is False
 
 
+def test_github_is_offered_natively_and_never_imported_from_composio():
+    """A workspace agent's `git`/`gh` need the account's real token inside the
+    sandbox, which a broker never hands over -- so GitHub is Lemma's own
+    connector, and importing a Composio toolkit of the same name would put a
+    second, unusable GitHub install next to it."""
+    assert "github" not in importer.DEFAULT_COMPOSIO_CONNECTOR_IDS
+    assert "github" in importer.COMPOSIO_EXCLUDED_CONNECTOR_IDS
+    assert importer._filter_composio_connector_ids({"github", "notion"}) == {"notion"}
+
+
+def test_a_retired_connector_is_never_deactivated_wholesale():
+    """Excluding a connector from Composio normally means the whole connector
+    goes: nothing is left once the toolkit is removed. A retired one still has
+    its native half, so deactivating it here would take GitHub down entirely."""
+    github = ConnectorEntity(
+        id="github",
+        title="GitHub",
+        provider_capabilities=[
+            HttpKindSpec(auth_scheme=AuthMethod.OAUTH2),
+            ComposioProviderCapability(toolkit_slug="github"),
+        ],
+        is_active=True,
+    )
+    assert importer._is_excluded_composio_connector(github) is False
+
+
+@pytest.mark.asyncio
+async def test_retiring_composio_drops_only_its_half_of_the_connector():
+    github = ConnectorEntity(
+        id="github",
+        title="GitHub",
+        provider_capabilities=[
+            HttpKindSpec(auth_scheme=AuthMethod.OAUTH2),
+            ComposioProviderCapability(toolkit_slug="github"),
+        ],
+        is_active=True,
+    )
+    connector_repository = SimpleNamespace(
+        get=AsyncMock(return_value=github),
+        update=AsyncMock(),
+    )
+    session = SimpleNamespace(execute=AsyncMock(return_value=SimpleNamespace(rowcount=2)))
+
+    retired = await importer._retire_composio_capabilities(
+        connector_repository, session
+    )
+
+    assert retired == 1
+    updated = connector_repository.update.await_args.args[0]
+    assert updated.is_active is True
+    assert [
+        AuthProvider(capability.provider.value)
+        for capability in updated.provider_capabilities
+    ] == [AuthProvider.LEMMA]
+    # Catalog rows are regenerated every import, so the Composio ones are
+    # deleted; installs are only disabled, because deleting them would silently
+    # disconnect the people who own them.
+    statements = [str(call.args[0]) for call in session.execute.await_args_list]
+    assert any(
+        "DELETE FROM connector_operations" in statement for statement in statements
+    )
+    assert any(
+        "DELETE FROM connector_triggers" in statement for statement in statements
+    )
+    assert any("UPDATE auth_configs" in statement for statement in statements)
+    assert not any("accounts" in statement.lower() for statement in statements)
+
+
+@pytest.mark.asyncio
+async def test_retiring_composio_is_a_no_op_once_applied():
+    github = ConnectorEntity(
+        id="github",
+        title="GitHub",
+        provider_capabilities=[HttpKindSpec(auth_scheme=AuthMethod.OAUTH2)],
+        is_active=True,
+    )
+    connector_repository = SimpleNamespace(
+        get=AsyncMock(return_value=github),
+        update=AsyncMock(),
+    )
+    session = SimpleNamespace(execute=AsyncMock())
+
+    assert (
+        await importer._retire_composio_capabilities(connector_repository, session)
+        == 0
+    )
+    session.execute.assert_not_awaited()
+    connector_repository.update.assert_not_awaited()
+
+
 @pytest.mark.asyncio
 async def test_sync_composio_catalog_batched_commits_per_toolkit_batch():
     toolkit_items = [_toolkit("outlook", name="Outlook"), _toolkit("trello", name="Trello")]

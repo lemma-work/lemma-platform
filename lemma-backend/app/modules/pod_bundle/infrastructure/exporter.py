@@ -184,10 +184,9 @@ class BundleExporter:
         *,
         pod_id: UUID,
         user_id: UUID,
-        with_data: bool,
         include: list[str] | None,
         data_tables: list[str] | None = None,
-        with_files: bool = False,
+        file_folders: list[str] | None = None,
         ctx: Context,
         uow: SqlAlchemyUnitOfWork,
         on_progress: ProgressCallback,
@@ -200,12 +199,15 @@ class BundleExporter:
         The schema always exports fully; only row data + file/asset bytes are
         bounded (best-effort), with each cap that trips noted in ``warnings``.
 
-        Row data is opt-in and off by default: a table is seeded only when
-        ``with_data`` (every table) or its name is in ``data_tables`` (just those).
+        Row data and files are selected by name, never in bulk: a table is
+        seeded only when it appears in ``data_tables``, and a file is included
+        only when it lives under one of ``file_folders``. Naming nothing exports
+        the pod's resources alone.
         """
         selected = _normalize_include(include)
         data_tables_set = _normalize_data_tables(data_tables)
-        wants_data = with_data or bool(data_tables_set)
+        folder_paths = _normalize_file_folders(file_folders)
+        wants_data = bool(data_tables_set)
         warnings: list[str] = []
         record_budget = _RecordBudget(
             per_table=pod_bundle_settings.pod_bundle_export_max_records_per_table,
@@ -284,8 +286,7 @@ class BundleExporter:
                     )
                     # Seed this table only when the caller asked for all data or
                     # named it explicitly.
-                    seed_this = with_data or table_name in data_tables_set
-                    if seed_this and record_service is not None:
+                    if table_name in data_tables_set and record_service is not None:
                         cap = record_budget.table_cap()
                         if cap <= 0:
                             record_budget.note_skipped(table=table_name)
@@ -478,7 +479,7 @@ class BundleExporter:
 
             # --- files (opt-in, byte-budgeted, shares the data pool) ----------
             wrote_files = False
-            if with_files:
+            if folder_paths:
                 wrote_files = await self._export_pod_files(
                     root=root,
                     uow=uow,
@@ -486,6 +487,7 @@ class BundleExporter:
                     ctx=ctx,
                     data_budget=data_budget,
                     warnings=warnings,
+                    folder_paths=folder_paths,
                 )
 
             # --- portability + contents manifest (no DB) ----------------------
@@ -663,118 +665,26 @@ class BundleExporter:
         uow: SqlAlchemyUnitOfWork,
         pod_id: UUID,
         ctx: Context,
-        data_budget: _ByteBudget,
+        data_budget: "_ByteBudget",
         warnings: list[str],
+        folder_paths: list[str],
     ) -> bool:
-        """Export the pod's POD-visible file tree into ``files/`` — folders as
-        ``.folder.json``, file bytes (drawn from the shared data budget), and a
-        ``.files.json`` manifest — mirroring the CLI layout so either tool can
-        import the result. Returns whether any ``files/`` content was written.
-        Best-effort: a file that can't be listed/downloaded is skipped, never
-        failing the export."""
-        from lemma_pod_bundle.layout import FILES_MANIFEST
+        from app.modules.pod_bundle.infrastructure.exporter_files import (
+            export_pod_files,
+        )
 
-        from app.composition.pod_bundle_resources import build_file_service
-
-        try:
-            service = build_file_service(uow)
-            entities = await self._walk_pod_files(service, pod_id, ctx)
-        except Exception:  # noqa: BLE001 - files are best-effort
-            logger.debug('pod_bundle.exporter.skipping_file_export_pod_s.diagnostic', pod_id=pod_id)
-            return False
-
-        pod_entities = [
-            e
-            for e in entities
-            if str(getattr(e, "visibility", "") or "").upper() == "POD"
-        ]
-        if not pod_entities:
-            return False
-
-        files_root = root / "files"
-        files_root.mkdir(parents=True, exist_ok=True)
-        wrote = False
-
-        # Folders first so parent dirs exist before their files land.
-        for folder in sorted(
-            (e for e in pod_entities if e.is_folder), key=lambda e: str(e.path or "")
-        ):
-            parts = [p for p in str(folder.path or "").split("/") if p]
-            if not parts:
-                continue
-            target = files_root.joinpath(*parts)
-            target.mkdir(parents=True, exist_ok=True)
-            _write_json(
-                target / ".folder.json",
-                {"description": folder.description, "visibility": folder.visibility},
-            )
-            wrote = True
-
-        file_manifest: list[dict[str, Any]] = []
-        for entity in sorted(
-            (e for e in pod_entities if e.is_file), key=lambda e: str(e.path or "")
-        ):
-            path = str(entity.path or "")
-            parts = [p for p in path.split("/") if p]
-            if not parts:
-                continue
-            # Pre-check the declared size so an oversized file isn't downloaded
-            # just to be rejected.
-            declared = int(getattr(entity, "size_bytes", 0) or 0)
-            if declared and not data_budget.allow(name=f"files{path}", size=declared):
-                continue
-            try:
-                _entity, content = await service.download_file_content_by_path(
-                    pod_id, path, ctx
-                )
-            except Exception as exc:  # noqa: BLE001 - one bad file is not fatal
-                warnings.append(f"file '{path}' skipped: {exc}")
-                continue
-            # When size wasn't known up front, budget the real bytes now.
-            if not declared and not data_budget.allow(
-                name=f"files{path}", size=len(content)
-            ):
-                continue
-            target = files_root.joinpath(*parts)
-            target.parent.mkdir(parents=True, exist_ok=True)
-            await run_blocking(target.write_bytes, content, limiter="cpu_bound")
-            file_manifest.append(
-                {
-                    "path": path,
-                    "description": entity.description,
-                    "visibility": entity.visibility,
-                    "search_enabled": entity.search_enabled,
-                }
-            )
-            wrote = True
-
-        if file_manifest:
-            _write_json(files_root / FILES_MANIFEST, {"files": file_manifest})
-        return wrote
+        return await export_pod_files(
+            root=root, uow=uow, pod_id=pod_id, ctx=ctx,
+            data_budget=data_budget, warnings=warnings,
+            folder_paths=folder_paths,
+        )
 
     async def _walk_pod_files(
         self, service: Any, pod_id: UUID, ctx: Context, dir_path: str = "/"
     ) -> list[Any]:
-        """Depth-first list of every file/folder entity under ``dir_path``,
-        paging each directory fully (the tree endpoint caps files-per-dir, so we
-        walk with ``list_files`` instead)."""
-        out: list[Any] = []
-        cursor: str | None = None
-        while True:
-            items, cursor = await service.list_files(
-                pod_id, ctx, directory_path=dir_path, limit=100, cursor=cursor
-            )
-            for item in items:
-                out.append(item)
-                if item.is_folder:
-                    out.extend(
-                        await self._walk_pod_files(
-                            service, pod_id, ctx, dir_path=str(item.path or "")
-                        )
-                    )
-            if not cursor:
-                break
-        return out
+        from app.modules.pod_bundle.infrastructure.exporter_files import walk_pod_files
+
+        return await walk_pod_files(service, pod_id, ctx, dir_path)
 
 
 # --- response-dict adapters (per-module GET serialization) -------------------
@@ -885,9 +795,28 @@ def _normalize_include(include: list[str] | None) -> set[str]:
     return resolved or set(_EXPORT_RESOURCE_TYPES)
 
 
+def _normalize_file_folders(file_folders: list[str] | None) -> list[str]:
+    """Folder paths to export, normalized to a leading slash and de-duplicated.
+
+    Order is preserved so warnings come back in the order the caller asked."""
+    if not file_folders:
+        return []
+    seen: set[str] = set()
+    out: list[str] = []
+    for raw in file_folders:
+        if not raw or not raw.strip():
+            continue
+        path = "/" + raw.strip().strip("/")
+        if path in seen:
+            continue
+        seen.add(path)
+        out.append(path)
+    return out
+
+
 def _normalize_data_tables(data_tables: list[str] | None) -> set[str]:
     """The set of table names to seed row data for. ``None``/empty means none
-    (unless ``with_data`` seeds every table). Blank entries are dropped."""
+    Blank entries are dropped."""
     if not data_tables:
         return set()
     return {name.strip() for name in data_tables if name and name.strip()}

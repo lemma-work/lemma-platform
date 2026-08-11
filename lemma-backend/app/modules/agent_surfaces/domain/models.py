@@ -183,6 +183,21 @@ class SurfaceApprovalRenderPlan(BaseModel):
             lines.append(f"Action: {self.action_summary}")
         lines.append('\nReply "approve" to run it or "deny" to cancel.')
         return "\n".join(lines)
+class ColdEmailSendResult(BaseModel):
+    """What a platform reports after starting an email thread from nothing.
+
+    ``external_thread_id`` is whatever that platform's *inbound parser* will
+    derive as the thread root when the reply arrives — the seed we planted in
+    ``References`` for Resend, the provider's own thread id for Gmail. Anything
+    else here would look correct and still route the reply into a brand-new
+    conversation, which is the silent failure this type exists to prevent.
+    """
+
+    external_thread_id: str
+    external_message_id: str | None = None
+    reply_target: dict[str, Any] = Field(default_factory=dict)
+
+
 @dataclass(frozen=True, slots=True)
 class StreamAppendResult:
     handle: dict[str, Any] | None

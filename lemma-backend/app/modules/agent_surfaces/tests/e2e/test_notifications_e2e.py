@@ -355,3 +355,107 @@ async def test_a_workflow_form_assignment_notifies_and_closes_on_submit(
     )
     assert closed["status"] == "RESPONDED"
     assert closed["awaiting_response"] is False
+
+
+async def test_a_notification_cold_opens_an_email_thread_the_reply_can_find(
+    authenticated_client: AsyncClient,
+    db_session: AsyncSession,
+    test_pod,
+    fixed_test_user,
+    fake_resend,
+    message_store,
+):
+    """The first test in this file that reaches the delivery path at all.
+
+    Every other test here runs in a pod with no surface, so ``deliver()``
+    returns at the ``UNDELIVERABLE`` branch and never calls into egress. That is
+    precisely how two ``AttributeError``s — a missing ``agent_name_for_surface``
+    and a missing cold-email send — shipped and stayed invisible.
+
+    So this asserts the whole loop end to end: the mail goes out, it is *not*
+    prefixed "Re:", it carries a seed in ``References``, and a reply quoting
+    that seed lands in the same conversation the notification opened, with the
+    asker's ``background_instruction`` still attached to it.
+    """
+    import json
+    from uuid import UUID as _UUID
+
+    from app.modules.agent_surfaces.domain.ingress_request import (
+        SurfacePlatformWebhookIngress,
+    )
+    from app.modules.agent_surfaces.infrastructure.models import AgentSurface
+    from app.modules.agent_surfaces.tests.e2e.helpers import (
+        _conversation_by_external_thread,
+        _create_surface,
+        _ensure_connector_account,
+        _resend_payload,
+    )
+    from app.modules.agent_surfaces.tests.e2e.mock_infrastructure import (
+        wait_for_messages,
+    )
+    from app.modules.agent_surfaces.tests.e2e.scripted_llm import (
+        process_ingress_and_run_scripted,
+    )
+    from app.modules.connectors.domain.connector import AuthProvider
+    from app.modules.test_support.e2e.scripted_model import script_email_reply
+
+    pod_id = test_pod["id"]
+    account = await _ensure_connector_account(
+        db_session,
+        user_id=fixed_test_user["id"],
+        connector_id="resend",
+        credentials={"api_key": "resend-token", "api_base_url": fake_resend.api_base},
+        email="assistant@resend.test",
+        provider=AuthProvider.LEMMA,
+    )
+    surface = await _create_surface(
+        authenticated_client,
+        pod_id,
+        config={"type": "RESEND", "account_id": str(account.id)},
+    )
+    assistant_address = surface.get("surface_identity_email")
+    if not assistant_address:
+        surface_model = await db_session.get(AgentSurface, _UUID(surface["id"]))
+        assistant_address = surface_model.surface_identity_email
+    assert assistant_address
+
+    created = await _notify(
+        authenticated_client, pod_id, recipient=fixed_test_user["email"]
+    )
+
+    # Not UNDELIVERABLE — the whole point.
+    assert created["delivery_status"] == "DELIVERED", created
+    assert created["delivery_platform"] == "RESEND"
+
+    sent = (await wait_for_messages(message_store, "RESEND", min_count=1))[-1]
+    body = json.loads(json.dumps(sent))
+    # First contact is not a reply, and must not read as one.
+    assert "Re:" not in json.dumps(body.get("subject", ""))
+    seed = json.dumps(body).split('"References": "')[1].split('"')[0]
+    assert seed.startswith("<lemma-notification-")
+
+    # Their MUA answers with References = [our seed, their message id], so the
+    # parser's thread root is our seed.
+    await process_ingress_and_run_scripted(
+        db_session,
+        SurfacePlatformWebhookIngress(
+            source="resend",
+            payload={
+                **_resend_payload(
+                    sender_email=fixed_test_user["email"],
+                    assistant_address=assistant_address,
+                    message_id="reply-to-standup",
+                    text="Shipped the importer and reviewed two PRs.",
+                ),
+                "references": [seed, "<reply-to-standup@resend-e2e.test>"],
+            },
+            headers={},
+        ),
+        script=[script_email_reply("resend_reply_email", "Thanks, recorded.")],
+    )
+
+    threaded = await _conversation_by_external_thread(
+        authenticated_client, pod_id=pod_id, external_thread_id=seed
+    )
+    assert threaded is not None, "the reply did not land in the notification's thread"
+    assert (threaded.get("metadata") or {}).get("notification_id") == created["id"]

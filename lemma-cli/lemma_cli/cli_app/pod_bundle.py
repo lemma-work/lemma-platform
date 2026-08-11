@@ -681,6 +681,27 @@ def _download_app_assets(
         (resource_dir / "dist.zip").write_bytes(dist_archive)
 
 
+def _normalize_file_folders(file_folders: list[str] | None) -> list[str]:
+    """Folder paths normalized to a leading slash, de-duplicated, order kept.
+
+    ``/`` is dropped: it is the whole file tree, which is exactly what naming
+    folders exists to avoid.
+    """
+    if not file_folders:
+        return []
+    seen: set[str] = set()
+    out: list[str] = []
+    for raw in file_folders:
+        if not raw or not raw.strip():
+            continue
+        path = "/" + raw.strip().strip("/")
+        if path == "/" or path in seen:
+            continue
+        seen.add(path)
+        out.append(path)
+    return out
+
+
 def _is_pod_visible_file(item: dict[str, Any]) -> bool:
     return str(item.get("visibility") or "").upper() == "POD"
 
@@ -714,22 +735,50 @@ def fetch_files_index(
     return by_parent, all_items
 
 
+def _under_named_folder(path: str, folders: list[str]) -> bool:
+    """Is ``path`` one of the named folders, or inside one of them?"""
+    return any(path == folder or path.startswith(f"{folder}/") for folder in folders)
+
+
 def _export_pod_files(
     client: Lemma,
     pod_id: str,
     bundle_root: Path,
     *,
-    with_files: bool = False,
+    file_folders: list[str] | None = None,
+    warnings: list[str] | None = None,
     data_budget: _ByteBudget | None = None,
 ) -> dict[str, int]:
+    """Export the named folders and everything beneath them.
+
+    Selection is by name only: there is no "every folder" switch, so a pod's
+    private files cannot ride along in a bundle nobody meant to put them in.
+    """
     files_root = bundle_root / "files"
     files_root.mkdir(parents=True, exist_ok=True)
+    folders = _normalize_file_folders(file_folders)
+    notes = warnings if warnings is not None else []
+    if not folders:
+        return {"folders": 0, "files": 0}
     _, all_items = fetch_files_index(client, pod_id)
+
+    known_folders = {
+        str(item.get("path") or "")
+        for item in all_items.values()
+        if str(item.get("kind") or "").upper() == "FOLDER"
+    }
+    for folder in folders:
+        if folder not in known_folders:
+            notes.append(
+                f"folder '{folder}' requested for export but not found in the "
+                f"pod; skipped"
+            )
 
     pod_items = {
         item_id: item
         for item_id, item in all_items.items()
         if _is_pod_visible_file(item)
+        and _under_named_folder(str(item.get("path") or ""), folders)
     }
     folder_count = 0
     file_count = 0
@@ -811,10 +860,10 @@ def _export_pod_files(
     ):
         if str(item.get("kind") or "").upper() == "FOLDER":
             export_folder(item)
-        elif with_files:
+        else:
             export_file(item)
 
-    if with_files:
+    if file_manifest:
         _write_json(files_root / FILES_MANIFEST, {"files": file_manifest})
 
     return {"folders": folder_count, "files": file_count}
@@ -829,9 +878,8 @@ def export_pod_bundle(
     exclude: set[str] | None = None,
     include: set[str] | None = None,
     names: set[str] | None = None,
-    with_data: bool = False,
     data_tables: set[str] | None = None,
-    with_files: bool = False,
+    file_folders: list[str] | None = None,
 ) -> dict[str, Any]:
     excluded = set(exclude or set())
     unknown = sorted(excluded - EXPORTABLE_RESOURCE_DIRS)
@@ -851,11 +899,13 @@ def export_pod_bundle(
         overlap = ", ".join(sorted(included & excluded))
         raise ValueError(f"Resources cannot be both included and excluded: {overlap}")
     selected_names = {name for name in (names or set()) if name}
-    # Per-table seed selection: seed row data only for these tables (or every
-    # table when with_data). Independent of `names` (which scopes whole resources).
+    # Row data is seeded only for the tables named here, and files only for the
+    # folders named there. Neither has an "everything" switch. Independent of
+    # `names` (which scopes whole resources).
     seed_tables = {name.strip() for name in (data_tables or set()) if name and name.strip()}
-    wants_data = with_data or bool(seed_tables)
+    wants_data = bool(seed_tables)
     data_table_warnings: list[str] = []
+    export_warnings = data_table_warnings
     # Same caps the server enforces (lemma_pod_bundle.limits): data + files share
     # one byte pool; app builds get their own.
     row_budget = _RowBudget()
@@ -904,7 +954,7 @@ def export_pod_bundle(
             resource_dir.mkdir(parents=True, exist_ok=True)
             full_table = to_plain(pod_sdk.tables.get(table_name))
             _write_json(resource_dir / f"{table_name}.json", _normalize_table_payload(full_table))
-            if with_data or table_name in seed_tables:
+            if table_name in seed_tables:
                 _export_table_data(
                     pod_sdk,
                     table_name,
@@ -1064,7 +1114,8 @@ def export_pod_bundle(
             client,
             pod_id,
             bundle_root,
-            with_files=with_files,
+            file_folders=file_folders,
+            warnings=export_warnings,
             data_budget=data_budget,
         )
 
@@ -1082,7 +1133,7 @@ def export_pod_bundle(
         excluded=excluded,
         names=selected_names,
         with_data=wants_data,
-        with_files=with_files,
+        with_files=bool(file_folders),
     )
 
     return {
