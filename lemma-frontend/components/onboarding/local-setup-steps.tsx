@@ -47,10 +47,14 @@ import {
 } from "@/lib/desktop/local-capabilities";
 import {
     useAgentHostHarnesses,
+    useAgentHosts,
     useManagedAgentRuntimes,
     useRestoreAgentRuntime,
 } from "@/lib/hooks/use-agent-runtime";
-import { isArchivedProfile } from "@/components/agents/agent-runtime-helpers";
+import {
+    isArchivedProfile,
+    isDiscoveringHarnesses,
+} from "@/components/agents/agent-runtime-helpers";
 import { RuntimeProfileKind } from "lemma-sdk";
 import { SetupPrimaryButton, SetupSplitPanel } from "./account-onboarding-chrome";
 import type { SetupStep } from "./account-onboarding-helpers";
@@ -145,6 +149,12 @@ export function LocalIntelligenceStep({
     const status = useAutoConnectThisComputer();
     const hostId = status?.targets[0]?.host_id ?? null;
     const harnesses = useAgentHostHarnesses(hostId);
+    // A host publishes nothing until it has found its first agent, so an
+    // empty list right after pairing means "still probing", not "none
+    // installed". Nothing on the wire distinguishes them, so it is inferred
+    // from how long this computer has been paired.
+    const hosts = useAgentHosts();
+    const host = hosts.data?.items?.find((candidate) => candidate.id === hostId);
     // Archived profiles included on purpose. They are out of the catalog but
     // still hold their name, so a harness whose profile was archived looks
     // unadded here and offering "Use in chats" walks straight into
@@ -346,7 +356,9 @@ export function LocalIntelligenceStep({
                                   ? "Connecting this computer…"
                                   : harnesses.isLoading || harnesses.isFetching
                                     ? "Scanning for installed agents…"
-                                    : "No coding agents found. macOS may ask for file access the first time one is probed — allow it and press Rescan."}
+                                    : host && isDiscoveringHarnesses(host, detected.length)
+                                      ? "Still looking for coding agents on this Mac…"
+                                      : "No coding agents found. macOS may ask for file access the first time one is probed — allow it and press Rescan."}
                         </p>
                     ) : null}
                 </section>
