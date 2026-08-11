@@ -2506,7 +2506,7 @@ fn diagnostic_logs(
     };
     let metadata = file.metadata().map_err(|error| error.to_string())?;
     let length = metadata.len();
-    let identity = diagnostic_file_identity(&metadata);
+    let identity = diagnostic_file_identity(&file);
     let start = cursor
         .as_deref()
         .and_then(parse_diagnostic_cursor)
@@ -2542,27 +2542,47 @@ fn parse_diagnostic_cursor(cursor: &str) -> Option<(String, u64)> {
 }
 
 #[cfg(unix)]
-fn diagnostic_file_identity(metadata: &std::fs::Metadata) -> String {
+fn diagnostic_file_identity(file: &std::fs::File) -> String {
     use std::os::unix::fs::MetadataExt;
-    format!("{:x}-{:x}", metadata.dev(), metadata.ino())
+    match file.metadata() {
+        Ok(metadata) => format!("{:x}-{:x}", metadata.dev(), metadata.ino()),
+        Err(_) => String::new(),
+    }
 }
 
 #[cfg(windows)]
-fn diagnostic_file_identity(metadata: &std::fs::Metadata) -> String {
-    // The unix arm uses (device, inode), whose Windows equivalent -- volume
-    // serial and file index -- is still behind the unstable `windows_by_handle`
-    // feature, so reaching for it does not compile on stable at all.
+fn diagnostic_file_identity(file: &std::fs::File) -> String {
+    // (volume serial, file index) is the Windows spelling of (device, inode).
+    // `Metadata` only exposes it behind the unstable `windows_by_handle`
+    // feature, but the same fields are on the stable Win32 call, and we are
+    // holding the open handle it wants.
     //
-    // Creation time and size are enough for what this identity is for: a
-    // cursor is only invalidated when the log it points into is no longer the
-    // same file, and rotation replaces the file rather than truncating it.
-    use std::os::windows::fs::MetadataExt;
-    format!("{:x}-{:x}", metadata.creation_time(), metadata.file_size())
+    // Anything derived from the file's *contents* -- size, last write -- is
+    // wrong here even though it compiles: an identity that changes whenever
+    // the log is appended to invalidates the cursor on every poll, which
+    // re-sends the whole tail exactly while the user is watching a live log.
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::{
+        GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
+    };
+
+    let mut information = unsafe { std::mem::zeroed::<BY_HANDLE_FILE_INFORMATION>() };
+    // SAFETY: the handle is live for as long as `file` is borrowed, and
+    // `information` is a correctly sized, writable destination.
+    if unsafe { GetFileInformationByHandle(file.as_raw_handle() as _, &mut information) } == 0 {
+        // An empty identity never matches a cursor, so the caller falls back
+        // to re-reading the tail -- the same behaviour as a rotated file.
+        return String::new();
+    }
+    let index =
+        (u64::from(information.nFileIndexHigh) << 32) | u64::from(information.nFileIndexLow);
+    format!("{:x}-{:x}", information.dwVolumeSerialNumber, index)
 }
 
 #[cfg(not(any(unix, windows)))]
-fn diagnostic_file_identity(metadata: &std::fs::Metadata) -> String {
-    format!("{:x}", metadata.len())
+fn diagnostic_file_identity(_file: &std::fs::File) -> String {
+    // No portable file identity, so every poll re-reads the tail.
+    String::new()
 }
 
 fn redact_diagnostic_text(mut text: String) -> String {
@@ -4844,6 +4864,55 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
+    use std::fs::File;
+
+    #[test]
+    fn a_growing_log_keeps_its_identity_so_the_tail_cursor_survives() {
+        // The identity exists to answer "is this still the same file", and the
+        // cursor is thrown away whenever it changes. Deriving it from anything
+        // that grows with the log -- size, last write time -- compiles fine and
+        // then re-sends the whole tail on every poll of an active log, i.e. it
+        // breaks precisely when someone is watching a failure happen.
+        use std::io::Write;
+
+        let directory = tempfile::tempdir().expect("temp dir");
+        let path = directory.path().join("backend.log");
+        std::fs::write(&path, b"first\n").expect("seed the log");
+
+        let before = super::diagnostic_file_identity(&File::open(&path).expect("open"));
+        assert_ne!(
+            before, "",
+            "the identity should be readable on this platform"
+        );
+
+        let mut appended = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .expect("append to the log");
+        appended.write_all(b"second\n").expect("write");
+        appended.flush().expect("flush");
+        drop(appended);
+
+        let after = super::diagnostic_file_identity(&File::open(&path).expect("reopen"));
+        assert_eq!(before, after, "appending to a log must not re-identify it");
+    }
+
+    #[test]
+    fn replacing_a_log_changes_its_identity_so_a_stale_cursor_is_dropped() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let path = directory.path().join("backend.log");
+        std::fs::write(&path, b"old\n").expect("seed the log");
+        let rotated = super::diagnostic_file_identity(&File::open(&path).expect("open"));
+
+        std::fs::rename(&path, directory.path().join("backend.log.1")).expect("rotate");
+        std::fs::write(&path, b"new\n").expect("fresh log");
+
+        let fresh = super::diagnostic_file_identity(&File::open(&path).expect("reopen"));
+        assert_ne!(
+            rotated, fresh,
+            "a rotated log is a different file and must reset the cursor"
+        );
+    }
     use super::*;
 
     fn capability(name: &str) -> Value {
