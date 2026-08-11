@@ -95,6 +95,11 @@ def test_app(
     yield create_app()
 
 
+# Matches lemma-backend/Makefile's FUNCTION_BENCH_RUNTIME_CREDENTIAL_KEY, so a
+# `make` run and a bare pytest run sign with the same value.
+_RUNTIME_CREDENTIAL_KEY = "benchmark-runtime-credential-key-32-bytes"
+
+
 def _benchmark_environment(name: str) -> str | None:
     configured = os.getenv(name)
     if configured:
@@ -436,6 +441,7 @@ async def function_benchmark_runtime(
             ),
             "add_host_gateway": workspace_settings.add_host_gateway,
             "host_alias": workspace_settings.host_alias,
+            "runtime_credential_key": workspace_settings.runtime_credential_key,
         }
         runtime: FunctionBenchmarkRuntime | None = None
         benchmark_error: BaseException | None = None
@@ -445,6 +451,11 @@ async def function_benchmark_runtime(
             workspace_settings.provider = provider
             workspace_settings.workspace_image = selected_workspace_image
             workspace_settings.function_image = selected_function_image
+            # Provisioning happens in this process, so the signer reads the
+            # attribute rather than the environment. `make` supplies this
+            # through the environment before the interpreter starts; a bare
+            # pytest run, which is how CI invokes the suite, does not.
+            workspace_settings.runtime_credential_key = _RUNTIME_CREDENTIAL_KEY
             if provider == "docker":
                 # The benchmark images are content-addressed tags, not digests,
                 # and the sandboxes have to reach this process to fetch their
@@ -471,6 +482,7 @@ async def function_benchmark_runtime(
                 "WORKSPACE_PROVIDER": provider,
                 "WORKSPACE_IMAGE": selected_workspace_image,
                 "FUNCTION_IMAGE": selected_function_image,
+                "WORKSPACE_RUNTIME_CREDENTIAL_KEY": _RUNTIME_CREDENTIAL_KEY,
                 "DEBUG": "false",
                 "LOG_LEVEL": "INFO",
             }
