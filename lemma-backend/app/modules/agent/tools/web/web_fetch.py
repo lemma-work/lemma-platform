@@ -20,13 +20,17 @@ text. That is the whole point: twenty pages of article text would swamp the
 context this tool exists to protect. The agent greps what it saved, `view_image`s
 a screenshot, or runs `pod_view_document_pages` over a captured PDF.
 
-The browser path is serialised on purpose: `start-browser` runs one shared
-session per sandbox (one Xvfb display, one profile), so concurrent captures
-would fight over the same page.
+Fetches on the http path run concurrently — they are independent network waits,
+and a research batch is the case this tool was built for. The browser path stays
+serialised on purpose: `start-browser` runs one shared session per sandbox (one
+Xvfb display, one profile), so concurrent captures would fight over the same
+page. A whole-batch deadline bounds the pathological case where most of the list
+needs rendering.
 """
 
 from __future__ import annotations
 
+import asyncio
 import shlex
 from urllib.parse import urlparse
 
@@ -38,6 +42,7 @@ from app.modules.agent.tools.web.models import (
     WebFetchResponse,
 )
 from app.modules.agent.tools.web.page_extract import (
+    ExtractedPage,
     PageFetchError,
     fetch_and_clean,
     render_document,
@@ -53,6 +58,16 @@ logger = get_logger(__name__)
 # network to settle.
 _HTTP_TIMEOUT_SECONDS = 45
 _BROWSER_TIMEOUT_SECONDS = 120
+
+# The batch as a whole. Browser renders are serialised, so twenty JS-heavy pages
+# would otherwise hold the tool for forty minutes and the agent would look hung.
+# Past this, whatever has been captured is returned and the rest are reported as
+# skipped — a partial answer the agent can act on beats an unbounded wait.
+_BATCH_BUDGET_SECONDS = 300
+
+# Enough to saturate the network wait without opening twenty sockets to twenty
+# sites at once.
+_MAX_CONCURRENT_FETCHES = 5
 
 _PREVIEW_CHARS = 400
 
@@ -90,17 +105,23 @@ def _needs_browser(formats: list[str], render: bool) -> bool:
     return render or any(fmt in {"pdf", "jpeg", "png"} for fmt in formats)
 
 
-def _write_script(out_dir: str, path: str, content: str) -> str:
+async def _write_markdown(session, *, out_dir: str, path: str, content: str) -> None:
     """Write already-cleaned markdown into the workspace.
 
-    A heredoc with a quoted delimiter, so the document is written literally —
-    no shell expansion of whatever happened to be on the page.
+    Through the runtime's file API, not a shell heredoc. The heredoc could not
+    work for the pages that most need capturing: it puts the whole document in a
+    single `sh -c` argument, and Linux caps one argument at `MAX_ARG_STRLEN`
+    (32 pages = 128KB) no matter how large `ARG_MAX` is. A full Wikipedia
+    article extracts to ~185KB of markdown, so it failed with E2BIG — and the
+    caller read that failure as "this page needs a browser" and spent a Chrome
+    render re-fetching a page it had already read correctly.
+
+    Streaming the bytes also removes the quoting question entirely: no shell
+    parses this, so nothing on the page can terminate the document early.
     """
-    return (
-        f"mkdir -p {shlex.quote(out_dir)} && "
-        f"cat > {shlex.quote(path)} <<'LEMMA_WEB_FETCH_EOF'\n"
-        f"{content}\n"
-        "LEMMA_WEB_FETCH_EOF"
+    await session.exec_command(cmd=f"mkdir -p {shlex.quote(out_dir)}", timeout=20)
+    await session.write_file(
+        path, content.encode("utf-8"), timeout=_HTTP_TIMEOUT_SECONDS
     )
 
 
@@ -115,9 +136,7 @@ def _browser_script(url: str, out_dir: str, name: str, formats: list[str]) -> st
 
 def _expected_files(out_dir: str, name: str, formats: list[str]) -> dict[str, str]:
     suffix = {"markdown": "md", "pdf": "pdf", "jpeg": "jpg", "png": "png"}
-    return {
-        fmt: f"{out_dir}/{name}.{suffix[fmt]}" for fmt in formats if fmt in suffix
-    }
+    return {fmt: f"{out_dir}/{name}.{suffix[fmt]}" for fmt in formats if fmt in suffix}
 
 
 async def web_fetch_internal(
@@ -127,7 +146,7 @@ async def web_fetch_internal(
     out_dir = request.out_dir.strip().strip("/") or "research"
     formats = list(dict.fromkeys(request.formats)) or ["markdown"]
 
-    pages: list[WebFetchPage] = []
+    pages: dict[str, WebFetchPage] = {}
     try:
         session = await _get_workspace_session(
             ctx,
@@ -135,16 +154,14 @@ async def web_fetch_internal(
             close_on_exit=False,
         )
         async with session:
-            for url in request.urls:
-                pages.append(
-                    await _fetch_one(
-                        session,
-                        url=url,
-                        out_dir=out_dir,
-                        formats=formats,
-                        render=request.render,
-                    )
-                )
+            await _capture_batch(
+                session,
+                urls=list(dict.fromkeys(request.urls)),
+                out_dir=out_dir,
+                formats=formats,
+                render=request.render,
+                pages=pages,
+            )
     except Exception as exc:  # noqa: BLE001 - graceful tool boundary
         logger.debug("agent.web_fetch.session_failed.diagnostic", exc_info=True)
         return WebFetchResponse(
@@ -153,18 +170,19 @@ async def web_fetch_internal(
                 f"Could not reach the workspace to capture pages: "
                 f"{type(exc).__name__}. Retry if the pages are still needed."
             ),
-            pages=pages,
+            pages=list(pages.values()),
         )
 
-    captured = sum(1 for page in pages if page.success)
+    ordered = [pages[url] for url in dict.fromkeys(request.urls) if url in pages]
+    captured = sum(1 for page in ordered if page.success)
     return WebFetchResponse(
         # Partial success is still success: one dead link must not discard the
         # nine pages that came back.
         success=captured > 0,
         out_dir=out_dir,
-        pages=pages,
+        pages=ordered,
         message=(
-            f"Captured {captured} of {len(pages)} page(s) into '{out_dir}'. "
+            f"Captured {captured} of {len(ordered)} page(s) into '{out_dir}'. "
             "Read them with `exec_command` (grep/cat), view screenshots with "
             "`view_image`."
             if captured
@@ -173,29 +191,79 @@ async def web_fetch_internal(
     )
 
 
-async def _fetch_one(
+async def _capture_batch(
+    session,
+    *,
+    urls: list[str],
+    out_dir: str,
+    formats: list[str],
+    render: bool,
+    pages: dict[str, WebFetchPage],
+) -> None:
+    """Fill ``pages`` for every URL, cheap path first and in parallel.
+
+    Written to mutate a dict the caller owns so that a batch which runs out of
+    budget still returns everything captured before the deadline.
+    """
+    deadline = asyncio.get_running_loop().time() + _BATCH_BUDGET_SECONDS
+    needs_browser: list[str] = []
+
+    for url in urls:
+        invalid = _validate(url)
+        if invalid:
+            pages[url] = WebFetchPage(url=url, success=False, error=invalid)
+
+    cheap = [
+        url for url in urls if url not in pages and not _needs_browser(formats, render)
+    ]
+    if cheap:
+        limit = asyncio.Semaphore(_MAX_CONCURRENT_FETCHES)
+
+        async def _extract(url: str) -> tuple[str, ExtractedPage | None]:
+            async with limit:
+                return url, await _clean_or_none(url)
+
+        for url, page in await asyncio.gather(*(_extract(u) for u in cheap)):
+            if page is None:
+                needs_browser.append(url)
+                continue
+            written = await _write_extracted(
+                session, url=url, page=page, out_dir=out_dir
+            )
+            if written is None:
+                needs_browser.append(url)
+            else:
+                pages[url] = written
+
+    needs_browser.extend(
+        url for url in urls if url not in pages and url not in needs_browser
+    )
+
+    for url in needs_browser:
+        if asyncio.get_running_loop().time() >= deadline:
+            pages[url] = WebFetchPage(
+                url=url,
+                success=False,
+                error=(
+                    "Skipped: this batch ran out of time before reaching the "
+                    "page. It needs the full browser, which renders one page at "
+                    "a time. Ask for it again in a smaller batch."
+                ),
+            )
+            continue
+        pages[url] = await _capture_with_browser(
+            session, url=url, out_dir=out_dir, formats=formats
+        )
+
+
+async def _capture_with_browser(
     session,
     *,
     url: str,
     out_dir: str,
     formats: list[str],
-    render: bool,
 ) -> WebFetchPage:
-    invalid = _validate(url)
-    if invalid:
-        return WebFetchPage(url=url, success=False, error=invalid)
-
     name = _slugify(url)
-
-    if not _needs_browser(formats, render):
-        # Returns None when the page needs a real browser after all — a fetch
-        # that failed, or one that came back with no readable article.
-        captured = await _fetch_without_browser(
-            session, url=url, out_dir=out_dir, name=name
-        )
-        if captured is not None:
-            return captured
-
     browser_formats = formats if "markdown" in formats else [*formats, "markdown"]
     result = await session.exec_command(
         cmd=_browser_script(url, out_dir, name, browser_formats),
@@ -266,42 +334,65 @@ async def _finish(
 def _parse_int(value: object) -> int | None:
     try:
         return int(str(value).strip())
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return None
 
 
-async def _fetch_without_browser(
-    session, *, url: str, out_dir: str, name: str
-) -> WebFetchPage | None:
-    """Fetch and clean in-process, or None if the browser is needed.
+async def _clean_or_none(url: str) -> ExtractedPage | None:
+    """Fetch and clean in-process, or None when the browser is needed.
 
-    Cheap path: no browser start-up and no container round-trip to fetch — the
-    sandbox is touched only to write the finished markdown, so raw HTML never
-    leaves this process.
+    Cheap path: no browser start-up and no container round-trip to fetch, so raw
+    HTML never leaves this process. Touches no workspace state, which is what
+    makes it safe to run for several URLs at once.
     """
     try:
         page = await fetch_and_clean(url)
     except PageFetchError as exc:
-        # Most often "renders with JavaScript". Escalate rather than reporting
-        # an empty article as a success.
+        # Most often "renders with JavaScript", sometimes a 403 at a site that
+        # refuses scripted clients. Escalate rather than reporting an empty
+        # article as a success.
         logger.debug(
             "agent.web_fetch.http_path_failed.diagnostic",
             error_type=type(exc).__name__,
         )
         return None
+    except Exception as exc:  # noqa: BLE001 - one URL must not sink the batch
+        # These run under `gather`, so anything unhandled here fails every other
+        # page in the call too. A malformed charset or an extractor crash is one
+        # bad source, not a broken research batch — escalate this URL alone.
+        logger.warning(
+            "agent.web_fetch.http_path_crashed.degraded",
+            error_type=type(exc).__name__,
+            exc_info=True,
+        )
+        return None
 
-    document = render_document(page)
     # Measured on the extracted article, not the rendered document — the
     # provenance header would otherwise mask an empty extraction.
     if len(page.markdown) < _THIN_CONTENT_CHARS:
         return None
+    return page
 
-    markdown_path = f"{out_dir}/{name}.md"
-    written = await session.exec_command(
-        cmd=_write_script(out_dir, markdown_path, document),
-        timeout=_HTTP_TIMEOUT_SECONDS,
-    )
-    if written.get("exit_code") != 0:
+
+async def _write_extracted(
+    session, *, url: str, page: ExtractedPage, out_dir: str
+) -> WebFetchPage | None:
+    """Save a cleaned page, or None when the write itself failed."""
+    document = render_document(page)
+    markdown_path = f"{out_dir}/{_slugify(url)}.md"
+    try:
+        await _write_markdown(
+            session, out_dir=out_dir, path=markdown_path, content=document
+        )
+    except Exception:  # noqa: BLE001 - falls back to the browser path
+        # Logged rather than swallowed: the caller will spend a browser render
+        # recovering from this, and a recurring write failure is a workspace
+        # problem, not a property of the page.
+        logger.warning(
+            "agent.web_fetch.workspace_write_failed.degraded",
+            characters=len(document),
+            exc_info=True,
+        )
         return None
 
     return WebFetchPage(

@@ -51,6 +51,11 @@ logger = get_logger(__name__)
 
 MOCK_SCRIPT_METADATA_KEY = "mock_llm_script"
 
+# Delta size for scripted text. Smaller than `CharStreamBuffer`'s 50-char window
+# so a scripted answer of any realistic length crosses it several times and the
+# run emits a sequence of token frames rather than one.
+_STREAM_DELTA_CHARS = 12
+
 
 async def _emulate_model_latency() -> None:
     """Sleep per model turn to emulate real LLM I/O (load-test honesty).
@@ -208,7 +213,7 @@ def _resolve_turn(
     if not info.allow_text_output and info.output_tools:
         # Structured-output agent: best-effort call the output tool so the run
         # completes; tests needing specific output should script it.
-        logger.debug('agent.mock_model.mock_llm_structured_output_required.diagnostic')
+        logger.debug("agent.mock_model.mock_llm_structured_output_required.diagnostic")
         return None, [
             {
                 "tool_name": info.output_tools[0].name,
@@ -267,7 +272,7 @@ def _drop_after_turns(error: object) -> int:
         return 0
     try:
         return max(0, int(error.get("times") or 1))
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return 1
 
 
@@ -302,7 +307,13 @@ def build_mock_model(conversation: Any) -> FunctionModel:
         await _emulate_model_latency()
         text, tool_calls = _resolve_turn(messages, info, script, drop_counts)
         if text:
-            yield text
+            # Emitted in small deltas, the way a provider actually sends them.
+            # Yielding the whole answer in one chunk made the mock unable to
+            # tell incremental streaming apart from a harness that buffers the
+            # entire response and flushes it at the end — which is exactly the
+            # regression `test_sse_streaming_e2e` exists to catch.
+            for start in range(0, len(text), _STREAM_DELTA_CHARS):
+                yield text[start : start + _STREAM_DELTA_CHARS]
         if tool_calls:
             yield {
                 j: DeltaToolCall(

@@ -17,9 +17,11 @@ JavaScript runs and for anything that needs a PDF or a screenshot.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import partial
 
 import httpx
 
+from app.core.concurrency.offload import run_blocking
 from app.core.log.log import get_logger
 from app.core.net.http_client import get_shared_http_client
 
@@ -57,11 +59,27 @@ def _looks_like_html(content_type: str | None) -> bool:
     return "html" in content_type.lower() or "xml" in content_type.lower()
 
 
+async def extract_markdown_off_loop(html: str, *, url: str) -> tuple[str | None, str]:
+    """`extract_markdown` on a worker thread.
+
+    Boilerplate removal is pure CPU and it scales with page size: a full
+    Wikipedia article (1.2MB of HTML) measures at ~1.1 seconds. On the event
+    loop that is 1.1 seconds in which the worker publishes no SSE frames, runs
+    no other agent's tools and answers no stop-checks — and a research batch
+    does it once per URL. `run_blocking` is the house rule for exactly this
+    (see `app/core/concurrency/offload`).
+    """
+    return await run_blocking(
+        partial(extract_markdown, html, url=url), limiter="cpu_bound"
+    )
+
+
 def extract_markdown(html: str, *, url: str) -> tuple[str | None, str]:
     """Return ``(title, markdown)`` for a page's HTML.
 
     Kept separate from fetching so it can be tested without the network, and so
-    the browser path can reuse it on HTML it captured itself.
+    the browser path can reuse it on HTML it captured itself. Call
+    `extract_markdown_off_loop` from async code.
     """
     import trafilatura
 
@@ -110,7 +128,9 @@ async def fetch_and_clean(url: str) -> ExtractedPage:
             f"The site returned HTTP {exc.response.status_code}."
         ) from exc
     except httpx.HTTPError as exc:
-        raise PageFetchError(f"The page could not be reached ({type(exc).__name__}).") from exc
+        raise PageFetchError(
+            f"The page could not be reached ({type(exc).__name__})."
+        ) from exc
 
     content_type = response.headers.get("content-type")
     if not _looks_like_html(content_type):
@@ -121,7 +141,7 @@ async def fetch_and_clean(url: str) -> ExtractedPage:
     if len(response.content) > MAX_HTML_BYTES:
         raise PageFetchError("The page is too large to extract in one call.")
 
-    title, markdown = extract_markdown(response.text, url=url)
+    title, markdown = await extract_markdown_off_loop(response.text, url=url)
     if not markdown:
         raise PageFetchError(
             "No readable article was found — the page probably renders its "
@@ -134,5 +154,10 @@ async def fetch_and_clean(url: str) -> ExtractedPage:
 
 def render_document(page: ExtractedPage) -> str:
     """The markdown file written to the workspace, with its provenance."""
-    header = [f"# {page.title}" if page.title else "# Untitled", "", f"Source: {page.url}", ""]
+    header = [
+        f"# {page.title}" if page.title else "# Untitled",
+        "",
+        f"Source: {page.url}",
+        "",
+    ]
     return "\n".join(header) + page.markdown + "\n"

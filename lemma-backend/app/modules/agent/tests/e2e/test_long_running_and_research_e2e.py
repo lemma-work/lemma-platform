@@ -313,6 +313,76 @@ async def test_web_fetch_captures_a_real_page_into_the_workspace(
     assert "Example Domain" in (listing.stdout or "")
 
 
+async def test_a_research_batch_saves_pages_larger_than_a_shell_can_carry(
+    authenticated_client,
+    fixed_test_org,
+    fixed_test_user,
+    configure_workspace_api_url,
+    monkeypatch,
+):
+    """A long article must land on disk, in a real container.
+
+    The document used to be embedded in the `sh -c` argument of a heredoc, and
+    Linux caps a single argument at MAX_ARG_STRLEN (128KB) regardless of
+    ARG_MAX. A Wikipedia article extracts to ~185KB of markdown, so exactly the
+    pages worth capturing failed with E2BIG — and `web_fetch` read that as "this
+    page needs a browser", spending a Chrome render per page and turning a
+    five-source research call into minutes of apparent hang.
+
+    The extraction is stubbed so the test does not depend on a third party
+    staying large; everything past it — the file API, the container filesystem,
+    the size on disk — is real.
+    """
+    del configure_workspace_api_url
+    from app.modules.agent.tools.web import web_fetch as web_fetch_module
+    from app.modules.agent.tools.web.models import WebFetchRequest
+    from app.modules.agent.tools.web.page_extract import ExtractedPage
+    from app.modules.agent.tools.web.web_fetch import web_fetch_internal
+
+    ctx = await _agent_context(authenticated_client, fixed_test_org, fixed_test_user)
+
+    body = "Ashwin took 537 Test wickets across 106 matches. " * 4000  # ~195KB
+    urls = [f"https://en.wikipedia.org/wiki/Subject_{index}" for index in range(3)]
+
+    async def fake_fetch(url: str) -> ExtractedPage:
+        return ExtractedPage(
+            url=url, title="Ravichandran Ashwin", markdown=body, content_type="text/html"
+        )
+
+    monkeypatch.setattr(web_fetch_module, "fetch_and_clean", fake_fetch)
+
+    result = await web_fetch_internal(
+        ctx,
+        WebFetchRequest(urls=urls, out_dir="research", comment="a large batch"),
+    )
+
+    assert result.success, result
+    assert len(result.pages) == 3
+    for page in result.pages:
+        assert page.success, page.error
+        assert page.fetched_with == "http", "a fetched page must not need Chrome"
+        assert page.characters and page.characters > 128 * 1024
+
+    # On disk in the container, at full size — the response stayed small.
+    sizes = await exec_command_internal(
+        ctx,
+        ExecCommandRequest(
+            comment="confirm the large captures landed whole",
+            cmd="wc -c research/*.md",
+            timeout_seconds=30,
+        ),
+    )
+    assert sizes.exit_code == 0, sizes
+    counts = [
+        int(line.split()[0])
+        for line in (sizes.stdout or "").splitlines()
+        if line.split() and line.split()[0].isdigit() and "total" not in line
+    ]
+    assert len(counts) == 3, sizes.stdout
+    assert all(count > 128 * 1024 for count in counts), counts
+    assert len(result.model_dump_json()) < 8000, "the response must stay bounded"
+
+
 async def _pdf_in_pod(authenticated_client, fixed_test_org, fixed_test_user):
     """Upload a real multi-line PDF and return (ctx, pod_id, path)."""
     from app.modules.datastore.tests.e2e.harness import DatastoreApi, build_pdf_bytes
@@ -386,6 +456,7 @@ async def test_pdf_pages_reach_a_text_only_model_as_words(
     """
     del configure_workspace_api_url
     from app.modules.agent.domain.vision import AgentVisionMode
+    from app.modules.agent.tools import vision_delegation
     from app.modules.agent.tools.pod import pydantic_adapter as pod_adapter
     from app.modules.agent.tools.pod.models import ViewDocumentPagesRequest
     from pydantic_ai import ToolReturn
@@ -403,7 +474,12 @@ async def test_pdf_pages_reach_a_text_only_model_as_words(
         seen["labels"] = [image.label for image in images]
         return "A three-stage pipeline: Ingest -> Validate -> Store."
 
-    monkeypatch.setattr(pod_adapter, "describe_images", fake_describe)
+    # Patched on `vision_delegation`, which is where the delegation actually
+    # lives: it was extracted out of the pod adapter to keep that file under the
+    # size ratchet, and this patch kept naming the old home. It has been raising
+    # AttributeError here ever since — e2e is not a required check, so a red
+    # test shipped.
+    monkeypatch.setattr(vision_delegation, "describe_images", fake_describe)
 
     result = await pod_adapter.pod_view_document_pages(
         SimpleNamespace(deps=ctx),

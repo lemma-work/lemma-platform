@@ -8,6 +8,7 @@ exist. Snippets are not sources; reading a page had no first-class path.
 
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 
 import pytest
@@ -34,9 +35,7 @@ class TestDomainOperators:
             include_domains=["arxiv.org"],
             exclude_domains=["pinterest.com"],
         )
-        assert query == (
-            "transformer architecture site:arxiv.org -site:pinterest.com"
-        )
+        assert query == ("transformer architecture site:arxiv.org -site:pinterest.com")
 
     def test_a_leading_wildcard_is_tolerated(self) -> None:
         assert apply_domain_operators("x", include_domains=["*.gov.uk"]) == (
@@ -73,9 +72,7 @@ class TestVerticalSupport:
         assert len(endpoints) == len(BraveSearchClient._ENDPOINTS), "must be distinct"
         # Anchored: a substring check would also accept
         # https://evil.test/api.search.brave.com/.
-        assert all(
-            url.startswith("https://api.search.brave.com/") for url in endpoints
-        )
+        assert all(url.startswith("https://api.search.brave.com/") for url in endpoints)
 
     def test_brave_translates_freshness_to_its_own_vocabulary(self) -> None:
         assert BraveSearchClient._FRESHNESS[SearchFreshness.DAY] == "pd"
@@ -124,17 +121,25 @@ class TestUnsupportedVerticalDegradesHonestly:
 
 
 class _FakeSession:
-    """Records the shell commands `web_fetch` would run in the sandbox."""
+    """Records what `web_fetch` sends to the sandbox: commands and file writes."""
 
-    def __init__(self, *, responses=None):
+    def __init__(self, *, responses=None, write_error: Exception | None = None):
         self.commands: list[str] = []
+        self.writes: dict[str, bytes] = {}
         self._responses = responses or {}
+        self._write_error = write_error
 
     async def __aenter__(self):
         return self
 
     async def __aexit__(self, *exc):
         return False
+
+    async def write_file(self, path: str, data: bytes, *, timeout: int = 60):
+        if self._write_error is not None:
+            raise self._write_error
+        self.writes[path] = data
+        return None
 
     async def exec_command(self, *, cmd: str, timeout: int = 60, **_kwargs):
         self.commands.append(cmd)
@@ -198,10 +203,99 @@ class TestWebFetch:
         assert result.success
         assert result.pages[0].fetched_with == "http"
         assert not any("save-webpage" in cmd for cmd in session.commands)
-        # The only shell command is the write, and it carries cleaned markdown.
-        written = " ".join(session.commands)
+        # The document goes through the file API, not a shell command: only
+        # `mkdir -p` is executed, and the markdown is written as bytes.
+        assert all(cmd.startswith("mkdir -p") for cmd in session.commands)
+        written = b"".join(session.writes.values()).decode()
         assert "Real article body." in written
         assert "<html" not in written and "<script" not in written
+
+    @pytest.mark.asyncio
+    async def test_a_large_article_is_saved_rather_than_re_rendered(
+        self, monkeypatch
+    ) -> None:
+        """The page that most needs capturing must not be the one that fails.
+
+        The document used to be embedded in a `sh -c` argument, and Linux caps a
+        single argument at MAX_ARG_STRLEN (128KB) whatever ARG_MAX says. A full
+        Wikipedia article extracts to ~185KB of markdown, so it failed with
+        E2BIG — and the caller read that as "needs a browser" and spent a Chrome
+        render re-fetching a page it had already read correctly.
+        """
+        session = _FakeSession()
+        _patch_session(monkeypatch, session)
+        big = "Ashwin took 537 Test wickets. " * 8000  # ~240KB
+        _patch_extraction(monkeypatch, markdown=big)
+
+        result = await web_fetch_module.web_fetch_internal(
+            SimpleNamespace(),
+            WebFetchRequest(urls=["https://en.wikipedia.org/wiki/X"]),
+        )
+
+        page = result.pages[0]
+        assert page.success and page.fetched_with == "http", page.error
+        assert not any("save-webpage" in cmd for cmd in session.commands)
+        saved = session.writes[page.files["markdown"]]
+        assert len(saved) > 128 * 1024
+        # What comes back stays bounded no matter how large the page was.
+        assert page.preview and len(page.preview) <= 400
+
+    @pytest.mark.asyncio
+    async def test_a_failed_write_falls_back_to_the_browser(self, monkeypatch) -> None:
+        """A workspace that refuses the write is not a page that cannot be read."""
+        session = _FakeSession(write_error=OSError("no space left on device"))
+        _patch_session(monkeypatch, session)
+        _patch_extraction(monkeypatch, markdown="Real article body. " * 40)
+
+        result = await web_fetch_module.web_fetch_internal(
+            SimpleNamespace(),
+            WebFetchRequest(urls=["https://example.com/a"]),
+        )
+
+        assert result.pages[0].fetched_with == "browser"
+        assert any("save-webpage" in cmd for cmd in session.commands)
+
+    @pytest.mark.asyncio
+    async def test_the_cheap_path_fetches_the_batch_concurrently(
+        self, monkeypatch
+    ) -> None:
+        """Ten sources are ten independent network waits, not a queue.
+
+        Serially this batch is the sum of every site's latency, which is what
+        made a research call look hung.
+        """
+        session = _FakeSession()
+        _patch_session(monkeypatch, session)
+
+        from app.modules.agent.tools.web import page_extract
+
+        in_flight = 0
+        peak = 0
+
+        async def fake_fetch(url: str):
+            nonlocal in_flight, peak
+            in_flight += 1
+            peak = max(peak, in_flight)
+            try:
+                await asyncio.sleep(0.05)
+                return page_extract.ExtractedPage(
+                    url=url,
+                    title="A Title",
+                    markdown="Body text here. " * 40,
+                    content_type="text/html",
+                )
+            finally:
+                in_flight -= 1
+
+        monkeypatch.setattr(web_fetch_module, "fetch_and_clean", fake_fetch)
+
+        result = await web_fetch_module.web_fetch_internal(
+            SimpleNamespace(),
+            WebFetchRequest(urls=[f"https://e{i}.example/a" for i in range(5)]),
+        )
+
+        assert all(page.success for page in result.pages)
+        assert peak > 1, "the batch was fetched one URL at a time"
 
     @pytest.mark.asyncio
     async def test_a_screenshot_request_uses_the_browser(self, monkeypatch) -> None:
@@ -302,3 +396,37 @@ class TestWebFetch:
         """One call must not become a hundred browser renders."""
         with pytest.raises(Exception):
             WebFetchRequest(urls=[f"https://e.example/{i}" for i in range(50)])
+
+    @pytest.mark.asyncio
+    async def test_one_crashing_extraction_does_not_sink_the_batch(
+        self, monkeypatch
+    ) -> None:
+        """The cheap path runs under `gather`, so an unhandled error there would
+        fail every other page in the same call."""
+        session = _FakeSession()
+        _patch_session(monkeypatch, session)
+
+        from app.modules.agent.tools.web import page_extract
+
+        async def fake_fetch(url: str):
+            if "boom" in url:
+                raise UnicodeDecodeError("utf-8", b"", 0, 1, "bad charset")
+            return page_extract.ExtractedPage(
+                url=url,
+                title="A Title",
+                markdown="Body text here. " * 40,
+                content_type="text/html",
+            )
+
+        monkeypatch.setattr(web_fetch_module, "fetch_and_clean", fake_fetch)
+
+        result = await web_fetch_module.web_fetch_internal(
+            SimpleNamespace(),
+            WebFetchRequest(urls=["https://ok.example/a", "https://boom.example/b"]),
+        )
+
+        assert result.success
+        by_url = {page.url: page for page in result.pages}
+        assert by_url["https://ok.example/a"].success
+        # The crashing one escalates on its own rather than taking the batch out.
+        assert by_url["https://boom.example/b"].fetched_with == "browser"
