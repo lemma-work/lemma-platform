@@ -154,3 +154,48 @@ def test_ordinary_prose_beginning_with_from_survives():
     assert strip_quoted_reply("Sure.\nSent from my iPhone\n\nPS the PO is 8812") == (
         "Sure.\nSent from my iPhone\n\nPS the PO is 8812"
     )
+
+
+# ------------------------------------------------------------ forwarded mail
+
+
+@pytest.mark.parametrize(
+    "subject",
+    ["Fwd: invoice", "FW: invoice", "fwd:invoice", "Wg: Rechnung", "TR: facture"],
+)
+def test_a_forward_keeps_everything_below_the_marker(subject):
+    """The forwarded content *is* the message.
+
+    Outlook writes `-----Original Message-----` for replies and forwards alike,
+    so the marker cannot tell them apart. Trimming on it left "please process
+    this" and threw away the invoice — the one thing the agent was asked to act
+    on. Trimming now needs evidence of a reply rather than assuming one.
+    """
+    body = "Please process this:\n\n-----Original Message-----\nInvoice #8812, due Friday"
+
+    assert strip_quoted_reply(body, subject) == body.strip()
+
+
+@pytest.mark.parametrize(
+    "marker",
+    ["---------- Forwarded message ---------", "Begin forwarded message:"],
+)
+def test_an_explicit_forward_marker_is_enough_without_the_subject(marker):
+    """Gmail and Apple Mail say so in the body; the subject may be edited away."""
+    body = f"Can you handle this?\n\n{marker}\nFrom: supplier\nPO 8812 confirmed"
+
+    assert strip_quoted_reply(body) == body.strip()
+
+
+def test_a_reply_is_still_trimmed_when_the_subject_says_re():
+    """The forward rule must not disarm trimming for the case it exists for."""
+    body = "Shipped the importer.\n\nOn Mon, Ops wrote:\n> What did you ship?"
+
+    assert strip_quoted_reply(body, "Re: Standup") == "Shipped the importer."
+
+
+def test_a_subject_merely_containing_fwd_is_not_a_forward():
+    """Anchored to the start, so "Re: Fwd: thing" — a reply to a forward — trims."""
+    body = "Looks right to me.\n\nOn Mon, Ops wrote:\n> see attached"
+
+    assert strip_quoted_reply(body, "Re: Fwd: invoice") == "Looks right to me."

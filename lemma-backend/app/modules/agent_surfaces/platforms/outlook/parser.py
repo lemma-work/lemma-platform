@@ -133,7 +133,7 @@ class OutlookMessageParser:
             subject = str(data.get("subject") or "").strip()
             # Quoted original trimmed for the same reason as every other
             # provider: a reply should be what the person just wrote.
-            body = strip_quoted_reply(_body_text(data).strip())
+            body = strip_quoted_reply(_body_text(data).strip(), subject)
             message_text = f"Email subject: {subject}\n\n{body}".strip()
             header_references = [
                 ref.strip()

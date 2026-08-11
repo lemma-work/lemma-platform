@@ -137,7 +137,25 @@ _QUOTE_MARKERS = (
 )
 
 
-def strip_quoted_reply(text: str | None) -> str:
+# A forward's payload is *below* the marker — it is the whole reason the message
+# was sent. Outlook writes "-----Original Message-----" for replies and forwards
+# alike, so the marker cannot tell them apart and these have to.
+_FORWARD_SUBJECT = re.compile(r"^\s*(fwd?|wg|tr|rv|enc)\s*:", re.IGNORECASE)
+_FORWARD_MARKERS = (
+    re.compile(r"^-+\s*Forwarded message\s*-+", re.IGNORECASE | re.MULTILINE),
+    re.compile(r"^\s*Begin forwarded message:", re.IGNORECASE | re.MULTILINE),
+)
+
+
+def looks_forwarded(text: str | None, subject: str | None = None) -> bool:
+    """Whether this message is somebody forwarding content *to* us."""
+    if _FORWARD_SUBJECT.match(str(subject or "")):
+        return True
+    body = str(text or "")
+    return any(marker.search(body) for marker in _FORWARD_MARKERS)
+
+
+def strip_quoted_reply(text: str | None, subject: str | None = None) -> str:
     """Drop the quoted original from a reply, keeping what the person wrote.
 
     Every provider needs this and none had it. Without it each reply carries the
@@ -153,6 +171,12 @@ def strip_quoted_reply(text: str | None) -> str:
     body = str(text or "")
     if not body.strip():
         return ""
+
+    # Forwarding an invoice, a bug report or a thread *is* the message. Trimming
+    # at the marker leaves only "please handle this" and throws away the thing
+    # to handle, so a forward is never trimmed.
+    if looks_forwarded(body, subject):
+        return body.strip()
 
     earliest = len(body)
     for marker in _QUOTE_MARKERS:
@@ -185,6 +209,7 @@ def inbound_email_text(
     text: Any = None,
     html: Any = None,
     html_format: Any = None,
+    subject: Any = None,
 ) -> str:
     """The message a person actually typed, from whichever part carries it.
 
@@ -195,7 +220,7 @@ def inbound_email_text(
     plain = str(text or "").strip()
     if not plain:
         plain = plain_text_from_html(decode_email_html(html, html_format))
-    return strip_quoted_reply(plain)
+    return strip_quoted_reply(plain, subject)
 
 
 def decode_email_html(html: Any, html_format: Any = None) -> str:

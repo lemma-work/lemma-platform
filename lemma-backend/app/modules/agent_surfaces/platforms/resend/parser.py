@@ -43,6 +43,7 @@ def merge_received_email(
         text=received.get("text"),
         html=received.get("html"),
         html_format=received.get("html_format"),
+        subject=received.get("subject") or (event.metadata or {}).get("subject"),
     )
     if not message_text:
         return None
@@ -148,12 +149,13 @@ class ResendInboundParser:
             sender=sender,
         )
 
+        subject = str(payload.get("subject") or "").strip() or None
         message_text = inbound_email_text(
             text=payload.get("text"),
             html=payload.get("html"),
             html_format=payload.get("html_format"),
+            subject=subject,
         )
-        subject = str(payload.get("subject") or "").strip() or None
 
         # The outbound reply references chain = inbound references + this id.
         reply_references = references + ([message_id] if message_id else [])

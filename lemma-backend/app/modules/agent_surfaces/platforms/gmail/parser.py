@@ -222,7 +222,7 @@ class GmailMessageParser:
         # Drop the quoted original. Without this every reply carries the whole
         # thread forward, so by the fourth exchange most of the prompt is the
         # agent re-reading its own earlier messages.
-        message_text = f"Email subject: {subject}\n\n{strip_quoted_reply(body)}".strip()
+        message_text = f"Email subject: {subject}\n\n{strip_quoted_reply(body, subject)}".strip()
 
         attachment_candidates = [
             normalized

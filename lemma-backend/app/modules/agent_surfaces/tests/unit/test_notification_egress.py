@@ -28,8 +28,12 @@ from app.modules.agent_surfaces.domain.notification import (
     NotificationEntity,
     NotificationOriginKind,
 )
+from app.modules.agent_surfaces.domain.models import ColdEmailSendResult
 from app.modules.agent_surfaces.domain.ports import ColdEmailThread
-from app.modules.agent_surfaces.services.cold_email_thread import cold_thread_seed_id
+from app.modules.agent_surfaces.services.cold_email_thread import (
+    build_cold_email_thread,
+    cold_thread_seed_id,
+)
 from app.modules.agent_surfaces.services.ingress_service import (
     AgentSurfaceIngressService,
 )
@@ -101,12 +105,24 @@ def _links():
     return links
 
 
-def _thread_for(surface: AgentSurfaceEntity, seed: str) -> ColdEmailThread:
-    return ColdEmailThread(
-        external_thread_id=seed,
-        external_channel_id=surface.surface_identity_email,
-        external_message_id="email-9",
-        last_event={"platform": "RESEND"},
+def _thread_for(
+    surface: AgentSurfaceEntity, seed: str, recipient: str
+) -> ColdEmailThread:
+    """What the ingress side really returns, built by the code that builds it.
+
+    Hand-writing the thread here would make the test assert its own arithmetic:
+    the coordinates a reply is matched on would come from the fixture, so
+    ``build_cold_email_thread`` could derive every one of them wrong and this
+    would still be green. The platform send is the only part stubbed.
+    """
+    return build_cold_email_thread(
+        surface=surface,
+        recipient_email=recipient,
+        sent=ColdEmailSendResult(
+            external_thread_id=seed,
+            external_message_id="email-9",
+            reply_target={"recipient_email": recipient.strip().lower()},
+        ),
     )
 
 
@@ -159,7 +175,9 @@ async def test_a_cold_email_leaves_a_link_the_reply_will_match():
     seed = cold_thread_seed_id(notification_id=notification.id, surface=surface)
 
     egress_port = _egress_double()
-    egress_port.open_cold_email_thread.return_value = _thread_for(surface, seed)
+    egress_port.open_cold_email_thread.return_value = _thread_for(
+        surface, seed, "Bob@Example.com"
+    )
     links = _links()
 
     egress = NotificationEgress(
@@ -254,7 +272,9 @@ async def test_redelivering_the_same_notification_reuses_its_thread():
     seed = cold_thread_seed_id(notification_id=notification.id, surface=surface)
 
     egress_port = _egress_double()
-    egress_port.open_cold_email_thread.return_value = _thread_for(surface, seed)
+    egress_port.open_cold_email_thread.return_value = _thread_for(
+        surface, seed, "Bob@Example.com"
+    )
     links = _links()
     links.get_by_external_thread.return_value = AgentSurfaceConversationLink(
         surface_id=surface.id,
