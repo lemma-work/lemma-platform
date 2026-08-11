@@ -82,7 +82,7 @@ class GithubBundleFetcher:
         if not ref:
             repo_result = _unwrap_operation(
                 await self._run(
-                    "GITHUB_GET_A_REPOSITORY",
+                    "repos_get",
                     {"owner": owner, "repo": repo},
                 )
             )
@@ -92,35 +92,25 @@ class GithubBundleFetcher:
         try:
             result = _unwrap_operation(
                 await self._run(
-                    "GITHUB_DOWNLOAD_A_REPOSITORY_ARCHIVE_ZIP",
+                    "repos_download_zipball_archive",
                     {"owner": owner, "repo": repo, "ref": ref},
                 )
             )
         except DomainError as exc:
             raise _map_connector_error(exc, owner=owner, repo=repo) from exc
 
+        # The archive endpoint answers with a redirect to a short-lived signed
+        # URL; the connector's HTTP executor follows it (re-validating each hop
+        # and dropping the account's credentials once off GitHub's origin), so
+        # what arrives here is always the archive itself.
         inline = _extract_binary(result)
-        if inline is not None:
-            return _validate_archive(inline, owner=owner, repo=repo)
-
-        headers = result.get("headers")
-        location = None
-        if isinstance(headers, dict):
-            location = headers.get("Location") or headers.get("location")
-        if not isinstance(location, str) or not location:
+        if inline is None:
             raise GithubImportError(
                 "GitHub did not return an archive download location.",
                 code="GITHUB_ARCHIVE_INVALID",
                 status_code=422,
             )
-        # GitHub's archive redirect is a short-lived signed URL. Do not forward
-        # Lemma's configured GitHub token to that different host.
-        return await self._stream_url(
-            location,
-            headers={"User-Agent": "lemma-pod-bundle"},
-            owner=owner,
-            repo=repo,
-        )
+        return _validate_archive(inline, owner=owner, repo=repo)
 
     def _github_headers(self) -> dict[str, str]:
         headers = {
@@ -252,33 +242,23 @@ def _validate_archive(content: bytes, *, owner: str, repo: str) -> bytes:
 
 
 def _extract_binary(value: object) -> bytes | None:
-    if isinstance(value, dict):
-        if value.get("type") == "binary_content":
-            encoded = value.get("content_base64")
-            if isinstance(encoded, str):
-                try:
-                    return base64.b64decode(encoded, validate=True)
-                except (ValueError, TypeError):
-                    return None
-        for key in ("data", "content", "body"):
-            nested = _extract_binary(value.get(key))
-            if nested is not None:
-                return nested
-    return None
+    """Decode the connector's ``BinaryContentResult`` shape."""
+    if not isinstance(value, dict) or value.get("type") != "binary_content":
+        return None
+    encoded = value.get("content_base64")
+    if not isinstance(encoded, str):
+        return None
+    try:
+        return base64.b64decode(encoded, validate=True)
+    except (ValueError, TypeError):
+        return None
 
 
 def _unwrap_operation(result: object) -> dict[str, Any]:
+    """Peel ``OperationExecutionResponse.result`` off the provider's response."""
     current = result
-    for _ in range(5):
-        if not isinstance(current, dict):
-            return {}
-        if isinstance(current.get("result"), dict):
-            current = current["result"]
-            continue
-        if "successful" in current and isinstance(current.get("data"), dict):
-            current = current["data"]
-            continue
-        return current
+    if isinstance(current, dict) and "result" in current:
+        current = current["result"]
     return current if isinstance(current, dict) else {}
 
 
@@ -288,7 +268,12 @@ def _map_connector_error(
     owner: str,
     repo: str,
 ) -> GithubImportError:
-    status = getattr(exc, "status_code", None)
+    # The connector maps GitHub's status onto its own domain error, which does
+    # not always keep the number (a rate limit becomes a generic failure), so
+    # prefer the provider status it records in the details.
+    details = getattr(exc, "details", None)
+    upstream = details.get("upstream_status") if isinstance(details, dict) else None
+    status = upstream if isinstance(upstream, int) else getattr(exc, "status_code", None)
     if status == 404:
         return GithubImportError(
             f"Repository {owner}/{repo} was not found.",

@@ -732,22 +732,18 @@ def export_pod(
         "--as-template",
         help="Strip instance data (pinned agent runtimes, surface account ids) for a reusable starter.",
     ),
-    with_data: bool = typer.Option(
-        False,
-        "--with-data",
-        help="Also export EVERY table's rows to data.csv (capped). Prefer "
-        "--data-table to seed just specific tables.",
-    ),
     data_table: list[str] = typer.Option(
         [],
         "--data-table",
-        help="Export row data for this table only (repeat for multiple). Seeds "
-        "just these tables — the common case for shipping setup/config rows.",
+        help="Export row data for this table (repeat for multiple). Tables are "
+        "named one by one — there is no flag for every table, so rows leave the "
+        "pod only where you asked for them.",
     ),
-    with_files: bool = typer.Option(
-        False,
-        "--with-files",
-        help="Also download pod file contents into the bundle.",
+    folder: list[str] = typer.Option(
+        [],
+        "--folder",
+        help="Export this folder and everything under it (repeat for multiple). "
+        "Folders are named one by one — there is no flag for the whole file tree.",
     ),
 ) -> None:
     """Export pod resources to a local bundle."""
@@ -766,9 +762,8 @@ def export_pod(
             include=include or None,
             names=set(name) or None,
             exclude=excluded or None,
-            with_data=with_data,
             data_tables=set(data_table) or None,
-            with_files=with_files,
+            file_folders=list(folder) or None,
         ),
     )
     if result is None:

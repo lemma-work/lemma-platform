@@ -228,13 +228,11 @@ class ImportState(_BundleJobState):
 class ExportState(_BundleJobState):
     export_id: UUID
     status: ExportStatus = ExportStatus.QUEUED
-    with_data: bool = False
-    # Opt-in per-table seed selection: seed row data only for these table names.
-    # Independent of with_data (which seeds every table); the effective set is the
-    # union of the two.
+    # Explicit selection, both ways round: row data is seeded only for the
+    # tables named here, and files are included only for the folders named here.
+    # There is no "everything" switch -- see ExportStartRequest for why.
     data_tables: list[str] | None = None
-    # Opt-in: include the pod's file storage (folders + file bytes).
-    with_files: bool = False
+    file_folders: list[str] | None = None
     include: list[str] | None = None
     ttl_seconds: int | None = None
     staging_key: str | None = None

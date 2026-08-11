@@ -91,11 +91,9 @@ async def resolve_account_identity(
             return _email_identity(creds, profile, raw, user_data)
         if app == "slack":
             return _slack_identity(creds, profile, raw, user_data)
-        # "github" is both the native LEMMA connector (profile has "login",
-        # from the curated users_get_authenticated operation) and a Composio
-        # toolkit (whose identity lives in raw.word_id and is handled by the
-        # generic fallback below) -- distinguish by shape, not by kind, since
-        # this function only sees connector_id.
+        # GitHub's identity comes from the curated `users_get_authenticated`
+        # profile operation. An account connected before that enrichment existed
+        # has no "login" to read and falls through to the generic identity.
         if app == "github" and _nested(profile, "login"):
             return _github_identity(profile)
         return _generic_identity(creds, profile, raw, user_data)

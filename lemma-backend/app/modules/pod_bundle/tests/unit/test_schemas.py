@@ -11,34 +11,30 @@ from app.modules.pod_bundle.api.schemas import ExportStartRequest, PublishStartR
 from app.modules.pod_bundle.domain.state import PublishMode
 
 
-def test_export_defaults_to_resources_only_no_data():
-    """Row data is opt-in: an export request with no explicit flag carries only
-    pod resources (with_data defaults to False), matching the CLI."""
+def test_export_defaults_to_resources_only():
+    """Naming nothing exports the pod's shape alone — no rows, no files."""
     request = ExportStartRequest()
-    assert request.with_data is False
+    assert request.data_tables is None
+    assert request.file_folders is None
 
 
-def test_export_with_data_can_be_opted_in():
-    """The rare seed/setup-data case is still expressible via an explicit flag."""
-    request = ExportStartRequest(with_data=True)
-    assert request.with_data is True
-
-
-def test_export_data_tables_defaults_to_none():
-    """Per-table seeding is opt-in: no tables selected unless named."""
-    assert ExportStartRequest().data_tables is None
-
-
-def test_export_data_tables_selects_specific_tables():
-    """A caller can seed only specific setup tables without dumping the pod."""
-    request = ExportStartRequest(data_tables=["settings", "roles"])
+def test_export_selects_tables_and_folders_by_name():
+    """Both dimensions are chosen one name at a time."""
+    request = ExportStartRequest(
+        data_tables=["settings", "roles"], file_folders=["/reports"]
+    )
     assert request.data_tables == ["settings", "roles"]
-    assert request.with_data is False
+    assert request.file_folders == ["/reports"]
 
 
-def test_export_with_files_defaults_off():
-    """Pod file storage is opt-in, off by default (resources-only export)."""
-    assert ExportStartRequest().with_files is False
+@pytest.mark.parametrize("field", ["with_data", "with_files"])
+def test_export_refuses_the_old_everything_switches(field):
+    """The blanket flags are gone, not merely defaulted off. A caller still
+    sending one is asking for every table's rows or the whole file tree, and
+    silently accepting it as "export nothing" would be the same surprise in the
+    opposite direction — so the request is rejected outright."""
+    with pytest.raises(ValidationError):
+        ExportStartRequest(**{field: True})
 
 
 def test_export_caps_are_conservative_and_shared():
