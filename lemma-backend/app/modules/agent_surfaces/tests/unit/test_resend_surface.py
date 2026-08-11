@@ -440,3 +440,48 @@ def test_a_real_reply_threads_back_onto_our_seed():
     )
 
     assert merged.external_thread_id == seed
+
+
+def test_a_json_array_smuggled_inside_a_header_string_is_unwrapped():
+    """The shape Resend actually returned for a live reply.
+
+    Not a list of ids, and not a plain header — a list whose single element is a
+    JSON-encoded array of ids. Joining the outer list leaves the blob intact, so
+    `.split()` yields one token and the thread root becomes the whole serialized
+    array. The reply then opens a new conversation and the notification it was
+    answering stays OPEN forever.
+    """
+    from app.modules.agent_surfaces.platforms.email_common import email_thread_root
+    from app.modules.agent_surfaces.platforms.resend.inbound import (
+        header_map,
+        references_of,
+    )
+
+    seed = "<lemma-notification-019fef17@ops.asur.work>"
+    headers = header_map(
+        {
+            "References": [
+                f'["{seed}","<0106-generated@ap-northeast-1.amazonses.com>"]',
+                "<reply-from-outlook@outlook.com>",
+            ]
+        }
+    )
+
+    refs = references_of({}, headers)
+
+    assert refs[0] == seed, "the JSON array was left serialized"
+    assert email_thread_root(
+        references=refs,
+        in_reply_to=None,
+        message_id="<reply-from-outlook@outlook.com>",
+        sender="anukul@lemma.work",
+    ) == seed
+
+
+def test_a_header_that_merely_looks_like_json_is_left_alone():
+    """Unwrapping must not corrupt an ordinary header that starts with '['."""
+    from app.modules.agent_surfaces.platforms.resend.inbound import header_map
+
+    headers = header_map({"Subject": "[URGENT] deploy failed]"})
+
+    assert headers["subject"] == "[URGENT] deploy failed]"

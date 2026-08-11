@@ -10,6 +10,7 @@ it there is nothing to fetch with, and the agent sees an empty message.
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from app.modules.agent_surfaces.platforms.email_common import parse_email_identity
@@ -41,18 +42,29 @@ def all_addresses(value: Any) -> list[str]:
 
 
 def _header_value(value: Any) -> str:
-    """One header as a string, joining multi-valued headers with spaces.
+    """One header as a string, flattening however the provider encoded it.
 
-    ``References`` comes back from the Received Emails API as a JSON **array**,
-    and ``str(["<a>", "<b>"])`` yields ``'["<a>","<b>"]'`` — which then survives
-    ``.split()`` as a single token, so the thread root became the entire
-    serialized list and no reply ever matched the thread it belonged to. Joining
-    is also the correct reading: RFC 5322 defines References as a
-    whitespace-separated sequence of message ids.
+    ``References`` has arrived in three shapes from Resend: a plain string, a
+    JSON array, and — observed live — a *string containing* a JSON array,
+    ``'["<a>","<b>"]'``. All three have to collapse to the whitespace-separated
+    sequence of message ids that RFC 5322 says the header is, because every
+    consumer downstream reads it with ``.split()``. Left unflattened, the entire
+    blob becomes one token and is taken for the thread root, so a reply opens a
+    new conversation instead of rejoining the one it answers — which is exactly
+    what happened to a live notification reply.
     """
     if isinstance(value, (list, tuple)):
-        return " ".join(str(item).strip() for item in value if str(item).strip())
-    return str(value or "")
+        return " ".join(_header_value(item) for item in value if _header_value(item))
+
+    text = str(value or "").strip()
+    if text.startswith("[") and text.endswith("]"):
+        try:
+            decoded = json.loads(text)
+        except ValueError:
+            return text
+        if isinstance(decoded, list):
+            return " ".join(_header_value(item) for item in decoded if _header_value(item))
+    return text
 
 
 def header_map(raw_headers: Any) -> dict[str, str]:
