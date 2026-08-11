@@ -1684,12 +1684,24 @@ fn send_to_locald(app: &AppHandle, message: Value) -> Result<(), String> {
         .map_err(|e| format!("locald flush failed: {e}"))
 }
 
+/// What a refused operation says. Callers match on it to tell "the daemon is
+/// busy" apart from "the daemon is broken", so it is one string in one place.
+const LOCALD_BUSY: &str =
+    "Lemma is still finishing another operation. Wait for that to finish, then try again.";
+
 fn send_local_operation(app: &AppHandle, mut request: Value, id: String) -> Result<(), String> {
     {
         let shell: State<Shell> = app.state();
         let mut ui = shell.ui.lock().unwrap();
         if !ui.active_operation_id.is_empty() {
-            return Ok(());
+            // This used to return Ok(()) and drop the request. The daemon takes
+            // one operation at a time, so that is a real condition -- but
+            // reporting it as success made every caller believe a command had
+            // been sent that never was. A menu click did nothing at all, and
+            // `stop_then_quit` armed `quit_after_stop` and then waited forever
+            // for the completion of an operation it had not started, which is
+            // how Cmd-Q could leave the app running.
+            return Err(LOCALD_BUSY.to_string());
         }
         ui.active_operation_id = id.clone();
     }
@@ -2352,13 +2364,17 @@ fn stop_impl(app: AppHandle, include_infra: Option<bool>) -> Result<(), String> 
     if current_mode(&app) != "local" {
         return Err("local services are not active in Lemma Cloud mode".into());
     }
-    show_splash_with_intent(&app, "stop");
     ensure_locald(&app)?;
+    // Only put the splash up once the daemon has actually taken the stop.
+    // Showing it first meant a refused operation left a "stopping Lemma"
+    // screen in front of a stack that was never asked to stop.
     send_local_operation(
         &app,
         json!({"cmd": "stop", "infra": include_infra.unwrap_or(false)}),
         operation_id("shell-stop"),
-    )
+    )?;
+    show_splash_with_intent(&app, "stop");
+    Ok(())
 }
 
 #[tauri::command]
@@ -2371,13 +2387,14 @@ fn restart_impl(app: AppHandle) -> Result<(), String> {
     if current_mode(&app) != "local" {
         return Err("local services are not active in Lemma Cloud mode".into());
     }
-    show_splash(&app);
     ensure_locald(&app)?;
     send_local_operation(
         &app,
         json!({"cmd": "restart"}),
         operation_id("shell-restart"),
-    )
+    )?;
+    show_splash(&app);
+    Ok(())
 }
 
 #[tauri::command]
@@ -3257,6 +3274,44 @@ fn close_local_settings(window: Webview, app: AppHandle) -> Result<(), String> {
         let _ = main.set_focus();
     }
     Ok(())
+}
+
+/// Ask the user to confirm something destructive, from the settings page.
+///
+/// `window.confirm()` is not usable here: WKWebView routes it through a
+/// WKUIDelegate panel that wry does not implement, so it returns false without
+/// ever drawing anything. Local settings used that to gate "Stop everything"
+/// and "Verify & repair runtime", which made both buttons look inert on macOS
+/// -- the click was received and then silently discarded.
+///
+/// The prompt text is chosen in the page, but the dialog is native, so it is
+/// the same one the tray and the quit path already use.
+#[tauri::command]
+fn confirm_destructive_action(
+    window: Webview,
+    app: AppHandle,
+    title: String,
+    message: String,
+    confirm_label: String,
+) -> Result<bool, String> {
+    require_control_window(&window)?;
+    // `show` hands the dialog to the main thread and returns; commands run off
+    // it, so waiting here blocks a worker rather than the UI.
+    let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+    app.dialog()
+        .message(message)
+        .title(title)
+        .kind(MessageDialogKind::Warning)
+        .buttons(MessageDialogButtons::OkCancelCustom(
+            confirm_label,
+            "Cancel".into(),
+        ))
+        .show(move |confirmed| {
+            let _ = sender.send(confirmed);
+        });
+    receiver
+        .recv()
+        .map_err(|_| "the confirmation dialog closed unexpectedly".to_string())
 }
 
 #[tauri::command]
@@ -4325,9 +4380,13 @@ fn stop_then_quit(app: &AppHandle) {
     let shell: State<Shell> = app.state();
     shell.quit_confirmed.store(true, Ordering::Release);
     shell.quit_after_stop.store(true, Ordering::Release);
-    if stop_impl(app.clone(), Some(true)).is_err() {
+    if let Err(error) = stop_impl(app.clone(), Some(true)) {
         shell.quit_after_stop.store(false, Ordering::Release);
         shell.quit_confirmed.store(false, Ordering::Release);
+        // Confirming "Stop and Quit" and then getting neither, silently, is the
+        // worst version of this. Say why the quit did not happen; the dialog
+        // also tells the user that trying again is the next move.
+        report_action_failure(app, "Stop Lemma and quit", &error);
     }
 }
 
@@ -4523,6 +4582,7 @@ fn main() {
             configure_ai_provider,
             sharing_action,
             close_local_settings,
+            confirm_destructive_action,
             open_developer_tools
         ])
         .setup(move |app| {
@@ -4865,6 +4925,81 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use std::fs::File;
+
+    #[test]
+    fn local_settings_never_gates_a_button_on_a_webview_confirm() {
+        // WKWebView routes window.confirm() through a WKUIDelegate panel wry
+        // does not implement, so it returns false without drawing anything:
+        // the click is received and discarded, and the button looks inert.
+        // Destructive actions go through the native dialog command instead.
+        let script = include_str!("../ui/control.js");
+        assert!(
+            !script.contains("window.confirm("),
+            "a destructive button is gated on a confirm() that always says no"
+        );
+        assert!(
+            script.contains("confirm_destructive_action"),
+            "the native confirmation command is how those buttons ask"
+        );
+    }
+
+    /// The source of one free function, for the cases where asserting on
+    /// behaviour would need a running AppHandle.
+    fn function_body<'a>(source: &'a str, signature: &str) -> &'a str {
+        let start = source.find(signature).expect("the function exists");
+        let end = source[start..]
+            .find("\nfn ")
+            .map_or(source.len(), |offset| start + offset);
+        &source[start..end]
+    }
+
+    #[test]
+    fn a_busy_daemon_refuses_an_operation_rather_than_dropping_it() {
+        // locald runs one operation at a time, so "busy" is a real answer. It
+        // used to be reported as Ok(()), which told every caller a command had
+        // been sent that never was: menu items did nothing at all, and
+        // stop_then_quit armed the quit flags and then waited forever for the
+        // completion of an operation it had not started.
+        let source = include_str!("main.rs");
+        let body = function_body(source, "fn send_local_operation(");
+        assert!(
+            body.contains("return Err(LOCALD_BUSY.to_string());"),
+            "a busy daemon must refuse the operation"
+        );
+        assert!(
+            !body.contains("return Ok(());"),
+            "no path may report an unsent operation as sent"
+        );
+    }
+
+    #[test]
+    fn a_refused_stop_leaves_no_splash_behind() {
+        // The splash used to go up before the stop was sent, so a refusal left
+        // a "stopping Lemma" screen in front of a stack nobody had asked to
+        // stop, with no way back.
+        let source = include_str!("main.rs");
+        let body = function_body(source, "fn stop_impl(");
+        let sent = body.find("send_local_operation").expect("stop_impl sends");
+        let splash = body
+            .find("show_splash_with_intent")
+            .expect("stop_impl shows a splash");
+        assert!(
+            sent < splash,
+            "the splash must follow the accepted operation, not precede it"
+        );
+    }
+
+    #[test]
+    fn giving_up_on_quit_says_so() {
+        // Confirming "Stop and Quit" and then getting neither, silently, is the
+        // failure this guards.
+        let source = include_str!("main.rs");
+        let body = function_body(source, "fn stop_then_quit(");
+        assert!(
+            body.contains("report_action_failure"),
+            "a quit that cannot start its stop must tell the user why"
+        );
+    }
 
     #[test]
     fn a_growing_log_keeps_its_identity_so_the_tail_cursor_survives() {
