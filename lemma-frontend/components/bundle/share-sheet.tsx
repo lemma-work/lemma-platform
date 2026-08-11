@@ -165,11 +165,11 @@ export function ShareSheet({ podId, podName, open, onOpenChange, canPublish = tr
     const defaultRepo = useMemo(() => toRepoSlug(podName || 'my-pod') || 'my-pod', [podName]);
     const tableNames = useMemo(
         () =>
-            ((tables as { name?: string }[] | undefined) ?? [])
-                .map((t) => t.name)
-                .filter((name): name is string => Boolean(name))
+            (tables?.items ?? [])
+                .map((table) => table.name)
+                .filter((name) => Boolean(name))
                 .sort(),
-        [tables],
+        [tables?.items],
     );
     /** Every folder in the tree, flattened to full paths so a nested one can be
      *  picked on its own. The pod root is not offered: "everything" is exactly
