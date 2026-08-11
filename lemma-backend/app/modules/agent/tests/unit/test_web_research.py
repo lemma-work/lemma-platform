@@ -49,9 +49,17 @@ class TestDomainOperators:
 
 class TestVerticalSupport:
     def test_brave_and_searxng_serve_every_vertical(self) -> None:
+        every_vertical = {
+            SearchVertical.WEB,
+            SearchVertical.NEWS,
+            SearchVertical.IMAGES,
+            SearchVertical.VIDEOS,
+        }
+        # Named explicitly rather than iterating the enum, so adding a vertical
+        # fails here instead of silently widening what "every" means.
+        assert set(SearchVertical) == every_vertical
         for client in (BraveSearchClient(), SearXNGSearchClient()):
-            for vertical in SearchVertical:
-                assert client.supports(vertical), (client.source, vertical)
+            assert client.supported_verticals >= every_vertical, client.source
 
     def test_duckduckgo_is_honest_about_being_web_only(self) -> None:
         """It scrapes HTML; claiming video support would return blog posts."""
@@ -61,11 +69,13 @@ class TestVerticalSupport:
         assert not client.supports(SearchVertical.NEWS)
 
     def test_brave_maps_each_vertical_to_its_own_endpoint(self) -> None:
-        endpoints = {
-            BraveSearchClient._ENDPOINTS[vertical] for vertical in SearchVertical
-        }
-        assert len(endpoints) == len(SearchVertical), "endpoints must be distinct"
-        assert all("api.search.brave.com" in url for url in endpoints)
+        endpoints = set(BraveSearchClient._ENDPOINTS.values())
+        assert len(endpoints) == len(BraveSearchClient._ENDPOINTS), "must be distinct"
+        # Anchored: a substring check would also accept
+        # https://evil.test/api.search.brave.com/.
+        assert all(
+            url.startswith("https://api.search.brave.com/") for url in endpoints
+        )
 
     def test_brave_translates_freshness_to_its_own_vocabulary(self) -> None:
         assert BraveSearchClient._FRESHNESS[SearchFreshness.DAY] == "pd"

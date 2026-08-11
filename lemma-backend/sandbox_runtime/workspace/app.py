@@ -125,8 +125,10 @@ def create_app(
             yield
         finally:
             reaper.cancel()
-            with suppress(asyncio.CancelledError):
-                await reaper
+            # `gather` rather than a bare `await reaper`: the cancellation is
+            # expected, so its CancelledError is collected as a result instead
+            # of having to be suppressed around an await whose value is unused.
+            await asyncio.gather(reaper, return_exceptions=True)
 
     app = FastAPI(title="Lemma Workspace Runtime", lifespan=lifespan)
     app.state.process_manager = manager

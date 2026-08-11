@@ -176,7 +176,13 @@ async def _drive_with_retry(
         try:
             await drive_once(resume_history, state, carried_usage)
             return
-        except BaseException as exc:  # noqa: BLE001 — re-raised below
+        # Deliberately `Exception`, not `BaseException`: a CancelledError must
+        # reach the caller untouched so pydantic-graph's scopes unwind in this
+        # task. It would have been re-raised here anyway —
+        # `is_retryable_stream_error` never retries cancellation — so letting it
+        # skip the handler entirely is the same behaviour with less to reason
+        # about.
+        except Exception as exc:  # noqa: BLE001 — re-raised below when fatal
             run = state.get("run")
             snapshot = state.get("resume_from")
             if (

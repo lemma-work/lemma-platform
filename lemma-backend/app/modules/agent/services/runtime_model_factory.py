@@ -10,7 +10,6 @@ harness now has to recover from, so this is the other half of that fix.
 
 from __future__ import annotations
 
-import hashlib
 from collections.abc import Mapping
 
 import httpx
@@ -37,20 +36,35 @@ logger = get_logger(__name__)
 _provider_clients: dict[str, httpx.AsyncClient] = {}
 
 
+# Opaque per-process labels standing in for credentials in cache keys. The
+# first version hashed the key instead, which is the wrong shape twice over: a
+# digest of a secret is still derived from the secret (and offline-comparable),
+# and the cache only ever needs to know whether two credentials are the *same*,
+# never anything about them. A counter answers that exactly, and leaves nothing
+# to leak if a key ever reaches a log line or a traceback.
+_credential_labels: dict[str, str] = {}
+
+
+def _credential_label(api_key: str | None) -> str:
+    if not api_key:
+        return "anonymous"
+    label = _credential_labels.get(api_key)
+    if label is None:
+        label = f"credential-{len(_credential_labels) + 1}"
+        _credential_labels[api_key] = label
+    return label
+
+
 def _client_cache_key(
     protocol: str, base_url: str, api_key: str | None, headers: Mapping[str, object]
 ) -> str:
-    """Identify an endpoint+credential pair without holding the key in the key.
+    """Identify an endpoint+credential pair without putting the key in the key.
 
-    Two profiles pointing at the same base URL with different keys must not share
-    a client, but the cache key is logged and inspected, so the secret is hashed
-    rather than stored.
+    Two profiles pointing at the same base URL with different credentials must
+    not share a client — same endpoint, different tenant.
     """
-    digest = hashlib.blake2s(
-        (api_key or "").encode("utf-8"), digest_size=8
-    ).hexdigest()
     header_sig = ",".join(f"{k}={v}" for k, v in sorted(headers.items()))
-    return f"{protocol}|{base_url}|{digest}|{header_sig}"
+    return f"{protocol}|{base_url}|{_credential_label(api_key)}|{header_sig}"
 
 
 def _should_retry_status(response: httpx.Response) -> None:

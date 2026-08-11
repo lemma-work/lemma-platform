@@ -186,42 +186,15 @@ async def _fetch_one(
         return WebFetchPage(url=url, success=False, error=invalid)
 
     name = _slugify(url)
-    use_browser = _needs_browser(formats, render)
 
-    if not use_browser:
-        try:
-            page = await fetch_and_clean(url)
-        except PageFetchError as exc:
-            # Most often "renders with JavaScript". Escalate rather than
-            # reporting an empty article as a success.
-            logger.debug(
-                "agent.web_fetch.http_path_failed.diagnostic",
-                error_type=type(exc).__name__,
-            )
-            use_browser = True
-        else:
-            document = render_document(page)
-            # Measured on the extracted article, not the rendered document —
-            # the provenance header would otherwise mask an empty extraction.
-            if len(page.markdown) < _THIN_CONTENT_CHARS:
-                use_browser = True
-            else:
-                markdown_path = f"{out_dir}/{name}.md"
-                written = await session.exec_command(
-                    cmd=_write_script(out_dir, markdown_path, document),
-                    timeout=_HTTP_TIMEOUT_SECONDS,
-                )
-                if written.get("exit_code") == 0:
-                    return WebFetchPage(
-                        url=url,
-                        success=True,
-                        title=page.title,
-                        files={"markdown": markdown_path},
-                        preview=document[:_PREVIEW_CHARS],
-                        characters=len(document),
-                        fetched_with="http",
-                    )
-                use_browser = True
+    if not _needs_browser(formats, render):
+        # Returns None when the page needs a real browser after all — a fetch
+        # that failed, or one that came back with no readable article.
+        captured = await _fetch_without_browser(
+            session, url=url, out_dir=out_dir, name=name
+        )
+        if captured is not None:
+            return captured
 
     browser_formats = formats if "markdown" in formats else [*formats, "markdown"]
     result = await session.exec_command(
@@ -295,3 +268,48 @@ def _parse_int(value: object) -> int | None:
         return int(str(value).strip())
     except (TypeError, ValueError):
         return None
+
+
+async def _fetch_without_browser(
+    session, *, url: str, out_dir: str, name: str
+) -> WebFetchPage | None:
+    """Fetch and clean in-process, or None if the browser is needed.
+
+    Cheap path: no browser start-up and no container round-trip to fetch — the
+    sandbox is touched only to write the finished markdown, so raw HTML never
+    leaves this process.
+    """
+    try:
+        page = await fetch_and_clean(url)
+    except PageFetchError as exc:
+        # Most often "renders with JavaScript". Escalate rather than reporting
+        # an empty article as a success.
+        logger.debug(
+            "agent.web_fetch.http_path_failed.diagnostic",
+            error_type=type(exc).__name__,
+        )
+        return None
+
+    document = render_document(page)
+    # Measured on the extracted article, not the rendered document — the
+    # provenance header would otherwise mask an empty extraction.
+    if len(page.markdown) < _THIN_CONTENT_CHARS:
+        return None
+
+    markdown_path = f"{out_dir}/{name}.md"
+    written = await session.exec_command(
+        cmd=_write_script(out_dir, markdown_path, document),
+        timeout=_HTTP_TIMEOUT_SECONDS,
+    )
+    if written.get("exit_code") != 0:
+        return None
+
+    return WebFetchPage(
+        url=url,
+        success=True,
+        title=page.title,
+        files={"markdown": markdown_path},
+        preview=document[:_PREVIEW_CHARS],
+        characters=len(document),
+        fetched_with="http",
+    )
