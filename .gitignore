@@ -60,3 +60,11 @@ __pycache__/
 
 # CodeQL databases and SARIF output from `make codeql`.
 .codeql/
+
+# Local benchmark corpus (~310MB of arXiv PDFs) used by the datastore
+# load tests. Rebuild with:
+#   uv run python lemma-backend/load_tests/fetch_arxiv_corpus.py
+# The script is the source of truth for which papers are in it, so the
+# bytes stay local and never go to GitHub.
+benchmark-corpus/
+benchmark-corpus

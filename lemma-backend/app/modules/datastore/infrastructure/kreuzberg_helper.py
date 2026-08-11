@@ -1,12 +1,9 @@
 import asyncio
-import base64
-import binascii
 from functools import partial
 from io import BytesIO
 import json
 import mimetypes
 import os
-from pathlib import PurePosixPath
 import tempfile
 from typing import Any
 
@@ -15,6 +12,10 @@ import anyio
 
 from app.core.concurrency.offload import run_blocking
 from app.modules.datastore.config import datastore_settings
+from app.modules.datastore.domain.errors import DocumentExtractionUnavailableError
+from app.modules.datastore.infrastructure.extraction_result import (
+    KreuzbergExtractionResult,
+)
 from app.modules.datastore.infrastructure.kreuzberg_circuit import (
     get_kreuzberg_circuit,
 )
@@ -31,168 +32,17 @@ _TRANSIENT_RETRY_ATTEMPTS = 3
 _TRANSIENT_RETRY_BASE_DELAY_SECONDS = 1.0
 
 
-class KreuzbergTransientError(RuntimeError):
-    """The extractor was unreachable or timed out; retry as a later job."""
+class KreuzbergTransientError(DocumentExtractionUnavailableError):
+    """The extractor was unreachable or timed out; retry as a later job.
+
+    Subclasses the engine-neutral unavailability error so processing refunds the
+    attempt instead of spending it — see DocumentExtractionUnavailableError.
+    """
 
 
 class KreuzbergCompatibilityError(RuntimeError):
     """The extractor rejected the request schema and a legacy config may work."""
 
-
-class KreuzbergExtractionResult:
-    def __init__(self, data: dict[str, Any]):
-        self.content = data.get("content", "")
-        self.metadata = data.get("metadata", {})
-        self.chunks = data.get("chunks", [])
-        self.mime_type = data.get("mime_type")
-        self.detected_languages = data.get("detected_languages", [])
-        self.images = data.get("images", [])
-        self.pages = data.get("pages", [])
-        self.quality_score = data.get("quality_score")
-        self.extraction_mode = data.get("extraction_mode", "direct")
-
-    def get_chunks(self) -> list[dict[str, Any]]:
-        if self.chunks:
-            formatted = []
-            for chunk in self.chunks:
-                if isinstance(chunk, str):
-                    formatted.append({"text": chunk, "metadata": {}})
-                elif isinstance(chunk, dict):
-                    if "text" not in chunk:
-                        chunk["text"] = chunk.get("content", str(chunk))
-                    if "metadata" not in chunk:
-                        chunk["metadata"] = {}
-                    formatted.append(chunk)
-                else:
-                    formatted.append({"text": str(chunk), "metadata": {}})
-            return formatted
-
-        if self.content:
-            return [{"text": self.content, "metadata": self.metadata}]
-        return []
-
-    def get_images(self) -> list[dict[str, Any]]:
-        images = self._format_images(self.images or [])
-        for page in self.get_pages():
-            images.extend(page["images"])
-
-        formatted: list[dict[str, Any]] = []
-        used_names: dict[str, bytes] = {}
-        for image in images:
-            name = image["name"]
-            content = image["content"]
-            if used_names.get(name) == content:
-                continue
-            if name in used_names:
-                stem, suffix = PurePosixPath(name).stem, PurePosixPath(name).suffix
-                counter = 2
-                candidate = f"{stem}_{counter}{suffix}"
-                while candidate in used_names:
-                    counter += 1
-                    candidate = f"{stem}_{counter}{suffix}"
-                image = {**image, "name": candidate}
-                name = candidate
-            used_names[name] = content
-            formatted.append(image)
-        return formatted
-
-    def get_pages(self) -> list[dict[str, Any]]:
-        formatted: list[dict[str, Any]] = []
-        for index, page in enumerate(self.pages or []):
-            if not isinstance(page, dict):
-                continue
-            page_number = page.get("page_number", page.get("pageNumber", index + 1))
-            try:
-                page_number = int(page_number)
-            except TypeError, ValueError:
-                page_number = index + 1
-            formatted.append(
-                {
-                    "page_number": page_number,
-                    "content": str(page.get("content") or page.get("text") or ""),
-                    "tables": (
-                        page.get("tables")
-                        if isinstance(page.get("tables"), list)
-                        else []
-                    ),
-                    "images": self._format_images(
-                        page.get("images") or [],
-                        default_page_number=page_number,
-                    ),
-                    "is_blank": page.get("is_blank", page.get("isBlank")),
-                }
-            )
-        return formatted
-
-    def _format_images(
-        self,
-        images: list[Any],
-        *,
-        default_page_number: int | None = None,
-    ) -> list[dict[str, Any]]:
-        formatted: list[dict[str, Any]] = []
-        for index, image in enumerate(images):
-            if not isinstance(image, dict):
-                continue
-
-            image_index = image.get("image_index", image.get("imageIndex"))
-            page_number = image.get(
-                "page_number",
-                image.get("pageNumber", default_page_number),
-            )
-            image_format = str(image.get("format") or "png").lower()
-            if image_index is not None:
-                generated_name = f"image_{image_index}.{image_format}"
-            elif page_number is not None:
-                try:
-                    normalized_page_number = int(page_number)
-                except TypeError, ValueError:
-                    normalized_page_number = default_page_number or index + 1
-                generated_name = (
-                    f"page_{normalized_page_number:04d}_image_{index}.{image_format}"
-                )
-            else:
-                generated_name = f"image_{index}.{image_format}"
-            name = (
-                image.get("name")
-                or image.get("filename")
-                or image.get("path")
-                or image.get("source_path")
-                or image.get("sourcePath")
-                or generated_name
-            )
-            raw_data = image.get("data") or image.get("base64") or image.get("content")
-            if raw_data is None:
-                continue
-
-            if isinstance(raw_data, bytes):
-                content = raw_data
-            elif isinstance(raw_data, str):
-                payload = (
-                    raw_data.split(",", 1)[-1]
-                    if raw_data.startswith("data:")
-                    else raw_data
-                )
-                try:
-                    content = base64.b64decode(payload, validate=True)
-                except binascii.Error, ValueError:
-                    continue
-            elif isinstance(raw_data, list) and all(
-                isinstance(item, int) for item in raw_data
-            ):
-                content = bytes(raw_data)
-            else:
-                continue
-
-            formatted.append(
-                {
-                    "name": str(name).replace("\\", "/").split("/")[-1],
-                    "content": content,
-                    "mime_type": image.get("mime_type") or f"image/{image_format}",
-                    "page_number": page_number,
-                }
-            )
-        return formatted
 
 
 class KreuzbergHelper:
@@ -282,6 +132,9 @@ class KreuzbergHelper:
                 extraction.extraction_mode = "ocr"
 
             if chunk_content and extraction.content and not extraction.chunks:
+                # Inline chunking (the `chunking` config key) normally makes this
+                # unnecessary AND gives chunks native page spans. This is the
+                # fallback for when it produced nothing.
                 extraction.chunks = await self._chunk_content(
                     session,
                     text=extraction.content,
@@ -291,9 +144,54 @@ class KreuzbergHelper:
                 )
 
             if not extraction.chunks and extraction.content:
-                extraction.chunks = [{"text": extraction.content, "metadata": {}}]
+                # Last resort: chunk in-process. Xberg 1.x removed POST /chunk
+                # entirely, so on that engine the remote fallback above always
+                # fails — without this the whole document would be indexed as one
+                # giant chunk, which destroys retrieval quality.
+                extraction.chunks = await self._chunk_locally(
+                    extraction.content,
+                    max_chars=max_chars,
+                    max_overlap=max_overlap,
+                )
 
             return extraction
+
+    @staticmethod
+    async def _chunk_locally(
+        content: str,
+        *,
+        max_chars: int,
+        max_overlap: int,
+    ) -> list[dict[str, Any]]:
+        """Chunk markdown in this process, off the event loop.
+
+        Mirrors what the markitdown/docling adapters already do, so a document is
+        never indexed as a single unsplittable blob just because the extractor
+        has no chunking endpoint.
+        """
+        from app.modules.datastore.infrastructure.markdown_chunker import (
+            chunk_markdown,
+        )
+
+        chunks = await run_blocking(
+            partial(chunk_markdown, max_chars=max_chars, overlap=max_overlap),
+            content,
+            limiter="cpu_bound",
+        )
+        return [
+            {
+                "text": chunk.text,
+                "metadata": {
+                    key: value
+                    for key, value in (
+                        ("first_page", chunk.page_start),
+                        ("last_page", chunk.page_end),
+                    )
+                    if value is not None
+                },
+            }
+            for chunk in chunks
+        ]
 
     async def _pdf_needs_ocr(
         self, content: bytes | None, content_path: str | None = None
@@ -373,12 +271,22 @@ class KreuzbergHelper:
                 "language": "eng",
             },
         }
+        # Cap the extractor's internal thread pool. Left unset it sizes itself
+        # from the host's CPU count, ignoring our container limit, so several
+        # concurrent extractions oversubscribe the box.
+        max_threads = datastore_settings.document_processing_extractor_max_threads
+        if max_threads > 0:
+            config["concurrency"] = {"max_threads": max_threads}
         if self._supports_image_extraction(mime_type):
             # Native PDFs render embedded images fine at 150 DPI (4× less memory
             # than 300); scanned/OCR docs keep 300 for OCR + figure fidelity.
             config["images"] = {
                 "extract_images": True,
                 "target_dpi": 300 if force_ocr else 150,
+                # Without this, image bytes arrive as a JSON array of integers —
+                # several times the payload and parse cost of base64 for the
+                # same bytes.
+                "include_data_base64": True,
             }
         if mime_type == "application/pdf":
             # Layout + TATR reconstruct rich markdown and text tables for digital
@@ -395,15 +303,22 @@ class KreuzbergHelper:
                     "include_bbox": False,
                 }
                 config["layout"] = {
-                    # "fast" = YOLO DocLayNet (11-class), lighter than the default
-                    # "accurate" RT-DETR v2 (17-class) layout model — lower peak
-                    # RAM with no measured loss of table quality. "tatr" is the
-                    # smallest table-structure model and reconstructs markdown
-                    # tables (slanet_plus was lighter but lost tables).
-                    "preset": "fast",
+                    # "auto" pre-screens each page with cheap geometry signals and
+                    # runs the layout model only where it can help. The default is
+                    # "always", which renders and infers EVERY page and dominates
+                    # extraction cost.
+                    #
+                    # NOTE: this replaced a "preset": "fast" key that never
+                    # existed on LayoutDetectionConfig. That struct does not set
+                    # deny_unknown_fields, so the key was accepted and silently
+                    # discarded and we paid full always-on layout while believing
+                    # otherwise. Only Xberg 1.x honours "strategy"; on Kreuzberg
+                    # v4 it is likewise ignored (v4 has no page-selection knob),
+                    # which is what keeps this config valid against both.
+                    "strategy": datastore_settings.document_processing_layout_strategy,
                     "confidence_threshold": 0.5,
                     "apply_heuristics": True,
-                    "table_model": "tatr",
+                    "table_model": datastore_settings.document_processing_table_model,
                 }
         if force_ocr:
             config["force_ocr"] = True
@@ -568,17 +483,12 @@ class KreuzbergHelper:
                 async with session.post(
                     f"{self.base_url}/extract",
                     data=form_data,
-                    params={"output_format": "markdown"},
                 ) as response:
                     await self._raise_for_status(response)
                     # A completed HTTP round-trip means the extractor is reachable.
                     circuit.record_success()
                     data = await response.json()
-                    if isinstance(data, list) and data:
-                        return KreuzbergExtractionResult(data[0])
-                    raise RuntimeError(
-                        "Unexpected response from Kreuzberg extract endpoint"
-                    )
+                    return self._parse_extract_response(data)
             except (asyncio.TimeoutError, TimeoutError) as exc:
                 # A timeout may happen after Kreuzberg accepted the upload and
                 # started CPU-heavy work. Retrying immediately can duplicate that
@@ -615,6 +525,39 @@ class KreuzbergHelper:
                     file_obj.close()
         # Unreachable: the loop either returns or raises on the final attempt.
         raise KreuzbergTransientError("Kreuzberg extract request failed")
+
+    @staticmethod
+    def _parse_extract_response(data: Any) -> KreuzbergExtractionResult:
+        """Read one document out of an /extract response, on either wire format.
+
+        Kreuzberg v4 returns a bare JSON array of results. Xberg 1.x returns an
+        envelope, ``{results: [...], errors: [...], summary: {...}}``, and
+        reports per-input failures inside a **200** — so a naive parse would
+        silently treat a failed extraction as an empty document. Supporting both
+        shapes here is what lets one client run against either engine, so the
+        image tag is the only thing that changes when we migrate.
+        """
+        if isinstance(data, dict):
+            results = data.get("results")
+            if isinstance(results, list) and results:
+                return KreuzbergExtractionResult(results[0])
+            # 200 with no result means the errors array is the real answer.
+            errors = data.get("errors")
+            if isinstance(errors, list) and errors:
+                first = errors[0]
+                detail = (
+                    first.get("message") or first.get("error") or str(first)
+                    if isinstance(first, dict)
+                    else str(first)
+                )
+                # A document-level rejection, not an outage: this must spend an
+                # attempt and eventually go terminal rather than be retried
+                # forever, so it is deliberately NOT a transient error.
+                raise RuntimeError(f"Extractor reported no usable result: {detail}")
+            raise RuntimeError("Extractor returned an empty result set")
+        if isinstance(data, list) and data:
+            return KreuzbergExtractionResult(data[0])
+        raise RuntimeError("Unexpected response from the extract endpoint")
 
     async def _chunk_content(
         self,
@@ -681,9 +624,22 @@ class KreuzbergHelper:
         if response.status < 400:
             return
         body = await response.text()
-        message = f"Kreuzberg request failed with status {response.status}: {body}"
+        message = f"Extractor request failed with status {response.status}: {body}"
         if response.status in {400, 422}:
+            # 400 = bad request/config (the compat-config ladder may recover it);
+            # 422 = the document itself could not be parsed or OCR'd.
             raise KreuzbergCompatibilityError(message)
-        if response.status in {408, 429} or response.status >= 500:
+        if response.status in {408, 429}:
+            raise KreuzbergTransientError(message)
+        if response.status == 502:
+            # Model download from HuggingFace failed — exactly what a cold
+            # container produces. Infrastructure, not a bad document.
+            raise KreuzbergTransientError(message)
+        if response.status >= 500:
+            # A per-file extraction timeout surfaces as a 500 carrying
+            # error_type=TimeoutError rather than a 408, so the body is the only
+            # way to tell "the extractor is struggling" (retry later) from a
+            # genuine internal error. Both are treated as transient; the
+            # distinction is kept for the log.
             raise KreuzbergTransientError(message)
         raise RuntimeError(message)

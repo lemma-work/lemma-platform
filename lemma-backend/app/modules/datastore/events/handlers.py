@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import math
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
@@ -41,6 +40,7 @@ from app.modules.datastore.services.file_recovery_service import (
 )
 from app.core.infrastructure.jobs.streaq_runtime import (
     AppWorkerContext,
+    Lane,
     streaq_cron,
     streaq_task,
     streaq_worker,
@@ -50,22 +50,6 @@ from app.core.log.log import get_logger
 logger = get_logger(__name__)
 
 router = RedisRouter()
-_document_processing_semaphore: asyncio.Semaphore | None = None
-_document_processing_semaphore_limit: int | None = None
-
-
-def _get_document_processing_semaphore() -> asyncio.Semaphore:
-    global _document_processing_semaphore, _document_processing_semaphore_limit
-
-    limit = max(1, datastore_settings.document_processing_max_concurrency)
-    if (
-        _document_processing_semaphore is None
-        or _document_processing_semaphore_limit != limit
-    ):
-        _document_processing_semaphore = asyncio.Semaphore(limit)
-        _document_processing_semaphore_limit = limit
-
-    return _document_processing_semaphore
 
 
 def _content_update_defer_until(occurred_at: datetime) -> datetime | None:
@@ -138,7 +122,13 @@ async def on_datastore_file_event(
 # The datastore row state machine owns retries: a failure records FAILED and the
 # recovery cron re-drives it after backoff. An immediate Streaq retry would see a
 # non-PENDING row and no-op, so keep this task single-attempt.
-@streaq_task(name="process_datastore_file_task", max_tries=1)
+#
+# Runs on the BULK lane. Extraction concurrency is now the bulk lane's worker
+# concurrency (``WORKER_BULK_CONCURRENCY``) rather than a semaphore inside the
+# task: parking on a semaphore still held a worker slot, so a burst of uploads
+# consumed the capacity that agent runs and surface messages needed. Bounding it
+# at the queue means excess work simply stays queued.
+@streaq_task(name="process_datastore_file_task", max_tries=1, lane=Lane.BULK)
 async def process_datastore_file_task(
     _task_context=None,
     *,
@@ -153,29 +143,25 @@ async def process_datastore_file_task(
     file_uuid = UUID(file_id)
     pod_uuid = UUID(pod_id)
 
-
     try:
-        async with _get_document_processing_semaphore():
-            # The service uses a uow_factory to open SHORT UoWs around each DB
-            # op, releasing the pooled connection during the slow storage
-            # downloads, document extraction, and uploads inside
-            # process_file_async. The semaphore still caps extraction
-            # CPU/memory and concurrent datastore-pool use during indexing.
-            uow_factory = (
-                worker_ctx.uow_factory
-                if worker_ctx is not None
-                else SessionUnitOfWorkFactory(async_session_maker)
-            )
-            service = get_datastore_composition().build_processing_service(
-                pod_uuid, uow_factory=uow_factory
-            )
-            await service.process_file_async(file_uuid, metadata or {})
+        # The service uses a uow_factory to open SHORT UoWs around each DB op,
+        # releasing the pooled connection during the slow storage downloads,
+        # document extraction, and uploads inside process_file_async.
+        uow_factory = (
+            worker_ctx.uow_factory
+            if worker_ctx is not None
+            else SessionUnitOfWorkFactory(async_session_maker)
+        )
+        service = get_datastore_composition().build_processing_service(
+            pod_uuid, uow_factory=uow_factory
+        )
+        await service.process_file_async(file_uuid, metadata or {})
     except Exception:
         logger.debug('datastore.handlers.process_datastore_file_task_s.propagated', exc_info=True)
         raise
 
 
-@streaq_task(name="cleanup_deleted_datastore_paths")
+@streaq_task(name="cleanup_deleted_datastore_paths", lane=Lane.BULK)
 async def cleanup_deleted_datastore_paths_task(
     _task_context=None,
     *,
@@ -215,7 +201,41 @@ async def cleanup_deleted_datastore_paths_task(
         raise
 
 
-@streaq_cron("*/15 * * * *", name="recover_stuck_processing_files")
+@streaq_cron(
+    "* * * * *", name="dispatch_pending_datastore_files", lane=Lane.BULK
+)
+async def dispatch_pending_datastore_files() -> None:
+    """Meter the PENDING backlog into the bulk queue, fairly across pods.
+
+    Uploads past a pod's in-flight allowance are intentionally not enqueued (see
+    ``RedisDatastoreReindexQueue.enqueue``); their PENDING rows are the durable
+    backlog. This runs every minute and drains that backlog round-robin, so one
+    tenant uploading a thousand papers cannot starve anyone else and every file
+    is still processed eventually.
+    """
+    worker_ctx: AppWorkerContext = streaq_worker.context
+    try:
+        async with worker_ctx.uow() as uow:
+            dispatch_service = DatastoreFileRecoveryService(
+                file_repository=DatastoreFileRepository(uow),
+                reindex_queue=get_datastore_reindex_queue(),
+                uow=uow,
+            )
+            summary = await dispatch_service.dispatch_pending_files()
+
+        if summary.enqueued_count:
+            logger.debug(
+                "datastore.handlers.dispatched_pending_datastore_files.observed",
+                enqueued_count=summary.enqueued_count,
+                pod_count=summary.pod_count,
+            )
+    except Exception:
+        logger.error(
+            "datastore.handlers.pending_file_dispatch_cron.failed", exc_info=True
+        )
+
+
+@streaq_cron("*/15 * * * *", name="recover_stuck_processing_files", lane=Lane.BULK)
 async def recover_stuck_processing_files() -> None:
     """
     Find files stuck in PENDING or PROCESSING and make sure they get queued.

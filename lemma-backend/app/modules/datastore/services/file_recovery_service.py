@@ -14,6 +14,13 @@ from app.modules.datastore.domain.ports import (
 
 
 @dataclass(frozen=True)
+class DatastoreFileDispatchSummary:
+    considered_count: int
+    enqueued_count: int
+    pod_count: int
+
+
+@dataclass(frozen=True)
 class DatastoreFileRecoverySummary:
     examined_count: int
     reset_count: int
@@ -34,6 +41,61 @@ class DatastoreFileRecoveryService:
         self.file_repository = file_repository
         self.reindex_queue = reindex_queue
         self.uow = uow
+
+    async def dispatch_pending_files(
+        self,
+        *,
+        per_pod_limit: int | None = None,
+        global_limit: int | None = None,
+    ) -> DatastoreFileDispatchSummary:
+        """Meter PENDING work into the queue, fairly across pods.
+
+        This is the counterpart to the per-pod admission gate in
+        ``RedisDatastoreReindexQueue.enqueue``: uploads beyond a pod's in-flight
+        allowance are deliberately left PENDING rather than queued, so the
+        Postgres row is the durable backlog and Redis only ever holds a bounded
+        working set. This runs often and drains that backlog round-robin, which
+        is what guarantees every file is eventually processed even while one
+        tenant is bulk-uploading.
+
+        ``bypass_admission`` is passed on purpose: the fairness decision was
+        already made by the ranked query, and re-applying the gate here would
+        refuse exactly the files this pass just chose.
+        """
+        if per_pod_limit is None:
+            per_pod_limit = datastore_settings.datastore_per_pod_max_inflight
+        if global_limit is None:
+            global_limit = datastore_settings.datastore_dispatch_global_batch
+        # A disabled per-pod gate means "no fairness accounting" — dispatch is
+        # then just a bounded FIFO drain.
+        effective_per_pod = per_pod_limit if per_pod_limit > 0 else global_limit
+
+        candidates = await self.file_repository.list_pending_dispatch_candidates(
+            per_pod_limit=effective_per_pod,
+            global_limit=global_limit,
+        )
+        batch_size = max(1, datastore_settings.recovery_enqueue_batch_size)
+        enqueued_count = 0
+        for index, file_entity in enumerate(candidates):
+            queued = await self.reindex_queue.enqueue(
+                file_id=file_entity.id,
+                pod_id=file_entity.pod_id,
+                metadata=file_entity.metadata or {},
+                defer_until=None,
+                bypass_admission=True,
+            )
+            if queued:
+                enqueued_count += 1
+            # Yield between batches so a large backlog is spread out instead of
+            # dispatched as one burst that spikes DB + worker pickup demand.
+            if (index + 1) % batch_size == 0:
+                await asyncio.sleep(0)
+
+        return DatastoreFileDispatchSummary(
+            considered_count=len(candidates),
+            enqueued_count=enqueued_count,
+            pod_count=len({file_entity.pod_id for file_entity in candidates}),
+        )
 
     async def recover_stale_files(
         self,

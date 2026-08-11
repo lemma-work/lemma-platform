@@ -14,9 +14,17 @@ from app.modules.datastore.domain.document_processing import (
     DocumentImage,
     DocumentPage,
 )
+from app.modules.datastore.domain.file_entities import FileStatus
 from app.modules.datastore.domain.errors import (
     DatastoreObjectIntegrityError,
     DatastoreObjectNotFoundError,
+    DocumentExtractionUnavailableError,
+)
+from app.modules.datastore.infrastructure.kreuzberg_circuit import (
+    KreuzbergCircuitOpen,
+)
+from app.modules.datastore.infrastructure.kreuzberg_helper import (
+    KreuzbergTransientError,
 )
 from app.modules.datastore.services.file_processing_service import (
     DatastoreFileProcessingService,
@@ -673,6 +681,124 @@ async def test_process_file_async_marks_failed_in_own_uow_on_error():
     # get_model + claim + mark_failed, all closed.
     assert factory.opened == 3
     assert factory.active == 0
+
+
+@pytest.mark.asyncio
+async def test_extractor_outage_releases_claim_instead_of_spending_an_attempt():
+    """An unreachable extractor must NOT consume the file's retry budget.
+
+    claim_for_processing increments processing_attempts, and recovery terminally
+    fails a file once it reaches datastore_recovery_max_attempts (3). If an
+    outage were recorded as a document failure, three blips would mark a
+    perfectly good user document FAILED_PERMANENT. The row must instead go back
+    to PENDING with the attempt refunded.
+    """
+    file_id = uuid4()
+    file_model = SimpleNamespace(
+        id=file_id,
+        kind="FILE",
+        status="PENDING",
+        search_enabled=True,
+        name="paper.pdf",
+        path="/papers/paper.pdf",
+        mime_type="application/pdf",
+        file_metadata={},
+        # None so the download integrity fence doesn't fire first — this test is
+        # about what happens when the *extractor* is unreachable.
+        content_sha256=None,
+    )
+    # get_model, claim, release_claim.
+    factory = _RecordingUowFactory(
+        results=[_ScalarResult(file_model), _ExecuteResult(), _ExecuteResult()]
+    )
+    service = _build_service(factory)
+    service.document_processor.extract = AsyncMock(
+        side_effect=KreuzbergTransientError("extract connection failed")
+    )
+
+    with pytest.raises(DocumentExtractionUnavailableError):
+        await service.process_file_async(file_id)
+
+    release_stmt = factory.sessions[-1].execute.await_args.args[0]
+    rendered = str(release_stmt).replace("\n", " ")
+    compiled = release_stmt.compile()
+
+    # Back to PENDING, not FAILED / FAILED_PERMANENT.
+    assert compiled.params["status"] == FileStatus.PENDING.value
+    assert "FAILED" not in str(compiled.params)
+    # The attempt is refunded, not merely left alone.
+    assert "processing_attempts=(datastore_files.processing_attempts - " in rendered
+    # Still fenced on the exact claim + PROCESSING, so a stale worker cannot
+    # release a newer claim.
+    assert compiled.params["status_1"] == FileStatus.PROCESSING.value
+    assert "datastore_files.processing_attempts = :processing_attempts_2" in rendered
+    assert factory.active == 0
+
+
+@pytest.mark.asyncio
+async def test_open_circuit_also_releases_the_claim():
+    """An open circuit is the clearest 'extractor is down' signal there is."""
+    file_id = uuid4()
+    file_model = SimpleNamespace(
+        id=file_id,
+        kind="FILE",
+        status="PENDING",
+        search_enabled=True,
+        name="paper.pdf",
+        path="/papers/paper.pdf",
+        mime_type="application/pdf",
+        file_metadata={},
+        content_sha256=None,
+    )
+    factory = _RecordingUowFactory(
+        results=[_ScalarResult(file_model), _ExecuteResult(), _ExecuteResult()]
+    )
+    service = _build_service(factory)
+    service.document_processor.extract = AsyncMock(
+        side_effect=KreuzbergCircuitOpen("circuit open")
+    )
+
+    with pytest.raises(DocumentExtractionUnavailableError):
+        await service.process_file_async(file_id)
+
+    params = str(factory.sessions[-1].execute.await_args.args[0].compile().params)
+    assert "PENDING" in params
+    assert "FAILED" not in params
+
+
+@pytest.mark.asyncio
+async def test_document_level_failure_still_spends_its_attempt():
+    """The refund must not leak to real document failures.
+
+    A corrupt/unparseable document is genuinely bad, so it keeps costing an
+    attempt and eventually goes terminal — otherwise a poison file loops forever.
+    """
+    file_id = uuid4()
+    file_model = SimpleNamespace(
+        id=file_id,
+        kind="FILE",
+        status="PENDING",
+        search_enabled=True,
+        name="broken.pdf",
+        path="/papers/broken.pdf",
+        mime_type="application/pdf",
+        file_metadata={},
+        content_sha256=None,
+    )
+    factory = _RecordingUowFactory(
+        results=[_ScalarResult(file_model), _ExecuteResult(), _ExecuteResult()]
+    )
+    service = _build_service(factory)
+    service.document_processor.extract = AsyncMock(
+        side_effect=ValueError("unparseable document")
+    )
+
+    with pytest.raises(ValueError):
+        await service.process_file_async(file_id)
+
+    params = str(factory.sessions[-1].execute.await_args.args[0].compile().params)
+    assert "FAILED" in params
+    assert "PENDING" not in params
 
 
 @pytest.mark.asyncio

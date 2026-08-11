@@ -92,12 +92,25 @@ def main() -> None:
         default="http://localhost:8000",
         help="Base URL of the running lemma-backend (default: http://localhost:8000)",
     )
+    parser.add_argument(
+        "--email-domain",
+        default="lemma-loadtest.com",
+        help=(
+            "Signup email domain. Needs a normal TLD (reserved ones like .local "
+            "fail email-validator's syntax check); it never has to resolve, "
+            "because the load-test stack disables the signup email gates."
+        ),
+    )
     args = parser.parse_args()
 
     api_url: str = args.api_url.rstrip("/")
     ws_url = api_url.replace("http://", "ws://").replace("https://", "wss://")
 
-    email = f"loadtest+{uuid.uuid4().hex[:8]}@example.com"
+    # example.com is on the bundled disposable-email blocklist, and reserved
+    # TLDs like .local/.example fail email-validator's syntax check outright.
+    # The load-test stack disables both signup email gates, so any normal TLD
+    # works and nothing needs to resolve in DNS.
+    email = f"loadtest+{uuid.uuid4().hex[:8]}@{args.email_domain}"
     password = "LoadTest@Password123"
     table_name = "load_test_events"
 

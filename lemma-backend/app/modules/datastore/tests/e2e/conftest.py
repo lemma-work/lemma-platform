@@ -144,8 +144,10 @@ def document_worker(
             e2e_settings,
             log_prefix=f"lemma_datastore_{processor}_worker",
             extra_env=extra_env,
+            # Module path, not `module:attribute` — the worker is started with
+            # `python -m` so it runs every lane, matching production.
             worker_entrypoint=(
-                "app.modules.datastore.tests.e2e.worker_entrypoint:streaq_worker"
+                "app.modules.datastore.tests.e2e.worker_entrypoint"
             ),
         ) as process:
             yield process

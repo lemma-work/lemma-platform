@@ -200,3 +200,80 @@ async def test_recover_stale_files_passes_max_attempts_to_both_queries():
     exhausted_call = file_repository.list_exhausted_recovery_candidates.await_args
     assert stale_call.kwargs["max_attempts"] == 2
     assert exhausted_call.kwargs["max_attempts"] == 2
+
+
+# --- Fair dispatch --------------------------------------------------------
+#
+# Ingestion is shared capacity. Plain FIFO lets one pod that uploads a thousand
+# papers hold the queue until it drains, so everyone else waits. These cover the
+# two halves of the fix: the ranked query spreads work across pods, and the
+# dispatcher must not be re-gated by the admission check that deferred the work
+# to it in the first place.
+
+
+def _dispatch_repo(candidates):
+    repo = AsyncMock()
+    repo.list_pending_dispatch_candidates.return_value = list(candidates)
+    return repo
+
+
+def _file(pod_id):
+    return SimpleNamespace(id=uuid4(), pod_id=pod_id, metadata={}, status=FileStatus.PENDING)
+
+
+@pytest.mark.asyncio
+async def test_dispatch_enqueues_candidates_and_reports_pod_spread():
+    pod_a, pod_b = uuid4(), uuid4()
+    candidates = [_file(pod_a), _file(pod_b), _file(pod_a)]
+    repo = _dispatch_repo(candidates)
+    queue = AsyncMock()
+    queue.enqueue.return_value = True
+
+    service = DatastoreFileRecoveryService(
+        file_repository=repo, reindex_queue=queue, uow=AsyncMock()
+    )
+    summary = await service.dispatch_pending_files(per_pod_limit=2, global_limit=50)
+
+    assert summary.considered_count == 3
+    assert summary.enqueued_count == 3
+    assert summary.pod_count == 2
+    repo.list_pending_dispatch_candidates.assert_awaited_once_with(
+        per_pod_limit=2, global_limit=50
+    )
+
+
+@pytest.mark.asyncio
+async def test_dispatch_bypasses_the_admission_gate():
+    """Otherwise the gate would refuse exactly the files this pass just chose.
+
+    The per-pod gate is what deferred these rows to the dispatcher; re-applying
+    it here would deadlock the backlog — nothing would ever drain.
+    """
+    repo = _dispatch_repo([_file(uuid4())])
+    queue = AsyncMock()
+    queue.enqueue.return_value = True
+
+    service = DatastoreFileRecoveryService(
+        file_repository=repo, reindex_queue=queue, uow=AsyncMock()
+    )
+    await service.dispatch_pending_files(per_pod_limit=1, global_limit=10)
+
+    assert queue.enqueue.await_args.kwargs["bypass_admission"] is True
+
+
+@pytest.mark.asyncio
+async def test_dispatch_with_fairness_disabled_falls_back_to_bounded_fifo():
+    """per_pod_limit=0 means 'no fairness accounting', not 'dispatch nothing'."""
+    repo = _dispatch_repo([])
+    queue = AsyncMock()
+
+    service = DatastoreFileRecoveryService(
+        file_repository=repo, reindex_queue=queue, uow=AsyncMock()
+    )
+    await service.dispatch_pending_files(per_pod_limit=0, global_limit=25)
+
+    # Falls back to the global bound rather than passing 0 through, which would
+    # select no rows and stall ingestion permanently.
+    repo.list_pending_dispatch_candidates.assert_awaited_once_with(
+        per_pod_limit=25, global_limit=25
+    )

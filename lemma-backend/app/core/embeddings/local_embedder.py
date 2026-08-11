@@ -24,13 +24,13 @@ class FastEmbedLocalEmbedder(Embedder):
         *,
         model_name: str | None = None,
         dimension: int | None = None,
-        batch_size: int = 32,
+        batch_size: int | None = None,
         cache_dir: str | Path | None = None,
         model: Any | None = None,
     ):
         self.model_name = model_name or settings.local_embedding_model
         self.dimension = dimension or settings.embedding_dimension
-        self.batch_size = batch_size
+        self.batch_size = batch_size or settings.local_embedding_batch_size
         self.cache_dir = Path(
             cache_dir or settings.local_embedding_cache_dir
         ).expanduser()
@@ -46,9 +46,43 @@ class FastEmbedLocalEmbedder(Embedder):
         return embeddings[0]
 
     async def embed_batch(self, texts: List[str]) -> List[List[float]]:
+        """Embed in bounded slices rather than one call per document.
+
+        A single document can produce hundreds of chunks — one 95-page paper in
+        the benchmark corpus produced 533 — and embedding them in one call holds
+        every input string and every output vector live at once on top of the
+        ONNX arena. That is what OOM-killed the ingestion worker at its 4GB
+        limit. Slicing caps peak memory at the slice, independently of how large
+        a document happens to be, and costs nothing: FastEmbed batches
+        internally anyway.
+        """
         if not texts:
             return []
-        return await anyio.to_thread.run_sync(self._encode_batch, list(texts))
+        slice_size = max(1, settings.local_embedding_max_texts_per_call)
+        pending = list(texts)
+        vectors: List[List[float]] = []
+        for start in range(0, len(pending), slice_size):
+            chunk = pending[start : start + slice_size]
+            vectors.extend(await anyio.to_thread.run_sync(self._encode_batch, chunk))
+        return vectors
+
+    def _threading_kwargs(self) -> dict[str, int]:
+        """Pin the ONNX session's own thread pools.
+
+        Left unset, ONNX Runtime sizes its intra-op pool from the host's CPU
+        count — which in a container is the *host's*, not the cgroup limit — so
+        it oversubscribes the cores it actually has and every inference gets
+        slower. Measured directly on a 2-CPU container with bge-base: 604
+        ms/chunk with this unset against 264 ms/chunk pinned — 2.3x, from one
+        value.
+
+        ``threads=0`` leaves it to ONNX, which is the right choice when the
+        process owns the whole machine.
+        """
+        threads = settings.local_embedding_threads
+        if threads <= 0:
+            return {}
+        return {"threads": threads}
 
     def _load_model(self):
         if self._model is not None:
@@ -70,6 +104,7 @@ class FastEmbedLocalEmbedder(Embedder):
                     self._model = TextEmbedding(
                         model_name=self.model_name,
                         cache_dir=str(self.cache_dir),
+                        **self._threading_kwargs(),
                     )
                 except Exception as exc:
                     if not self._is_missing_model_artifact(exc):

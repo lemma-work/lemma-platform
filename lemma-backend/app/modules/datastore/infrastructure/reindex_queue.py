@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from sqlalchemy import select
+from sqlalchemy import func, select
 from uuid import UUID
 
 from app.core.infrastructure.db.session import async_session_maker
@@ -11,6 +11,7 @@ from app.core.infrastructure.jobs.streaq_job_queue import (
     SharedStreaqJobQueue,
     get_streaq_job_queue,
 )
+from app.modules.datastore.config import datastore_settings
 from app.modules.datastore.domain.file_entities import FileStatus
 from app.modules.datastore.domain.ports import DatastoreReindexQueuePort
 from app.modules.datastore.infrastructure.models import DatastoreFile
@@ -54,6 +55,45 @@ class RedisDatastoreReindexQueue(DatastoreReindexQueuePort):
 
         return True
 
+    async def _pod_has_admission_headroom(
+        self, pod_id: UUID, *, file_id: UUID
+    ) -> bool:
+        """Whether this pod may enqueue immediately, or should wait its turn.
+
+        Uploads are enqueued straight away in the common case — that keeps
+        single-file latency low. Only once a pod is already saturated do we stop
+        adding to Redis and let the fair dispatcher meter the rest out, which is
+        what stops one tenant's bulk upload from starving everyone else.
+
+        ``file_id`` is excluded from the count: its row is already PENDING by the
+        time this runs, so counting it would mean a pod at limit 4 admits only 3
+        — and with a limit of 1, nothing at all.
+        """
+        limit = datastore_settings.datastore_per_pod_max_inflight
+        if limit <= 0:
+            return True
+        async with async_session_maker() as session:
+            active = int(
+                await session.scalar(
+                    select(func.count())
+                    .select_from(DatastoreFile)
+                    .where(
+                        DatastoreFile.pod_id == pod_id,
+                        DatastoreFile.id != file_id,
+                        DatastoreFile.kind == "FILE",
+                        DatastoreFile.search_enabled == True,  # noqa: E712
+                        DatastoreFile.status.in_(
+                            (
+                                FileStatus.PENDING.value,
+                                FileStatus.PROCESSING.value,
+                            )
+                        ),
+                    )
+                )
+                or 0
+            )
+        return active < limit
+
     def _job_id(self, *, file_id: UUID, defer_until: datetime | None) -> str:
         if defer_until is None:
             return f"datastore_file:{file_id}"
@@ -66,9 +106,27 @@ class RedisDatastoreReindexQueue(DatastoreReindexQueuePort):
         pod_id: UUID,
         metadata: dict | None,
         defer_until: datetime | None = None,
+        bypass_admission: bool = False,
     ) -> bool:
+        """Queue a file for processing, subject to the per-pod admission gate.
+
+        Returning False when the pod is saturated is not a failure and drops
+        nothing: the row stays PENDING, which IS the durable backlog, and
+        ``dispatch_pending_datastore_files`` will pick it up fairly. The
+        dispatcher itself passes ``bypass_admission`` — it has already done the
+        fairness accounting and must not be re-gated by it.
+        """
         is_pending = await self._is_file_pending(file_id=file_id, pod_id=pod_id)
         if not is_pending:
+            return False
+
+        if not bypass_admission and not await self._pod_has_admission_headroom(
+            pod_id, file_id=file_id
+        ):
+            logger.debug(
+                "datastore.reindex_queue.pod_admission_deferred_to_dispatcher.observed",
+                pod_id=str(pod_id),
+            )
             return False
 
         job_id = self._job_id(file_id=file_id, defer_until=defer_until)

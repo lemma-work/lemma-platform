@@ -94,7 +94,7 @@ async def cancellable_worker(e2e_settings):
     backend_root = Path(__file__).resolve().parents[5]
     log_file = open(log_path, "w+")
     proc = subprocess.Popen(
-        [str(backend_root / ".venv/bin/streaq"), "run", "app.events:streaq_worker"],
+        [str(backend_root / ".venv/bin/python"), "-m", "app.worker"],
         cwd=str(backend_root),
         env={
             **os.environ,

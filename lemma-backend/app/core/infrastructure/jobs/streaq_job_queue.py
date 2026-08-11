@@ -40,17 +40,59 @@ def create_streaq_client(*, queue_name: str = "default") -> Worker[None]:
 
 
 class SharedStreaqJobQueue(JobQueuePort):
-    """Shared streaq-backed job queue for a process."""
+    """Shared streaq-backed job queue for a process.
+
+    Lanes are separate Redis queues, so publishing needs a client per lane. The
+    default client (``connect()``) is the interactive lane and also backs the
+    lane-independent plain-Redis helpers below; ``_lane_client`` lazily opens an
+    extra client for any other lane a caller actually enqueues to, so a process
+    that never touches the bulk lane never opens a second connection.
+    """
 
     def __init__(self, worker_factory: Callable[[], Worker[Any]]):
         self._worker_factory = worker_factory
         self._worker = worker_factory()
         self._stack: AsyncExitStack | None = None
         self._lock = asyncio.Lock()
+        self._lane_clients: dict[str, Worker[Any]] = {}
+        self._lane_stacks: dict[str, AsyncExitStack] = {}
 
     def _reset_worker(self) -> None:
         self._worker = self._worker_factory()
         self._stack = None
+
+    async def _lane_client(self, job_name: str) -> Worker[Any]:
+        """Client for the lane ``job_name`` is registered on."""
+        from app.core.infrastructure.jobs.streaq_runtime import (
+            Lane,
+            lane_for_task,
+            lane_queue_name,
+        )
+
+        lane = lane_for_task(job_name)
+        if lane is Lane.INTERACTIVE:
+            return await self.connect()
+
+        queue_name = lane_queue_name(lane)
+        existing = self._lane_clients.get(queue_name)
+        if existing is not None:
+            return existing
+
+        async with self._lock:
+            existing = self._lane_clients.get(queue_name)
+            if existing is None:
+                client = create_streaq_client(queue_name=queue_name)
+                stack = AsyncExitStack()
+                await stack.__aenter__()
+                await stack.enter_async_context(client)
+                self._lane_clients[queue_name] = client
+                self._lane_stacks[queue_name] = stack
+                existing = client
+        return existing
+
+    async def _all_clients(self) -> list[Worker[Any]]:
+        """Every open client, for id-keyed lookups whose lane is unknown."""
+        return [await self.connect(), *self._lane_clients.values()]
 
     async def connect(self) -> Worker[Any]:
         """Initialize the shared streaq client if needed."""
@@ -73,9 +115,14 @@ class SharedStreaqJobQueue(JobQueuePort):
         """Close the shared streaq client when owned by this adapter."""
         stack = self._stack
         self._stack = None
-        if stack is not None:
+        lane_stacks = list(self._lane_stacks.values())
+        self._lane_stacks.clear()
+        self._lane_clients.clear()
+        for lane_stack in (*lane_stacks, stack):
+            if lane_stack is None:
+                continue
             try:
-                await stack.aclose()
+                await lane_stack.aclose()
             except ValueError as exc:
                 if "different Context" not in str(exc):
                     raise
@@ -85,7 +132,7 @@ class SharedStreaqJobQueue(JobQueuePort):
         self._reset_worker()
 
     async def enqueue(self, job_name: str, **kwargs: Any) -> Task[Any] | None:
-        worker = await self.connect()
+        worker = await self._lane_client(job_name)
         task_id = kwargs.pop("_job_id", None)
         defer_until = kwargs.pop("_defer_until", None)
         task = worker.enqueue_unsafe(job_name, **kwargs)
@@ -130,8 +177,12 @@ class SharedStreaqJobQueue(JobQueuePort):
         return task
 
     async def abort(self, job_id: str, *, timeout_seconds: float | None = None) -> bool:
-        worker = await self.connect()
-        return await worker.abort_by_id(job_id, timeout=timeout_seconds)
+        # A job id does not carry its lane, and streaq scopes these lookups by
+        # queue, so ask each open lane and take the first that owns it.
+        for worker in await self._all_clients():
+            if await worker.abort_by_id(job_id, timeout=timeout_seconds):
+                return True
+        return False
 
     def _task_job_key(self, task_id: str) -> str:
         return f"streaq:task-job:{task_id}"
@@ -177,8 +228,15 @@ class SharedStreaqJobQueue(JobQueuePort):
         return aborted
 
     async def status(self, job_id: str) -> TaskStatus:
-        worker = await self.connect()
-        return await worker.status_by_id(job_id)
+        # As with abort: the id is lane-agnostic, so consult each open lane and
+        # return the first that actually knows this job.
+        clients = await self._all_clients()
+        result = TaskStatus.NOT_FOUND
+        for worker in clients:
+            result = await worker.status_by_id(job_id)
+            if result != TaskStatus.NOT_FOUND:
+                return result
+        return result
 
     async def defer(
         self,

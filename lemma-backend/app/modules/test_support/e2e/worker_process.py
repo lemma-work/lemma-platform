@@ -52,7 +52,10 @@ async def production_worker_process(
     extra_env: Mapping[str, str] | None = None,
     readiness_markers: Sequence[str] = _DEFAULT_READINESS_MARKERS,
     startup_attempts: int = 600,
-    worker_entrypoint: str = "app.events:streaq_worker",
+    # Module entrypoint, not the streaq CLI: `streaq run app.events:streaq_worker`
+    # starts a single Worker object, which since lanes exist would consume only
+    # the interactive queue and silently never run document processing.
+    worker_entrypoint: str = "app.worker",
 ) -> AsyncIterator[ProductionWorkerProcess]:
     """Start the same worker entrypoint used in production with hermetic I/O.
 
@@ -100,8 +103,8 @@ async def production_worker_process(
     with log_path.open("w") as log_writer:
         process = subprocess.Popen(
             [
-                str(backend_root / ".venv/bin/streaq"),
-                "run",
+                str(backend_root / ".venv/bin/python"),
+                "-m",
                 worker_entrypoint,
             ],
             cwd=str(backend_root),
