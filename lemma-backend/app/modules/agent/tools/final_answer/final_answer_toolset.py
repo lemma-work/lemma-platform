@@ -32,7 +32,8 @@ from pydantic import TypeAdapter
 from pydantic_ai.tools import RunContext, Tool
 from pydantic_ai.toolsets import FunctionToolset
 from pydantic_core import SchemaValidator
-from pydantic_ai._function_schema import FunctionSchema
+
+from app.modules.agent.infrastructure.pydantic_ai_compat import FunctionSchema
 
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger

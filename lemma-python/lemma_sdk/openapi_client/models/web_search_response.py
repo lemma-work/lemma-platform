@@ -23,12 +23,15 @@ class WebSearchResponse:
         success (bool): Whether the search was successful
         error (None | str | Unset): Error message if the search was not successful
         message (None | str | Unset): Status message
+        note (None | str | Unset): Set when the search could not be run exactly as asked — for example a vertical this
+            provider does not serve.
         results (list[SearchResult] | Unset): List of search results
     """
 
     success: bool
     error: None | str | Unset = UNSET
     message: None | str | Unset = UNSET
+    note: None | str | Unset = UNSET
     results: list[SearchResult] | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
@@ -46,6 +49,12 @@ class WebSearchResponse:
             message = UNSET
         else:
             message = self.message
+
+        note: None | str | Unset
+        if isinstance(self.note, Unset):
+            note = UNSET
+        else:
+            note = self.note
 
         results: list[dict[str, Any]] | Unset = UNSET
         if not isinstance(self.results, Unset):
@@ -65,6 +74,8 @@ class WebSearchResponse:
             field_dict["error"] = error
         if message is not UNSET:
             field_dict["message"] = message
+        if note is not UNSET:
+            field_dict["note"] = note
         if results is not UNSET:
             field_dict["results"] = results
 
@@ -95,6 +106,15 @@ class WebSearchResponse:
 
         message = _parse_message(d.pop("message", UNSET))
 
+        def _parse_note(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        note = _parse_note(d.pop("note", UNSET))
+
         _results = d.pop("results", UNSET)
         results: list[SearchResult] | Unset = UNSET
         if _results is not UNSET:
@@ -108,6 +128,7 @@ class WebSearchResponse:
             success=success,
             error=error,
             message=message,
+            note=note,
             results=results,
         )
 

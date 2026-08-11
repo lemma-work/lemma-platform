@@ -36,6 +36,22 @@ async def exec_command(
     for interactive commands. Either way, drive the process afterwards with
     `manage_process` — poll or send input with `action="input"`, stop it with
     `action="kill"`, and use `action="list"` to find processes started earlier.
+
+    Long commands (installs, builds, test suites) are normal and supported. When
+    one outlives the wait window you get `completed: false` plus a `process_id`,
+    and the command carries on running — nothing was cancelled and no output is
+    lost. Keep polling until it finishes:
+
+        exec_command(cmd="npm ci && npm run build", timeout_seconds=300)
+        -> completed: false, process_id: "abc"
+        manage_process(action="input", process_id="abc", chars="")
+        -> completed: false        # repeat; each poll returns new output
+        manage_process(action="input", process_id="abc", chars="")
+        -> completed: true, exit_code: 0
+
+    Never re-run a command because it did not finish — that starts a second
+    build alongside the first. If you lose a `process_id`, `action="list"`
+    recovers it.
     """
     return await workspace_cli.exec_command(ctx.deps, request)
 

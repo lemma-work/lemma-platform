@@ -12,7 +12,7 @@ import traceback
 from typing import Any
 
 from fastapi import FastAPI
-from opentelemetry._logs import NoOpLoggerProvider, set_logger_provider
+from opentelemetry._logs import set_logger_provider
 from opentelemetry import metrics, trace
 from opentelemetry.exporter.otlp.proto.grpc._log_exporter import (
     OTLPLogExporter as GrpcOTLPLogExporter,
@@ -461,15 +461,18 @@ def _setup_llm_tracing(service_name: str) -> TracerProvider | None:
     # specifically to let developers review what's sent to the LLM — so it
     # carries full prompt/response content and skips SanitizingSpanExporter's
     # attribute allowlist (which would truncate/strip it right back out).
+    # `logger_provider`/`event_mode` are gone as of pydantic-ai 2.x: instrumentation
+    # now always writes content into span attributes rather than log records, which
+    # is exactly what NoOpLoggerProvider + event_mode="attributes" used to force.
+    # `version=2` is still honoured and is kept deliberately — the span shape here
+    # is what the LLM-review tooling reads.
     Agent.instrument_all(
         InstrumentationSettings(
             tracer_provider=provider,
             meter_provider=NoOpMeterProvider(),
-            logger_provider=NoOpLoggerProvider(),
             include_content=True,
             include_binary_content=False,
             version=2,
-            event_mode="attributes",
             use_aggregated_usage_attribute_names=True,
         )
     )

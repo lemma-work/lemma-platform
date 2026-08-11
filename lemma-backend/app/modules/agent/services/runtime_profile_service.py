@@ -181,6 +181,14 @@ class ResolvedAgentRuntime:
             "protocol": self.profile.protocol.value,
             "model_name": self.model.name if self.model else None,
             "provider_model_name": self.provider_model_name,
+            # Carried so paths that rebuild a context from the snapshot — the
+            # MCP bridges, notably — can work out whether this model reads
+            # images, instead of assuming it cannot and delegating needlessly.
+            "model_capabilities": (
+                [capability.value for capability in self.model.capabilities]
+                if self.model
+                else []
+            ),
             "config": _config_dict(self.profile.config),
         }
 

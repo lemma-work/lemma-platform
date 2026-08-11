@@ -38,7 +38,9 @@ _CONTRACT_METADATA_FIELDS = {
     "deployment.environment",
     "dropped_field_count",
     "error_frames",
+    "error_message",
     "error_stack_hash",
+    "error_traceback",
     "error_type",
     "event",
     "event_id",
@@ -149,20 +151,32 @@ def _dependency_floor_applies(configured_level: int, name: str) -> bool:
     return False
 
 
+# Emitted whole rather than flattened and truncated to 512 characters — a
+# one-line traceback is not a traceback. The caps are generous; they exist only
+# so a pathological recursion cannot produce a megabyte log line.
+_UNTRUNCATED_FIELDS = {"error_traceback", "error_message"}
+_MAX_ERROR_MESSAGE_CHARS = 4_000
+_MAX_ERROR_TRACEBACK_CHARS = 20_000
+
+# Only genuine credentials. This list used to also hide `body`, `message`,
+# `response`, `traceback`, `sql` and `url` — which meant that when something
+# broke, the log recorded *that* it broke and discarded every fact needed to
+# work out why. An error nobody can diagnose is not protected, it is lost.
+#
+# Dropping whole fields was always the blunt instrument anyway. Secrets are
+# caught by `redact_event_dict`, which runs over every value and matches on the
+# *pattern*: a traceback containing `Bearer sk-live-…` still reaches the log with
+# its frames, file names and error text intact and the key replaced by
+# [REDACTED]. That is strictly better than losing the traceback.
+#
+# The invariant that matters is at the other boundary: full detail in logs,
+# never in an HTTP response or an SSE error frame. See
+# `app/core/tests/unit/test_error_disclosure_boundary.py`, which pins both.
 _PROHIBITED_FIELDS = {
     "authorization",
-    "body",
     "cookie",
-    "headers",
-    "message",
-    "payload",
-    "prompt",
-    "request",
-    "response",
-    "source_text",
-    "sql",
-    "traceback",
-    "url",
+    "password",
+    "secret",
 }
 
 
@@ -274,12 +288,24 @@ def _add_safe_exception(_: Any, __: str, event_dict: dict[str, Any]) -> dict[str
     if info is None:
         return event_dict
 
-    exc_type, _exc, tb = info
-    event_dict.update(_safe_exception_fields(exc_type, tb))
+    exc_type, exc, tb = info
+    event_dict.update(_safe_exception_fields(exc_type, tb, exc))
     return event_dict
 
 
-def _safe_exception_fields(exc_type: type[BaseException], tb: Any) -> dict[str, Any]:
+def _safe_exception_fields(
+    exc_type: type[BaseException],
+    tb: Any,
+    exc: BaseException | None = None,
+) -> dict[str, Any]:
+    """Everything known about a failure, in a form someone can act on.
+
+    This used to emit only the exception's *type* plus module/function/line
+    frames — no message, no traceback. That is enough to count failures and
+    almost never enough to fix one: "ValueError in service.py:412" does not say
+    which value. The message and the formatted traceback are the diagnosis, so
+    they are included.
+    """
     extracted = traceback.extract_tb(tb) if tb is not None else []
     application = [
         frame
@@ -306,6 +332,14 @@ def _safe_exception_fields(exc_type: type[BaseException], tb: Any) -> dict[str, 
     }
     if frames:
         fields["error_frames"] = frames
+    if exc is not None:
+        message = str(exc).strip()
+        if message:
+            fields["error_message"] = message[:_MAX_ERROR_MESSAGE_CHARS]
+        if tb is not None:
+            fields["error_traceback"] = "".join(
+                traceback.format_exception(exc_type, exc, tb)
+            )[-_MAX_ERROR_TRACEBACK_CHARS:]
     return fields
 
 
@@ -314,9 +348,9 @@ class _SafeExceptionFilter(logging.Filter):
 
     def filter(self, record: logging.LogRecord) -> bool:
         if record.exc_info:
-            exc_type, _exc, tb = record.exc_info
+            exc_type, exc, tb = record.exc_info
             if isinstance(exc_type, type):
-                record.lemma_safe_exception = _safe_exception_fields(exc_type, tb)
+                record.lemma_safe_exception = _safe_exception_fields(exc_type, tb, exc)
             record.exc_info = None
             record.exc_text = None
             record.stack_info = None
@@ -386,9 +420,14 @@ def _bounded_contract(_: Any, __: str, event_dict: dict[str, Any]) -> dict[str, 
             continue
         value = event_dict[key]
         lowered = key.lower()
-        if lowered in _PROHIBITED_FIELDS or lowered == "error":
+        if lowered in _PROHIBITED_FIELDS:
             event_dict.pop(key, None)
             dropped += 1
+            continue
+        if lowered in _UNTRUNCATED_FIELDS:
+            # A traceback flattened onto one line and cut at 512 characters is
+            # not a traceback. These carry the actual diagnosis, so they are
+            # emitted whole, newlines and all.
             continue
         if isinstance(value, str):
             event_dict[key] = " ".join(value.splitlines())[:512]

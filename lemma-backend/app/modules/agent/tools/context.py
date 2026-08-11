@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 
 from app.modules.agent.domain.context import AgentContext
 from app.modules.agent.domain.subscription_models import SubscriptionModels
+from app.modules.agent.domain.vision import AgentVisionMode
 from app.modules.agent.services.subscription_models_provider import (
     resolve_subscription_models,
 )
@@ -47,6 +48,13 @@ class BaseAgentContext(AgentContext):
     # Default pod-filesystem working directory for this conversation, e.g.
     # `/me/c/{date}/{slug}`. Relative pod tool paths resolve against this.
     pod_cwd: str | None = None
+
+    # How image-returning tools should answer on this run. Transient (derived
+    # from the resolved model each run), never persisted. UNAVAILABLE is the
+    # safe default: a tool that does not know the mode must not emit image
+    # content, because a text-only model rejects the whole request when it
+    # arrives. See `domain/vision`.
+    vision_mode: AgentVisionMode = AgentVisionMode.UNAVAILABLE
 
     # True only when this tool runs inside the in-process pydantic harness, which
     # catches the AgentInputRequired pause signal and turns it into a clean run

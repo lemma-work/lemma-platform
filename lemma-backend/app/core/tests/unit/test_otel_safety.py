@@ -305,7 +305,13 @@ def test_llm_pipeline_enables_content_and_uses_dedicated_provider(
         assert instrumentation.include_content is True
         assert instrumentation.include_binary_content is False
         assert instrumentation.tracer.resource is provider.resource
-        assert instrumentation.event_mode == "attributes"
+        # Content must land in span attributes, not log records, so the dedicated
+        # LLM tracer is the only thing that ever carries it. pydantic-ai 2.x dropped
+        # `event_mode`/`logger_provider` and made attributes the only behaviour, so
+        # the guarantee is now that no logs pipeline is wired in at all.
+        assert not hasattr(instrumentation, "event_mode")
+        assert getattr(instrumentation, "logger_provider", None) is None
+        assert instrumentation.version == 2
     finally:
         if provider is not None:
             provider.shutdown()

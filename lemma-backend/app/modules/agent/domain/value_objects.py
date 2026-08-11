@@ -259,8 +259,18 @@ TERMINAL_AGENT_RUN_STATUSES = frozenset(
     }
 )
 
-DEFAULT_HISTORY_SUMMARIZATION_TOKEN_LIMIT = 100_000
-DEFAULT_HISTORY_SUMMARIZATION_KEEP_MESSAGES = 20
+# Compaction trigger. Lowered from 100k when the token count became real: the
+# old figure was measured with a chars/4 estimate that under-counts code, logs
+# and JSON by 25-65%, so "100k" was routinely 140k+ of actual prompt and the
+# provider rejected the request before compaction ever ran.
+DEFAULT_HISTORY_SUMMARIZATION_TOKEN_LIMIT = 70_000
+# Raised from 20: at ~6-10 tool rounds, 20 messages threw away the working
+# context of a coding session immediately after summarizing it.
+DEFAULT_HISTORY_SUMMARIZATION_KEEP_MESSAGES = 40
+# Absolute ceiling. If compaction is skipped or fails, the history is trimmed
+# deterministically to fit rather than sent oversized — a failed summary must
+# never turn into a provider rejection.
+DEFAULT_HISTORY_HARD_TOKEN_CEILING = 110_000
 
 
 class MessageRole(str, Enum):
@@ -521,6 +531,7 @@ class HarnessOptions:
     history_summarization_keep_messages: int = (
         DEFAULT_HISTORY_SUMMARIZATION_KEEP_MESSAGES
     )
+    history_hard_token_ceiling: int = DEFAULT_HISTORY_HARD_TOKEN_CEILING
     should_stop: Callable[[], Awaitable[bool]] | None = None
     extra: JsonObject = field(default_factory=dict)
 
