@@ -254,7 +254,7 @@ function PodAssistantSurface({
     }));
 
     const seenFiles = new Set<string>();
-    const fileMentions = ((filesData as { items?: unknown[] } | undefined)?.items || [])
+    const fileMentions = (filesData?.items ?? [])
       .map(getFileMentionPath)
       .filter((path) => {
         if (!path || seenFiles.has(path)) return false;

@@ -20,7 +20,6 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { AssistantExperienceView } from '@/components/lemma/assistant/assistant-experience';
 import type { AssistantControllerView } from '@/components/lemma/assistant/assistant-types';
 import { Agent, ConnectorMode } from '@/lib/types';
-import type { Message } from '@/lib/types';
 import { cn } from '@/lib/utils';
 import {
     isRecord,
@@ -221,10 +220,7 @@ export function AgentTestPanel({
     const settledConversationRef = useRef<string | null>(null);
     const handledOpenRequestRef = useRef<string | number | null>(null);
     const { data: rawMessagesData, refetch: refetchRawMessages } = useMessages(podId, openedConversationId || '', { limit: 100 });
-    const rawMessages = useMemo(
-        () => (rawMessagesData as { items?: Message[] } | undefined)?.items || [],
-        [rawMessagesData],
-    );
+    const rawMessages = useMemo(() => rawMessagesData?.items ?? [], [rawMessagesData]);
     const activeConversation = useMemo(
         () => controller.conversations.find((conversation) => conversation.id === openedConversationId) ?? null,
         [controller.conversations, openedConversationId],
