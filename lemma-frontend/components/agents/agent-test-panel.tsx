@@ -5,7 +5,6 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useAssistantController, useConversationMessages } from 'lemma-sdk/react';
 import { useAgent } from '@/lib/hooks/use-agents';
-import { useMessages } from '@/lib/hooks/use-assistants';
 import { useAccounts, useConnectors, useAuthConfigs, useCreateConnectRequest } from '@/lib/hooks/use-connectors';
 import { usePod } from '@/lib/hooks/use-pods';
 import { getLemmaClient } from '@/lib/sdk/lemma-client';
@@ -219,38 +218,16 @@ export function AgentTestPanel({
     const openConversation = controller.openConversation;
     const settledConversationRef = useRef<string | null>(null);
     const handledOpenRequestRef = useRef<string | number | null>(null);
-    const { data: rawMessagesData, refetch: refetchRawMessages } = useMessages(podId, openedConversationId || '', { limit: 100 });
-    const rawMessages = useMemo(() => rawMessagesData?.items ?? [], [rawMessagesData]);
     const activeConversation = useMemo(
         () => controller.conversations.find((conversation) => conversation.id === openedConversationId) ?? null,
         [controller.conversations, openedConversationId],
     );
-    const controllerView = useMemo<AssistantControllerView>(() => {
-        const base = controller as unknown as AssistantControllerView;
-        const rawById = new Map(rawMessages.map((message) => [message.id, message]));
-
-        return {
-            ...base,
-            messages: base.messages.map((message) => {
-                const raw = rawById.get(message.id);
-                if (!raw) return message;
-
-                return {
-                    ...message,
-                    metadata: (raw.metadata as Record<string, unknown> | null | undefined) ?? message.metadata,
-                    message_metadata: (raw.message_metadata as Record<string, unknown> | null | undefined) ?? message.message_metadata,
-                    tool_name: raw.tool_name ?? message.tool_name,
-                    tool_call_id: raw.tool_call_id ?? message.tool_call_id,
-                };
-            }),
-        };
-    }, [controller, rawMessages]);
-    const finalOutputMessages = useMemo(
-        () => [...rawMessages, ...controllerView.messages],
-        [controllerView.messages, rawMessages],
-    );
+    // The controller's messages already carry `metadata`, `tool_name`, and
+    // `tool_call_id` straight from the API, so there is no raw copy to fetch and
+    // patch on top of them. See docs/design/conversation-messages.md.
+    const controllerView = controller as unknown as AssistantControllerView;
     const conversationOutputText = conversationMessages.finalOutputText || conversationMessages.outputText;
-    const assistantText = conversationOutputText || latestAssistantText(finalOutputMessages);
+    const assistantText = conversationOutputText || latestAssistantText(controller.messages);
     const parsedOutput = taskConversationOutput(activeConversation);
 
     useEffect(() => {
@@ -288,11 +265,8 @@ export function AgentTestPanel({
 
         if (settledConversationRef.current === conversationId) return;
         settledConversationRef.current = conversationId;
-        void Promise.allSettled([
-            refetchRawMessages(),
-            refreshConversationMessages({ conversationId, limit: 100 }),
-        ]);
-    }, [controller.isOpenedConversationRunning, controller.openedConversationId, refetchRawMessages, refreshConversationMessages]);
+        void refreshConversationMessages({ conversationId, limit: 100 });
+    }, [controller.isOpenedConversationRunning, controller.openedConversationId, refreshConversationMessages]);
 
     useEffect(() => {
         const conversationId = controller.openedConversationId;
@@ -307,10 +281,7 @@ export function AgentTestPanel({
             timeoutId = setTimeout(() => {
                 if (cancelled) return;
                 attempts += 1;
-                void Promise.allSettled([
-                    refetchRawMessages(),
-                    refreshConversationMessages({ conversationId, limit: 100 }),
-                ]).finally(() => {
+                void refreshConversationMessages({ conversationId, limit: 100 }).finally(() => {
                     if (!cancelled && attempts < 6) refreshUntilOutputArrives();
                 });
             }, attempts === 0 ? 450 : 900);
@@ -328,7 +299,6 @@ export function AgentTestPanel({
         controller.openedConversationId,
         hasOutputSchema,
         parsedOutput,
-        refetchRawMessages,
         refreshConversationMessages,
     ]);
 
@@ -363,10 +333,7 @@ export function AgentTestPanel({
             await controller.sendMessage(formatAgentRunInput(payload), { forceNewConversation: true });
             const conversationId = controller.openedConversationId;
             if (conversationId) {
-                void Promise.allSettled([
-                    refetchRawMessages(),
-                    refreshConversationMessages({ conversationId, limit: 100 }),
-                ]);
+                void refreshConversationMessages({ conversationId, limit: 100 });
             }
         } catch (error) {
             console.error('Failed to start agent run:', error);

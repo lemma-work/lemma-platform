@@ -125,13 +125,13 @@ export type PodNewWorkspacePlacement = 'empty-state' | 'below-composer';
 // group, so a panel taller than its neighbour moves the whole block — including
 // the pod line and the tabs you are aiming at — every time you switch tabs.
 //
-// Sized for the worst realistic panel, not the average one: two rows of tiles
-// whose titles have wrapped to the second line line-clamp allows, plus a
-// caption. Tiles are ~104px with a one-line title and ~124px with two, so two
-// wrapped rows plus a caption is ~282. Undershooting this is what put a
-// scrollbar in the Create panel and clipped its caption. `overflow-y-auto`
-// stays as the safety net for anything longer still.
-const PANEL_HEIGHT = 'h-72 overflow-y-auto';
+// Sized for the worst realistic panel, not the average one: Do, at two rows of
+// tiles whose titles have wrapped to the second line line-clamp allows, plus
+// the row that unscopes the composer. Measured, not guessed — a tile is 94px
+// with a one-line title and 112px with two, so that worst case is 272.
+// Undershooting this is what put a scrollbar in the Create panel and clipped
+// its caption. `overflow-y-auto` stays as the safety net for anything longer.
+const PANEL_HEIGHT = 'h-[17.5rem] overflow-y-auto';
 
 // Below the composer there is nothing above to shove around, so the lock buys
 // nothing and costs a block of dead space under every short panel.
@@ -151,18 +151,18 @@ function TileIconBox({ spec, muted }: { spec: LauncherTileSpec; muted?: boolean 
 
     if (muted) {
         return (
-            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-[var(--border-subtle)] bg-[var(--surface-1)] text-[var(--text-tertiary)]">
-                <Icon className="h-4 w-4" strokeWidth={1.8} />
+            <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-[var(--border-subtle)] bg-[var(--surface-1)] text-[var(--text-tertiary)]">
+                <Icon className="h-3.5 w-3.5" strokeWidth={1.8} />
             </span>
         );
     }
 
     return (
-        <span className="recipe-icon-tile h-8 w-8 shrink-0 rounded-lg" data-accent={spec.accent ?? 'intelligence'}>
+        <span className="recipe-icon-tile h-7 w-7 shrink-0 rounded-lg" data-accent={spec.accent ?? 'intelligence'}>
             {spec.image ? (
-                <Image src={spec.image.src} alt="" aria-hidden width={18} height={18} className="object-contain" />
+                <Image src={spec.image.src} alt="" aria-hidden width={16} height={16} className="object-contain" />
             ) : (
-                <Icon className="h-4 w-4" strokeWidth={1.8} />
+                <Icon className="h-3.5 w-3.5" strokeWidth={1.8} />
             )}
         </span>
     );
@@ -188,14 +188,14 @@ function LauncherTile({
         <>
             <TileIconBox spec={spec} muted={muted} />
             <span className="flex w-full min-w-0 flex-col items-start gap-0.5">
-                <span className="line-clamp-2 w-full text-left text-sm leading-5 text-[var(--text-primary)]">{spec.title}</span>
-                <span className="w-full truncate text-left text-xs text-[var(--text-tertiary)]">{spec.hint}</span>
+                <span className="line-clamp-2 w-full text-left text-sm leading-tight text-[var(--text-primary)]">{spec.title}</span>
+                <span className="w-full truncate text-left text-xs leading-4 text-[var(--text-tertiary)]">{spec.hint}</span>
             </span>
         </>
     );
     // `whitespace-normal` is load-bearing: Button's base sets `whitespace-nowrap`,
     // which silently clips every title mid-word instead of letting it wrap.
-    const className = 'h-auto min-h-24 w-full flex-col items-start justify-start gap-2.5 whitespace-normal rounded-lg p-3 text-left font-normal data-[selected=true]:border-[color:var(--action-primary)]';
+    const className = 'h-auto min-h-20 w-full flex-col items-start justify-start gap-2 whitespace-normal rounded-lg p-2.5 text-left font-normal data-[selected=true]:border-[color:var(--action-primary)]';
 
     if (href) {
         return (
@@ -267,8 +267,13 @@ function BuildPanel({
     onLaunchThemePrompt: (theme: StarterTheme, recipeId: string, prompt: string) => void;
 }) {
     const themes = FEATURED_STARTER_THEMES.slice(0, BUILD_THEME_TILES);
-    const [activeThemeId, setActiveThemeId] = useState(themes[0]?.id);
-    const activeTheme = themes.find((theme) => theme.id === activeThemeId) ?? themes[0];
+    // Nothing is chosen until someone chooses it. The prompts below still need a
+    // theme to come from, so they fall back to the first one — but DRAWING that
+    // fallback as selected told everyone opening a new tab that a choice they
+    // never made had already been made for them, and the first tile has no
+    // claim to being the answer.
+    const [chosenThemeId, setChosenThemeId] = useState<string | null>(null);
+    const activeTheme = themes.find((theme) => theme.id === chosenThemeId) ?? themes[0];
 
     if (!activeTheme) return null;
 
@@ -293,8 +298,8 @@ function BuildPanel({
                             icon: LayoutDashboard,
                             image: THEME_LOGOS[theme.id],
                         }}
-                        selected={theme.id === activeTheme.id}
-                        onSelect={() => setActiveThemeId(theme.id)}
+                        selected={theme.id === chosenThemeId}
+                        onSelect={() => setChosenThemeId(theme.id)}
                     />
                 ))}
                 <LauncherTile

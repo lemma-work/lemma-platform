@@ -129,7 +129,10 @@ export interface UseAssistantSessionResult {
   sendMessage: (content: string, options?: SendAssistantMessageOptions) => Promise<Conversation>;
   retryFailedRun: (conversationId?: string | null) => Promise<Conversation>;
   resume: (conversationId?: string | null | ResumeAssistantOptions) => Promise<void>;
-  resumeIfRunning: (conversationId?: string | null) => Promise<boolean>;
+  resumeIfRunning: (
+    conversationId?: string | null,
+    options?: { knownConversation?: Conversation | null },
+  ) => Promise<boolean>;
   stop: (conversationId?: string | null) => Promise<void>;
   cancel: () => void;
   clearMessages: () => void;
@@ -973,19 +976,32 @@ export function useAssistantSession(options: UseAssistantSessionOptions): UseAss
     }
   }, [cancel, client, consume, conversationId, defaultScope, setConversationStatus]);
 
-  const resumeIfRunning = useCallback(async (explicitConversationId?: string | null): Promise<boolean> => {
+  const resumeIfRunning = useCallback(async (
+    explicitConversationId?: string | null,
+    options?: { knownConversation?: Conversation | null },
+  ): Promise<boolean> => {
     const id = explicitConversationId ?? conversationId;
     if (!id) return false;
     if (isStreaming) return false;
 
-    const statusKey = normalizeConversationStatus(statusRef.current);
+    // A caller that has just read the conversation can hand it over rather than
+    // make us read it again: without a hint the only way to answer "is this
+    // running?" is to go and fetch the record, which is what the caller has in
+    // its hand. Trusted only for the conversation it actually describes.
+    const knownConversation = options?.knownConversation?.id === id
+      ? options.knownConversation
+      : null;
+    const statusKey = normalizeConversationStatus(knownConversation?.status ?? statusRef.current);
     const resumeKey = `${id}:${statusKey ?? "UNKNOWN"}`;
     if (autoResumedKeyRef.current === resumeKey) {
       return false;
     }
 
-    const knownRunning = isConversationRunningStatus(statusRef.current);
-    if (!knownRunning) {
+    if (knownConversation) {
+      if (!isConversationRunningStatus(knownConversation.status)) return false;
+      setConversation(knownConversation);
+      setConversationStatus(statusKey);
+    } else if (!isConversationRunningStatus(statusRef.current)) {
       const latestConversation = await refreshConversation(id);
       if (!latestConversation || !isConversationRunningStatus(latestConversation.status)) {
         return false;
@@ -1006,7 +1022,7 @@ export function useAssistantSession(options: UseAssistantSessionOptions): UseAss
       }
       throw error;
     }
-  }, [conversationId, isStreaming, refreshConversation, resume]);
+  }, [conversationId, isStreaming, refreshConversation, resume, setConversationStatus]);
 
   const stop = useCallback(async (explicitConversationId?: string | null): Promise<void> => {
     setError(null);

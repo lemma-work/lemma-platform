@@ -184,7 +184,12 @@ export function MessageGroup({
 
   return (
     <div className="flex flex-col gap-2">
-      <div className="flex flex-col gap-2">
+      {/* The blocks in a turn — a thought, a tool rollup, a paragraph of answer —
+          are separate beats and need room to read as such. At `gap-2` a
+          four-line thought sat half a line from the tool row after it, so a run
+          arrived as one wall of grey. The rows *inside* a rollup stay tight:
+          they are a list, and a list should look like one. */}
+      <div className="flex flex-col gap-4">
         {foldReasoningIntoRunRollup ? (
           <ToolActivityRollup
             key={`${message.id}-run-trace`}
@@ -248,10 +253,12 @@ export function MessageGroup({
                 key={part.id}
                 text={trimmedText}
                 timestamp={blockIndex === lastTextBlockIndex ? messageTimestamp : null}
-                // While the run is live, drop the hover copy/timestamp bar: its
-                // reserved height shows up as inconsistent gaps between streaming
-                // blocks. It returns once the run settles.
-                showActions={!withinTrace && !isCurrentRunActive}
+                // Not gated on the run being live. The bar is invisible until
+                // hover either way, so gating it on `isCurrentRunActive` bought
+                // nothing and cost a layout shift in every text block at the
+                // moment the run ended. Whether a block is trace is settled when
+                // it renders, so this height never changes under the reader.
+                showActions={!withinTrace}
               >
                 {contentNode}
               </TextBlockWithCopy>
