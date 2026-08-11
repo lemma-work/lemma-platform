@@ -35,6 +35,7 @@ const COMMANDS: &[&str] = &[
     "configure_ai_provider",
     "sharing_action",
     "close_local_settings",
+    "confirm_destructive_action",
     "open_developer_tools",
 ];
 

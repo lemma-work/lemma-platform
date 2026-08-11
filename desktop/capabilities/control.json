@@ -21,6 +21,7 @@
     "allow-configure-ai-provider",
     "allow-sharing-action",
     "allow-close-local-settings",
+    "allow-confirm-destructive-action",
     "allow-open-developer-tools"
   ]
 }
