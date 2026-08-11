@@ -2719,19 +2719,27 @@ mod tests {
         assert!(!manager.backend_restart_available());
         manager.mark_dependency_ready();
         assert!(manager.backend_restart_available());
-        let before: HashMap<_, _> = manager
-            .status()
-            .into_iter()
-            .map(|process| (process.id, process.pid.unwrap()))
-            .collect();
+        // Named rather than unwrapped: when this fails on a loaded machine the
+        // useful question is *which* process lost its pid, and a bare unwrap
+        // answers neither that nor what the rest of the stack was doing.
+        fn pids(manager: &HostProcessManager, when: &str) -> HashMap<String, u32> {
+            let status = manager.status();
+            status
+                .iter()
+                .map(|process| {
+                    let pid = process.pid.unwrap_or_else(|| {
+                        panic!("{} has no pid {when}; full status: {status:#?}", process.id)
+                    });
+                    (process.id.clone(), pid)
+                })
+                .collect()
+        }
+
+        let before = pids(&manager, "before the restart");
 
         manager.restart_backend().unwrap();
 
-        let after: HashMap<_, _> = manager
-            .status()
-            .into_iter()
-            .map(|process| (process.id, process.pid.unwrap()))
-            .collect();
+        let after = pids(&manager, "after the restart");
         assert_ne!(before["backend"], after["backend"]);
         assert_eq!(before["frontend"], after["frontend"]);
         manager.stop_all().unwrap();

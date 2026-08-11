@@ -38,10 +38,13 @@ Download Lemma Desktop, choose **Local**, and select **Install local services**.
 <summary>Desktop installation and local runtime details</summary>
 
 Download the signed **online** package from the latest release for macOS 14+
-on Apple silicon or Windows 11 23H2+ on x86-64. On macOS, drag Lemma to
-Applications before opening it; on Windows, run the signed setup executable.
-The small installer downloads digest-verified runtime components on first use;
-public offline packages are not offered in this release.
+on Apple silicon, and drag Lemma to Applications before opening it. The small
+installer downloads digest-verified runtime components on first use; public
+offline packages are not offered in this release.
+
+Windows 11 23H2+ on x86-64 builds and is signed every release, but it is
+experimental and not published as a release asset yet — see
+[docs/installation.md](docs/installation.md) for how to get a build.
 
 Choose **Local**, select **Install local services**, and create the local owner
 inside the app. Lemma owns its lightweight VZ/WSL2 runtime; the normal path

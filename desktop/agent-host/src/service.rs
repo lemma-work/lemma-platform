@@ -1,8 +1,5 @@
 //! Per-user headless service installation and lifecycle.
 
-// Only the Windows scheduled-task calls need it.
-#[cfg(windows)]
-use crate::NoConsoleWindow;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
@@ -419,7 +416,10 @@ mod platform {
 
 #[cfg(windows)]
 mod platform {
+    // The scheduled-task calls below are the only ones that need it, and a
+    // file-level import does not reach into this module.
     use super::{Command, HostPaths, Path, ServiceStatus, run_checked};
+    use crate::NoConsoleWindow;
 
     const MANAGER: &str = "task-scheduler";
     const TASK_NAME: &str = "Lemma Agent Host";

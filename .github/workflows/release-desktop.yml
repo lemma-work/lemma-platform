@@ -3,6 +3,13 @@ name: Release Lemma Desktop
 # Builds the signed online installer for macOS and Windows. The application
 # contains only the native control plane and a release manifest; first launch
 # downloads digest-pinned host and guest runtimes with visible progress.
+#
+# macOS is the only platform this publishes. Windows is still experimental and
+# has not been tested end to end, so its installer is built, signed and kept as
+# a workflow artifact for whoever is testing it -- but it is never attached to
+# the release, because attaching it is what makes it an offer of support.
+# Building it every release is deliberate: it is how the Windows paths keep
+# compiling while the support work continues.
 
 on:
   release:
@@ -525,10 +532,15 @@ jobs:
             throw "Expanded online application payload is $bytes bytes; limit is 25 MiB"
           }
 
-      - name: Upload online Windows installer to release
-        uses: softprops/action-gh-release@v2
+      # Deliberately an artifact, not a release asset. See the note at the top
+      # of this file: Windows is experimental and is not published yet.
+      - name: Keep the Windows installer as a workflow artifact
+        uses: actions/upload-artifact@v4
         with:
-          files: desktop/target/release/release-artifacts/Lemma_*_x64-*-setup.exe
+          name: lemma-desktop-windows-${{ steps.version.outputs.version }}
+          path: desktop/target/release/release-artifacts/Lemma_*_x64-*-setup.exe
+          if-no-files-found: error
+          retention-days: 30
 
       - name: Remove Windows code-signing certificate
         if: always() && steps.windows-signing.outcome == 'success'

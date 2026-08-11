@@ -357,31 +357,30 @@ const PRIVATE_SERVICE_PORTS: [(&str, u16); 3] =
 /// sharing one guest means each overwrites the other's capability file, either
 /// one's stop kills the other's runtime, and the second silently runs against
 /// the first's data.
+#[cfg(windows)]
 fn wsl_distribution_for(root: &Path) -> String {
-    #[cfg(windows)]
+    if let Some(name) = env::var_os("LEMMA_RUNTIME_WSL_DISTRIBUTION")
+        .map(|value| value.to_string_lossy().into_owned())
+        .filter(|value| !value.trim().is_empty())
     {
-        if let Some(name) = env::var_os("LEMMA_RUNTIME_WSL_DISTRIBUTION")
-            .map(|value| value.to_string_lossy().into_owned())
-            .filter(|value| !value.trim().is_empty())
-        {
-            return name;
-        }
-        let is_default = crate::paths::LocalPaths::default_root().is_ok_and(|default| {
-            crate::paths::stable_hash(&default) == crate::paths::stable_hash(root)
-        });
-        if is_default {
-            return DEFAULT_WSL_DISTRIBUTION.to_string();
-        }
-        return format!(
+        return name;
+    }
+    let is_default = crate::paths::LocalPaths::default_root().is_ok_and(|default| {
+        crate::paths::stable_hash(&default) == crate::paths::stable_hash(root)
+    });
+    if is_default {
+        DEFAULT_WSL_DISTRIBUTION.to_string()
+    } else {
+        format!(
             "{DEFAULT_WSL_DISTRIBUTION}-{:016x}",
             crate::paths::stable_hash(root)
-        );
+        )
     }
-    #[cfg(not(windows))]
-    {
-        let _ = root;
-        DEFAULT_WSL_DISTRIBUTION.to_string()
-    }
+}
+
+#[cfg(not(windows))]
+fn wsl_distribution_for(_root: &Path) -> String {
+    DEFAULT_WSL_DISTRIBUTION.to_string()
 }
 
 fn wait_for_private_services(status: &ManagedRuntimeStatus, timeout: Duration) -> io::Result<()> {
