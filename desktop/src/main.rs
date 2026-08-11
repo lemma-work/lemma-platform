@@ -5300,11 +5300,14 @@ mod tests {
         // tray's included. The tray builder registered a second handler on top,
         // so every tray verb ran twice: two confirmation dialogs stacked on each
         // other, two stops, two restarts.
-        // Counting the registration itself, not the words -- the previous
-        // version of this assertion matched its own message.
+        // The needle is assembled at compile time so it never appears whole in
+        // this file -- a source-scanning test that spells out what it is looking
+        // for finds itself, which is how the first two versions of this failed
+        // on the fix they were written to protect.
+        let needle = concat!("on_menu_event", "(|app, event|");
         let source = include_str!("main.rs").replace("\r\n", "\n");
         assert_eq!(
-            source.matches("on_menu_event(|app, event|").count(),
+            source.matches(needle).count(),
             1,
             "exactly one menu event handler, or every verb fires once per handler"
         );
