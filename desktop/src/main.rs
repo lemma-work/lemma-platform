@@ -3299,6 +3299,7 @@ fn set_mode(app: &AppHandle, mode: &str) -> Result<(), String> {
         config["connectionMode"] = json!(mode);
         config["connectionModePromptRevision"] = json!(CONNECTION_MODE_PROMPT_REVISION);
     })?;
+    refresh_menus_for_connection_mode(app);
     {
         let shell: State<Shell> = app.state();
         let mut ui = shell.ui.lock().unwrap();
@@ -4044,6 +4045,35 @@ fn build_app_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
 }
 
 fn build_tray(app: &AppHandle) -> tauri::Result<()> {
+    let menu = build_tray_menu(app)?;
+    TrayIconBuilder::with_id("lemma-tray")
+        .icon(tauri::include_image!("icons/tray-icon.png"))
+        .icon_as_template(false)
+        .menu(&menu)
+        .show_menu_on_left_click(true)
+        .on_menu_event(|app, event| handle_menu_action(app, event.id().as_ref()))
+        .build(app)?;
+    Ok(())
+}
+
+/// Both menus gate their local-only verbs on the connection mode, and both are
+/// built during setup — which on a machine's first launch is before the user
+/// has chosen one. Everything gated was created disabled and stayed that way
+/// for the whole session, so picking Local left "Local settings…" greyed out in
+/// the tray and ⌘, dead in the app menu until Lemma was restarted.
+///
+/// Rebuilding is what makes the choice take effect. It also picks up anything
+/// else that reads state at construction, such as the Start at Login check.
+fn refresh_menus_for_connection_mode(app: &AppHandle) {
+    if let Ok(menu) = build_app_menu(app) {
+        let _ = app.set_menu(menu);
+    }
+    if let (Some(tray), Ok(menu)) = (app.tray_by_id("lemma-tray"), build_tray_menu(app)) {
+        let _ = tray.set_menu(Some(menu));
+    }
+}
+
+fn build_tray_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     let local = connection_mode() == "local";
     // A glance and a few verbs. This menu used to carry eighteen items of
     // supervisor vocabulary — starting and stopping named services, switching
@@ -4141,14 +4171,7 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
         ],
     )?;
 
-    TrayIconBuilder::with_id("lemma-tray")
-        .icon(tauri::include_image!("icons/tray-icon.png"))
-        .icon_as_template(false)
-        .menu(&menu)
-        .show_menu_on_left_click(true)
-        .on_menu_event(|app, event| handle_menu_action(app, event.id().as_ref()))
-        .build(app)?;
-    Ok(())
+    Ok(menu)
 }
 
 fn disconnect_locald(app: &AppHandle) {
@@ -5179,6 +5202,34 @@ mod tests {
         assert!(
             !css.contains("Bricolage"),
             "the page no longer carries its own display face"
+        );
+    }
+
+    #[test]
+    fn choosing_a_connection_mode_re_enables_the_menus_it_gates() {
+        // Both menus gate their local-only verbs on `local`, and both are built
+        // during setup — which on a first launch is before anyone has chosen.
+        // Every gated item was created disabled and never revisited, so picking
+        // Local left "Local settings…" greyed out in the tray and Cmd-, dead in
+        // the app menu until Lemma was restarted.
+        //
+        // Asserted on the source because the alternative needs a running
+        // AppHandle, and the thing worth pinning is that the one function every
+        // mode change goes through is what rebuilds them.
+        let source = include_str!("main.rs");
+        let set_mode = {
+            let start = source
+                .find("fn set_mode(app: &AppHandle, mode: &str)")
+                .expect("set_mode exists");
+            let end = source[start..]
+                .find("\nfn ")
+                .map_or(source.len(), |offset| start + offset);
+            &source[start..end]
+        };
+        assert!(
+            set_mode.contains("refresh_menus_for_connection_mode(app)"),
+            "set_mode must rebuild the menus, or the choice does not take effect \
+             until the next launch"
         );
     }
 
