@@ -5388,7 +5388,11 @@ mod tests {
             "get_state",
         ];
 
-        let source = include_str!("main.rs");
+        // Normalised, because the Windows runner checks out CRLF and the
+        // patterns below are written with \n -- which is how this test passed on
+        // macOS and failed on Windows against identical source.
+        let source = include_str!("main.rs").replace("\r\n", "\n");
+        let source = source.as_str();
         let handlers = {
             let start = source
                 .find("tauri::generate_handler![")
