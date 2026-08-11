@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from 'react';
 import Link from 'next/link';
+import type { DatastoreDirectoryTreeNode } from 'lemma-sdk';
 import { ArrowUpRight, Copy, Download, FileText, Github, Share2 } from '@/components/ui/icons';
 import { toast } from 'sonner';
 
@@ -165,27 +166,24 @@ export function ShareSheet({ podId, podName, open, onOpenChange, canPublish = tr
     const defaultRepo = useMemo(() => toRepoSlug(podName || 'my-pod') || 'my-pod', [podName]);
     const tableNames = useMemo(
         () =>
-            ((tables as { name?: string }[] | undefined) ?? [])
-                .map((t) => t.name)
-                .filter((name): name is string => Boolean(name))
+            (tables?.items ?? [])
+                .map((table) => table.name)
+                .filter((name) => Boolean(name))
                 .sort(),
-        [tables],
+        [tables?.items],
     );
     /** Every folder in the tree, flattened to full paths so a nested one can be
      *  picked on its own. The pod root is not offered: "everything" is exactly
      *  what naming folders exists to avoid. */
     const folderPaths = useMemo(() => {
         const out: string[] = [];
-        const walk = (node: unknown) => {
-            if (!node || typeof node !== 'object') return;
-            const entry = node as { path?: string; kind?: string; children?: unknown[] };
-            const path = entry.path ?? '';
-            if (String(entry.kind ?? '').toUpperCase() === 'FOLDER' && path && path !== '/') {
-                out.push(path);
+        const walk = (node: DatastoreDirectoryTreeNode) => {
+            if (node.kind.toUpperCase() === 'FOLDER' && node.path && node.path !== '/') {
+                out.push(node.path);
             }
-            for (const child of entry.children ?? []) walk(child);
+            for (const child of node.children ?? []) walk(child);
         };
-        walk((folderTree as { root?: unknown } | undefined)?.root ?? folderTree);
+        if (folderTree) walk(folderTree.tree);
         return Array.from(new Set(out)).sort();
     }, [folderTree]);
 
