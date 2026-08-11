@@ -852,10 +852,10 @@ fn secret_environment() -> [(&'static str, &'static str); 15] {
         ("surfaces.whatsapp_verify_token", "WHATSAPP_VERIFY_TOKEN"),
         ("surfaces.whatsapp_app_secret", "WHATSAPP_APP_SECRET"),
         ("surfaces.resend_api_key", "RESEND_API_KEY"),
-        (
-            "surfaces.resend_signing_secret",
-            "RESEND_INBOUND_SIGNING_SECRET",
-        ),
+        // One secret for the Resend webhook that carries inbound email and
+        // notification replies. Was RESEND_INBOUND_SIGNING_SECRET; the backend
+        // still accepts that name as an alias, but new deployments set this.
+        ("surfaces.resend_signing_secret", "RESEND_WEBHOOK_SECRET"),
     ]
 }
 

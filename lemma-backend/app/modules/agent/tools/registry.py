@@ -33,6 +33,13 @@ POD_DEFAULT_AGENT_TOOLSETS = (
     AgentToolset.SUBAGENTS,
     AgentToolset.SPEECH,
     AgentToolset.TODO,
+    # Reaching a colleague, and being able to wait for their answer. These two
+    # are one capability: `message_user` does not block, so without `snooze` the
+    # agent is told to send and then has no way to be around when the reply
+    # lands. Both are deferred (see EXTRA_TOOLSETS) so neither shows up in the
+    # prompt prefix of an ordinary chat.
+    AgentToolset.MESSAGING,
+    AgentToolset.SNOOZE,
 )
 
 _TOOLSET_BY_NAME: dict[AgentToolset, object] = {
@@ -69,6 +76,15 @@ EXTRA_TOOLSETS: tuple[AgentToolset, ...] = (
     # (RunToolAssembler still drops SUBAGENTS entirely for sub-agent conversations
     # before the capability assembler runs, so sub-agents never get them.)
     AgentToolset.SUBAGENTS,
+    # Messaging and snooze are deferred for a UX reason rather than a size one:
+    # the pod assistant is the interactive chat, and an assistant carrying
+    # "message a colleague" and "go to sleep" in its visible prefix reaches for
+    # them. Behind ToolSearch it has to go looking first — the same bar as
+    # spawning a sub-agent. Their *instructions* still ride in the prefix; see
+    # `_deferred_capability`, because hiding the contract while advertising the
+    # tool is the worst of both.
+    AgentToolset.MESSAGING,
+    AgentToolset.SNOOZE,
 )
 EXTRA_TOOLSET_OBJECTS: tuple[object, ...] = tuple(
     _TOOLSET_BY_NAME[name] for name in EXTRA_TOOLSETS

@@ -11,6 +11,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    func,
     text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
@@ -42,6 +43,19 @@ class AgentSurface(UUIDAuditBase):
     __tablename__ = "agent_surfaces"
     __table_args__ = (
         UniqueConstraint("pod_id", "name", name="uq_agent_surface_pod_name"),
+        # Mirrors migration 0016. Declared here too so a schema built from
+        # metadata (tests, a fresh non-Alembic environment) carries the same
+        # guarantee — address allocation inserts and retries on conflict, which
+        # is only safe with this present, and autogenerate would otherwise emit
+        # a DROP for an index it cannot see. Functional and partial to match the
+        # lookup exactly: inbound routing compares lower(...), and most surfaces
+        # are not email and hold NULL here.
+        Index(
+            "uq_agent_surface_identity_email",
+            func.lower(text("surface_identity_email")),
+            unique=True,
+            postgresql_where=text("surface_identity_email IS NOT NULL"),
+        ),
     )
 
     pod_id: Mapped[UUID] = mapped_column(

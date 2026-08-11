@@ -80,19 +80,6 @@ class SqlAlchemySurfaceRoutingResolutionAdapter(SurfacePodMembershipPort):
             platform, surface_id
         ).model_dump(mode="json")
 
-    async def get_user_default_surface_ids(self, user_id: UUID) -> list[UUID]:
-        raw = await self.session.scalar(
-            select(User.preferences).where(User.id == user_id)
-        )
-        if not raw:
-            return []
-        try:
-            return list(UserPreferences.model_validate(raw).default_surfaces.values())
-        except ValidationError:
-            # A malformed preferences blob must not stop someone being reached;
-            # delivery falls through to observed channels.
-            return []
-
     async def get_pod_member_id(self, user_id: UUID, pod_id: UUID) -> UUID | None:
         stmt = (
             select(PodMember.id)

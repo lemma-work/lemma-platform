@@ -18,7 +18,10 @@ from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
 
-from app.modules.agent_surfaces.config import surface_settings
+from app.modules.agent_surfaces.config import (
+    resolve_resend_api_key,
+    surface_settings,
+)
 from app.core.log.log import get_logger
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
@@ -52,8 +55,42 @@ class SlackWebhookCredentials:
     uses_custom_app: bool
 
 
-def native_credentials(platform: str | SurfacePlatform | None) -> dict[str, Any]:
-    """System credentials from environment settings (WhatsApp/Telegram only)."""
+def with_surface_identity(
+    credentials: dict[str, Any], surface: "AgentSurfaceEntity | None"
+) -> dict[str, Any]:
+    """Add the credential parts that belong to the surface row, not the platform.
+
+    Resend's ``from_address`` is the address *that surface* was provisioned
+    with, so no platform-level lookup can know it. It used to be applied in one
+    place only, which made every other way of obtaining credentials quietly
+    wrong: the send then failed with "Resend send requires api_key, from_address
+    and a recipient", which reads like missing configuration and is really a
+    missing join. Applying it here, on the way out of every path, is what stops
+    that being re-discovered a fourth time.
+
+    A no-op without a surface, so callers that genuinely have none (a
+    system-credential conversation with no surface row) can call it freely.
+    """
+    if (
+        surface is not None
+        and surface.surface_type is SurfacePlatform.RESEND
+        and surface.surface_identity_email
+    ):
+        return {**credentials, "from_address": surface.surface_identity_email}
+    return credentials
+
+
+def native_credentials(
+    platform: str | SurfacePlatform | None,
+    *,
+    surface: "AgentSurfaceEntity | None" = None,
+) -> dict[str, Any]:
+    """System credentials from environment settings (WhatsApp/Telegram/Resend).
+
+    Pass ``surface`` whenever one is in hand: the surface-derived parts are
+    applied on the way out, so the fast path stays correct without a database
+    round trip.
+    """
     normalized = str(platform or "").upper()
     if normalized == SurfacePlatform.WHATSAPP:
         credentials = {
@@ -64,17 +101,20 @@ def native_credentials(platform: str | SurfacePlatform | None) -> dict[str, Any]
         app_secret = surface_settings.whatsapp_app_secret
         if app_secret:
             credentials["app_secret"] = app_secret
-        return credentials
+        return with_surface_identity(credentials, surface)
     if normalized == SurfacePlatform.TELEGRAM:
-        return {"bot_token": surface_settings.telegram_bot_token or ""}
+        return with_surface_identity(
+            {"bot_token": surface_settings.telegram_bot_token or ""}, surface
+        )
     if normalized == SurfacePlatform.RESEND:
-        # from_address is per-surface (the provisioned pod address); the resolver
-        # injects it from surface.surface_identity_email in for_surface().
-        return {
-            "api_key": surface_settings.resend_api_key or "",
-            "from_name": surface_settings.resend_from_name or "Lemma",
-        }
-    return {}
+        return with_surface_identity(
+            {
+                "api_key": resolve_resend_api_key() or "",
+                "from_name": surface_settings.resend_from_name or "Lemma",
+            },
+            surface,
+        )
+    return with_surface_identity({}, surface)
 
 
 def has_native_credentials(platform: str | SurfacePlatform | None) -> bool:
@@ -87,7 +127,10 @@ def has_native_credentials(platform: str | SurfacePlatform | None) -> bool:
     if normalized == SurfacePlatform.TELEGRAM:
         return bool(surface_settings.telegram_bot_token)
     if normalized == SurfacePlatform.RESEND:
-        return bool(surface_settings.resend_api_key)
+        # Both, because an address on an unowned domain is as unusable as no
+        # key: the UI offered SYSTEM mode on the key alone and provisioning then
+        # raised for the missing domain.
+        return bool(resolve_resend_api_key() and surface_settings.resend_inbound_domain)
     return False
 
 
@@ -103,41 +146,39 @@ class SurfaceCredentialResolver:
         prefer_native: bool = False,
         force_refresh: bool = False,
     ) -> dict[str, Any]:
-        # `from_address` is a property of the surface row (its provisioned
-        # Resend address), never of the account's own credentials — inject it
-        # unconditionally, regardless of which branch below resolves the rest.
+        # Every branch returns through ``with_surface_identity``; see there for
+        # why that is a property of the function rather than of the caller.
         if prefer_native and has_native_credentials(surface.surface_type):
-            credentials = native_credentials(surface.surface_type)
-        elif surface.account_id is None:
-            credentials = native_credentials(surface.surface_type)
-        else:
-            credentials = await self.for_account(
-                surface.account_id, force_refresh=force_refresh
-            )
-        return self._with_resend_from_address(credentials, surface)
-
-    @staticmethod
-    def _with_resend_from_address(
-        credentials: dict[str, Any], surface: AgentSurfaceEntity
-    ) -> dict[str, Any]:
-        """Inject the surface's provisioned address as the Resend ``from``."""
-        if (
-            surface.surface_type is SurfacePlatform.RESEND
-            and surface.surface_identity_email
-        ):
-            return {**credentials, "from_address": surface.surface_identity_email}
-        return credentials
+            return native_credentials(surface.surface_type, surface=surface)
+        if surface.account_id is None:
+            return native_credentials(surface.surface_type, surface=surface)
+        credentials = await self.for_account(
+            surface.account_id, force_refresh=force_refresh
+        )
+        return with_surface_identity(credentials, surface)
 
     async def for_platform(
         self,
         platform: str | SurfacePlatform,
         account_id: UUID | str | None,
         *,
+        surface: AgentSurfaceEntity | None,
         force_refresh: bool = False,
     ) -> dict[str, Any]:
+        """Credentials when the caller may not have a surface row.
+
+        ``surface`` is required and may be ``None`` — deliberately not
+        defaulted. Some credential values live on the surface rather than the
+        platform (Resend's sender address), and every time a caller reached for
+        the platform-level lookup while holding a surface, the result was
+        silently incomplete and the send failed on a missing field. Making the
+        argument explicit turns "did you have one?" into something the call site
+        has to answer rather than something a reader has to infer.
+        """
         if not account_id:
-            return native_credentials(platform)
-        return await self.for_account(account_id, force_refresh=force_refresh)
+            return native_credentials(platform, surface=surface)
+        credentials = await self.for_account(account_id, force_refresh=force_refresh)
+        return with_surface_identity(credentials, surface)
 
     async def for_account(
         self,

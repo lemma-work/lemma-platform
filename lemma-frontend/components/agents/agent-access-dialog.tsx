@@ -130,7 +130,7 @@ const TOOL_COPY: Record<string, { label: string; description: string; icon: Lemm
     MESSAGING: {
         label: 'Message people',
         description:
-            'Reach teammates on Slack, Telegram or email to ask for something, and read their replies.',
+            'See who is in the pod, reach teammates on Slack, Telegram or email to ask for something, and read their replies.',
         icon: Send,
     },
     VIEW_IMAGE: {

@@ -20,8 +20,9 @@ SMTP_USE_TLS=true
 # port 465, username "resend", and implicit TLS automatically.
 # Explicit SMTP_* credentials above take precedence when both are configured.
 RESEND_API_KEY=...
-RESEND_FROM_EMAIL=local@ops.asur.work
-RESEND_WEBHOOK_SECRET=whsec_...
+RESEND_FROM_EMAIL=noreply@your-domain.example   # no default; must be a domain you own
+RESEND_WEBHOOK_SECRET=whsec_...        # the main Resend webhook
+# RESEND_BOUNCE_WEBHOOK_SECRET=whsec_... # only if bounces are a SEPARATE endpoint
 
 AUTH_EMAIL_VERIFICATION_REQUIRED=true
 AUTH_EMAIL_DELIVERABILITY_CHECKS_ENABLED=true
@@ -99,7 +100,10 @@ The reconciliation command is idempotent and never prints complete addresses. An
 For Resend, configure a webhook for `POST /auth/email/bounces/resend` and select
 the `email.bounced` event. The endpoint verifies the original request body with
 the `svix-id`, `svix-timestamp`, and `svix-signature` headers using
-`RESEND_WEBHOOK_SECRET`. Only a `Permanent` bounce deactivates an account;
+`RESEND_WEBHOOK_SECRET` — or `RESEND_BOUNCE_WEBHOOK_SECRET` when bounces are a
+separate Resend endpoint, since Svix derives the signature from a per-endpoint
+secret and the wrong one rejects every delivery. Only a `Permanent` bounce
+deactivates an account;
 `Temporary` bounces are accepted without deactivation.
 
 For another SMTP provider, use the normalized adapter below.

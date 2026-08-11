@@ -7,6 +7,7 @@ from app.modules.agent_surfaces.platforms.email_common import (
     decode_base64_bytes,
     parse_email_identity,
     plain_text_from_html,
+    strip_quoted_reply,
 )
 
 
@@ -218,7 +219,10 @@ class GmailMessageParser:
             or _read_gmail_payload_body(data).strip()
             or str(((data.get("preview") or {}).get("body")) or "").strip()
         )
-        message_text = f"Email subject: {subject}\n\n{body}".strip()
+        # Drop the quoted original. Without this every reply carries the whole
+        # thread forward, so by the fourth exchange most of the prompt is the
+        # agent re-reading its own earlier messages.
+        message_text = f"Email subject: {subject}\n\n{strip_quoted_reply(body, subject)}".strip()
 
         attachment_candidates = [
             normalized

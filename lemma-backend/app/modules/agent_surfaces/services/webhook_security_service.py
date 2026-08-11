@@ -17,7 +17,10 @@ from app.core.config import settings
 from app.core.domain.errors import DomainError
 from app.core.infrastructure.cache.redis_json_cache import RedisJsonCache
 from app.core.log.log import get_logger
-from app.modules.agent_surfaces.config import surface_settings
+from app.modules.agent_surfaces.config import (
+    resolve_resend_inbound_secret,
+    surface_settings,
+)
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
     SurfacePlatform,
@@ -271,13 +274,19 @@ class SurfaceWebhookSecurityService:
         Resend does not go through ``assert_platform_request_allowed`` (that path
         only covers the four chat platforms with a shared webhook), so the
         controller calls this directly before enqueuing the inbound email.
+
+        Reads ``RESEND_WEBHOOK_SECRET``, the single secret for the Resend
+        webhook. Svix issues one per *endpoint*, so the only case needing a
+        second variable is bounces configured as their own Resend endpoint —
+        ``RESEND_BOUNCE_WEBHOOK_SECRET``, read by the bounce controller and
+        defaulting to this one. Nothing overrides the inbound side on its own.
         """
         if not self.verification_enabled():
             return
         self._verify_svix_signature(
             headers=headers,
             raw_body=raw_body,
-            signing_secret=surface_settings.resend_inbound_signing_secret,
+            signing_secret=resolve_resend_inbound_secret(),
         )
 
     def _verify_svix_signature(

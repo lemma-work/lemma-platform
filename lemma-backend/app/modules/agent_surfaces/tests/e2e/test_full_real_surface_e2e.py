@@ -1122,10 +1122,16 @@ async def test_resend_signed_webhook_replies_via_worker(
     monkeypatch,
 ):
     _ = worker
+    from app.core.config import settings as app_settings
+
     monkeypatch.setattr(surface_settings, "surface_webhook_security_enabled", True)
+    # The signing secret lives in core settings, not `SurfaceSettings` — the
+    # Resend API key and sender identity were already there, and splitting one
+    # provider's config across two Settings classes is what produced two
+    # secrets, two API keys and two answers to "which domain do we send from".
     monkeypatch.setattr(
-        surface_settings,
-        "resend_inbound_signing_secret",
+        app_settings,
+        "resend_webhook_secret",
         _RESEND_SIGNING_SECRET,
     )
 

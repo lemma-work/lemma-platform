@@ -6,12 +6,19 @@ from typing import Any
 
 from app.modules.agent_surfaces.domain.entities import ParsedInboundSurfaceEvent
 from app.modules.agent_surfaces.domain.models import (
+    ColdEmailSendResult,
     SurfaceDisplayRenderPlan,
     SurfaceSenderProfile,
 )
+from app.core.log.log import get_logger
 from app.modules.agent_surfaces.platforms.base import BaseSurfaceAdapter
-from app.modules.agent_surfaces.platforms.resend.parser import ResendInboundParser
+from app.modules.agent_surfaces.platforms.resend.parser import (
+    ResendInboundParser,
+    merge_received_email,
+)
 from app.modules.agent_surfaces.platforms.resend.service import ResendPlatformService
+
+logger = get_logger(__name__)
 
 
 class ResendSurfaceAdapter(BaseSurfaceAdapter):
@@ -30,6 +37,50 @@ class ResendSurfaceAdapter(BaseSurfaceAdapter):
     ) -> SurfaceSenderProfile | None:
         return await ResendPlatformService(credentials).fetch_sender_profile(event)
 
+    async def download_attachment(
+        self,
+        *,
+        credentials: dict[str, Any],
+        event: ParsedInboundSurfaceEvent,
+        attachment: dict[str, Any],
+    ) -> tuple[bytes, str, str] | None:
+        """Let inbound email attachments become pod files like every other surface.
+
+        Without this the base class returned None, so a file somebody emailed to
+        an agent was named in the metadata and never fetched — the agent was told
+        an attachment existed and had no way to open it.
+        """
+        return await ResendPlatformService(credentials).download_attachment_bytes(
+            event, attachment
+        )
+
+    async def enrich_inbound_event(
+        self, *, credentials: dict[str, Any], event: ParsedInboundSurfaceEvent
+    ) -> ParsedInboundSurfaceEvent | None:
+        """Fetch the body the webhook did not carry.
+
+        Returning ``None`` drops the event, and that is the right failure: the
+        alternative is starting an agent run whose user message is the empty
+        string, which is what shipped and what made every inbound email look
+        like the agent ignoring people.
+
+        Also re-derives the thread root, because ``References`` only exists once
+        the headers arrive — without this every reply opens a new conversation
+        no matter what we seeded the outbound with.
+        """
+        email_id = str((event.metadata or {}).get("email_id") or "").strip()
+        if not email_id:
+            logger.warning(
+                "agent_surfaces.resend.inbound_missing_email_id.degraded",
+                thread_id=event.external_thread_id,
+            )
+            return None if not event.message_text.strip() else event
+
+        received = await ResendPlatformService(credentials).fetch_received_email(
+            email_id
+        )
+        return merge_received_email(event, received)
+
     async def send_message(
         self,
         *,
@@ -39,6 +90,24 @@ class ResendSurfaceAdapter(BaseSurfaceAdapter):
         metadata: dict[str, Any] | None = None,
     ) -> None:
         await ResendPlatformService(credentials).send_message(event, message, metadata)
+
+    async def send_cold_email(
+        self,
+        *,
+        credentials: dict[str, Any],
+        recipient_email: str,
+        subject: str,
+        message: str,
+        thread_seed_id: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> ColdEmailSendResult | None:
+        return await ResendPlatformService(credentials).send_cold_email(
+            recipient_email=recipient_email,
+            subject=subject,
+            message=message,
+            thread_seed_id=thread_seed_id,
+            metadata=metadata,
+        )
 
     async def send_display_resource(
         self,

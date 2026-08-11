@@ -53,8 +53,12 @@ async def snooze(
     - **Every wake replays the whole conversation**, so one longer sleep beats a
       poll loop.
 
-    Don't use it to wait on a person — ask and end your turn; their reply starts
-    a fresh run.
+    Don't use it to wait on the person you are *talking to* — ask with
+    `ask_user`, or end your turn; their reply starts a fresh run either way.
+    Waiting on somebody you reached with `message_user` is the exception, and
+    the one case this is for: nothing resumes you there, so a single sleep sized
+    to how long a person actually takes is the only way to be around when they
+    answer.
     """
     deps = ctx.deps
 

@@ -26,6 +26,38 @@ from pydantic_ai.toolsets import AbstractToolset
 from app.modules.agent.tools.messaging.respond import respond_toolset
 
 
+def render_form_fields(schema: object) -> list[str]:
+    """The form's actual fields, so the agent knows what it is listening for.
+
+    Without this the agent is told a form is owed and given only a run id and a
+    node id — it has to collect "structured values" whose shape it cannot see.
+    The resolved schema was already stored on the notification when the
+    assignment was created; it just never reached the prompt.
+
+    Names, types, enums and requiredness only — no descriptions or defaults,
+    which are usually prose and would crowd out the conversation itself.
+    """
+    if not isinstance(schema, dict):
+        return []
+    properties = schema.get("properties")
+    if not isinstance(properties, dict) or not properties:
+        return []
+    required = schema.get("required")
+    required_names = set(required) if isinstance(required, list) else set()
+
+    lines = ["- Fields to collect:"]
+    for name, spec in properties.items():
+        spec = spec if isinstance(spec, dict) else {}
+        parts = [str(spec.get("type") or "any")]
+        choices = spec.get("enum")
+        if isinstance(choices, list) and choices:
+            parts.append("one of " + ", ".join(f"`{c}`" for c in choices[:10]))
+        if name in required_names:
+            parts.append("required")
+        lines.append(f"  - `{name}` ({'; '.join(parts)})")
+    return lines
+
+
 def render_open_notifications(notifications: list[dict]) -> str:
     """Build the prompt fragment. Empty string when nothing is open.
 
@@ -50,11 +82,10 @@ def render_open_notifications(notifications: list[dict]) -> str:
         if item.get("background_instruction"):
             lines.append(f"- Do with their reply: {item['background_instruction']}")
         if item.get("responds_through_action"):
-            action = item.get("action") or {}
             lines.append(
-                f"- Answered by submitting workflow form (run `{action.get('run_id')}`,"
-                f" node `{action.get('node_id')}`), not a free-text response."
+                "- Answered with `submit_workflow_form`, not a free-text response."
             )
+            lines.extend(render_form_fields((item.get("action") or {}).get("schema")))
         lines.append("")
 
     lines.append(
@@ -64,6 +95,15 @@ def render_open_notifications(notifications: list[dict]) -> str:
         "they say they will get to it. If they decline, leave it open and say"
     )
     lines.append("who was asking. Don't raise these while they're mid-topic.")
+    lines.append("")
+    # Without this the model treats the reply as a question to answer, and
+    # writes a page back to somebody who only answered a standup. Recording is
+    # the work; the message is a receipt.
+    lines.append("Then keep your reply to them short: confirm you have passed")
+    lines.append("it on, and stop. They answered a question — they did not ask")
+    lines.append("one, so there is nothing here to explain, expand on or advise")
+    lines.append("about. Never answer on their behalf or invent detail they did")
+    lines.append("not give you.")
     return "\n".join(lines)
 
 

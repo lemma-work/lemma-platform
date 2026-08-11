@@ -3,20 +3,32 @@
 Split out of :mod:`notification_service` because it is the part with real rules
 in it and no side effects — which makes it the part worth testing directly.
 
-The ordering below is the whole policy, and each step earns its place:
+The choice belongs to the **sending agent**, not the recipient. That is the
+identity argument: a pod connects its own Telegram bot or Slack app, and a
+message from "the agent you already talk to there" carries the trust that
+bot has earned. Reaching someone through an unrelated pod surface because they
+once set it as a personal default borrows trust the sender never had, and asks
+the recipient to place a message from a bot they have no relationship with.
 
-1. **A surface they chose.** ``UserPreferences.default_surfaces`` is already
-   authoritative for *inbound* routing (``ingress_service._select_surface``).
-   Using the same precedence for egress means a person is reached where they
-   already talk to us, rather than somewhere we merely observed them once.
-2. **A surface we have seen them on**, freshest inbound first. "Freshest" means
-   where they last spoke to *us* — not where we last spoke at them, which is why
-   it reads ``last_inbound_at`` and not ``updated_at``.
-3. **Email**, which is the only family of platforms that can address someone who
-   has never written to us first.
-4. **Nothing** — and that is a legitimate outcome, not an exception. The in-app
-   inbox still has the notification. What must never happen is a silent nothing,
-   so the reason travels with the result and reaches the API.
+So the candidate set is the surfaces this agent serves, and the ordering is:
+
+1. **The surface the run is on.** If the agent is answering on Telegram right
+   now, that is where it reaches out from — same bot, same conversation, no
+   explaining required.
+2. **Its other chat surfaces**, freshest inbound first. "Freshest" means where
+   they last spoke to *us* — not where we last spoke at them, which is why it
+   reads ``last_inbound_at`` and not ``updated_at``.
+3. **Its mailbox.** Email is the only family that can address someone who has
+   never written to us first, so it is the fallback and the default for agents
+   with no chat surface at all.
+4. **Nothing** — a legitimate outcome, not an exception. The in-app inbox still
+   has the notification. What must never happen is a silent nothing, so the
+   reason travels with the result and reaches the API.
+
+The recipient's own ``UserPreferences.default_surfaces`` deliberately plays no
+part here. It remains authoritative for *inbound* routing
+(``ingress_service._select_surface``), where the question is genuinely "which of
+our surfaces did this person mean to talk to".
 
 First success wins. Fan-out across three apps is how a genuinely useful feature
 comes to read as spam.
@@ -59,6 +71,14 @@ class UndeliverableReason:
         "reply window."
     )
     NO_EMAIL_ADDRESS = "No email address is on file for this person."
+    NO_SURFACE_FOR_AGENT = (
+        "This agent has no surface it can reach people on. Connect a chat "
+        "surface for it, or configure email so it gets a mailbox."
+    )
+    COLD_OPEN_UNSUPPORTED = (
+        "The pod's only mailbox surface cannot start a new email thread. Ask "
+        "them to email the pod address once, or connect a chat surface."
+    )
 
 
 @dataclass(frozen=True)
@@ -111,6 +131,42 @@ def reply_window_open(
     return elapsed < timedelta(hours=capabilities.reply_window_hours)
 
 
+def surfaces_for_agent(
+    surfaces: list[AgentSurfaceEntity], *, actor_agent_id: UUID | None
+) -> list[AgentSurfaceEntity]:
+    """The surfaces this agent speaks through.
+
+    Matched on ``surface.agent_id`` only. Channel routes and the Slack per-user
+    DM choice deliberately play no part: both are keyed on things a notification
+    does not have — a channel id, and the recipient's own external id — and
+    honouring them would make "who can this agent reach" depend on where someone
+    last happened to speak to it.
+
+    ``actor_agent_id is None`` means the pod assistant, whose surfaces are the
+    ones with no agent of their own. That is a *deliberate* absence rather than
+    "unset", which is also why it must not be read as "every surface": routing
+    the pod assistant through a named agent's bot would put the wrong name on
+    the message.
+
+    A caller with no agent at all — a workflow form assignment, or the
+    notifications API — passes ``None`` and gets the same set, which is the pod's
+    own surfaces. That is the right answer for them too: nobody's agent identity
+    is being borrowed.
+
+    **Falls back to the pod's own surfaces when the agent has none.** The common
+    existing shape is a single pod-level Slack or Telegram bot with no agent of
+    its own, routed to named agents by channel; without this an agent in such a
+    pod could reach nobody, which is a regression rather than a policy. Sending
+    from the pod's own bot borrows no other agent's identity, and ``attribute()``
+    still names the agent in the message — it is exactly what happened before
+    delivery became agent-scoped.
+    """
+    own = [surface for surface in surfaces if surface.agent_id == actor_agent_id]
+    if own or actor_agent_id is None:
+        return own
+    return [surface for surface in surfaces if surface.agent_id is None]
+
+
 def sort_key_for_link(link: AgentSurfaceConversationLink) -> datetime:
     activity = link.inbound_activity_at
     return activity if activity.tzinfo else activity.replace(tzinfo=timezone.utc)
@@ -119,24 +175,24 @@ def sort_key_for_link(link: AgentSurfaceConversationLink) -> datetime:
 def rank_candidates(
     candidates: list[DeliveryChannel],
     *,
-    preferred_surface_ids: set[UUID],
+    origin_surface_id: UUID | None = None,
 ) -> list[DeliveryChannel]:
     """Order resolved channels best-first.
 
     Chat before email: email is the fallback that always works, not the one
-    people are watching. Within each, a surface the person explicitly chose
-    beats one we merely observed, and among the observed, the freshest inbound
-    wins.
+    people are watching. Within chat, the surface the run is *on* wins — an
+    agent answering on Telegram should reach out from that same bot rather than
+    from another of its own surfaces — and among the rest, the freshest inbound.
     """
 
     def key(channel: DeliveryChannel) -> tuple[int, int, float]:
         capabilities = get_platform_capabilities(channel.platform.value)
         is_email = bool(capabilities and capabilities.is_email)
-        chosen = channel.surface.id in preferred_surface_ids
+        here = origin_surface_id is not None and channel.surface.id == origin_surface_id
         freshness = (
             sort_key_for_link(channel.link).timestamp() if channel.link else 0.0
         )
         # Tuple is compared ascending, so negate what should come first.
-        return (int(is_email), 0 if chosen else 1, -freshness)
+        return (int(is_email), 0 if here else 1, -freshness)
 
     return sorted(candidates, key=key)

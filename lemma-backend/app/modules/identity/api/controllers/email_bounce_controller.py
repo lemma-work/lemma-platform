@@ -143,7 +143,11 @@ async def accept_email_bounce(request: Request, event: BounceEvent) -> Response:
 @router.post("/resend", include_in_schema=False, status_code=204)
 async def accept_resend_email_bounce(request: Request) -> Response:
     """Consume signed Resend bounce events without relying on a paid service."""
-    secret = reveal_secret(settings.resend_webhook_secret)
+    # Its own secret only when bounces are a separate Resend endpoint;
+    # otherwise the one webhook secret covers both event types.
+    secret = reveal_secret(
+        settings.resend_bounce_webhook_secret or settings.resend_webhook_secret
+    )
     if not secret:
         raise HTTPException(status_code=404, detail="Not found")
     body = await request.body()
