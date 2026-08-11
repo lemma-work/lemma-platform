@@ -84,3 +84,29 @@ def test_a_missing_or_malformed_schema_degrades_to_no_field_list():
     assert render_form_fields({"type": "object"}) == []
     assert render_form_fields("not a schema") == []
     assert render_form_fields({"properties": {}}) == []
+
+
+def test_the_replying_agent_is_told_to_acknowledge_not_to_hold_forth():
+    """A reply is a receipt, not a conversation to continue.
+
+    Without this the model reads the person's answer as a prompt and writes a
+    page back to somebody who only reported their standup. Recording it is the
+    work; the message they get should say so and stop.
+    """
+    rendered = render_open_notifications(
+        [
+            {
+                "notification_id": "n1",
+                "title": "What did you ship today?",
+                "body": "What did you ship today?",
+                "background_instruction": "Record their answer as the summary.",
+                "responds_through_action": False,
+            }
+        ]
+    )
+
+    assert "respond_to_notification" in rendered
+    assert "short" in rendered
+    assert "invent" in rendered
+    # And the asker's private framing still reaches the agent, never the person.
+    assert "Record their answer as the summary." in rendered

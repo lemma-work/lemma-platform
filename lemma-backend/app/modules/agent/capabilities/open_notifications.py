@@ -95,6 +95,15 @@ def render_open_notifications(notifications: list[dict]) -> str:
         "they say they will get to it. If they decline, leave it open and say"
     )
     lines.append("who was asking. Don't raise these while they're mid-topic.")
+    lines.append("")
+    # Without this the model treats the reply as a question to answer, and
+    # writes a page back to somebody who only answered a standup. Recording is
+    # the work; the message is a receipt.
+    lines.append("Then keep your reply to them short: confirm you have passed")
+    lines.append("it on, and stop. They answered a question — they did not ask")
+    lines.append("one, so there is nothing here to explain, expand on or advise")
+    lines.append("about. Never answer on their behalf or invent detail they did")
+    lines.append("not give you.")
     return "\n".join(lines)
 
 
