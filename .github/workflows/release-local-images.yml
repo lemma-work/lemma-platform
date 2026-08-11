@@ -72,7 +72,13 @@ jobs:
                   f"branch-test runtime {requested} does not match Desktop {desktop}"
               )
           PY
+      # Release evidence gates a release. A branch test build is explicitly not
+      # one: it is how a commit gets tried *before* it is release-qualified, and
+      # protected E2E is not a required check on main, so demanding a successful
+      # run for the exact SHA would block nearly every one of these. The version
+      # check above still runs either way.
       - name: Verify protected evidence
+        if: github.event_name == 'push' || inputs.publish
         uses: ./.github/actions/require-backend-protected-e2e
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
