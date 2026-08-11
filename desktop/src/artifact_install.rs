@@ -906,8 +906,18 @@ fn extract_archive(
         let relative = entry
             .enclosed_name()
             .ok_or_else(|| invalid("ZIP entry escapes the installation directory"))?;
-        if relative.as_os_str().is_empty() || !seen.insert(relative.clone()) {
-            return Err(invalid("ZIP archive contains an empty or duplicate path"));
+        // Compared case-insensitively because the filesystems this lands on
+        // are. Two entries differing only in case -- LICENSE and license, which
+        // npm and Python packages produce routinely -- passed a byte-exact
+        // check and then collided at `create_new`, failing the first-run
+        // install with a bare "os error 80" that named no file, after which the
+        // staging directory was discarded so every retry did the same.
+        let key = relative.to_string_lossy().to_lowercase();
+        if relative.as_os_str().is_empty() || !seen.insert(key) {
+            return Err(invalid(format!(
+                "ZIP archive contains an empty or duplicate path: {}",
+                relative.display()
+            )));
         }
         if entry
             .unix_mode()

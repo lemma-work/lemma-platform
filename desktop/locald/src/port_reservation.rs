@@ -43,6 +43,35 @@ impl PortReservation {
         // Deliberately no SO_REUSEADDR: exclusivity is the whole point, and a
         // reservation that a second binder can join reserves nothing. Nor
         // `listen`, so the port stays indistinguishable from an idle one.
+        //
+        // On Windows that reasoning inverts. Leaving SO_REUSEADDR off is not
+        // exclusivity there -- it is the default, and it still lets a process
+        // that *does* set SO_REUSEADDR take the port out from under this
+        // reservation. SO_EXCLUSIVEADDRUSE is the flag that actually refuses
+        // them, so the window this type exists to close is closed on Windows
+        // too.
+        #[cfg(windows)]
+        {
+            use std::os::windows::io::AsRawSocket;
+            use windows_sys::Win32::Networking::WinSock::{
+                setsockopt, SOCKET_ERROR, SOL_SOCKET, SO_EXCLUSIVEADDRUSE,
+            };
+            let enabled: i32 = 1;
+            // SAFETY: the socket is open and owned here, and the option value
+            // is a correctly sized i32 for SO_EXCLUSIVEADDRUSE.
+            let result = unsafe {
+                setsockopt(
+                    socket.as_raw_socket() as _,
+                    SOL_SOCKET,
+                    SO_EXCLUSIVEADDRUSE,
+                    std::ptr::from_ref(&enabled).cast(),
+                    std::mem::size_of_val(&enabled) as i32,
+                )
+            };
+            if result == SOCKET_ERROR {
+                return Err(io::Error::last_os_error());
+            }
+        }
         socket.bind(&address.into())?;
         let address = socket
             .local_addr()?

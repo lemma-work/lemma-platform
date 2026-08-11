@@ -175,8 +175,13 @@ switch ($Verb) {
     # The one command that turns this checkout into an installable Windows
     # build. "Self-contained" means the installer carries the host pack and the
     # guest runtime as app resources instead of downloading them on first
-    # launch, so it installs on a machine with no network and against no
-    # published release.
+    # launch, so it needs no published release and fetches no Lemma artifact.
+    #
+    # One caveat, and it is Microsoft's: the bundled WebView2 bootstrapper
+    # downloads the runtime if the machine does not already have it. Windows 11
+    # and any updated Windows 10 do. A truly offline installer means switching
+    # webviewInstallMode to offlineInstaller in tauri.windows.conf.json, which
+    # costs about 130 MB.
     #
     # This mirrors release-local-images.yml's windows-test-desktop job and
     # shares its staging engine, so a green local build and a green CI build

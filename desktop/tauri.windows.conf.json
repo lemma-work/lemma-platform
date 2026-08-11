@@ -4,6 +4,15 @@
       "binaries/lemma-locald",
       "binaries/lemma-agent-host",
       "binaries/lemma-runtime"
-    ]
+    ],
+    "targets": [
+      "nsis"
+    ],
+    "windows": {
+      "webviewInstallMode": {
+        "type": "embedBootstrapper",
+        "silent": true
+      }
+    }
   }
 }

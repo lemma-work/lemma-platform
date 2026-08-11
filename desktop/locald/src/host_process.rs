@@ -1,3 +1,6 @@
+// Only the Windows stop path needs it; elsewhere flags go on directly.
+#[cfg(windows)]
+use crate::NoConsoleWindow;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
@@ -1265,12 +1268,13 @@ fn write_private_atomic(path: &Path, contents: &[u8]) -> io::Result<()> {
 }
 
 fn replace_private_file(source: &Path, destination: &Path) -> io::Result<()> {
-    #[cfg(windows)]
-    if destination.exists() {
-        fs::remove_file(destination)?;
-    }
-    #[cfg(not(windows))]
-    let _ = destination;
+    // No delete-then-rename on Windows. `fs::rename` is MoveFileExW with
+    // MOVEFILE_REPLACE_EXISTING and already replaces the destination, so the
+    // unlink bought nothing and cost two things: a window in which the process
+    // ledger simply did not exist -- crash there and the previous backend and
+    // frontend are never reclaimed, and keep their ports -- and a second way to
+    // fail, since removing a file anything has open (a virus scanner, moments
+    // after it was written) is a sharing violation.
     fs::rename(source, destination)
 }
 
@@ -1857,7 +1861,35 @@ fn terminate_process_group(child: &mut Child) -> io::Result<()> {
 
 #[cfg(windows)]
 fn terminate_process_group(child: &mut Child) -> io::Result<()> {
-    child.kill()?;
+    // This was `child.kill()`, which is TerminateProcess: no chance to flush,
+    // no shutdown hook, and it does not touch descendants. The backend lost
+    // in-flight writes and left Postgres with unclean disconnects on every
+    // stop, and anything it or Next.js had spawned kept running -- and kept its
+    // port -- until locald itself exited.
+    //
+    // Windows has no SIGTERM, and CREATE_NO_WINDOW gives each child its own
+    // console, so GenerateConsoleCtrlEvent cannot reach them from here. What
+    // does exist is the EOF watchdog services opt into: dropping our end of
+    // their stdin closes the pipe, which is the same shutdown signal an abrupt
+    // locald exit gives them.
+    drop(child.stdin.take());
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        if child.try_wait()?.is_some() {
+            return Ok(());
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+    // Beyond the graceful window. Take the tree, not just the child, so nothing
+    // is left holding a port the next start needs.
+    let felled = Command::new("taskkill")
+        .no_console_window()
+        .args(["/PID", &child.id().to_string(), "/T", "/F"])
+        .status()
+        .is_ok_and(|status| status.success());
+    if !felled {
+        child.kill()?;
+    }
     child.wait().map(|_| ())
 }
 
