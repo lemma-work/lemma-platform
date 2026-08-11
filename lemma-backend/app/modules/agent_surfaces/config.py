@@ -158,13 +158,22 @@ class SurfaceSettings(BaseSettings):
     resend_from_name: str = Field(
         default="Lemma", description="Display name on outbound Resend emails"
     )
-    resend_webhook_secret: Optional[str] = Field(
+    # Optional override. Deployments that point inbound email and bounces at a
+    # single Resend webhook set only the shared ``RESEND_WEBHOOK_SECRET``; this
+    # exists because Svix issues a signing secret per *endpoint*, so two
+    # endpoints means two secrets and one variable cannot verify both.
+    resend_inbound_webhook_secret: Optional[str] = Field(
         default=None,
         description=(
-            "Svix signing secret for verifying Resend inbound webhooks. Without "
-            "it every inbound email is rejected, so it is required to receive."
+            "Svix signing secret for the Resend inbound-email webhook "
+            "(email.received → /surfaces/webhooks/resend). Only needed when "
+            "that is a different Resend endpoint to the bounce webhook; "
+            "otherwise RESEND_WEBHOOK_SECRET is used for both."
         ),
     )
+    # NOTE: the shared fallback lives in ``resolve_resend_inbound_secret``
+    # below rather than here, because the shared value is a core setting and
+    # importing it at class-definition time would invert the module layering.
     resend_auto_provision_enabled: bool = Field(
         default=False,
         description=(
@@ -231,3 +240,22 @@ class SurfaceSettings(BaseSettings):
 
 
 surface_settings = SurfaceSettings()
+
+
+def resolve_resend_inbound_secret() -> str | None:
+    """The signing secret for the Resend inbound-email webhook.
+
+    Prefers the inbound-specific variable and falls back to the shared
+    ``RESEND_WEBHOOK_SECRET`` that the bounce endpoint already reads, so one
+    variable covers a deployment that sends both event types to a single Resend
+    webhook. They must be split only when inbound and bounces are *separate*
+    endpoints, because Svix derives the signature from a per-endpoint secret and
+    the wrong one fails every delivery with a signature error that says nothing
+    about which secret it wanted.
+    """
+    from app.core.config import reveal_secret, settings
+
+    specific = (surface_settings.resend_inbound_webhook_secret or "").strip()
+    if specific:
+        return specific
+    return (reveal_secret(settings.resend_webhook_secret) or "").strip() or None

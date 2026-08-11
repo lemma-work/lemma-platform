@@ -8,7 +8,7 @@ and ``_normalize_resend_inbound`` entirely.
 
 Like the other platforms, Resend inbound is authenticated: the controller
 verifies the Svix signature (HMAC-SHA256 over ``{svix-id}.{svix-timestamp}.{body}``
-keyed by ``resend_webhook_secret``) before trusting the payload. These
+keyed by ``resend_inbound_webhook_secret``) before trusting the payload. These
 tests sign their POSTs with ``build_resend_svix_headers`` and set the secret via
 ``monkeypatch``, mirroring the other platforms' ``build_*_signature_headers``.
 
@@ -90,7 +90,7 @@ async def test_resend_webhook_ignores_unmatched_address(
     fails closed rather than guessing a destination. The Svix signature is valid;
     only the destination is unknown."""
     monkeypatch.setattr(
-        surface_settings, "resend_webhook_secret", _RESEND_SIGNING_SECRET
+        surface_settings, "resend_inbound_webhook_secret", _RESEND_SIGNING_SECRET
     )
     monkeypatch.setattr(surface_settings, "resend_inbound_domain", "ops.asur.work")
     envelope = _raw_resend_envelope(
@@ -119,7 +119,7 @@ async def test_resend_webhook_rejects_invalid_signature(
     """An inbound envelope with a bad/absent Svix signature is rejected (401)
     before any address routing — proves inbound is authenticated."""
     monkeypatch.setattr(
-        surface_settings, "resend_webhook_secret", _RESEND_SIGNING_SECRET
+        surface_settings, "resend_inbound_webhook_secret", _RESEND_SIGNING_SECRET
     )
     monkeypatch.setattr(surface_settings, "resend_inbound_domain", "ops.asur.work")
     envelope = _raw_resend_envelope(
@@ -155,7 +155,7 @@ async def test_resend_webhook_routes_raw_envelope_to_provisioned_address(
 
     monkeypatch.setattr(app_settings, "api_url", "https://api.example.test")
     monkeypatch.setattr(
-        surface_settings, "resend_webhook_secret", _RESEND_SIGNING_SECRET
+        surface_settings, "resend_inbound_webhook_secret", _RESEND_SIGNING_SECRET
     )
     monkeypatch.setattr(surface_settings, "resend_inbound_domain", "ops.asur.work")
     pod_id = test_pod["id"]
