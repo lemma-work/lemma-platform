@@ -2,6 +2,7 @@
 
 import React from "react";
 import { LemmaMark } from "@/components/brand/logo";
+import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
 type LoaderSize = "xs" | "sm" | "md" | "lg";
@@ -134,13 +135,14 @@ export function PageLoader() {
                     <p className="text-sm text-[var(--text-tertiary)]">
                         Still starting Lemma. This can take a while the first time.
                     </p>
-                    <button
+                    <Button
                         type="button"
-                        className="rounded-md border border-[var(--border-subtle)] px-3 py-1.5 text-sm text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+                        variant="secondary"
+                        size="sm"
                         onClick={() => window.location.reload()}
                     >
                         Reload
-                    </button>
+                    </Button>
                 </div>
             ) : null}
         </div>
