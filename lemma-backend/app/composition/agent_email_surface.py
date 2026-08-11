@@ -21,6 +21,8 @@ from __future__ import annotations
 
 from uuid import UUID
 
+from sqlalchemy.exc import IntegrityError
+
 from app.core.log.log import get_logger
 
 logger = get_logger(__name__)
@@ -34,9 +36,12 @@ async def provision_agent_email_surface(
     None when email is not configured for the deployment, or when provisioning
     failed — both are survivable, and both are logged rather than raised.
     """
-    from app.modules.agent_surfaces.config import surface_settings
+    from app.modules.agent_surfaces.config import (
+        resolve_resend_api_key,
+        surface_settings,
+    )
 
-    if not (surface_settings.resend_api_key and surface_settings.resend_inbound_domain):
+    if not (resolve_resend_api_key() and surface_settings.resend_inbound_domain):
         return None
 
     from app.modules.agent_surfaces.domain.entities import (
@@ -60,22 +65,32 @@ async def provision_agent_email_surface(
     service = get_surface_service(uow)
     # Insert and retry rather than check-then-insert: the unique index on
     # surface_identity_email is the arbiter, and a pre-check would still race.
+    #
+    # Each attempt gets a savepoint. This runs inside the caller's
+    # agent-creation transaction, and a unique violation aborts a Postgres
+    # transaction outright — so without one, the second attempt raises
+    # PendingRollbackError, the commit fails, and *creating an agent* returns
+    # 500 because two of them wanted the same address. Same reasoning, and the
+    # same shape, as `notification_repository.create`.
     for address in addresses:
         try:
-            surface = await service.create_surface(
-                pod_id=pod_id,
-                platform=SurfacePlatform.RESEND,
-                agent_id=agent_id,
-                # Surface names are unique per pod, so the platform default
-                # ("resend") collides as soon as a second agent wants one.
-                name=f"resend-{slugify(agent_name)}",
-                config=SurfaceConfig(),
-                credential_mode=SurfaceCredentialMode.SYSTEM,
-                surface_identity_email=address,
-            )
+            async with uow.session.begin_nested():
+                surface = await service.create_surface(
+                    pod_id=pod_id,
+                    platform=SurfacePlatform.RESEND,
+                    agent_id=agent_id,
+                    # Surface names are unique per pod, so the platform default
+                    # ("resend") collides as soon as a second agent wants one.
+                    name=f"resend-{slugify(agent_name)}",
+                    config=SurfaceConfig(),
+                    credential_mode=SurfaceCredentialMode.SYSTEM,
+                    surface_identity_email=address,
+                )
+        except IntegrityError:
+            # The address (or the surface name) is taken. Try the next candidate;
+            # the savepoint means the outer transaction is still usable.
+            continue
         except Exception as exc:  # noqa: BLE001 - see module docstring
-            if _is_address_taken(exc):
-                continue
             logger.warning(
                 "agent_surfaces.agent_email_surface.provision_failed.degraded",
                 pod_id=str(pod_id),
@@ -89,14 +104,6 @@ async def provision_agent_email_surface(
         pod_id=str(pod_id),
     )
     return None
-
-
-def _is_address_taken(exc: Exception) -> bool:
-    """Whether this failure is 'that address is already allocated'."""
-    text = str(exc).lower()
-    return "uq_agent_surface_identity_email" in text or (
-        "unique" in text and "surface_identity_email" in text
-    )
 
 
 async def _pod_name(uow, pod_id: UUID) -> str | None:

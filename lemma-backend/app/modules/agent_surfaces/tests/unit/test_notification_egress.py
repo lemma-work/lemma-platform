@@ -344,10 +344,11 @@ async def test_a_pod_with_no_surface_is_given_the_system_mailbox(monkeypatch):
     message anyone, and an address handed out is an address that has to keep
     working.
     """
+    from app.core.config import settings as core_settings
     from app.modules.agent_surfaces.config import surface_settings
 
     monkeypatch.setattr(surface_settings, "resend_auto_provision_enabled", True)
-    monkeypatch.setattr(surface_settings, "resend_api_key", "re_test")
+    monkeypatch.setattr(core_settings, "resend_api_key", "re_test")
 
     surface = _email_surface()
     provisioner = AsyncMock(return_value=surface)
@@ -385,11 +386,12 @@ async def test_a_failed_provision_is_undeliverable_not_an_exception(monkeypatch)
     Letting a provisioning failure escape would turn a handled outcome — the row
     exists, the inbox has it — into a raised send.
     """
+    from app.core.config import settings as core_settings
     from app.modules.agent_surfaces.config import surface_settings
     from app.modules.agent_surfaces.domain.errors import AgentSurfaceError
 
     monkeypatch.setattr(surface_settings, "resend_auto_provision_enabled", True)
-    monkeypatch.setattr(surface_settings, "resend_api_key", "re_test")
+    monkeypatch.setattr(core_settings, "resend_api_key", "re_test")
 
     provisioner = AsyncMock(side_effect=AgentSurfaceError("resend refused"))
     service = _notification_service(provisioner=provisioner, surfaces=())

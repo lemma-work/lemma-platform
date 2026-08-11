@@ -268,7 +268,7 @@ async def test_the_resend_reply_tool_is_given_the_surfaces_from_address(monkeypa
     )
 
     monkeypatch.setattr(
-        "app.modules.agent_surfaces.config.surface_settings.resend_api_key", "re_test"
+        "app.core.config.settings.resend_api_key", "re_test"
     )
 
     credentials = await SurfaceCredentialResolver(

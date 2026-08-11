@@ -34,10 +34,8 @@ EXPECTED = [
         "TELEGRAM_MANAGER_WEBHOOK_SECRET",
         None,
     ),
-    ("resend_api_key", "RESEND_API_KEY", None),
     ("resend_inbound_domain", "RESEND_INBOUND_DOMAIN", None),
     ("resend_from_name", "RESEND_FROM_NAME", "Lemma"),
-    ("resend_inbound_webhook_secret", "RESEND_INBOUND_WEBHOOK_SECRET", None),
     # Default False on purpose: turning this on gives every pod outbound mail
     # from one shared Resend domain, so the deliverability and abuse reputation
     # are pooled. That is a deployment decision, not a default.

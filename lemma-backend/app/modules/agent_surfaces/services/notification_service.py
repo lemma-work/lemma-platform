@@ -18,7 +18,10 @@ from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
 from app.core.config import settings
-from app.modules.agent_surfaces.config import surface_settings
+from app.modules.agent_surfaces.config import (
+    resolve_resend_api_key,
+    surface_settings,
+)
 from app.core.log.log import get_logger
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
@@ -384,7 +387,7 @@ class NotificationService:
         """
         if not (
             surface_settings.resend_auto_provision_enabled
-            and surface_settings.resend_api_key
+            and resolve_resend_api_key()
         ):
             return None
         if self.surface_provisioner is None:

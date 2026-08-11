@@ -18,7 +18,10 @@ from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
 
-from app.modules.agent_surfaces.config import surface_settings
+from app.modules.agent_surfaces.config import (
+    resolve_resend_api_key,
+    surface_settings,
+)
 from app.core.log.log import get_logger
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
@@ -106,7 +109,7 @@ def native_credentials(
     if normalized == SurfacePlatform.RESEND:
         return with_surface_identity(
             {
-                "api_key": surface_settings.resend_api_key or "",
+                "api_key": resolve_resend_api_key() or "",
                 "from_name": surface_settings.resend_from_name or "Lemma",
             },
             surface,
@@ -124,7 +127,10 @@ def has_native_credentials(platform: str | SurfacePlatform | None) -> bool:
     if normalized == SurfacePlatform.TELEGRAM:
         return bool(surface_settings.telegram_bot_token)
     if normalized == SurfacePlatform.RESEND:
-        return bool(surface_settings.resend_api_key)
+        # Both, because an address on an unowned domain is as unusable as no
+        # key: the UI offered SYSTEM mode on the key alone and provisioning then
+        # raised for the missing domain.
+        return bool(resolve_resend_api_key() and surface_settings.resend_inbound_domain)
     return False
 
 

@@ -578,3 +578,50 @@ def test_references_unwrap_applies_to_the_data_field_too():
     refs = references_of({"references": '["<seed@ops.asur.work>","<gen@ses>"]'}, {})
 
     assert refs == ["<seed@ops.asur.work>", "<gen@ses>"]
+
+
+@pytest.mark.asyncio
+async def test_a_failed_body_fetch_raises_so_the_delivery_is_retried():
+    """A transient mail-API error must not consume the email.
+
+    Resend's webhook carries no body, so enrichment *is* the message. Swallowing
+    the failure left an empty event, the empty-message guard dropped it, and the
+    webhook had already returned 200 — so a 429 or a timeout lost somebody's
+    reply permanently, with the only trace at DEBUG level.
+    """
+    from unittest.mock import AsyncMock, patch
+
+    from app.modules.agent_surfaces.platforms.resend.adapter import (
+        ResendSurfaceAdapter,
+    )
+
+    event = ResendInboundParser().parse(_normalize_resend_inbound(_real_webhook()))
+
+    with patch.object(
+        ResendPlatformService,
+        "fetch_received_email",
+        new=AsyncMock(side_effect=RuntimeError("resend 429")),
+    ):
+        with pytest.raises(RuntimeError):
+            await ResendSurfaceAdapter().enrich_inbound_event(
+                credentials={"api_key": "re_test"}, event=event
+            )
+
+
+def test_the_unique_email_index_is_declared_on_the_model_too():
+    """Allocation inserts and retries, which is only safe with the index there.
+
+    It existed only in Alembic, so any schema built from metadata — tests, a
+    fresh non-Alembic environment — allocated addresses unguarded, and
+    autogenerate would have emitted a DROP for an index it could not see.
+    """
+    from app.modules.agent_surfaces.infrastructure.models import AgentSurface
+
+    names = {index.name for index in AgentSurface.__table__.indexes}
+
+    assert "uq_agent_surface_identity_email" in names
+    index = next(
+        i for i in AgentSurface.__table__.indexes
+        if i.name == "uq_agent_surface_identity_email"
+    )
+    assert index.unique is True

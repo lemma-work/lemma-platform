@@ -7,6 +7,7 @@ import time
 import pytest
 from uuid import uuid4
 
+from app.core.config import settings as core_settings
 from app.modules.agent_surfaces.config import surface_settings
 from app.core.security import _is_surface_webhook_path
 from app.modules.agent_surfaces.domain.entities import (
@@ -84,7 +85,7 @@ def _svix_headers(raw_body: bytes, secret: str, *, timestamp: int | None = None)
 
 async def test_verify_resend_request_accepts_valid_svix_signature(monkeypatch):
     monkeypatch.setattr(surface_settings, "surface_webhook_security_enabled", True)
-    monkeypatch.setattr(surface_settings, "resend_inbound_webhook_secret", _RESEND_SECRET)
+    monkeypatch.setattr(core_settings, "resend_webhook_secret", _RESEND_SECRET)
     service = SurfaceWebhookSecurityService()
     body = b'{"type":"email.inbound","data":{}}'
 
@@ -95,7 +96,7 @@ async def test_verify_resend_request_accepts_valid_svix_signature(monkeypatch):
 
 async def test_verify_resend_request_rejects_tampered_body(monkeypatch):
     monkeypatch.setattr(surface_settings, "surface_webhook_security_enabled", True)
-    monkeypatch.setattr(surface_settings, "resend_inbound_webhook_secret", _RESEND_SECRET)
+    monkeypatch.setattr(core_settings, "resend_webhook_secret", _RESEND_SECRET)
     service = SurfaceWebhookSecurityService()
     headers = _svix_headers(b'{"to":"pod-a@x"}', _RESEND_SECRET)
 
@@ -107,7 +108,7 @@ async def test_verify_resend_request_rejects_tampered_body(monkeypatch):
 
 async def test_verify_resend_request_rejects_missing_headers(monkeypatch):
     monkeypatch.setattr(surface_settings, "surface_webhook_security_enabled", True)
-    monkeypatch.setattr(surface_settings, "resend_inbound_webhook_secret", _RESEND_SECRET)
+    monkeypatch.setattr(core_settings, "resend_webhook_secret", _RESEND_SECRET)
     service = SurfaceWebhookSecurityService()
 
     with pytest.raises(SurfaceWebhookAuthenticationError):
@@ -116,7 +117,7 @@ async def test_verify_resend_request_rejects_missing_headers(monkeypatch):
 
 async def test_verify_resend_request_rejects_stale_timestamp(monkeypatch):
     monkeypatch.setattr(surface_settings, "surface_webhook_security_enabled", True)
-    monkeypatch.setattr(surface_settings, "resend_inbound_webhook_secret", _RESEND_SECRET)
+    monkeypatch.setattr(core_settings, "resend_webhook_secret", _RESEND_SECRET)
     service = SurfaceWebhookSecurityService()
     body = b"{}"
     stale = _svix_headers(body, _RESEND_SECRET, timestamp=int(time.time()) - 3600)
@@ -127,7 +128,7 @@ async def test_verify_resend_request_rejects_stale_timestamp(monkeypatch):
 
 async def test_verify_resend_request_raises_when_secret_unconfigured(monkeypatch):
     monkeypatch.setattr(surface_settings, "surface_webhook_security_enabled", True)
-    monkeypatch.setattr(surface_settings, "resend_inbound_webhook_secret", None)
+    monkeypatch.setattr(core_settings, "resend_webhook_secret", None)
     service = SurfaceWebhookSecurityService()
     body = b"{}"
 
@@ -159,44 +160,47 @@ def test_inbound_falls_back_to_the_shared_resend_webhook_secret(monkeypatch):
     from app.core.config import settings
     from app.modules.agent_surfaces.config import (
         resolve_resend_inbound_secret,
-        surface_settings,
     )
 
-    monkeypatch.setattr(surface_settings, "resend_inbound_webhook_secret", None)
+    monkeypatch.setattr(core_settings, "resend_webhook_secret", None)
     monkeypatch.setattr(settings, "resend_webhook_secret", "whsec_shared")
 
     assert resolve_resend_inbound_secret() == "whsec_shared"
 
 
-def test_a_separate_inbound_endpoint_can_override_the_shared_secret(monkeypatch):
-    """Svix derives the signature from a *per-endpoint* secret.
+def test_bounces_may_carry_their_own_secret_without_touching_inbound():
+    """Svix derives signatures per endpoint, so two endpoints have two secrets.
 
-    So when inbound and bounces are separate endpoints in Resend their secrets
-    differ, and the shared variable would reject every inbound delivery with a
-    signature error that says nothing about which secret it wanted.
+    One variable names the main webhook that carries inbound email; bounces
+    override only when Resend has them on a separate endpoint. Collapsing both
+    onto one value made whichever endpoint did not supply it reject every
+    delivery, with an error that says only "invalid signature".
     """
-    from app.core.config import settings
-    from app.modules.agent_surfaces.config import (
-        resolve_resend_inbound_secret,
-        surface_settings,
-    )
+    from app.core.config import reveal_secret, settings
+    from app.modules.agent_surfaces.config import resolve_resend_inbound_secret
 
-    monkeypatch.setattr(
-        surface_settings, "resend_inbound_webhook_secret", "whsec_inbound_only"
-    )
-    monkeypatch.setattr(settings, "resend_webhook_secret", "whsec_bounces")
-
-    assert resolve_resend_inbound_secret() == "whsec_inbound_only"
+    settings.resend_webhook_secret = "whsec_inbound"
+    settings.resend_bounce_webhook_secret = "whsec_bounces"
+    try:
+        assert resolve_resend_inbound_secret() == "whsec_inbound"
+        assert (
+            reveal_secret(
+                settings.resend_bounce_webhook_secret or settings.resend_webhook_secret
+            )
+            == "whsec_bounces"
+        )
+    finally:
+        settings.resend_webhook_secret = None
+        settings.resend_bounce_webhook_secret = None
 
 
 def test_neither_configured_is_reported_as_unconfigured(monkeypatch):
     from app.core.config import settings
     from app.modules.agent_surfaces.config import (
         resolve_resend_inbound_secret,
-        surface_settings,
     )
 
-    monkeypatch.setattr(surface_settings, "resend_inbound_webhook_secret", None)
+    monkeypatch.setattr(core_settings, "resend_webhook_secret", None)
     monkeypatch.setattr(settings, "resend_webhook_secret", None)
 
     assert resolve_resend_inbound_secret() is None

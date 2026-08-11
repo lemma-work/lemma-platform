@@ -248,6 +248,43 @@ AUTH_EMAIL_VERIFICATION_REQUIRED=true
 AUTH_ABUSE_PROTECTION_ENABLED=true
 ```
 
+`RESEND_FROM_EMAIL` has **no default**. It used to fall back to a Lemma-owned
+domain, which meant an unconfigured deployment sent password resets from a
+domain it did not own — those fail DMARC silently and lock people out with
+nothing in the logs to explain it. Set it, or leave Resend unconfigured.
+
+### Agent email surfaces
+
+Separate from the transactional mail above: this is how *agents* send and
+receive email. Each agent gets its own address at creation, which the UI shows
+as "email this agent at …" and which people can reply to.
+
+```dotenv
+RESEND_API_KEY=re_...              # shared with transactional mail above
+RESEND_INBOUND_DOMAIN=ops.example.com   # verified, catch-all inbound
+RESEND_WEBHOOK_SECRET=whsec_...    # Svix secret for the inbound webhook
+RESEND_FROM_NAME=Lemma
+RESEND_AUTO_PROVISION_ENABLED=false
+```
+
+Point a Resend webhook at `POST /surfaces/webhooks/resend` and select
+`email.received`. Two things are worth knowing:
+
+- **`RESEND_INBOUND_DOMAIN` has no default and must be a domain you own.** Agent
+  addresses are minted on it (`{agent}.{pod}@{domain}`) and inbound routing
+  matches on it, so a wrong value means mail that bounces on the way out and
+  matches no surface on the way back.
+- **`RESEND_WEBHOOK_SECRET` is per *endpoint*.** Svix derives the signature from
+  the secret of the endpoint that sent the request, so if bounces are a separate
+  Resend endpoint, its secret differs — set `RESEND_BOUNCE_WEBHOOK_SECRET` for
+  that one and leave this as the main webhook's. A single endpoint carrying both
+  event types needs only `RESEND_WEBHOOK_SECRET`.
+
+`RESEND_AUTO_PROVISION_ENABLED` gives a pod with no surface at all a system
+mailbox the first time it tries to notify someone. Off by default because it is
+outward-facing: every pod that turns it on sends from the same domain, so
+deliverability and abuse reputation are pooled.
+
 ## Storage
 
 Object storage holds uploads and generated artifacts. `auto` picks local disk

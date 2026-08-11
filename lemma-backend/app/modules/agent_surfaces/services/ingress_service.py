@@ -1728,13 +1728,9 @@ class AgentSurfaceIngressService(SurfaceConfigurationMixin, SurfaceProgressMixin
     ) -> dict[str, Any]:
         """Credentials for a reply that only has the run's context in hand.
 
-        Resolved *for the surface* whenever the context names one, because some
-        credentials are properties of the surface row rather than the platform:
-        Resend's ``from_address`` is the address that surface was provisioned
-        with, and ``for_platform`` cannot know it. Without it every agent reply
-        on an email surface failed with "Resend send requires api_key,
-        from_address and a recipient" — a message that reads like missing
-        configuration and is really a missing lookup.
+        Resolved *for the surface* when the context names one: ``for_platform``
+        cannot know a value that lives on the surface row, and every agent reply
+        on an email surface failed for want of it.
         """
         needs_surface = self._credentials_need_surface(context)
         if self._uow_factory is not None:
@@ -1764,12 +1760,9 @@ class AgentSurfaceIngressService(SurfaceConfigurationMixin, SurfaceProgressMixin
 
     @staticmethod
     def _credentials_need_surface(context: AgentSurfaceContext) -> bool:
-        """Whether this platform's credentials live partly on the surface row.
+        """Resend's ``from_address`` lives on the surface row; nothing else does.
 
-        Only Resend so far: its ``from_address`` is the address that surface was
-        provisioned with, which ``for_platform`` has no way to know. Every other
-        platform's credentials are wholly per-account or per-deployment, so they
-        skip the extra read — this runs on every inbound reply.
+        Scoped so the extra read stays off every other platform's inbound path.
         """
         return (
             context.surface_id is not None
@@ -1843,21 +1836,6 @@ class AgentSurfaceIngressService(SurfaceConfigurationMixin, SurfaceProgressMixin
         if surface.should_ignore_sender(parsed.sender_external_user_id):
             return None
 
-        claimed = await self.event_dedup_store.claim_message(
-            surface_installation_id=surface.id,
-            platform=surface.surface_type,
-            external_channel_id=parsed.external_channel_id,
-            external_thread_id=parsed.external_thread_id,
-            external_message_id=parsed.external_message_id,
-        )
-        if not claimed:
-            logger.debug(
-                "agent_surfaces.ingress_service.agent_surface_ignored_duplicate_external.observed",
-                surface_type=surface.surface_type,
-                external_channel_id=parsed.external_channel_id,
-            )
-            return None
-
         credentials = await self._resolve_credentials(surface)
         fallback_agent_name = await self.agent_name_for_surface(surface)
         fallback_agent_display_name = fallback_agent_name or "Lemma"
@@ -1875,16 +1853,39 @@ class AgentSurfaceIngressService(SurfaceConfigurationMixin, SurfaceProgressMixin
                 return None
             parsed = enriched
         except Exception:
-            logger.debug(
-                'agent_surfaces.ingress_service.enriching_inbound_event_s_message.diagnostic',
+            # Never swallowed: for a provider whose webhook carries no body
+            # (Resend sends metadata only) enrichment *is* the message, so
+            # continuing drops the email permanently — the webhook already
+            # returned 200. Raising makes the delivery retryable.
+            logger.warning(
+                "agent_surfaces.ingress_service.inbound_enrichment_failed.degraded",
                 surface_type=surface.surface_type,
             )
+            raise
 
         # Re-check after enrichment: email triggers (e.g. Outlook) deliver a
         # minimal payload with no sender, so the pre-enrich self-check above
         # cannot see it. Without this the surface would process its own
         # outgoing replies and loop, re-sending the signup/agent reply forever.
         if self._is_self_email_event(surface=surface, parsed=parsed):
+            return None
+
+        # Claimed only with the message in hand: claiming earlier burns it on an
+        # attempt that had no body, so the retry is discarded as a duplicate.
+        # Enrichment also changes the ids this keys on.
+        claimed = await self.event_dedup_store.claim_message(
+            surface_installation_id=surface.id,
+            platform=surface.surface_type,
+            external_channel_id=parsed.external_channel_id,
+            external_thread_id=parsed.external_thread_id,
+            external_message_id=parsed.external_message_id,
+        )
+        if not claimed:
+            logger.debug(
+                "agent_surfaces.ingress_service.agent_surface_ignored_duplicate_external.observed",
+                surface_type=surface.surface_type,
+                external_channel_id=parsed.external_channel_id,
+            )
             return None
 
         attachment_count = len(parsed.metadata.get("attachments") or [])

@@ -469,10 +469,35 @@ class Settings(BaseSettings):
     )
     resend_webhook_secret: Optional[SecretStr] = Field(
         default=None,
-        description="Resend signing secret for native email event webhooks",
+        validation_alias=AliasChoices(
+            "RESEND_WEBHOOK_SECRET",
+            # Previously separate settings for the inbound endpoint. One
+            # variable now names the main Resend webhook; bounces override only
+            # when they are a different endpoint.
+            "RESEND_INBOUND_WEBHOOK_SECRET",
+            "RESEND_INBOUND_SIGNING_SECRET",
+        ),
+        description=(
+            "Svix signing secret for the Resend webhook that carries inbound "
+            "email and notification replies. Bounces reuse it unless they are a "
+            "separate Resend endpoint, in which case set "
+            "RESEND_BOUNCE_WEBHOOK_SECRET — Svix derives signatures per "
+            "endpoint, so two endpoints genuinely have two secrets."
+        ),
     )
-    resend_from_email: str = Field(
-        default="local@ops.asur.work",
+    resend_bounce_webhook_secret: Optional[SecretStr] = Field(
+        default=None,
+        description=(
+            "Svix signing secret for the bounce endpoint, when that is a "
+            "separate Resend webhook. Defaults to RESEND_WEBHOOK_SECRET, which "
+            "is correct when one endpoint carries both event types."
+        ),
+    )
+    # No default. A fallback sender is not configuration: it makes an
+    # unconfigured deployment send password resets from a domain it may not own,
+    # which fails DMARC silently and locks people out with no error anywhere.
+    resend_from_email: Optional[str] = Field(
+        default=None,
         description="Sender address used with the Resend SMTP relay",
     )
     email_transport: Literal["smtp", "filesystem"] = Field(
