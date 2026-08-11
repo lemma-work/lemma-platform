@@ -79,6 +79,7 @@ from app.modules.agent_surfaces.infrastructure.repositories.external_user_reposi
 )
 from app.modules.agent_surfaces.infrastructure.repositories.surface_repository import (
     SurfaceConversationLinkRepository,
+    SurfaceRepository,
 )
 from app.modules.agent_surfaces.services.credential_resolver import (
     SurfaceCredentialResolver,
@@ -1725,6 +1726,17 @@ class AgentSurfaceIngressService(SurfaceConfigurationMixin, SurfaceProgressMixin
     async def _resolve_credentials_from_context(
         self, context: AgentSurfaceContext
     ) -> dict[str, Any]:
+        """Credentials for a reply that only has the run's context in hand.
+
+        Resolved *for the surface* whenever the context names one, because some
+        credentials are properties of the surface row rather than the platform:
+        Resend's ``from_address`` is the address that surface was provisioned
+        with, and ``for_platform`` cannot know it. Without it every agent reply
+        on an email surface failed with "Resend send requires api_key,
+        from_address and a recipient" — a message that reads like missing
+        configuration and is really a missing lookup.
+        """
+        needs_surface = self._credentials_need_surface(context)
         if self._uow_factory is not None:
             # Worker path: read credentials in a short UoW and return the plain
             # dict, so no connection is held during the platform I/O that follows.
@@ -1733,13 +1745,35 @@ class AgentSurfaceIngressService(SurfaceConfigurationMixin, SurfaceProgressMixin
                     session=uow.session,
                     connector_service=self._connector_service_factory(uow),
                 )
+                if needs_surface:
+                    surface = await SurfaceRepository(uow).get(context.surface_id)
+                    if surface is not None:
+                        return await resolver.for_surface(surface)
                 return await resolver.for_platform(
                     context.platform,
                     context.surface_account_id,
                 )
+        if needs_surface:
+            surface = await self.surface_repository.get(context.surface_id)
+            if surface is not None:
+                return await self.credential_resolver.for_surface(surface)
         return await self.credential_resolver.for_platform(
             context.platform,
             context.surface_account_id,
+        )
+
+    @staticmethod
+    def _credentials_need_surface(context: AgentSurfaceContext) -> bool:
+        """Whether this platform's credentials live partly on the surface row.
+
+        Only Resend so far: its ``from_address`` is the address that surface was
+        provisioned with, which ``for_platform`` has no way to know. Every other
+        platform's credentials are wholly per-account or per-deployment, so they
+        skip the extra read — this runs on every inbound reply.
+        """
+        return (
+            context.surface_id is not None
+            and str(context.platform or "").upper() == SurfacePlatform.RESEND.value
         )
 
     def _resolve_platform(self, source: str) -> str | None:

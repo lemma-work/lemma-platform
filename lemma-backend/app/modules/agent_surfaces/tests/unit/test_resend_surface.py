@@ -485,3 +485,81 @@ def test_a_header_that_merely_looks_like_json_is_left_alone():
     headers = header_map({"Subject": "[URGENT] deploy failed]"})
 
     assert headers["subject"] == "[URGENT] deploy failed]"
+
+
+@pytest.mark.asyncio
+async def test_an_email_reply_resolves_credentials_from_its_surface():
+    """`from_address` is a property of the surface, not of the platform.
+
+    `for_platform` returns only the deployment-wide api key, so a reply routed
+    through the run context had no sender address and Resend refused it with
+    "requires api_key, from_address and a recipient" — which reads like missing
+    configuration and is really a missing lookup. Every agent reply on an email
+    surface failed this way, including the acknowledgement that closes a
+    notification.
+    """
+    from unittest.mock import AsyncMock
+
+    from types import SimpleNamespace
+
+    from app.modules.agent_surfaces.services.ingress_service import (
+        AgentSurfaceIngressService,
+    )
+
+    surface = AgentSurfaceEntity(
+        id=uuid4(),
+        pod_id=uuid4(),
+        name="resend-mailtest",
+        surface_type=SurfacePlatform.RESEND,
+        config=SurfaceConfig(),
+        surface_identity_email="mailtest.acme@ops.asur.work",
+    )
+
+    service = AgentSurfaceIngressService.__new__(AgentSurfaceIngressService)
+    service._uow_factory = None
+    service.surface_repository = AsyncMock()
+    service.surface_repository.get = AsyncMock(return_value=surface)
+    service.credential_resolver = AsyncMock()
+    service.credential_resolver.for_surface = AsyncMock(
+        return_value={"api_key": "re_x", "from_address": surface.surface_identity_email}
+    )
+
+    context = SimpleNamespace(
+        platform=SurfacePlatform.RESEND.value,
+        surface_id=surface.id,
+        surface_account_id=None,
+    )
+
+    credentials = await service._resolve_credentials_from_context(context)
+
+    assert credentials["from_address"] == "mailtest.acme@ops.asur.work"
+    service.credential_resolver.for_surface.assert_awaited_once_with(surface)
+
+
+@pytest.mark.asyncio
+async def test_chat_platforms_do_not_pay_for_an_extra_surface_read():
+    """This runs on every inbound reply, so the lookup stays scoped to Resend."""
+    from unittest.mock import AsyncMock
+
+    from types import SimpleNamespace
+
+    from app.modules.agent_surfaces.services.ingress_service import (
+        AgentSurfaceIngressService,
+    )
+
+    service = AgentSurfaceIngressService.__new__(AgentSurfaceIngressService)
+    service._uow_factory = None
+    service.surface_repository = AsyncMock()
+    service.credential_resolver = AsyncMock()
+    service.credential_resolver.for_platform = AsyncMock(return_value={"token": "t"})
+
+    context = SimpleNamespace(
+        platform=SurfacePlatform.SLACK.value,
+        surface_id=uuid4(),
+        surface_account_id=None,
+    )
+
+    await service._resolve_credentials_from_context(context)
+
+    service.surface_repository.get.assert_not_awaited()
+    service.credential_resolver.for_platform.assert_awaited_once()
