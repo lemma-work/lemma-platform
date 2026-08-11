@@ -3889,6 +3889,29 @@ fn menu_attempt(app: &AppHandle, action: &str, work: impl FnOnce() -> Result<(),
     }
 }
 
+/// Run a menu action that waits on something, without freezing the app.
+///
+/// Menu and tray handlers are called on the main thread, so a verb that talks
+/// to the daemon from one blocks every window for as long as it takes -- the
+/// same failure the Tauri commands had, reached through the tray instead of the
+/// page. Starting Lemma from the tray could freeze the app for the length of a
+/// runtime install.
+///
+/// Failure still surfaces the same way: `report_action_failure` opens a dialog,
+/// and that dispatches to the main thread on its own, so it is safe from here.
+fn menu_background(
+    app: &AppHandle,
+    action: &'static str,
+    work: impl FnOnce() -> Result<(), String> + Send + 'static,
+) {
+    let handle = app.clone();
+    std::thread::spawn(move || {
+        if let Err(error) = work() {
+            report_action_failure(&handle, action, &error);
+        }
+    });
+}
+
 /// setting to offer later — it just is not the default identity.
 fn desktop_system_accent_enabled() -> bool {
     std::env::var("LEMMA_DESKTOP_SYSTEM_ACCENT").as_deref() == Ok("1")
@@ -4016,23 +4039,25 @@ fn handle_menu_action(app: &AppHandle, id: &str) {
         }
         "start" => {
             let handle = app.clone();
-            menu_attempt(&handle, "Start Lemma", || start_impl(app).map(|_| ()));
+            menu_background(&app, "Start Lemma", move || start_impl(handle).map(|_| ()));
         }
         "stop" => {
             let handle = app.clone();
-            menu_attempt(&handle, "Stop Lemma", || {
-                stop_impl(app, Some(false)).map(|_| ())
+            menu_background(&app, "Stop Lemma", move || {
+                stop_impl(handle, Some(false)).map(|_| ())
             });
         }
         "stop-all" => {
             let handle = app.clone();
-            menu_attempt(&handle, "Stop Lemma completely", || {
-                stop_impl(app, Some(true)).map(|_| ())
+            menu_background(&app, "Stop Lemma completely", move || {
+                stop_impl(handle, Some(true)).map(|_| ())
             });
         }
         "restart" => {
             let handle = app.clone();
-            menu_attempt(&handle, "Restart Lemma", || restart_impl(app).map(|_| ()));
+            menu_background(&app, "Restart Lemma", move || {
+                restart_impl(handle).map(|_| ())
+            });
         }
         "mode" => {
             confirm_then_switch_connection(app);
@@ -4063,7 +4088,8 @@ fn handle_menu_action(app: &AppHandle, id: &str) {
             } else {
                 "Turn Agent Host on"
             };
-            menu_attempt(&app, action, || toggle_agent_host_from_tray(&app));
+            let handle = app.clone();
+            menu_background(&app, action, move || toggle_agent_host_from_tray(&handle));
         }
         "agent-host-log" => {
             let _ = reveal_path(&agent_host_log_path());
