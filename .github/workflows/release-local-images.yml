@@ -799,6 +799,11 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # This job only downloads artifacts -- it never checks the repo out --
+          # so gh has no git remote to infer the repository from and refuses to
+          # run. Name it explicitly rather than checking out a whole tree to
+          # satisfy a CLI.
+          GH_REPO: ${{ github.repository }}
           TAG: ${{ steps.version.outputs.release_tag }}
           SHA: ${{ github.sha }}
           REF_NAME: ${{ github.ref_name }}
