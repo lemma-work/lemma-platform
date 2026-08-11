@@ -1298,7 +1298,7 @@ async def test_execute_chat_factory_mode_holds_no_session_during_io(monkeypatch)
         def __init__(self, *, session, connector_service) -> None:
             pass
 
-        async def for_platform(self, platform, account_id):
+        async def for_platform(self, platform, account_id, *, surface=None):
             return {}
 
     monkeypatch.setattr(

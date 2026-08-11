@@ -162,11 +162,23 @@ class SurfaceCredentialResolver:
         platform: str | SurfacePlatform,
         account_id: UUID | str | None,
         *,
+        surface: AgentSurfaceEntity | None,
         force_refresh: bool = False,
     ) -> dict[str, Any]:
+        """Credentials when the caller may not have a surface row.
+
+        ``surface`` is required and may be ``None`` — deliberately not
+        defaulted. Some credential values live on the surface rather than the
+        platform (Resend's sender address), and every time a caller reached for
+        the platform-level lookup while holding a surface, the result was
+        silently incomplete and the send failed on a missing field. Making the
+        argument explicit turns "did you have one?" into something the call site
+        has to answer rather than something a reader has to infer.
+        """
         if not account_id:
-            return native_credentials(platform)
-        return await self.for_account(account_id, force_refresh=force_refresh)
+            return native_credentials(platform, surface=surface)
+        credentials = await self.for_account(account_id, force_refresh=force_refresh)
+        return with_surface_identity(credentials, surface)
 
     async def for_account(
         self,

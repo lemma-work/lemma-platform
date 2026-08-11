@@ -1746,24 +1746,20 @@ class AgentSurfaceIngressService(SurfaceConfigurationMixin, SurfaceProgressMixin
                     if surface is not None:
                         return await resolver.for_surface(surface)
                 return await resolver.for_platform(
-                    context.platform,
-                    context.surface_account_id,
+                    context.platform, context.surface_account_id, surface=None
                 )
         if needs_surface:
             surface = await self.surface_repository.get(context.surface_id)
             if surface is not None:
                 return await self.credential_resolver.for_surface(surface)
         return await self.credential_resolver.for_platform(
-            context.platform,
-            context.surface_account_id,
+            context.platform, context.surface_account_id, surface=None
         )
 
     @staticmethod
     def _credentials_need_surface(context: AgentSurfaceContext) -> bool:
-        """Resend's ``from_address`` lives on the surface row; nothing else does.
-
-        Scoped so the extra read stays off every other platform's inbound path.
-        """
+        """Resend's ``from_address`` lives on the surface row; nothing else does,
+        so the extra read stays off every other platform's inbound path."""
         return (
             context.surface_id is not None
             and str(context.platform or "").upper() == SurfacePlatform.RESEND.value
@@ -1802,7 +1798,10 @@ class AgentSurfaceIngressService(SurfaceConfigurationMixin, SurfaceProgressMixin
             credentials = (
                 await self._resolve_credentials(surface)
                 if surface is not None
-                else await self.credential_resolver.for_platform(platform, None)
+                # No surface on this path by definition: the event matched none.
+                else await self.credential_resolver.for_platform(
+                    platform, None, surface=None
+                )
             )
             resolved_user = await self._resolve_sender_identity(
                 adapter=adapter,

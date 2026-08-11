@@ -17,6 +17,7 @@ from pydantic_ai.tools import RunContext
 from app.core.log.log import get_logger
 from app.modules.agent.contracts import ConversationContext
 from app.modules.agent_surfaces.domain.entities import ParsedInboundSurfaceEvent
+from app.modules.agent_surfaces.domain.errors import AgentSurfaceValidationError
 from app.modules.agent_surfaces.domain.models import (
     ColdEmailSendResult,
     SurfaceDisplayRenderPlan,
@@ -81,6 +82,30 @@ class ResendPlatformService:
             ),
         )
 
+    def _raise_unsendable(self, recipient_email: str) -> None:
+        """Say which part is missing, and raise something delivery can catch.
+
+        ``AgentSurfaceError``, not ``ValueError``: notification delivery catches
+        the former per channel, while a bare ``ValueError`` escapes ``notify()``
+        and rolls back the notification row that was deliberately written before
+        the send — losing the very record that design exists to keep. Naming the
+        missing field matters too: this message has been read three times as
+        "Resend is unconfigured" when the key was present and only the
+        surface-derived sender was absent.
+        """
+        missing = [
+            name
+            for name, value in (
+                ("api_key", self._api_key),
+                ("from_address", self._from_address),
+                ("recipient", recipient_email),
+            )
+            if not value
+        ]
+        raise AgentSurfaceValidationError(
+            f"Resend send is missing: {', '.join(missing)}."
+        )
+
     async def fetch_received_email(self, email_id: str) -> dict[str, Any]:
         """Retrieve a received email's body, headers and attachment metadata.
 
@@ -89,9 +114,9 @@ class ResendPlatformService:
         enrichment nicety, it is the only way to learn what the person wrote.
         """
         if not self._api_key:
-            raise ValueError("Resend receive requires an api_key.")
+            raise AgentSurfaceValidationError("Resend receive requires an api_key.")
         if not email_id:
-            raise ValueError("Resend receive requires an email id.")
+            raise AgentSurfaceValidationError("Resend receive requires an email id.")
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.get(
                 f"{self._api_base.rstrip('/')}/emails/receiving/{email_id}",
@@ -227,7 +252,7 @@ class ResendPlatformService:
         is_reply: bool = True,
     ) -> dict[str, Any]:
         if not recipient_email or not self._api_key or not self._from_address:
-            raise ValueError("Resend send requires api_key, from_address and a recipient.")
+            self._raise_unsendable(recipient_email)
 
         plain_text, html_body = render_email_content(
             content=content,
