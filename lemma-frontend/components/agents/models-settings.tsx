@@ -51,6 +51,7 @@ import {
     agentHostHarnessModelCount,
     agentHostStatusLabel,
     isArchivedProfile,
+    isDiscoveringHarnesses,
     harnessLogo,
     profileHarnessKey,
     runtimeAvailabilityLabel,
@@ -700,6 +701,8 @@ function AgentHostCard({
     onRefresh?: () => void;
 }) {
     const harnesses = useAgentHostHarnesses(host.id);
+    // An empty list means "still looking" for as long as looking is plausible.
+    const discovering = isDiscoveringHarnesses(host, harnesses.data?.items.length ?? 0);
     const revoke = useRevokeAgentHost();
     const [confirmDisconnect, setConfirmDisconnect] = useState(false);
     const activeRuns = host.capacity?.active_runs ?? 0;
@@ -776,8 +779,20 @@ function AgentHostCard({
                 />
             </div>
             <div className="flex flex-col gap-2 border-t border-[var(--border-subtle)] p-3">
-                {harnesses.isLoading ? (
-                    <p className="px-1 text-xs text-[var(--text-tertiary)]">Looking for agents on this computer…</p>
+                {/*
+                  * `isLoading` alone was the bug: it is only true for the very
+                  * first fetch, and that fetch returns an empty list straight
+                  * away because the computer has not published anything yet.
+                  * The page then stated "No agents published yet" as fact while
+                  * the host was still installing adapter packages, which takes
+                  * minutes on a machine's first pairing.
+                  */}
+                {harnesses.isLoading || discovering ? (
+                    <p className="flex items-center gap-2 px-1 text-xs text-[var(--text-tertiary)]">
+                        <RefreshCw className="size-3 lemma-spin" />
+                        Looking for agents on this computer…
+                        {isThisComputer ? ' The first time takes a few minutes.' : null}
+                    </p>
                 ) : null}
                 {(harnesses.data?.items ?? []).map((harness) => (
                     <AgentHostHarnessRow
@@ -789,7 +804,7 @@ function AgentHostCard({
                         onRefresh={onRefresh}
                     />
                 ))}
-                {!harnesses.isLoading && !(harnesses.data?.items.length ?? 0) ? (
+                {!harnesses.isLoading && !discovering && !(harnesses.data?.items.length ?? 0) ? (
                     <p className="px-1 text-xs text-[var(--text-tertiary)]">
                         No agents published yet. {isThisComputer
                             ? 'Use "Recheck agents" above to look again now.'

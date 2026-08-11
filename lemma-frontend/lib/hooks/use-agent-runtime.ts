@@ -6,6 +6,7 @@ import type {
     AgentRuntimeConfig,
 } from 'lemma-sdk';
 import { getLemmaClient } from '@/lib/sdk/lemma-client';
+import { HARNESS_DISCOVERY_WINDOW_MS } from '@/components/agents/agent-runtime-helpers';
 
 export const agentRuntimeQueryKey = (organizationId?: string | null) =>
     ['agent-runtime', 'runtimes', organizationId ?? null] as const;
@@ -50,8 +51,7 @@ const SETTLED_REFETCH_MS = 20000;
 // seen at all yet, and one that is coming back was seen moments ago. Anything
 // quiet for longer than this is a state, not a transition.
 const ARRIVING_WINDOW_MS = 90_000;
-/** Empty-list polls at the fast interval before harness discovery is given up on. */
-const EMPTY_HARNESS_FAST_POLLS = ARRIVING_WINDOW_MS / SETTLING_REFETCH_MS;
+const EMPTY_HARNESS_FAST_POLLS = HARNESS_DISCOVERY_WINDOW_MS / SETTLING_REFETCH_MS;
 
 export const isArriving = (host: AgentHost): boolean => {
     if (host.status === 'ONLINE') return false;

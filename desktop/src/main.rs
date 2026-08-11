@@ -12,7 +12,7 @@ use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -995,20 +995,10 @@ fn ensure_locald(app: &AppHandle) -> Result<(), String> {
         replace_locald(connection)?;
     }
 
-    spawn_locald()?;
-    let mut last_error = "daemon did not create its control endpoint".to_string();
-    for _ in 0..80 {
-        match connect_locald() {
-            Ok(connection) if acceptable(&connection.hello) => {
-                install_locald_connection(app, connection);
-                return Ok(());
-            }
-            Ok(_) => last_error = "daemon started with the wrong native host pack".into(),
-            Err(error) => last_error = error,
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    }
-    Err(format!("could not connect to lemma-locald: {last_error}"))
+    let child = spawn_locald()?;
+    let connection = await_locald(child, |connection| acceptable(&connection.hello))?;
+    install_locald_connection(app, connection);
+    Ok(())
 }
 
 /// Bring up locald for a workspace that has no local stack.
@@ -1043,20 +1033,12 @@ fn ensure_locald_without_host_pack(app: &AppHandle) -> Result<(), String> {
         replace_locald(connection)?;
     }
 
-    spawn_locald()?;
-    let mut last_error = "daemon did not create its control endpoint".to_string();
-    for _ in 0..80 {
-        match connect_locald() {
-            Ok(connection) if locald_is_this_build(&connection.hello, expected.as_deref()) => {
-                install_locald_connection(app, connection);
-                return Ok(());
-            }
-            Ok(_) => last_error = "another build's daemon holds the control socket".into(),
-            Err(error) => last_error = error,
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    }
-    Err(format!("could not connect to lemma-locald: {last_error}"))
+    let child = spawn_locald()?;
+    let connection = await_locald(child, |connection| {
+        locald_is_this_build(&connection.hello, expected.as_deref())
+    })?;
+    install_locald_connection(app, connection);
+    Ok(())
 }
 
 fn ensure_runtime_artifacts(app: &AppHandle) -> Result<(), String> {
@@ -1347,7 +1329,7 @@ fn locald_binary() -> Option<PathBuf> {
         })
 }
 
-fn spawn_locald() -> Result<(), String> {
+fn spawn_locald() -> Result<Child, String> {
     let root = runtime_root();
     let have_checkout = root.join("desktop/locald/Cargo.toml").exists();
     let locald_bin = locald_binary();
@@ -1409,8 +1391,46 @@ fn spawn_locald() -> Result<(), String> {
     }
     command
         .spawn()
-        .map(|_| ())
         .map_err(|e| format!("failed to spawn lemma-locald: {e}"))
+}
+
+/// How long a freshly spawned locald gets to open its control endpoint.
+///
+/// This was 8 seconds, which is generous for a warm start and nowhere near
+/// enough for the one that matters. On a machine's first launch macOS verifies
+/// the newly installed binary before it will run, locald creates its state
+/// root, and asking the credential vault for the installation secret can put a
+/// system prompt in front of all of it. Missing that window reported "could not
+/// connect to lemma-locald" over a daemon that was starting perfectly normally
+/// -- and Try again then worked instantly, because by then it had.
+///
+/// A longer budget costs nothing when the daemon is healthy: the wait returns
+/// on the first successful connect. A daemon that dies is now noticed directly
+/// rather than by running out the clock.
+const LOCALD_START_BUDGET: Duration = Duration::from_secs(45);
+const LOCALD_POLL_INTERVAL: Duration = Duration::from_millis(100);
+
+/// Wait for the control endpoint, giving up early if the daemon exited.
+fn await_locald<F>(mut child: Child, accept: F) -> Result<LocaldConnection, String>
+where
+    F: Fn(&LocaldConnection) -> bool,
+{
+    let deadline = Instant::now() + LOCALD_START_BUDGET;
+    let mut last_error = "daemon did not create its control endpoint".to_string();
+    while Instant::now() < deadline {
+        match connect_locald() {
+            Ok(connection) if accept(&connection) => return Ok(connection),
+            Ok(_) => last_error = "daemon started with the wrong native host pack".into(),
+            Err(error) => last_error = error,
+        }
+        // A daemon that has already exited will never open the endpoint, so say
+        // why instead of spending the rest of the budget waiting for it.
+        if let Ok(Some(status)) = child.try_wait() {
+            return Err(format!("lemma-locald exited during startup ({status})"));
+        }
+        std::thread::sleep(LOCALD_POLL_INTERVAL);
+    }
+    Err(format!("could not connect to lemma-locald: {last_error}"))
 }
 
 fn connect_locald() -> Result<LocaldConnection, String> {

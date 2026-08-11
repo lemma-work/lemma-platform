@@ -19,6 +19,8 @@ import {
     harnessProfileChanges,
     hydrateRuntimeModel,
     isArchivedProfile,
+    isDiscoveringHarnesses,
+    HARNESS_DISCOVERY_WINDOW_MS,
     resolveDefaultAgentRuntime,
     resolveRuntimeModelName,
     runtimeAvailabilityLabel,
@@ -146,6 +148,40 @@ describe('formatAgentRuntime', () => {
     it("resolves through the runtime's own profile, not the catalog default", () => {
         expect(formatAgentRuntime({ profile_id: 'org:byo' }, catalog))
             .toBe('Acme · claude-sonnet-5');
+    });
+});
+
+describe('harness discovery', () => {
+    const host = (overrides: Partial<{ status: string; created_at: string }> = {}) => ({
+        status: 'ONLINE',
+        created_at: new Date().toISOString(),
+        ...overrides,
+    }) as Parameters<typeof isDiscoveringHarnesses>[0];
+
+    it('treats an empty list on a freshly paired computer as still looking', () => {
+        // The reported bug: the page concluded "No agents published yet" within
+        // two seconds of the first empty response, while the host was still
+        // installing an adapter package per agent against an empty npm cache.
+        expect(isDiscoveringHarnesses(host(), 0)).toBe(true);
+    });
+
+    it('stops looking once the computer has published something', () => {
+        expect(isDiscoveringHarnesses(host(), 1)).toBe(false);
+    });
+
+    it('stops looking once discovery has had long enough', () => {
+        const old = new Date(Date.now() - HARNESS_DISCOVERY_WINDOW_MS - 1_000).toISOString();
+        expect(isDiscoveringHarnesses(host({ created_at: old }), 0)).toBe(false);
+    });
+
+    it('covers the host\'s own connect timeout, which is what makes it slow', () => {
+        // agent-host's CONNECT_TIMEOUT is 600s; a window shorter than that
+        // would call discovery finished while the host was still working.
+        expect(HARNESS_DISCOVERY_WINDOW_MS).toBeGreaterThanOrEqual(600_000);
+    });
+
+    it('never claims a revoked computer is still looking', () => {
+        expect(isDiscoveringHarnesses(host({ status: 'REVOKED' }), 0)).toBe(false);
     });
 });
 

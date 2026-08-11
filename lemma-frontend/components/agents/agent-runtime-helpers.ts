@@ -1,4 +1,5 @@
 import { HarnessKind } from 'lemma-sdk';
+import type { AgentHostResponse } from 'lemma-sdk';
 import type {
     AgentRuntimeConfig,
     AgentRuntimeProfileListResponse,
@@ -23,6 +24,42 @@ export const HARNESS_LOGOS: Partial<Record<string, string>> = {
     codex: '/harnesslogos/codex.png',
     cursor: '/harnesslogos/cursor.png',
     opencode: '/harnesslogos/opencode.png',
+};
+
+/**
+ * How long a computer may plausibly still be finding its coding agents.
+ *
+ * Ninety seconds, borrowed from the window above, was far too short. The first
+ * pairing on a machine does not probe agents, it *installs* them: the host
+ * fetches and verifies a pinned adapter package per certified agent against an
+ * empty npm cache, which is why its own connect timeout is ten minutes. A
+ * re-probe afterwards spawns each agent and opens an ACP session with a
+ * twenty-second ceiling of its own.
+ *
+ * So the list is legitimately empty for minutes on a fresh machine, and the
+ * page used to conclude "No agents published yet" within two seconds of the
+ * first empty response and then poll only every twenty seconds — which is
+ * exactly how Claude Code appeared to be missing until someone hit Recheck.
+ */
+export const HARNESS_DISCOVERY_WINDOW_MS = 10 * 60_000;
+
+/**
+ * Whether an empty harness list means "still looking" rather than "found none".
+ *
+ * Nothing on the wire distinguishes the two — a host only publishes once it has
+ * at least one harness — so this is inferred from how long the computer has
+ * been paired. Anchored on `created_at`, because the expensive step is the
+ * first install on a machine, not the re-probe on later launches.
+ */
+export const isDiscoveringHarnesses = (
+    host: Pick<AgentHostResponse, 'status' | 'created_at'>,
+    harnessCount: number,
+): boolean => {
+    if (harnessCount > 0) return false;
+    if (host.status === 'REVOKED') return false;
+    const pairedAt = Date.parse(host.created_at);
+    if (Number.isNaN(pairedAt)) return false;
+    return Date.now() - pairedAt < HARNESS_DISCOVERY_WINDOW_MS;
 };
 
 export function harnessLogo(harnessKey?: string | null): string | undefined {
