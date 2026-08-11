@@ -1,0 +1,602 @@
+[
+  {
+    "id": "1706.03762",
+    "slug": "attention_is_all_you_need",
+    "bytes": 2215244,
+    "status": "downloaded"
+  },
+  {
+    "id": "1810.04805",
+    "slug": "bert",
+    "bytes": 775166,
+    "status": "downloaded"
+  },
+  {
+    "id": "2005.14165",
+    "slug": "gpt3_few_shot_learners",
+    "bytes": 6768044,
+    "status": "downloaded"
+  },
+  {
+    "id": "1907.11692",
+    "slug": "roberta",
+    "bytes": 209675,
+    "status": "downloaded"
+  },
+  {
+    "id": "1910.10683",
+    "slug": "t5_exploring_transfer_learning",
+    "bytes": 1190021,
+    "status": "downloaded"
+  },
+  {
+    "id": "1910.01108",
+    "slug": "distilbert",
+    "bytes": 436085,
+    "status": "downloaded"
+  },
+  {
+    "id": "2001.08361",
+    "slug": "scaling_laws_neural_lm",
+    "bytes": 2493004,
+    "status": "downloaded"
+  },
+  {
+    "id": "2203.15556",
+    "slug": "chinchilla_compute_optimal",
+    "bytes": 6004349,
+    "status": "downloaded"
+  },
+  {
+    "id": "2302.13971",
+    "slug": "llama",
+    "bytes": 726566,
+    "status": "downloaded"
+  },
+  {
+    "id": "2307.09288",
+    "slug": "llama2",
+    "bytes": 13661300,
+    "status": "downloaded"
+  },
+  {
+    "id": "2407.21783",
+    "slug": "llama3_herd",
+    "bytes": 9833173,
+    "status": "downloaded"
+  },
+  {
+    "id": "2303.08774",
+    "slug": "gpt4_technical_report",
+    "bytes": 5245564,
+    "status": "downloaded"
+  },
+  {
+    "id": "2204.02311",
+    "slug": "palm",
+    "bytes": 2711295,
+    "status": "downloaded"
+  },
+  {
+    "id": "2112.11446",
+    "slug": "gopher",
+    "bytes": 3412401,
+    "status": "downloaded"
+  },
+  {
+    "id": "2201.11903",
+    "slug": "chain_of_thought",
+    "bytes": 891773,
+    "status": "downloaded"
+  },
+  {
+    "id": "2203.11171",
+    "slug": "self_consistency",
+    "bytes": 10505941,
+    "status": "downloaded"
+  },
+  {
+    "id": "2205.11916",
+    "slug": "llms_are_zero_shot_reasoners",
+    "bytes": 762445,
+    "status": "downloaded"
+  },
+  {
+    "id": "2210.03629",
+    "slug": "react_reasoning_acting",
+    "bytes": 633805,
+    "status": "downloaded"
+  },
+  {
+    "id": "2305.10601",
+    "slug": "tree_of_thoughts",
+    "bytes": 799685,
+    "status": "downloaded"
+  },
+  {
+    "id": "2203.02155",
+    "slug": "instructgpt",
+    "bytes": 1797405,
+    "status": "downloaded"
+  },
+  {
+    "id": "2212.08073",
+    "slug": "constitutional_ai",
+    "bytes": 2088111,
+    "status": "downloaded"
+  },
+  {
+    "id": "2204.05862",
+    "slug": "hh_rlhf",
+    "bytes": 9503688,
+    "status": "downloaded"
+  },
+  {
+    "id": "2305.18290",
+    "slug": "dpo_direct_preference",
+    "bytes": 1299212,
+    "status": "downloaded"
+  },
+  {
+    "id": "1707.06347",
+    "slug": "ppo",
+    "bytes": 2923532,
+    "status": "downloaded"
+  },
+  {
+    "id": "2106.09685",
+    "slug": "lora",
+    "bytes": 1609513,
+    "status": "downloaded"
+  },
+  {
+    "id": "2305.14314",
+    "slug": "qlora",
+    "bytes": 1065470,
+    "status": "downloaded"
+  },
+  {
+    "id": "2104.08691",
+    "slug": "prompt_tuning",
+    "bytes": 547768,
+    "status": "downloaded"
+  },
+  {
+    "id": "2101.00190",
+    "slug": "prefix_tuning",
+    "bytes": 1569113,
+    "status": "downloaded"
+  },
+  {
+    "id": "1902.00751",
+    "slug": "adapter_houlsby",
+    "bytes": 872475,
+    "status": "downloaded"
+  },
+  {
+    "id": "2110.08207",
+    "slug": "t0_multitask_prompted",
+    "bytes": 2087672,
+    "status": "downloaded"
+  },
+  {
+    "id": "2109.01652",
+    "slug": "flan_finetuned_lms",
+    "bytes": 1626775,
+    "status": "downloaded"
+  },
+  {
+    "id": "2210.11416",
+    "slug": "scaling_instruction_finetuned",
+    "bytes": 1557309,
+    "status": "downloaded"
+  },
+  {
+    "id": "2005.11401",
+    "slug": "rag",
+    "bytes": 885323,
+    "status": "downloaded"
+  },
+  {
+    "id": "2004.04906",
+    "slug": "dpr_dense_passage_retrieval",
+    "bytes": 383508,
+    "status": "downloaded"
+  },
+  {
+    "id": "2007.01282",
+    "slug": "fid_fusion_in_decoder",
+    "bytes": 326612,
+    "status": "downloaded"
+  },
+  {
+    "id": "2112.04426",
+    "slug": "retro_retrieval_enhanced",
+    "bytes": 1566448,
+    "status": "downloaded"
+  },
+  {
+    "id": "2208.03299",
+    "slug": "atlas_few_shot_retrieval",
+    "bytes": 921252,
+    "status": "downloaded"
+  },
+  {
+    "id": "2312.10997",
+    "slug": "rag_survey",
+    "bytes": 1662567,
+    "status": "downloaded"
+  },
+  {
+    "id": "1908.10084",
+    "slug": "sentence_bert",
+    "bytes": 548961,
+    "status": "downloaded"
+  },
+  {
+    "id": "2212.03533",
+    "slug": "e5_text_embeddings",
+    "bytes": 484956,
+    "status": "downloaded"
+  },
+  {
+    "id": "2104.08821",
+    "slug": "simcse",
+    "bytes": 1672580,
+    "status": "downloaded"
+  },
+  {
+    "id": "2205.14135",
+    "slug": "flashattention",
+    "bytes": 2630825,
+    "status": "downloaded"
+  },
+  {
+    "id": "2307.08691",
+    "slug": "flashattention2",
+    "bytes": 1660578,
+    "status": "downloaded"
+  },
+  {
+    "id": "1909.08053",
+    "slug": "megatron_lm",
+    "bytes": 3850425,
+    "status": "downloaded"
+  },
+  {
+    "id": "1910.02054",
+    "slug": "zero_memory_optimization",
+    "bytes": 779206,
+    "status": "downloaded"
+  },
+  {
+    "id": "2104.04473",
+    "slug": "efficient_large_scale_training",
+    "bytes": 1035739,
+    "status": "downloaded"
+  },
+  {
+    "id": "2101.03961",
+    "slug": "switch_transformers",
+    "bytes": 1304157,
+    "status": "downloaded"
+  },
+  {
+    "id": "2006.16668",
+    "slug": "gshard",
+    "bytes": 1747868,
+    "status": "downloaded"
+  },
+  {
+    "id": "2401.04088",
+    "slug": "mixtral_of_experts",
+    "bytes": 2475990,
+    "status": "downloaded"
+  },
+  {
+    "id": "2211.05100",
+    "slug": "bloom",
+    "bytes": 3029243,
+    "status": "downloaded"
+  },
+  {
+    "id": "2205.01068",
+    "slug": "opt_open_pretrained",
+    "bytes": 1765159,
+    "status": "downloaded"
+  },
+  {
+    "id": "2210.02414",
+    "slug": "glm_130b",
+    "bytes": 4743570,
+    "status": "downloaded"
+  },
+  {
+    "id": "2309.16609",
+    "slug": "qwen",
+    "bytes": 1994623,
+    "status": "downloaded"
+  },
+  {
+    "id": "2310.06825",
+    "slug": "mistral_7b",
+    "bytes": 3749788,
+    "status": "downloaded"
+  },
+  {
+    "id": "2403.05530",
+    "slug": "gemini_1_5",
+    "bytes": 7184542,
+    "status": "downloaded"
+  },
+  {
+    "id": "2312.11805",
+    "slug": "gemini",
+    "bytes": 27484659,
+    "status": "downloaded"
+  },
+  {
+    "id": "2305.10403",
+    "slug": "palm2",
+    "bytes": 5412215,
+    "status": "downloaded"
+  },
+  {
+    "id": "2108.07258",
+    "slug": "foundation_models_opportunities",
+    "bytes": 14419820,
+    "status": "downloaded"
+  },
+  {
+    "id": "2206.07682",
+    "slug": "emergent_abilities",
+    "bytes": 842905,
+    "status": "downloaded"
+  },
+  {
+    "id": "2206.04615",
+    "slug": "big_bench",
+    "bytes": 3874852,
+    "status": "downloaded"
+  },
+  {
+    "id": "2009.03300",
+    "slug": "mmlu_measuring_massive",
+    "bytes": 2074939,
+    "status": "downloaded"
+  },
+  {
+    "id": "2110.14168",
+    "slug": "gsm8k_math_word_problems",
+    "bytes": 2935719,
+    "status": "downloaded"
+  },
+  {
+    "id": "2107.03374",
+    "slug": "codex_evaluating_llms_code",
+    "bytes": 1885177,
+    "status": "downloaded"
+  },
+  {
+    "id": "2308.12950",
+    "slug": "code_llama",
+    "bytes": 1623794,
+    "status": "downloaded"
+  },
+  {
+    "id": "2211.10435",
+    "slug": "pal_program_aided",
+    "bytes": 1180832,
+    "status": "downloaded"
+  },
+  {
+    "id": "2303.12712",
+    "slug": "sparks_of_agi",
+    "bytes": 7370286,
+    "status": "downloaded"
+  },
+  {
+    "id": "2303.17580",
+    "slug": "hugginggpt",
+    "bytes": 3417598,
+    "status": "downloaded"
+  },
+  {
+    "id": "2302.04761",
+    "slug": "toolformer",
+    "bytes": 657966,
+    "status": "downloaded"
+  },
+  {
+    "id": "2304.03442",
+    "slug": "generative_agents",
+    "bytes": 11947867,
+    "status": "downloaded"
+  },
+  {
+    "id": "2308.08155",
+    "slug": "autogen",
+    "bytes": 3571809,
+    "status": "downloaded"
+  },
+  {
+    "id": "2303.11366",
+    "slug": "reflexion",
+    "bytes": 591097,
+    "status": "downloaded"
+  },
+  {
+    "id": "2305.16291",
+    "slug": "voyager",
+    "bytes": 18830859,
+    "status": "downloaded"
+  },
+  {
+    "id": "2201.08239",
+    "slug": "lamda",
+    "bytes": 1509689,
+    "status": "downloaded"
+  },
+  {
+    "id": "2112.09332",
+    "slug": "webgpt",
+    "bytes": 1486858,
+    "status": "downloaded"
+  },
+  {
+    "id": "2009.01325",
+    "slug": "learning_to_summarize_hf",
+    "bytes": 1670544,
+    "status": "downloaded"
+  },
+  {
+    "id": "1804.07461",
+    "slug": "glue",
+    "bytes": 382439,
+    "status": "downloaded"
+  },
+  {
+    "id": "1905.00537",
+    "slug": "superglue",
+    "bytes": 495594,
+    "status": "downloaded"
+  },
+  {
+    "id": "1606.05250",
+    "slug": "squad",
+    "bytes": 456847,
+    "status": "downloaded"
+  },
+  {
+    "id": "2109.07958",
+    "slug": "truthfulqa",
+    "bytes": 819857,
+    "status": "downloaded"
+  },
+  {
+    "id": "2009.11462",
+    "slug": "realtoxicityprompts",
+    "bytes": 1046316,
+    "status": "downloaded"
+  },
+  {
+    "id": "2202.03286",
+    "slug": "red_teaming_lms",
+    "bytes": 3087681,
+    "status": "downloaded"
+  },
+  {
+    "id": "2308.03688",
+    "slug": "agentbench",
+    "bytes": 23017024,
+    "status": "downloaded"
+  },
+  {
+    "id": "2306.05685",
+    "slug": "judging_llm_as_a_judge",
+    "bytes": 1580141,
+    "status": "downloaded"
+  },
+  {
+    "id": "2211.09110",
+    "slug": "helm_holistic_evaluation",
+    "bytes": 6045688,
+    "status": "downloaded"
+  },
+  {
+    "id": "1503.02531",
+    "slug": "distilling_knowledge",
+    "bytes": 106630,
+    "status": "downloaded"
+  },
+  {
+    "id": "1810.03993",
+    "slug": "model_cards",
+    "bytes": 995470,
+    "status": "downloaded"
+  },
+  {
+    "id": "1803.09010",
+    "slug": "datasheets_for_datasets",
+    "bytes": 554802,
+    "status": "downloaded"
+  },
+  {
+    "id": "2104.09864",
+    "slug": "rope_rotary_embeddings",
+    "bytes": 599289,
+    "status": "downloaded"
+  },
+  {
+    "id": "2108.12409",
+    "slug": "alibi_short_train_long_test",
+    "bytes": 759030,
+    "status": "downloaded"
+  },
+  {
+    "id": "1607.06450",
+    "slug": "layer_normalization",
+    "bytes": 612446,
+    "status": "downloaded"
+  },
+  {
+    "id": "2002.05202",
+    "slug": "glu_variants_transformer",
+    "bytes": 109135,
+    "status": "downloaded"
+  },
+  {
+    "id": "1910.07467",
+    "slug": "rmsnorm",
+    "bytes": 555031,
+    "status": "downloaded"
+  },
+  {
+    "id": "2302.13971v1",
+    "slug": "llama_v1_alt",
+    "bytes": 726566,
+    "status": "downloaded"
+  },
+  {
+    "id": "1409.0473",
+    "slug": "neural_mt_jointly_align",
+    "bytes": 444482,
+    "status": "downloaded"
+  },
+  {
+    "id": "1409.3215",
+    "slug": "seq2seq",
+    "bytes": 112084,
+    "status": "downloaded"
+  },
+  {
+    "id": "1512.03385",
+    "slug": "resnet",
+    "bytes": 819383,
+    "status": "downloaded"
+  },
+  {
+    "id": "2010.11929",
+    "slug": "vit_image_is_worth_16x16",
+    "bytes": 3743814,
+    "status": "downloaded"
+  },
+  {
+    "id": "2103.00020",
+    "slug": "clip",
+    "bytes": 6813639,
+    "status": "downloaded"
+  },
+  {
+    "id": "2304.08485",
+    "slug": "llava_visual_instruction",
+    "bytes": 5906135,
+    "status": "downloaded"
+  },
+  {
+    "id": "2301.12597",
+    "slug": "blip2",
+    "bytes": 6737540,
+    "status": "downloaded"
+  }
+]
