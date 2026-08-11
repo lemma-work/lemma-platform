@@ -66,7 +66,6 @@ async def provider() -> AsyncIterator[E2BSandboxProvider]:
             function_template=_WORKSPACE_TEMPLATE,
             sandbox_timeout_seconds=180,
             metadata_namespace=_NAMESPACE,
-            adopt_legacy=False,
         ),
         output=InMemoryOutputBuffer(),
     )
