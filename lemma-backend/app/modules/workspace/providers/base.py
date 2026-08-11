@@ -43,8 +43,7 @@ from app.modules.workspace.domain.sandbox import SandboxKind, SandboxMount
 
 
 # Every object this module creates carries these, so a sweep can recognise its
-# own work. `managed-by` is matched permissively on read: pre-consolidation
-# objects carry "agentbox" and must still be found, or they leak.
+# own work.
 LABEL_MANAGED_BY = "managed-by"
 LABEL_SANDBOX_ID = "lemma-sandbox-id"
 LABEL_SANDBOX_KIND = "lemma-sandbox-kind"
@@ -55,9 +54,6 @@ LABEL_PROFILE_NAME = "profile-name"
 # with, so releasing a new image actually reaches existing workspaces instead of
 # leaving them on the old one for as long as they live.
 LABEL_PROFILE_DIGEST = "profile-digest"
-# What AgentBox stamped on the same objects. Read-only compatibility.
-LEGACY_MANAGED_BY = "agentbox"
-LEGACY_LOGICAL_ID = "logical-id"
 MANAGED_BY = "lemma-workspace"
 
 

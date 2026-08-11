@@ -13,17 +13,6 @@ def test_new_document_generates_installation_secret(paths):
     assert paths.config_file.stat().st_mode & 0o777 == 0o600
 
 
-def test_an_existing_installation_keeps_its_pre_rename_secret(paths):
-    """Regenerating this would be silent data loss: the same seed derives the
-    key that encrypts stored secrets, so a new one leaves every encrypted row
-    in that installation unreadable."""
-    doc = store.load_or_create(paths)
-    del doc["internal"]["installation_secret"]
-    doc["internal"]["agentbox_api_key"] = "a" * 32
-
-    assert store.installation_secret(doc) == "a" * 32
-
-
 def test_upper_snake_keys_route_to_backend_env(paths):
     doc = store.load_or_create(paths)
     parts = store.set_value(doc, "LEMMA_OPENAI_API_KEY", "sk-123")

@@ -38,8 +38,6 @@ from app.modules.workspace.providers.base import (
     LABEL_PROFILE_NAME,
     LABEL_SANDBOX_ID,
     LABEL_SANDBOX_KIND,
-    LEGACY_LOGICAL_ID,
-    LEGACY_MANAGED_BY,
     MANAGED_BY,
     ProviderCreateAmbiguous,
     ProviderCreateSpec,
@@ -393,24 +391,12 @@ class DockerSandboxProvider(DockerOpsMixin):
     async def find_volume(
         self, *, sandbox_id: UUID, deadline_at: datetime
     ) -> str | None:
-        """Locate this sandbox's volume, including one created before cutover.
-
-        The pre-consolidation volume is labelled with the AgentBox logical id,
-        which for a default workspace was the user id -- and the migration set
-        the sandbox id to that same value precisely so this lookup matches.
-        Losing this lookup means losing the user's files.
-        """
+        """Locate this sandbox's volume."""
         ours = await self._list_volumes(
             {LABEL_MANAGED_BY: MANAGED_BY, LABEL_SANDBOX_ID: str(sandbox_id)},
             deadline_at=deadline_at,
         )
-        if ours:
-            return ours[0]
-        legacy = await self._list_volumes(
-            {LABEL_MANAGED_BY: LEGACY_MANAGED_BY, LEGACY_LOGICAL_ID: str(sandbox_id)},
-            deadline_at=deadline_at,
-        )
-        return legacy[0] if legacy else None
+        return ours[0] if ours else None
 
     async def ensure_volume(
         self,
@@ -462,17 +448,9 @@ class DockerSandboxProvider(DockerOpsMixin):
     async def list_objects(
         self, *, deadline_at: datetime
     ) -> tuple[ProviderObject, ...]:
-        """Everything this provider holds that a sweep may be responsible for.
-
-        Legacy objects are included on purpose. A container created before the
-        cutover carries `managed-by=agentbox` and no epoch label; if the sweep
-        did not recognise it, it would run forever with nobody to reap it.
-        """
+        """Everything this provider holds that a sweep may be responsible for."""
         found: list[ProviderObject] = []
-        for label_set, legacy in (
-            ({LABEL_MANAGED_BY: MANAGED_BY}, False),
-            ({LABEL_MANAGED_BY: LEGACY_MANAGED_BY}, True),
-        ):
+        for label_set in ({LABEL_MANAGED_BY: MANAGED_BY},):
             try:
                 containers = await self._engine.list_containers(
                     labels=label_set, deadline_at=deadline_at
@@ -480,7 +458,7 @@ class DockerSandboxProvider(DockerOpsMixin):
             except DockerEngineError as exc:
                 raise ProviderRejected(str(exc)) from exc
             for container in containers:
-                found.append(_as_object(container, legacy=legacy))
+                found.append(_as_object(container))
         return tuple(found)
 
     async def close(self) -> None:
@@ -491,7 +469,7 @@ def _bind(mount: SandboxMount) -> str:
     return f"{mount.host_path}:{mount.container_path}{suffix}"
 
 
-def _as_object(container, *, legacy: bool) -> ProviderObject:
+def _as_object(container) -> ProviderObject:
     labels: Mapping[str, str] = container.labels
     name = (container.names[0] if getattr(container, "names", None) else "").lstrip("/")
 
@@ -500,7 +478,7 @@ def _as_object(container, *, legacy: bool) -> ProviderObject:
         sandbox_id, _, epoch = parsed
     else:
         sandbox_id, epoch = None, None
-        raw_id = labels.get(LABEL_SANDBOX_ID) or labels.get(LEGACY_LOGICAL_ID)
+        raw_id = labels.get(LABEL_SANDBOX_ID)
         if raw_id:
             try:
                 sandbox_id = UUID(raw_id)
@@ -519,7 +497,9 @@ def _as_object(container, *, legacy: bool) -> ProviderObject:
         sandbox_id=sandbox_id,
         epoch=epoch,
         running=container.state.lower() == "running",
-        legacy=legacy,
+        # Every container this provider creates carries the current labels, so
+        # nothing it lists is pre-cutover.
+        legacy=False,
     )
 
 

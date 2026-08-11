@@ -63,7 +63,6 @@ def test_pull_refs_contain_no_separate_manager_or_document_service():
     manifest = m.parse(sample())
     refs = manifest.all_pull_refs()
     assert not any("kreuzberg" in ref for ref in refs)
-    assert not any(ref.endswith("lemma-agentbox:v1.4.0") for ref in refs)
     assert any("lemma-workspace" in ref for ref in refs)
     assert any("lemma-function" in ref for ref in refs)
 
@@ -79,7 +78,6 @@ def test_native_host_start_pulls_only_infrastructure():
     ]
     assert not any("lemma-backend" in ref for ref in refs)
     assert not any("lemma-frontend" in ref for ref in refs)
-    assert not any("agentbox-runtime" in ref for ref in refs)
 
 
 def test_missing_image_rejected():

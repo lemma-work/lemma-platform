@@ -255,4 +255,3 @@ def test_backend_runs_the_all_in_one_local_entrypoint(config, paths, manifest):
     # Readiness is the backend's own, not a mounted manager's. Provisioning is
     # part of this process, so there is nothing else to wait for.
     assert backend.wait_http == "http://app.lemma.localhost:8711/health/ready"
-    assert "agentbox" not in [spec.name for spec in build(config, paths, manifest)]

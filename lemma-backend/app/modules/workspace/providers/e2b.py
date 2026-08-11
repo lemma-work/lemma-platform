@@ -51,9 +51,6 @@ from app.modules.workspace.providers.base import (
 )
 from app.modules.workspace.providers.e2b_common import (
     DEFAULT_METADATA_NAMESPACE,
-    LEGACY_LOGICAL_ID,
-    LEGACY_MANAGED_BY,
-    LEGACY_MANAGED_BY_KEY,
     meta_epoch,
     meta_profile_digest,
     meta_sandbox_id,
@@ -81,10 +78,6 @@ class E2BProviderConfig:
     # it makes a provider blind to sandboxes labelled by another namespace,
     # which is exactly what a conformance run against a shared account needs.
     metadata_namespace: str = DEFAULT_METADATA_NAMESPACE
-    # Whether pre-consolidation AgentBox sandboxes may be adopted. Off for any
-    # namespace but the production one: a test must never adopt a real user's
-    # workspace.
-    adopt_legacy: bool = True
 
 
 class E2BSandboxProvider(E2BOpsMixin):
@@ -398,13 +391,7 @@ class E2BSandboxProvider(E2BOpsMixin):
     # ------------------------------------------------------------------
 
     async def _find_any(self, sandbox_id: UUID) -> ProviderInstance | None:
-        """The sandbox holding this workspace's files, whatever labelled it.
-
-        Pre-consolidation sandboxes carry ``logical-id`` and
-        ``managed-by=agentbox``. Those are live production workspaces, paused
-        with the user's files inside them, so failing to match one would not
-        merely duplicate compute -- it would hand the user an empty workspace
-        and leave their work in a sandbox nothing points at any more.
+        """The sandbox holding this workspace's files.
 
         Paused sandboxes count as found. Pausing is how storage persists here.
         """
@@ -412,13 +399,6 @@ class E2BSandboxProvider(E2BOpsMixin):
         queries: list[dict[str, str]] = [
             {meta_sandbox_id(namespace): str(sandbox_id)}
         ]
-        if self._config.adopt_legacy:
-            queries.append(
-                {
-                    LEGACY_MANAGED_BY_KEY: LEGACY_MANAGED_BY,
-                    LEGACY_LOGICAL_ID: str(sandbox_id),
-                }
-            )
         for query in queries:
             match = await self._first_matching(query)
             if match is not None:

@@ -316,61 +316,6 @@ async def test_a_sandbox_from_an_older_template_build_is_destroyed(
     assert len(world.created) == 1
 
 
-async def test_a_pre_consolidation_sandbox_is_destroyed_rather_than_adopted(
-    provider: E2BSandboxProvider, world: FakeE2B
-) -> None:
-    """Still matched, but now to reap it rather than to resume it.
-
-    A sandbox AgentBox labelled with `logical-id` and `managed-by=agentbox`
-    predates the in-image contract: its runtime reads the credential from a
-    path the backend no longer writes and answers headers the backend no
-    longer sends. Resuming one would hand the user a workspace that cannot
-    serve. The legacy query is kept precisely so such a sandbox is found and
-    killed instead of being left running with nothing pointing at it.
-
-    Its files go with it. That is the accepted cost of the rename on E2B,
-    where the sandbox is the disk; `storage_adopted=False` is how the caller
-    learns to tell the user.
-    """
-    from app.modules.workspace.testing.fake_e2b import FakeSandboxInfo
-
-    user_id = uuid4()
-    world.sandboxes["legacy-prod"] = FakeSandboxInfo(
-        sandbox_id="legacy-prod",
-        state="paused",
-        metadata={
-            "managed-by": "agentbox",
-            "logical-id": str(user_id),
-            "workload-kind": "workspace",
-            "profile-name": "workspace-python-v1",
-        },
-    )
-
-    instance = await provider.create(_spec(user_id))
-
-    assert world.killed == ["legacy-prod"], "the stale sandbox must not survive"
-    assert instance.provider_id != "legacy-prod"
-    assert instance.storage_adopted is False, "the caller must be told the disk is new"
-    assert len(world.created) == 1
-
-
-async def test_a_legacy_sandbox_belonging_to_someone_else_is_not_adopted(
-    provider: E2BSandboxProvider, world: FakeE2B
-) -> None:
-    from app.modules.workspace.testing.fake_e2b import FakeSandboxInfo
-
-    world.sandboxes["theirs"] = FakeSandboxInfo(
-        sandbox_id="theirs",
-        state="paused",
-        metadata={"managed-by": "agentbox", "logical-id": str(uuid4())},
-    )
-
-    instance = await provider.create(_spec(uuid4()))
-
-    assert instance.provider_id != "theirs"
-    assert instance.storage_adopted is False
-
-
 async def test_a_running_match_is_preferred_over_a_paused_duplicate(
     provider: E2BSandboxProvider, world: FakeE2B
 ) -> None:

@@ -16,17 +16,11 @@ class RuntimeStub:
         self.existing.discard(name)
 
 
-def test_upgrade_removes_retired_agentbox_and_kreuzberg_containers() -> None:
-    runtime = RuntimeStub(
-        {
-            "lemma-local-agentbox",
-            "lemma-local-kreuzberg",
-            "lemma-local-backend",
-        }
-    )
+def test_upgrade_removes_the_retired_document_service_container() -> None:
+    runtime = RuntimeStub({"lemma-local-kreuzberg", "lemma-local-backend"})
 
     removed = remove_obsolete_containers(runtime)  # type: ignore[arg-type]
 
-    assert removed == ["agentbox", "kreuzberg"]
-    assert runtime.removed == ["lemma-local-agentbox", "lemma-local-kreuzberg"]
+    assert removed == ["kreuzberg"]
+    assert runtime.removed == ["lemma-local-kreuzberg"]
     assert "lemma-local-backend" in runtime.existing
