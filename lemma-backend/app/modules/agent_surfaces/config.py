@@ -155,15 +155,14 @@ class SurfaceSettings(BaseSettings):
     resend_from_name: str = Field(
         default="Lemma", description="Display name on outbound Resend emails"
     )
-    resend_auto_provision_enabled: bool = Field(
-        default=False,
-        description=(
-            "Give a pod with no active surface a system Resend email surface the "
-            "first time it tries to notify someone. Off by default because it is "
-            "outward-facing: every pod that turns it on sends mail from the same "
-            "Resend domain, so deliverability and abuse reputation are shared."
-        ),
-    )
+    # There was a RESEND_AUTO_PROVISION_ENABLED here, defaulting off. It was a
+    # second thing to get right on top of the API key and the domain, and being
+    # per-process it could be — and on dev was — true where the catalog runs and
+    # false where sends run, so the UI offered email and delivery reported "no
+    # active surface". Whether a mailbox can be minted is now the same
+    # key-and-domain question the catalog already asks, and the abuse concern it
+    # was standing in for is a send cap (``notification_rate_limiter``), which
+    # bounds the thing that actually costs us: mail out of a shared domain.
 
     # Surface webhook ingress + runtime
     surface_webhook_security_enabled: bool = Field(

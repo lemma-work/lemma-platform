@@ -13,6 +13,7 @@ under test: it would have passed happily against a method that did not exist.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, create_autospec
 from uuid import UUID, uuid4
 
@@ -25,6 +26,7 @@ from app.modules.agent_surfaces.domain.entities import (
     SurfacePlatform,
 )
 from app.modules.agent_surfaces.domain.notification import (
+    NotificationDeliveryStatus,
     NotificationEntity,
     NotificationOriginKind,
 )
@@ -57,6 +59,32 @@ def _notification(**overrides) -> NotificationEntity:
     }
     payload.update(overrides)
     return NotificationEntity(**payload)
+
+
+class _FakeRedis:
+    """A fixed-window counter — all the rate limiter uses."""
+
+    def __init__(self) -> None:
+        self.counts: dict[str, int] = {}
+
+    async def incr(self, key: str) -> int:
+        self.counts[key] = self.counts.get(key, 0) + 1
+        return self.counts[key]
+
+    async def expire(self, key: str, ttl: int) -> None:
+        return None
+
+
+def _link_for(surface: AgentSurfaceEntity) -> AgentSurfaceConversationLink:
+    """A thread this person has written to, recently enough to still be open."""
+    return AgentSurfaceConversationLink(
+        surface_id=surface.id,
+        conversation_id=uuid4(),
+        platform=surface.surface_type.value,
+        external_thread_id="C1",
+        external_user_id="U123",
+        last_inbound_at=datetime.now(timezone.utc),
+    )
 
 
 def _email_surface() -> AgentSurfaceEntity:
@@ -333,7 +361,13 @@ async def test_a_channel_with_a_live_thread_replies_into_it():
 # ------------------------------------------------- lazy surface provisioning
 
 
-def _notification_service(*, provisioner=None, surfaces=()):
+def _notification_service(
+    *,
+    provisioner=None,
+    surfaces=(),
+    recipient_email="bob@example.com",
+    external_user=None,
+):
     """A NotificationService with only the collaborators channel resolution uses.
 
     Autospecced against the real classes for the same reason as
@@ -350,22 +384,47 @@ def _notification_service(*, provisioner=None, surfaces=()):
         NotificationService,
     )
 
+    from app.modules.agent_surfaces.infrastructure.repositories.external_user_repository import (  # noqa: E501
+        ExternalSurfaceUserRepository,
+    )
+
     surface_repo = create_autospec(SurfaceRepository, instance=True)
     surface_repo.list_by_pod.return_value = (list(surfaces), None)
     membership = create_autospec(SurfacePodMembershipPort, instance=True)
-    membership.get_user_email.return_value = "bob@example.com"
+    membership.get_user_email.return_value = recipient_email
+    # Nobody has written to a chat surface unless a test says they have. A bare
+    # AsyncMock here answers with a truthy Mock, which silently turns every chat
+    # surface into a deliverable channel and makes "they never messaged the bot"
+    # untestable.
+    external_users = create_autospec(ExternalSurfaceUserRepository, instance=True)
+    external_users.get_by_resolved_user.return_value = external_user
 
     return NotificationService(
         uow=AsyncMock(),
         notification_repository=AsyncMock(),
         surface_repository=surface_repo,
         conversation_link_repository=_links(),
-        external_user_repository=AsyncMock(),
+        external_user_repository=external_users,
         conversation_service=_conversation_service(uuid4()),
         ingress_service=_egress_double(),
         pod_membership_port=membership,
         surface_provisioner=provisioner,
     )
+
+
+def _email_configured(monkeypatch):
+    """What "email is set up" means now: a key and a domain, nothing else.
+
+    There used to be a third thing — RESEND_AUTO_PROVISION_ENABLED — and being
+    per-process it could be true where the surfaces catalog runs and false where
+    sends run. On dev it was exactly that, so the UI offered email while
+    delivery reported "the pod has no active surface".
+    """
+    from app.core.config import settings as core_settings
+    from app.modules.agent_surfaces.config import surface_settings
+
+    monkeypatch.setattr(core_settings, "resend_api_key", "re_test")
+    monkeypatch.setattr(surface_settings, "resend_inbound_domain", "ops.example.com")
 
 
 async def test_a_pod_with_no_surface_is_given_the_system_mailbox(monkeypatch):
@@ -375,11 +434,7 @@ async def test_a_pod_with_no_surface_is_given_the_system_mailbox(monkeypatch):
     message anyone, and an address handed out is an address that has to keep
     working.
     """
-    from app.core.config import settings as core_settings
-    from app.modules.agent_surfaces.config import surface_settings
-
-    monkeypatch.setattr(surface_settings, "resend_auto_provision_enabled", True)
-    monkeypatch.setattr(core_settings, "resend_api_key", "re_test")
+    _email_configured(monkeypatch)
 
     surface = _email_surface()
     provisioner = AsyncMock(return_value=surface)
@@ -394,11 +449,135 @@ async def test_a_pod_with_no_surface_is_given_the_system_mailbox(monkeypatch):
     assert [c.surface.id for c in channels] == [surface.id]
 
 
-async def test_provisioning_stays_off_until_it_is_configured(monkeypatch):
-    """It is outward-facing: every pod would send from one shared Resend domain."""
+async def test_the_pod_assistant_gets_a_mailbox_even_when_agents_have_theirs(
+    monkeypatch,
+):
+    """The hole that broke dev, and the reason this is not just a config fix.
+
+    Provisioning used to fire only when the *pod* had no surface at all. Once
+    any one agent was given its own mailbox the pod was no longer empty, so it
+    never fired again — and the pod assistant, which reaches for a surface with
+    no agent of its own, was left permanently unable to message anyone.
+    """
+    _email_configured(monkeypatch)
+
+    assistant_mailbox = _email_surface()
+    provisioner = AsyncMock(return_value=assistant_mailbox)
+    service = _notification_service(
+        provisioner=provisioner,
+        # A pod that is anything but empty — every surface belongs to a named
+        # agent, which is what a pod looks like after per-agent mailboxes.
+        surfaces=(
+            _surface_for(uuid4(), SurfacePlatform.RESEND),
+            _surface_for(uuid4(), SurfacePlatform.RESEND),
+        ),
+    )
+
+    channels, reason = await service.resolve_channels(
+        pod_id=uuid4(), recipient_user_id=uuid4(), actor_agent_id=None
+    )
+
+    assert reason == ""
+    # Its own, not one borrowed from a named agent: sending from another agent's
+    # bot puts the wrong name on the message.
+    assert [c.surface.id for c in channels] == [assistant_mailbox.id]
+    _, agent_id, _ = provisioner.await_args.args
+    assert agent_id is None
+
+
+async def test_an_agent_from_before_per_agent_mailboxes_gets_one(monkeypatch):
+    """Agents created before mailboxes existed never went through creation.
+
+    There is no backfill by design, so the send path is the only thing that can
+    give them one. Without this they are in the same position as the assistant.
+    """
+    _email_configured(monkeypatch)
+
+    mailbox = _email_surface()
+    provisioner = AsyncMock(return_value=mailbox)
+    older_agent = uuid4()
+    service = _notification_service(
+        provisioner=provisioner,
+        surfaces=(_surface_for(uuid4(), SurfacePlatform.RESEND),),
+    )
+
+    channels, reason = await service.resolve_channels(
+        pod_id=uuid4(), recipient_user_id=uuid4(), actor_agent_id=older_agent
+    )
+
+    assert reason == ""
+    assert [c.surface.id for c in channels] == [mailbox.id]
+    _, agent_id, _ = provisioner.await_args.args
+    assert agent_id == older_agent
+
+
+async def test_a_chat_only_agent_falls_back_to_email_it_does_not_yet_have(
+    monkeypatch,
+):
+    """"Email always works" was not true when the agent had no mailbox.
+
+    An agent whose only surface is a Slack bot the recipient never wrote to
+    could reach nobody, and reported NEVER_INTERACTED — which reads as the
+    recipient's fault for a problem we can fix ourselves.
+    """
+    _email_configured(monkeypatch)
+
+    agent_id = uuid4()
+    mailbox = _email_surface()
+    provisioner = AsyncMock(return_value=mailbox)
+    service = _notification_service(
+        provisioner=provisioner,
+        surfaces=(_surface_for(agent_id, SurfacePlatform.SLACK),),
+    )
+
+    channels, reason = await service.resolve_channels(
+        pod_id=uuid4(), recipient_user_id=uuid4(), actor_agent_id=agent_id
+    )
+
+    assert reason == ""
+    assert [c.surface.id for c in channels] == [mailbox.id]
+
+
+async def test_an_agent_that_already_has_a_mailbox_is_not_given_a_second(
+    monkeypatch,
+):
+    """No channel from an existing mailbox means the *recipient* has no address.
+
+    Minting another would not fix that, and would leave the pod holding two
+    addresses for one agent.
+    """
+    _email_configured(monkeypatch)
+
+    agent_id = uuid4()
+    provisioner = AsyncMock(return_value=_email_surface())
+    service = _notification_service(
+        provisioner=provisioner,
+        surfaces=(_surface_for(agent_id, SurfacePlatform.RESEND),),
+        recipient_email=None,
+    )
+
+    channels, reason = await service.resolve_channels(
+        pod_id=uuid4(), recipient_user_id=uuid4(), actor_agent_id=agent_id
+    )
+
+    provisioner.assert_not_awaited()
+    assert channels == []
+    assert reason == UndeliverableReason.NO_EMAIL_ADDRESS
+
+
+async def test_unconfigured_email_says_so_rather_than_blaming_the_pod(monkeypatch):
+    """The message that cost a day of looking in the wrong place.
+
+    A deployment with no mail domain reported "the pod has no active surface",
+    which is about pods and surfaces; the actual problem was two environment
+    variables.
+    """
+    from app.core.config import settings as core_settings
     from app.modules.agent_surfaces.config import surface_settings
 
-    monkeypatch.setattr(surface_settings, "resend_auto_provision_enabled", False)
+    monkeypatch.setattr(core_settings, "resend_api_key", None)
+    monkeypatch.setattr(surface_settings, "resend_inbound_domain", None)
+
     provisioner = AsyncMock(return_value=_email_surface())
     service = _notification_service(provisioner=provisioner, surfaces=())
 
@@ -408,21 +587,19 @@ async def test_provisioning_stays_off_until_it_is_configured(monkeypatch):
 
     provisioner.assert_not_awaited()
     assert channels == []
-    assert "no active surface" in reason.lower()
+    assert reason == UndeliverableReason.EMAIL_NOT_CONFIGURED
 
 
 async def test_a_failed_provision_is_undeliverable_not_an_exception(monkeypatch):
     """Delivery already has a name for "we could not reach them".
 
     Letting a provisioning failure escape would turn a handled outcome — the row
-    exists, the inbox has it — into a raised send.
+    exists, the inbox has it — into a raised send. The reason carries the
+    provider's own words, so the next incident is readable from the row.
     """
-    from app.core.config import settings as core_settings
-    from app.modules.agent_surfaces.config import surface_settings
     from app.modules.agent_surfaces.domain.errors import AgentSurfaceError
 
-    monkeypatch.setattr(surface_settings, "resend_auto_provision_enabled", True)
-    monkeypatch.setattr(core_settings, "resend_api_key", "re_test")
+    _email_configured(monkeypatch)
 
     provisioner = AsyncMock(side_effect=AgentSurfaceError("resend refused"))
     service = _notification_service(provisioner=provisioner, surfaces=())
@@ -432,7 +609,8 @@ async def test_a_failed_provision_is_undeliverable_not_an_exception(monkeypatch)
     )
 
     assert channels == []
-    assert "no active surface" in reason.lower()
+    assert reason.startswith(UndeliverableReason.MAILBOX_PROVISION_FAILED)
+    assert "resend refused" in reason
 
 
 # --------------------------------------------------- routing follows the agent
@@ -461,8 +639,6 @@ async def test_an_agent_never_reaches_out_through_another_agents_bot():
     service = _notification_service(
         surfaces=(_surface_for(mine), _surface_for(theirs, SurfacePlatform.SLACK))
     )
-    service.external_users.get_by_resolved_user = AsyncMock(return_value=None)
-
     channels, reason = await service.resolve_channels(
         pod_id=uuid4(), recipient_user_id=uuid4(), actor_agent_id=theirs
     )
@@ -473,8 +649,15 @@ async def test_an_agent_never_reaches_out_through_another_agents_bot():
     assert reason != UndeliverableReason.NO_SURFACE_FOR_AGENT
 
 
-async def test_an_agent_with_no_surface_of_its_own_says_so():
-    """Distinct from "the pod has nothing" — the pod here has plenty."""
+async def test_an_agent_with_no_surface_says_so_when_email_cannot_help(monkeypatch):
+    """Distinct from "the pod has nothing" — the pod here has plenty.
+
+    With email configured this agent would be given a mailbox; the reason only
+    survives when there is genuinely nothing left to try.
+    """
+    from app.core.config import settings as core_settings
+
+    monkeypatch.setattr(core_settings, "resend_api_key", None)
     service = _notification_service(surfaces=(_surface_for(uuid4()),))
 
     channels, reason = await service.resolve_channels(
@@ -482,7 +665,7 @@ async def test_an_agent_with_no_surface_of_its_own_says_so():
     )
 
     assert channels == []
-    assert reason == UndeliverableReason.NO_SURFACE_FOR_AGENT
+    assert reason == UndeliverableReason.EMAIL_NOT_CONFIGURED
 
 
 async def test_an_agents_own_mailbox_is_used_when_it_has_no_chat_surface():
@@ -518,3 +701,75 @@ async def test_the_recipients_own_preference_no_longer_steers_delivery():
     )
 
     assert channels, "pod-assistant delivery still resolves without preferences"
+
+
+# ------------------------------------------------ the shared sending domain
+
+
+async def test_the_daily_email_cap_stops_the_send_but_not_the_notification(
+    monkeypatch,
+):
+    """Running out of email budget is a delivery outcome, not a failed call.
+
+    The pod asked for something real and the recipient still has it in their
+    Lemma inbox; what we decline is putting it on a domain every other pod also
+    sends from. So it comes back as an undeliverable reason rather than an
+    exception out of ``notify``.
+    """
+    from app.modules.agent_surfaces.services.notification_rate_limiter import (
+        NotificationRateLimiter,
+    )
+
+    _email_configured(monkeypatch)
+
+    surface = _email_surface()
+    service = _notification_service(surfaces=(surface,))
+    service.rate_limiter = NotificationRateLimiter(email_limit=0, redis=_FakeRedis())
+    service.notifications.update = AsyncMock(side_effect=lambda entity: entity)
+
+    notification = _notification(pod_id=surface.pod_id)
+    delivered = await service.deliver(notification)
+
+    assert delivered.delivery_status == NotificationDeliveryStatus.FAILED
+    assert "emails today" in (delivered.delivery_error or "")
+    # Never reached the platform: the point is that the mail does not go out.
+    service.ingress.open_cold_email_thread.assert_not_awaited()
+
+
+async def test_a_chat_channel_does_not_spend_the_email_budget(monkeypatch):
+    """The budget exists to protect one shared domain.
+
+    A notification delivered on Slack costs that domain nothing, so charging it
+    would let ordinary chat traffic exhaust the ceiling that stops a mail flood.
+    """
+    from app.modules.agent_surfaces.services.notification_rate_limiter import (
+        NotificationRateLimiter,
+    )
+
+    _email_configured(monkeypatch)
+
+    redis = _FakeRedis()
+    agent_id = uuid4()
+    chat_surface = _surface_for(agent_id, SurfacePlatform.SLACK)
+    service = _notification_service(
+        surfaces=(chat_surface,),
+        external_user=SimpleNamespace(external_user_id="U123"),
+    )
+    link = _link_for(chat_surface)
+    service.channels.links.get_latest_by_surface_and_external_user = AsyncMock(
+        return_value=link
+    )
+    # A live conversation on that thread, so delivery continues it rather than
+    # opening a new one — the DM-reset check compares real timestamps.
+    service.conversation_service.conversation_repository.get_conversation = AsyncMock(
+        return_value=_Conversation(link.conversation_id)
+    )
+    service.rate_limiter = NotificationRateLimiter(email_limit=0, redis=redis)
+    service.notifications.update = AsyncMock(side_effect=lambda entity: entity)
+
+    delivered = await service.deliver(
+        _notification(pod_id=chat_surface.pod_id, actor_agent_id=agent_id)
+    )
+
+    assert delivered.delivery_status == NotificationDeliveryStatus.DELIVERED
+    assert redis.counts == {}

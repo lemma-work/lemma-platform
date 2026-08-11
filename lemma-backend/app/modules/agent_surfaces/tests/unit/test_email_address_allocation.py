@@ -68,3 +68,45 @@ def test_suffixed_candidates_stay_within_the_limit_too():
         agent_name="a" * 50, pod_name="b" * 50, domain="ops.asur.work"
     ):
         assert len(address.split("@")[0]) <= MAX_LOCAL_PART
+
+
+# ------------------------------------------------- the pod's own mailbox
+
+
+def test_the_pod_assistant_is_addressed_by_the_pod_alone():
+    """It is not one agent among several — it is the pod answering.
+
+    ``acme.acme@`` would be the mechanical result of treating the assistant as
+    an agent named after its pod, and it reads like a mistake. This is also the
+    shortest address a person can be asked to type.
+    """
+    assert (
+        build_agent_email(
+            agent_name=None, pod_name="Acme Ops", domain="ops.example.com"
+        )
+        == "acme-ops@ops.example.com"
+    )
+
+
+def test_the_pod_mailbox_still_takes_a_suffix_when_the_name_is_taken():
+    """Readable means collidable; the unique index is still the arbiter."""
+    address = build_agent_email(
+        agent_name=None, pod_name="Acme Ops", domain="ops.example.com", suffix="k3p9"
+    )
+
+    assert address == "acme-ops-k3p9@ops.example.com"
+
+
+def test_a_pod_with_no_name_still_gets_a_valid_address():
+    """A nameless pod is a data problem, not a reason to mint a broken address."""
+    assert (
+        build_agent_email(agent_name=None, pod_name=None, domain="ops.example.com")
+        == "pod@ops.example.com"
+    )
+
+
+def test_a_very_long_pod_name_is_cut_to_the_rfc_limit():
+    local = build_local_part(agent_name=None, pod_name="x" * 200, suffix="k3p9")
+
+    assert len(local) <= MAX_LOCAL_PART
+    assert local.endswith("-k3p9")
