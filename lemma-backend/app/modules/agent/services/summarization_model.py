@@ -48,7 +48,7 @@ async def resolve_summarization_model(
 
     # Imported here: this module is pulled in by the harness, and the profile
     # service reaches back into services that import the harness.
-    from app.modules.agent.domain.runtime_profiles import AgentRuntimeConfig
+    from app.core.domain.runtime import AgentRuntimeConfig
     from app.modules.agent.services.runtime_model_factory import (
         pydantic_ai_model_from_runtime_profile,
     )
@@ -71,8 +71,15 @@ async def resolve_summarization_model(
             runtime_credentials=resolved.credentials,
         )
     except Exception:
-        logger.debug(
-            "agent.summarization_model.resolution_failed.diagnostic",
+        # Warning, not debug. Falling back is silent but not free: compaction
+        # then runs on the run's own model, which is the expensive one this
+        # setting exists to avoid, on ~70k-token requests. A broken import here
+        # (AgentRuntimeConfig was imported from the wrong module and raised
+        # ImportError on every call) looked exactly like "no model configured"
+        # at debug level, so the operator saw a setting that did nothing.
+        logger.warning(
+            "agent.summarization_model.resolution_failed.observed",
+            model_name=model_name,
             exc_info=True,
         )
         return fallback

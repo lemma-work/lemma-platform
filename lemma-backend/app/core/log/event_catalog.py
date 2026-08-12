@@ -70,7 +70,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'agent.pydantic_ai.skipping_tool_result_malformed_call.diagnostic': EventSpec('debug', frozenset({'tool_call_id'})),
     'agent.pydantic_ai.skipping_unknown_agent_message_role.diagnostic': EventSpec('debug', frozenset()),
     'agent.vision_service.description_failed.diagnostic': EventSpec('debug', frozenset()),
-    'agent.summarization_model.resolution_failed.diagnostic': EventSpec('debug', frozenset()),
+    'agent.summarization_model.resolution_failed.observed': EventSpec('warning', frozenset({'model_name'})),
     'agent.realtime.publishing_agent_realtime_event.diagnostic': EventSpec('debug', frozenset({'conversation_id', 'error_type'})),
     'agent.runtime_model_factory.provider_client_close_failed.diagnostic': EventSpec('debug', frozenset()),
     'agent.runtime_profile.unreadable.skipped': EventSpec('warning', frozenset({'error', 'organization_id', 'profile_id'})),
