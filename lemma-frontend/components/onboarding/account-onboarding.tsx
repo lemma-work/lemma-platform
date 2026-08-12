@@ -44,10 +44,9 @@ import { useAccessiblePods } from "@/lib/hooks/use-pods";
 import { useProfile, useUpdateProfile } from "@/lib/hooks/use-user";
 import {
   useCreateAgentRuntime,
-  useManagedAgentRuntimes,
   useUpdatePodDefaultAgentRuntime,
 } from "@/lib/hooks/use-agent-runtime";
-import { RuntimeProfileKind, RuntimeProfileStatus } from "lemma-sdk";
+import { adoptableLocalAgent } from "@/lib/desktop/local-agent-default";
 import {
   OrganizationInvitationStatus,
   OrganizationJoinPolicy,
@@ -346,11 +345,6 @@ function SetupAssistant({
     },
   );
   const activeOrganization = createdOrganization || initialOrganization;
-  // Only queried on a local install, and only to answer "is there exactly one
-  // coding agent to adopt as this pod's default".
-  const localRuntimeProfiles = useManagedAgentRuntimes(
-    isLocal ? activeOrganization?.id : null,
-  );
 
   // Keep the name we show on the identity step to one that is still free. This
   // is for honest copy only — the create itself re-walks the ladder against the
@@ -635,7 +629,7 @@ function SetupAssistant({
         // pointed at the installation provider, which on a local install is
         // usually unconfigured — so a user who deliberately chose Claude Code
         // got "check the agent runtime configuration" on their first message.
-        await adoptLocalAgentAsPodDefault(pod.id);
+        await adoptLocalAgentAsPodDefault(pod);
         saveOnboardingDraft({
           organizationId: organization.id,
           basePodId: pod.id,
@@ -671,18 +665,30 @@ function SetupAssistant({
    * did pick an agent, that agent becomes the default or they are told the pod
    * has no model — never left to discover it by sending a message.
    */
-  const adoptLocalAgentAsPodDefault = async (podId: string) => {
+  const adoptLocalAgentAsPodDefault = async (pod: Pod) => {
     if (!isLocal) return;
     // A configured provider already answers as the system default; the pod
     // needs nothing of its own.
     if ((await readLocalAiStatus()) === "ready") return;
 
-    const agents = (localRuntimeProfiles.data?.items ?? []).filter(
-      (profile) =>
-        profile.kind === RuntimeProfileKind.HARNESS
-        && profile.status === RuntimeProfileStatus.ACTIVE,
-    );
-    if (!agents.length) {
+    // Read the agents now, from the server, rather than from a cached listing.
+    // The agent this is here to adopt was created seconds ago, in the step
+    // before this one, so any cache old enough to still be warm is old enough
+    // to predate it — which is exactly how this silently adopted nothing and
+    // left pods failing on "No LLM model is configured on this server".
+    let agent: { id: string; name: string } | null = null;
+    try {
+      const profiles = await getLemmaClient().agentRuntime.listProfiles(
+        pod.organization_id,
+      );
+      agent = adoptableLocalAgent(profiles.items);
+    } catch {
+      // Unreachable server: the pod exists and setup continues. The workspace
+      // banner covers a pod with no model, and the composer's picker is the
+      // way out of it.
+      return;
+    }
+    if (!agent) {
       // Nothing was configured at all — the deferred path. The workspace
       // banner is already saying so, so this stays quiet rather than
       // repeating it at pod creation.
@@ -690,17 +696,14 @@ function SetupAssistant({
     }
 
     try {
-      // Whichever came first, deterministically. With several to choose from
-      // the composer's picker is where someone changes their mind; what must
-      // not happen is the pod opening with no default at all.
       await updatePodDefaultRuntime.mutateAsync({
-        podId,
-        runtime: { profile_id: agents[0].id },
+        podId: pod.id,
+        runtime: { profile_id: agent.id },
       });
     } catch (error) {
       // Loud, because the pod does not work without this.
       toast.error(
-        `${agents[0].name} could not be set as this pod's model: `
+        `${agent.name} could not be set as this pod's model: `
           + `${error instanceof Error ? error.message : "unknown error"}. `
           + "Pick a model in the composer before sending a message.",
       );

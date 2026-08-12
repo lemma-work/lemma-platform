@@ -219,6 +219,107 @@ class TestMetadata:
         assert "agent-message" not in str(ids)
 
 
+class TestToolNames:
+    """What a tool call is *called*, which is what every card and icon keys on.
+
+    The payloads here are the ones a real Claude Code run emits over ACP, taken
+    from a desktop install's event journal: no `name` field anywhere, the real
+    name under `_meta.claudeCode.toolName`, and a `kind` that is a category
+    rather than a name.
+    """
+
+    def _call(self, payload: dict) -> str:
+        n = _normalizer()
+        out = n.normalize(
+            _event(1, AgentHostEventType.TOOL_CALL_UPSERT, payload, object_id="c1")
+        )
+        return _messages(out)[0].data.tool_name
+
+    def test_a_lemma_mcp_tool_is_the_tool_the_pod_agent_calls(self) -> None:
+        """The whole point: one tool, one name. A local agent namespaces Lemma's
+        run-scoped MCP server, so the same tool the pod agent calls as
+        `pod_write_file` arrived as `mcp__lemma__lemma_pod_write_file` and
+        rendered as its own unrecognised tool, with no icon and no card."""
+        assert (
+            self._call(
+                {
+                    "_meta": {
+                        "claudeCode": {"toolName": "mcp__lemma__lemma_pod_write_file"}
+                    },
+                    "title": "mcp__lemma__lemma_pod_write_file",
+                    "toolCallId": "c1",
+                }
+            )
+            == "pod_write_file"
+        )
+
+    def test_every_namespacing_shape_lands_on_the_same_tool(self) -> None:
+        for reported in (
+            "mcp__lemma__lemma_exec_command",
+            "mcp__lemma_tools__lemma_exec_command",
+            "lemma__lemma_exec_command",
+            "lemma_exec_command",
+            "exec_command",
+        ):
+            assert self._call({"title": reported}) == "exec_command", reported
+
+    def test_a_third_party_mcp_tool_keeps_its_own_name(self) -> None:
+        assert (
+            self._call({"title": "mcp__github__create_issue"})
+            == "mcp__github__create_issue"
+        )
+
+    def test_the_real_name_beats_the_acp_category(self) -> None:
+        """`kind` is `fetch` for a web search, a page fetch and anything else an
+        adapter files under it, so reading it as the name showed every one of
+        them as "Fetch" — and made the approval card name a category too."""
+        assert (
+            self._call(
+                {
+                    "_meta": {"claudeCode": {"toolName": "WebSearch"}},
+                    "kind": "fetch",
+                    "title": "Web search",
+                }
+            )
+            == "WebSearch"
+        )
+
+    def test_a_category_is_still_better_than_a_human_title(self) -> None:
+        """Without `_meta` the title is whatever the adapter wrote for a human —
+        for Bash that is the command itself — so `kind` still comes first."""
+        assert self._call({"kind": "execute", "title": "npm test"}) == "exec_command"
+
+    def test_other_is_not_a_name(self) -> None:
+        """`other` is the kind adapters give everything they have no category
+        for, MCP tools included. Recorded as the name it collapsed them all."""
+        assert self._call({"kind": "other", "title": "lemma_read_table"}) == "read_table"
+
+    def test_the_approval_card_names_the_tool_it_interrupts(self) -> None:
+        n = _normalizer()
+        n.normalize(
+            _event(
+                1,
+                AgentHostEventType.TOOL_CALL_UPSERT,
+                {"_meta": {"claudeCode": {"toolName": "WebSearch"}}, "kind": "fetch"},
+                object_id="toolu_1",
+            )
+        )
+        out = n.normalize(
+            _event(
+                2,
+                AgentHostEventType.PERMISSION_REQUEST,
+                {
+                    "toolCall": {"toolCallId": "toolu_1", "kind": "fetch", "title": "x"},
+                    "options": [{"optionId": "allow", "kind": "allow_once"}],
+                },
+                object_id="toolu_1",
+            )
+        )
+
+        calls = [m for m in _messages(out) if m.data.tool_call_id is not None]
+        assert calls[0].data.tool_args["tool_name"] == "WebSearch"
+
+
 class TestToolCalls:
     def test_tool_call_and_return_are_emitted_once(self) -> None:
         n = _normalizer()
@@ -313,6 +414,40 @@ class TestToolCalls:
         )
         assert any(m for m in _messages(out))
         assert out[-1].type is AgentEventType.ERROR
+
+    def test_an_unanswered_permission_is_closed_at_terminal(self) -> None:
+        """A card whose run is gone must stop offering buttons.
+
+        The host is no longer holding the request — its own timeout denied it
+        half an hour in — so the only thing left to press was a button that
+        lands on a dead run. One user pressed "Always allow" on a card four
+        hours after the run behind it had failed, and nothing happened.
+        """
+        n = _normalizer()
+        n.normalize(
+            _event(
+                1,
+                AgentHostEventType.PERMISSION_REQUEST,
+                {
+                    "toolCall": {"toolCallId": "perm-1", "title": "Web search"},
+                    "options": [{"optionId": "allow", "kind": "allow_once"}],
+                },
+                object_id="perm-1",
+            )
+        )
+
+        out = n.normalize(_event(2, AgentHostEventType.TERMINAL, {"state": "FAILED"}))
+
+        returns = [
+            message
+            for message in _messages(out)
+            if message.data.tool_call_id == "agent-host-permission:perm-1"
+        ]
+        assert [message.data.tool_name for message in returns] == ["request_approval"]
+        assert returns[0].data.tool_result["success"] is False
+        # What every renderer already keys on to draw an unanswered interaction
+        # as spent rather than live.
+        assert returns[0].data.tool_result["interaction_fallback"] is True
 
 
 class TestTerminalMapping:

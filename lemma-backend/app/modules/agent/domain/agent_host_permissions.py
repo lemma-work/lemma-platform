@@ -39,7 +39,9 @@ _REJECT_KINDS = {"rejectonce", "rejectalways"}
 
 def _normalized_kind(value: object) -> str:
     """Fold ``allow_once`` / ``allowOnce`` / ``ALLOW_ONCE`` to one spelling."""
-    return "".join(character for character in str(value or "").lower() if character.isalnum())
+    return "".join(
+        character for character in str(value or "").lower() if character.isalnum()
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -101,6 +103,7 @@ def permission_approval_tool_args(
     payload: JsonObject,
     *,
     request_id: str,
+    tool_name: str | None = None,
 ) -> JsonObject:
     """Build ``request_approval`` arguments from an ACP permission payload.
 
@@ -108,11 +111,17 @@ def permission_approval_tool_args(
     (``title`` / ``reason`` / ``tool_name``) so every renderer — web cards and
     the surface approval plan alike — needs no Agent Host special case. There
     is no ``args`` key: nothing here is executed by Lemma.
+
+    ``tool_name`` is the name the caller already resolved for the tool call this
+    request belongs to, so the card and the call it interrupts say the same
+    word. Without one, the payload's own ``kind`` is the fallback — a category
+    ("fetch", "execute") rather than a name, which is why the caller resolving
+    it properly is preferred.
     """
     tool_call = payload.get("toolCall")
     tool_call = tool_call if isinstance(tool_call, dict) else {}
     title = _first_string(tool_call, "title") or "The local agent needs permission"
-    tool_name = _first_string(tool_call, "kind", "title") or "native tool"
+    tool_name = tool_name or _first_string(tool_call, "kind", "title") or "native tool"
     reason = _first_string(payload, "message", "reason")
     return {
         "title": title,
@@ -139,6 +148,7 @@ def permission_approval_events(
     sequence: int,
     payload: JsonObject,
     metadata: JsonObject,
+    tool_name: str | None = None,
 ) -> list[AgentEvent]:
     """The events one parked ACP permission request becomes.
 
@@ -155,7 +165,11 @@ def permission_approval_events(
             data=MessageDraft.of_tool_call(
                 tool_name="request_approval",
                 tool_call_id=tool_call_id,
-                tool_args=permission_approval_tool_args(payload, request_id=request_id),
+                tool_args=permission_approval_tool_args(
+                    payload,
+                    request_id=request_id,
+                    tool_name=tool_name,
+                ),
                 metadata=metadata,
             ),
             agent_run_id=agent_run_id,

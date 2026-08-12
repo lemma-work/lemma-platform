@@ -74,6 +74,16 @@ describe("normalizeAgentToolName", () => {
     expect(normalizeAgentToolName("mcp__github__create_issue")).toBe("mcp__github__create_issue");
     expect(normalizeAgentToolName("commandExecution")).toBe("commandExecution");
   });
+
+  it("reads the Agent Host's shorter server name as the same server", () => {
+    // A local agent is handed the run-scoped server as `lemma`, not
+    // `lemma_tools`, so its calls arrive namespaced that way and have to land
+    // on the same tool as the pod agent's — same card, same icon, same name.
+    expect(normalizeAgentToolName("mcp__lemma__lemma_pod_write_file")).toBe("pod_write_file");
+    expect(normalizeAgentToolName("mcp.lemma.lemma_display_resource")).toBe("display_resource");
+    expect(normalizeAgentToolName("lemma__lemma_ask_user")).toBe("ask_user");
+    expect(normalizeAgentToolName("lemma/lemma_exec_command")).toBe("exec_command");
+  });
 });
 
 describe("parseAssistantStreamEvent completed", () => {

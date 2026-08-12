@@ -9,6 +9,13 @@ describe('normalizeToolNameForDisplay', () => {
         expect(normalizeToolNameForDisplay('lemma_tools_lemma_display_resource')).toBe('display_resource');
         expect(normalizeToolNameForDisplay('commandExecution')).toBe('command_execution');
     });
+
+    it('renders an Agent Host run of a Lemma tool as that tool', () => {
+        // Namespaced under the Agent Host's server name, which is how every
+        // Lemma tool call from a local agent arrives.
+        expect(normalizeToolNameForDisplay('mcp__lemma__lemma_exec_command')).toBe('exec_command');
+        expect(normalizeToolNameForDisplay('mcp__lemma__lemma_pod_write_file')).toBe('pod_write_file');
+    });
 });
 
 describe('toolIconKind', () => {
@@ -19,5 +26,6 @@ describe('toolIconKind', () => {
         expect(toolIconKind('pod_write_record')).toBe('data');
         expect(toolIconKind('spawn_subagent')).toBe('agent');
         expect(toolIconKind('unknown_custom_tool')).toBe('tool');
+        expect(toolIconKind('mcp__lemma__lemma_exec_command')).toBe('terminal');
     });
 });
