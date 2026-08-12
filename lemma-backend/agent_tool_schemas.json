@@ -3394,11 +3394,11 @@
     "input_schema": {
       "properties": {
         "urls": {
-          "description": "Pages to capture, in one call. Batching is the point: research usually means reading ten sources, not one.",
+          "description": "Pages to capture, in one call \u2014 up to 10. Batching is the point: research usually means reading several sources, not one. Static pages are fetched in parallel and are quick; pages that need the full browser render one at a time, so a call is capped at a few minutes and reports anything it did not reach. If some come back 'not attempted', ask for those again rather than repeating the whole list.",
           "items": {
             "type": "string"
           },
-          "maxItems": 20,
+          "maxItems": 10,
           "minItems": 1,
           "type": "array"
         },

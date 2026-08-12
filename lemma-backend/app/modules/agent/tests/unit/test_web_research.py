@@ -526,16 +526,16 @@ class TestWebFetch:
         assert result.pages[0].success is False, result.pages[0]
 
     @pytest.mark.asyncio
-    async def test_only_the_formats_that_landed_are_reported(
-        self, monkeypatch
-    ) -> None:
+    async def test_only_the_formats_that_landed_are_reported(self, monkeypatch) -> None:
         """A screenshot that failed must not be listed beside the markdown."""
         session = _FakeSession()
         _patch_session(monkeypatch, session)
 
         result = await web_fetch_module.web_fetch_internal(
             SimpleNamespace(),
-            WebFetchRequest(urls=["https://example.com/a"], formats=["markdown", "pdf"]),
+            WebFetchRequest(
+                urls=["https://example.com/a"], formats=["markdown", "pdf"]
+            ),
         )
         page = result.pages[0]
         assert page.success and set(page.files) == {"markdown", "pdf"}
@@ -545,6 +545,150 @@ class TestWebFetch:
         _patch_session(monkeypatch, empty)
         result = await web_fetch_module.web_fetch_internal(
             SimpleNamespace(),
-            WebFetchRequest(urls=["https://example.com/a"], formats=["markdown", "pdf"]),
+            WebFetchRequest(
+                urls=["https://example.com/a"], formats=["markdown", "pdf"]
+            ),
         )
         assert result.pages[0].files == {}
+
+
+class TestTheToolAlwaysReturns:
+    """A tool that blocks takes its whole agent run with it.
+
+    Nothing in the harness imposes a per-tool timeout, and the streaq job
+    ceiling that eventually fires records the job as *succeeded* — so a stuck
+    `web_fetch` presents to the user as a conversation that simply stopped.
+    That is what these pin: the call is bounded, and being cut short still
+    returns what it captured.
+    """
+
+    @pytest.mark.asyncio
+    async def test_the_batch_returns_when_it_runs_out_of_budget(
+        self, monkeypatch
+    ) -> None:
+        session = _FakeSession()
+        _patch_session(monkeypatch, session)
+        monkeypatch.setattr(web_fetch_module, "_BATCH_BUDGET_SECONDS", 0.3)
+
+        from app.modules.agent.tools.web import page_extract
+
+        async def slow_fetch(url: str):
+            if "slow" in url:
+                await asyncio.sleep(30)  # never completes inside the budget
+            return page_extract.ExtractedPage(
+                url=url,
+                title="A Title",
+                markdown="Body text here. " * 40,
+                content_type="text/html",
+            )
+
+        monkeypatch.setattr(web_fetch_module, "fetch_and_clean", slow_fetch)
+
+        result = await asyncio.wait_for(
+            web_fetch_module.web_fetch_internal(
+                SimpleNamespace(),
+                WebFetchRequest(
+                    urls=["https://slow.example/a", "https://slow.example/b"]
+                ),
+            ),
+            timeout=10,
+        )
+
+        # Every requested URL is accounted for, none of them silently missing.
+        assert len(result.pages) == 2
+        assert all(not page.success for page in result.pages)
+        assert all(
+            "not attempted" in (page.error or "").lower() for page in result.pages
+        )
+
+    @pytest.mark.asyncio
+    async def test_pages_captured_before_the_deadline_are_still_returned(
+        self, monkeypatch
+    ) -> None:
+        """The whole point of a partial answer: three of four beats nothing."""
+        session = _FakeSession()
+        _patch_session(monkeypatch, session)
+        monkeypatch.setattr(web_fetch_module, "_BATCH_BUDGET_SECONDS", 0.5)
+        monkeypatch.setattr(web_fetch_module, "_MAX_CONCURRENT_FETCHES", 1)
+
+        from app.modules.agent.tools.web import page_extract
+
+        async def fetch(url: str):
+            if "slow" in url:
+                await asyncio.sleep(30)
+            return page_extract.ExtractedPage(
+                url=url,
+                title="A Title",
+                markdown="Body text here. " * 40,
+                content_type="text/html",
+            )
+
+        monkeypatch.setattr(web_fetch_module, "fetch_and_clean", fetch)
+
+        result = await asyncio.wait_for(
+            web_fetch_module.web_fetch_internal(
+                SimpleNamespace(),
+                WebFetchRequest(
+                    urls=["https://quick.example/a", "https://slow.example/b"]
+                ),
+            ),
+            timeout=10,
+        )
+
+        by_url = {page.url: page for page in result.pages}
+        assert by_url["https://quick.example/a"].success, result
+        assert not by_url["https://slow.example/b"].success
+        assert result.success, "a partial capture is still a useful result"
+        assert "time budget" in (result.message or "")
+
+    @pytest.mark.asyncio
+    async def test_browser_renders_are_capped_per_call(self, monkeypatch) -> None:
+        """Four JS-heavy URLs must not become four serialised Chrome renders.
+
+        This is the shape that hung in production: a research batch where most
+        of the list refuses a plain fetch.
+        """
+        session = _FakeSession()
+        _patch_session(monkeypatch, session)
+        _patch_extraction(monkeypatch, markdown=None)  # everything needs a browser
+
+        result = await web_fetch_module.web_fetch_internal(
+            SimpleNamespace(),
+            WebFetchRequest(urls=[f"https://spa{i}.example/app" for i in range(6)]),
+        )
+
+        rendered = sum("save-webpage" in cmd for cmd in session.commands)
+        assert rendered == web_fetch_module._MAX_BROWSER_RENDERS, session.commands
+        skipped = [p for p in result.pages if p.error and "Skipped" in p.error]
+        assert len(skipped) == 6 - web_fetch_module._MAX_BROWSER_RENDERS
+
+    @pytest.mark.asyncio
+    async def test_an_unreachable_workspace_reports_every_url(
+        self, monkeypatch
+    ) -> None:
+        """The failure must name the pages, not just the workspace."""
+
+        async def no_session(ctx, *, session_id, close_on_exit):
+            raise RuntimeError("sandbox is not available")
+
+        monkeypatch.setattr(web_fetch_module, "_get_workspace_session", no_session)
+        monkeypatch.setattr(
+            web_fetch_module,
+            "workspace_runtime_context",
+            lambda ctx: SimpleNamespace(default_shell_session_id="shell-1"),
+        )
+
+        result = await web_fetch_module.web_fetch_internal(
+            SimpleNamespace(),
+            WebFetchRequest(urls=["https://a.example/1", "https://b.example/2"]),
+        )
+
+        assert result.success is False
+        assert len(result.pages) == 2
+        assert result.error and "workspace" in result.error.lower()
+
+    def test_the_url_list_is_capped(self) -> None:
+        """Ten is already several minutes of browser work in the worst case."""
+        WebFetchRequest(urls=[f"https://e{i}.example/a" for i in range(10)])
+        with pytest.raises(Exception):
+            WebFetchRequest(urls=[f"https://e{i}.example/a" for i in range(11)])

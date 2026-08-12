@@ -46,6 +46,13 @@ class OutputBuffer:
         self._next_sequence = 1
         self._truncated_before_sequence: int | None = None
         self._condition = asyncio.Condition()
+        # Latched, not signalled. `notify_all` only reaches waiters that are
+        # already waiting, and a fast command exits before its first poll
+        # arrives — so the wakeup went nowhere and the poll then blocked for its
+        # whole window with nothing left to wake it. Every silent command
+        # (`mkdir`, `cd`, `touch`, most CLI calls that print nothing) cost a full
+        # 29 seconds, which is what made the shell tools feel unusable.
+        self._finished = False
 
     async def append(self, channel: OutputChannel, data: bytes) -> None:
         if not data:
@@ -65,7 +72,14 @@ class OutputBuffer:
         self, after_sequence: int, *, wait_seconds: float = 0
     ) -> OutputSnapshot:
         async with self._condition:
-            if wait_seconds > 0 and self._next_sequence <= after_sequence + 1:
+            should_wait = (
+                wait_seconds > 0
+                # A finished process will never produce anything else, so
+                # waiting on it can only ever burn the whole window.
+                and not self._finished
+                and self._next_sequence <= after_sequence + 1
+            )
+            if should_wait:
                 try:
                     await asyncio.wait_for(
                         self._condition.wait(), timeout=min(wait_seconds, 30)
@@ -80,8 +94,10 @@ class OutputBuffer:
                 truncated_before_sequence=self._truncated_before_sequence,
             )
 
-    async def notify_waiters(self) -> None:
+    async def mark_finished(self) -> None:
+        """The process has exited: wake current waiters and never block again."""
         async with self._condition:
+            self._finished = True
             self._condition.notify_all()
 
     @property
@@ -134,15 +150,40 @@ class ManagedProcess:
         if self.state != ProcessState.RUNNING:
             raise RuntimeError("process is not running")
         if self.master_fd is not None:
-            view = memoryview(data)
-            while view:
-                written = os.write(self.master_fd, view)
-                view = view[written:]
+            await self._write_to_pty(data)
             return
         if self.process.stdin is None:
             raise RuntimeError("process stdin is unavailable")
         self.process.stdin.write(data)
         await self.process.stdin.drain()
+
+    async def _write_to_pty(self, data: bytes) -> None:
+        """Write everything, waiting whenever the terminal buffer is full.
+
+        The master fd is non-blocking, and a PTY's kernel buffer is small — a
+        few kilobytes. Writing more than that raises `BlockingIOError` partway
+        through, which used to propagate: an agent pasting a file into
+        `cat > file`, or a block of code into a REPL, silently delivered only
+        the first few KB. Measured at ~11KB of a 24KB paste.
+
+        Waiting for writability is the whole fix: the child drains the terminal
+        as it reads, and the rest goes in behind it.
+        """
+        loop = asyncio.get_running_loop()
+        view = memoryview(data)
+        while view:
+            try:
+                view = view[os.write(self.master_fd, view) :]
+            except BlockingIOError:
+                # An Event rather than a Future: `add_writer` can fire more than
+                # once, and setting an Event twice is harmless where resolving a
+                # Future twice raises.
+                writable = asyncio.Event()
+                loop.add_writer(self.master_fd, writable.set)
+                try:
+                    await writable.wait()
+                finally:
+                    loop.remove_writer(self.master_fd)
 
     def resize(self, cols: int, rows: int) -> None:
         if self.master_fd is None:
@@ -214,7 +255,7 @@ class ManagedProcess:
             else ProcessState.FAILED
         )
         self._done.set()
-        await self.output.notify_waiters()
+        await self.output.mark_finished()
 
     async def _wait_for_direct_exit(self) -> int:
         # asyncio.Process.wait() does not complete until inherited stdout/stderr

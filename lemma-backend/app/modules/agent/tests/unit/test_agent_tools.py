@@ -810,6 +810,14 @@ def test_workspace_agent_prompt_states_working_directory():
     assert "pip install" in prompt  # on-demand package guidance
     # The non-root sandbox can't write the system env, so steer away from uv --system.
     assert "uv pip install --system" not in prompt
+    # pnpm is the default JS installer: its store is on the workspace volume, so
+    # it can hard-link rather than copy and survives into the next conversation.
+    # npm still has to be mentioned — plenty of projects and tools require it.
+    assert "pnpm" in prompt
+    assert "npm" in prompt
+    # `uv` is right for a project with its own dependencies, and wrong for the
+    # shared interpreter. The prompt has to say which is which.
+    assert "uv venv" in prompt
 
 
 def test_project_agent_prompt_describes_the_checkout_not_the_scratchpad():

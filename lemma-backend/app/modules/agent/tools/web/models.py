@@ -13,10 +13,15 @@ class WebFetchRequest(BaseModel):
     urls: list[str] = Field(
         ...,
         min_length=1,
-        max_length=20,
+        max_length=10,
         description=(
-            "Pages to capture, in one call. Batching is the point: research "
-            "usually means reading ten sources, not one."
+            "Pages to capture, in one call — up to 10. Batching is the point: "
+            "research usually means reading several sources, not one. Static "
+            "pages are fetched in parallel and are quick; pages that need the "
+            "full browser render one at a time, so a call is capped at a few "
+            "minutes and reports anything it did not reach. If some come back "
+            "'not attempted', ask for those again rather than repeating the "
+            "whole list."
         ),
     )
     formats: list[WebFetchFormat] = Field(
