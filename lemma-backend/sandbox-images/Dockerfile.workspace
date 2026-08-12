@@ -94,7 +94,6 @@ FROM ${PYTHON_IMAGE}
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_PREFIX=/workspace/.python \
-    PYTHONPATH=/app:/workspace/.python/lib/python3.14/site-packages:/opt/lemma-python/lib/python3.14/site-packages \
     HOME=/home/appuser \
     DISPLAY=:99 \
     XDG_RUNTIME_DIR=/tmp/lemma-browser/runtime \
@@ -167,6 +166,18 @@ COPY --from=python-runtime /opt/lemma-python /opt/lemma-python
 COPY --from=uv-runtime /uv /usr/local/bin/uv
 COPY --from=uv-runtime /uvx /usr/local/bin/uvx
 COPY --from=gh-runtime /usr/local/bin/gh /usr/local/bin/gh
+# Where `pip install` puts things (PIP_PREFIX), made importable by the Lemma
+# interpreter — via a .pth rather than PYTHONPATH, which is the whole point.
+# PYTHONPATH applies to *every* interpreter, so it also landed at the front of
+# every virtualenv's sys.path: a project that pinned `numpy==1.26` in a uv venv
+# silently imported the shared 2.5 instead, because the shared site-packages
+# came first. A .pth file is read only by the interpreter that owns the
+# site-packages holding it, so the shared environment stays available to
+# `execute_python` and invisible to a venv. Missing directories are skipped, so
+# this is safe before /workspace/.python exists.
+RUN printf '/app\n/workspace/.python/lib/python3.14/site-packages\n' \
+      > /opt/lemma-python/lib/python3.14/site-packages/lemma-workspace-paths.pth
+
 COPY lemma-backend/sandbox-images/scripts/lemma-node-tool /usr/local/lib/lemma-node-tool
 RUN ln -sf "$(command -v chromium)" /usr/local/bin/workspace-chrome \
     && ln -sf ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
