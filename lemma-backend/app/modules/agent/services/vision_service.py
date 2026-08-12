@@ -93,10 +93,10 @@ async def _resolve_vision_model(*, organization_id: UUID | None, user_id: UUID):
             "No vision model is configured (set VISION_MODEL)."
         )
 
-    from app.modules.agent.domain.runtime_profiles import (
-        AgentRuntimeConfig,
-        RuntimeModelCapability,
-    )
+    # AgentRuntimeConfig lives in the shared runtime module (re-exported by
+    # value_objects); only RuntimeModelCapability is defined in runtime_profiles.
+    from app.core.domain.runtime import AgentRuntimeConfig
+    from app.modules.agent.domain.runtime_profiles import RuntimeModelCapability
     from app.modules.agent.services.runtime_model_factory import (
         pydantic_ai_model_from_runtime_profile,
     )
