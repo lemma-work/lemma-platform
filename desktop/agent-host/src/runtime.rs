@@ -725,8 +725,23 @@ impl TargetWorker {
                 prune_stale_scratch(parent);
             }
             std::fs::create_dir_all(&scratch)?;
+            // The name Lemma published for this run's server, not a name of our
+            // own. An agent namespaces every MCP tool with the server it came
+            // from, so registering a different name here made the same tool
+            // arrive as `mcp__lemma__lemma_exec_command` on this path and
+            // `mcp__lemma_tools__lemma_exec_command` on every other one — one
+            // tool with two names, which is exactly what the readers of those
+            // names cannot tell apart.
+            let scoped_server_name = spec
+                .mcp
+                .get("server_name")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .unwrap_or(crate::acp::SCOPED_MCP_SERVER)
+                .to_owned();
             let mcp_server = McpServer::Stdio(
-                McpServerStdio::new(crate::acp::SCOPED_MCP_SERVER, mcp_bridge_executable)
+                McpServerStdio::new(scoped_server_name, mcp_bridge_executable)
                     .args(vec![
                         "--data-dir".to_owned(),
                         paths.root.to_string_lossy().into_owned(),
@@ -2668,7 +2683,7 @@ mod target_worker_tests {
         let handle = tokio::spawn(async move {
             let _ = tokio::time::timeout(
                 Duration::from_millis(20),
-                gate.wait(run_id, "call-1".to_owned(), Duration::from_secs(600)),
+                gate.wait(run_id, "call-1".to_owned(), Duration::from_secs(600), None),
             )
             .await;
             Ok(())
@@ -2767,7 +2782,7 @@ mod target_worker_tests {
         // which is long enough to register a request nobody will answer.
         let gate = harness.worker.permissions.clone();
         let late = tokio::spawn(async move {
-            gate.wait(run_id, "late".to_owned(), Duration::from_secs(600))
+            gate.wait(run_id, "late".to_owned(), Duration::from_secs(600), None)
                 .await
         });
         while harness.worker.permissions.parked() == 0 {

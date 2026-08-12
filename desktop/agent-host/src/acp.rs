@@ -20,7 +20,7 @@ use serde_json::{Map, Value};
 use tokio::sync::watch;
 
 use crate::adapters::ResolvedAdapter;
-use crate::permissions::{PermissionDecision, PermissionGate};
+use crate::permissions::{AlwaysAllowOffer, AlwaysAllowScope, PermissionDecision, PermissionGate};
 use crate::protocol::{ConfigOption, EventType, JsonMap, RunSpec, RunState};
 
 #[derive(Clone)]
@@ -202,6 +202,22 @@ impl AgentDriver for AcpDriver {
                             });
                         return responder.respond(RequestPermissionResponse::new(outcome));
                     }
+                    // An "always" the user already gave for exactly this scope
+                    // is answered here, without asking again. The agent's own
+                    // rule lives in an adapter process that is new every run,
+                    // and is set only once the answer arrives — so without this
+                    // the same grant is asked for on the next message, and once
+                    // more for every call of a parallel batch.
+                    let always = always_allow_offer(&request);
+                    if let Some(offer) = always.as_ref().filter(|offer| {
+                        permission_gate.is_granted(&offer.scope)
+                    }) {
+                        return responder.respond(RequestPermissionResponse::new(
+                            RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(
+                                offer.option_id.clone(),
+                            )),
+                        ));
+                    }
                     let payload = permission_payload(&request);
                     // Without a toolCallId every request in a session would
                     // collapse onto one gate key, so concurrent prompts would
@@ -224,7 +240,7 @@ impl AgentDriver for AcpDriver {
                     // Hold the agent's request open until Lemma answers. The
                     // gate denies on timeout, so this cannot hang forever.
                     let decision = permission_gate
-                        .wait(permission_run_id, request_id, permission_timeout)
+                        .wait(permission_run_id, request_id, permission_timeout, always)
                         .await;
                     let outcome = match decision {
                         PermissionDecision::Allow { option_id } => request
@@ -679,11 +695,13 @@ fn permission_payload(request: &RequestPermissionRequest) -> JsonMap {
         .collect()
 }
 
-/// The name Lemma's run-scoped MCP server is registered under.
+/// The stem every name of Lemma's run-scoped MCP server starts with.
 ///
-/// Kept next to the matcher because that is the only thing tying the two
-/// together: `runtime.rs` registers `McpServerStdio::new(SCOPED_MCP_SERVER, …)`
-/// and this is how a permission request is recognised as belonging to it.
+/// The server is registered under the name Lemma publishes for the run —
+/// `lemma_tools` — and this is the stem shared by that name and the one older
+/// hosts registered (`lemma`), which is what the matcher below anchors on. It
+/// is also the fallback `runtime.rs` registers under when a run carries no
+/// server name of its own.
 pub(crate) const SCOPED_MCP_SERVER: &str = "lemma";
 
 /// Is this the agent asking permission to use one of *our* tools?
@@ -747,15 +765,18 @@ fn names_known_scoped_tool(value: &Value, scoped_tools: &HashSet<String>) -> boo
     }
     permission_tool_candidates(value).any(|name| {
         let name = name.trim().to_ascii_lowercase();
-        let bare = name
-            .rsplit_once("__")
-            .map_or(name.as_str(), |(_, tail)| tail)
-            .trim();
-        scoped_tools.contains(name.as_str()) || scoped_tools.contains(bare)
+        let bare = scoped_tool_name(&name).map(str::to_ascii_lowercase);
+        scoped_tools.contains(name.as_str())
+            || bare.is_some_and(|bare| scoped_tools.contains(bare.as_str()))
     })
 }
 
 /// Every field of a permission request that might carry the tool's identity.
+///
+/// `_meta` is included because it is where an adapter puts the real name when
+/// the title is written for a human: Claude Code reports
+/// `_meta.claudeCode.toolName`, and this reads any vendor's key rather than
+/// that one convention.
 fn permission_tool_candidates(value: &Value) -> impl Iterator<Item = &str> {
     [
         value.pointer("/toolCall/title").and_then(Value::as_str),
@@ -768,22 +789,85 @@ fn permission_tool_candidates(value: &Value) -> impl Iterator<Item = &str> {
     ]
     .into_iter()
     .flatten()
+    .chain(meta_tool_names(value.pointer("/toolCall/_meta")))
+    .chain(meta_tool_names(value.get("_meta")))
 }
+
+/// `_meta.<vendor>.toolName`, for whatever vendor keys the payload carries.
+fn meta_tool_names(meta: Option<&Value>) -> impl Iterator<Item = &str> {
+    meta.and_then(Value::as_object)
+        .into_iter()
+        .flat_map(|meta| meta.values())
+        .filter_map(|vendor| vendor.get("toolName").and_then(Value::as_str))
+}
+
+/// The always-allow this request offers, named by the scope it would grant.
+///
+/// The agent writes that name from the permission rules it would install — the
+/// difference between "Always Allow all Bash" and "Always Allow
+/// WebFetch(domain:github.com)" is the whole grant — so it is both what the
+/// user is shown and what a later request has to match to be covered by it.
+fn always_allow_offer(request: &RequestPermissionRequest) -> Option<AlwaysAllowOffer> {
+    request
+        .options
+        .iter()
+        .find(|option| option.kind == PermissionOptionKind::AllowAlways)
+        .map(|option| AlwaysAllowOffer {
+            scope: AlwaysAllowScope {
+                session_id: request.session_id.to_string(),
+                label: option.name.trim().to_owned(),
+            },
+            option_id: option.option_id.to_string(),
+        })
+}
+
+/// The names Lemma's run-scoped MCP server is known by.
+///
+/// `lemma_tools` is the one every run publishes and the one the server is
+/// registered under. The others are names Lemma itself shipped earlier — a
+/// hyphenated config, and the bare `lemma` this host used before it registered
+/// the run's published name — and are still in stored conversations. Longest
+/// first, so `lemma_tools` is read as itself and not as `lemma` plus `_tools`.
+const SCOPED_MCP_SERVER_NAMES: [&str; 3] = ["lemma_tools", "lemma-tools", SCOPED_MCP_SERVER];
+
+/// How an agent marks a name as coming from an MCP server at all.
+const MCP_MARKERS: [&str; 3] = ["mcp__", "mcp.", "mcp/"];
+
+/// What may join a server name to a tool name. No `-`: `lemma-tools` is a
+/// server name in its own right above, and treating `-` as a separator would
+/// read someone else's `lemma-corp` server as ours.
+const NAMESPACE_SEPARATORS: [char; 4] = ['_', '.', '/', ':'];
 
 /// Does the tool being requested belong to Lemma's own MCP server?
 ///
-/// Agents namespace MCP tools differently — `mcp__lemma__read_table`,
-/// `lemma__read_table`, `lemma.read_table`, `lemma/read_table` — so this looks
-/// for the server name followed by a separator rather than assuming one
-/// convention. Anchored at the start so a user's tool that merely mentions
-/// "lemma" somewhere does not get silently auto-approved.
+/// Agents namespace MCP tools differently — `mcp__lemma_tools__read_table`,
+/// `lemma_tools.read_table`, `lemma/read_table` — so this looks for one of our
+/// server names followed by a separator rather than assuming a convention.
+/// Anchored at the start, and matched whole: a user's own tool that merely
+/// mentions Lemma, or their own server called `lemma-corp`, is theirs to
+/// approve.
 fn names_scoped_mcp_tool(value: &Value) -> bool {
-    permission_tool_candidates(value).any(|name| {
-        let name = name.trim().to_ascii_lowercase();
-        // `mcp__` is the common prefix agents add before the server name.
-        let name = name.strip_prefix("mcp__").unwrap_or(&name);
-        name.strip_prefix(SCOPED_MCP_SERVER)
-            .is_some_and(|rest| rest.starts_with(['_', '.', '/', ':', '-']))
+    permission_tool_candidates(value).any(|name| scoped_tool_name(name).is_some())
+}
+
+/// The tool's own name with our namespace removed, or `None` if the name is
+/// not one of ours.
+fn scoped_tool_name(name: &str) -> Option<&str> {
+    let name = name.trim();
+    // `to_ascii_lowercase` is length-preserving, so offsets taken from the
+    // lowercased copy index the original correctly.
+    let lowered = name.to_ascii_lowercase();
+    let without_marker = MCP_MARKERS
+        .iter()
+        .find(|marker| lowered.starts_with(**marker))
+        .map_or(name, |marker| &name[marker.len()..]);
+    let lowered = without_marker.to_ascii_lowercase();
+    SCOPED_MCP_SERVER_NAMES.iter().find_map(|server| {
+        let rest = lowered.strip_prefix(server)?;
+        rest.starts_with(NAMESPACE_SEPARATORS).then(|| {
+            without_marker[without_marker.len() - rest.len()..]
+                .trim_start_matches(NAMESPACE_SEPARATORS)
+        })
     })
 }
 
@@ -1287,7 +1371,14 @@ mod scoped_mcp_approval_tests {
         // An agent that does not set it — OpenCode — made every Lemma tool
         // call raise an approval card the user had to click through.
         for name in [
+            // The name every run publishes, and the one the server is
+            // registered under.
+            "mcp__lemma_tools__lemma_read_table",
+            "mcp.lemma_tools.lemma_read_table",
+            "lemma_tools.read_table",
+            // Names older builds produced, still in stored conversations.
             "mcp__lemma__read_table",
+            "mcp__lemma-tools__read_table",
             "lemma__read_table",
             "lemma.read_table",
             "lemma/read_table",
@@ -1301,6 +1392,18 @@ mod scoped_mcp_approval_tests {
     }
 
     #[test]
+    fn the_real_name_is_read_from_meta_when_the_title_is_for_a_human() {
+        // Agents write the title for a person and put the tool's actual name in
+        // `_meta`; a Lemma tool called by a subagent arrives exactly like this.
+        assert!(names_scoped_mcp_tool(&json!({
+            "toolCall": {
+                "title": "Reading the customers table",
+                "_meta": {"claudeCode": {"toolName": "mcp__lemma_tools__lemma_read_table"}}
+            }
+        })));
+    }
+
+    #[test]
     fn someone_elses_tool_is_never_auto_approved() {
         // Anchored at the start on purpose: auto-approving anything that
         // merely mentions Lemma would hand away the user's decision.
@@ -1310,6 +1413,10 @@ mod scoped_mcp_approval_tests {
             "bash",
             "write_file",
             "my-lemma-helper",
+            // Someone else's server whose name merely starts with ours. The
+            // server name is matched whole, so this is theirs to approve.
+            "mcp__lemma-corp__delete_everything",
+            "lemma-corp.delete_everything",
         ] {
             assert!(
                 !names_scoped_mcp_tool(&json!({"toolCall": {"title": name}})),

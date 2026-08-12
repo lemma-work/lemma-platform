@@ -391,7 +391,11 @@ async fn an_agent_run_discovers_and_calls_a_lemma_tool_through_the_host() {
     );
     let mcp_servers = served[0];
     assert_eq!(mcp_servers.len(), 1);
-    assert_eq!(mcp_servers[0]["name"], "lemma");
+    // The name Lemma published for this run, not one the host chose. An agent
+    // namespaces every MCP tool with the server it came from, so a name of our
+    // own here would make the same tool arrive under two names depending on
+    // which path ran it — and nothing reading those names could tell.
+    assert_eq!(mcp_servers[0]["name"], "lemma_tools");
     let args = mcp_servers[0]["args"]
         .as_array()
         .unwrap()
