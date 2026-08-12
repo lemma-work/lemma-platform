@@ -97,9 +97,9 @@ export default function LandingPage() {
               The runtime for agent-built software
             </p>
             <h1 className="lp-hero-headline" id="hero-title">
-              The software you need
+              Where software
               <span className="lp-hl-line">
-                <span className="lp-hl-accent">doesn&apos;t exist yet.</span>
+                <span className="lp-hl-accent">builds itself.</span>
               </span>
             </h1>
             <p className="lp-subhead">

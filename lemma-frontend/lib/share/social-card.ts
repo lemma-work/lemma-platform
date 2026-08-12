@@ -77,7 +77,7 @@ const VARIANT_COPY: Record<
 > = {
     site: {
         eyebrow: 'THE RUNTIME FOR AGENT-BUILT SOFTWARE',
-        title: "The software you need doesn't exist yet.",
+        title: "Where software builds itself.",
         detail: 'Your coding agent can write it. Lemma makes it something your team can actually use.',
         label: 'lemma.work',
         accent: '#5f61d8',

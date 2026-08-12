@@ -11,7 +11,7 @@ import {
  * The shared preview is the first thing anyone sees — tab title, Slack unfurl,
  * social card. It carries the same thesis as the hero, not a second one.
  */
-const SITE_TITLE = "The software you need doesn't exist yet.";
+const SITE_TITLE = "Where software builds itself.";
 const SITE_DESCRIPTION =
     'Your coding agent can write it. Lemma turns it into something your team can actually use — and run anywhere.';
 
