@@ -106,9 +106,39 @@ class Settings(BaseSettings):
     worker_concurrency: int = Field(
         default=20,
         description=(
-            "Maximum concurrent streaq tasks per worker process. Should not "
-            "exceed db_pool_size + db_max_overflow (default 20), since each "
-            "task that opens a DB session consumes one pooled connection."
+            "Maximum concurrent streaq tasks on the INTERACTIVE lane per worker "
+            "process. Should not exceed db_pool_size + db_max_overflow "
+            "(default 20), since each task that opens a DB session consumes one "
+            "pooled connection. The bulk lane is budgeted separately via "
+            "``worker_bulk_concurrency``; when a process runs both lanes, their "
+            "sum is what the connection pool must absorb."
+        ),
+    )
+    worker_lanes: str = Field(
+        default="",
+        description=(
+            "Comma-separated streaq lanes this worker process consumes: "
+            "'interactive', 'bulk', or both. Empty (the default) runs every "
+            "lane, which keeps single-process deployments — the local stack, "
+            "desktop, and today's cloud worker — behaving exactly as before. "
+            "Split deployments set WORKER_LANES=interactive on the latency-"
+            "sensitive worker and WORKER_LANES=bulk on the ingestion worker so "
+            "a large upload can never occupy slots that agent runs need. The "
+            "interactive lane owns process-wide startup and must always be "
+            "present in at least one process. Env: ``WORKER_LANES``."
+        ),
+    )
+    worker_bulk_concurrency: int = Field(
+        default=2,
+        description=(
+            "Maximum concurrent tasks on the BULK lane (document extraction, "
+            "pod import/export) per worker process. This is the real cap on "
+            "concurrent document extractions and therefore the primary lever on "
+            "worker peak RAM during ingestion: each extraction holds the source "
+            "document plus the extractor's response in memory. It replaces the "
+            "old in-task semaphore, which throttled extractions only after they "
+            "had already occupied a worker slot — so bursts blocked unrelated "
+            "work while waiting. Env: ``WORKER_BULK_CONCURRENCY``."
         ),
     )
     # --- Thread-offload pool (app.core.concurrency.offload) ---
@@ -1063,7 +1093,51 @@ class Settings(BaseSettings):
     )
     local_embedding_model: str = Field(
         default="BAAI/bge-base-en-v1.5",
-        description="FastEmbed model used for local CPU embeddings.",
+        description=(
+            "FastEmbed model used for local CPU embeddings. The default is the "
+            "quality choice (768-dim, MTEB retrieval 53.25). "
+            "'BAAI/bge-small-en-v1.5' measures ~3.4x faster on CPU (126 vs 432 "
+            "ms/chunk on 4 cores) at 384 dimensions and MTEB retrieval 51.68 — "
+            "worth it where ingestion throughput matters more than the last "
+            "point of recall. CHANGING THIS IS A RE-INDEX: the dimension is "
+            "baked into each pod's vector column, so "
+            "``embedding_dimension`` must change with it and existing chunks "
+            "must be re-embedded."
+        ),
+    )
+    local_embedding_batch_size: int = Field(
+        default=32,
+        description=(
+            "Texts per FastEmbed inference call. Larger amortizes per-call "
+            "overhead but raises peak memory. Env: "
+            "``LOCAL_EMBEDDING_BATCH_SIZE``."
+        ),
+    )
+    local_embedding_max_texts_per_call: int = Field(
+        default=256,
+        description=(
+            "Maximum texts embedded in one thread-offloaded slice. Documents "
+            "are embedded per-document, and a long paper can produce hundreds "
+            "of chunks (533 for a 95-page paper in the benchmark corpus); "
+            "embedding them all in one call holds every input and output vector "
+            "live at once and OOM-killed the ingestion worker. Slicing bounds "
+            "peak memory independently of document size. Env: "
+            "``LOCAL_EMBEDDING_MAX_TEXTS_PER_CALL``."
+        ),
+    )
+    local_embedding_threads: int = Field(
+        default=4,
+        description=(
+            "ONNX Runtime intra-op threads for the local embedder. Unset, ONNX "
+            "sizes its pool from the HOST's CPU count rather than the "
+            "container's cgroup limit and oversubscribes the cores it actually "
+            "has, which makes every inference slower. Set this to the worker's "
+            "CPU allocation. Measured on a 2-CPU container with bge-base: 604 "
+            "ms/chunk unset versus 264 ms/chunk pinned — a 2.3x speedup from "
+            "this one value. 0 leaves the decision to ONNX, which is correct "
+            "only when the process owns the whole machine. Env: "
+            "``LOCAL_EMBEDDING_THREADS``."
+        ),
     )
     local_embedding_cache_dir: str = Field(
         default="~/.cache/lemma/fastembed",

@@ -148,7 +148,7 @@ async def test_kreuzberg_upload_runs_outbox_worker_projection_search_and_dedup(
 
 
 @pytest.mark.asyncio
-async def test_kreuzberg_terminal_failures_are_durable_and_secret_safe(
+async def test_failure_kind_decides_terminal_vs_retry_and_never_leaks_secrets(
     pod_api: DatastoreApi,
     db_manager,
     document_worker,
@@ -166,13 +166,28 @@ async def test_kreuzberg_terminal_failures_are_durable_and_secret_safe(
         )
         await _dispatch_outbox(db_manager)
 
-        for item in (malformed, provider_error):
-            failed = await _wait_for_status(pod_api, item["path"], {"FAILED"})
-            assert failed["last_processing_error"].endswith(
-                "document processing failed"
-            )
-            assert "CANARY_DATASTORE_PROVIDER_SECRET" not in str(failed)
-            assert (await pod_api.list_children(item["path"]))["items"] == []
+        # A response we cannot make sense of is a DOCUMENT-level failure: the
+        # extractor answered, we just can't use the answer. It spends an attempt
+        # and goes terminal so a poison file can't loop forever.
+        failed = await _wait_for_status(pod_api, malformed["path"], {"FAILED"})
+        assert failed["last_processing_error"].endswith("document processing failed")
+        assert "CANARY_DATASTORE_PROVIDER_SECRET" not in str(failed)
+        assert (await pod_api.list_children(malformed["path"]))["items"] == []
+
+        # A 5xx is INFRASTRUCTURE unavailability — nothing was learned about the
+        # document. It must go back to PENDING with its attempt refunded, or an
+        # extractor outage would burn the 3-attempt budget and permanently fail
+        # perfectly good user documents.
+        released = await _wait_for_status(
+            pod_api, provider_error["path"], {"PENDING"}
+        )
+        assert released["processing_attempts"] == 0, (
+            "a 5xx from the extractor must not spend the file's retry budget"
+        )
+        assert released["status"] != "FAILED_PERMANENT"
+        # The upstream body carries a credential; it must never be persisted.
+        assert "CANARY_DATASTORE_PROVIDER_SECRET" not in str(released)
+        assert (await pod_api.list_children(provider_error["path"]))["items"] == []
 
 
 @pytest.mark.asyncio

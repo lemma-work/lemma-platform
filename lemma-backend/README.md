@@ -67,7 +67,7 @@ make logs               # tail backend logs
 - API: `http://localhost:8710`
 - API docs (Scalar): `http://localhost:8710/scalar`
 
-`make dev` runs Postgres/Redis/SuperTokens/Kreuzberg in Docker and the backend as **one** host process (`uvicorn standalone_app:app`) that combines the FastAPI app, the streaq event worker, and the scheduler — convenient for local dev. It also installs the local `lemma` CLI and registers it as the `local-dev` server:
+`make dev` runs Postgres/Redis/SuperTokens in Docker and the backend as **one** host process (`uvicorn standalone_app:app`) that combines the FastAPI app, the streaq event worker, and the scheduler — convenient for local dev. It also installs the local `lemma` CLI and registers it as the `local-dev` server:
 
 ```bash
 lemma servers select local-dev
@@ -79,7 +79,7 @@ lemma auth login
 Production runs the API and the worker as **separate** processes (and the scheduler as a third). To mirror that locally, start infra, then run each process yourself from `lemma-backend/`:
 
 ```bash
-docker compose up -d                  # infra: postgres, redis, supertokens, kreuzberg
+docker compose up -d                  # infra: postgres, redis, supertokens
 uv run alembic upgrade head           # apply migrations
 
 # API only
@@ -110,7 +110,8 @@ make test                       # unit + e2e
 
 ### e2e — mocked (default gate)
 
-Container-backed but with **no external services**: the agent LLM is an in-process pydantic-ai `FunctionModel` (scriptable per conversation), and workspace tools + functions hit an in-process **fake sandbox** — so **no model API key and no Docker workspace image** are needed. Postgres/Redis/SuperTokens/Kreuzberg are provided per worker by testcontainers.
+Container-backed but with **no external services**: the agent LLM is an in-process pydantic-ai `FunctionModel` (scriptable per conversation), and workspace tools + functions hit an in-process **fake sandbox** — so **no model API key and no Docker workspace image** are needed. Postgres/Redis/SuperTokens are provided per worker by testcontainers; the
+`indexing`-marked tests additionally share one document-extractor container.
 
 ```bash
 make test-e2e         # all mocked e2e (parallel via pytest-xdist)

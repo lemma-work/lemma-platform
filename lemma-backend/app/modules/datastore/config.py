@@ -75,6 +75,29 @@ class DatastoreSettings(BaseSettings):
         default=300,
         description="Debounce window for datastore file content updates before enqueueing document processing.",
     )
+    datastore_per_pod_max_inflight: int = Field(
+        default=4,
+        description=(
+            "Maximum files one pod may have queued or mid-flight (PENDING or "
+            "PROCESSING) before uploads stop being enqueued immediately. Beyond "
+            "this the row is simply left PENDING and the fair dispatcher picks "
+            "it up on its next tick, so a tenant bulk-uploading a thousand "
+            "documents cannot monopolise ingestion or push every other tenant "
+            "behind them. Nothing is dropped — the PENDING row is the durable "
+            "backlog. 0 disables the gate (immediate enqueue for everything, "
+            "the pre-fairness behaviour). Env: "
+            "``DATASTORE_PER_POD_MAX_INFLIGHT``."
+        ),
+    )
+    datastore_dispatch_global_batch: int = Field(
+        default=50,
+        description=(
+            "Maximum files the fair dispatcher enqueues per tick across all "
+            "pods. Bounds how much of the backlog is resident in Redis at once; "
+            "the rest stays PENDING in Postgres and is dispatched on later "
+            "ticks. Env: ``DATASTORE_DISPATCH_GLOBAL_BATCH``."
+        ),
+    )
     recovery_enqueue_batch_size: int = Field(
         default=10,
         description=(
@@ -108,13 +131,15 @@ class DatastoreSettings(BaseSettings):
         ),
     )
     document_processing_max_inflight_bytes: int = Field(
-        default=0,
+        default=536_870_912,  # 512 MB
         description=(
-            "Optional aggregate cap (bytes) on document content held in memory "
-            "across all concurrent extractions. Complements "
-            "document_processing_max_concurrency (a count) by bounding total bytes "
-            "so a few large files can't stack to an OOM. 0 disables the byte gate "
-            "(only the count semaphore applies). Env: "
+            "Aggregate cap (bytes) on document content held in memory across all "
+            "concurrent extractions. Complements the bulk lane's concurrency (a "
+            "count) by bounding total bytes, so a few large files cannot stack "
+            "into an OOM — which is not hypothetical: the ingestion worker was "
+            "OOM-killed at its 4GB limit during the 100-paper benchmark while "
+            "this defaulted to 0. Enabled by default now; 0 disables the byte "
+            "gate and leaves only the count. Env: "
             "``DOCUMENT_PROCESSING_MAX_INFLIGHT_BYTES``."
         ),
     )
@@ -158,6 +183,43 @@ class DatastoreSettings(BaseSettings):
             "production-quality digital PDFs; the switch exists for hermetic tests "
             "and emergency low-resource operation. Env: "
             "``DOCUMENT_PROCESSING_LAYOUT_ENABLED``."
+        ),
+    )
+
+    document_processing_layout_strategy: Literal["auto", "always"] = Field(
+        default="auto",
+        description=(
+            "Which pages the layout model runs on. 'auto' pre-screens each page "
+            "with cheap geometry signals and runs the model only where it can "
+            "help (multi-column, table-bearing, figure-heavy, rotated); 'always' "
+            "renders and infers every page. Layout inference dominates "
+            "extraction cost, so 'auto' is the single biggest CPU-per-document "
+            "lever. Honoured by Xberg 1.x; ignored by Kreuzberg v4, which has no "
+            "page-selection knob. Env: "
+            "``DOCUMENT_PROCESSING_LAYOUT_STRATEGY``."
+        ),
+    )
+    document_processing_table_model: Literal[
+        "tatr", "slanet_plus", "slanet_wired", "slanet_wireless", "slanet_auto", "disabled"
+    ] = Field(
+        default="tatr",
+        description=(
+            "Table-structure recognition model used inside layout-detected table "
+            "regions. 'tatr' (~30MB) is the default; 'slanet_plus' (~8MB) suits "
+            "memory-constrained deployments; the slanet_wired/wireless/auto "
+            "variants are far larger (365MB+). 'disabled' skips table structure "
+            "entirely. Env: ``DOCUMENT_PROCESSING_TABLE_MODEL``."
+        ),
+    )
+    document_processing_extractor_max_threads: int = Field(
+        default=4,
+        description=(
+            "Cap on the extractor's internal thread pool, sent as "
+            "concurrency.max_threads in the per-request config. Unset, the "
+            "extractor sizes its pool from the host CPU count and ignores the "
+            "container's CPU limit, so concurrent extractions oversubscribe the "
+            "box and each one gets slower. 0 leaves it to the extractor. Env: "
+            "``DOCUMENT_PROCESSING_EXTRACTOR_MAX_THREADS``."
         ),
     )
 

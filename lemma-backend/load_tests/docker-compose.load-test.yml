@@ -84,6 +84,11 @@ services:
       REDIS_URL: redis://redis:6379
       SUPERTOKENS_CORE_URL: http://supertokens:3567
       ENVIRONMENT: local
+      # The synthetic load-test identity uses a domain that neither exists in
+      # DNS nor is meant to receive mail, so both signup email gates are turned
+      # off for this throwaway stack only.
+      AUTH_EMAIL_DELIVERABILITY_CHECKS_ENABLED: "false"
+      AUTH_DISPOSABLE_EMAIL_DOMAINS_ENABLED: "false"
       LOCAL_OBJECT_STORAGE_ROOT: /home/appuser/.local/object-storage
       LOCAL_FILE_STORAGE_ROOT: /home/appuser/.local/files
       REDIS_STREAM_POLLING_INTERVAL_MS: 200
@@ -148,13 +153,18 @@ services:
   worker:
     image: ${LEMMA_IMAGE:-lemma-backend:load-test}
     container_name: lemma-load-worker
-    command: ["streaq", "run", "app.events:streaq_worker"]
+    command: ["python", "-m", "app.worker"]
     environment:
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/lemma
       DATASTORE_DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/lemma_datastore
       REDIS_URL: redis://redis:6379
       SUPERTOKENS_CORE_URL: http://supertokens:3567
       ENVIRONMENT: local
+      # The synthetic load-test identity uses a domain that neither exists in
+      # DNS nor is meant to receive mail, so both signup email gates are turned
+      # off for this throwaway stack only.
+      AUTH_EMAIL_DELIVERABILITY_CHECKS_ENABLED: "false"
+      AUTH_DISPOSABLE_EMAIL_DOMAINS_ENABLED: "false"
       LOCAL_OBJECT_STORAGE_ROOT: /home/appuser/.local/object-storage
       LOCAL_FILE_STORAGE_ROOT: /home/appuser/.local/files
       REDIS_STREAM_POLLING_INTERVAL_MS: 200

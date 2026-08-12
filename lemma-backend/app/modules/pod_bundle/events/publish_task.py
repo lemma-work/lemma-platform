@@ -15,6 +15,7 @@ from app.core.authorization.service import AuthorizationDataService
 from app.core.concurrency.offload import run_blocking
 from app.core.domain.errors import DomainError
 from app.core.infrastructure.jobs.streaq_runtime import (
+    Lane,
     AppWorkerContext,
     streaq_task,
     streaq_worker,
@@ -306,7 +307,7 @@ async def _publish_files(
     )
 
 
-@streaq_task(name="publish_pod_github")
+@streaq_task(name="publish_pod_github", lane=Lane.BULK)
 async def publish_pod_github(context: dict[str, str | None]) -> None:
     worker_ctx: AppWorkerContext = streaq_worker.context
     publish_id = UUID(str(context["publish_id"]))

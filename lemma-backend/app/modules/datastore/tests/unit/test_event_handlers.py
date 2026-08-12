@@ -8,6 +8,12 @@ from uuid import uuid4
 
 import pytest
 
+from app.core.infrastructure.jobs.streaq_runtime import (
+    TASK_LANES,
+    Lane,
+    lane_for_task,
+    lane_queue_name,
+)
 from app.modules.datastore.events import handlers
 from app.modules.datastore.domain.events import (
     DatastoreFileCreatedEvent,
@@ -16,10 +22,51 @@ from app.modules.datastore.domain.events import (
 from app.modules.test_support.fakes import PassthroughEventInbox
 
 
+def test_document_processing_runs_on_the_bulk_lane():
+    """Ingestion must not share a queue with latency-sensitive work.
+
+    Document extraction used to be throttled by a semaphore *inside* the task,
+    which meant a queued extraction still occupied a worker slot while waiting —
+    so a bulk upload could starve agent runs and surface messages. The bound is
+    now the bulk lane's own worker concurrency, and the only thing that keeps
+    that true is this task being registered on the bulk lane.
+    """
+    assert lane_for_task("process_datastore_file_task") is Lane.BULK
+    # Its companions are background work too; leaving any of them interactive
+    # would reopen the same starvation path.
+    assert lane_for_task("cleanup_deleted_datastore_paths") is Lane.BULK
+    assert lane_for_task("recover_stuck_processing_files") is Lane.BULK
+    # Separate Redis queues are what make a deep bulk backlog invisible to the
+    # interactive lane.
+    assert lane_queue_name(Lane.BULK) != lane_queue_name(Lane.INTERACTIVE)
+
+
+def test_interactive_work_stays_on_the_interactive_lane():
+    """The things a human is waiting on keep their own queue and budget."""
+    # Import every module's tasks so the registry is fully populated —
+    # lane_for_task() falls back to INTERACTIVE for unknown names, so without
+    # this the assertions below would pass even if nothing were registered.
+    import app.events  # noqa: F401
+
+    for task_name in (
+        "process_agent_run",
+        "process_surface_message",
+        "resume_workflow_run_for_agent",
+        "process_function_run",
+    ):
+        assert task_name in TASK_LANES, f"{task_name} is not registered on any lane"
+        assert lane_for_task(task_name) is Lane.INTERACTIVE
+
+
 @pytest.mark.asyncio
-async def test_process_datastore_file_task_limits_document_processing_concurrency(
+async def test_process_datastore_file_task_no_longer_serializes_in_process(
     monkeypatch,
 ):
+    """The in-task semaphore is gone: the task itself must not self-throttle.
+
+    Concurrency is the bulk lane's; if this task still gated internally we would
+    be limiting twice and holding slots while blocked.
+    """
     processed: list[str] = []
 
     class _FakeProcessingService:
@@ -43,13 +90,6 @@ async def test_process_datastore_file_task_limits_document_processing_concurrenc
         )
     )
     monkeypatch.setattr(handlers, "get_datastore_composition", lambda: composition)
-    monkeypatch.setattr(
-        handlers.datastore_settings,
-        "document_processing_max_concurrency",
-        20,
-    )
-    handlers._document_processing_semaphore = None
-    handlers._document_processing_semaphore_limit = None
 
     pod_id = str(uuid4())
     await asyncio.gather(
@@ -60,12 +100,13 @@ async def test_process_datastore_file_task_limits_document_processing_concurrenc
                 pod_id=pod_id,
                 metadata={"index": index},
             )
-            for index in range(100)
+            for index in range(50)
         ]
     )
 
-    assert len(processed) == 100
-    assert _FakeProcessingService.max_seen <= 20
+    assert len(processed) == 50
+    # All 50 ran concurrently — nothing inside the task capped them.
+    assert _FakeProcessingService.max_seen == 50
 
 
 def test_content_update_defer_until_uses_next_debounce_boundary(monkeypatch):

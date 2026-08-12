@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from typing import Optional, Sequence, Tuple
 from uuid import UUID
 
-from sqlalchemy import and_, delete, or_, select, text, update
+from sqlalchemy import delete, select, text, update
 
 from app.core.authorization.context import Context, ResourceType, ResourceVisibility
 from app.core.authorization.grants import delete_resource_sharing_grants
@@ -22,6 +22,9 @@ from app.modules.datastore.domain.ports import DatastoreFileRepositoryPort
 from app.modules.datastore.infrastructure.models import DatastoreFile
 from app.modules.datastore.infrastructure.repositories._base import (
     DatastoreRepositoryBase,
+)
+from app.modules.datastore.infrastructure.repositories.file_recovery_queries import (
+    DatastoreFileRecoveryQueriesMixin,
 )
 from app.modules.datastore.infrastructure.sql_identifiers import escape_like
 
@@ -60,7 +63,11 @@ def _file_payload(entity: DatastoreFileEntity) -> dict:
     return payload
 
 
-class DatastoreFileRepository(DatastoreRepositoryBase, DatastoreFileRepositoryPort):
+class DatastoreFileRepository(
+    DatastoreFileRecoveryQueriesMixin,
+    DatastoreRepositoryBase,
+    DatastoreFileRepositoryPort,
+):
     """Persistence for file/folder metadata (the application DB)."""
 
     async def acquire_path_lock(self, pod_id: UUID, path: str) -> None:
@@ -190,6 +197,46 @@ class DatastoreFileRepository(DatastoreRepositoryBase, DatastoreFileRepositoryPo
             .values(
                 status=FileStatus.FAILED.value,
                 last_processing_error=error,
+            )
+        )
+        return result.rowcount > 0
+
+    async def release_claim(
+        self,
+        file_id: UUID,
+        *,
+        content_sha256: str | None,
+        processing_attempt: int,
+    ) -> bool:
+        """Return a claim to PENDING *without* spending an attempt.
+
+        For infrastructure backpressure — the extractor is down, overloaded, or
+        the circuit is open — the document itself is fine and nothing about it
+        was learned. ``claim_for_processing`` incremented ``processing_attempts``
+        on the way in, and the recovery cron terminally fails a file once that
+        counter reaches ``datastore_recovery_max_attempts`` (3). Without this,
+        three extractor blips are enough to mark a perfectly good user document
+        FAILED_PERMANENT.
+
+        So this decrements the counter back to its pre-claim value, which is what
+        distinguishes "we could not reach the extractor" from "this document
+        cannot be processed". Document-level failures keep using ``mark_failed``
+        and do spend their attempt.
+
+        Fenced on the same (status, content identity, attempt) triple as every
+        other transition, so a stale worker cannot release a newer claim.
+        """
+        result = await self.session.execute(
+            update(DatastoreFile)
+            .where(
+                DatastoreFile.id == file_id,
+                DatastoreFile.status == FileStatus.PROCESSING.value,
+                _content_identity_matches(content_sha256),
+                DatastoreFile.processing_attempts == processing_attempt,
+            )
+            .values(
+                status=FileStatus.PENDING.value,
+                processing_attempts=DatastoreFile.processing_attempts - 1,
             )
         )
         return result.rowcount > 0
@@ -407,142 +454,6 @@ class DatastoreFileRepository(DatastoreRepositoryBase, DatastoreFileRepositoryPo
         )
         return [instance.to_entity() for instance in result.scalars().all()]
 
-    async def list_stale_recovery_candidates(
-        self,
-        *,
-        pending_cutoff: datetime,
-        processing_cutoff: datetime,
-        failed_cutoff: datetime | None = None,
-        max_attempts: int = 3,
-    ) -> Sequence[DatastoreFileEntity]:
-        # The attempt cap applies to EVERY re-drive branch, not just FAILED.
-        # A worker that is OOM-killed / SIGKILLed mid-extraction never runs its
-        # mark_failed handler, so the row is stranded in PROCESSING with an
-        # incremented processing_attempts. Without the cap here, the PROCESSING
-        # branch would re-drive that poison file forever (the failure mode that
-        # took the dev worker down). Capping all branches makes the budget real.
-        branches = [
-            and_(
-                DatastoreFile.status == FileStatus.PENDING.value,
-                DatastoreFile.updated_at < pending_cutoff,
-                DatastoreFile.processing_attempts < max_attempts,
-            ),
-            and_(
-                DatastoreFile.status == FileStatus.PROCESSING.value,
-                DatastoreFile.updated_at < processing_cutoff,
-                DatastoreFile.processing_attempts < max_attempts,
-            ),
-        ]
-        if failed_cutoff is not None:
-            # Re-drive FAILED files that haven't exhausted their retry budget.
-            branches.append(
-                and_(
-                    DatastoreFile.status == FileStatus.FAILED.value,
-                    DatastoreFile.updated_at < failed_cutoff,
-                    DatastoreFile.processing_attempts < max_attempts,
-                )
-            )
-        result = await self.session.execute(
-            select(DatastoreFile).where(
-                DatastoreFile.kind == "FILE",
-                DatastoreFile.search_enabled == True,  # noqa: E712
-                or_(*branches),
-            )
-        )
-        return [instance.to_entity() for instance in result.scalars().all()]
-
-    async def list_exhausted_recovery_candidates(
-        self,
-        *,
-        processing_cutoff: datetime,
-        failed_cutoff: datetime | None = None,
-        max_attempts: int = 3,
-    ) -> Sequence[DatastoreFileEntity]:
-        """Stale PROCESSING/FAILED files that have hit the attempt cap.
-
-        These are the counterpart to ``list_stale_recovery_candidates``: instead
-        of being re-driven they are transitioned to the terminal FAILED_PERMANENT
-        state so the cron stops resurrecting them. PENDING is excluded — a file
-        that has never been claimed past the cap shouldn't exist, and a fresh
-        upload legitimately resets attempts to 0.
-        """
-        branches = [
-            and_(
-                DatastoreFile.status == FileStatus.PROCESSING.value,
-                DatastoreFile.updated_at < processing_cutoff,
-                DatastoreFile.processing_attempts >= max_attempts,
-            ),
-        ]
-        if failed_cutoff is not None:
-            branches.append(
-                and_(
-                    DatastoreFile.status == FileStatus.FAILED.value,
-                    DatastoreFile.updated_at < failed_cutoff,
-                    DatastoreFile.processing_attempts >= max_attempts,
-                )
-            )
-        result = await self.session.execute(
-            select(DatastoreFile).where(
-                DatastoreFile.kind == "FILE",
-                DatastoreFile.search_enabled == True,  # noqa: E712
-                or_(*branches),
-            )
-        )
-        return [instance.to_entity() for instance in result.scalars().all()]
-
-    async def bulk_update_status(
-        self,
-        *,
-        file_ids: Sequence[UUID],
-        status: FileStatus,
-    ) -> int:
-        if not file_ids:
-            return 0
-        result = await self.session.execute(
-            update(DatastoreFile)
-            .where(DatastoreFile.id.in_(list(file_ids)))
-            .values(status=status.value)
-        )
-        return result.rowcount or 0
-
-    async def bulk_mark_failed_permanent(
-        self,
-        *,
-        file_ids: Sequence[UUID],
-        error: str,
-    ) -> int:
-        """Transition files to the terminal FAILED_PERMANENT state with a reason."""
-        if not file_ids:
-            return 0
-        result = await self.session.execute(
-            update(DatastoreFile)
-            .where(DatastoreFile.id.in_(list(file_ids)))
-            .values(
-                status=FileStatus.FAILED_PERMANENT.value,
-                last_processing_error=error,
-            )
-        )
-        return result.rowcount or 0
-
-    async def mark_failed_permanent(self, file_id: UUID, *, error: str) -> bool:
-        """Terminally fail a single file (e.g. too large to process).
-
-        Not guarded on a prior status: this is called pre-claim (file is PENDING)
-        for the size guard, but must not clobber a COMPLETED row if a race put one
-        there — so exclude COMPLETED explicitly.
-        """
-        result = await self.session.execute(
-            update(DatastoreFile)
-            .where(
-                DatastoreFile.id == file_id,
-                DatastoreFile.status != FileStatus.COMPLETED.value,
-            )
-            .values(
-                status=FileStatus.FAILED_PERMANENT.value,
-                last_processing_error=error,
-            )
-        )
-        return result.rowcount > 0
 
 
 def _file_payload_unset(entity: DatastoreFileEntity) -> dict:

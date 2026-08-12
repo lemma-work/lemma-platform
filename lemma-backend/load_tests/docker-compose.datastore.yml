@@ -38,13 +38,24 @@ services:
       KREUZBERG_URL: http://kreuzberg:8000
       DOCUMENT_PROCESSOR: kreuzberg
       DOCUMENT_PROCESSING_OCR_ENABLED: "false"
-      DOCUMENT_PROCESSING_MAX_CONCURRENCY: "${DATASTORE_EXTRACTION_CONCURRENCY:-2}"
+      # Extraction concurrency is now the BULK lane's worker concurrency. The old
+      # in-task semaphore (DOCUMENT_PROCESSING_MAX_CONCURRENCY) throttled
+      # extractions only after they had already taken a worker slot, so a burst
+      # blocked unrelated work while queued.
+      WORKER_BULK_CONCURRENCY: "${DATASTORE_EXTRACTION_CONCURRENCY:-2}"
+      # Per-pod admission + fair dispatch: bound how much of one tenant's upload
+      # is resident in Redis so no pod can monopolise ingestion.
+      DATASTORE_PER_POD_MAX_INFLIGHT: "${DATASTORE_PER_POD_MAX_INFLIGHT:-4}"
+      DATASTORE_DISPATCH_GLOBAL_BATCH: "${DATASTORE_DISPATCH_GLOBAL_BATCH:-50}"
       DOCUMENT_PROCESSING_MAX_INFLIGHT_BYTES: "${DATASTORE_MAX_INFLIGHT_BYTES:-536870912}"
       KREUZBERG_REQUEST_TIMEOUT_SECONDS: "${DATASTORE_KREUZBERG_TIMEOUT_SECONDS:-600}"
       LOCAL_EMBEDDING_CACHE_DIR: /home/appuser/.cache/lemma/fastembed
       HF_HOME: /home/appuser/.cache/lemma/fastembed/huggingface
       XDG_CACHE_HOME: /home/appuser/.cache/lemma/fastembed/xdg
       LOCAL_EMBEDDING_PRELOAD_TIMEOUT_SECONDS: "900"
+      # Pin ONNX to the container's CPU allocation. Unset, it sizes from the
+      # HOST cpu count and oversubscribes, which measured ~3.7x slower.
+      LOCAL_EMBEDDING_THREADS: "${DATASTORE_WORKER_CPUS:-4}"
       WORKER_CONCURRENCY: "${DATASTORE_WORKER_CONCURRENCY:-10}"
     volumes:
       - datastore_objects:/home/appuser/.local/object-storage
@@ -62,7 +73,10 @@ services:
           memory: "${DATASTORE_WORKER_MEMORY:-4G}"
 
   kreuzberg:
-    image: ${DEV_KREUZBERG_IMAGE:-ghcr.io/xberg-io/kreuzberg:4.9.9-core}
+    # 4.8.0-4.9.9 are Elastic License 2.0 (the 4.9.9-core image's MIT label is
+    # wrong — its source revision carries an ELv2 LICENSE). 4.10.2 is the MIT
+    # LTS head on the same v4 wire schema. See app/core/test_utils.py.
+    image: ${DEV_KREUZBERG_IMAGE:-ghcr.io/kreuzberg-dev/kreuzberg-core:4.10.2}
     entrypoint: ["sh", "-c"]
     command:
       - >-

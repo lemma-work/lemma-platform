@@ -9,7 +9,6 @@ from typing import Any
 from app.core.infrastructure.events.config import event_transport_settings
 from app.core.infrastructure.events.stream_subscriber import registered_stream_groups
 from app.core.log.log import get_logger
-from app.core.config import settings
 from app.core.observability.dependency_incident import DependencyIncident
 
 
@@ -31,12 +30,24 @@ def _last_delivered_id(group: dict[Any, Any]) -> Any:
     )
 
 
+def _streaq_lane_queues() -> set[str]:
+    """The streaq ready-queue key for every lane.
+
+    Lanes are separate Redis queues, so watching only the interactive one would
+    make a bulk-lane backlog — exactly the thing lanes exist to contain —
+    invisible on dashboards.
+    """
+    from app.core.infrastructure.jobs.streaq_runtime import Lane, lane_queue_name
+
+    return {f"streaq:{lane_queue_name(lane)}:queues:normal" for lane in Lane}
+
+
 def observable_streams() -> set[str]:
     """Static names only: never emit tenant or dynamic Redis key names."""
     return {
         *(stream for stream, _group in registered_stream_groups()),
         *event_transport_settings.redis_stream_maxlen_overrides,
-        f"streaq:{settings.worker_queue_name}:queues:normal",
+        *_streaq_lane_queues(),
     }
 
 
@@ -52,16 +63,15 @@ async def _snapshot_stream(
     client,
     stream: str,
 ) -> None:
-    is_streaq = stream.startswith(f"streaq:{settings.worker_queue_name}:queues:")
+    is_streaq = stream.startswith("streaq:") and ":queues:" in stream
     maxlen = (
         None if is_streaq else event_transport_settings.stream_maxlen_for(stream)
     )
+    # Report the delayed set belonging to THIS lane's queue, not always the
+    # interactive one, or a deferred bulk backlog would be attributed to the
+    # wrong lane.
     delayed = (
-        int(
-            await client.zcard(
-                f"streaq:{settings.worker_queue_name}:queues:delayed:"
-            )
-        )
+        int(await client.zcard(f"{stream.rsplit(':queues:', 1)[0]}:queues:delayed:"))
         if is_streaq
         else 0
     )
