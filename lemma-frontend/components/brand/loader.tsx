@@ -2,6 +2,7 @@
 
 import React from "react";
 import { LemmaMark } from "@/components/brand/logo";
+import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
 type LoaderSize = "xs" | "sm" | "md" | "lg";
@@ -97,10 +98,31 @@ export function WordmarkLoader({
  * PageLoader — full-page centered loading splash.
  * Used for route-level Suspense boundaries.
  */
+/**
+ * How long a mark alone is an acceptable answer to "what is happening".
+ *
+ * Every route that is not ready yet renders this, so when something upstream
+ * stalls it is the only thing on screen — and it says nothing, forever. A first
+ * run that never reached account creation looked exactly like one that was
+ * about to. Past this point the loader stops implying progress it cannot see and
+ * offers the user something to do.
+ */
+const PAGE_LOADER_PATIENCE_MS = 10_000;
+
 export function PageLoader() {
+    const [waitedTooLong, setWaitedTooLong] = React.useState(false);
+
+    React.useEffect(() => {
+        const timer = window.setTimeout(
+            () => setWaitedTooLong(true),
+            PAGE_LOADER_PATIENCE_MS,
+        );
+        return () => window.clearTimeout(timer);
+    }, []);
+
     return (
         <div
-            className="lemma-page-loader flex min-h-screen items-center justify-center bg-transparent"
+            className="lemma-page-loader flex min-h-screen flex-col items-center justify-center gap-6 bg-transparent"
             role="status"
             aria-label="Loading Lemma"
             aria-live="polite"
@@ -108,6 +130,21 @@ export function PageLoader() {
             <div className="lemma-page-loader-mark-shell">
                 <LemmaMark size="lg" className="lemma-page-loader-mark" />
             </div>
+            {waitedTooLong ? (
+                <div className="flex flex-col items-center gap-3 text-center">
+                    <p className="text-sm text-[var(--text-tertiary)]">
+                        Still starting Lemma. This can take a while the first time.
+                    </p>
+                    <Button
+                        type="button"
+                        variant="secondary"
+                        size="sm"
+                        onClick={() => window.location.reload()}
+                    >
+                        Reload
+                    </Button>
+                </div>
+            ) : null}
         </div>
     );
 }

@@ -867,6 +867,14 @@ function RefreshSessionPage() {
       }
 
       navigate({ pathname: "/", search: location.search }, { replace: true });
+    }).catch(() => {
+      // Without this the rejection was swallowed and the spinner below became
+      // the final state of the page. A refresh that cannot even be attempted —
+      // offline, or the API not up yet — is the same outcome for the user as one
+      // that says no: send them back to sign in, where there is something to do.
+      if (!cancelled) {
+        navigate({ pathname: "/", search: location.search }, { replace: true });
+      }
     });
 
     return () => {

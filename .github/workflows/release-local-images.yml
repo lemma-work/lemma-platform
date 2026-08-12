@@ -1011,7 +1011,10 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           set -euo pipefail
-          dmg="$(ls desktop/target/release/release-artifacts/*.dmg)"
+          # Named, not globbed: the cargo target directory is cached
+          # between runs, so a previous run's DMG is still sitting there
+          # and `ls *.dmg` handed notarytool two paths.
+          dmg="desktop/target/release/release-artifacts/Lemma-nightly-${GITHUB_SHA:0:8}_aarch64.dmg"
           xcrun notarytool submit "${dmg}" \
             --apple-id "${APPLE_ID}" \
             --password "${APPLE_PASSWORD}" \
@@ -1028,7 +1031,8 @@ jobs:
           codesign --verify --deep --strict --verbose=2 "${app}"
           codesign -dvvv "${app}" 2>&1 | grep -F "Identifier=work.lemma.desktop"
           xcrun stapler validate "${app}"
-          xcrun stapler validate desktop/target/release/release-artifacts/*.dmg
+          xcrun stapler validate \
+            "desktop/target/release/release-artifacts/Lemma-nightly-${GITHUB_SHA:0:8}_aarch64.dmg"
 
       - name: Attach the DMG to the nightly prerelease
         shell: bash
@@ -1037,7 +1041,7 @@ jobs:
           TAG: ${{ steps.tag.outputs.release_tag }}
         run: |
           set -euo pipefail
-          dmg="$(ls desktop/target/release/release-artifacts/*.dmg)"
+          dmg="desktop/target/release/release-artifacts/Lemma-nightly-${GITHUB_SHA:0:8}_aarch64.dmg"
           gh release upload "${TAG}" "${dmg}" --clobber
           url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/$(basename "${dmg}")"
           {

@@ -94,11 +94,14 @@ async def sample_interactive_latency(
     probe: Probe,
     stop: asyncio.Event,
     interval: float,
-) -> None:
+) -> Probe:
     """Poll a cheap authenticated read that shares the API + DB with ingestion.
 
     This is the signal a user actually feels. It must not degrade just because
     someone else is uploading a hundred documents.
+
+    Returns the probe it filled so the caller consumes the task's result rather
+    than reaching back into a shared object.
     """
     while not stop.is_set():
         started = time.perf_counter()
@@ -107,11 +110,16 @@ async def sample_interactive_latency(
             response.raise_for_status()
             probe.samples.append(time.perf_counter() - started)
         except Exception:
+            # An error is a latency signal too — count it and keep sampling, so
+            # one blip cannot end the measurement we are here to take.
             probe.errors += 1
         try:
             await asyncio.wait_for(stop.wait(), timeout=interval)
         except TimeoutError:
+            # Expected: the wait times out once per interval while the run is
+            # still going. `stop` being set is the only real exit condition.
             pass
+    return probe
 
 
 async def upload(
@@ -211,7 +219,7 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
         )
         await asyncio.sleep(args.baseline_seconds)
         stop_baseline.set()
-        await baseline_task
+        baseline = await baseline_task
 
         # --- 2. Burst: whale floods, small pod submits a few ------------------
         under_load = Probe("interactive_under_load")
@@ -275,7 +283,7 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
             ),
         )
         stop_load.set()
-        await load_task
+        under_load = await load_task
 
     return summarize(args, baseline, under_load, whale_done, small_done)
 

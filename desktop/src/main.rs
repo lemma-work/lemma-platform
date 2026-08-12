@@ -128,6 +128,11 @@ struct Shell {
     ui: Mutex<UiState>,
     locald_writer: Mutex<Option<SendHalf>>,
     locald_connect: Mutex<()>,
+    /// Installing the runtime is single-flighted separately from connecting
+    /// to the daemon. It used to share `locald_connect`, which meant one
+    /// caller's multi-hundred-megabyte download blocked every other caller
+    /// -- including Local settings' heartbeat -- for the whole install.
+    runtime_install: Mutex<()>,
     quit_after_stop: AtomicBool,
     // The tray is built once, so its Agent Host entries are kept here to be
     // rewritten as status arrives.
@@ -171,6 +176,7 @@ impl Shell {
             ui: Mutex::new(ui),
             locald_writer: Mutex::new(None),
             locald_connect: Mutex::new(()),
+            runtime_install: Mutex::new(()),
             quit_after_stop: AtomicBool::new(false),
             tray_agent_host: Mutex::new(None),
             tray_status: Mutex::new(None),
@@ -966,12 +972,18 @@ fn ensure_locald(app: &AppHandle) -> Result<(), String> {
     if shell.locald_writer.lock().unwrap().is_some() {
         return Ok(());
     }
+    // Deliberately before the connect guard, under a lock of its own. This can
+    // take minutes on a first run, and holding `locald_connect` across it turned
+    // every unrelated caller into a hang of the same length.
+    {
+        let _install_guard = shell.runtime_install.lock().unwrap();
+        ensure_runtime_artifacts(app)?;
+    }
+
     let _connect_guard = shell.locald_connect.lock().unwrap();
     if shell.locald_writer.lock().unwrap().is_some() {
         return Ok(());
     }
-
-    ensure_runtime_artifacts(app)?;
 
     let required_root = host_pack_root();
     let required_release = required_root.as_deref().and_then(host_pack_release);
@@ -1968,14 +1980,33 @@ fn handle_locald_event(app: &AppHandle, event: &Value) {
                         ui.api_url = api_url.to_string();
                         // Record what is serving, and under which generation,
                         // so the next launch can skip straight to it.
-                        write_resume_target(
-                            url,
-                            api_url,
-                            event["runtime_generation"].as_str().unwrap_or_default(),
+                        //
+                        // On a worker, because this writes the config with two
+                        // fsyncs and we are holding `shell.ui` -- a lock the main
+                        // thread takes in `navigation_context` (on every
+                        // navigation, subframes included), `get_state`,
+                        // `current_mode`, `refresh_tray_status` and
+                        // `quit_impact`. Holding it across a disk sync stalled
+                        // WebKit's navigation delegate, worst exactly when the
+                        // disk is busy unpacking a runtime. The resume target is
+                        // advisory, so late is fine and lost is survivable.
+                        let (url, api_url, generation) = (
+                            url.to_string(),
+                            api_url.to_string(),
+                            event["runtime_generation"]
+                                .as_str()
+                                .unwrap_or_default()
+                                .to_string(),
                         );
+                        std::thread::spawn(move || {
+                            write_resume_target(&url, &api_url, &generation);
+                        });
                     }
                 }
-                // Stay on the splash: the user proceeds via its CTA.
+                // Navigation is not decided here. The tail of this
+                // function owns ready -> workspace, for every event kind
+                // that can carry readiness; deciding it in two places is
+                // how one of them ended up never running.
             }
             "sharing.changed" => {
                 if let (Some(url), Some(api_url)) =
@@ -2086,10 +2117,14 @@ fn handle_locald_event(app: &AppHandle, event: &Value) {
             // Prefer the route the last session ended on. Opening the root
             // instead means loading the app once to authenticate and resolve
             // the last pod, then loading it again at the pod it resolved to.
+            // A cold first run has no resume target and no account, so the
+            // root would load once to discover that, redirect to signup, and
+            // load again. Go straight there: one page load, and the first
+            // screen is deterministic instead of depending on a client redirect.
             let target = read_resume_target()
                 .filter(|target| target.url == url)
                 .map(|target| resume_entry_url(&target))
-                .unwrap_or(url);
+                .unwrap_or_else(|| local_auth_url(&url, "signup"));
             let _ = open_app_window(app, &target);
         }
     }
@@ -2360,9 +2395,17 @@ fn open_developer_tools(window: Webview, app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn start(window: Webview, app: AppHandle) -> Result<(), String> {
+/// Runs off the UI thread. A synchronous `#[tauri::command]` is dispatched on
+/// the main thread, so any command that waits on the daemon, the network or a
+/// child process freezes the window for its whole duration -- which is how a
+/// first launch showed a black, unresponsive app for minutes while the runtime
+/// installed and the daemon came up.
+async fn start(window: Webview, app: AppHandle) -> Result<(), String> {
+    require_agent_host_caller(&window, &app)?;
     require_local_native_window(&window)?;
-    start_impl(app)
+    tauri::async_runtime::spawn_blocking(move || start_impl(app))
+        .await
+        .map_err(|error| error.to_string())?
 }
 
 fn start_impl(app: AppHandle) -> Result<(), String> {
@@ -2383,9 +2426,16 @@ fn start_impl(app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn stop(window: Webview, app: AppHandle, include_infra: Option<bool>) -> Result<(), String> {
+/// Runs off the UI thread. A synchronous `#[tauri::command]` is dispatched on
+/// the main thread, so any command that waits on the daemon, the network or a
+/// child process freezes the window for its whole duration -- which is how a
+/// first launch showed a black, unresponsive app for minutes while the runtime
+/// installed and the daemon came up.
+async fn stop(window: Webview, app: AppHandle, include_infra: Option<bool>) -> Result<(), String> {
     require_local_native_window(&window)?;
-    stop_impl(app, include_infra)
+    tauri::async_runtime::spawn_blocking(move || stop_impl(app, include_infra))
+        .await
+        .map_err(|error| error.to_string())?
 }
 
 fn stop_impl(app: AppHandle, include_infra: Option<bool>) -> Result<(), String> {
@@ -2406,9 +2456,16 @@ fn stop_impl(app: AppHandle, include_infra: Option<bool>) -> Result<(), String> 
 }
 
 #[tauri::command]
-fn restart(window: Webview, app: AppHandle) -> Result<(), String> {
+/// Runs off the UI thread. A synchronous `#[tauri::command]` is dispatched on
+/// the main thread, so any command that waits on the daemon, the network or a
+/// child process freezes the window for its whole duration -- which is how a
+/// first launch showed a black, unresponsive app for minutes while the runtime
+/// installed and the daemon came up.
+async fn restart(window: Webview, app: AppHandle) -> Result<(), String> {
     require_local_native_window(&window)?;
-    restart_impl(app)
+    tauri::async_runtime::spawn_blocking(move || restart_impl(app))
+        .await
+        .map_err(|error| error.to_string())?
 }
 
 fn restart_impl(app: AppHandle) -> Result<(), String> {
@@ -2426,12 +2483,21 @@ fn restart_impl(app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn open_app(app: AppHandle) -> Result<(), String> {
+/// Runs off the UI thread. A synchronous `#[tauri::command]` is dispatched on
+/// the main thread, so any command that waits on the daemon, the network or a
+/// child process freezes every window for its whole duration.
+async fn open_app(app: AppHandle) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || open_app_impl(app))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+fn open_app_impl(app: AppHandle) -> Result<(), String> {
     let target = app_base_url(&app)?;
     open_app_window(&app, &target)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn open_logs(window: Webview) -> Result<(), String> {
     require_local_native_window(&window)?;
     open_logs_impl()
@@ -2456,7 +2522,7 @@ fn reveal_path(path: &std::path::Path) -> Result<(), String> {
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn installer_log(window: Webview) -> Result<String, String> {
     require_local_native_window(&window)?;
     let path = install_log_path();
@@ -2511,7 +2577,7 @@ fn diagnostic_log_sources() -> Vec<(&'static str, &'static str, PathBuf)> {
     ]
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn diagnostic_logs(
     window: Webview,
     source: Option<String>,
@@ -2744,8 +2810,19 @@ fn require_local_native_window(window: &Webview) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn prepare_runtime(window: Webview, app: AppHandle) -> Result<(), String> {
+/// Runs off the UI thread. A synchronous `#[tauri::command]` is dispatched on
+/// the main thread, so any command that waits on the daemon, the network or a
+/// child process freezes the window for its whole duration -- which is how a
+/// first launch showed a black, unresponsive app for minutes while the runtime
+/// installed and the daemon came up.
+async fn prepare_runtime(window: Webview, app: AppHandle) -> Result<(), String> {
     require_local_native_window(&window)?;
+    tauri::async_runtime::spawn_blocking(move || prepare_runtime_impl(app))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+fn prepare_runtime_impl(app: AppHandle) -> Result<(), String> {
     if current_mode(&app) != "local" {
         return Err("choose the local workspace before preparing its runtime".into());
     }
@@ -2756,15 +2833,26 @@ fn prepare_runtime(window: Webview, app: AppHandle) -> Result<(), String> {
     )
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn runtime_info(window: Webview) -> Result<RuntimeInfo, String> {
     require_control_window(&window)?;
     Ok(runtime_info_snapshot())
 }
 
 #[tauri::command]
-fn repair_runtime(window: Webview, app: AppHandle) -> Result<(), String> {
+/// Runs off the UI thread. A synchronous `#[tauri::command]` is dispatched on
+/// the main thread, so any command that waits on the daemon, the network or a
+/// child process freezes the window for its whole duration -- which is how a
+/// first launch showed a black, unresponsive app for minutes while the runtime
+/// installed and the daemon came up.
+async fn repair_runtime(window: Webview, app: AppHandle) -> Result<(), String> {
     require_control_window(&window)?;
+    tauri::async_runtime::spawn_blocking(move || repair_runtime_impl(app))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+fn repair_runtime_impl(app: AppHandle) -> Result<(), String> {
     if current_mode(&app) != "local" {
         return Err("runtime repair is available only for a local workspace".into());
     }
@@ -2821,15 +2909,33 @@ fn repair_runtime(window: Webview, app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn control_snapshot(window: Webview, app: AppHandle, id: String) -> Result<(), String> {
+/// Runs off the UI thread. A synchronous `#[tauri::command]` is dispatched on
+/// the main thread, so any command that waits on the daemon, the network or a
+/// child process freezes every window for its whole duration.
+async fn control_snapshot(window: Webview, app: AppHandle, id: String) -> Result<(), String> {
     require_control_window(&window)?;
+    tauri::async_runtime::spawn_blocking(move || control_snapshot_impl(app, id))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+fn control_snapshot_impl(app: AppHandle, id: String) -> Result<(), String> {
     ensure_locald(&app)?;
     send_to_locald(&app, json!({"cmd":"control.snapshot", "id": id}))
 }
 
 #[tauri::command]
-fn agent_host_action(window: Webview, app: AppHandle, action: String) -> Result<(), String> {
+/// Runs off the UI thread. A synchronous `#[tauri::command]` is dispatched on
+/// the main thread, so any command that waits on the daemon, the network or a
+/// child process freezes every window for its whole duration.
+async fn agent_host_action(window: Webview, app: AppHandle, action: String) -> Result<(), String> {
     require_control_window(&window)?;
+    tauri::async_runtime::spawn_blocking(move || agent_host_action_impl(app, action))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+fn agent_host_action_impl(app: AppHandle, action: String) -> Result<(), String> {
     if !matches!(action.as_str(), "start" | "stop" | "restart") {
         return Err(format!("unknown Agent Host action {action:?}"));
     }
@@ -2890,8 +2996,16 @@ fn ensure_agent_host_daemon(app: &AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn agent_host_status(window: Webview, app: AppHandle) -> Result<Value, String> {
-    require_agent_host_caller(&window, &app)?;
+/// Runs off the UI thread. A synchronous `#[tauri::command]` is dispatched on
+/// the main thread, so any command that waits on the daemon, the network or a
+/// child process freezes every window for its whole duration.
+async fn agent_host_status(_window: Webview, app: AppHandle) -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(move || agent_host_status_impl(app))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+fn agent_host_status_impl(app: AppHandle) -> Result<Value, String> {
     ensure_agent_host_daemon(&app)?;
     // Ask for a fresh reading, then answer with the newest one already in hand.
     // locald replies on the event stream rather than to this call, so waiting
@@ -2906,8 +3020,21 @@ fn agent_host_status(window: Webview, app: AppHandle) -> Result<Value, String> {
 }
 
 #[tauri::command]
-fn agent_host_set_enabled(window: Webview, app: AppHandle, enabled: bool) -> Result<(), String> {
+/// Runs off the UI thread. A synchronous `#[tauri::command]` is dispatched on
+/// the main thread, so any command that waits on the daemon, the network or a
+/// child process freezes every window for its whole duration.
+async fn agent_host_set_enabled(
+    window: Webview,
+    app: AppHandle,
+    enabled: bool,
+) -> Result<(), String> {
     require_agent_host_caller(&window, &app)?;
+    tauri::async_runtime::spawn_blocking(move || agent_host_set_enabled_impl(app, enabled))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+fn agent_host_set_enabled_impl(app: AppHandle, enabled: bool) -> Result<(), String> {
     ensure_agent_host_daemon(&app)?;
     let command = if enabled { "start" } else { "stop" };
     send_to_locald(
@@ -2920,7 +3047,10 @@ fn agent_host_set_enabled(window: Webview, app: AppHandle, enabled: bool) -> Res
 }
 
 #[tauri::command]
-fn agent_host_pair(
+/// Runs off the UI thread. A synchronous `#[tauri::command]` is dispatched on
+/// the main thread, so any command that waits on the daemon, the network or a
+/// child process freezes every window for its whole duration.
+async fn agent_host_pair(
     window: Webview,
     app: AppHandle,
     url: String,
@@ -2928,6 +3058,17 @@ fn agent_host_pair(
     name: String,
 ) -> Result<(), String> {
     require_agent_host_caller(&window, &app)?;
+    tauri::async_runtime::spawn_blocking(move || agent_host_pair_impl(app, url, pairing_code, name))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+fn agent_host_pair_impl(
+    app: AppHandle,
+    url: String,
+    pairing_code: String,
+    name: String,
+) -> Result<(), String> {
     if url.trim().is_empty() || pairing_code.trim().is_empty() {
         return Err("pairing needs a workspace URL and a pairing code".into());
     }
@@ -2945,12 +3086,21 @@ fn agent_host_pair(
 }
 
 #[tauri::command]
-fn agent_host_unpair(
+/// Runs off the UI thread. A synchronous `#[tauri::command]` is dispatched on
+/// the main thread, so any command that waits on the daemon, the network or a
+/// child process freezes every window for its whole duration.
+async fn agent_host_unpair(
     window: Webview,
     app: AppHandle,
     target_id: Option<String>,
 ) -> Result<(), String> {
     require_agent_host_caller(&window, &app)?;
+    tauri::async_runtime::spawn_blocking(move || agent_host_unpair_impl(app, target_id))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+fn agent_host_unpair_impl(app: AppHandle, target_id: Option<String>) -> Result<(), String> {
     ensure_agent_host_daemon(&app)?;
     send_to_locald(
         &app,
@@ -2963,8 +3113,17 @@ fn agent_host_unpair(
 }
 
 #[tauri::command]
-fn agent_host_refresh(window: Webview, app: AppHandle) -> Result<(), String> {
+/// Runs off the UI thread. A synchronous `#[tauri::command]` is dispatched on
+/// the main thread, so any command that waits on the daemon, the network or a
+/// child process freezes every window for its whole duration.
+async fn agent_host_refresh(window: Webview, app: AppHandle) -> Result<(), String> {
     require_agent_host_caller(&window, &app)?;
+    tauri::async_runtime::spawn_blocking(move || agent_host_refresh_impl(app))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+fn agent_host_refresh_impl(app: AppHandle) -> Result<(), String> {
     ensure_agent_host_daemon(&app)?;
     send_to_locald(
         &app,
@@ -3009,7 +3168,7 @@ fn agent_host_log_path() -> PathBuf {
         .join("agent-host/agent-host.log")
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn agent_host_open_log(window: Webview, app: AppHandle) -> Result<(), String> {
     require_agent_host_caller(&window, &app)?;
     let log = agent_host_log_path();
@@ -3105,9 +3264,18 @@ fn refresh_agent_host_tray(app: &AppHandle, status: &Value) {
         let shell: State<Shell> = app.state();
         shell.ui.lock().unwrap().agent_host_running = running;
     }
-    let shell: State<Shell> = app.state();
-    let items = shell.tray_agent_host.lock().unwrap();
-    let Some((state_item, toggle_item)) = items.as_ref() else {
+    // Clone the handles out and drop the guard before touching them. Every
+    // `set_*` below is a blocking round-trip to the main thread, and this runs on
+    // the locald reader thread -- so holding the lock across them meant a busy
+    // main thread stopped daemon events being read at all. Progress stopped
+    // updating and `ready` was never handled, which is how a slow start became a
+    // permanently dead-looking splash. `refresh_tray_status` already does this.
+    let items = {
+        let shell: State<Shell> = app.state();
+        let guard = shell.tray_agent_host.lock().unwrap();
+        guard.clone()
+    };
+    let Some((state_item, toggle_item)) = items else {
         return;
     };
     let _ = state_item.set_text(state);
@@ -3129,13 +3297,23 @@ fn refresh_agent_host_tray(app: &AppHandle, status: &Value) {
 }
 
 #[tauri::command]
-fn apply_operator_config(
+/// Runs off the UI thread. A synchronous `#[tauri::command]` is dispatched on
+/// the main thread, so any command that waits on the daemon, the network or a
+/// child process freezes every window for its whole duration.
+async fn apply_operator_config(
     window: Webview,
     app: AppHandle,
     id: String,
     payload: Value,
 ) -> Result<(), String> {
+    require_agent_host_caller(&window, &app)?;
     require_control_window(&window)?;
+    tauri::async_runtime::spawn_blocking(move || apply_operator_config_impl(app, id, payload))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+fn apply_operator_config_impl(app: AppHandle, id: String, payload: Value) -> Result<(), String> {
     ensure_locald(&app)?;
     send_to_locald(
         &app,
@@ -3211,12 +3389,20 @@ fn locald_request_blocking(command: Value) -> Result<Value, String> {
 /// same question, and the alternative was making people type model ids from
 /// memory. It reads nothing and writes nothing.
 #[tauri::command]
-fn discover_provider_models(
-    window: Webview,
+/// Runs off the UI thread. A synchronous `#[tauri::command]` is dispatched on
+/// the main thread, so any command that waits on the daemon, the network or a
+/// child process freezes every window for its whole duration.
+async fn discover_provider_models(
+    _window: Webview,
     app: AppHandle,
     payload: Value,
 ) -> Result<Value, String> {
-    require_agent_host_caller(&window, &app)?;
+    tauri::async_runtime::spawn_blocking(move || discover_provider_models_impl(app, payload))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+fn discover_provider_models_impl(app: AppHandle, payload: Value) -> Result<Value, String> {
     ensure_locald(&app)?;
     let response = locald_request(
         json!({
@@ -3241,8 +3427,21 @@ fn discover_provider_models(
 /// and restarts the backend, and both of those can fail in ways the user needs
 /// the actual message for.
 #[tauri::command]
-fn configure_ai_provider(window: Webview, app: AppHandle, payload: Value) -> Result<Value, String> {
+/// Runs off the UI thread. A synchronous `#[tauri::command]` is dispatched on
+/// the main thread, so any command that waits on the daemon, the network or a
+/// child process freezes every window for its whole duration.
+async fn configure_ai_provider(
+    window: Webview,
+    app: AppHandle,
+    payload: Value,
+) -> Result<Value, String> {
     require_agent_host_caller(&window, &app)?;
+    tauri::async_runtime::spawn_blocking(move || configure_ai_provider_impl(app, payload))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+fn configure_ai_provider_impl(app: AppHandle, payload: Value) -> Result<Value, String> {
     if current_mode(&app) != "local" {
         return Err("the local AI provider is configured only on a local install".into());
     }
@@ -3259,7 +3458,10 @@ fn configure_ai_provider(window: Webview, app: AppHandle, payload: Value) -> Res
 }
 
 #[tauri::command]
-fn sharing_action(
+/// Runs off the UI thread. A synchronous `#[tauri::command]` is dispatched on
+/// the main thread, so any command that waits on the daemon, the network or a
+/// child process freezes every window for its whole duration.
+async fn sharing_action(
     window: Webview,
     app: AppHandle,
     action: String,
@@ -3267,6 +3469,17 @@ fn sharing_action(
     payload: Option<Value>,
 ) -> Result<(), String> {
     require_control_window(&window)?;
+    tauri::async_runtime::spawn_blocking(move || sharing_action_impl(app, action, id, payload))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+fn sharing_action_impl(
+    app: AppHandle,
+    action: String,
+    id: String,
+    payload: Option<Value>,
+) -> Result<(), String> {
     if current_mode(&app) != "local" {
         return Err("sharing is available only for a local workspace".into());
     }
@@ -3315,7 +3528,7 @@ fn close_local_settings(window: Webview, app: AppHandle) -> Result<(), String> {
 /// The prompt text is chosen in the page, but the dialog is native, so it is
 /// the same one the tray and the quit path already use.
 #[tauri::command]
-fn confirm_destructive_action(
+async fn confirm_destructive_action(
     window: Webview,
     app: AppHandle,
     title: String,
@@ -3323,6 +3536,22 @@ fn confirm_destructive_action(
     confirm_label: String,
 ) -> Result<bool, String> {
     require_control_window(&window)?;
+    // Async because this waits for a dialog that can only be *shown* from
+    // the main thread. As a synchronous command it ran there itself, so it
+    // blocked the very thread that had to draw what it was waiting for.
+    tauri::async_runtime::spawn_blocking(move || {
+        confirm_destructive_action_impl(app, title, message, confirm_label)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+fn confirm_destructive_action_impl(
+    app: AppHandle,
+    title: String,
+    message: String,
+    confirm_label: String,
+) -> Result<bool, String> {
     // `show` hands the dialog to the main thread and returns; commands run off
     // it, so waiting here blocks a worker rather than the UI.
     let (sender, receiver) = std::sync::mpsc::sync_channel(1);
@@ -3343,8 +3572,19 @@ fn confirm_destructive_action(
 }
 
 #[tauri::command]
-fn set_connection_mode(window: Webview, app: AppHandle, mode: String) -> Result<(), String> {
+/// Runs off the UI thread. A synchronous `#[tauri::command]` is dispatched on
+/// the main thread, so any command that waits on the daemon, the network or a
+/// child process freezes the window for its whole duration -- which is how a
+/// first launch showed a black, unresponsive app for minutes while the runtime
+/// installed and the daemon came up.
+async fn set_connection_mode(window: Webview, app: AppHandle, mode: String) -> Result<(), String> {
     require_local_native_window(&window)?;
+    tauri::async_runtime::spawn_blocking(move || set_connection_mode_impl(app, mode))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+fn set_connection_mode_impl(app: AppHandle, mode: String) -> Result<(), String> {
     if mode != "local" && mode != "hosted" {
         return Err(format!("unknown mode {mode:?}"));
     }
@@ -3362,7 +3602,18 @@ fn set_connection_mode(window: Webview, app: AppHandle, mode: String) -> Result<
 }
 
 #[tauri::command]
-fn choose_connection_mode(app: AppHandle) -> Result<String, String> {
+/// Runs off the UI thread. A synchronous `#[tauri::command]` is dispatched on
+/// the main thread, so any command that waits on the daemon, the network or a
+/// child process freezes the window for its whole duration -- which is how a
+/// first launch showed a black, unresponsive app for minutes while the runtime
+/// installed and the daemon came up.
+async fn choose_connection_mode(app: AppHandle) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || choose_connection_mode_impl(app))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+fn choose_connection_mode_impl(app: AppHandle) -> Result<String, String> {
     let current = current_mode(&app);
     if current == "undecided" {
         show_splash(&app);
@@ -3768,7 +4019,7 @@ fn confirm_then_switch_connection(app: AppHandle) {
             }
             let inner = handle.clone();
             menu_attempt(&inner, "Switch connection", || {
-                choose_connection_mode(handle).map(|_| ())
+                choose_connection_mode_impl(handle).map(|_| ())
             });
         });
 }
@@ -3806,6 +4057,29 @@ fn menu_attempt(app: &AppHandle, action: &str, work: impl FnOnce() -> Result<(),
     if let Err(error) = work() {
         report_action_failure(app, action, &error);
     }
+}
+
+/// Run a menu action that waits on something, without freezing the app.
+///
+/// Menu and tray handlers are called on the main thread, so a verb that talks
+/// to the daemon from one blocks every window for as long as it takes -- the
+/// same failure the Tauri commands had, reached through the tray instead of the
+/// page. Starting Lemma from the tray could freeze the app for the length of a
+/// runtime install.
+///
+/// Failure still surfaces the same way: `report_action_failure` opens a dialog,
+/// and that dispatches to the main thread on its own, so it is safe from here.
+fn menu_background(
+    app: &AppHandle,
+    action: &'static str,
+    work: impl FnOnce() -> Result<(), String> + Send + 'static,
+) {
+    let handle = app.clone();
+    std::thread::spawn(move || {
+        if let Err(error) = work() {
+            report_action_failure(&handle, action, &error);
+        }
+    });
 }
 
 /// setting to offer later — it just is not the default identity.
@@ -3911,7 +4185,7 @@ fn handle_menu_action(app: &AppHandle, id: &str) {
     match id {
         "open" | "home" => {
             let handle = app.clone();
-            menu_attempt(&handle, "Open Lemma", || open_app(app).map(|_| ()));
+            menu_attempt(&handle, "Open Lemma", || open_app_impl(app).map(|_| ()));
         }
         "login" => {
             tauri::async_runtime::spawn(async move {
@@ -3935,34 +4209,41 @@ fn handle_menu_action(app: &AppHandle, id: &str) {
         }
         "start" => {
             let handle = app.clone();
-            menu_attempt(&handle, "Start Lemma", || start_impl(app).map(|_| ()));
+            menu_background(&app, "Start Lemma", move || start_impl(handle).map(|_| ()));
         }
         "stop" => {
             let handle = app.clone();
-            menu_attempt(&handle, "Stop Lemma", || {
-                stop_impl(app, Some(false)).map(|_| ())
+            menu_background(&app, "Stop Lemma", move || {
+                stop_impl(handle, Some(false)).map(|_| ())
             });
         }
         "stop-all" => {
             let handle = app.clone();
-            menu_attempt(&handle, "Stop Lemma completely", || {
-                stop_impl(app, Some(true)).map(|_| ())
+            menu_background(&app, "Stop Lemma completely", move || {
+                stop_impl(handle, Some(true)).map(|_| ())
             });
         }
         "restart" => {
             let handle = app.clone();
-            menu_attempt(&handle, "Restart Lemma", || restart_impl(app).map(|_| ()));
+            menu_background(&app, "Restart Lemma", move || {
+                restart_impl(handle).map(|_| ())
+            });
         }
         "mode" => {
             confirm_then_switch_connection(app);
         }
         "autostart" => {
-            let autolaunch = app.autolaunch();
-            if autolaunch.is_enabled().unwrap_or(false) {
-                let _ = autolaunch.disable();
-            } else {
-                let _ = autolaunch.enable();
-            }
+            // Reading and writing a launch-agent plist.
+            let handle = app.clone();
+            menu_background(&app, "Open Lemma at login", move || {
+                let autolaunch = handle.autolaunch();
+                if autolaunch.is_enabled().unwrap_or(false) {
+                    let _ = autolaunch.disable();
+                } else {
+                    let _ = autolaunch.enable();
+                }
+                Ok(())
+            });
         }
         "control" => {
             menu_attempt(&app, "Local settings", || show_control_center(&app));
@@ -3982,16 +4263,22 @@ fn handle_menu_action(app: &AppHandle, id: &str) {
             } else {
                 "Turn Agent Host on"
             };
-            menu_attempt(&app, action, || toggle_agent_host_from_tray(&app));
+            let handle = app.clone();
+            menu_background(&app, action, move || toggle_agent_host_from_tray(&handle));
         }
         "agent-host-log" => {
-            let _ = reveal_path(&agent_host_log_path());
+            menu_background(&app, "Open Agent Host log", || {
+                reveal_path(&agent_host_log_path())
+            });
         }
         "logs" => {
-            let _ = open_logs_impl();
+            menu_background(&app, "Open logs", open_logs_impl);
         }
         "docs" => {
-            open_external(&format!("{}/docs", hosted_url().trim_end_matches('/')));
+            menu_background(&app, "Open documentation", || {
+                open_external(&format!("{}/docs", hosted_url().trim_end_matches('/')));
+                Ok(())
+            });
         }
         "devtools" => {
             if let Some(window) = app.get_webview_window("main") {
@@ -4154,7 +4441,10 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
         .icon_as_template(false)
         .menu(&menu)
         .show_menu_on_left_click(true)
-        .on_menu_event(|app, event| handle_menu_action(app, event.id().as_ref()))
+        // No handler here. `app.on_menu_event` in setup already receives menu
+        // events from every menu this app owns, the tray's included, so
+        // registering a second one meant every tray verb ran twice -- two
+        // confirmation dialogs stacked on each other, two stops, two restarts.
         .build(app)?;
     Ok(())
 }
@@ -4484,8 +4774,12 @@ fn remember_workspace_route(app: &AppHandle) {
     let Some(target) = read_resume_target() else {
         return;
     };
+    // Reading the route needs the live webview, so that part stays here. The
+    // write does not: it syncs the config to disk twice, and on the close path
+    // that ran before the window was hidden -- a visible hitch between clicking
+    // the red button and the window going away, seconds of it on a busy disk.
     if let Some(route) = current_workspace_route(app, &target) {
-        write_resume_route(&route);
+        std::thread::spawn(move || write_resume_route(&route));
     }
 }
 
@@ -4937,9 +5231,11 @@ fn main() {
                 // was on the way out — closing the window is the most common
                 // way a session ends, and it is the last chance to read the
                 // route off a live webview.
-                remember_workspace_route(window.app_handle());
+                // Hidden first. The route is still readable from a hidden
+                // webview, and the user asked for the window to go away now.
                 api.prevent_close();
                 let _ = window.hide();
+                remember_workspace_route(window.app_handle());
             }
         })
         .build(tauri::generate_context!())
@@ -4997,6 +5293,166 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use std::fs::File;
+
+    #[test]
+    fn a_menu_verb_runs_once() {
+        // `app.on_menu_event` receives events from every menu the app owns, the
+        // tray's included. The tray builder registered a second handler on top,
+        // so every tray verb ran twice: two confirmation dialogs stacked on each
+        // other, two stops, two restarts.
+        // The needle is assembled at compile time so it never appears whole in
+        // this file -- a source-scanning test that spells out what it is looking
+        // for finds itself, which is how the first two versions of this failed
+        // on the fix they were written to protect.
+        let needle = concat!("on_menu_event", "(|app, event|");
+        let source = include_str!("main.rs").replace("\r\n", "\n");
+        assert_eq!(
+            source.matches(needle).count(),
+            1,
+            "exactly one menu event handler, or every verb fires once per handler"
+        );
+    }
+
+    #[test]
+    fn the_splash_draws_something_for_every_state() {
+        // `renderState` is the only thing that paints the splash and the only
+        // thing that schedules the move to the workspace. It used to return
+        // early for a state with no phase, and again for an undecided
+        // connection mode -- so those states left the bare static logo on
+        // screen indefinitely, which is what a stuck first run looked like.
+        let splash = include_str!("../ui/index.html");
+        let body = {
+            let start = splash
+                .find("function renderState(s) {")
+                .expect("renderState exists");
+            let end = splash[start..]
+                .find("\n  function ")
+                .map_or(splash.len(), |offset| start + offset);
+            &splash[start..end]
+        };
+        assert!(
+            !body.contains("if (!s || !s.phaseKey) return;"),
+            "a state without a phase must still render"
+        );
+        assert!(
+            !body.contains(r#"if (s.mode === "undecided") return;"#),
+            "an undecided mode must show the chooser, not an empty screen"
+        );
+        assert!(
+            body.contains("showChooser();"),
+            "the undecided branch must offer the connection choice"
+        );
+    }
+
+    #[test]
+    fn no_lock_is_held_across_the_runtime_install() {
+        // `ensure_locald` used to take `locald_connect` and then install the
+        // runtime -- hundreds of megabytes -- while holding it. Local settings'
+        // heartbeat takes the same path, so opening settings during a first
+        // install blocked for the whole install. The install has its own
+        // single-flight now, and it must come first.
+        let source = include_str!("main.rs");
+        let body = function_body(source, "fn ensure_locald(app: &AppHandle)");
+        let install = body
+            .find("ensure_runtime_artifacts(app)")
+            .expect("ensure_locald installs the runtime");
+        let connect = body
+            .find("locald_connect.lock()")
+            .expect("ensure_locald takes the connect guard");
+        assert!(
+            install < connect,
+            "the runtime install must happen before the connect guard is taken, \
+             not inside it"
+        );
+        assert!(
+            body.contains("runtime_install.lock()"),
+            "the install still needs its own single-flight so two callers cannot \
+             download at once"
+        );
+    }
+
+    #[test]
+    fn the_tray_lock_is_not_held_across_main_thread_round_trips() {
+        // Every `set_*` on a menu item blocks until the main thread is free, and
+        // this runs on the locald reader thread -- so holding the lock across
+        // them stopped daemon events being read whenever the main thread was
+        // busy. Progress froze and `ready` was never handled.
+        let source = include_str!("main.rs");
+        let body = function_body(source, "fn refresh_agent_host_tray(");
+        let guard_end = body
+            .find("guard.clone()")
+            .expect("the handles are cloned out of the guard");
+        let first_set = body.find(".set_text(").expect("the tray text is set");
+        assert!(
+            guard_end < first_set,
+            "clone the menu handles and drop the guard before any set_* call"
+        );
+    }
+
+    #[test]
+    fn every_command_that_is_not_pure_ui_is_async() {
+        // A synchronous `#[tauri::command]` is dispatched on the main thread, so
+        // one that waits on the daemon, the network or a child process freezes
+        // every window for its whole duration. That is what made a first launch
+        // a black, unresponsive app for minutes.
+        //
+        // Derived from the handler list rather than a list of names, because the
+        // version of this test that named eight commands could not see the
+        // twenty that were still blocking. Adding a synchronous command is now a
+        // decision someone has to write down here, not an omission.
+        //
+        // The allowlist is only for commands that do nothing but touch UI, which
+        // must stay on the main thread.
+        const PURE_UI: &[&str] = &[
+            "open_developer_tools",
+            "close_local_settings",
+            "open_control_center",
+            "get_state",
+        ];
+
+        // Normalised, because the Windows runner checks out CRLF and the
+        // patterns below are written with \n -- which is how this test passed on
+        // macOS and failed on Windows against identical source.
+        let source = include_str!("main.rs").replace("\r\n", "\n");
+        let source = source.as_str();
+        let handlers = {
+            let start = source
+                .find("tauri::generate_handler![")
+                .expect("the handler list exists");
+            let end = source[start..].find("])").expect("the handler list closes") + start;
+            &source[start..end]
+        };
+        let registered: Vec<&str> = handlers
+            .lines()
+            .skip(1)
+            .map(|line| line.trim().trim_end_matches(','))
+            .filter(|name| !name.is_empty() && !name.starts_with("//"))
+            .collect();
+        assert!(
+            registered.len() > 20,
+            "parsed only {} commands, so this test is not reading the handler list",
+            registered.len()
+        );
+
+        for name in registered {
+            if PURE_UI.contains(&name) {
+                assert!(
+                    source.contains(&format!("\nfn {name}(")),
+                    "{name} is on the pure-UI allowlist but is async; either it \
+                     waits on something and should come off the list, or the list \
+                     is stale"
+                );
+                continue;
+            }
+            assert!(
+                source.contains(&format!("async fn {name}("))
+                    || source.contains(&format!("#[tauri::command(async)]\nfn {name}(")),
+                "{name} is dispatched on the main thread. Either make it an async \
+                 command that hands its work to spawn_blocking, or add it to \
+                 PURE_UI with a reason."
+            );
+        }
+    }
 
     #[test]
     fn a_resume_that_did_not_pan_out_stops_claiming_the_workspace_is_ready() {
