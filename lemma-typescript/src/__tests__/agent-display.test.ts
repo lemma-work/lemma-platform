@@ -84,6 +84,13 @@ describe("normalizeAgentToolName", () => {
     expect(normalizeAgentToolName("lemma__lemma_ask_user")).toBe("ask_user");
     expect(normalizeAgentToolName("lemma/lemma_exec_command")).toBe("exec_command");
   });
+
+  it("leaves someone else's server named after ours alone", () => {
+    // The server name is matched whole: `lemma-corp` is not `lemma`.
+    expect(normalizeAgentToolName("mcp__lemma-corp__delete_everything")).toBe(
+      "mcp__lemma-corp__delete_everything",
+    );
+  });
 });
 
 describe("parseAssistantStreamEvent completed", () => {

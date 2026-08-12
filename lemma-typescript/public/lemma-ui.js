@@ -968,7 +968,7 @@ var LemmaUI = (() => {
     (left, right) => right.length - left.length
   );
   var MCP_MARKERS = ["mcp__", "mcp.", "mcp/"];
-  var NAMESPACE_SEPARATORS = /^[_./:-]+/;
+  var NAMESPACE_SEPARATORS = /^[_./:]+/;
   function stripProviderNamespace(toolName) {
     let candidate = toolName;
     const marker = MCP_MARKERS.find((value) => candidate.toLowerCase().startsWith(value));

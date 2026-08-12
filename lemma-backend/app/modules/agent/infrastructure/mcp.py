@@ -26,7 +26,9 @@ _SERVER_NAMES = tuple(
 # so recovering Lemma's name is: drop the MCP marker, drop our server name,
 # drop whatever separator joined them.
 _MCP_MARKERS = ("mcp__", "mcp.", "mcp/")
-_NAMESPACE_SEPARATORS = "_./:-"
+# No `-`: `lemma-tools` is a server name in its own right above, and treating
+# `-` as a separator would read someone else's `lemma-corp` server as ours.
+_NAMESPACE_SEPARATORS = "_./:"
 
 
 def strip_provider_namespace(tool_name: str) -> str:

@@ -18,8 +18,12 @@ const LEMMA_MCP_SERVER_NAMES = [LEMMA_MCP_SERVER_NAME, "lemma-tools", "lemma"].s
 /** How agents mark a name as coming from an MCP server at all. */
 const MCP_MARKERS = ["mcp__", "mcp.", "mcp/"] as const;
 
-/** Whatever character joined the server name to the tool name. */
-const NAMESPACE_SEPARATORS = /^[_./:-]+/;
+/**
+ * Whatever character joined the server name to the tool name. No `-`:
+ * `lemma-tools` is a server name in its own right above, and treating `-` as a
+ * separator would read someone else's `lemma-corp` server as ours.
+ */
+const NAMESPACE_SEPARATORS = /^[_./:]+/;
 
 /**
  * Drop the MCP namespace an agent added, when the server named is Lemma's.

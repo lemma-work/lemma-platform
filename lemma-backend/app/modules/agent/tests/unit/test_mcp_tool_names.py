@@ -55,6 +55,16 @@ class TestNamespacesLemmaDoesNotOwn:
         )
         assert not is_provider_scoped_lemma_mcp_tool_name("mcp__github__create_issue")
 
+    def test_someone_elses_server_named_after_us_is_still_theirs(self) -> None:
+        """The server name is matched whole. `lemma-corp` is not `lemma`."""
+        assert (
+            normalize_local_mcp_tool_name("mcp__lemma-corp__delete_everything")
+            == "mcp__lemma-corp__delete_everything"
+        )
+        assert not is_provider_scoped_lemma_mcp_tool_name(
+            "lemma-corp.delete_everything"
+        )
+
     def test_a_word_starting_with_lemma_is_not_a_namespace(self) -> None:
         """The server name has to be followed by a separator. Without that check
         `lemmatize_text` reads as the `lemma` server's `tize_text`."""
