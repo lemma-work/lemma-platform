@@ -269,16 +269,6 @@ async def _capture_with_browser(
         cmd=_browser_script(url, out_dir, name, browser_formats),
         timeout=_BROWSER_TIMEOUT_SECONDS,
     )
-    if result.get("exit_code") not in (0, None):
-        return WebFetchPage(
-            url=url,
-            success=False,
-            fetched_with="browser",
-            error=(
-                (result.get("stderr") or result.get("stdout") or "").strip()[:400]
-                or "The page could not be captured."
-            ),
-        )
     return await _finish(
         session,
         url=url,
@@ -286,8 +276,31 @@ async def _capture_with_browser(
         name=name,
         formats=browser_formats,
         fetched_with="browser",
-        characters=None,
+        failure_output=(result.get("stderr") or result.get("stdout") or ""),
     )
+
+
+async def _present_files(session, paths: list[str]) -> dict[str, int]:
+    """Of the captures we asked for, the ones that are really on disk.
+
+    One command for the whole set, printing `size path` per non-empty file.
+    """
+    if not paths:
+        return {}
+    quoted = " ".join(shlex.quote(path) for path in paths)
+    listing = await session.exec_command(
+        cmd=(
+            f'for f in {quoted}; do [ -s "$f" ] && '
+            'printf "%s %s\\n" "$(wc -c < "$f" | tr -d " ")" "$f"; done'
+        ),
+        timeout=30,
+    )
+    sizes: dict[str, int] = {}
+    for line in (listing.get("stdout") or "").splitlines():
+        size, _, path = line.strip().partition(" ")
+        if path and size.isdigit():
+            sizes[path] = int(size)
+    return sizes
 
 
 async def _finish(
@@ -298,27 +311,44 @@ async def _finish(
     name: str,
     formats: list[str],
     fetched_with: str,
-    characters: int | None,
+    failure_output: str,
 ) -> WebFetchPage:
-    files = _expected_files(out_dir, name, formats)
+    """Report what the browser actually produced, not what was requested.
+
+    The result used to be the *expected* paths plus `success=True` whenever the
+    capture command did not exit non-zero — so a page the browser could not
+    render (Britannica refuses ours) came back as a success naming a file that
+    was never written, and the agent went looking for it. Exit codes were the
+    wrong thing to trust anyway: a render outliving its wait window reports no
+    exit code at all, which read as success. What is on disk is the answer.
+    """
+    expected = _expected_files(out_dir, name, formats)
+    present = await _present_files(session, list(expected.values()))
+    files = {fmt: path for fmt, path in expected.items() if path in present}
+
+    markdown_path = files.get("markdown")
+    if markdown_path is None:
+        return WebFetchPage(
+            url=url,
+            success=False,
+            fetched_with=fetched_with,
+            error=(
+                failure_output.strip()[:400]
+                or "The browser produced no readable article for this page. "
+                "Some sites refuse automated clients outright."
+            ),
+        )
+
+    head = await session.exec_command(
+        cmd=f"head -c {_PREVIEW_CHARS * 2} {shlex.quote(markdown_path)}",
+        timeout=20,
+    )
     preview = None
     title = None
-    markdown_path = files.get("markdown")
-    if markdown_path:
-        head = await session.exec_command(
-            cmd=f"head -c {_PREVIEW_CHARS * 2} {shlex.quote(markdown_path)}",
-            timeout=20,
-        )
-        text = (head.get("stdout") or "").strip()
-        if text:
-            first_line = text.splitlines()[0].lstrip("# ").strip()
-            title = first_line or None
-            preview = text[:_PREVIEW_CHARS]
-        if characters is None:
-            size = await session.exec_command(
-                cmd=f"wc -c < {shlex.quote(markdown_path)}", timeout=20
-            )
-            characters = _parse_int(size.get("stdout"))
+    text = (head.get("stdout") or "").strip()
+    if text:
+        title = text.splitlines()[0].lstrip("# ").strip() or None
+        preview = text[:_PREVIEW_CHARS]
 
     return WebFetchPage(
         url=url,
@@ -326,16 +356,9 @@ async def _finish(
         title=title,
         files=files,
         preview=preview,
-        characters=characters,
+        characters=present[markdown_path],
         fetched_with=fetched_with,
     )
-
-
-def _parse_int(value: object) -> int | None:
-    try:
-        return int(str(value).strip())
-    except TypeError, ValueError:
-        return None
 
 
 async def _clean_or_none(url: str) -> ExtractedPage | None:

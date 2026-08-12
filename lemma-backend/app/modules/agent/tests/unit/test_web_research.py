@@ -9,6 +9,7 @@ exist. Snippets are not sources; reading a page had no first-class path.
 from __future__ import annotations
 
 import asyncio
+import shlex
 from types import SimpleNamespace
 
 import pytest
@@ -121,13 +122,31 @@ class TestUnsupportedVerticalDegradesHonestly:
 
 
 class _FakeSession:
-    """Records what `web_fetch` sends to the sandbox: commands and file writes."""
+    """A sandbox with a filesystem, because `web_fetch` now reports what is on it.
 
-    def __init__(self, *, responses=None, write_error: Exception | None = None):
+    Modelling the files rather than just recording commands is what lets these
+    tests distinguish "the browser captured the page" from "the browser ran and
+    produced nothing", which is the difference the tool used to get wrong.
+    """
+
+    def __init__(
+        self,
+        *,
+        responses=None,
+        write_error: Exception | None = None,
+        browser_writes_nothing: bool = False,
+    ):
         self.commands: list[str] = []
-        self.writes: dict[str, bytes] = {}
+        self.files: dict[str, bytes] = {}
         self._responses = responses or {}
         self._write_error = write_error
+        self._browser_writes_nothing = browser_writes_nothing
+
+    # `writes` names only what the file API put there, so a test can still
+    # assert the cheap path did not go through the browser.
+    @property
+    def writes(self) -> dict[str, bytes]:
+        return {path: data for path, data in self.files.items() if path in self._api}
 
     async def __aenter__(self):
         return self
@@ -135,21 +154,46 @@ class _FakeSession:
     async def __aexit__(self, *exc):
         return False
 
+    _api: set
+
     async def write_file(self, path: str, data: bytes, *, timeout: int = 60):
         if self._write_error is not None:
             raise self._write_error
-        self.writes[path] = data
+        self.files[path] = data
+        self._api = getattr(self, "_api", set()) | {path}
         return None
+
+    def _capture_with_browser(self, cmd: str) -> None:
+        """Emulate `save-webpage`: write the files it was asked to emit."""
+        if self._browser_writes_nothing:
+            return
+        parts = shlex.split(cmd)
+        out = parts[parts.index("--out") + 1]
+        name = parts[parts.index("--name") + 1]
+        formats = parts[parts.index("--formats") + 1].split(",")
+        suffix = {"markdown": "md", "pdf": "pdf", "jpeg": "jpg", "png": "png"}
+        for fmt in formats:
+            if fmt in suffix:
+                self.files[f"{out}/{name}.{suffix[fmt]}"] = b"# A Title\n\nBody text."
 
     async def exec_command(self, *, cmd: str, timeout: int = 60, **_kwargs):
         self.commands.append(cmd)
         for marker, response in self._responses.items():
             if marker in cmd:
                 return response
+        if "save-webpage" in cmd:
+            self._capture_with_browser(cmd)
+            return {"exit_code": 0, "stdout": ""}
+        if cmd.startswith("for f in "):  # the presence-and-size probe
+            found = [
+                f"{len(data)} {path}"
+                for path, data in self.files.items()
+                if shlex.quote(path) in cmd and data
+            ]
+            return {"exit_code": 0, "stdout": "\n".join(found)}
         if cmd.startswith("head -c"):
-            return {"exit_code": 0, "stdout": "# A Title\n\nBody text here."}
-        if "wc -c" in cmd:
-            return {"exit_code": 0, "stdout": "5000"}
+            path = shlex.split(cmd)[-1]
+            return {"exit_code": 0, "stdout": self.files.get(path, b"").decode()}
         return {"exit_code": 0, "stdout": ""}
 
 
@@ -430,3 +474,77 @@ class TestWebFetch:
         assert by_url["https://ok.example/a"].success
         # The crashing one escalates on its own rather than taking the batch out.
         assert by_url["https://boom.example/b"].fetched_with == "browser"
+
+    @pytest.mark.asyncio
+    async def test_a_browser_that_captured_nothing_is_reported_as_a_failure(
+        self, monkeypatch
+    ) -> None:
+        """Found by running the real tool: Britannica refuses our browser too.
+
+        The page came back `success: true, fetched_with: "browser"` naming a
+        markdown file that was never written, and the agent went looking for it.
+        Success was inferred from the capture command's exit code; what is on
+        disk is the only honest answer.
+        """
+        session = _FakeSession(browser_writes_nothing=True)
+        _patch_session(monkeypatch, session)
+        _patch_extraction(monkeypatch, markdown=None)  # forces the browser
+
+        result = await web_fetch_module.web_fetch_internal(
+            SimpleNamespace(),
+            WebFetchRequest(urls=["https://www.britannica.com/biography/X"]),
+        )
+
+        page = result.pages[0]
+        assert page.success is False, page
+        assert page.files == {}, "a path must not be reported for a missing file"
+        assert page.error and "refuse" in page.error.lower()
+        assert result.success is False
+
+    @pytest.mark.asyncio
+    async def test_a_render_that_never_finished_is_not_a_success(
+        self, monkeypatch
+    ) -> None:
+        """A command outliving its wait window reports no exit code at all.
+
+        `exit_code not in (0, None)` treated that as success, so a browser still
+        working when the tool gave up returned a filename for a file that did
+        not exist yet.
+        """
+        session = _FakeSession(
+            browser_writes_nothing=True,
+            responses={"save-webpage": {"exit_code": None, "process_id": "p-1"}},
+        )
+        _patch_session(monkeypatch, session)
+        _patch_extraction(monkeypatch, markdown=None)
+
+        result = await web_fetch_module.web_fetch_internal(
+            SimpleNamespace(),
+            WebFetchRequest(urls=["https://spa.example/app"]),
+        )
+
+        assert result.pages[0].success is False, result.pages[0]
+
+    @pytest.mark.asyncio
+    async def test_only_the_formats_that_landed_are_reported(
+        self, monkeypatch
+    ) -> None:
+        """A screenshot that failed must not be listed beside the markdown."""
+        session = _FakeSession()
+        _patch_session(monkeypatch, session)
+
+        result = await web_fetch_module.web_fetch_internal(
+            SimpleNamespace(),
+            WebFetchRequest(urls=["https://example.com/a"], formats=["markdown", "pdf"]),
+        )
+        page = result.pages[0]
+        assert page.success and set(page.files) == {"markdown", "pdf"}
+
+        # Now the same request against a browser that writes nothing.
+        empty = _FakeSession(browser_writes_nothing=True)
+        _patch_session(monkeypatch, empty)
+        result = await web_fetch_module.web_fetch_internal(
+            SimpleNamespace(),
+            WebFetchRequest(urls=["https://example.com/a"], formats=["markdown", "pdf"]),
+        )
+        assert result.pages[0].files == {}
