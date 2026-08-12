@@ -112,8 +112,16 @@ ENV PYTHONUNBUFFERED=1 \
     GH_NO_UPDATE_NOTIFIER=1 \
     GH_PAGER=cat \
     NODE_PATH=/opt/lemma-node/node_modules \
-    PNPM_HOME=/home/appuser/.local/share/pnpm \
-    PATH=/workspace/.python/bin:/opt/lemma-python/bin:/opt/lemma-node/node_modules/.bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin \
+    # On the workspace volume, which is the only thing that survives a sandbox
+    # being recreated — and, less obviously, the only place pnpm can do its job.
+    # pnpm links packages into node_modules from its store, and a hard link
+    # cannot cross a filesystem: with the store on the container layer and the
+    # project on /workspace, every install silently fell back to copying. So the
+    # store was neither faster nor smaller than npm's. Here it is both, and it
+    # survives to the next conversation.
+    PNPM_HOME=/workspace/.pnpm \
+    UV_CACHE_DIR=/workspace/.uv-cache \
+    PATH=/workspace/.python/bin:/workspace/.pnpm:/opt/lemma-python/bin:/opt/lemma-node/node_modules/.bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin \
     MPLBACKEND=Agg
 
 RUN apt-get update \

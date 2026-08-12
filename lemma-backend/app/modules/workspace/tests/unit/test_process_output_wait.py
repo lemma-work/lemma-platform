@@ -78,7 +78,7 @@ async def test_a_waiting_poll_wakes_the_moment_the_process_exits() -> None:
     started = time.monotonic()
     await buffer.snapshot(0, wait_seconds=29)
     elapsed = time.monotonic() - started
-    await task
+    await asyncio.wait_for(task, timeout=5)
 
     assert elapsed < 1.0, f"woke {elapsed:.1f}s after exit, not promptly"
 
@@ -95,7 +95,7 @@ async def test_a_waiting_poll_wakes_the_moment_output_appears() -> None:
     started = time.monotonic()
     snapshot = await buffer.snapshot(0, wait_seconds=29)
     elapsed = time.monotonic() - started
-    await task
+    await asyncio.wait_for(task, timeout=5)
 
     assert elapsed < 1.0, f"woke {elapsed:.1f}s after output, not promptly"
     assert len(snapshot.chunks) == 1

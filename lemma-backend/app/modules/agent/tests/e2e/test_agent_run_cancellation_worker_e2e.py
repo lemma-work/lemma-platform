@@ -320,6 +320,8 @@ async def test_sigterm_midrun_shuts_down_cleanly_and_finalizes_run(
         try:
             proc.wait(timeout=5)
         except subprocess.TimeoutExpired:
+            # Expected: SIGQUIT only asks for a dump, it does not end the
+            # process. Fall through to SIGABRT, which does.
             pass
         proc.send_signal(signal.SIGABRT)
         try:

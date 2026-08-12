@@ -175,15 +175,13 @@ class ManagedProcess:
             try:
                 view = view[os.write(self.master_fd, view) :]
             except BlockingIOError:
-                writable = loop.create_future()
-
-                def _ready() -> None:
-                    if not writable.done():
-                        writable.set_result(None)
-
-                loop.add_writer(self.master_fd, _ready)
+                # An Event rather than a Future: `add_writer` can fire more than
+                # once, and setting an Event twice is harmless where resolving a
+                # Future twice raises.
+                writable = asyncio.Event()
+                loop.add_writer(self.master_fd, writable.set)
                 try:
-                    await writable
+                    await writable.wait()
                 finally:
                     loop.remove_writer(self.master_fd)
 
