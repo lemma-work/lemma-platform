@@ -1,0 +1,462 @@
+/* ──────────────────────────────────────────────────────────────────────────
+   Notifications — the bell badge, the inbox, and home's unattended slice.
+
+   The inbox is two shapes, because it holds two kinds of thing. An open ask is
+   a task: read whole, answered in place, one card each, and never many. A
+   settled one is a record: one line in a ledger, scanned rather than read,
+   opened only when somebody is looking for something specific.
+
+   What this replaced grouped rows into "threads" keyed on the conversation
+   they came from — which every scheduled run makes unique, so six check-ins
+   became six groups of one, each paying for a heading and a rule, with the
+   subject repeated on all six anyway.
+
+   Weight stays at 500 throughout. An unread ask is marked by its dot and its
+   ink, never by being bolder than the asks around it.
+   ────────────────────────────────────────────────────────────────────────── */
+
+/* ── The badge ── */
+
+/* Sized to hold "9+" without becoming an oval, and ringed in the shell's own
+   background so it reads as sitting on the bell rather than merging with its
+   strokes. Under desktop vibrancy `--pod-shell-bg` is `transparent`, and the
+   ring simply disappears — the fill still carries it. */
+.notification-bell-badge {
+  position: absolute;
+  top: 1px;
+  right: 1px;
+  display: flex;
+  min-width: var(--space-4);
+  height: var(--space-4);
+  align-items: center;
+  justify-content: center;
+  padding: 0 var(--space-1);
+  border-radius: var(--radius-full);
+  background: var(--action-primary);
+  box-shadow: 0 0 0 2px var(--pod-shell-bg);
+  color: var(--text-on-brand);
+  font-size: var(--text-2xs);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  letter-spacing: 0;
+}
+
+/* The status dot, wherever a notification is drawn. Colour comes from a utility
+   on the element; this is the shape. It had no rule at all for a while, which
+   made home's dots zero-sized — a coloured background on a span with no box. */
+.notification-row-dot,
+.notification-card-dot,
+.notification-ledger-dot {
+  width: 5px;
+  height: 5px;
+  flex-shrink: 0;
+  border-radius: var(--radius-full);
+}
+
+/* ── The page ── */
+
+/* A measure, not a width. These are sentences people read, and a question run
+   across a 2000px display is unreadable in a way no amount of spacing fixes.
+   58rem lands a little over 70 characters at this size. */
+.notification-page {
+  width: 100%;
+  max-width: 58rem;
+}
+
+.notification-page-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+}
+
+/* The count belongs to the tab it counts, not to a mono line pinned to the far
+   side of the page. */
+.notification-tab-count {
+  margin-left: var(--space-1-5);
+  color: var(--text-tertiary);
+  font-size: var(--text-2xs);
+  font-variant-numeric: tabular-nums;
+}
+
+[data-state='active'] .notification-tab-count {
+  color: var(--text-secondary);
+}
+
+/* ── The one reason nothing was delivered ── */
+
+/* A pod with no connected surface fails every notification for the same reason,
+   and printing that reason under each card spends a line per record restating
+   one missing connection. Said once, with the thing that fixes it. */
+.notification-banner {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2-5);
+  margin-bottom: var(--space-4);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--state-warning) 12%, transparent);
+  color: var(--state-warning);
+}
+
+.notification-banner p {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--text-xs);
+  line-height: 1.5;
+}
+
+.notification-banner-action {
+  flex-shrink: 0;
+  border-radius: var(--radius-md);
+  font-size: var(--text-xs);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+/* ── An open ask ── */
+
+.notification-card-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2-5);
+}
+
+/* A card, not a row. There are only ever a handful of these — everything
+   answered has left for the ledger — so each one can afford to show the whole
+   question and the box to answer it in, with no disclosure to click first. */
+.notification-card {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--card-bg);
+  padding: var(--space-3-5) var(--space-4);
+}
+
+.notification-card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1-5);
+  color: var(--text-tertiary);
+  font-size: var(--text-2xs);
+  line-height: 1.4;
+}
+
+.notification-card-dot {
+  background: var(--text-tertiary);
+}
+
+.notification-card[data-unread='true'] .notification-card-dot {
+  background: var(--action-primary);
+}
+
+.notification-card-sender {
+  color: var(--text-secondary);
+}
+
+/* Pushed to the end of the meta line rather than given a row of its own: it
+   opens a detail nobody needs until they doubt the count. */
+.notification-card-repeats {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin-left: auto;
+  border-radius: var(--radius-md);
+  padding: 0 var(--space-1);
+  color: var(--text-tertiary);
+  font-size: var(--text-2xs);
+  cursor: pointer;
+  transition: color var(--dur-fast) var(--ease-out);
+}
+
+.notification-card-repeats:hover {
+  color: var(--text-secondary);
+}
+
+.notification-card-repeats svg {
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+
+.notification-card-repeats svg[data-open='true'] {
+  transform: rotate(180deg);
+}
+
+.notification-card-title {
+  margin-top: var(--space-2);
+  color: var(--text-primary);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  line-height: 1.5;
+}
+
+/* The ask itself, unclipped. It is the only thing on the card that says which
+   question this is, and a card is not short of room. */
+.notification-card-body {
+  margin-top: var(--space-1);
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+
+.notification-card-repeat-list {
+  margin: var(--space-2) 0 0;
+  padding: 0 0 0 var(--space-3);
+  border-left: 1px solid var(--border-subtle);
+  list-style: none;
+  color: var(--text-tertiary);
+  font-size: var(--text-2xs);
+  line-height: 1.7;
+}
+
+.notification-card-note {
+  margin-top: var(--space-2);
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+}
+
+/* Wide enough to hold an answer, narrow enough not to become the page. */
+.notification-card-field {
+  margin-top: var(--space-3);
+  min-height: 3.75rem;
+  max-width: 34rem;
+}
+
+.notification-card-actions {
+  margin-top: var(--space-2-5);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1-5);
+}
+
+.notification-card-hint {
+  color: var(--text-tertiary);
+  font-size: var(--text-2xs);
+}
+
+/* Pushed away from the answering actions: it closes the ask without answering
+   it. Only ever drawn where the domain actually allows it — `acknowledge` is
+   refused for anything expecting a response. */
+.notification-card-dismiss {
+  margin-left: auto;
+}
+
+.notification-card-error {
+  margin-top: var(--space-2);
+  color: var(--state-error);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+}
+
+/* ── The ledger ── */
+
+.notification-history {
+  margin-top: var(--space-7);
+}
+
+.notification-band + .notification-band {
+  margin-top: var(--space-5);
+}
+
+/* Two bands, never a calendar. Past yesterday the exact day stops being how
+   anyone looks for something, and the row already carries its own clock. */
+.notification-band-label {
+  color: var(--text-tertiary);
+  font-size: var(--text-2xs);
+  font-weight: 500;
+  letter-spacing: 0.02em;
+}
+
+.notification-ledger-row {
+  display: flex;
+  width: 100%;
+  min-height: 2.25rem;
+  align-items: center;
+  gap: var(--space-2-5);
+  border: 0;
+  background: none;
+  text-align: left;
+  cursor: pointer;
+}
+
+/* The subject is the topic and a topic repeats; the preview is what tells two
+   of them apart. Same split as home's slice, so one record reads the same way
+   in both places. */
+.notification-ledger-title {
+  flex: 0 0 clamp(9rem, 32%, 18rem);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--text-primary);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+}
+
+.notification-ledger-preview {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--text-tertiary);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+}
+
+/* Who asked — and, where a row ended somewhere it should not have, what
+   happened to it instead. "Answered" is not printed here: the whole list is
+   answered things, and the dot already carries it. */
+.notification-ledger-sender {
+  flex-shrink: 0;
+  max-width: 9rem;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--text-tertiary);
+  font-size: var(--text-2xs);
+}
+
+.notification-ledger-sender[data-state='true'] {
+  color: var(--state-error);
+}
+
+.notification-ledger-time {
+  flex-shrink: 0;
+  min-width: 2.5rem;
+  color: var(--text-tertiary);
+  font-size: var(--text-2xs);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.notification-ledger-item[data-current='true'] .notification-ledger-row {
+  background: color-mix(in srgb, var(--action-primary) 7%, transparent);
+}
+
+/* Indented to the preview column, so the detail reads as belonging to the row
+   above it rather than as a record of its own. */
+.notification-ledger-detail {
+  padding: var(--space-1) var(--space-2) var(--space-3)
+    calc(var(--space-1) + 5px + var(--space-2-5));
+}
+
+.notification-ledger-ask {
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+
+.notification-ledger-answer {
+  margin-top: var(--space-2);
+  padding: var(--space-1-5) var(--space-2-5);
+  border-left: 2px solid var(--border-subtle);
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  line-height: 1.55;
+}
+
+.notification-ledger-note {
+  margin-top: var(--space-2);
+  color: var(--text-tertiary);
+  font-size: var(--text-2xs);
+  line-height: 1.5;
+}
+
+.notification-ledger-actions {
+  margin-top: var(--space-1);
+  display: flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  margin-left: calc(var(--space-2) * -1);
+}
+
+.notification-history-empty {
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+}
+
+/* ── Empty, and older ── */
+
+.notification-empty {
+  padding: var(--space-6) 0;
+  max-width: 32rem;
+}
+
+.notification-empty p {
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  line-height: 1.6;
+}
+
+.notification-empty p + p {
+  margin-top: var(--space-1-5);
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+}
+
+.notification-page-more {
+  margin-top: var(--space-3);
+  display: flex;
+  justify-content: flex-start;
+  margin-left: calc(var(--space-3) * -1);
+}
+
+/* ── Home: the unattended slice ── */
+
+/* Home's activity panel already draws one-line rows; these only add the link
+   behaviour, since a notification's row there is an anchor and the panel's own
+   rows are anchors too. */
+.pod-home-notification-row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-md);
+  text-decoration: none;
+  transition: background-color 120ms ease;
+}
+
+.pod-home-notification-row:hover {
+  background: color-mix(in srgb, var(--surface-2) 50%, transparent);
+}
+
+/* Narrower share than the page's: home's panel is one column of a centred
+   layout, not the full width, so a 20% title column would leave the preview
+   nothing to say. */
+.pod-home-notification-title {
+  flex: 0 0 clamp(8rem, 34%, 16rem);
+  padding-right: var(--space-2-5);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--text-primary);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+}
+
+.pod-home-notification-preview {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--text-tertiary);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+}
+
+.pod-home-notification-meta {
+  flex-shrink: 0;
+  margin-left: auto;
+  padding-left: var(--space-2);
+  color: var(--text-tertiary);
+  font-size: var(--text-2xs);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}

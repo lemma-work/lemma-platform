@@ -25,6 +25,15 @@ import {
     useFlows,
     useWorkflowRunSnapshots,
 } from '@/lib/hooks/use-flows';
+import {
+    UNATTENDED_NOTIFICATION_STATUSES,
+    useNotifications,
+} from '@/lib/hooks/use-notifications';
+import {
+    buildNotificationHref,
+    describeNotificationMeta,
+    flattenNotificationBody,
+} from '@/lib/notifications/notification-display';
 import { usePod } from '@/lib/hooks/use-pods';
 import { usePodAccess } from '@/lib/hooks/use-pod-access';
 import { usePodJoinRequests } from '@/lib/hooks/use-pod-join-requests';
@@ -66,6 +75,10 @@ const OUTCOME_TITLE_MAX_LENGTH = 58;
  * other's cache and cost two round trips.
  */
 const POD_HOME_CONVERSATION_LIMIT = 100;
+/** How many unattended notifications home prints before deferring to the page.
+ *  Home is a glance at what is happening; a queue is a queue and has its own
+ *  route. */
+const POD_HOME_NOTIFICATION_LIMIT = 4;
 
 interface ComposerLaunchAnimation {
     id: number;
@@ -641,6 +654,18 @@ function PodAgentWorkflowKanban({
     const { data: agentsData, isLoading: loadingAgents } = useAgents(canReadAgents ? podId : undefined);
     const { data: workflowsData = [], isLoading: loadingWorkflows } = useFlows(canReadWorkflows ? podId : undefined);
     const { data: schedulesData, isLoading: loadingSchedules } = useSchedules(canReadSchedules ? podId : undefined, { isActive: true, limit: 12 });
+    // Scoped to OPEN by the server rather than filtered here, so home reads a
+    // short list instead of pulling a history it throws away. Notifications are
+    // addressed to one person and gated on membership, so there is no capability
+    // to check — everyone who can see this page can be asked something on it.
+    const { data: notificationsData, isLoading: loadingNotifications } = useNotifications(podId, {
+        limit: POD_HOME_NOTIFICATION_LIMIT,
+        status: UNATTENDED_NOTIFICATION_STATUSES,
+    });
+    const unattendedNotifications = useMemo(
+        () => (notificationsData?.items || []).slice(0, POD_HOME_NOTIFICATION_LIMIT),
+        [notificationsData?.items],
+    );
 
     const agents = useMemo(() => agentsData?.items || [], [agentsData?.items]);
     const workflows = useMemo(() => workflowsData || [], [workflowsData]);
@@ -749,8 +774,9 @@ function PodAgentWorkflowKanban({
         return [...workflowOutcomes, ...agentOutcomes].slice(0, 5);
     }, [agentsByNameOrId, conversations, podId, runSnapshots]);
 
-    const isLoading = loadingAgents || loadingWorkflows || loadingSchedules || loadingRuns;
-    const hasKanbanItems = upcomingItems.length + movingItems.length + recentOutcomeItems.length > 0;
+    const isLoading = loadingAgents || loadingWorkflows || loadingSchedules || loadingRuns || loadingNotifications;
+    const hasKanbanItems =
+        unattendedNotifications.length + upcomingItems.length + movingItems.length + recentOutcomeItems.length > 0;
     const hasUsedWorkflow = runSnapshots.some((snapshot) => snapshot.runs.some((run) => {
         const status = normalizeWorkflowRunStatus(run.status);
         return RUNNING_RUN_STATUSES.has(status) || COMPLETED_RUN_STATUSES.has(status);
@@ -785,6 +811,9 @@ function PodAgentWorkflowKanban({
                                     <span className="pod-home-work-live-dot" />
                                 ) : null}
                                 <span>
+                                    {unattendedNotifications.length > 0
+                                        ? `${unattendedNotifications.length} waiting on you · `
+                                        : ''}
                                     {movingItems.length > 0 ? `${movingItems.length} running · ` : ''}
                                     {schedules.length} scheduled
                                 </span>
@@ -792,6 +821,50 @@ function PodAgentWorkflowKanban({
                         </div>
 
                         <div className="pod-home-work-panel">
+                            {/* First in the panel, above everything the pod is
+                                doing on its own: these are the only rows that
+                                are blocked on a person. One line each — the
+                                title and when it arrived — because anything
+                                longer turns four of them into a wall, and the
+                                body is one click away on the row's own page. */}
+                            {unattendedNotifications.length > 0 ? (
+                                <div className="pod-home-work-section-row">
+                                    <p className="pod-home-work-section-label">Needs you</p>
+                                    <div className="pod-home-work-list">
+                                        {unattendedNotifications.map((notification) => (
+                                            <Link
+                                                key={notification.id}
+                                                href={buildNotificationHref(podId, notification.id)}
+                                                className="pod-home-notification-row group"
+                                            >
+                                                <span
+                                                    className={cn(
+                                                        'notification-row-dot',
+                                                        notification.awaiting_response
+                                                            ? 'bg-[var(--action-primary)]'
+                                                            : 'bg-[var(--text-tertiary)]',
+                                                    )}
+                                                    aria-hidden="true"
+                                                />
+                                                <span className="pod-home-notification-title">
+                                                    {notification.title}
+                                                </span>
+                                                {/* The title is the topic and a
+                                                    topic repeats; the body is
+                                                    what tells two of these
+                                                    apart. */}
+                                                <span className="pod-home-notification-preview">
+                                                    {flattenNotificationBody(notification.body)}
+                                                </span>
+                                                <span className="pod-home-notification-meta">
+                                                    {describeNotificationMeta(notification)}
+                                                </span>
+                                            </Link>
+                                        ))}
+                                    </div>
+                                </div>
+                            ) : null}
+
                             {upcomingItems.length > 0 ? (
                                 <div className="pod-home-work-section-row">
                                     <p className="pod-home-work-section-label">Upcoming</p>
