@@ -146,6 +146,14 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=node-runtime /usr/local/bin/node /usr/local/bin/node
+# npm and npx, not just the node binary. Copying only `node` left the image with
+# pnpm and no npm at all, which breaks the first thing anyone does with a
+# JavaScript project: `npx create-next-app`, `npm install`, `npm run build`, and
+# every README and error message that names them. An agent asked to build a
+# Next.js app got as far as discovering npm was missing and started hand-
+# downloading a Node tarball — twice, because it guessed the wrong architecture.
+# pnpm stays the preferred installer; npm just has to exist.
+COPY --from=node-runtime /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/npm
 COPY --from=node-runtime /opt/lemma-node /opt/lemma-node
 COPY --from=python-runtime /opt/lemma-python /opt/lemma-python
 COPY --from=uv-runtime /uv /usr/local/bin/uv
@@ -153,6 +161,8 @@ COPY --from=uv-runtime /uvx /usr/local/bin/uvx
 COPY --from=gh-runtime /usr/local/bin/gh /usr/local/bin/gh
 COPY lemma-backend/sandbox-images/scripts/lemma-node-tool /usr/local/lib/lemma-node-tool
 RUN ln -sf "$(command -v chromium)" /usr/local/bin/workspace-chrome \
+    && ln -sf ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
+    && ln -sf ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
     && ln -sf /opt/lemma-python/bin/lemma /usr/local/bin/lemma \
     && chmod 0755 /usr/local/lib/lemma-node-tool \
     && ln -sf /usr/local/lib/lemma-node-tool /usr/local/bin/agent-browser \

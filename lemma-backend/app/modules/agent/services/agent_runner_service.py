@@ -97,6 +97,11 @@ from app.core.authorization.delegation import DEFAULT_POD_AGENT_NAME
 logger = get_logger(__name__)
 FULL_HISTORY_AGENT_RUN_COUNT = 5
 
+# Ceiling on the shielded finalization write. Comfortably longer than the write
+# takes and comfortably inside the worker's shutdown grace period, so a healthy
+# run always finalizes and a wedged one still lets the process exit.
+_FINALIZATION_TIMEOUT_SECONDS = 8.0
+
 
 def _run_failure_message(exc: BaseException) -> str:
     """What the user reads when a run dies outside the harness's own handling.
@@ -529,7 +534,20 @@ class AgentRunnerService:
             # (no retry). That is intentional — the app DB (this FAILED write)
             # is the source of truth; interrupted runs fail terminally and the
             # user re-asks rather than the job silently re-running on another pod.
-            with anyio.CancelScope(shield=True):
+            # Shielded *and* bounded. The shield is what lets the write finish
+            # while the surrounding scope is already cancelled; without a
+            # deadline it also makes the write uninterruptible, and an
+            # uninterruptible write is how a SIGTERM'd worker hangs forever:
+            # streaq's consumer cannot finish, so its task group never exits and
+            # the lifespan teardown is never reached — no grace period applies,
+            # because the grace period is enforced by the very cancellation this
+            # scope is ignoring. Observed on roughly one mid-run SIGTERM in four.
+            #
+            # Losing the write is survivable; `reconcile_orphaned_agent_runs`
+            # already exists to finish runs that were interrupted. Losing the
+            # worker is not: the platform SIGKILLs it and every other in-flight
+            # run on that process dies with it.
+            with anyio.move_on_after(_FINALIZATION_TIMEOUT_SECONDS, shield=True):
                 await _finalize_safely(
                     self._finish_agent_run(
                         conversation_id=conversation.id,

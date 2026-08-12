@@ -6,12 +6,12 @@ import asyncio
 import json
 import logging
 import time
+import traceback
 from collections.abc import AsyncGenerator, Awaitable, Callable, Sequence
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
 from enum import StrEnum
 
-import anyio
 from faststream.redis import RedisBroker
 from opentelemetry import context as otel_context
 from opentelemetry import metrics, trace
@@ -96,6 +96,79 @@ TASK_LANES: dict[str, Lane] = {}
 _primary_lane_context: AppWorkerContext | None = None
 _primary_lane_ready = asyncio.Event()
 
+#: Tasks running the non-primary lanes, so the primary's teardown can stop them
+#: before it disposes the infrastructure they share.
+_secondary_lane_tasks: list[asyncio.Task[None]] = []
+
+
+def _silence_lane_signal_handler(worker: Worker[AppWorkerContext]) -> None:
+    """Stop a non-primary lane from competing for the process's signals.
+
+    streaq starts `signal_handler` for every worker regardless of its
+    `handle_signals` argument, and each one opens an anyio signal receiver.
+    asyncio's `add_signal_handler` keeps only the last registration per signal,
+    so with more than one lane the SIGTERM goes to whichever registered last —
+    and if that is not the primary, the lane that receives it cancels only its
+    own scope while the primary keeps running.
+
+    Replacing the coroutine on the instance is the smallest thing that works:
+    the task still exists and still ends with the worker's task group, it just
+    never claims the signal.
+    """
+
+    async def _never_receives_signals(_scope: object) -> None:
+        await asyncio.Event().wait()  # until the lane's task group unwinds
+
+    worker.signal_handler = _never_receives_signals  # type: ignore[method-assign]
+
+
+def _install_task_dump_handler() -> None:
+    """Print every pending coroutine's stack on SIGQUIT.
+
+    A worker that stops responding to SIGTERM shows nothing useful in a thread
+    dump: `faulthandler` reports the event loop sitting in `select()`, which is
+    what an idle loop always looks like. The question is always *which awaited
+    coroutine is not finishing*, and only the task list answers it. SIGQUIT is
+    free — neither streaq nor anything else here uses it.
+    """
+    import signal
+
+    def _dump(*_args: object) -> None:
+        for task in asyncio.all_tasks():
+            frames = "".join(
+                traceback.format_stack(task.get_coro().cr_frame)  # type: ignore[union-attr]
+                if getattr(task.get_coro(), "cr_frame", None)
+                else []
+            )
+            logger.warning(
+                "infrastructure.streaq_runtime.pending_task_dump.diagnostic",
+                task_name=task.get_name(),
+                frames=frames[-2000:],
+            )
+
+    try:
+        asyncio.get_running_loop().add_signal_handler(signal.SIGQUIT, _dump)
+    except (NotImplementedError, RuntimeError):  # pragma: no cover - platform
+        pass
+
+
+async def _stop_secondary_lanes() -> None:
+    """Cancel the non-primary lanes and wait, briefly, for them to unwind."""
+    tasks = [task for task in _secondary_lane_tasks if not task.done()]
+    _secondary_lane_tasks.clear()
+    if not tasks:
+        return
+    for task in tasks:
+        task.cancel()
+    _, pending = await asyncio.wait(tasks, timeout=_SECONDARY_LANE_SHUTDOWN_SECONDS)
+    if pending:
+        # Named, because "the worker had to be killed" is not a diagnosis.
+        logger.warning(
+            "infrastructure.streaq_runtime.lane_shutdown_timed_out.degraded",
+            lanes=",".join(sorted(task.get_name() for task in pending)),
+            timeout_seconds=_SECONDARY_LANE_SHUTDOWN_SECONDS,
+        )
+
 
 def lane_queue_name(lane: Lane) -> str:
     """Redis queue name for a lane.
@@ -127,6 +200,17 @@ def lane_for_task(task_name: str) -> Lane:
 # Headroom between task concurrency and the DB pool, leaving room for the
 # crons, event handlers and reconcilers that share the worker.
 _DB_POOL_SAFETY_FACTOR = 0.8
+
+# How long the non-primary lanes get to unwind once the primary has shut down.
+# The primary has already served its own grace period by this point, so the
+# remaining lanes are only closing connections. Short, because the alternative
+# to giving up is being SIGKILLed by the platform a moment later.
+_SECONDARY_LANE_SHUTDOWN_SECONDS = 10.0
+
+# Per-step ceiling for the primary lane's teardown. Closing a pool should take
+# milliseconds; anything that takes seconds is wedged, and waiting on it only
+# trades a clean exit for a SIGKILL.
+_SHUTDOWN_STEP_TIMEOUT_SECONDS = 5.0
 
 JOB_TIMEOUT_SECONDS = 1800
 # An agent run is the one task whose ceiling is not ours to pick freely: it
@@ -243,10 +327,29 @@ class AppWorkerContext:
 
 
 async def _safe_shutdown_step(name: str, fn: Callable[[], Awaitable[None]]) -> None:
+    """Run one teardown step, bounded, and say which one is running.
+
+    Both properties exist because of the same incident: a worker that stopped
+    responding to SIGTERM left a log ending at `service.started`, so there was
+    nothing to say which step had stalled — and one stalled step was enough to
+    hold the whole process until the platform killed it. A step that cannot
+    finish in time is now abandoned so the rest still run.
+    """
+    logger.debug(
+        "infrastructure.streaq_runtime.worker_shutdown_step.diagnostic", step=name
+    )
     try:
-        await fn()
+        await asyncio.wait_for(fn(), timeout=_SHUTDOWN_STEP_TIMEOUT_SECONDS)
+    except TimeoutError:
+        logger.warning(
+            "infrastructure.streaq_runtime.worker_shutdown_step_timed_out.degraded",
+            step=name,
+            timeout_seconds=_SHUTDOWN_STEP_TIMEOUT_SECONDS,
+        )
     except Exception:  # pragma: no cover
-        logger.debug("infrastructure.streaq_runtime.worker_shutdown_step.diagnostic")
+        logger.debug(
+            "infrastructure.streaq_runtime.worker_shutdown_step.diagnostic", step=name
+        )
 
 
 async def _ensure_consumer_groups_once() -> None:
@@ -430,6 +533,13 @@ async def worker_lifespan() -> AsyncGenerator[AppWorkerContext]:
             _primary_lane_ready.set()
             yield context
     finally:
+        # Before anything shared is disposed. Every lane runs on this one
+        # context — the same engine, broker and Redis clients — so tearing them
+        # down while a secondary lane is still consuming jobs is what used to
+        # hang the process: `close_engine` and `broker.stop` wait on work that
+        # nothing has told to stop. Stopping the other lanes first is the
+        # ordering that makes the rest of this block finite.
+        await _stop_secondary_lanes()
         _primary_lane_ready.clear()
         _primary_lane_context = None
         for background_task in (
@@ -496,12 +606,18 @@ def create_streaq_worker(
         redis_url=settings.redis_url,
         queue_name=lane_queue_name(lane),
         concurrency=concurrency if concurrency is not None else lane_concurrency(lane),
-        # Only the primary lane watches for signals. streaq's handler cancels
-        # just its OWN worker's scope, so with a handler per lane a SIGTERM
-        # stops one lane and leaves the others running — the process then never
-        # exits. The primary handles the signal (applying its grace period so an
-        # in-flight agent run can still finalize) and run_worker_lanes stops the
-        # rest once it unwinds.
+        # Only the primary lane should watch for signals: streaq's handler
+        # cancels just its OWN worker's scope, so a handler per lane means a
+        # SIGTERM stops one lane and leaves the others running, and the process
+        # never exits.
+        #
+        # This flag does not achieve that. streaq stores `handle_signals` and
+        # never reads it — `run_async` starts `signal_handler` unconditionally
+        # — so every lane opens a receiver for SIGINT/SIGTERM. asyncio's
+        # `add_signal_handler` is last-wins, so which lane actually receives the
+        # signal is a startup race: about one time in four the bulk lane won,
+        # cancelled only itself, and the worker hung until it was SIGKILLed.
+        # `_silence_lane_signal_handler` below is what really enforces this.
         handle_signals=handle_signals and lane is _PRIMARY_LANE,
         lifespan=(
             worker_lifespan if lane is _PRIMARY_LANE else secondary_lane_lifespan
@@ -527,6 +643,10 @@ LANE_WORKERS: dict[Lane, Worker[AppWorkerContext]] = {
     Lane.INTERACTIVE: streaq_worker,
     Lane.BULK: bulk_worker,
 }
+
+for _lane, _worker in LANE_WORKERS.items():
+    if _lane is not _PRIMARY_LANE:
+        _silence_lane_signal_handler(_worker)
 
 
 def enabled_lanes() -> list[Lane]:
@@ -578,6 +698,7 @@ async def run_worker_lanes(lanes: Sequence[Lane] | None = None) -> None:
         "worker.lanes.starting",
         lanes=",".join(lane.value for lane in selected),
     )
+    _install_task_dump_handler()
     primary, *secondary = selected
     if not secondary:
         await LANE_WORKERS[primary].run_async()
@@ -587,13 +708,29 @@ async def run_worker_lanes(lanes: Sequence[Lane] | None = None) -> None:
     # return is the process's shutdown signal: wait for it to unwind gracefully,
     # then stop the remaining lanes. Cancelling a bulk extraction mid-flight is
     # safe — the row stays PROCESSING and the recovery cron reclaims it.
-    async with anyio.create_task_group() as task_group:
-        for lane in secondary:
-            task_group.start_soon(LANE_WORKERS[lane].run_async)
-        try:
-            await LANE_WORKERS[primary].run_async()
-        finally:
-            task_group.cancel_scope.cancel()
+    #
+    # Plain tasks rather than a task group, because leaving is not optional.
+    # `async with create_task_group()` waits for its children unconditionally,
+    # and a streaq worker does not always unwind promptly when cancelled: parts
+    # of its shutdown run under a shielded scope, so an external cancel can be
+    # held off until an in-flight Redis call returns. Measured on a SIGTERM
+    # delivered mid-run, that hung the whole process about one time in four —
+    # and a worker that does not exit gets SIGKILLed by the platform, which
+    # takes the in-flight agent run's finalization with it.
+    _secondary_lane_tasks.clear()
+    _secondary_lane_tasks.extend(
+        create_background_task(
+            LANE_WORKERS[lane].run_async(), name=f"worker-lane-{lane.value}"
+        )
+        for lane in secondary
+    )
+    try:
+        await LANE_WORKERS[primary].run_async()
+    finally:
+        # Normally already done, from inside the primary's lifespan teardown.
+        # Repeated here for the paths that never reach it — a primary that
+        # fails during startup still has to take the other lanes with it.
+        await _stop_secondary_lanes()
 
 
 async def load_job_observability_context(redis, job_id: str) -> dict[str, str]:
