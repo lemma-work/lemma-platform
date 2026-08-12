@@ -57,13 +57,27 @@ logger = get_logger(__name__)
 # A plain fetch is quick; a browser render has to start Chrome and wait for the
 # network to settle.
 _HTTP_TIMEOUT_SECONDS = 45
-_BROWSER_TIMEOUT_SECONDS = 120
+_BROWSER_TIMEOUT_SECONDS = 75
 
-# The batch as a whole. Browser renders are serialised, so twenty JS-heavy pages
-# would otherwise hold the tool for forty minutes and the agent would look hung.
-# Past this, whatever has been captured is returned and the rest are reported as
-# skipped — a partial answer the agent can act on beats an unbounded wait.
-_BATCH_BUDGET_SECONDS = 300
+# The batch as a whole, and a hard one: the tool returns at this point whatever
+# it has, because nothing above it will stop it.
+#
+# There is no per-tool timeout anywhere in the harness. A tool that blocks blocks
+# its run until the streaq job ceiling (55 minutes) kills the worker task — and
+# that path records the job as *succeeded*, so the user is left with a run that
+# simply stopped. A research batch is exactly the shape that gets there: four
+# URLs of which three need the browser, serialised because the sandbox has one
+# shared browser session, is already minutes of work before anything goes wrong.
+#
+# So the budget is enforced with a real deadline rather than checked between
+# steps, and partial results survive it. An agent that gets three of four pages
+# and a note about the fourth can act; an agent whose run disappears cannot.
+_BATCH_BUDGET_SECONDS = 240
+
+# Browser renders are the serialised, expensive path, and the batch budget is
+# the only thing bounding them. Capping them keeps a list of JS-heavy URLs from
+# spending the entire budget before the cheap pages are even reported.
+_MAX_BROWSER_RENDERS = 3
 
 # Enough to saturate the network wait without opening twenty sockets to twenty
 # sites at once.
@@ -146,45 +160,85 @@ async def web_fetch_internal(
     out_dir = request.out_dir.strip().strip("/") or "research"
     formats = list(dict.fromkeys(request.formats)) or ["markdown"]
 
+    urls = list(dict.fromkeys(request.urls))
     pages: dict[str, WebFetchPage] = {}
+    reached_deadline = False
+    session_error: str | None = None
+
     try:
-        session = await _get_workspace_session(
-            ctx,
-            session_id=runtime_context.default_shell_session_id,
-            close_on_exit=False,
-        )
-        async with session:
-            await _capture_batch(
-                session,
-                urls=list(dict.fromkeys(request.urls)),
-                out_dir=out_dir,
-                formats=formats,
-                render=request.render,
-                pages=pages,
+        # The deadline wraps acquiring the workspace as well as using it: a cold
+        # sandbox has to be provisioned before the first capture, and that wait
+        # is part of what the caller is sitting through.
+        async with asyncio.timeout(_BATCH_BUDGET_SECONDS):
+            session = await _get_workspace_session(
+                ctx,
+                session_id=runtime_context.default_shell_session_id,
+                close_on_exit=False,
             )
+            async with session:
+                await _capture_batch(
+                    session,
+                    urls=urls,
+                    out_dir=out_dir,
+                    formats=formats,
+                    render=request.render,
+                    pages=pages,
+                )
+    except TimeoutError:
+        # Not an error: the tool ran out of its own budget. Everything captured
+        # before now is still on disk and still worth returning.
+        reached_deadline = True
+        logger.warning(
+            "agent.web_fetch.batch_deadline_reached.degraded",
+            requested=len(urls),
+            captured=sum(1 for page in pages.values() if page.success),
+        )
     except Exception as exc:  # noqa: BLE001 - graceful tool boundary
-        logger.debug("agent.web_fetch.session_failed.diagnostic", exc_info=True)
-        return WebFetchResponse(
-            success=False,
-            error=(
-                f"Could not reach the workspace to capture pages: "
-                f"{type(exc).__name__}. Retry if the pages are still needed."
-            ),
-            pages=list(pages.values()),
+        logger.warning(
+            "agent.web_fetch.session_failed.degraded",
+            error_type=type(exc).__name__,
+            exc_info=True,
+        )
+        session_error = (
+            f"Could not reach the workspace to capture pages: "
+            f"{type(exc).__name__}. Retry if the pages are still needed."
         )
 
-    ordered = [pages[url] for url in dict.fromkeys(request.urls) if url in pages]
+    for url in urls:
+        pages.setdefault(
+            url,
+            WebFetchPage(
+                url=url,
+                success=False,
+                error=(
+                    "Not attempted: this call reached its time budget first. "
+                    "Ask for this page again on its own."
+                    if reached_deadline
+                    else session_error
+                    or "Not attempted: the batch ended before reaching this page."
+                ),
+            ),
+        )
+
+    ordered = [pages[url] for url in urls]
     captured = sum(1 for page in ordered if page.success)
     return WebFetchResponse(
         # Partial success is still success: one dead link must not discard the
-        # nine pages that came back.
+        # nine pages that came back, and neither must running out of time.
         success=captured > 0,
         out_dir=out_dir,
         pages=ordered,
+        error=session_error if not captured else None,
         message=(
             f"Captured {captured} of {len(ordered)} page(s) into '{out_dir}'. "
             "Read them with `exec_command` (grep/cat), view screenshots with "
             "`view_image`."
+            + (
+                " The call hit its time budget before finishing; re-request the "
+                "pages marked not attempted."
+                if reached_deadline
+                else ""
+            )
             if captured
             else "No pages could be captured."
         ),
@@ -202,10 +256,9 @@ async def _capture_batch(
 ) -> None:
     """Fill ``pages`` for every URL, cheap path first and in parallel.
 
-    Written to mutate a dict the caller owns so that a batch which runs out of
-    budget still returns everything captured before the deadline.
+    Written to mutate a dict the caller owns so that a batch cut short by the
+    deadline above still returns everything captured before it.
     """
-    deadline = asyncio.get_running_loop().time() + _BATCH_BUDGET_SECONDS
     needs_browser: list[str] = []
 
     for url in urls:
@@ -218,36 +271,49 @@ async def _capture_batch(
     ]
     if cheap:
         limit = asyncio.Semaphore(_MAX_CONCURRENT_FETCHES)
+        # Writes share one workspace session, so they are serialised even though
+        # the fetches are not.
+        writing = asyncio.Lock()
 
-        async def _extract(url: str) -> tuple[str, ExtractedPage | None]:
+        async def _capture(url: str) -> None:
+            """Fetch, then save — and record the result the moment it exists.
+
+            Deliberately not `gather`-then-write: collecting every extraction
+            before writing any makes the batch all-or-nothing, so one slow site
+            costs the caller every fast page that had already come back when the
+            deadline fired. Recording per URL is what makes a partial result
+            actually partial.
+            """
             async with limit:
-                return url, await _clean_or_none(url)
-
-        for url, page in await asyncio.gather(*(_extract(u) for u in cheap)):
+                page = await _clean_or_none(url)
             if page is None:
                 needs_browser.append(url)
-                continue
-            written = await _write_extracted(
-                session, url=url, page=page, out_dir=out_dir
-            )
+                return
+            async with writing:
+                written = await _write_extracted(
+                    session, url=url, page=page, out_dir=out_dir
+                )
             if written is None:
                 needs_browser.append(url)
             else:
                 pages[url] = written
 
+        await asyncio.gather(*(_capture(url) for url in cheap))
+
     needs_browser.extend(
         url for url in urls if url not in pages and url not in needs_browser
     )
 
-    for url in needs_browser:
-        if asyncio.get_running_loop().time() >= deadline:
+    for index, url in enumerate(needs_browser):
+        if index >= _MAX_BROWSER_RENDERS:
             pages[url] = WebFetchPage(
                 url=url,
                 success=False,
                 error=(
-                    "Skipped: this batch ran out of time before reaching the "
-                    "page. It needs the full browser, which renders one page at "
-                    "a time. Ask for it again in a smaller batch."
+                    f"Skipped: this page needs the full browser, and a single "
+                    f"call renders at most {_MAX_BROWSER_RENDERS} (the sandbox "
+                    "has one browser, so they run one at a time). Ask for it "
+                    "again on its own."
                 ),
             )
             continue
