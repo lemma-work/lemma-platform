@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import signal
 import subprocess
 from pathlib import Path
 from uuid import UUID, uuid4
@@ -101,6 +102,7 @@ async def cancellable_worker(e2e_settings):
             **system_lemma_env_overlay(),
             "PYTHONPATH": ".",
             "WORKER_QUEUE_NAME": queue_name,
+            "WORKER_LANES": os.environ.get("_CANCEL_TEST_LANES", ""),
             "DATABASE_URL": e2e_settings.database_url,
             "DATASTORE_DATABASE_URL": e2e_settings.datastore_database_url,
             "REDIS_URL": e2e_settings.redis_url,
@@ -118,6 +120,14 @@ async def cancellable_worker(e2e_settings):
             "LOCAL_OBJECT_STORAGE_ROOT": e2e_settings.local_object_storage_root,
             "LOCAL_FILE_STORAGE_ROOT": e2e_settings.local_file_storage_root,
             "COMPOSIO_CACHE_DIR": "/tmp/composio",
+            # Unbuffered, because this fixture's whole diagnostic value is the
+            # log it leaves behind — and the failure path SIGKILLs the worker,
+            # which discards anything still sitting in a block buffer. A hang
+            # used to produce a log that stopped at `service.started`.
+            "PYTHONUNBUFFERED": "1",
+            # So a hung worker can be made to print where every thread is
+            # stuck, rather than dying silently on SIGKILL.
+            "PYTHONFAULTHANDLER": "1",
         },
         stdout=log_file,
         stderr=subprocess.STDOUT,
@@ -303,8 +313,25 @@ async def test_sigterm_midrun_shuts_down_cleanly_and_finalizes_run(
     try:
         proc.wait(timeout=30)
     except subprocess.TimeoutExpired:
-        proc.kill()
-        pytest.fail("worker did not exit within 30s of SIGTERM (possible hang)")
+        # SIGABRT with PYTHONFAULTHANDLER makes the worker print every thread's
+        # stack before it dies, so a hang names the line it is stuck on instead
+        # of leaving a log that stops at startup.
+        proc.send_signal(signal.SIGQUIT)  # dump pending coroutines first
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            # Expected: SIGQUIT only asks for a dump, it does not end the
+            # process. Fall through to SIGABRT, which does.
+            pass
+        proc.send_signal(signal.SIGABRT)
+        try:
+            proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+        pytest.fail(
+            "worker did not exit within 30s of SIGTERM (possible hang)\n"
+            f"{Path(log_path).read_text()[-6000:]}"
+        )
 
     logs = Path(log_path).read_text()
 

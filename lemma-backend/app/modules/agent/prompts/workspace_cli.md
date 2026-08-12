@@ -64,6 +64,14 @@ The workspace is private to this conversation. Work in your working directory (b
 
 `execute_python` and `exec_command` share one interpreter and run in your working directory, so relative paths land there. Python state — imports, variables, objects — persists across calls; use that for stepwise analysis instead of repeating setup.
 
-`numpy`, `pandas`, `matplotlib`, `openpyxl`, `pillow`, `requests`, and `tabulate` are pre-installed. For anything else run `pip install <package>` via `exec_command`, then import it. Use plain `pip`, never `uv pip` — it targets a system environment you cannot write to. Installs persist for the conversation.
+## Toolchains
+
+**JavaScript and TypeScript — prefer `pnpm`.** Its store lives on the workspace volume, so it hard-links packages instead of copying them and keeps them for your next conversation: `pnpm install` after the first one is close to instant, and several projects sharing a dependency store it once. `pnpm dlx` is the one-shot runner. `npm`, `npx` and `node` are all installed too — use them when a project has a `package-lock.json`, or when a tool insists on npm — but reach for `pnpm` by default.
+
+**Python — two cases, and they use different tools.**
+
+*Adding a package to the interpreter you already have* (the one `execute_python` uses): `pip install <package>`. Not `uv pip install`, which targets a system environment you cannot write to and fails with a permission error. `numpy`, `pandas`, `matplotlib`, `openpyxl`, `pillow`, `requests` and `tabulate` are already there. These installs last for the conversation.
+
+*Building a Python project* — anything with a `pyproject.toml`, or that needs its own pinned dependencies: use `uv`. `uv venv` then `uv pip install`, or `uv sync` for a project with a lockfile. Its cache is on the workspace volume too, so repeat installs are fast. Run the project's code with that venv's interpreter rather than `execute_python`, which is bound to the shared one.
 
 SDK source is readable at `/sdk/lemma-python` and `/sdk/lemma-typescript` when you need an exact signature or response shape.
