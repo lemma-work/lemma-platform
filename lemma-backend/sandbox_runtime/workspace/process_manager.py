@@ -150,15 +150,42 @@ class ManagedProcess:
         if self.state != ProcessState.RUNNING:
             raise RuntimeError("process is not running")
         if self.master_fd is not None:
-            view = memoryview(data)
-            while view:
-                written = os.write(self.master_fd, view)
-                view = view[written:]
+            await self._write_to_pty(data)
             return
         if self.process.stdin is None:
             raise RuntimeError("process stdin is unavailable")
         self.process.stdin.write(data)
         await self.process.stdin.drain()
+
+    async def _write_to_pty(self, data: bytes) -> None:
+        """Write everything, waiting whenever the terminal buffer is full.
+
+        The master fd is non-blocking, and a PTY's kernel buffer is small — a
+        few kilobytes. Writing more than that raises `BlockingIOError` partway
+        through, which used to propagate: an agent pasting a file into
+        `cat > file`, or a block of code into a REPL, silently delivered only
+        the first few KB. Measured at ~11KB of a 24KB paste.
+
+        Waiting for writability is the whole fix: the child drains the terminal
+        as it reads, and the rest goes in behind it.
+        """
+        loop = asyncio.get_running_loop()
+        view = memoryview(data)
+        while view:
+            try:
+                view = view[os.write(self.master_fd, view) :]
+            except BlockingIOError:
+                writable = loop.create_future()
+
+                def _ready() -> None:
+                    if not writable.done():
+                        writable.set_result(None)
+
+                loop.add_writer(self.master_fd, _ready)
+                try:
+                    await writable
+                finally:
+                    loop.remove_writer(self.master_fd)
 
     def resize(self, cols: int, rows: int) -> None:
         if self.master_fd is None:

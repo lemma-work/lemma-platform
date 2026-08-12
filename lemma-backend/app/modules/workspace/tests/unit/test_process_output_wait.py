@@ -128,3 +128,74 @@ async def test_a_finished_process_does_not_re_block_on_later_polls() -> None:
 
     assert time.monotonic() - started < _IMMEDIATE_SECONDS
     assert second.chunks == ()
+
+
+class TestWritingToATerminal:
+    """Pasting more than the terminal buffer holds.
+
+    A PTY master is non-blocking with a small kernel buffer (a few KB). Writing
+    a file into `cat > file`, or a block of code into a REPL, is far more than
+    that — the write has to be drained across several attempts rather than
+    tried once. Measured against a real container before the fix: 11KB of a
+    24KB paste arrived, and the tool reported failure that the caller was not
+    checking.
+    """
+
+    @staticmethod
+    async def _drain_writer(fd: int, data: bytes) -> None:
+        """The production write loop, exercised directly on a real PTY."""
+        from sandbox_runtime.workspace.process_manager import ManagedProcess
+
+        managed = ManagedProcess.__new__(ManagedProcess)
+        managed.master_fd = fd
+        await ManagedProcess._write_to_pty(managed, data)
+
+    @pytest.mark.asyncio
+    async def test_a_paste_larger_than_the_buffer_is_written_in_full(self) -> None:
+        import os
+        import pty
+
+        master, slave = pty.openpty()
+        os.set_blocking(master, False)
+        os.set_blocking(slave, False)
+        # Newline-terminated: a terminal in canonical mode buffers until one
+        # arrives, so an unbroken 24KB blob would stall on the line discipline
+        # rather than on the buffer this test is about.
+        payload = (b"x" * 199 + b"\n") * 120
+        received = bytearray()
+
+        async def slow_reader() -> None:
+            """A child that consumes at its own pace, as a real one does."""
+            while len(received) < len(payload):
+                await asyncio.sleep(0.005)
+                try:
+                    received.extend(os.read(slave, 2048))
+                except (BlockingIOError, OSError):
+                    continue
+
+        reader = asyncio.create_task(slow_reader())
+        try:
+            await asyncio.wait_for(self._drain_writer(master, payload), timeout=15)
+            await asyncio.wait_for(reader, timeout=15)
+        finally:
+            reader.cancel()
+            os.close(master)
+            os.close(slave)
+
+        assert len(received) == len(payload), (
+            f"only {len(received)} of {len(payload)} bytes reached the terminal"
+        )
+
+    @pytest.mark.asyncio
+    async def test_a_small_write_needs_no_draining(self) -> None:
+        import os
+        import pty
+
+        master, slave = pty.openpty()
+        os.set_blocking(master, False)
+        try:
+            await asyncio.wait_for(self._drain_writer(master, b"ls -la\n"), timeout=5)
+            assert os.read(slave, 4096) == b"ls -la\n"
+        finally:
+            os.close(master)
+            os.close(slave)
