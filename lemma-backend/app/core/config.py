@@ -409,6 +409,28 @@ class Settings(BaseSettings):
             "Set to 0 to disable the in-process cache."
         ),
     )
+    organization_home_cache_ttl_seconds: int = Field(
+        default=30,
+        description=(
+            "TTL in seconds for the cached organization landing page (pods with "
+            "their apps, agents and the caller's roles). Short because it is a "
+            "read-heavy view of slow-moving content; the roles it carries are "
+            "for display, and every permission check inside a pod resolves them "
+            "live. Set to 0 to always rebuild from the database."
+        ),
+    )
+    auth_state_cache_ttl_seconds: int = Field(
+        default=30,
+        description=(
+            "TTL in seconds for the cached account standing (active/verified/"
+            "deleted) that every authenticated request checks. Deliberately far "
+            "shorter than the role snapshot TTL: this decides whether a "
+            "deactivated or unverified account can call the API at all, so the "
+            "window where a stale answer is served is kept small even though "
+            "deactivation also invalidates the entry outright. Set to 0 to "
+            "disable and read the standing from the database on every request."
+        ),
+    )
     session_approval_ttl_seconds: int = Field(
         default=3600,
         description=(

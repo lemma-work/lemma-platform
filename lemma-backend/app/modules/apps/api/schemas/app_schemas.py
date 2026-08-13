@@ -1,11 +1,9 @@
 from typing import Any, Optional
-from urllib.parse import urlparse
 from uuid import UUID
 
 from pydantic import BaseModel, Field, computed_field
 
-from app.core.config import settings
-from app.modules.apps.domain.entities import AppStatus
+from app.modules.apps.domain.entities import AppStatus, public_app_url
 
 
 class CreateAppRequest(BaseModel):
@@ -56,8 +54,7 @@ class AppResponse(BaseModel):
     @computed_field(return_type=str)
     @property
     def url(self) -> str:
-        scheme = urlparse(settings.api_url).scheme or "https"
-        return f"{scheme}://{self.public_slug}.{settings.app_base_domain}"
+        return public_app_url(self.public_slug)
 
 
 class AppDetailResponse(AppResponse):

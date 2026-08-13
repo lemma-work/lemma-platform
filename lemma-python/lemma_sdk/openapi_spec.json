@@ -7800,6 +7800,153 @@
         "title": "HarnessKind",
         "type": "string"
       },
+      "HomeAgentResponse": {
+        "properties": {
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "icon_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Icon Url"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ],
+        "title": "HomeAgentResponse",
+        "type": "object"
+      },
+      "HomeAppResponse": {
+        "properties": {
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "url": {
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "url",
+          "status"
+        ],
+        "title": "HomeAppResponse",
+        "type": "object"
+      },
+      "HomePodResponse": {
+        "description": "A pod with what it contains and what the caller is to it.",
+        "properties": {
+          "agents": {
+            "items": {
+              "$ref": "#/components/schemas/HomeAgentResponse"
+            },
+            "title": "Agents",
+            "type": "array"
+          },
+          "apps": {
+            "items": {
+              "$ref": "#/components/schemas/HomeAppResponse"
+            },
+            "title": "Apps",
+            "type": "array"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "icon_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Icon Url"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "roles": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Roles",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "roles",
+          "apps",
+          "agents"
+        ],
+        "title": "HomePodResponse",
+        "type": "object"
+      },
       "HostHello": {
         "properties": {
           "host_release": {
@@ -8530,6 +8677,98 @@
           "message"
         ],
         "title": "MessageResponseSchema",
+        "type": "object"
+      },
+      "NavigationOrganizationResponse": {
+        "description": "An organization and the pods the caller can see inside it.",
+        "properties": {
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "pods": {
+            "items": {
+              "$ref": "#/components/schemas/NavigationPodResponse"
+            },
+            "title": "Pods",
+            "type": "array"
+          },
+          "role": {
+            "title": "Role",
+            "type": "string"
+          },
+          "slug": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Slug"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "role",
+          "pods"
+        ],
+        "title": "NavigationOrganizationResponse",
+        "type": "object"
+      },
+      "NavigationPodResponse": {
+        "description": "A pod as a navigation entry \u2014 enough to draw and to link to.",
+        "properties": {
+          "icon_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Icon Url"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ],
+        "title": "NavigationPodResponse",
+        "type": "object"
+      },
+      "NavigationResponse": {
+        "description": "Everything a sidebar needs, for every organization, in one response.\n\nDeliberately shallow: apps, agents and roles per pod are the detail endpoint's\njob, because carrying them here would make the payload grow with the content\nof every organization a person happens to belong to.",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/NavigationOrganizationResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "NavigationResponse",
         "type": "object"
       },
       "NotificationDeliveryStatus": {
@@ -9275,6 +9514,50 @@
           "name"
         ],
         "title": "OrganizationCreateRequest",
+        "type": "object"
+      },
+      "OrganizationHomeResponse": {
+        "description": "One organization's landing page in a single response.",
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "organization_id": {
+            "format": "uuid",
+            "title": "Organization Id",
+            "type": "string"
+          },
+          "pods": {
+            "items": {
+              "$ref": "#/components/schemas/HomePodResponse"
+            },
+            "title": "Pods",
+            "type": "array"
+          },
+          "role": {
+            "title": "Role",
+            "type": "string"
+          },
+          "slug": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Slug"
+          }
+        },
+        "required": [
+          "organization_id",
+          "name",
+          "role",
+          "pods"
+        ],
+        "title": "OrganizationHomeResponse",
         "type": "object"
       },
       "OrganizationInvitationListResponse": {
@@ -18358,6 +18641,35 @@
         }
       }
     },
+    "/organizations/navigation": {
+      "get": {
+        "description": "Every organization the current user belongs to, each with the pods they can see in it. Replaces fetching the organization list and then one pod list per organization; the payload stays shallow so it does not grow with the contents of each pod.",
+        "operationId": "org.navigation",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NavigationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Organizations And Their Pods",
+        "tags": [
+          "Organizations"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "org",
+          "result": "entity",
+          "verb": "navigation"
+        }
+      }
+    },
     "/organizations/slug-availability": {
       "get": {
         "description": "Check whether an organization slug is available, and optionally whether a candidate name is still free",
@@ -19004,6 +19316,57 @@
           "resource": "agent.runtime.profiles",
           "result": "entity",
           "verb": "restore"
+        }
+      }
+    },
+    "/organizations/{org_id}/home": {
+      "get": {
+        "description": "One organization's landing page: every pod the current user can see, with its apps, its agents, and the user's roles in that pod. Replaces fetching apps and agents per pod. Cached briefly per user.",
+        "operationId": "org.home",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "org_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Org Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrganizationHomeResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Organization Home",
+        "tags": [
+          "Organizations"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "org",
+          "result": "entity",
+          "verb": "home"
         }
       }
     },

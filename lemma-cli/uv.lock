@@ -343,7 +343,6 @@ name = "lemma-terminal"
 source = { editable = "." }
 dependencies = [
     { name = "click" },
-    { name = "lemma-pod-bundle" },
     { name = "lemma-sdk" },
     { name = "rich" },
     { name = "textual" },
@@ -354,6 +353,7 @@ dependencies = [
 [package.dev-dependencies]
 dev = [
     { name = "httpx" },
+    { name = "lemma-pod-bundle" },
     { name = "psycopg", extra = ["binary"] },
     { name = "pytest" },
     { name = "pytest-asyncio" },
@@ -364,7 +364,6 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "click", specifier = ">=8.3.0" },
-    { name = "lemma-pod-bundle", directory = "../lemma-pod-bundle" },
     { name = "lemma-sdk", directory = "../lemma-python" },
     { name = "rich", specifier = ">=13.9.4" },
     { name = "textual", specifier = ">=8.0" },
@@ -375,6 +374,7 @@ requires-dist = [
 [package.metadata.requires-dev]
 dev = [
     { name = "httpx", specifier = ">=0.27" },
+    { name = "lemma-pod-bundle", directory = "../lemma-pod-bundle" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.1" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
