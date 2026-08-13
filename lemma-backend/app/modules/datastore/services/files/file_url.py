@@ -16,6 +16,7 @@ via the tool's ``ToolReturn.content``, while the DB only stores the URL.
 
 from __future__ import annotations
 
+from contextlib import suppress
 import base64
 import json
 import time
@@ -152,13 +153,11 @@ async def build_object_url(
     cache_key = f"{object_key}:{content_sha256 or ''}"
 
     if cache is not None:
-        try:
+        with suppress(Exception):
             cached = await cache.get_raw(cache_key)
             if cached:
                 payload = json.loads(cached)
                 return payload["url"], datetime.fromisoformat(payload["expires_at"])
-        except Exception:
-            logger.debug("datastore.file_url.file_url_cache_read_s.observed")
 
     now = int(time.time())
     expires_at_epoch = now + expires_seconds
@@ -177,13 +176,11 @@ async def build_object_url(
         url = f"{base}{PUBLIC_FILE_PATH}?token={quote(token)}"
 
     if cache is not None:
-        try:
+        with suppress(Exception):
             await cache.set_raw(
                 cache_key,
                 json.dumps({"url": url, "expires_at": expires_at.isoformat()}),
             )
-        except Exception:
-            logger.debug("datastore.file_url.file_url_cache_write_s.observed")
 
     return url, expires_at
 

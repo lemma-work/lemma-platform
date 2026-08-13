@@ -485,6 +485,19 @@ async def function_benchmark_runtime(
                 "WORKSPACE_RUNTIME_CREDENTIAL_KEY": _RUNTIME_CREDENTIAL_KEY,
                 "DEBUG": "false",
                 "LOG_LEVEL": "INFO",
+                # The worker is where this benchmark's JOB timings are stamped,
+                # so it has to hold connections the way production does.
+                # ENVIRONMENT=testing otherwise selects NullPool and every unit
+                # of work pays a fresh TCP+TLS connect — DSN parse, SSL context,
+                # ~/.postgresql probes. A JOB dispatch opens several such units
+                # where an API request reuses one session, so the cost landed
+                # almost entirely on the JOB numbers: measured 0.316s queue
+                # latency under NullPool against 0.053s pooled, i.e. the
+                # benchmark was reporting the harness, not the platform. Only
+                # the worker subprocess is switched: it is long-lived and runs
+                # one event loop, where a pooled connection is safe, unlike the
+                # pytest process that opens a loop per test.
+                "DB_POOL_IN_TESTING": "1",
             }
             if provider == "docker":
                 worker_environment.update(

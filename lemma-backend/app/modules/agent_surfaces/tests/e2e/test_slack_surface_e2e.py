@@ -24,6 +24,7 @@ from app.modules.agent_surfaces.tests.e2e.helpers import (
 from app.modules.agent_surfaces.tests.e2e.mock_infrastructure import (
     build_slack_signature_headers,
     wait_for_messages,
+    wait_for_slack_text,
 )
 from app.modules.agent_surfaces.tests.e2e.scripted_llm import (
     process_ingress_and_run_scripted,
@@ -123,10 +124,10 @@ async def test_slack_identity_policy_blocks_then_allows_sender_domain(
     assert isinstance(allowed_context, SurfaceChatContext)
     assert allowed_context.surface_id == UUID(surface["id"])
 
-    stream_chunks = await wait_for_messages(
-        message_store, "SLACK_STREAM_APPEND", min_count=1
-    )
-    assert any("E2E agent reply [SLACK]" in json.dumps(item) for item in stream_chunks)
+    # Across appends, not within one: the token buffer flushes on a size *or*
+    # time trigger, so the answer can be split at an arbitrary character.
+    delivered = await wait_for_slack_text(message_store, "E2E agent reply [SLACK]")
+    assert any("E2E agent reply [SLACK]" in text for text in delivered), delivered
 
 
 async def test_slack_dm_and_channel_surfaces_route_through_shared_webhook(
@@ -249,10 +250,8 @@ async def test_slack_dm_and_channel_surfaces_route_through_shared_webhook(
     )
     assert stream_starts[-2]["channel"] == "D0123456"
     assert stream_starts[-1]["channel"] == "C-SUPPORT"
-    stream_chunks = await wait_for_messages(
-        message_store, "SLACK_STREAM_APPEND", min_count=2
-    )
-    assert any("E2E agent reply [SLACK]" in json.dumps(item) for item in stream_chunks)
+    delivered = await wait_for_slack_text(message_store, "E2E agent reply [SLACK]")
+    assert any("E2E agent reply [SLACK]" in text for text in delivered), delivered
 
 
 async def test_slack_channel_mention_injects_recent_thread_context(

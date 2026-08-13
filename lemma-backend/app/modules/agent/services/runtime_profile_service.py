@@ -835,7 +835,6 @@ def _selected_model(
     # the profile's own default — and then the first catalog entry — rather than
     # hard-failing every run that relies on this profile.
     if requested_model_name:
-        logger.debug('agent.runtime_profile_service.requested_model_r_not_runtime.diagnostic')
         if profile.default_model_name:
             for model in profile.model_catalog:
                 if profile.default_model_name == model.name:

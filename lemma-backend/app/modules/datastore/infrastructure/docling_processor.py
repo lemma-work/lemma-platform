@@ -158,9 +158,6 @@ class DoclingDocumentProcessor(PdfPageRenderingMixin):
             ) as exc:
                 if attempt < _SUBMIT_RETRY_ATTEMPTS - 1:
                     delay = _SUBMIT_RETRY_BASE_DELAY_SECONDS * (2**attempt)
-                    logger.debug(
-                        'datastore.docling_processor.docling_async_submit_connection_s.diagnostic'
-                    )
                     await asyncio.sleep(delay)
                     continue
                 raise RuntimeError("Docling async submit failed") from exc

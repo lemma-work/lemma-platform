@@ -17,6 +17,7 @@ egress.
 
 from __future__ import annotations
 
+from contextlib import suppress
 import asyncio
 import secrets
 import time
@@ -160,10 +161,8 @@ class SignedUrlStore:
         content_sha256 = result[3] or None
         if hits > max_hits:
             # Burn the link so further attempts short-circuit as not-found.
-            try:
+            with suppress(Exception):
                 await redis.delete(key)
-            except Exception:  # best-effort cleanup
-                logger.debug("datastore.signed_url.signed_url_cleanup_s.observed")
             raise SignedUrlExhausted(code)
 
         return SignedUrlClaims(

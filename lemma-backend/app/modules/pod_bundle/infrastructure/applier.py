@@ -657,7 +657,6 @@ def _agent_toolsets(payload: dict[str, Any]) -> list[Any]:
         try:
             toolset = AgentToolset(str(raw))
         except ValueError:
-            logger.debug('pod_bundle.applier.skipping_unknown_agent_toolset_r.diagnostic')
             continue
         if toolset is AgentToolset.VIEW_IMAGE:
             continue

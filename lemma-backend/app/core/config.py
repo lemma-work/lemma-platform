@@ -62,6 +62,22 @@ class Settings(BaseSettings):
             "Default 10 keeps per-process main pool at 20 max."
         ),
     )
+    db_pool_in_testing: bool = Field(
+        default=False,
+        description=(
+            "Use a real connection pool even when ENVIRONMENT=testing. Testing "
+            "defaults to NullPool because the pytest process runs many event "
+            "loops and a pooled connection must not outlive the loop that "
+            "opened it. A long-lived single-loop subprocess has no such "
+            "problem, and NullPool costs it a full TCP+TLS connect — DSN parse, "
+            "SSL context, ~/.postgresql probes — for every unit of work. That "
+            "made the function benchmark measure the harness rather than the "
+            "platform: JOB queue latency was 0.3s under NullPool against 0.06s "
+            "pooled, because a JOB dispatch opens several short units of work "
+            "where an API request reuses one session. Set it for processes that "
+            "must behave like production; leave it off for the pytest process."
+        ),
+    )
     db_pool_timeout_seconds: float = Field(
         default=10.0,
         description=(

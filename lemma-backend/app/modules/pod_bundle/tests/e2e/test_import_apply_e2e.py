@@ -298,10 +298,12 @@ async def test_export_then_import_apply_roundtrip(
         follow_redirects=True,
     )
 
-    # Export the source pod and take its signed download URL.
+    # Export the source pod and take its signed download URL. The pod is a
+    # function and an agent, with no table, so there is no row data to name.
     start = await authenticated_client.post(
-        f"/pods/{source_id}/bundle/exports", json={"with_data": True}
+        f"/pods/{source_id}/bundle/exports", json={}
     )
+    assert start.status_code == status.HTTP_202_ACCEPTED, start.text
     export_id = start.json()["export_id"]
     export_final = None
     for _ in range(60):

@@ -49,7 +49,14 @@ async def _run_coroutine_job_with_slot(job, jobstore_alias, run_times, logger_na
                         run_time,
                     )
                 )
-                logger.debug('schedule.executor.run_time_job_s_was.diagnostic')
+                # A schedule that never fired is worth a record, but it needs to
+                # say which one and by how much — the previous line named
+                # neither, so it could only ever report that "a" job was missed.
+                logger.warning(
+                    "schedule.executor.job_misfired",
+                    job_id=str(job.id),
+                    late_by_seconds=round(difference.total_seconds(), 1),
+                )
                 continue
 
         token = _scheduled_run_time.set(run_time)

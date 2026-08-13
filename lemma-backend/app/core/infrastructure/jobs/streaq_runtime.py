@@ -11,6 +11,7 @@ from collections.abc import AsyncGenerator, Awaitable, Callable, Sequence
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
 from enum import StrEnum
+from typing import TYPE_CHECKING
 
 from faststream.redis import RedisBroker
 from opentelemetry import context as otel_context
@@ -59,6 +60,9 @@ from app.core.observability.telemetry import (
     shutdown_telemetry,
 )
 from app.core.request_context import bind_job_context, create_background_task
+
+if TYPE_CHECKING:
+    from app.core.registry.contract import LemmaModule
 
 logger = get_logger(__name__)
 tracer = trace.get_tracer(__name__)
@@ -187,6 +191,38 @@ def lane_concurrency(lane: Lane) -> int:
     return settings.worker_concurrency
 
 
+def ensure_task_lanes_registered(modules: Sequence[LemmaModule] | None = None) -> None:
+    """Populate ``TASK_LANES`` in a process that only *publishes* jobs.
+
+    The decorators fill ``TASK_LANES`` as a side effect of importing each
+    module's handlers, which the worker entrypoint does via ``app.events``. The
+    API imports controllers, not handlers — so its ``TASK_LANES`` was empty and
+    every bulk task it enqueued was routed to the interactive queue, where the
+    interactive worker read a task it had never registered and dropped it with
+    "missing function". Pod bundle export, import, and GitHub publish are
+    enqueued only from the API, so all three were silently doing nothing.
+
+    Registration is import-for-side-effect and touches no I/O, so the publisher
+    can do it on demand. Skipped when the table is already populated: the worker
+    registers at import scope and must not register a second time.
+
+    ``modules`` is the composed module list — lemma-cloud installs more than
+    OSS, and a cloud-only task missing from this table lands back on the exact
+    bug above. Callers with no module list (the lazy fallback on the enqueue
+    path) get the OSS set.
+    """
+    if TASK_LANES:
+        return
+    # Deferred: the registry imports the modules that import this one.
+    from app.core.registry.assembly import import_module_tasks
+    from app.core.registry.installed import OSS_MODULES
+
+    # The core's own crons, which app/events.py imports explicitly.
+    from app.core.infrastructure.events import tasks as _core_tasks  # noqa: F401
+
+    import_module_tasks(OSS_MODULES if modules is None else modules)
+
+
 def lane_for_task(task_name: str) -> Lane:
     """Lane a task runs on; unregistered names default to interactive.
 
@@ -194,6 +230,7 @@ def lane_for_task(task_name: str) -> Lane:
     explicitly moved, so forgetting to annotate a task degrades to "as before"
     rather than to a silently unconsumed queue.
     """
+    ensure_task_lanes_registered()
     return TASK_LANES.get(task_name, Lane.INTERACTIVE)
 
 

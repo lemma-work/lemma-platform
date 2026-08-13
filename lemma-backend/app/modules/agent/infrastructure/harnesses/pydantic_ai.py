@@ -1049,7 +1049,6 @@ class PydanticAIHarness:
         try:
             return await should_stop()
         except Exception:
-            logger.debug('agent.pydantic_ai.agent_stop_check_s.diagnostic')
             return False
 
     def _stopped_event(self, agent_run_id: UUID) -> AgentEvent:

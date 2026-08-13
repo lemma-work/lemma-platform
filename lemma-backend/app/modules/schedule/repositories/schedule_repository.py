@@ -406,14 +406,8 @@ class ScheduleRepository(ScheduleRepositoryInterface):
             try:
                 config = entity.datastore_config
             except ValueError:
-                logger.debug(
-                    "schedule.schedule_repository.datastore_schedule_s_has_invalid.diagnostic"
-                )
                 continue
             if config is None or not config.operations:
-                logger.debug(
-                    "schedule.schedule_repository.datastore_schedule_s_declares_no.diagnostic"
-                )
                 continue
             if operation_value in config.operations:
                 matched.append(entity)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import suppress
 import asyncio
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -435,7 +436,7 @@ class AgentSurfaceIngressService(SurfaceConfigurationMixin, SurfaceProgressMixin
             conversation_service=self.conversation_service,
         ):
             return
-        try:
+        with suppress(Exception):
             await adapter.add_processing_indicator(
                 credentials=credentials,
                 event=context.event,
@@ -443,26 +444,18 @@ class AgentSurfaceIngressService(SurfaceConfigurationMixin, SurfaceProgressMixin
                     "agent_display_name": context.agent_display_name,
                 },
             )
-        except Exception:
-            logger.debug(
-                'agent_surfaces.ingress_service.adding_surface_processing_indicator_s.diagnostic'
-            )
 
         # Auto-ingest any user-provided files into the pod datastore (/me/{platform})
         # so surface files behave like web uploads; failures never block the run.
         ingested: list[IngestedAttachment] = []
         if context.pod_id is not None:
-            try:
+            with suppress(Exception):
                 ingested = await self.file_ingest_service.ingest_attachments(
                     pod_id=context.pod_id,
                     platform=context.platform,
                     user_id=context.user_id,
                     parsed=context.event,
                     credentials=credentials,
-                )
-            except Exception:
-                logger.debug(
-                    'agent_surfaces.ingress_service.surface_file_auto_ingest_s.diagnostic'
                 )
 
         metadata = context.message_metadata.as_message_metadata()
@@ -646,9 +639,14 @@ class AgentSurfaceIngressService(SurfaceConfigurationMixin, SurfaceProgressMixin
                 from app.composition.surface_agent import get_speech_provider
 
                 provider = get_speech_provider()
-            except Exception:
+            except Exception as exc:
+                # Voice notes arrive untranscribed from here on, which is a
+                # user-visible degradation — so it stays a warning, but it has
+                # to name the failure. The previous line carried no fields at
+                # all, so it could only report that something was wrong.
                 logger.warning(
-                    "agent_surfaces.ingress_service.speech_provider_unavailable_ingress_s.degraded"
+                    "agent_surfaces.ingress_service.speech_provider_unavailable",
+                    error_type=type(exc).__name__,
                 )
                 provider = None
 
@@ -659,9 +657,6 @@ class AgentSurfaceIngressService(SurfaceConfigurationMixin, SurfaceProgressMixin
                 )
                 return item, result
             except Exception:
-                logger.debug(
-                    'agent_surfaces.ingress_service.surface_voice_transcription_path_s.diagnostic'
-                )
                 return item, None
 
         results: list[tuple[IngestedAttachment, Any]] = []
@@ -1469,9 +1464,6 @@ class AgentSurfaceIngressService(SurfaceConfigurationMixin, SurfaceProgressMixin
                 clear_actions=True,
             )
         except Exception:
-            logger.debug(
-                'agent_surfaces.ingress_service.surface_interaction_handling_s.diagnostic'
-            )
             if adapter is not None and credentials is not None:
                 await adapter.acknowledge_interaction(
                     credentials=credentials,
@@ -1684,7 +1676,7 @@ class AgentSurfaceIngressService(SurfaceConfigurationMixin, SurfaceProgressMixin
           a manually typed name that produced no entity).
 
         Best-effort; returns the event unchanged on any failure."""
-        try:
+        with suppress(Exception):
             from app.modules.agent_surfaces.platforms.telegram.service import (
                 TelegramPlatformService,
             )
@@ -1712,10 +1704,6 @@ class AgentSurfaceIngressService(SurfaceConfigurationMixin, SurfaceProgressMixin
 
             if matched:
                 return parsed.model_copy(update={"mentioned_agent": True})
-        except Exception:
-            logger.debug(
-                "agent_surfaces.ingress_service.telegram_text_mention_enrich_s.observed"
-            )
         return parsed
 
     async def _resolve_credentials(
@@ -2346,9 +2334,6 @@ class AgentSurfaceIngressService(SurfaceConfigurationMixin, SurfaceProgressMixin
                 event=parsed,
             )
         except Exception:
-            logger.debug(
-                'agent_surfaces.ingress_service.fetching_sender_profile_s_s.diagnostic'
-            )
             sender_profile = None
         resolved = await self.identity_service.resolve(
             event=parsed,

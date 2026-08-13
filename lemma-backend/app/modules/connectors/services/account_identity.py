@@ -98,9 +98,6 @@ async def resolve_account_identity(
             return _github_identity(profile)
         return _generic_identity(creds, profile, raw, user_data)
     except Exception:  # pragma: no cover - identity is best-effort
-        logger.debug(
-            'connectors.account_identity.account_identity_resolution_connector_s.diagnostic'
-        )
         return AccountIdentity()
 
 

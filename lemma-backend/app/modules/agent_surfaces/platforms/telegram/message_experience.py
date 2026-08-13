@@ -44,13 +44,7 @@ async def send_chunk(
         await call_with_retry("sendMessage", body)
     except TelegramApiError as exc:
         if not (use_markdown and exc.is_parse_entities_error):
-            logger.debug(
-                "agent_surfaces.service.telegram_sendmessage_chat_s_s.diagnostic"
-            )
             raise
-        logger.debug(
-            "agent_surfaces.service.telegram_markdownv2_parse_chat_s.diagnostic"
-        )
         await call_with_retry("sendMessage", {**payload, "text": raw_text})
 
 

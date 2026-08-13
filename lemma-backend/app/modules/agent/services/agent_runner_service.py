@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import suppress
 import asyncio
 import time
 from datetime import datetime, timedelta, timezone
@@ -303,7 +304,7 @@ class AgentRunnerService:
                 is_pod_default_agent=(agent.id == _POD_ASSISTANT_AGENT_ID),
                 **surface_context,
             )
-            try:
+            with suppress(Exception):
                 ctx.context_brief = await AgentContextBriefBuilder(
                     self.uow_factory
                 ).build(
@@ -312,8 +313,6 @@ class AgentRunnerService:
                     user_id=user_id,
                     pod_id=conversation.pod_id,
                 )
-            except Exception:
-                logger.debug('agent.agent_runner_service.build_agent_context_brief_s.diagnostic')
             full_toolsets = await self.tool_assembler.assemble(
                 agent=agent,
                 conversation=conversation,

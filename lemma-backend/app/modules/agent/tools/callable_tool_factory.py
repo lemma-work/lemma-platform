@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import suppress
 import asyncio
 import json
 from typing import Any, cast
@@ -149,13 +150,9 @@ class AgentCallableToolFactory:
                 function = await function_repo.get(function_id)
                 if function is None or function.status != FunctionStatus.READY:
                     continue
-                try:
+                with suppress(Exception):
                     tools.append(
                         self._build_function_tool(function, parent_agent=agent)
-                    )
-                except Exception:
-                    logger.debug(
-                        'agent.callable_tool_factory.skipping_function_tool_s_agent.diagnostic'
                     )
 
             # agent_<name> tools spawn child conversations, so they only exist on

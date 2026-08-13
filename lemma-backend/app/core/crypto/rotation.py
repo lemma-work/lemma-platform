@@ -145,5 +145,10 @@ async def reencrypt_all(
             session, cipher, col, force=force, batch_size=batch_size, dry_run=dry_run
         )
         report[col.label] = result
-        logger.debug("crypto.rotation.reencrypt_s_scanned_d_migrated.observed")
+        logger.debug(
+            "crypto.rotation.column_reencrypted",
+            column=col.label,
+            scanned=result.get("scanned", 0),
+            migrated=result.get("migrated", 0),
+        )
     return report

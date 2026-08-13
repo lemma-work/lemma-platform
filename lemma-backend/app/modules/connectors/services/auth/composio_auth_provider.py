@@ -1,3 +1,4 @@
+from contextlib import suppress
 import os
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Optional, Tuple
@@ -102,22 +103,14 @@ class ComposioAuthProvider(AuthProviderInterface):
             return datetime.fromtimestamp(expires_at, tz=timezone.utc)
         if isinstance(expires_at, str):
             normalized = expires_at.replace("Z", "+00:00")
-            try:
+            with suppress(ValueError):
                 return datetime.fromisoformat(normalized)
-            except ValueError:
-                logger.debug(
-                    'connectors.composio_auth_provider.parse_composio_expires_value_s.diagnostic'
-                )
 
         expires_in = getattr(value, "expires_in", None)
         if expires_in not in (None, ""):
-            try:
+            with suppress((TypeError, ValueError)):
                 return datetime.now(timezone.utc) + timedelta(
                     seconds=int(float(expires_in))
-                )
-            except (TypeError, ValueError):
-                logger.debug(
-                    'connectors.composio_auth_provider.parse_composio_expires_value_s.diagnostic'
                 )
 
         return None
@@ -137,9 +130,6 @@ class ComposioAuthProvider(AuthProviderInterface):
             if google_expiry is not None:
                 return google_expiry
 
-        logger.debug(
-            'connectors.composio_auth_provider.composio_expiry_missing_s_s.diagnostic'
-        )
         return datetime.now(timezone.utc) + timedelta(minutes=5)
 
     def _serialize_raw_connection_state(
