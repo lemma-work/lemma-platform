@@ -169,14 +169,6 @@ export function useScopedConversations(scope: ConversationScope, params?: { limi
     });
 }
 
-export function useConversation(podId: string, id: string) {
-    return useQuery({
-        queryKey: ['conversations', podId, id],
-        queryFn: () => getLemmaClient(podId || undefined).conversations.get(id, { pod_id: podId }) as Promise<Conversation>,
-        enabled: !!podId && !!id,
-    });
-}
-
 export function useCreateConversation() {
     const queryClient = useQueryClient();
 
@@ -227,23 +219,6 @@ export function useCreateScopedConversation() {
 }
 
 // Messages
-export function useMessages(podId: string, conversationId: string, params?: { limit?: number; cursor?: string }) {
-    return useQuery({
-        queryKey: ['conversations', podId, conversationId, 'messages', params],
-        queryFn: async () => {
-            const response = await getLemmaClient().conversations.messages.list(
-                conversationId,
-                {
-                    limit: params?.limit,
-                    page_token: params?.cursor,
-                }
-            );
-            return asPaginatedArray<Message>(response);
-        },
-        enabled: !!podId && !!conversationId,
-    });
-}
-
 export function useConversationMessages(conversationId: string, params?: { limit?: number; cursor?: string }) {
     return useQuery({
         queryKey: ['conversations', conversationId, 'messages', params],

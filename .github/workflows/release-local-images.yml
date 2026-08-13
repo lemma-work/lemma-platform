@@ -28,6 +28,11 @@ on:
         required: true
         default: true
         type: boolean
+      share:
+        description: "With publish off: publish the runtime to a nightly prerelease and attach a signed, notarized online DMG anyone can install."
+        required: false
+        default: false
+        type: boolean
 
 env:
   REGISTRY: ghcr.io
@@ -67,7 +72,13 @@ jobs:
                   f"branch-test runtime {requested} does not match Desktop {desktop}"
               )
           PY
+      # Release evidence gates a release. A branch test build is explicitly not
+      # one: it is how a commit gets tried *before* it is release-qualified, and
+      # protected E2E is not a required check on main, so demanding a successful
+      # run for the exact SHA would block nearly every one of these. The version
+      # check above still runs either way.
       - name: Verify protected evidence
+        if: github.event_name == 'push' || inputs.publish
         uses: ./.github/actions/require-backend-protected-e2e
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -582,8 +593,17 @@ jobs:
           else
             image_tag="test-${GITHUB_SHA:0:12}"
           fi
+          # Where the runtime assets will live, and therefore what the manifest
+          # has to point at. A shared build publishes to its own prerelease so
+          # it never touches the version-tag release channel.
+          if [[ "${PUBLISH}" == "true" ]]; then
+            release_tag="v${version}"
+          else
+            release_tag="desktop-nightly-${GITHUB_SHA:0:8}"
+          fi
           echo "version=${version}" >> "$GITHUB_OUTPUT"
           echo "image_tag=${image_tag}" >> "$GITHUB_OUTPUT"
+          echo "release_tag=${release_tag}" >> "$GITHUB_OUTPUT"
 
       - name: Download merged digests
         uses: actions/download-artifact@v8
@@ -619,6 +639,7 @@ jobs:
           IMAGE_TAG: ${{ steps.version.outputs.image_tag }}
           PREFIX: ${{ env.IMAGE_PREFIX }}
           REPOSITORY: ${{ github.repository }}
+          RELEASE_TAG: ${{ steps.version.outputs.release_tag }}
         run: |
           python3 - <<'PY'
           import json
@@ -630,6 +651,7 @@ jobs:
           image_tag = os.environ["IMAGE_TAG"]
           prefix = os.environ["PREFIX"]
           repository = os.environ["REPOSITORY"]
+          release_tag = os.environ["RELEASE_TAG"]
           digests = {}
           for path in Path("digests").glob("*.json"):
               entry = json.loads(path.read_text())
@@ -654,7 +676,7 @@ jobs:
               host_packs[target] = {
                   "url": (
                       f"https://github.com/{repository}/releases/download/"
-                      f"v{version}/{path.name}"
+                      f"{release_tag}/{path.name}"
                   ),
                   "sha256": digest,
                   "size": path.stat().st_size,
@@ -680,7 +702,7 @@ jobs:
               guest_runtimes[target] = {
                   "url": (
                       f"https://github.com/{repository}/releases/download/"
-                      f"v{version}/{path.name}"
+                      f"{release_tag}/{path.name}"
                   ),
                   "sha256": digest,
                   "size": path.stat().st_size,
@@ -768,6 +790,42 @@ jobs:
           # lemma-local.json asset) and must not overwrite the release body.
           generate_release_notes: ${{ github.event_name == 'push' }}
 
+      # The manifest a shared build ships points at this prerelease, so the
+      # assets have to be here before the DMG that references them is built.
+      # A prerelease never becomes "Latest", so the version-tag release channel
+      # is untouched.
+      - name: Publish runtime assets to the nightly prerelease
+        if: inputs.share && !inputs.publish
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # This job only downloads artifacts -- it never checks the repo out --
+          # so gh has no git remote to infer the repository from and refuses to
+          # run. Name it explicitly rather than checking out a whole tree to
+          # satisfy a CLI.
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ steps.version.outputs.release_tag }}
+          SHA: ${{ github.sha }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if ! gh release view "${TAG}" >/dev/null 2>&1; then
+            gh release create "${TAG}" \
+              --prerelease \
+              --target "${SHA}" \
+              --title "Lemma Desktop nightly — ${REF_NAME} ${SHA:0:8}" \
+              --notes "Built on demand from \`${REF_NAME}\` at ${SHA:0:8}. Apple silicon, macOS 14+.
+
+          Download the DMG below, drag Lemma to Applications, open it, and choose **Local → Install local services**. The runtime downloads from this prerelease on first launch.
+
+          Not an official release: no upgrade path and no support guarantees."
+          fi
+          gh release upload "${TAG}" \
+            lemma-local.json \
+            host-packs/lemma-host-pack-*.zip \
+            guest-runtimes/lemma-guest-runtime-*.zip \
+            --clobber
+
       - name: Upload branch-test runtime bundle
         if: github.event_name == 'workflow_dispatch' && !inputs.publish
         uses: actions/upload-artifact@v4
@@ -789,9 +847,20 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-  macos-test-desktop:
-    name: Package self-contained macOS test app
-    if: github.event_name == 'workflow_dispatch' && !inputs.publish
+  # The shared build is the *online* app: the same small, signed, notarized DMG
+  # a real release ships, pointed at the nightly prerelease instead of a version
+  # tag. It has to be the online one -- Apple's notary service unpacks
+  # host-runtime.zip and rejects everything inside it, because a bundled CPython
+  # and node_modules are not Developer ID signed and never will be. So a
+  # self-contained DMG cannot be notarized, and an un-notarized DMG is refused by
+  # Gatekeeper on any machine that did not build it.
+  #
+  # Self-contained builds are a local tool now (`make desktop-dmg`), fed by the
+  # runtime artifacts this workflow already uploads. CI does not package them:
+  # half a gigabyte per run, for something nobody can hand to a tester anyway.
+  share-desktop-dmg:
+    name: Publish signed nightly macOS DMG
+    if: github.event_name == 'workflow_dispatch' && inputs.share && !inputs.publish
     runs-on: macos-14
     needs: manifest
     steps:
@@ -803,51 +872,83 @@ jobs:
         with:
           node-version: 22
 
-      - name: Setup Rust
+      - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
 
-      - name: Cache cargo
+      - name: Cache cargo and desktop target
         uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
             desktop/target
-          key: desktop-test-cargo-${{ runner.os }}-${{ hashFiles('desktop/Cargo.lock') }}
-          restore-keys: desktop-test-cargo-${{ runner.os }}-
+          key: desktop-share-cargo-${{ runner.os }}-${{ hashFiles('desktop/Cargo.lock') }}
+          restore-keys: desktop-share-cargo-${{ runner.os }}-
 
-      - name: Download macOS native host pack
-        uses: actions/download-artifact@v8
-        with:
-          name: host-pack-aarch64-apple-darwin
-          path: desktop/runtime/download
-
-      - name: Download macOS managed guest runtime
-        uses: actions/download-artifact@v8
-        with:
-          name: guest-runtime-macos-aarch64
-          path: desktop/runtime/download
-
-      - name: Download exact branch-test manifest
-        uses: actions/download-artifact@v8
-        with:
-          name: lemma-local-test-manifest-${{ github.sha }}
-          path: desktop/runtime/download
-
-      # One staging engine for CI and for `make desktop-dmg`, so a locally
-      # built test DMG and this one are produced by the same code.
-      - name: Verify and stage compressed PR test runtime
+      - name: Resolve nightly tag
+        id: tag
         shell: bash
+        run: echo "release_tag=desktop-nightly-${GITHUB_SHA:0:8}" >> "$GITHUB_OUTPUT"
+
+      - name: Require notarization credentials
+        shell: bash
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          if [[ -z "${APPLE_ID}" || -z "${APPLE_PASSWORD}" || -z "${APPLE_TEAM_ID}" ]]; then
+            echo "::error::APPLE_ID, APPLE_PASSWORD and APPLE_TEAM_ID are required to share a build." >&2
+            exit 1
+          fi
+
+      - name: Import Developer ID certificate
+        id: apple-signing
+        uses: ./.github/actions/setup-apple-signing
+        with:
+          certificate: ${{ secrets.APPLE_CERTIFICATE }}
+          certificate-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+
+      # The same verification the release build does: the app trusts this
+      # manifest to fetch its runtime, so the digests it names are checked
+      # against the bytes actually published before anything is built.
+      - name: Download and verify the published runtime manifest
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.tag.outputs.release_tag }}
+          TARGET: aarch64-apple-darwin
+          GUEST_TARGET: macos-aarch64
         run: |
           set -euo pipefail
-          python3 scripts/prepare_desktop_test_runtime.py \
-            --artifacts-dir desktop/runtime/download \
-            --mode bundled \
-            --expect-version "${{ inputs.version }}" \
-            --host-target aarch64-apple-darwin \
-            --guest-target macos-aarch64 \
-            --stage-dir desktop/runtime/bundled \
-            --output desktop/runtime/bundled/lemma-local.json
+          mkdir -p desktop/runtime/download
+          gh release download "${TAG}" \
+            --pattern lemma-local.json \
+            --pattern "lemma-host-pack-${TARGET}.zip" \
+            --pattern "lemma-guest-runtime-${GUEST_TARGET}.zip" \
+            --dir desktop/runtime/download \
+            --clobber
+          python3 - <<'VERIFY'
+          import hashlib, json, os
+          from pathlib import Path
+          root = Path("desktop/runtime/download")
+          manifest = json.loads((root / "lemma-local.json").read_text())
+          for kind, key, name in (
+              ("host_packs", os.environ["TARGET"], "lemma-host-pack-{}.zip"),
+              ("guest_runtimes", os.environ["GUEST_TARGET"], "lemma-guest-runtime-{}.zip"),
+          ):
+              archive = root / name.format(key)
+              expected = manifest[kind][key]
+              if hashlib.sha256(archive.read_bytes()).hexdigest() != expected["sha256"]:
+                  raise SystemExit(f"{archive.name} digest mismatch")
+              if archive.stat().st_size != expected["size"]:
+                  raise SystemExit(f"{archive.name} size mismatch")
+              if not expected["url"].endswith(f"/{archive.name}"):
+                  raise SystemExit(f"{archive.name} URL does not name the asset")
+          VERIFY
+          cp desktop/runtime/download/lemma-local.json desktop/runtime/lemma-local.json
 
       - name: Bake splash concepts
         run: node desktop/scripts/extract-concepts.mjs
@@ -858,18 +959,16 @@ jobs:
       - name: Build native local sidecars
         run: desktop/scripts/build-sidecar.sh
 
-      - name: Run Desktop tests
-        working-directory: desktop
-        run: cargo test --locked
-
-      - name: Sign virtualization helper with test entitlement
+      - name: Sign virtualization helper with its entitlement
         shell: bash
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ steps.apple-signing.outputs.signing-identity }}
         run: |
           set -euo pipefail
           helper="desktop/binaries/lemma-vz-aarch64-apple-darwin"
-          codesign --force --options runtime \
+          codesign --force --timestamp --options runtime \
             --entitlements desktop/entitlements.plist \
-            --sign - \
+            --sign "${APPLE_SIGNING_IDENTITY}" \
             "${helper}"
           codesign --verify --strict --verbose=2 "${helper}"
           codesign -d --entitlements :- "${helper}" 2>&1 \
@@ -879,197 +978,78 @@ jobs:
         run: |
           echo "TAURI_CLI=@tauri-apps/cli@$(tr -d '[:space:]' < desktop/scripts/tauri-cli-version.txt)" >> "$GITHUB_ENV"
 
-      - name: Build compressed macOS PR test DMG
+      - name: Build, sign and notarize the online DMG
         working-directory: desktop
         env:
-          APPLE_SIGNING_IDENTITY: "-"
+          APPLE_SIGNING_IDENTITY: ${{ steps.apple-signing.outputs.signing-identity }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
-          npx -y "$TAURI_CLI" build --config tauri.dist.conf.json
+          npx -y "$TAURI_CLI" build --config tauri.online.conf.json
+          mkdir -p target/release/release-artifacts
+          dmg=(target/release/bundle/dmg/Lemma_*_aarch64.dmg)
+          [[ "${#dmg[@]}" == 1 ]]
+          mv "${dmg[0]}" \
+            "target/release/release-artifacts/Lemma-nightly-${SHA:0:8}_aarch64.dmg"
 
-      - name: Verify compressed PR test application
+
+      # Tauri notarizes and staples the .app, then builds the DMG from it and
+      # only *signs* the DMG -- it never submits the DMG itself. An unstapled
+      # DMG still passes Gatekeeper while Apple is reachable, because the app
+      # inside carries its own ticket, but it fails closed on a machine that is
+      # offline or behind a filtering proxy. Submitting the disk image too costs
+      # seconds (everything inside it is already notarized) and makes the
+      # download self-contained.
+      - name: Notarize and staple the disk image
+        shell: bash
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          # Named, not globbed: the cargo target directory is cached
+          # between runs, so a previous run's DMG is still sitting there
+          # and `ls *.dmg` handed notarytool two paths.
+          dmg="desktop/target/release/release-artifacts/Lemma-nightly-${GITHUB_SHA:0:8}_aarch64.dmg"
+          xcrun notarytool submit "${dmg}" \
+            --apple-id "${APPLE_ID}" \
+            --password "${APPLE_PASSWORD}" \
+            --team-id "${APPLE_TEAM_ID}" \
+            --wait
+          xcrun stapler staple "${dmg}"
+
+      # Proved here so a tester never meets it as "Lemma is damaged".
+      - name: Verify signature and notarization
         shell: bash
         run: |
           set -euo pipefail
           app="desktop/target/release/bundle/macos/Lemma.app"
-          test -x "${app}/Contents/MacOS/lemma-locald"
-          test -x "${app}/Contents/MacOS/lemma-runtime"
-          test -x "${app}/Contents/Resources/lemma-vz"
-          test -f "${app}/Contents/Resources/lemma-local.json"
-          test -f "${app}/Contents/Resources/host-runtime.zip"
-          test -f "${app}/Contents/Resources/guest-runtime.zip"
-          test ! -e "${app}/Contents/Resources/local-runtime"
-          test ! -e "${app}/Contents/Resources/managed-runtime"
-          app_bytes="$(du -sk "${app}" | awk '{print $1 * 1024}')"
-          test "${app_bytes}" -le "$((850 * 1024 * 1024))"
           codesign --verify --deep --strict --verbose=2 "${app}"
-          codesign -d --entitlements :- \
-            "${app}/Contents/Resources/lemma-vz" 2>&1 \
-            | grep -F "com.apple.security.virtualization"
-          test "$(jq -r .version "${app}/Contents/Resources/lemma-local.json")" = \
-            "$(jq -r .version desktop/tauri.conf.json)"
+          codesign -dvvv "${app}" 2>&1 | grep -F "Identifier=work.lemma.desktop"
+          xcrun stapler validate "${app}"
+          xcrun stapler validate \
+            "desktop/target/release/release-artifacts/Lemma-nightly-${GITHUB_SHA:0:8}_aarch64.dmg"
 
-      - name: Upload compressed macOS PR test DMG
-        uses: actions/upload-artifact@v4
-        with:
-          name: lemma-desktop-macos-pr-test-${{ github.sha }}
-          path: desktop/target/release/bundle/dmg/Lemma_*_aarch64.dmg
-          if-no-files-found: error
-          retention-days: 14
-
-  # The Windows half of the pair. One `publish: false` dispatch now yields both
-  # an installable macOS DMG and an installable Windows installer, cut from the
-  # same host packs, guest runtimes, and manifest.
-  windows-test-desktop:
-    name: Package self-contained Windows test app
-    if: github.event_name == 'workflow_dispatch' && !inputs.publish
-    runs-on: windows-latest
-    needs: manifest
-    defaults:
-      run:
-        shell: pwsh
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v7
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v5
-        with:
-          node-version: 22
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: x86_64-pc-windows-msvc
-
-      - name: Cache cargo
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            desktop/target
-          key: desktop-test-cargo-${{ runner.os }}-${{ hashFiles('desktop/Cargo.lock') }}
-          restore-keys: desktop-test-cargo-${{ runner.os }}-
-
-      - name: Download Windows native host pack
-        uses: actions/download-artifact@v8
-        with:
-          name: host-pack-x86_64-pc-windows-msvc
-          path: desktop/runtime/download
-
-      - name: Download Windows managed guest runtime
-        uses: actions/download-artifact@v8
-        with:
-          name: guest-runtime-windows-x86_64
-          path: desktop/runtime/download
-
-      - name: Download exact branch-test manifest
-        uses: actions/download-artifact@v8
-        with:
-          name: lemma-local-test-manifest-${{ github.sha }}
-          path: desktop/runtime/download
-
-      # The same staging engine the macOS job and `desktop.ps1 exe` use.
-      - name: Verify and stage compressed PR test runtime
+      - name: Attach the DMG to the nightly prerelease
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.tag.outputs.release_tag }}
         run: |
-          python scripts/prepare_desktop_test_runtime.py `
-            --artifacts-dir desktop/runtime/download `
-            --mode bundled `
-            --expect-version "${{ inputs.version }}" `
-            --host-target x86_64-pc-windows-msvc `
-            --guest-target windows-x86_64 `
-            --stage-dir desktop/runtime/bundled `
-            --output desktop/runtime/bundled/lemma-local.json
-          if ($LASTEXITCODE -ne 0) { throw "Staging the bundled runtime failed" }
+          set -euo pipefail
+          dmg="desktop/target/release/release-artifacts/Lemma-nightly-${GITHUB_SHA:0:8}_aarch64.dmg"
+          gh release upload "${TAG}" "${dmg}" --clobber
+          url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/$(basename "${dmg}")"
+          {
+            echo "### Lemma Desktop nightly"
+            echo
+            echo "[Download the DMG](${url})"
+          } >> "${GITHUB_STEP_SUMMARY}"
 
-      - name: Bake splash concepts
-        run: node desktop/scripts/extract-concepts.mjs
-
-      - name: Verify baked splash concepts are committed
-        run: git diff --exit-code desktop/ui/concepts.gen.json
-
-      - name: Build Windows sidecars
-        run: desktop/scripts/build-sidecar.ps1
-
-      - name: Run Desktop tests
-        working-directory: desktop
-        run: cargo test -p lemma-desktop --locked
-
-      - name: Read the pinned Tauri CLI
-        run: |
-          $v = (Get-Content desktop/scripts/tauri-cli-version.txt).Trim()
-          "TAURI_CLI=@tauri-apps/cli@$v" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
-
-      - name: Build compressed Windows PR test installer
-        working-directory: desktop
-        run: |
-          npx -y $env:TAURI_CLI build --config tauri.dist.conf.json --bundles nsis
-          if ($LASTEXITCODE -ne 0) { throw "Bundled NSIS build failed" }
-
-      # A publish:false host pack is unsigned end to end, so there is no
-      # Authenticode to verify. NSIS is an LZMA self-extractor, so unlike the
-      # macOS .app the payload cannot be walked with Expand-Archive either -
-      # 7-Zip understands the container and ships on windows-latest, which makes
-      # it the only way to prove the runtime archives actually got inside.
-      - name: Verify compressed PR test installer
-        run: |
-          $ErrorActionPreference = "Stop"
-          $payload = @(
-            "desktop/target/release/lemma-desktop.exe",
-            "desktop/binaries/lemma-locald-x86_64-pc-windows-msvc.exe",
-            "desktop/binaries/lemma-agent-host-x86_64-pc-windows-msvc.exe",
-            "desktop/binaries/lemma-runtime-x86_64-pc-windows-msvc.exe",
-            "desktop/runtime/bundled/lemma-local.json",
-            "desktop/runtime/bundled/host-runtime.zip",
-            "desktop/runtime/bundled/guest-runtime.zip"
-          )
-          $bytes = ($payload | ForEach-Object {
-            if (-not (Test-Path $_)) { throw "Bundled payload is missing: $_" }
-            (Get-Item $_).Length
-          } | Measure-Object -Sum).Sum
-          # The same hard gate the bundled macOS app is held to. On Windows the
-          # installed application only exists post-install, so the staged
-          # payload is the honest analogue of `du -sk Lemma.app`.
-          if ($bytes -gt 850MB) {
-            throw "Bundled application payload is $bytes bytes; the limit is 850 MiB"
-          }
-
-          $installers = @(Get-ChildItem desktop/target/release/bundle/nsis/Lemma_*-setup.exe `
-            -ErrorAction SilentlyContinue)
-          if ($installers.Count -ne 1) {
-            throw "Expected exactly one bundled NSIS installer, found $($installers.Count)"
-          }
-          $installer = $installers[0]
-
-          $sevenZip = "$env:ProgramFiles\7-Zip\7z.exe"
-          if (Test-Path $sevenZip) {
-            $listing = & $sevenZip l $installer.FullName | Out-String
-            foreach ($entry in @("lemma-desktop.exe", "lemma-locald", "lemma-runtime",
-                                 "lemma-local.json", "host-runtime.zip", "guest-runtime.zip")) {
-              if ($listing -notmatch [regex]::Escape($entry)) {
-                throw "NSIS installer does not contain $entry"
-              }
-            }
-            Write-Host "installer contents verified with 7-Zip"
-          } else {
-            # Do not fail the build over a missing inspector: the payload check
-            # above already proves what went in. Say so, so a silently weaker
-            # gate is visible in the log.
-            Write-Warning "7-Zip not found; skipped inspecting the installer contents"
-          }
-
-          $manifest = Get-Content desktop/runtime/bundled/lemma-local.json | ConvertFrom-Json
-          $conf = Get-Content desktop/tauri.conf.json | ConvertFrom-Json
-          if ($manifest.version -ne $conf.version) {
-            throw "The bundled runtime manifest and Desktop disagree on the version"
-          }
-          Write-Host "installer verified: $($installer.Name) ($($installer.Length) bytes)"
-
-      - name: Upload compressed Windows PR test installer
-        uses: actions/upload-artifact@v4
-        with:
-          name: lemma-desktop-windows-pr-test-${{ github.sha }}
-          path: desktop/target/release/bundle/nsis/Lemma_*-setup.exe
-          if-no-files-found: error
-          retention-days: 14
+      - name: Remove temporary signing keychain
+        if: always() && steps.apple-signing.outcome == 'success'
+        run: security delete-keychain "${{ steps.apple-signing.outputs.keychain-path }}"

@@ -16,6 +16,7 @@ from uuid import UUID
 from app.modules.agent.domain.agent_host import AgentHostEventType, AgentHostRunState
 from app.modules.agent.domain.agent_host_permissions import (
     permission_approval_events,
+    permission_approval_tool_call_id,
 )
 from app.modules.agent.domain.value_objects import (
     AgentEvent,
@@ -66,6 +67,7 @@ __all__ = [
     "is_terminal_event",
     "terminal_event",
 ]
+
 
 @dataclass(frozen=True, slots=True)
 class AgentHostEventEnvelope:
@@ -467,14 +469,34 @@ class AgentHostEventNormalizer:
         already have; see ``domain.agent_host_permissions`` for the shape and for
         why this pause emits no WAITING event.
         """
+        request_id = row.object_id or f"permission-{row.sequence}"
+        tool_call = payload.get("toolCall")
+        # Tracked like any other open call, so a run that ends without an answer
+        # closes it. An approval card outlives its run otherwise: the host is no
+        # longer holding the request — its own timeout denied it — but the card
+        # still offers buttons, and pressing one lands on a run that ended hours
+        # ago. Answering it *does* write a return, and a synthesized return
+        # never replaces a real one, so this closes only the abandoned ones.
+        self.tool_calls[permission_approval_tool_call_id(request_id)] = (
+            "request_approval"
+        )
         return [
             *self._flush_messages(final=False),
             *permission_approval_events(
                 agent_run_id=self.agent_run_id,
-                request_id=row.object_id or f"permission-{row.sequence}",
+                request_id=request_id,
                 sequence=row.sequence,
                 payload=payload,
                 metadata=metadata,
+                # The call this request interrupts was already reported, and its
+                # name resolved; prefer the name that call is showing under to
+                # the ACP category the permission payload carries.
+                tool_name=self.tool_calls.get(request_id)
+                or (
+                    tool_name_from_payload(tool_call)
+                    if isinstance(tool_call, dict)
+                    else None
+                ),
             ),
         ]
 

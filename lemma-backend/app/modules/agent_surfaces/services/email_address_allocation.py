@@ -45,10 +45,18 @@ def build_local_part(
     The agent slug is the identifying half, so when the budget is tight the pod
     slug is truncated first and the agent name is what survives. A person
     reading ``support-triage.a…@`` can still tell which agent it is.
+
+    ``agent_name=None`` is the pod assistant, and it gets the pod slug alone:
+    ``acme@`` rather than ``acme.acme@``. The assistant is not one agent among
+    several, it is the pod answering, so the pod's own name is the honest
+    address — and it is the shortest thing a person can be asked to type.
     """
-    agent = slugify(agent_name)
     pod = slugify(pod_name, fallback="pod")
     tail = f"-{suffix}" if suffix else ""
+    if agent_name is None:
+        return f"{pod[: MAX_LOCAL_PART - len(tail)]}{tail}".strip("-.")
+
+    agent = slugify(agent_name)
 
     # Everything except the pod slug is fixed; give the pod whatever is left.
     room_for_pod = MAX_LOCAL_PART - len(agent) - len(tail) - 1  # 1 for the dot

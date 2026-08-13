@@ -421,7 +421,7 @@ async fn a_decision_cannot_resolve_another_runs_request() {
         let waiting = Arc::clone(&waiting);
         tokio::spawn(async move {
             waiting.store(true, Ordering::SeqCst);
-            gate.wait(mine, "call-1".to_owned(), Duration::from_secs(5))
+            gate.wait(mine, "call-1".to_owned(), Duration::from_secs(5), None)
                 .await
         })
     };

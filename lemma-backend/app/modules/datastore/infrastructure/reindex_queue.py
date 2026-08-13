@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from sqlalchemy import select
+from sqlalchemy import func, select
 from uuid import UUID
 
 from app.core.infrastructure.db.session import async_session_maker
@@ -11,6 +11,7 @@ from app.core.infrastructure.jobs.streaq_job_queue import (
     SharedStreaqJobQueue,
     get_streaq_job_queue,
 )
+from app.modules.datastore.config import datastore_settings
 from app.modules.datastore.domain.file_entities import FileStatus
 from app.modules.datastore.domain.ports import DatastoreReindexQueuePort
 from app.modules.datastore.infrastructure.models import DatastoreFile
@@ -29,14 +30,25 @@ class RedisDatastoreReindexQueue(DatastoreReindexQueuePort):
     async def close(self) -> None:
         return None
 
-    async def _is_file_pending(
+    async def _read_admission_state(
         self,
         *,
         file_id: UUID,
         pod_id: UUID,
-    ) -> bool:
+    ) -> tuple[bool, int]:
+        """Whether the file is still PENDING, and how much else the pod has active.
+
+        Both answers come from one session on purpose. They were two separate
+        round-trips, which is wasteful on a path that runs once per uploaded
+        file, and it also made the enqueue decision span two points in time.
+
+        ``file_id`` is excluded from the active count: its own row is already
+        PENDING by the time this runs, so counting it would mean a pod at limit 4
+        admits only 3 — and at a limit of 1, nothing at all.
+        """
+        active_statuses = (FileStatus.PENDING.value, FileStatus.PROCESSING.value)
         async with async_session_maker() as session:
-            result = await session.execute(
+            status = await session.scalar(
                 select(DatastoreFile.status).where(
                     DatastoreFile.id == file_id,
                     DatastoreFile.pod_id == pod_id,
@@ -44,15 +56,24 @@ class RedisDatastoreReindexQueue(DatastoreReindexQueuePort):
                     DatastoreFile.search_enabled == True,  # noqa: E712
                 )
             )
-            status = result.scalar_one_or_none()
-
-        if status is None:
-            return False
-
-        if status != FileStatus.PENDING.value:
-            return False
-
-        return True
+            if status != FileStatus.PENDING.value:
+                # Not eligible either way; skip the count entirely.
+                return False, 0
+            active = int(
+                await session.scalar(
+                    select(func.count())
+                    .select_from(DatastoreFile)
+                    .where(
+                        DatastoreFile.pod_id == pod_id,
+                        DatastoreFile.id != file_id,
+                        DatastoreFile.kind == "FILE",
+                        DatastoreFile.search_enabled == True,  # noqa: E712
+                        DatastoreFile.status.in_(active_statuses),
+                    )
+                )
+                or 0
+            )
+        return True, active
 
     def _job_id(self, *, file_id: UUID, defer_until: datetime | None) -> str:
         if defer_until is None:
@@ -66,9 +87,28 @@ class RedisDatastoreReindexQueue(DatastoreReindexQueuePort):
         pod_id: UUID,
         metadata: dict | None,
         defer_until: datetime | None = None,
+        bypass_admission: bool = False,
     ) -> bool:
-        is_pending = await self._is_file_pending(file_id=file_id, pod_id=pod_id)
+        """Queue a file for processing, subject to the per-pod admission gate.
+
+        Returning False when the pod is saturated is not a failure and drops
+        nothing: the row stays PENDING, which IS the durable backlog, and
+        ``dispatch_pending_datastore_files`` will pick it up fairly. The
+        dispatcher itself passes ``bypass_admission`` — it has already done the
+        fairness accounting and must not be re-gated by it.
+        """
+        is_pending, pod_active = await self._read_admission_state(
+            file_id=file_id, pod_id=pod_id
+        )
         if not is_pending:
+            return False
+
+        limit = datastore_settings.datastore_per_pod_max_inflight
+        if not bypass_admission and limit > 0 and pod_active >= limit:
+            logger.debug(
+                "datastore.reindex_queue.pod_admission_deferred_to_dispatcher.observed",
+                pod_id=str(pod_id),
+            )
             return False
 
         job_id = self._job_id(file_id=file_id, defer_until=defer_until)

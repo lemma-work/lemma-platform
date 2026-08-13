@@ -3,7 +3,6 @@ from __future__ import annotations
 from collections.abc import AsyncIterable, AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
-import time
 from typing import Any
 from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
@@ -19,9 +18,14 @@ from sandbox_runtime.protocol import (
     TerminalSize,
     WorkloadKind,
 )
-from sandbox_runtime.protocol import ProcessState, PythonExecutionState
+from sandbox_runtime.protocol import PythonExecutionState
 from app.core.log.log import get_logger
+from app.modules.workspace.config import workspace_settings
 from app.modules.workspace.contracts import PythonExecutionResult, ShellCommandResult
+from app.modules.workspace.process_output import (
+    TERMINAL_PROCESS_STATES,
+    collect_process_output,
+)
 from app.modules.workspace.session_support import (
     OutputCursor,
     resize_process_terminal,
@@ -34,12 +38,11 @@ from app.modules.workspace.session_support import (
 
 
 logger = get_logger(__name__)
-_TERMINAL_PROCESS_STATES = {
-    ProcessState.SUCCEEDED,
-    ProcessState.FAILED,
-    ProcessState.CANCELLED,
-    ProcessState.TIMED_OUT,
-}
+
+# How long a pure output poll waits for new bytes. Bounded by write_stdin's own
+# 35s deadline.
+_POLL_YIELD_MS = 30_000
+
 
 
 class SandboxWorkspaceSession:
@@ -160,7 +163,15 @@ class SandboxWorkspaceSession:
         rows: int = 40,
     ) -> dict[str, Any]:
         operation_id = uuid4()
-        deadline = self._deadline(timeout or 300)
+        # Two clocks, deliberately: `wait_until` is how long THIS call waits for
+        # output, `process_deadline` is how long the command may live. They used
+        # to be one number, so a 60s wait also stamped a 60s lifetime on a
+        # ten-minute build — harmless only because nothing enforced it, which
+        # the reaper now does.
+        wait_until = self._deadline(timeout or 300)
+        process_deadline = self._deadline(
+            workspace_settings.process_max_lifetime_seconds
+        )
         output_limit = min(
             2 * 1024 * 1024,
             max(1024, (max_output_tokens or 1_000_000) * 4),
@@ -176,16 +187,16 @@ class SandboxWorkspaceSession:
                     environment=self._environment,
                     tty=TerminalSize(cols=cols, rows=rows) if tty else None,
                     output_limit_bytes=output_limit,
-                    deadline_at=deadline,
+                    deadline_at=process_deadline,
                 ),
-                deadline,
+                wait_until,
             )
             effective_yield_ms = yield_time_ms
             if effective_yield_ms is None and tty:
                 effective_yield_ms = 1000
             return await self._collect_process(
                 operation_id,
-                deadline_at=deadline,
+                deadline_at=wait_until,
                 yield_time_ms=effective_yield_ms,
             )
         except SandboxError as exc:
@@ -223,10 +234,19 @@ class SandboxWorkspaceSession:
                     deadline_at=deadline,
                 )
                 input_accepted = True
+            # A pure poll (`chars=""`) is how an agent watches a build finish, so
+            # it waits much longer than an interactive keystroke does: at 5s a
+            # ten-minute build costs ~120 model round-trips just to sit still,
+            # and each one burns a request against the run's budget. Writing
+            # actual input keeps the short window, because someone typing wants
+            # the echo back immediately.
+            default_yield_ms = 5000 if chars else _POLL_YIELD_MS
             return await self._collect_process(
                 operation_id,
                 deadline_at=deadline,
-                yield_time_ms=yield_time_ms if yield_time_ms is not None else 5000,
+                yield_time_ms=(
+                    yield_time_ms if yield_time_ms is not None else default_yield_ms
+                ),
             )
         except SandboxError as exc:
             if input_accepted:
@@ -329,7 +349,7 @@ class SandboxWorkspaceSession:
                 "started_at": (
                     process.started_at.timestamp() if process.started_at else 0
                 ),
-                "completed": process.state in _TERMINAL_PROCESS_STATES,
+                "completed": process.state in TERMINAL_PROCESS_STATES,
                 "exit_code": process.exit_code,
             }
             for process in processes
@@ -501,65 +521,14 @@ class SandboxWorkspaceSession:
         deadline_at: datetime,
         yield_time_ms: int | None,
     ) -> dict[str, Any]:
-        started = time.monotonic()
-        yield_seconds = None if yield_time_ms is None else yield_time_ms / 1000
-        after_sequence = await self._output_cursor.load(operation_id)
-        initial_sequence = after_sequence
-        stdout = bytearray()
-        stderr = bytearray()
-        state = ProcessState.RUNNING
-        exit_code: int | None = None
-        while datetime.now(timezone.utc) < deadline_at:
-            elapsed = time.monotonic() - started
-            if yield_seconds is not None and elapsed >= yield_seconds:
-                break
-            remaining_yield = (
-                1.0
-                if yield_seconds is None
-                else max(0, min(1.0, yield_seconds - elapsed))
-            )
-            snapshot = await self.client.read_process_output(
-                WorkloadKind.WORKSPACE,
-                self.logical_id,
-                operation_id,
-                deadline_at=deadline_at,
-                after_sequence=after_sequence,
-                wait_seconds=remaining_yield,
-            )
-            state = snapshot.state
-            exit_code = snapshot.exit_code
-            for chunk in snapshot.chunks:
-                after_sequence = max(after_sequence, chunk.sequence)
-                if chunk.channel.value == "stderr":
-                    stderr.extend(chunk.data)
-                else:
-                    stdout.extend(chunk.data)
-            self._output_cursor.remember_locally(operation_id, after_sequence)
-            if state in _TERMINAL_PROCESS_STATES:
-                break
-        completed = state in _TERMINAL_PROCESS_STATES
-        if after_sequence != initial_sequence:
-            await self._output_cursor.save(operation_id, after_sequence)
-        # Each poll's bytes are decoded as a unit, so a chunk boundary inside
-        # one poll is handled correctly. A multi-byte character split across
-        # two polls still yields one replacement character; holding the partial
-        # sequence back is not worth it, because the output cursor is a single
-        # sequence over interleaved stdout/stderr chunks and rewinding it could
-        # duplicate or drop real output.
-        return {
-            "success": state in {ProcessState.RUNNING, ProcessState.SUCCEEDED},
-            "stdout": stdout.decode("utf-8", errors="replace"),
-            "stderr": stderr.decode("utf-8", errors="replace"),
-            "exit_code": exit_code,
-            "completed": completed,
-            "process_id": None if completed else str(operation_id),
-            "error": None
-            if state in {ProcessState.RUNNING, ProcessState.SUCCEEDED}
-            else state.value,
-        }
-
-
-
+        return await collect_process_output(
+            self.client,
+            self.logical_id,
+            self._output_cursor,
+            operation_id,
+            deadline_at=deadline_at,
+            yield_time_ms=yield_time_ms,
+        )
 
     @staticmethod
     def _deadline(seconds: int | float) -> datetime:

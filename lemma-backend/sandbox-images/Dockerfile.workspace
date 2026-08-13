@@ -94,7 +94,6 @@ FROM ${PYTHON_IMAGE}
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_PREFIX=/workspace/.python \
-    PYTHONPATH=/app:/workspace/.python/lib/python3.14/site-packages:/opt/lemma-python/lib/python3.14/site-packages \
     HOME=/home/appuser \
     DISPLAY=:99 \
     XDG_RUNTIME_DIR=/tmp/lemma-browser/runtime \
@@ -112,8 +111,16 @@ ENV PYTHONUNBUFFERED=1 \
     GH_NO_UPDATE_NOTIFIER=1 \
     GH_PAGER=cat \
     NODE_PATH=/opt/lemma-node/node_modules \
-    PNPM_HOME=/home/appuser/.local/share/pnpm \
-    PATH=/workspace/.python/bin:/opt/lemma-python/bin:/opt/lemma-node/node_modules/.bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin \
+    # On the workspace volume, which is the only thing that survives a sandbox
+    # being recreated — and, less obviously, the only place pnpm can do its job.
+    # pnpm links packages into node_modules from its store, and a hard link
+    # cannot cross a filesystem: with the store on the container layer and the
+    # project on /workspace, every install silently fell back to copying. So the
+    # store was neither faster nor smaller than npm's. Here it is both, and it
+    # survives to the next conversation.
+    PNPM_HOME=/workspace/.pnpm \
+    UV_CACHE_DIR=/workspace/.uv-cache \
+    PATH=/workspace/.python/bin:/workspace/.pnpm:/opt/lemma-python/bin:/opt/lemma-node/node_modules/.bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin \
     MPLBACKEND=Agg
 
 RUN apt-get update \
@@ -146,13 +153,35 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=node-runtime /usr/local/bin/node /usr/local/bin/node
+# npm and npx, not just the node binary. Copying only `node` left the image with
+# pnpm and no npm at all, which breaks the first thing anyone does with a
+# JavaScript project: `npx create-next-app`, `npm install`, `npm run build`, and
+# every README and error message that names them. An agent asked to build a
+# Next.js app got as far as discovering npm was missing and started hand-
+# downloading a Node tarball — twice, because it guessed the wrong architecture.
+# pnpm stays the preferred installer; npm just has to exist.
+COPY --from=node-runtime /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/npm
 COPY --from=node-runtime /opt/lemma-node /opt/lemma-node
 COPY --from=python-runtime /opt/lemma-python /opt/lemma-python
 COPY --from=uv-runtime /uv /usr/local/bin/uv
 COPY --from=uv-runtime /uvx /usr/local/bin/uvx
 COPY --from=gh-runtime /usr/local/bin/gh /usr/local/bin/gh
+# Where `pip install` puts things (PIP_PREFIX), made importable by the Lemma
+# interpreter — via a .pth rather than PYTHONPATH, which is the whole point.
+# PYTHONPATH applies to *every* interpreter, so it also landed at the front of
+# every virtualenv's sys.path: a project that pinned `numpy==1.26` in a uv venv
+# silently imported the shared 2.5 instead, because the shared site-packages
+# came first. A .pth file is read only by the interpreter that owns the
+# site-packages holding it, so the shared environment stays available to
+# `execute_python` and invisible to a venv. Missing directories are skipped, so
+# this is safe before /workspace/.python exists.
+RUN printf '/app\n/workspace/.python/lib/python3.14/site-packages\n' \
+      > /opt/lemma-python/lib/python3.14/site-packages/lemma-workspace-paths.pth
+
 COPY lemma-backend/sandbox-images/scripts/lemma-node-tool /usr/local/lib/lemma-node-tool
 RUN ln -sf "$(command -v chromium)" /usr/local/bin/workspace-chrome \
+    && ln -sf ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
+    && ln -sf ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
     && ln -sf /opt/lemma-python/bin/lemma /usr/local/bin/lemma \
     && chmod 0755 /usr/local/lib/lemma-node-tool \
     && ln -sf /usr/local/lib/lemma-node-tool /usr/local/bin/agent-browser \

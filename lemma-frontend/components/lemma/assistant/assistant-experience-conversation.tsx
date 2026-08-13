@@ -75,21 +75,34 @@ export function AssistantDisplayRow({
     && previousRow?.message.role === "assistant"
     && !rowHasToolActivity
     && !previousRowHasToolActivity;
-  // The live run trace (consecutive assistant rows in the active run — text,
-  // tool steps, thoughts) should read as one tight sequence rather than
-  // turn-spaced rows, so tighten it the same way consecutive plain-text rows
-  // are. Completed runs fold under "Worked for …" and keep their own spacing.
-  const rowInActiveRun = !!isRunActive && row.message.role === "assistant"
+  // A run's trace (consecutive assistant rows — text, tool steps, thoughts)
+  // reads as one tight sequence rather than turn-spaced rows.
+  //
+  // Deliberately not a function of `isRunActive`: keying spacing off whether the
+  // run happens to be live meant the same transcript was tight while you watched
+  // it and loose after a reload. What a row is does not change; how far it sits
+  // from its neighbour should not either.
+  const rowInLatestRun = row.message.role === "assistant"
     && rowIsAfterIndex(row, currentRunLatestUserIndex);
-  const previousRowInActiveRun = !!isRunActive && !!previousRow && previousRow.message.role === "assistant"
+  const previousRowInLatestRun = !!previousRow && previousRow.message.role === "assistant"
     && rowIsAfterIndex(previousRow, currentRunLatestUserIndex);
-  const compactActiveRunTrace = rowInActiveRun && previousRowInActiveRun;
+  const compactActiveRunTrace = rowInLatestRun && previousRowInLatestRun;
   const displayResourceCards = displayResourceCardsByRow.get(index) || [];
   // Rows folded under a "Worked for …" rollup are trace, not the final answer.
-  const withinTrace = completedRunTraceGroups.groupedIndexes.has(index);
+  // Trace is about what a row *is*, not about whether its run happens to be
+  // folded. The most recent run never folds, so keying this off `groupedIndexes`
+  // alone left its narration rendering at answer weight — which is why a turn
+  // that talked before acting read as two answers.
+  const withinTrace = completedRunTraceGroups.traceIndexes.has(index);
+  // Spacing asks a different question from styling. `withinTrace` is about what
+  // a row *is*; this is about whether it already sits inside a rollup that owns
+  // its spacing. Guarding the compaction on `withinTrace` — after that flag was
+  // widened to cover unfolded runs — turned it off for the whole live trace, so
+  // every step stood a full turn-gap from the one before it.
+  const isInsideRollup = completedRunTraceGroups.groupedIndexes.has(index);
 
   return (
-    <div key={row.id || index} className={cn((compactAfterAssistant || compactActiveRunTrace) && !withinTrace && "-mt-3")}>
+    <div key={row.id || index} className={cn((compactAfterAssistant || compactActiveRunTrace) && !isInsideRollup && "-mt-3")}>
       {index === inlineRunStatusRowIndex ? (
         <div className="mb-3">
           <RunTraceHeader

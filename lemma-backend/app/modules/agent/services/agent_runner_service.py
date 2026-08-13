@@ -18,6 +18,12 @@ from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.core.observability.telemetry import agent_run_telemetry_context
 from app.modules.agent.config import agent_settings
+from app.modules.agent.domain.vision import resolve_vision_mode
+from app.modules.agent.infrastructure.transport_errors import (
+    is_retryable_stream_error,
+)
+from app.modules.agent.services.vision_service import vision_delegate_available
+from app.modules.usage.domain.errors import UsageLimitExceededError
 from app.modules.agent.domain.entities import Agent, AgentRun, Conversation, Message
 from app.modules.agent.domain.errors import (
     AgentNotFoundError,
@@ -90,6 +96,35 @@ from app.core.authorization.delegation import DEFAULT_POD_AGENT_NAME
 
 logger = get_logger(__name__)
 FULL_HISTORY_AGENT_RUN_COUNT = 5
+
+# Ceiling on the shielded finalization write. Comfortably longer than the write
+# takes and comfortably inside the worker's shutdown grace period, so a healthy
+# run always finalizes and a wedged one still lets the process exit.
+_FINALIZATION_TIMEOUT_SECONDS = 8.0
+
+
+def _run_failure_message(exc: BaseException) -> str:
+    """What the user reads when a run dies outside the harness's own handling.
+
+    Distinguishing these matters: a quota exhaustion and a dropped connection
+    are both "the run failed", but only one of them is worth investigating, and
+    neither is fixed by checking the runtime configuration.
+    """
+    if isinstance(exc, UsageLimitExceededError):
+        return (
+            "This run was not started because the workspace has used its "
+            "available usage allowance. Usage resets with the billing period, "
+            "or the plan limit can be raised."
+        )
+    if is_retryable_stream_error(exc):
+        return (
+            "The connection to the model provider kept dropping. Nothing you "
+            "sent was lost — send another message, or press Retry to pick up "
+            "where it stopped."
+        )
+    if not isinstance(exc, Exception):
+        return "Agent run was interrupted (timeout or shutdown)"
+    return "Agent run failed. Please check the agent runtime configuration."
 
 
 def _newest_message_time(run: AgentRun) -> datetime | None:
@@ -283,14 +318,22 @@ class AgentRunnerService:
                 agent=agent,
                 conversation=conversation,
             )
-            # `view_image` is a standalone toolset, appended for any agent/harness
-            # whose resolved model declares VISION support — independent of the
-            # agent's configured toolsets (see AgentToolset.VIEW_IMAGE).
+            # How image-returning tools answer on this run. `view_image` itself
+            # is always offered (see below): withholding it on a text-only model
+            # never protected anything, because `pod_view_document_pages`
+            # shipped image content to that same model anyway.
             supports_vision = (
                 resolved_runtime.model is not None
                 and RuntimeModelCapability.VISION in resolved_runtime.model.capabilities
             )
-            if supports_vision and view_image_toolset not in full_toolsets:
+            ctx.vision_mode = resolve_vision_mode(
+                model_supports_vision=supports_vision,
+                delegate_model_configured=vision_delegate_available(),
+            )
+            # Present for every agent whose vision mode can answer at all: on a
+            # text-only model the tool delegates to the configured vision model
+            # and returns text, so it is safe everywhere.
+            if ctx.vision_mode.can_see and view_image_toolset not in full_toolsets:
                 full_toolsets = [*full_toolsets, view_image_toolset]
             # Remote harnesses (Codex/Claude-Code) reach every tool through the MCP
             # server, so they keep the full toolset list. The in-process LEMMA
@@ -454,7 +497,18 @@ class AgentRunnerService:
                             except Exception:
                                 logger.debug('agent.agent_runner_service.agent_run_observer_finish_run.diagnostic', agent_run_id=agent_run_id)
         except BaseException as exc:
-            if isinstance(exc, Exception):
+            if isinstance(exc, UsageLimitExceededError):
+                # Not a crash: the organisation is out of plan quota. This was
+                # the single most common "error" in production (154 in a week),
+                # logged at ERROR with a stack trace and shown to the user as
+                # "check the agent runtime configuration" — which sent people
+                # debugging a system that was working exactly as designed.
+                logger.warning(
+                    "agent.agent_runner_service.agent_run_quota_exhausted.degraded",
+                    agent_run_id=agent_run_id,
+                    exc_info=True,
+                )
+            elif isinstance(exc, Exception):
                 logger.error(
                     "agent.agent_runner_service.agent_run_s.failed", exc_info=True
                 )
@@ -480,17 +534,26 @@ class AgentRunnerService:
             # (no retry). That is intentional — the app DB (this FAILED write)
             # is the source of truth; interrupted runs fail terminally and the
             # user re-asks rather than the job silently re-running on another pod.
-            with anyio.CancelScope(shield=True):
+            # Shielded *and* bounded. The shield is what lets the write finish
+            # while the surrounding scope is already cancelled; without a
+            # deadline it also makes the write uninterruptible, and an
+            # uninterruptible write is how a SIGTERM'd worker hangs forever:
+            # streaq's consumer cannot finish, so its task group never exits and
+            # the lifespan teardown is never reached — no grace period applies,
+            # because the grace period is enforced by the very cancellation this
+            # scope is ignoring. Observed on roughly one mid-run SIGTERM in four.
+            #
+            # Losing the write is survivable; `reconcile_orphaned_agent_runs`
+            # already exists to finish runs that were interrupted. Losing the
+            # worker is not: the platform SIGKILLs it and every other in-flight
+            # run on that process dies with it.
+            with anyio.move_on_after(_FINALIZATION_TIMEOUT_SECONDS, shield=True):
                 await _finalize_safely(
                     self._finish_agent_run(
                         conversation_id=conversation.id,
                         agent_run_id=agent_run_id,
                         status=AgentRunStatus.FAILED,
-                        error=(
-                            "Agent run failed. Please check the agent runtime configuration."
-                            if isinstance(exc, Exception)
-                            else "Agent run was interrupted (timeout or shutdown)"
-                        ),
+                        error=_run_failure_message(exc),
                         organization_id=conversation.organization_id,
                         pod_id=conversation.pod_id,
                         user_id=user_id,

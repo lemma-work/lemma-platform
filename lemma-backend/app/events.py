@@ -4,10 +4,14 @@ FastStream subscriptions and streaq tasks are registered from the module
 registry: each module's ``event_routers()`` thunk imports its handlers, which
 also registers any ``@streaq_task``/``@streaq_cron`` defined alongside them.
 
-This runs at *import scope* on purpose: the worker entrypoint is
-``streaq run app.events:streaq_worker``, so all tasks must be registered on the
-shared ``streaq_worker`` before streaq introspects it, and all routers included
-on the ``broker`` before ``broker.start()``.
+This runs at *import scope* on purpose: the worker entrypoint (``python -m
+app.worker``) imports this module and then runs the configured lanes, so every
+task must already be registered on its lane's Worker, and every router included
+on the ``broker``, before ``broker.start()``.
+
+Note the entrypoint is deliberately NOT ``streaq run app.events:streaq_worker``:
+that starts one Worker object, which would consume only the interactive queue and
+silently leave bulk-lane work (document processing, pod imports) unprocessed.
 """
 
 from app.core.infrastructure.jobs.streaq_runtime import broker, streaq_worker

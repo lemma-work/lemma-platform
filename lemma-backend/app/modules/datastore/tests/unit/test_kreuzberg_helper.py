@@ -10,6 +10,9 @@ from app.modules.datastore.infrastructure import kreuzberg_helper as kreuzberg_m
 from app.modules.datastore.infrastructure.kreuzberg_circuit import (
     reset_kreuzberg_circuit,
 )
+from app.modules.datastore.domain.errors import (
+    DocumentExtractionUnavailableError,
+)
 from app.modules.datastore.infrastructure.kreuzberg_helper import (
     KreuzbergCompatibilityError,
     KreuzbergExtractionResult,
@@ -116,7 +119,12 @@ async def test_process_file_uses_native_pdf_config_with_150_dpi(monkeypatch):
     assert session_calls == [{"timeout": helper.request_timeout}]
     assert extract_mock.await_count == 1
     config = extract_mock.await_args.kwargs["config"]
-    assert config["images"] == {"extract_images": True, "target_dpi": 150}
+    assert config["images"] == {
+        "extract_images": True,
+        "target_dpi": 150,
+        # base64 rather than a JSON int array for the same bytes.
+        "include_data_base64": True,
+    }
     assert "force_ocr" not in config
     # Layout/table config is kept on the native path (preserves text tables).
     assert config["layout"]["table_model"] == "tatr"
@@ -155,7 +163,11 @@ async def test_process_file_uses_heavy_pdf_config_for_scanned_pdf(monkeypatch):
     assert extract_mock.await_count == 1
     config = extract_mock.await_args.kwargs["config"]
     assert config["force_ocr"] is True
-    assert config["images"] == {"extract_images": True, "target_dpi": 300}
+    assert config["images"] == {
+        "extract_images": True,
+        "target_dpi": 300,
+        "include_data_base64": True,
+    }
     assert config["pdf_options"]["hierarchy"]["enabled"] is True
     assert config["layout"]["table_model"] == "tatr"
     assert result.extraction_mode == "ocr"
@@ -218,10 +230,14 @@ def test_build_extract_config_native_pdf_uses_150_dpi_keeps_layout():
     config = helper._build_extract_config("application/pdf", force_ocr=False)
 
     # Native: 150-DPI images, no forced OCR — but the layout/table config stays
-    # (lighter "fast" layout preset) so text tables are still reconstructed.
+    # (page-selective layout) so text tables are still reconstructed.
     assert config["images"]["target_dpi"] == 150
     assert "force_ocr" not in config
-    assert config["layout"]["preset"] == "fast"
+    # "strategy", not the "preset" key we used to send: LayoutDetectionConfig has
+    # no "preset" field and does not reject unknown ones, so that key was
+    # silently discarded and we paid always-on layout on every page.
+    assert config["layout"]["strategy"] == "auto"
+    assert "preset" not in config["layout"]
     assert config["layout"]["table_model"] == "tatr"
     assert config["pdf_options"]["hierarchy"]["enabled"] is True
     assert config["pdf_options"]["allow_single_column_tables"] is True
@@ -581,3 +597,97 @@ async def test_extract_raises_after_exhausting_transient_retries(monkeypatch):
     )
     assert session.post.attempts == expected_attempts
     assert len(sleeps) == expected_attempts - 1
+
+
+# --- Wire-format compatibility -------------------------------------------
+#
+# Kreuzberg v4 returns a bare JSON array from /extract; Xberg 1.x returns an
+# envelope and reports per-input failures inside a 200. One client has to read
+# both so the engine can be swapped by image tag alone.
+
+
+def test_parses_kreuzberg_v4_bare_array_response():
+    result = KreuzbergHelper._parse_extract_response(
+        [{"content": "# Title", "metadata": {"page_count": 1}}]
+    )
+    assert result.content == "# Title"
+
+
+def test_parses_xberg_v1_envelope_response():
+    result = KreuzbergHelper._parse_extract_response(
+        {
+            "results": [{"content": "# Title", "metadata": {}}],
+            "errors": [],
+            "summary": {"inputs": 1, "results": 1, "errors": 0},
+        }
+    )
+    assert result.content == "# Title"
+
+
+def test_envelope_with_only_errors_raises_rather_than_indexing_an_empty_doc():
+    """A 200 carrying an errors[] must not be mistaken for a blank document.
+
+    Silently indexing nothing would mark the file COMPLETED with zero chunks —
+    the user sees a successfully-processed document they cannot search.
+    """
+    with pytest.raises(RuntimeError, match="no usable result"):
+        KreuzbergHelper._parse_extract_response(
+            {
+                "results": [],
+                "errors": [{"message": "unsupported encryption"}],
+                "summary": {"inputs": 1, "results": 0, "errors": 1},
+            }
+        )
+
+
+def test_extraction_failure_is_not_treated_as_infrastructure_backpressure():
+    """A bad document must spend its attempt and go terminal, not retry forever."""
+    with pytest.raises(RuntimeError) as excinfo:
+        KreuzbergHelper._parse_extract_response(
+            {"results": [], "errors": [{"message": "corrupt xref"}]}
+        )
+    assert not isinstance(excinfo.value, DocumentExtractionUnavailableError)
+
+
+def test_empty_response_raises():
+    for payload in ([], {}, {"results": []}, None):
+        with pytest.raises(RuntimeError):
+            KreuzbergHelper._parse_extract_response(payload)
+
+
+def test_image_bytes_prefer_base64_over_int_array():
+    """Both fields may be present; the int array is the same bytes, much larger."""
+    import base64
+
+    payload = b"\x89PNG\r\n\x1a\n-figure-bytes"
+    result = KreuzbergExtractionResult(
+        {
+            "content": "x",
+            "images": [
+                {
+                    "image_index": 0,
+                    "format": "png",
+                    "data": list(payload),
+                    "data_base64": base64.b64encode(payload).decode(),
+                }
+            ],
+        }
+    )
+    images = result.get_images()
+    assert len(images) == 1
+    assert images[0]["content"] == payload
+
+
+@pytest.mark.asyncio
+async def test_local_chunk_fallback_splits_instead_of_one_giant_chunk():
+    """Xberg 1.x removed POST /chunk, so the remote fallback always fails there.
+
+    Without an in-process fallback the whole document would be indexed as a
+    single chunk, which destroys retrieval quality.
+    """
+    markdown = "\n\n".join(f"## Section {i}\n\n{'body text ' * 60}" for i in range(12))
+    chunks = await KreuzbergHelper._chunk_locally(
+        markdown, max_chars=1000, max_overlap=200
+    )
+    assert len(chunks) > 1
+    assert all(chunk["text"].strip() for chunk in chunks)

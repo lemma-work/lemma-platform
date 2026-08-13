@@ -293,8 +293,10 @@ export type { ScheduleRunListResponse } from './models/ScheduleRunListResponse.j
 export type { ScheduleRunResponse } from './models/ScheduleRunResponse.js';
 export { ScheduleRunStatus } from './models/ScheduleRunStatus.js';
 export { ScheduleType } from './models/ScheduleType.js';
+export { SearchFreshness } from './models/SearchFreshness.js';
 export { SearchMethod } from './models/SearchMethod.js';
 export type { SearchResult } from './models/SearchResult.js';
+export { SearchVertical } from './models/SearchVertical.js';
 export type { SendMessageRequest } from './models/SendMessageRequest.js';
 export type { SetDefaultSurfaceRequest } from './models/SetDefaultSurfaceRequest.js';
 export type { StepRecordResponse } from './models/StepRecordResponse.js';

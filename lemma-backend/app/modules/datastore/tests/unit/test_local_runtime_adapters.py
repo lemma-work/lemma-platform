@@ -5,6 +5,8 @@ import asyncio
 import threading
 import time
 
+from unittest.mock import patch
+
 import pytest
 
 from app.core.config import settings
@@ -92,7 +94,9 @@ async def test_fastembed_model_initializes_once_under_concurrent_first_use(
     calls = 0
 
     class FakeTextEmbedding:
-        def __init__(self, *, model_name, cache_dir):
+        # `threads` mirrors fastembed's real signature — we pin ONNX's intra-op
+        # pool so it sizes to the container's CPU limit, not the host's.
+        def __init__(self, *, model_name, cache_dir, threads=None):
             nonlocal calls
             calls += 1
             assert Path(cache_dir) == tmp_path
@@ -316,3 +320,67 @@ async def test_download_missing_object_raises_typed_not_found(tmp_path: Path):
 
     with pytest.raises(DatastoreObjectNotFoundError):
         await storage.download_file("pod/does-not-exist.txt")
+
+
+# --- Embedding memory + threading bounds ----------------------------------
+#
+# Both of these came out of the 100-paper benchmark: the ingestion worker was
+# OOM-killed embedding a 533-chunk document in one call, and embedding ran ~3.7x
+# slower inside the loaded worker than in isolation because ONNX sized its thread
+# pool from the host's CPU count rather than the container's limit.
+
+
+@pytest.mark.asyncio
+async def test_embed_batch_is_sliced_so_peak_memory_is_bounded_by_slice():
+    """A long document must not be embedded in one giant call.
+
+    One 95-page paper in the benchmark corpus produced 533 chunks. Embedding
+    them together holds every input string and output vector live at once on top
+    of the ONNX arena, which is what exhausted the worker's memory limit.
+    """
+    calls: list[int] = []
+
+    class FakeFastEmbed:
+        def embed(self, texts, **kwargs):
+            texts = list(texts)
+            calls.append(len(texts))
+            return [[1.0, 0.0] for _ in texts]
+
+    embedder = FastEmbedLocalEmbedder(dimension=2, model=FakeFastEmbed())
+    embedder_slice = 64
+    with patch.object(
+        settings, "local_embedding_max_texts_per_call", embedder_slice
+    ):
+        vectors = await embedder.embed_batch([f"chunk {i}" for i in range(533)])
+
+    # Every vector is still returned, in order, exactly once.
+    assert len(vectors) == 533
+    assert sum(calls) == 533
+    # ...but no single call ever saw the whole document.
+    assert max(calls) <= embedder_slice
+
+
+@pytest.mark.asyncio
+async def test_slicing_preserves_vector_order():
+    """Slicing must not reorder results — chunk N's vector must stay chunk N's."""
+
+    class FakeFastEmbed:
+        def embed(self, texts, **kwargs):
+            # Encode the input's identity into the vector so order is checkable.
+            return [[float(int(t.split()[-1])), 0.0] for t in texts]
+
+    embedder = FastEmbedLocalEmbedder(dimension=2, model=FakeFastEmbed())
+    with patch.object(settings, "local_embedding_max_texts_per_call", 7):
+        vectors = await embedder.embed_batch([f"chunk {i}" for i in range(50)])
+
+    assert [int(v[0]) for v in vectors] == list(range(50))
+
+
+def test_onnx_thread_count_is_pinned_to_the_configured_allocation():
+    """Unset, ONNX reads the HOST's CPU count and oversubscribes the cgroup."""
+    embedder = FastEmbedLocalEmbedder(dimension=2, model=object())
+    with patch.object(settings, "local_embedding_threads", 4):
+        assert embedder._threading_kwargs() == {"threads": 4}
+    # 0 means "let ONNX decide", which is only right when we own the machine.
+    with patch.object(settings, "local_embedding_threads", 0):
+        assert embedder._threading_kwargs() == {}

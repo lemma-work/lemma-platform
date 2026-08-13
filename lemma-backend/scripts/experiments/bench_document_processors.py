@@ -10,10 +10,20 @@ Usage (from lemma-backend/):
   uv run python scripts/experiments/bench_document_processors.py \
       --processor markitdown --out /tmp/docproc
 
-  # Kreuzberg needs the service running:
-  docker compose up -d kreuzberg
+  # Kreuzberg/Xberg needs the service running. The dev compose stack does NOT
+  # include it (it runs the in-process markitdown adapter), so start one
+  # directly. Both engines speak the same adapter:
+  docker run -d -p 8002:8000 ghcr.io/kreuzberg-dev/kreuzberg-core:4.10.2 \
+      serve --host 0.0.0.0 --port 8000
+  #   ...or the current line:
+  #   ghcr.io/xberg-io/xberg:1.0.14-core serve --host 0.0.0.0 --port 8000
   KREUZBERG_URL=http://localhost:8002 uv run python \
       scripts/experiments/bench_document_processors.py --processor kreuzberg --out /tmp/docproc
+
+For an engine-vs-engine comparison on a real corpus, prefer
+``load_tests/extractor_ab.py`` — it drives the exact config the backend sends and
+disables the extractor's result cache, which otherwise makes repeat runs
+meaningless.
 """
 
 from __future__ import annotations

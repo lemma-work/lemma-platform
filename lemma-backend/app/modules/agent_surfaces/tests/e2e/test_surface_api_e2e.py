@@ -3,6 +3,7 @@ from __future__ import annotations
 from app.modules.agent_surfaces.config import surface_settings
 import json
 
+from urllib.parse import parse_qs, urlparse
 import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -953,16 +954,36 @@ async def test_available_catalog_channel_discovery_and_teams_consent_journey(
     )
     assert bad_state.status_code == 400
 
+    # The state the server actually issued, nonce and all. A bare surface id is
+    # shown to every pod member who opens Teams setup and never rotates, so the
+    # nonce is the only thing separating a real Microsoft round-trip from a
+    # direct call by anyone who saw one — which is why passing the id alone
+    # (as this did) is now refused.
+    issued_state = parse_qs(urlparse(consent["consent_url"]).query)["state"][0]
+    assert issued_state.startswith(f"{teams_id}:")
+
     activated = await authenticated_client.get(
         "/surfaces/teams/admin-consent/callback",
         params={
             "tenant": tenant_id,
             "admin_consent": "True",
-            "state": teams_id,
+            "state": issued_state,
         },
     )
     assert activated.status_code == 200, activated.text
     assert "Microsoft Teams is connected" in activated.text
+
+    # Single use. A consent URL can sit in an admin's history or a proxy log,
+    # and replaying it must not re-run activation.
+    replayed = await authenticated_client.get(
+        "/surfaces/teams/admin-consent/callback",
+        params={
+            "tenant": tenant_id,
+            "admin_consent": "True",
+            "state": issued_state,
+        },
+    )
+    assert replayed.status_code == 400
 
     ready = await authenticated_client.get(f"/pods/{pod_id}/surfaces/teams/setup")
     assert ready.status_code == 200, ready.text

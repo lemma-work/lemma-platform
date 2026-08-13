@@ -18,10 +18,10 @@ from app.modules.datastore.domain.document_processing import (
     DocumentPage,
 )
 from app.modules.datastore.domain.ports import DocumentProcessorPort
-from app.modules.datastore.infrastructure.kreuzberg_helper import (
+from app.modules.datastore.infrastructure.extraction_result import (
     KreuzbergExtractionResult,
-    KreuzbergHelper,
 )
+from app.modules.datastore.infrastructure.kreuzberg_helper import KreuzbergHelper
 from app.modules.datastore.infrastructure.markdown_images import (
     rewrite_image_references,
 )

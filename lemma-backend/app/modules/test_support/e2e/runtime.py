@@ -779,7 +779,7 @@ async def full_stack(
 
     with open(log_path, "w+") as log_file:
         proc = subprocess.Popen(
-            [str(backend_root / ".venv/bin/streaq"), "run", "app.events:streaq_worker"],
+            [str(backend_root / ".venv/bin/python"), "-m", "app.worker"],
             cwd=str(backend_root),
             env=worker_env,
             stdout=log_file,

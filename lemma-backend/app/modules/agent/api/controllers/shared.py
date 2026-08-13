@@ -51,8 +51,17 @@ async def iter_subscription(
         if not isinstance(payload, dict):
             continue
 
+        # Filter to this run, but only among events that belong to a run. A
+        # payload with no `agent_run_id` is conversation-scoped (the generated
+        # title is the one in production today) and was being dropped by the
+        # same comparison — `None != "<uuid>"` — so it could never reach a
+        # client that was streaming, which is every client that would want it.
         payload_run_id = payload.get("agent_run_id")
-        if agent_run_id is not None and payload_run_id != str(agent_run_id):
+        if (
+            agent_run_id is not None
+            and payload_run_id is not None
+            and payload_run_id != str(agent_run_id)
+        ):
             continue
 
         event_type = str(payload.get("type", ""))

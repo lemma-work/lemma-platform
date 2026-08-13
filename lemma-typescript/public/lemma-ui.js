@@ -963,25 +963,27 @@ var LemmaUI = (() => {
   };
 
   // src/core/agent/tool-names.ts
-  var LEMMA_MCP_TOOL_PREFIXES = [
-    "mcp.lemma_tools.",
-    "mcp__lemma_tools__",
-    "lemma_tools_",
-    "lemma_tools.",
-    "mcp.lemma-tools.",
-    "mcp__lemma-tools__",
-    "lemma-tools_",
-    "lemma-tools."
-  ];
-  function normalizeAgentToolName(toolName) {
-    let normalized = toolName.trim();
-    const lower = normalized.toLowerCase();
-    const providerPrefix = LEMMA_MCP_TOOL_PREFIXES.find((prefix) => lower.startsWith(prefix));
-    if (providerPrefix) normalized = normalized.slice(providerPrefix.length);
-    if (normalized.toLowerCase().startsWith("lemma_")) {
-      normalized = normalized.slice("lemma_".length);
+  var LEMMA_MCP_SERVER_NAME = "lemma_tools";
+  var LEMMA_MCP_SERVER_NAMES = [LEMMA_MCP_SERVER_NAME, "lemma-tools", "lemma"].sort(
+    (left, right) => right.length - left.length
+  );
+  var MCP_MARKERS = ["mcp__", "mcp.", "mcp/"];
+  var NAMESPACE_SEPARATORS = /^[_./:]+/;
+  function stripProviderNamespace(toolName) {
+    let candidate = toolName;
+    const marker = MCP_MARKERS.find((value) => candidate.toLowerCase().startsWith(value));
+    if (marker) candidate = candidate.slice(marker.length);
+    for (const name of LEMMA_MCP_SERVER_NAMES) {
+      if (!candidate.toLowerCase().startsWith(name)) continue;
+      const remainder = candidate.slice(name.length);
+      const withoutSeparator = remainder.replace(NAMESPACE_SEPARATORS, "");
+      if (withoutSeparator !== remainder) return withoutSeparator;
     }
-    return normalized;
+    return toolName;
+  }
+  function normalizeAgentToolName(toolName) {
+    const normalized = stripProviderNamespace(toolName.trim());
+    return normalized.toLowerCase().startsWith("lemma_") ? normalized.slice("lemma_".length) : normalized;
   }
 
   // src/core/agent/output.ts

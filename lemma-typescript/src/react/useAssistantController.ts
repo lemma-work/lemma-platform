@@ -469,7 +469,12 @@ function mapConversationMessage(
   };
 }
 
-function mapConversationMessages(messages: AssistantApiConversationMessage[]): AssistantRenderableMessage[] {
+// Exported for tests. Consumers must not re-merge tool returns on top of this:
+// a TOOL_RETURN is already folded into its originating TOOL_CALL below, so a
+// second pass finds invocations that are already `state: "result"` and rewrites
+// them to the values they hold — producing fresh object identities on every
+// render for no gain. See docs/design/conversation-messages.md.
+export function mapConversationMessages(messages: AssistantApiConversationMessage[]): AssistantRenderableMessage[] {
   const mappedMessages: AssistantRenderableMessage[] = [];
   const pendingToolCalls = new Map<string, AssistantToolInvocation>();
 
@@ -679,17 +684,28 @@ export function useAssistantController({
   const [isUploadingFiles, setIsUploadingFiles] = useState(false);
   const [pendingFileUploads, setPendingFileUploads] = useState<AssistantPendingFileUpload[]>([]);
   const [olderMessagesCursor, setOlderMessagesCursor] = useState<string | null>(null);
+  // Pagination position per conversation. A retained transcript is not reloaded
+  // when you return to it, so without this its cursor would stay null and
+  // "Load earlier activity" would vanish from a conversation that has more.
+  const olderMessagesCursorsRef = useRef<Map<string, string | null>>(new Map());
 
   const activeConversationIdRef = useRef<string | null>(null);
   const conversationsRef = useRef<Conversation[]>([]);
   const heldStreamingThinkingRef = useRef<HeldStreamingThinking | null>(null);
   const isStreamingRef = useRef(false);
   const sessionIsStreamingRef = useRef(false);
-  const lastAutoLoadedConversationIdRef = useRef<string | null>(null);
+  // Which conversations have had their history loaded in this session. A set,
+  // not a single "last" id: the runtime store retains several transcripts, so
+  // re-opening one that is still resident must not trigger a second load.
+  const loadedConversationIdsRef = useRef<Set<string>>(new Set());
   const loadingConversationIdRef = useRef<string | null>(null);
   const skipInitialLoadConversationIdsRef = useRef<Set<string>>(new Set());
+  // The detail fetch each open starts, kept by id so the transcript load that
+  // races it can read the answer instead of asking for it again. Values never
+  // reject — a failed fetch resolves to null, which reads as "we do not know".
+  const conversationDetailsRef = useRef<Map<string, Promise<Conversation | null>>>(new Map());
   const loadConversationMessagesRef = useRef<((conversationId: string) => Promise<AssistantApiConversationMessage[] | null>) | null>(null);
-  const resumeIfRunningRef = useRef<((conversationId?: string | null) => Promise<boolean>) | null>(null);
+  const resumeConversationIfRunningRef = useRef<((conversationId: string) => Promise<boolean>) | null>(null);
 
   const scope = useMemo<AssistantConversationScope>(() => ({
     podId: podId ?? null,
@@ -756,6 +772,7 @@ export function useAssistantController({
     appendOptimisticUserMessage,
     replaceLoadedMessages,
     mergeMessages,
+    hasConversationMessages,
     clear: clearRuntimeMessages,
   } = useAssistantRuntime({
     conversationId: activeConversationId,
@@ -805,15 +822,26 @@ export function useAssistantController({
     const knownConversation = conversationsRef.current.find(
       (conversation) => conversation.id === conversationId,
     );
-    const detail = await client.conversations.get(conversationId, {
+    const request = client.conversations.get(conversationId, {
       pod_id: knownConversation?.pod_id ?? scope.podId ?? undefined,
     });
+    conversationDetailsRef.current.set(conversationId, request.catch(() => null));
+    const detail = await request;
     setConversations((previous) => sortConversationsByUpdatedAt([
       detail,
       ...previous.filter((conversation) => conversation.id !== detail.id),
     ]));
     return detail;
   }, [client, scope.podId]);
+
+  // Resuming is only ever about a conversation that is still running, and the
+  // open path has just fetched the record that says whether it is. Waiting on
+  // that fetch costs nothing it was not already waiting on, and hands the
+  // session the answer instead of leaving it to fetch the same record again.
+  const resumeConversationIfRunning = useCallback(async (conversationId: string): Promise<boolean> => {
+    const knownConversation = await conversationDetailsRef.current.get(conversationId);
+    return (await sessionResumeIfRunning(conversationId, { knownConversation })) ?? false;
+  }, [sessionResumeIfRunning]);
 
   const setConversationModel = useCallback(async (model: ConversationModel | null, runtime?: AgentRuntimeConfig | null) => {
     const nextRuntime = typeof runtime === "undefined"
@@ -999,8 +1027,8 @@ export function useAssistantController({
   }, [loadConversationMessages]);
 
   useEffect(() => {
-    resumeIfRunningRef.current = sessionResumeIfRunning;
-  }, [sessionResumeIfRunning]);
+    resumeConversationIfRunningRef.current = resumeConversationIfRunning;
+  }, [resumeConversationIfRunning]);
 
   useEffect(() => {
     activeConversationIdRef.current = activeConversationId;
@@ -1124,6 +1152,11 @@ export function useAssistantController({
 
   useEffect(() => {
     if (!activeConversationId) return;
+    olderMessagesCursorsRef.current.set(activeConversationId, olderMessagesCursor);
+  }, [activeConversationId, olderMessagesCursor]);
+
+  useEffect(() => {
+    if (!activeConversationId) return;
     const activeConversation = conversations.find((conversation) => conversation.id === activeConversationId);
     if (!activeConversation) return;
     setConversationModelState(activeConversation.model ?? null);
@@ -1138,9 +1171,11 @@ export function useAssistantController({
       sessionCancel();
       clearRuntimeMessages();
       activeConversationIdRef.current = null;
-      lastAutoLoadedConversationIdRef.current = null;
+      loadedConversationIdsRef.current.clear();
+      olderMessagesCursorsRef.current.clear();
       loadingConversationIdRef.current = null;
       skipInitialLoadConversationIdsRef.current.clear();
+      conversationDetailsRef.current.clear();
       setActiveConversationId(null);
       setAvailableModels([]);
       setConversationModelState(null);
@@ -1157,9 +1192,11 @@ export function useAssistantController({
     }
 
     activeConversationIdRef.current = null;
-    lastAutoLoadedConversationIdRef.current = null;
+    loadedConversationIdsRef.current.clear();
+    olderMessagesCursorsRef.current.clear();
     loadingConversationIdRef.current = null;
     skipInitialLoadConversationIdsRef.current.clear();
+    conversationDetailsRef.current.clear();
     setActiveConversationId(null);
     setConversationModelState(null);
     setConversationRuntimeState(null);
@@ -1178,18 +1215,21 @@ export function useAssistantController({
   }, [autoLoad, enabled, historyScopeKey, loadConversations]);
 
   useEffect(() => {
+    // Having no conversation open is not a reason to forget the ones already
+    // loaded — `messages` is filtered by the active id, so a retained transcript
+    // is invisible until it is asked for again. Only leaving the scope entirely
+    // (handled by the scope effect above) drops the store.
     if (!enabled || !activeConversationId) {
-      clearRuntimeMessages();
-      lastAutoLoadedConversationIdRef.current = null;
       loadingConversationIdRef.current = null;
       setOlderMessagesCursor(null);
       setIsLoadingMessages(false);
       return;
     }
 
+    // Deferred loading, not discarded loading. This branch used to clear the
+    // store, so a gate that dipped false for one render made the side view
+    // re-fetch and re-paint a transcript it already had.
     if (!autoLoadMessages) {
-      clearRuntimeMessages();
-      lastAutoLoadedConversationIdRef.current = null;
       loadingConversationIdRef.current = null;
       setOlderMessagesCursor(null);
       setIsLoadingMessages(false);
@@ -1198,11 +1238,11 @@ export function useAssistantController({
 
     if (skipInitialLoadConversationIdsRef.current.has(activeConversationId)) {
       skipInitialLoadConversationIdsRef.current.delete(activeConversationId);
-      lastAutoLoadedConversationIdRef.current = activeConversationId;
+      loadedConversationIdsRef.current.add(activeConversationId);
       return;
     }
 
-    if (lastAutoLoadedConversationIdRef.current === activeConversationId) {
+    if (loadedConversationIdsRef.current.has(activeConversationId)) {
       return;
     }
     if (loadingConversationIdRef.current === activeConversationId) {
@@ -1215,9 +1255,9 @@ export function useAssistantController({
       setOlderMessagesCursor(null);
       await loadConversationMessagesRef.current?.(activeConversationId);
       if (cancelled) return;
-      lastAutoLoadedConversationIdRef.current = activeConversationId;
+      loadedConversationIdsRef.current.add(activeConversationId);
       try {
-        await resumeIfRunningRef.current?.(activeConversationId);
+        await resumeConversationIfRunningRef.current?.(activeConversationId);
       } catch (error) {
         if (cancelled) return;
         setLocalError((prev) => prev || (error instanceof Error ? error.message : "Failed to resume conversation"));
@@ -1287,7 +1327,7 @@ export function useAssistantController({
 
       if (
         loadingConversationIdRef.current === conversationId
-        || lastAutoLoadedConversationIdRef.current === conversationId
+        || loadedConversationIdsRef.current.has(conversationId)
       ) {
         return;
       }
@@ -1297,7 +1337,7 @@ export function useAssistantController({
       setOlderMessagesCursor(null);
       setIsLoadingMessages(true);
       void loadConversationMessagesRef.current?.(conversationId)
-        .then(() => resumeIfRunningRef.current?.(conversationId))
+        .then(() => resumeConversationIfRunningRef.current?.(conversationId))
         .catch((error) => {
           setLocalError((prev) => prev || (error instanceof Error ? error.message : "Failed to resume conversation"));
         })
@@ -1305,20 +1345,26 @@ export function useAssistantController({
           if (loadingConversationIdRef.current === conversationId) {
             loadingConversationIdRef.current = null;
           }
-          lastAutoLoadedConversationIdRef.current = conversationId;
+          loadedConversationIdsRef.current.add(conversationId);
         });
       return;
     }
 
     setLocalError(null);
     activeConversationIdRef.current = conversationId;
-    lastAutoLoadedConversationIdRef.current = null;
     loadingConversationIdRef.current = null;
-    setOlderMessagesCursor(null);
-    clearRuntimeMessages();
-    setIsLoadingMessages(Boolean(conversationId && autoLoadMessages));
+    // The store keeps the last few transcripts, so switching to one that is
+    // still resident is a swap, not a load: no wipe, and no loading state to
+    // paint a skeleton over messages we are holding.
+    const isResident = hasConversationMessages(conversationId);
+    setOlderMessagesCursor(
+      isResident && conversationId
+        ? olderMessagesCursorsRef.current.get(conversationId) ?? null
+        : null,
+    );
+    setIsLoadingMessages(Boolean(conversationId && autoLoadMessages && !isResident));
     setActiveConversationId(conversationId);
-  }, [autoLoadMessages, clearRuntimeMessages, refreshConversationDetail, sessionCancel]);
+  }, [autoLoadMessages, hasConversationMessages, refreshConversationDetail, sessionCancel]);
 
   const openConversation = useCallback((conversationId: string) => {
     selectConversation(conversationId);
@@ -1332,9 +1378,11 @@ export function useAssistantController({
     stop();
     clearRuntimeMessages();
     activeConversationIdRef.current = null;
-    lastAutoLoadedConversationIdRef.current = null;
+    loadedConversationIdsRef.current.clear();
+    olderMessagesCursorsRef.current.clear();
     loadingConversationIdRef.current = null;
     skipInitialLoadConversationIdsRef.current.clear();
+    conversationDetailsRef.current.clear();
     setActiveConversationId(null);
     setLocalError(null);
     setOlderMessagesCursor(null);
@@ -1371,7 +1419,7 @@ export function useAssistantController({
       ...prev.filter((conversation) => conversation.id !== createdConversation.id),
     ]));
     activeConversationIdRef.current = createdConversation.id;
-    lastAutoLoadedConversationIdRef.current = createdConversation.id;
+    loadedConversationIdsRef.current.add(createdConversation.id);
     loadingConversationIdRef.current = null;
     skipInitialLoadConversationIdsRef.current.add(createdConversation.id);
     setActiveConversationId(createdConversation.id);

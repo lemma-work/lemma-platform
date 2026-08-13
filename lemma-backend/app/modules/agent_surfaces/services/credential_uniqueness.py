@@ -24,6 +24,9 @@ from app.modules.agent_surfaces.domain.errors import (
 from app.modules.agent_surfaces.domain.ports import (
     SurfaceInstallationRepositoryPort,
 )
+from app.modules.agent_surfaces.platforms.platform_capabilities import (
+    get_platform_capabilities,
+)
 
 
 async def ensure_unique_org_credential_binding(
@@ -54,6 +57,22 @@ async def ensure_unique_org_credential_binding(
         return
 
     if surface.credential_mode is not SurfaceCredentialMode.SYSTEM:
+        return
+
+    # Only when the system credential *is* an identity. One Slack app, one
+    # Telegram bot, one WhatsApp number: inbound arrives keyed on that identity
+    # and nothing else, so a second pod claiming it would receive the first
+    # pod's messages.
+    #
+    # Resend fails that premise. Its system credential is an API key over a
+    # catch-all domain, and inbound routes on the surface's own unique
+    # `surface_identity_email` — one address per pod, and one per agent, off the
+    # single key. Applying the identity rule to it meant the first mailbox
+    # created in an organization silently blocked every mailbox after it,
+    # including further agents in the same pod, since this query does not
+    # exclude the surface's own pod either.
+    capabilities = get_platform_capabilities(surface.surface_type.value)
+    if capabilities is not None and not capabilities.system_credential_is_identity:
         return
 
     conflict = await surface_repository.get_system_credential_conflict_in_org(

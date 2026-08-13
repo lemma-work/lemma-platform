@@ -60,3 +60,12 @@ __pycache__/
 
 # CodeQL databases and SARIF output from `make codeql`.
 .codeql/
+
+# Local benchmark corpus for the datastore load tests (~310MB of arXiv PDFs).
+# Reproducible via lemma-backend/load_tests/fetch_arxiv_corpus.py, which is the
+# source of truth for which papers are in it — so the bytes never belong in git.
+# They were committed by accident once and had to be purged from history.
+# Both spellings: the trailing-slash form does not match a symlink, which is how
+# the directory appears inside a git worktree.
+benchmark-corpus/
+benchmark-corpus

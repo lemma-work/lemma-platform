@@ -78,11 +78,29 @@ class WorkspaceSandboxService:
         storage_generation_store: Optional[WorkspaceStorageGenerationStore] = None,
         process_store: Optional[WorkspaceProcessStore] = None,
     ):
-        self.sandbox = sandbox or self._build_sandbox()
+        self._sandbox = sandbox
         self.storage_generation_store = (
             storage_generation_store or get_workspace_storage_generation_store()
         )
         self.process_store = process_store or get_workspace_process_store()
+
+    @property
+    def sandbox(self) -> ISandbox:
+        """The sandbox backend, built on first use.
+
+        Built lazily because constructing it resolves a provider, and the Docker
+        provider refuses to exist without `WORKSPACE_RUNTIME_CREDENTIAL_KEY`.
+        Several callers only want `get_env_vars`, which mints a token and never
+        provisions anything — most importantly the Agent Host credential
+        refresh, which is what keeps a long ACP run's tools working past the
+        first hour. Building the provider eagerly made that refresh fail on any
+        deployment where sandbox provisioning was unconfigured, and the failure
+        was swallowed as a warning, so the run silently carried on toward a
+        cliff where every `lemma_*` call would start returning 401.
+        """
+        if self._sandbox is None:
+            self._sandbox = self._build_sandbox()
+        return self._sandbox
 
     def _build_sandbox(self) -> ISandbox:
         from app.modules.workspace.services.sandbox_composition import LocalSandbox
@@ -90,7 +108,12 @@ class WorkspaceSandboxService:
         return LocalSandbox()
 
     async def close(self) -> None:
-        close = getattr(self.sandbox, "close", None)
+        # Deliberately does not go through the property: closing a service that
+        # never provisioned anything must not build a provider in order to shut
+        # it down again.
+        if self._sandbox is None:
+            return
+        close = getattr(self._sandbox, "close", None)
         if close is not None:
             await close()
 

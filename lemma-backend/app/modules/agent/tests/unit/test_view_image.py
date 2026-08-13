@@ -17,11 +17,15 @@ from app.modules.agent.tools.workspace_cli.models import (
     ViewImageResponse,
 )
 
+from app.modules.agent.domain.vision import AgentVisionMode
+
 _PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
 
 
-def _ctx() -> SimpleNamespace:
-    return SimpleNamespace(pod_id=uuid4(), user_id=uuid4())
+def _ctx(vision_mode: AgentVisionMode = AgentVisionMode.DIRECT) -> SimpleNamespace:
+    return SimpleNamespace(
+        pod_id=uuid4(), user_id=uuid4(), vision_mode=vision_mode
+    )
 
 
 def _patch_readers(monkeypatch, *, pod=None, workspace=None) -> None:

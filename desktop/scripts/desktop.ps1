@@ -183,9 +183,10 @@ switch ($Verb) {
     # webviewInstallMode to offlineInstaller in tauri.windows.conf.json, which
     # costs about 130 MB.
     #
-    # This mirrors release-local-images.yml's windows-test-desktop job and
-    # shares its staging engine, so a green local build and a green CI build
-    # mean the same thing.
+    # Local only. CI no longer packages self-contained apps -- they cannot be
+    # notarized, because Apple inspects inside host-runtime.zip -- so this is
+    # the way to get an installable Windows build, from the runtime artifacts
+    # release-local-images.yml uploads.
     'exe' {
         Require-Command cargo 'install Rust from https://rustup.rs'
         Require-Command node 'install Node.js 22 from https://nodejs.org'

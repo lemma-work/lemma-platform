@@ -263,26 +263,45 @@ RESEND_API_KEY=re_...              # shared with transactional mail above
 RESEND_INBOUND_DOMAIN=ops.example.com   # verified, catch-all inbound
 RESEND_WEBHOOK_SECRET=whsec_...    # Svix secret for the inbound webhook
 RESEND_FROM_NAME=Lemma
-RESEND_AUTO_PROVISION_ENABLED=false
 ```
 
 Point a Resend webhook at `POST /surfaces/webhooks/resend` and select
 `email.received`. Two things are worth knowing:
 
 - **`RESEND_INBOUND_DOMAIN` has no default and must be a domain you own.** Agent
-  addresses are minted on it (`{agent}.{pod}@{domain}`) and inbound routing
-  matches on it, so a wrong value means mail that bounces on the way out and
-  matches no surface on the way back.
+  addresses are minted on it (`{agent}.{pod}@{domain}`, and `{pod}@{domain}` for
+  the pod's own assistant) and inbound routing matches on it, so a wrong value
+  means mail that bounces on the way out and matches no surface on the way back.
+- **The key and the domain together are the switch.** Set both and agents get
+  mailboxes; leave either unset and they do not. There is no separate enable
+  flag — there was one, and being read per process it could be on where the
+  surfaces catalog runs and off where sends run, which presents as the UI
+  offering email while delivery reports that the pod has no surface.
 - **`RESEND_WEBHOOK_SECRET` is per *endpoint*.** Svix derives the signature from
   the secret of the endpoint that sent the request, so if bounces are a separate
   Resend endpoint, its secret differs — set `RESEND_BOUNCE_WEBHOOK_SECRET` for
   that one and leave this as the main webhook's. A single endpoint carrying both
   event types needs only `RESEND_WEBHOOK_SECRET`.
 
-`RESEND_AUTO_PROVISION_ENABLED` gives a pod with no surface at all a system
-mailbox the first time it tries to notify someone. Off by default because it is
-outward-facing: every pod that turns it on sends from the same domain, so
-deliverability and abuse reputation are pooled.
+A mailbox is created when an agent first needs one and has no other way to reach
+anyone — including the pod's own assistant, and agents that predate per-agent
+mailboxes. Nothing is minted for a pod that never messages anybody.
+
+Because every pod sends from that one verified domain, its deliverability and
+abuse reputation are shared. Two limits bound that, both in Redis and both
+fixed-window:
+
+| Limit | Scope | Default |
+| --- | --- | --- |
+| Notifications | per pod, per recipient, per hour | 20 |
+| Outbound emails | per pod, per day | 200 |
+
+The second is the one that matters for a shared domain: an agent messaging five
+hundred different people once each never trips the first. Both fail *open* if
+Redis is unreachable — "nobody can be told anything while Redis is down" is the
+wrong way for a notification system to fail. Over the email budget the
+notification is still created and still in the recipient's Lemma inbox; only the
+mail is declined.
 
 ## Storage
 
@@ -347,11 +366,78 @@ SEARXNG_URL=
 DOCUMENT_PROCESSOR=markitdown # markitdown | docling | kreuzberg
 DOCUMENT_PROCESSING_OCR_ENABLED=false
 DOCUMENT_PROCESSING_MAX_FILE_BYTES=
-DOCUMENT_PROCESSING_MAX_CONCURRENCY=
+DOCUMENT_PROCESSING_LAYOUT_STRATEGY=auto  # auto | always
+DOCUMENT_PROCESSING_TABLE_MODEL=tatr      # tatr | slanet_plus | disabled | …
+DOCUMENT_PROCESSING_EXTRACTOR_MAX_THREADS=4
 ```
 
 `markitdown` runs in-process. `docling` and `kreuzberg` are HTTP services and
-need `DOCLING_SERVE_URL` or `KREUZBERG_URL` respectively.
+need `DOCLING_SERVE_URL` or `KREUZBERG_URL` respectively. The `kreuzberg`
+adapter also speaks the Xberg 1.x wire format (the renamed continuation of the
+project), so the engine can be swapped by changing the image tag alone.
+
+Layout inference dominates extraction cost, so `DOCUMENT_PROCESSING_LAYOUT_STRATEGY`
+is the main CPU-per-document lever: `auto` pre-screens pages and runs the model
+only where it helps, `always` runs it on every page. It is honoured by Xberg 1.x;
+Kreuzberg v4 has no page-selection knob and always runs layout.
+`DOCUMENT_PROCESSING_EXTRACTOR_MAX_THREADS` caps the extractor's internal thread
+pool — left unset it sizes itself from the host CPU count and ignores the
+container's CPU limit.
+
+### Embedding
+
+```dotenv
+EMBEDDING_PROVIDER=auto          # auto | local | openai_compat
+LOCAL_EMBEDDING_MODEL=BAAI/bge-base-en-v1.5
+LOCAL_EMBEDDING_THREADS=4        # pin to the worker's CPU allocation
+LOCAL_EMBEDDING_MAX_TEXTS_PER_CALL=256
+LOCAL_EMBEDDING_BATCH_SIZE=32
+```
+
+`auto` embeds locally on CPU in local/testing and calls an OpenAI-compatible
+service elsewhere. **On the local path, embedding — not extraction — dominates
+ingestion cost**: measured at ~209s vs ~34s per document on a 100-paper corpus.
+Three things govern it:
+
+- **`LOCAL_EMBEDDING_THREADS`** is the one to set. Left at 0, ONNX Runtime sizes
+  its thread pool from the *host's* CPU count rather than the container's cgroup
+  limit and oversubscribes the cores it has. Measured directly on a 2-CPU
+  container with bge-base: 604 ms/chunk unset against 264 ms/chunk pinned.
+- **`LOCAL_EMBEDDING_MAX_TEXTS_PER_CALL`** bounds peak memory. A document is
+  embedded per-document and a long paper can produce hundreds of chunks (533 for
+  a 95-page paper), which held enough live at once to OOM-kill the worker.
+- **`LOCAL_EMBEDDING_MODEL`** trades quality for throughput:
+  `BAAI/bge-small-en-v1.5` measured ~3.4x faster on CPU (126 vs 432 ms/chunk on
+  4 cores) at 384 dimensions, against MTEB retrieval 51.68 vs 53.25. **Changing
+  it is a re-index** — the dimension is baked into each pod's vector column, so
+  `EMBEDDING_DIMENSION` must move with it and existing chunks must be
+  re-embedded.
+
+### Ingestion throughput and fairness
+
+```dotenv
+WORKER_LANES=                  # empty = all lanes; or interactive | bulk
+WORKER_BULK_CONCURRENCY=2      # concurrent document extractions
+DATASTORE_PER_POD_MAX_INFLIGHT=4
+DATASTORE_DISPATCH_GLOBAL_BATCH=50
+```
+
+Document processing runs on the **bulk** worker lane, a separate Redis queue from
+the **interactive** lane that serves agent runs, surface messages and workflow
+resumes. A large upload therefore cannot occupy the slots interactive work needs.
+`WORKER_BULK_CONCURRENCY` is the real cap on concurrent extractions and the main
+lever on worker peak RAM.
+
+Uploads beyond `DATASTORE_PER_POD_MAX_INFLIGHT` are intentionally not enqueued;
+their rows stay `PENDING` in Postgres, which is the durable backlog, and a
+per-minute dispatcher drains it round-robin across pods. So one tenant uploading
+a thousand documents cannot monopolise ingestion, Redis depth stays bounded, and
+every file is still processed eventually.
+
+Leaving `WORKER_LANES` empty runs both lanes in one process, which is what the
+local stack and desktop do. Split deployments set `WORKER_LANES=interactive` on
+one worker and `WORKER_LANES=bulk` on another; the interactive lane owns
+process-wide startup, so at least one process must run it.
 
 ## Observability
 

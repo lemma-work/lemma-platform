@@ -83,6 +83,17 @@ class WorkspaceSettings(BaseSettings):
     )
 
     # --- Reclamation -------------------------------------------------------
+    process_max_lifetime_seconds: int = Field(
+        default=3600,
+        validation_alias=AliasChoices("WORKSPACE_PROCESS_MAX_LIFETIME_SECONDS"),
+        description=(
+            "How long a process started by exec_command may run before the "
+            "runtime terminates it. Separate from a tool call's wait window: a "
+            "build is allowed to outlive the call that started it, but not to "
+            "outlive the conversation and pin the sandbox forever. Generous on "
+            "purpose — this is a leak guard, not a command budget."
+        ),
+    )
     idle_release_seconds: int = Field(
         default=900,
         validation_alias=AliasChoices("WORKSPACE_IDLE_RELEASE_SECONDS"),

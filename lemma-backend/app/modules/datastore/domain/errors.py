@@ -90,3 +90,26 @@ class DatastoreQueryError(DatastoreDomainError):
 class DatastoreInfrastructureError(DatastoreDomainError):
     def __init__(self, message: str):
         super().__init__(message, code="DATASTORE_INFRA_ERROR", status_code=500)
+
+
+class DocumentExtractionUnavailableError(RuntimeError):
+    """The extractor could not be reached — the document was never judged.
+
+    This is the engine-neutral signal for *infrastructure* backpressure:
+    connection refused, a 5xx or timeout from the extraction service, or an open
+    circuit breaker. It deliberately does NOT mean "this document is bad".
+
+    The distinction is load-bearing. ``claim_for_processing`` spends one of a
+    file's ``datastore_recovery_max_attempts`` (3) on every claim, and the
+    recovery cron terminally fails a file once that budget is gone. Treating an
+    extractor outage as a document failure therefore turns three blips into a
+    permanently-failed user document. Processing catches this specific type and
+    calls ``release_claim``, which returns the row to PENDING and refunds the
+    attempt, so the file is re-driven when the extractor comes back.
+
+    Adapters raise their own subclass (e.g. ``KreuzbergTransientError``) so the
+    processing service never has to know which engine is configured.
+    """
+
+    def __init__(self, message: str = "Document extractor unavailable"):
+        super().__init__(message)

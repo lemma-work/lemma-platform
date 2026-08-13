@@ -28,6 +28,7 @@ from app.core.authorization.scope import context_scope, uow_scope
 from app.core.authorization.service import AuthorizationDataService
 from app.core.domain.errors import DomainError
 from app.core.infrastructure.jobs.streaq_runtime import (
+    Lane,
     AppWorkerContext,
     streaq_cron,
     streaq_task,
@@ -176,7 +177,7 @@ async def _settle_import_state_conflict(store, staging, import_id: UUID) -> bool
     }
 
 
-@streaq_task(name="export_pod_bundle")
+@streaq_task(name="export_pod_bundle", lane=Lane.BULK)
 async def export_pod_bundle(context: dict[str, str | None]) -> None:
     worker_ctx: AppWorkerContext = streaq_worker.context
     export_id = UUID(str(context["export_id"]))
@@ -303,7 +304,7 @@ async def _fail(store, state: ExportState, message: str) -> None:
         )
 
 
-@streaq_task(name="plan_pod_import")
+@streaq_task(name="plan_pod_import", lane=Lane.BULK)
 async def plan_pod_import(context: dict[str, str | None]) -> None:
     """Diff a staged bundle against the pod and produce a resumable plan.
 
@@ -402,7 +403,7 @@ async def _plan_from_staging(worker_ctx, store, staging, state: ImportState) -> 
     )
 
 
-@streaq_task(name="import_pod_github")
+@streaq_task(name="import_pod_github", lane=Lane.BULK)
 async def import_pod_github(context: dict[str, str | None]) -> None:
     """Fetch a GitHub zipball, using the selected connector account when set."""
     worker_ctx: AppWorkerContext = streaq_worker.context
@@ -478,7 +479,7 @@ async def import_pod_github(context: dict[str, str | None]) -> None:
     )
 
 
-@streaq_task(name="import_pod_url")
+@streaq_task(name="import_pod_url", lane=Lane.BULK)
 async def import_pod_url(context: dict[str, str | None]) -> None:
     """Copy a lemma-origin source object (an export or an uploaded bundle) into
     this import's own staging, then plan — one job per ``import_id``. The source
@@ -537,7 +538,7 @@ async def import_pod_url(context: dict[str, str | None]) -> None:
         raise
 
 
-@streaq_task(name="apply_pod_import")
+@streaq_task(name="apply_pod_import", lane=Lane.BULK)
 async def apply_pod_import(context: dict[str, str | None]) -> None:
     """Apply an approved plan step by step: each step runs in its own short UoW
     (commit) then a Redis checkpoint, so a crash resumes from the first pending
@@ -924,7 +925,7 @@ def _now():
 _STUCK_AFTER_SECONDS = 40 * 60
 
 
-@streaq_cron("*/30 * * * *", name="sweep_pod_bundle_staging")
+@streaq_cron("*/30 * * * *", name="sweep_pod_bundle_staging", lane=Lane.BULK)
 async def sweep_pod_bundle_staging() -> None:
     """Reclaim staged archives whose ephemeral state has expired, and mark
     crashed jobs FAILED so the UI stops showing them as in-progress. Durable

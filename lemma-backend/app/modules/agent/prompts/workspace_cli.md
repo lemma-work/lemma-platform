@@ -45,12 +45,33 @@ lit parse input.pdf --target-pages "1-5,10" --format json -o out.json
 lit screenshot input.pdf --target-pages "1-3" --dpi 200 -o shots
 ```
 
+## Long-running commands
+
+Installs, builds and test suites routinely outlive a single `exec_command` call, and that is fine. When one does, you get `completed: false` and a `process_id`; the command is still running, nothing was cancelled, and no output is lost. Poll until it finishes:
+
+```
+exec_command(cmd="npm ci && npm run build", timeout_seconds=300)
+manage_process(action="input", process_id="<id>", chars="")   # repeat until completed: true
+```
+
+Each poll returns only the output produced since the last one, so polling a quiet build is cheap. Read `exit_code` to know whether it actually succeeded — `completed: true` only means it stopped.
+
+Two things to avoid: never re-run a command because it hasn't finished (you get a second build racing the first), and don't kill a slow build to "retry" it. If you lose a `process_id`, `manage_process(action="list")` recovers it. Start long-lived servers (`npm run dev`) with `tty=true` and leave them running rather than polling them to completion.
+
 ## Sandbox
 
 The workspace is private to this conversation. Work in your working directory (below) and create subfolders under it; never create a parallel root under `/workspace`, and don't scatter work into `/tmp`. `localhost` is this container, not the Lemma backend.
 
 `execute_python` and `exec_command` share one interpreter and run in your working directory, so relative paths land there. Python state — imports, variables, objects — persists across calls; use that for stepwise analysis instead of repeating setup.
 
-`numpy`, `pandas`, `matplotlib`, `openpyxl`, `pillow`, `requests`, and `tabulate` are pre-installed. For anything else run `pip install <package>` via `exec_command`, then import it. Use plain `pip`, never `uv pip` — it targets a system environment you cannot write to. Installs persist for the conversation.
+## Toolchains
+
+**JavaScript and TypeScript — prefer `pnpm`.** Its store lives on the workspace volume, so it hard-links packages instead of copying them and keeps them for your next conversation: `pnpm install` after the first one is close to instant, and several projects sharing a dependency store it once. `pnpm dlx` is the one-shot runner. `npm`, `npx` and `node` are all installed too — use them when a project has a `package-lock.json`, or when a tool insists on npm — but reach for `pnpm` by default.
+
+**Python — two cases, and they use different tools.**
+
+*Adding a package to the interpreter you already have* (the one `execute_python` uses): `pip install <package>`. Not `uv pip install`, which targets a system environment you cannot write to and fails with a permission error. `numpy`, `pandas`, `matplotlib`, `openpyxl`, `pillow`, `requests` and `tabulate` are already there. These installs last for the conversation.
+
+*Building a Python project* — anything with a `pyproject.toml`, or that needs its own pinned dependencies: use `uv`. `uv venv` then `uv pip install`, or `uv sync` for a project with a lockfile. Its cache is on the workspace volume too, so repeat installs are fast. Run the project's code with that venv's interpreter rather than `execute_python`, which is bound to the shared one.
 
 SDK source is readable at `/sdk/lemma-python` and `/sdk/lemma-typescript` when you need an exact signature or response shape.

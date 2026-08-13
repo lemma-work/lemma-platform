@@ -6,7 +6,9 @@ from uuid import NAMESPACE_URL, uuid5
 
 from app.core.domain.errors import DomainError
 from app.core.log.log import get_logger
+from app.modules.agent.domain.vision import AgentVisionMode
 from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.tools.vision_delegation import describe_single_image
 from app.modules.agent.tools.file_access import (
     read_pod_file_bytes,
     read_workspace_file_bytes,
@@ -563,6 +565,21 @@ async def view_image_internal(
             media_type=media_type,
             source=source,
             size_bytes=len(content),
+        )
+
+    # Only a model that can actually accept image parts is given them. Handing
+    # BinaryContent to a text-only model poisons the whole request, and the
+    # provider rejects the turn rather than the tool call.
+    if getattr(ctx, "vision_mode", AgentVisionMode.UNAVAILABLE) is not (
+        AgentVisionMode.DIRECT
+    ):
+        return await describe_single_image(
+            ctx,
+            data=content,
+            media_type=media_type,
+            file_path=file_path,
+            source=source,
+            instructions=request.instructions,
         )
 
     return ToolReturn(

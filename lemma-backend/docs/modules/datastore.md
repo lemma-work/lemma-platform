@@ -55,11 +55,43 @@ stateDiagram-v2
     READY --> [*]: delete metadata; async byte/index cleanup
 ```
 
-The worker can use Kreuzberg, MarkItDown, or Docling-compatible processing.
-Large/parallel extraction is bounded by a semaphore and optional byte budget.
-The recovery cron requeues stale `PENDING`/`PROCESSING` rows.
+The worker can use Kreuzberg/Xberg, MarkItDown, or Docling-compatible
+processing. The HTTP adapter speaks both the Kreuzberg v4 and Xberg 1.x wire
+formats — the response envelope, the removal of `POST /chunk`, and the
+`layout.strategy` key are all handled in one client — so the engine can be
+swapped by changing the image tag.
+
 `DatastoreSettings` owns original, Markdown, attached-image, and request-batch
 upload ceilings as well as document-processing controls.
+
+### How ingestion is scheduled
+
+Three mechanisms keep a bulk upload from harming the rest of the platform, and
+guarantee every file is eventually processed:
+
+- **Lanes.** Document processing runs on the `bulk` streaq queue, separate from
+  the `interactive` queue serving agent runs, surface messages and workflow
+  resumes. `WORKER_BULK_CONCURRENCY` is the real cap on concurrent extractions.
+  This replaced an in-task semaphore that throttled extractions only *after*
+  they had already taken a worker slot, so a burst starved interactive work.
+- **Per-pod admission + fair dispatch.** Uploads beyond
+  `DATASTORE_PER_POD_MAX_INFLIGHT` are deliberately not enqueued; the `PENDING`
+  row in Postgres *is* the durable backlog. A per-minute cron
+  (`dispatch_pending_datastore_files`) drains it round-robin across pods, so one
+  tenant cannot monopolise ingestion and Redis depth stays bounded.
+- **Attempt accounting that distinguishes cause.** A document-level failure
+  spends one of the file's `datastore_recovery_max_attempts` and eventually goes
+  terminal. Infrastructure unavailability — extractor down, 5xx, timeout, open
+  circuit — instead calls `release_claim`, returning the row to `PENDING` and
+  *refunding* the attempt. Without that split, three extractor blips were enough
+  to mark a perfectly good user document `FAILED_PERMANENT`.
+
+The recovery cron still reclaims stale `PROCESSING` rows and terminally fails
+files that genuinely exhaust their budget.
+
+Note that in practice **embedding, not extraction, dominates ingestion cost**
+(measured at roughly 2.6x extraction on a 100-paper arXiv corpus), so worker CPU
+sizing should be driven by the embedding backend.
 
 ## Authorization
 

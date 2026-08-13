@@ -174,6 +174,13 @@ export const useAgentRuntimes = (organizationId?: string | null) => {
 
 export const useAgentRuntimeCatalog = useAgentRuntimes;
 
+// Every profile mutation invalidates the whole 'agent-runtime' tree: the catalog
+// (a rename or archive changes which models the composer offers), the management
+// listing, and the single-profile query the open dialog is reading.
+const invalidateAgentRuntime = (queryClient: ReturnType<typeof useQueryClient>) => {
+    queryClient.invalidateQueries({ queryKey: ['agent-runtime'] });
+};
+
 export const useCreateAgentRuntime = () => {
     const queryClient = useQueryClient();
 
@@ -185,9 +192,14 @@ export const useCreateAgentRuntime = () => {
             organizationId: string;
             request: Parameters<ReturnType<typeof getLemmaClient>['agentRuntime']['createRuntime']>[1];
         }) => getLemmaClient().agentRuntime.createRuntime(organizationId, request),
-        onSuccess: (_, variables) => {
-            queryClient.invalidateQueries({ queryKey: agentRuntimeQueryKey(variables.organizationId) });
-        },
+        // The whole 'agent-runtime' tree, like every other profile mutation
+        // below. Invalidating only the catalog key left the management listing
+        // — a *different* key by design — holding a snapshot taken before this
+        // profile existed, so a screen that had just created an agent could not
+        // see it. Onboarding was one: it adopted the agent it had made a moment
+        // earlier as the new pod's default, found an empty list, and created
+        // the pod with no model at all.
+        onSuccess: () => invalidateAgentRuntime(queryClient),
     });
 };
 
@@ -224,13 +236,6 @@ export const useAgentRuntimeProfile = (
         enabled: Boolean(organizationId) && Boolean(profileId),
         staleTime: 15000,
     });
-};
-
-// Every profile mutation invalidates the whole 'agent-runtime' tree: the catalog
-// (a rename or archive changes which models the composer offers), the management
-// listing, and the single-profile query the open dialog is reading.
-const invalidateAgentRuntime = (queryClient: ReturnType<typeof useQueryClient>) => {
-    queryClient.invalidateQueries({ queryKey: ['agent-runtime'] });
 };
 
 export const useUpdateAgentRuntime = () => {

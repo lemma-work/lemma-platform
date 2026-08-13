@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+import inspect
 from types import SimpleNamespace
 from uuid import UUID, uuid4
 
@@ -809,6 +810,14 @@ def test_workspace_agent_prompt_states_working_directory():
     assert "pip install" in prompt  # on-demand package guidance
     # The non-root sandbox can't write the system env, so steer away from uv --system.
     assert "uv pip install --system" not in prompt
+    # pnpm is the default JS installer: its store is on the workspace volume, so
+    # it can hard-link rather than copy and survives into the next conversation.
+    # npm still has to be mentioned — plenty of projects and tools require it.
+    assert "pnpm" in prompt
+    assert "npm" in prompt
+    # `uv` is right for a project with its own dependencies, and wrong for the
+    # shared interpreter. The prompt has to say which is which.
+    assert "uv venv" in prompt
 
 
 def test_project_agent_prompt_describes_the_checkout_not_the_scratchpad():
@@ -1487,22 +1496,48 @@ def test_surface_history_window_ignored_for_non_surface_conversation(monkeypatch
     assert len(grouped) == 4
 
 
-def test_history_processors_add_100k_summarizer_by_default():
+def test_history_processors_summarize_then_enforce_a_hard_ceiling():
+    """Two processors, in this order, for two different failure modes.
+
+    The summarizer keeps the prompt small on the happy path. The ceiling guard
+    exists because the summarizer swallows its own failures and returns the
+    ORIGINAL history — safe for the data, fatal for the request that follows.
+    """
     processors = build_history_processors(
         HarnessOptions(model_name="kimi-k2.6"),
         summarization_model="openai:gpt-4.1",
     )
 
-    assert len(processors) == 1
-    assert processors[0].trigger == ("tokens", 100_000)
-    assert processors[0].keep == ("messages", 20)
+    assert len(processors) == 2
+    assert processors[0].trigger == ("tokens", 70_000)
+    assert processors[0].keep == ("messages", 40)
+    # A real tokenizer, not the library's len(text)/4 estimate — and an async
+    # one, because tokenizing a large history is ~30ms of CPU per model request
+    # and the worker runs many agent runs on a single core.
+    assert processors[0].token_counter.__name__ == "_count_tokens_off_loop"
+    assert inspect.iscoroutinefunction(processors[0].token_counter)
 
 
-def test_history_processors_can_disable_default_summarizer():
+def test_disabling_summarization_keeps_the_ceiling_guard():
+    """Turning off the LLM summary must not turn off the overflow backstop."""
     processors = build_history_processors(
         HarnessOptions(
             model_name="kimi-k2.6",
             history_summarization_enabled=False,
+        ),
+        summarization_model="openai:gpt-4.1",
+    )
+
+    assert len(processors) == 1
+    assert processors[0].__name__ == "_ceiling_guard"
+
+
+def test_everything_can_be_disabled_explicitly():
+    processors = build_history_processors(
+        HarnessOptions(
+            model_name="kimi-k2.6",
+            history_summarization_enabled=False,
+            history_hard_token_ceiling=0,
         ),
         summarization_model="openai:gpt-4.1",
     )
@@ -1571,8 +1606,13 @@ def test_default_pod_assistant_prompt_uses_base_file_without_extra_instruction()
 
     assert prompt.startswith("You are the assistant for this Lemma pod")
     assert "Structure for state, prose for knowledge" in prompt
-    assert "## Web Search" in prompt
-    assert 'lemma tools web-search "query terms" --limit 5' in prompt
+    assert "## Web research" in prompt
+    # This used to assert the prompt contained
+    # `lemma tools web-search "query terms" --limit 5` — a CLI command that
+    # does not exist anywhere in lemma-cli. The test was pinning a broken
+    # instruction in place; the prompt now points at the real tools.
+    assert "web_search" in prompt and "web_fetch(" in prompt
+    assert "lemma tools web-search" not in prompt
     assert "# Agent Instructions" not in prompt
     assert "# Conversation Instructions" not in prompt
 
@@ -1596,7 +1636,7 @@ def test_persisted_agent_prompt_omits_web_search_without_toolset():
         ctx=object(),
     )
 
-    assert "## Web Search" not in prompt
+    assert "## Web research" not in prompt
     assert "lemma tools web-search" not in prompt
 
 
@@ -1620,8 +1660,13 @@ def test_persisted_agent_prompt_includes_web_search_with_toolset():
         ctx=object(),
     )
 
-    assert "## Web Search" in prompt
-    assert "save-webpage https://example.com/article" in prompt
+    assert "## Web research" in prompt
+    # Page capture is a first-class tool now, not a shell script the model has
+    # to be told about in prose. The prompt used to also advertise
+    # `lemma tools web-search`, a command that has never existed.
+    assert "web_fetch(" in prompt
+    assert "save-webpage" not in prompt
+    assert "lemma tools web-search" not in prompt
 
 
 def test_remote_harness_instructions_include_todo_guidance_only_with_toolset():
@@ -1679,7 +1724,7 @@ def test_pod_default_assistant_uses_rich_base_and_all_fragments():
     assert prompt.startswith("You are the assistant for this Lemma pod")
     assert "## Lemma CLI" in prompt
     assert "## Skills" in prompt
-    assert "## Web Search" in prompt
+    assert "## Web research" in prompt
     assert "# Task list" in prompt
 
 
@@ -1702,7 +1747,7 @@ def test_user_agent_uses_lean_base_and_only_its_toolset_fragments():
     assert prompt.startswith("You are a Lemma agent")
     assert "You are a Lemma pod assistant" not in prompt
     assert "## Lemma CLI" in prompt  # its one toolset's fragment
-    assert "## Web Search" not in prompt
+    assert "## Web research" not in prompt
     assert "## Skills" not in prompt
     assert "# Task list" not in prompt
     assert "# Agent Instructions\nWork only with pod data." in prompt
@@ -1725,7 +1770,7 @@ def test_user_agent_without_toolsets_has_no_tool_fragments():
     assert prompt.startswith("You are a Lemma agent")
     for fragment_marker in (
         "## Lemma CLI",
-        "## Web Search",
+        "## Web research",
         "## Skills",
         "# Task list",
     ):
@@ -1875,3 +1920,98 @@ def test_pausing_tool_call_with_synthesized_return_is_paired_in_history():
     assert len(request_message.parts) == 1
     assert request_message.parts[0].tool_call_id == "resolved-1"
     assert request_message.parts[0].content["success"] is False
+
+
+def test_interrupted_tool_call_reaches_the_model_as_a_failure_not_a_hole():
+    """An ordinary tool call with no recorded result used to be erased.
+
+    The agent then had no memory of having tried, so it re-issued the call blind
+    or reasoned as though it had never happened. Reporting the interruption is
+    strictly more useful — and it preserves the tool_use/tool_result pairing
+    that Anthropic requires.
+    """
+    conversation_id = uuid4()
+    orphaned = _tool_call_message(
+        conversation_id=conversation_id,
+        sequence=0,
+        tool_name="exec_command",
+        tool_call_id="orphan-exec",
+        tool_args={"cmd": "npm run build"},
+    )
+
+    history, _ = PydanticAIHarness()._history_and_prompt([orphaned])
+
+    call_parts = [
+        part
+        for message in history
+        for part in message.parts
+        if type(part).__name__ == "ToolCallPart"
+    ]
+    return_parts = [
+        part
+        for message in history
+        for part in message.parts
+        if type(part).__name__ == "ToolReturnPart"
+    ]
+    assert [part.tool_name for part in call_parts] == ["exec_command"]
+    assert len(return_parts) == 1
+    assert return_parts[0].content["success"] is False
+    assert "interrupted" in return_parts[0].content["error"]
+    # Pairing preserved: every call has exactly one matching return.
+    assert {p.tool_call_id for p in call_parts} == {
+        p.tool_call_id for p in return_parts
+    }
+
+
+def test_a_pending_approval_is_not_reported_to_the_model_as_a_failure():
+    """An unmatched ask_user/request_approval is the marker that the
+    conversation is waiting on a human — not an interrupted tool. Synthesizing a
+    failure would tell the model its question failed while the user is still
+    being asked it."""
+    conversation_id = uuid4()
+    for tool_name in ("ask_user", "request_approval", "snooze"):
+        pending = _tool_call_message(
+            conversation_id=conversation_id,
+            sequence=0,
+            tool_name=tool_name,
+            tool_call_id=f"pending-{tool_name}",
+        )
+
+        history, _ = PydanticAIHarness()._history_and_prompt([pending])
+
+        rendered = [
+            part
+            for message in history
+            for part in message.parts
+            if type(part).__name__ in {"ToolCallPart", "ToolReturnPart"}
+        ]
+        assert rendered == [], f"{tool_name} should stay pending, not fail"
+
+
+def test_unparseable_tool_arguments_are_reported_rather_than_vanishing():
+    conversation_id = uuid4()
+    call = _tool_call_message(
+        conversation_id=conversation_id,
+        sequence=0,
+        tool_name="pod_query",
+        tool_call_id="bad-args",
+        tool_args="not-a-json-object",
+    )
+    result = _tool_return_message(
+        conversation_id=conversation_id,
+        sequence=1,
+        tool_name="pod_query",
+        tool_call_id="bad-args",
+    )
+
+    history, _ = PydanticAIHarness()._history_and_prompt([call, result])
+
+    return_parts = [
+        part
+        for message in history
+        for part in message.parts
+        if type(part).__name__ == "ToolReturnPart"
+    ]
+    assert len(return_parts) == 1
+    assert return_parts[0].content["success"] is False
+    assert "could not be parsed" in return_parts[0].content["error"]

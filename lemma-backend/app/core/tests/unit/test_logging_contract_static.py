@@ -13,28 +13,16 @@ REPO_ROOT = Path(__file__).resolve().parents[5]
 EVENT_RE = re.compile(r"^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$")
 METHODS = {"debug", "info", "warning", "error", "exception", "critical"}
 PROHIBITED_FIELD_PARTS = {
+    # Credentials only. This list used to include "body", "message", "response",
+    # "traceback", "text", "token", "stack", "sql", "url" and more, which meant a
+    # log could say that something failed but never what failed — the fields
+    # carrying the diagnosis were exactly the banned ones. Errors are now logged
+    # in full, with messages and stack traces; what stays banned is the handful
+    # of names that only ever hold a secret.
     "authorization",
-    "body",
-    "content",
     "cookie",
-    "email",
-    "headers",
-    "message",
     "password",
-    "payload",
-    "prompt",
-    "query",
-    "request",
-    "response",
     "secret",
-    "source_text",
-    "sql",
-    "stack",
-    "text",
-    "token",
-    "traceback",
-    "uri",
-    "url",
 }
 
 

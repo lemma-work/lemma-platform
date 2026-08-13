@@ -25,6 +25,7 @@ from app.modules.datastore.domain.document_processing import (
 from app.modules.datastore.domain.errors import (
     DatastoreObjectIntegrityError,
     DatastoreObjectNotFoundError,
+    DocumentExtractionUnavailableError,
 )
 from app.modules.datastore.domain.file_entities import FileStatus
 from app.modules.datastore.domain.ports import DocumentProcessorPort
@@ -305,6 +306,24 @@ class DatastoreFileProcessingService:
             )
         except _StaleProcessingClaim:
             return
+        except DocumentExtractionUnavailableError:
+            # The extractor was unreachable/overloaded, so nothing was learned
+            # about this document. Refund the attempt and return the row to
+            # PENDING; recovery re-drives it once the extractor is back. Without
+            # this, an outage spends the file's 3-attempt budget and terminally
+            # fails documents that are perfectly fine.
+            async with self._file_repo() as files:
+                released = await files.release_claim(
+                    file_id,
+                    content_sha256=content_sha256,
+                    processing_attempt=processing_attempt,
+                )
+            logger.warning(
+                "datastore.file_processing_service.extraction_unavailable_claim_released.degraded",
+                file_id=file_id,
+                released=released,
+            )
+            raise
         except Exception as exc:
             logger.debug(
                 'datastore.file_processing_service.search_processing_s.propagated',

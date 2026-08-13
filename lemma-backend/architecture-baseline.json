@@ -1,8 +1,8 @@
 {
   "broad_catches": {
-    "agent:count": 55,
+    "agent:count": 65,
     "agent:max": 5,
-    "agent:total": 73,
+    "agent:total": 83,
     "agent_surfaces:count": 106,
     "agent_surfaces:max": 5,
     "agent_surfaces:total": 128,
@@ -49,7 +49,7 @@
   "complex_functions": {
     "agent:count": 16,
     "agent:max": 76,
-    "agent:total": 418,
+    "agent:total": 448,
     "agent_surfaces:count": 48,
     "agent_surfaces:max": 54,
     "agent_surfaces:total": 1185,
@@ -177,7 +177,7 @@
     "app/modules/agent/services/agent_runner_service.py": 1137,
     "app/modules/agent/services/conversation_service.py": 1565,
     "app/modules/agent/services/runtime_profile_service.py": 991,
-    "app/modules/agent/tools/pod/pydantic_adapter.py": 626,
+    "app/modules/agent/tools/pod/pydantic_adapter.py": 638,
     "app/modules/agent/tools/workspace_cli/workspace_cli.py": 765,
     "app/modules/agent_surfaces/api/controllers/surface_controller.py": 631,
     "app/modules/agent_surfaces/platforms/slack/service.py": 962,

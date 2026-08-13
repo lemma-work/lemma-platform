@@ -15,6 +15,7 @@ import json
 import os
 import shutil
 import subprocess
+import time
 import sys
 import tempfile
 import zipfile
@@ -37,6 +38,41 @@ def run(*args: str | Path, cwd: Path = REPO_ROOT, env: dict[str, str] | None = N
     command = [str(arg) for arg in args]
     print("+", " ".join(command), flush=True)
     subprocess.run(command, cwd=cwd, env=env, check=True)
+
+
+def run_with_retries(
+    *args: str | Path,
+    cwd: Path = REPO_ROOT,
+    env: dict[str, str] | None = None,
+    attempts: int = 3,
+) -> None:
+    """Run a command that can fail for reasons that have nothing to do with us.
+
+    The Next.js build resolves `next/font/google` by fetching from
+    fonts.googleapis.com at build time, so it is only as reliable as that
+    request. It has failed five of our last seven runs -- on the arm64 image
+    build, on the macOS host pack, on the Windows host pack -- always as a wall
+    of "Error while requesting resource", always green on a re-run. Retrying
+    here beats a human re-running the job.
+
+    The real fix is to stop fetching fonts during a build at all: vendor the
+    families and use `next/font/local`. That is a typography change across eight
+    families and does not belong in a packaging script.
+    """
+    for attempt in range(1, attempts + 1):
+        try:
+            run(*args, cwd=cwd, env=env)
+            return
+        except subprocess.CalledProcessError:
+            if attempt == attempts:
+                raise
+            delay = 5 * attempt
+            print(
+                f"  command failed (attempt {attempt}/{attempts}); "
+                f"retrying in {delay}s",
+                flush=True,
+            )
+            time.sleep(delay)
 
 
 def npm_executable(platform_name: str | None = None) -> str:
@@ -313,7 +349,7 @@ def build_frontend(output: Path, explicit_node_root: Path | None) -> None:
     run(npm, "ci", cwd=REPO_ROOT / "lemma-typescript")
     run(npm, "run", "build", cwd=REPO_ROOT / "lemma-typescript")
     run(npm, "ci", cwd=REPO_ROOT / "lemma-frontend")
-    run(npm, "run", "build", cwd=REPO_ROOT / "lemma-frontend")
+    run_with_retries(npm, "run", "build", cwd=REPO_ROOT / "lemma-frontend")
 
     frontend = output / "frontend"
     copy_node_runtime(frontend, explicit_node_root)

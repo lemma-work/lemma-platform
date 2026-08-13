@@ -75,6 +75,22 @@ class UndeliverableReason:
         "This agent has no surface it can reach people on. Connect a chat "
         "surface for it, or configure email so it gets a mailbox."
     )
+    # These two used to be indistinguishable from NO_ACTIVE_SURFACE, with the
+    # real cause in a `.degraded` log nobody reads. A deployment whose mail
+    # domain was unset reported "the pod has no active surface", which sent us
+    # looking at pods and surfaces for a day. The reason a person is told should
+    # be the reason it happened.
+    EMAIL_NOT_CONFIGURED = (
+        "Email is not set up for this deployment, so this agent has no mailbox "
+        "to reach people from. Set RESEND_API_KEY and RESEND_INBOUND_DOMAIN, or "
+        "connect a chat surface."
+    )
+    # "This agent" was read as the *recipient*, and sent someone looking for a
+    # person who had been resolved as an agent. The agent here is the sender —
+    # say whose mailbox failed, since that is what has to be fixed.
+    MAILBOX_PROVISION_FAILED = (
+        "The sending agent has no surface, and creating a mailbox for it failed."
+    )
     COLD_OPEN_UNSUPPORTED = (
         "The pod's only mailbox surface cannot start a new email thread. Ask "
         "them to email the pod address once, or connect a chat surface."

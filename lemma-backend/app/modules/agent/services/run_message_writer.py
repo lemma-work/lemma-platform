@@ -51,11 +51,43 @@ class RunMessageWriter:
         draft = draft.model_copy(update={"metadata": metadata})
 
         async with self.uow_factory() as uow:
-            return await ConversationRepository(uow).append_message(
+            repository = ConversationRepository(uow)
+            existing = await self._answered_already(
+                repository,
+                conversation_id=conversation_id,
+                draft=draft,
+            )
+            if existing is not None:
+                return existing
+            return await repository.append_message(
                 conversation_id=conversation_id,
                 agent_run_id=agent_run_id,
                 draft=draft,
             )
+
+    @staticmethod
+    async def _answered_already(
+        repository: ConversationRepository,
+        *,
+        conversation_id: UUID,
+        draft: MessageDraft,
+    ) -> Message | None:
+        """The real return for a call a synthesized one is about to close.
+
+        A run ending closes every tool call it left open, so a user who answered
+        an approval and *then* watched the run fail would get a second return
+        for it — the card flipping back from what they decided to "the run ended
+        before this was answered". A synthesized return never overwrites a real
+        one; it exists precisely for the calls that never got one.
+        """
+        if draft.kind != MessageKind.TOOL_RETURN or not draft.tool_call_id:
+            return None
+        if not (draft.metadata or {}).get("synthetic_tool_return"):
+            return None
+        return await repository.get_tool_return(
+            conversation_id=conversation_id,
+            tool_call_id=draft.tool_call_id,
+        )
 
     def output_data_from_event(self, event: AgentEvent) -> JsonValue | None:
         """Extract terminal output from a MESSAGE event, if present."""

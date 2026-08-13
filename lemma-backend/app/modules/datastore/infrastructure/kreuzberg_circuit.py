@@ -25,12 +25,18 @@ from typing import Callable
 
 from app.core.log.log import get_logger
 from app.modules.datastore.config import datastore_settings
+from app.modules.datastore.domain.errors import DocumentExtractionUnavailableError
 
 logger = get_logger(__name__)
 
 
-class KreuzbergCircuitOpen(RuntimeError):
-    """Raised when the Kreuzberg circuit is open (extractor treated as down)."""
+class KreuzbergCircuitOpen(DocumentExtractionUnavailableError):
+    """Raised when the Kreuzberg circuit is open (extractor treated as down).
+
+    An open circuit is the clearest possible statement that the *extractor* is
+    the problem and the document was never examined, so it must not spend one of
+    the file's processing attempts — see DocumentExtractionUnavailableError.
+    """
 
 
 class KreuzbergCircuitBreaker:

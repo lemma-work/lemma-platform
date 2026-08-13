@@ -6,9 +6,11 @@ import asyncio
 import json
 import logging
 import time
-from collections.abc import AsyncGenerator, Awaitable, Callable
+import traceback
+from collections.abc import AsyncGenerator, Awaitable, Callable, Sequence
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
+from enum import StrEnum
 
 from faststream.redis import RedisBroker
 from opentelemetry import context as otel_context
@@ -63,6 +65,152 @@ tracer = trace.get_tracer(__name__)
 meter = metrics.get_meter(__name__)
 job_counter = meter.create_counter("lemma.worker.jobs")
 job_duration = meter.create_histogram("lemma.worker.job.duration", unit="ms")
+
+class Lane(StrEnum):
+    """Which queue a task runs on.
+
+    Before lanes, every task type — agent runs, surface messages, workflow
+    resumes, pod imports, document ingestion — shared one queue and one
+    concurrency budget. A bulk upload could therefore occupy every worker slot
+    and stall interactive work behind it. Splitting the queue is what makes the
+    two classes of work independent; they are separate Redis queues, so a deep
+    bulk backlog is invisible to the interactive lane.
+    """
+
+    #: Latency-sensitive, user-facing work. Someone is waiting on it.
+    INTERACTIVE = "interactive"
+    #: Throughput-oriented background work. Slower is acceptable; starving the
+    #: interactive lane is not.
+    BULK = "bulk"
+
+
+#: The lane that owns process-wide startup (see ``secondary_lane_lifespan``).
+_PRIMARY_LANE = Lane.INTERACTIVE
+_SECONDARY_LANE_STARTUP_TIMEOUT_SECONDS = 120.0
+
+#: task name -> lane, populated by the @streaq_task/@streaq_cron decorators.
+#: The enqueue side reads this to route a job to the correct queue, so callers
+#: never name a queue and a task can be re-laned in exactly one place.
+TASK_LANES: dict[str, Lane] = {}
+
+_primary_lane_context: AppWorkerContext | None = None
+_primary_lane_ready = asyncio.Event()
+
+#: Tasks running the non-primary lanes, so the primary's teardown can stop them
+#: before it disposes the infrastructure they share.
+_secondary_lane_tasks: list[asyncio.Task[None]] = []
+
+
+def _silence_lane_signal_handler(worker: Worker[AppWorkerContext]) -> None:
+    """Stop a non-primary lane from competing for the process's signals.
+
+    streaq starts `signal_handler` for every worker regardless of its
+    `handle_signals` argument, and each one opens an anyio signal receiver.
+    asyncio's `add_signal_handler` keeps only the last registration per signal,
+    so with more than one lane the SIGTERM goes to whichever registered last —
+    and if that is not the primary, the lane that receives it cancels only its
+    own scope while the primary keeps running.
+
+    Replacing the coroutine on the instance is the smallest thing that works:
+    the task still exists and still ends with the worker's task group, it just
+    never claims the signal.
+    """
+
+    async def _never_receives_signals(_scope: object) -> None:
+        await asyncio.Event().wait()  # until the lane's task group unwinds
+
+    worker.signal_handler = _never_receives_signals  # type: ignore[method-assign]
+
+
+def _install_task_dump_handler() -> None:
+    """Print every pending coroutine's stack on SIGQUIT.
+
+    A worker that stops responding to SIGTERM shows nothing useful in a thread
+    dump: `faulthandler` reports the event loop sitting in `select()`, which is
+    what an idle loop always looks like. The question is always *which awaited
+    coroutine is not finishing*, and only the task list answers it. SIGQUIT is
+    free — neither streaq nor anything else here uses it.
+    """
+    import signal
+
+    def _dump(*_args: object) -> None:
+        for task in asyncio.all_tasks():
+            frames = "".join(
+                traceback.format_stack(task.get_coro().cr_frame)  # type: ignore[union-attr]
+                if getattr(task.get_coro(), "cr_frame", None)
+                else []
+            )
+            logger.warning(
+                "infrastructure.streaq_runtime.pending_task_dump.diagnostic",
+                task_name=task.get_name(),
+                frames=frames[-2000:],
+            )
+
+    try:
+        asyncio.get_running_loop().add_signal_handler(signal.SIGQUIT, _dump)
+    except (NotImplementedError, RuntimeError):  # pragma: no cover - platform
+        pass
+
+
+async def _stop_secondary_lanes() -> None:
+    """Cancel the non-primary lanes and wait, briefly, for them to unwind."""
+    tasks = [task for task in _secondary_lane_tasks if not task.done()]
+    _secondary_lane_tasks.clear()
+    if not tasks:
+        return
+    for task in tasks:
+        task.cancel()
+    _, pending = await asyncio.wait(tasks, timeout=_SECONDARY_LANE_SHUTDOWN_SECONDS)
+    if pending:
+        # Named, because "the worker had to be killed" is not a diagnosis.
+        logger.warning(
+            "infrastructure.streaq_runtime.lane_shutdown_timed_out.degraded",
+            lanes=",".join(sorted(task.get_name() for task in pending)),
+            timeout_seconds=_SECONDARY_LANE_SHUTDOWN_SECONDS,
+        )
+
+
+def lane_queue_name(lane: Lane) -> str:
+    """Redis queue name for a lane.
+
+    The interactive lane keeps the bare configured name so existing queues,
+    dashboards and any in-flight jobs survive the upgrade untouched; only the
+    new bulk lane gets a suffix.
+    """
+    base = settings.worker_queue_name
+    return base if lane is Lane.INTERACTIVE else f"{base}-{lane.value}"
+
+
+def lane_concurrency(lane: Lane) -> int:
+    if lane is Lane.BULK:
+        return settings.worker_bulk_concurrency
+    return settings.worker_concurrency
+
+
+def lane_for_task(task_name: str) -> Lane:
+    """Lane a task runs on; unregistered names default to interactive.
+
+    Defaulting to interactive preserves pre-lane behaviour for anything not
+    explicitly moved, so forgetting to annotate a task degrades to "as before"
+    rather than to a silently unconsumed queue.
+    """
+    return TASK_LANES.get(task_name, Lane.INTERACTIVE)
+
+
+# Headroom between task concurrency and the DB pool, leaving room for the
+# crons, event handlers and reconcilers that share the worker.
+_DB_POOL_SAFETY_FACTOR = 0.8
+
+# How long the non-primary lanes get to unwind once the primary has shut down.
+# The primary has already served its own grace period by this point, so the
+# remaining lanes are only closing connections. Short, because the alternative
+# to giving up is being SIGKILLed by the platform a moment later.
+_SECONDARY_LANE_SHUTDOWN_SECONDS = 10.0
+
+# Per-step ceiling for the primary lane's teardown. Closing a pool should take
+# milliseconds; anything that takes seconds is wedged, and waiting on it only
+# trades a clean exit for a SIGKILL.
+_SHUTDOWN_STEP_TIMEOUT_SECONDS = 5.0
 
 JOB_TIMEOUT_SECONDS = 1800
 # An agent run is the one task whose ceiling is not ours to pick freely: it
@@ -179,10 +327,29 @@ class AppWorkerContext:
 
 
 async def _safe_shutdown_step(name: str, fn: Callable[[], Awaitable[None]]) -> None:
+    """Run one teardown step, bounded, and say which one is running.
+
+    Both properties exist because of the same incident: a worker that stopped
+    responding to SIGTERM left a log ending at `service.started`, so there was
+    nothing to say which step had stalled — and one stalled step was enough to
+    hold the whole process until the platform killed it. A step that cannot
+    finish in time is now abandoned so the rest still run.
+    """
+    logger.debug(
+        "infrastructure.streaq_runtime.worker_shutdown_step.diagnostic", step=name
+    )
     try:
-        await fn()
+        await asyncio.wait_for(fn(), timeout=_SHUTDOWN_STEP_TIMEOUT_SECONDS)
+    except TimeoutError:
+        logger.warning(
+            "infrastructure.streaq_runtime.worker_shutdown_step_timed_out.degraded",
+            step=name,
+            timeout_seconds=_SHUTDOWN_STEP_TIMEOUT_SECONDS,
+        )
     except Exception:  # pragma: no cover
-        logger.debug("infrastructure.streaq_runtime.worker_shutdown_step.diagnostic")
+        logger.debug(
+            "infrastructure.streaq_runtime.worker_shutdown_step.diagnostic", step=name
+        )
 
 
 async def _ensure_consumer_groups_once() -> None:
@@ -269,10 +436,26 @@ async def worker_lifespan() -> AsyncGenerator[AppWorkerContext]:
     # connection checkout — which looks like the whole worker hanging. Warn (not
     # fail, to keep dev flexible) when the margin is too thin so it can't
     # silently regress.
+    # The shipped defaults sit exactly on this line: concurrency 20 against a
+    # pool of 20. `worker_concurrency`'s own docstring calls that acceptable
+    # ("should not exceed"), but equal is not enough — the worker also runs
+    # crons, event-bus handlers and reconcilers that each need a connection, so
+    # at parity the first one of those blocks behind a full pool. Hence the 0.8
+    # margin, and hence logging the numbers: a bare "degraded" event tells an
+    # operator nothing about which of the two knobs to move.
+    #
+    # Concurrency is summed across the lanes this process actually runs: with
+    # both enabled, interactive and bulk tasks draw from the same pool at the
+    # same time, so their combined budget is what can exhaust it.
     pool_capacity = settings.db_pool_size + settings.db_max_overflow
-    if pool_capacity and settings.worker_concurrency > pool_capacity * 0.8:
+    safe_concurrency = int(pool_capacity * _DB_POOL_SAFETY_FACTOR)
+    configured_concurrency = sum(lane_concurrency(lane) for lane in enabled_lanes())
+    if pool_capacity and configured_concurrency > safe_concurrency:
         logger.warning(
-            "infrastructure.streaq_runtime.worker_concurrency_exceeds_safe_db.degraded"
+            "infrastructure.streaq_runtime.worker_concurrency_exceeds_safe_db.degraded",
+            configured_concurrency=configured_concurrency,
+            pool_capacity=pool_capacity,
+            safe_concurrency=safe_concurrency,
         )
     # Pre-create Redis consumer groups BEFORE the broker starts its subscribers.
     # Several subscribers share a stream (e.g. workflow + surface both consume
@@ -330,6 +513,7 @@ async def worker_lifespan() -> AsyncGenerator[AppWorkerContext]:
     )
 
     started = False
+    global _primary_lane_context
     try:
         # Module-contributed worker lifespans (e.g. agent_surfaces native event
         # receiver + dedupe-store close; datastore reindex-queue close). Entered
@@ -342,8 +526,22 @@ async def worker_lifespan() -> AsyncGenerator[AppWorkerContext]:
             # Emit only after every core and module lifespan has entered.
             logger.info("service.started")
             started = True
+            # Release any secondary lanes only now that the shared broker,
+            # engine and module lifespans are fully up — they share this exact
+            # context object and must not consume jobs before it is complete.
+            _primary_lane_context = context
+            _primary_lane_ready.set()
             yield context
     finally:
+        # Before anything shared is disposed. Every lane runs on this one
+        # context — the same engine, broker and Redis clients — so tearing them
+        # down while a secondary lane is still consuming jobs is what used to
+        # hang the process: `close_engine` and `broker.stop` wait on work that
+        # nothing has told to stop. Stopping the other lanes first is the
+        # ordering that makes the rest of this block finite.
+        await _stop_secondary_lanes()
+        _primary_lane_ready.clear()
+        _primary_lane_context = None
         for background_task in (
             reconcile_task,
             watchdog_task,
@@ -374,13 +572,56 @@ async def worker_lifespan() -> AsyncGenerator[AppWorkerContext]:
         shutdown_telemetry()
 
 
-def create_streaq_worker(*, handle_signals: bool) -> Worker[AppWorkerContext]:
+@asynccontextmanager
+async def secondary_lane_lifespan() -> AsyncGenerator[AppWorkerContext]:
+    """Lifespan for every lane except the primary.
+
+    ``worker_lifespan`` performs process-wide setup — telemetry, the DB engine,
+    the FastStream broker and its consumer groups, the loop watchdog, the outbox
+    dispatcher. Running it once per lane would start two brokers and two
+    watchdogs in one process. So the primary lane owns all of it and publishes
+    the resulting context here; secondary lanes just wait for it and share it.
+
+    Lanes run concurrently in one event loop, so a plain asyncio.Event is the
+    right handshake. If the primary never comes up, the wait fails loudly rather
+    than letting a lane consume jobs with a half-built context.
+    """
+    await asyncio.wait_for(
+        _primary_lane_ready.wait(),
+        timeout=_SECONDARY_LANE_STARTUP_TIMEOUT_SECONDS,
+    )
+    context = _primary_lane_context
+    if context is None:  # pragma: no cover — defensive
+        raise RuntimeError("primary worker lane did not publish a context")
+    yield context
+
+
+def create_streaq_worker(
+    *,
+    handle_signals: bool,
+    lane: Lane = Lane.INTERACTIVE,
+    concurrency: int | None = None,
+) -> Worker[AppWorkerContext]:
     return Worker(
         redis_url=settings.redis_url,
-        queue_name=settings.worker_queue_name,
-        concurrency=WORKER_CONCURRENCY,
-        handle_signals=handle_signals,
-        lifespan=worker_lifespan,
+        queue_name=lane_queue_name(lane),
+        concurrency=concurrency if concurrency is not None else lane_concurrency(lane),
+        # Only the primary lane should watch for signals: streaq's handler
+        # cancels just its OWN worker's scope, so a handler per lane means a
+        # SIGTERM stops one lane and leaves the others running, and the process
+        # never exits.
+        #
+        # This flag does not achieve that. streaq stores `handle_signals` and
+        # never reads it — `run_async` starts `signal_handler` unconditionally
+        # — so every lane opens a receiver for SIGINT/SIGTERM. asyncio's
+        # `add_signal_handler` is last-wins, so which lane actually receives the
+        # signal is a startup race: about one time in four the bulk lane won,
+        # cancelled only itself, and the worker hung until it was SIGKILLed.
+        # `_silence_lane_signal_handler` below is what really enforces this.
+        handle_signals=handle_signals and lane is _PRIMARY_LANE,
+        lifespan=(
+            worker_lifespan if lane is _PRIMARY_LANE else secondary_lane_lifespan
+        ),
         # On SIGTERM, give in-flight tasks this long to finish before forcing
         # cancellation. Lets an interrupted agent run finalize its status in the
         # DB (via the shielded finalization in AgentRunnerService.execute) before
@@ -390,7 +631,106 @@ def create_streaq_worker(*, handle_signals: bool) -> Worker[AppWorkerContext]:
     )
 
 
-streaq_worker = create_streaq_worker(handle_signals=True)
+# One Worker per lane. ``streaq_worker`` stays the name of the interactive lane
+# so the ``streaq run app.events:streaq_worker`` entrypoint and every existing
+# ``streaq_worker.context`` read keep working — streaq stores the running
+# context in a MODULE-level ContextVar, so that accessor resolves correctly no
+# matter which lane is executing the task.
+streaq_worker = create_streaq_worker(handle_signals=True, lane=Lane.INTERACTIVE)
+bulk_worker = create_streaq_worker(handle_signals=True, lane=Lane.BULK)
+
+LANE_WORKERS: dict[Lane, Worker[AppWorkerContext]] = {
+    Lane.INTERACTIVE: streaq_worker,
+    Lane.BULK: bulk_worker,
+}
+
+for _lane, _worker in LANE_WORKERS.items():
+    if _lane is not _PRIMARY_LANE:
+        _silence_lane_signal_handler(_worker)
+
+
+def enabled_lanes() -> list[Lane]:
+    """Lanes this process should consume, from ``WORKER_LANES``.
+
+    Defaults to every lane so a single-process deployment (local stack, desktop,
+    today's cloud worker) keeps behaving exactly as before. Split deployments set
+    WORKER_LANES=interactive on one and WORKER_LANES=bulk on the other.
+    """
+    raw = (settings.worker_lanes or "").strip()
+    if not raw:
+        return list(Lane)
+    seen: list[Lane] = []
+    for part in raw.split(","):
+        name = part.strip().lower()
+        if not name:
+            continue
+        try:
+            lane = Lane(name)
+        except ValueError:
+            raise ValueError(
+                f"WORKER_LANES contains unknown lane {name!r}; "
+                f"valid lanes are {', '.join(x.value for x in Lane)}"
+            ) from None
+        if lane not in seen:
+            seen.append(lane)
+    if not seen:
+        return list(Lane)
+    # The primary lane owns the shared lifespan, so it must start first.
+    seen.sort(key=lambda lane: 0 if lane is _PRIMARY_LANE else 1)
+    return seen
+
+
+async def run_worker_lanes(lanes: Sequence[Lane] | None = None) -> None:
+    """Run the selected lanes concurrently in this process.
+
+    Each lane is an independent streaq Worker on its own Redis queue with its own
+    concurrency budget, which is the whole point: a burst of bulk ingestion can
+    no longer occupy the slots that agent runs and surface messages need.
+    """
+    selected = list(lanes) if lanes is not None else enabled_lanes()
+    if _PRIMARY_LANE not in selected:
+        # Something has to own the shared lifespan (broker, engine, watchdog).
+        raise ValueError(
+            f"the {_PRIMARY_LANE.value} lane owns process-wide startup and must be "
+            f"enabled; got {[lane.value for lane in selected]}"
+        )
+    logger.info(
+        "worker.lanes.starting",
+        lanes=",".join(lane.value for lane in selected),
+    )
+    _install_task_dump_handler()
+    primary, *secondary = selected
+    if not secondary:
+        await LANE_WORKERS[primary].run_async()
+        return
+
+    # The primary lane owns signal handling and the shared lifespan, so its
+    # return is the process's shutdown signal: wait for it to unwind gracefully,
+    # then stop the remaining lanes. Cancelling a bulk extraction mid-flight is
+    # safe — the row stays PROCESSING and the recovery cron reclaims it.
+    #
+    # Plain tasks rather than a task group, because leaving is not optional.
+    # `async with create_task_group()` waits for its children unconditionally,
+    # and a streaq worker does not always unwind promptly when cancelled: parts
+    # of its shutdown run under a shielded scope, so an external cancel can be
+    # held off until an in-flight Redis call returns. Measured on a SIGTERM
+    # delivered mid-run, that hung the whole process about one time in four —
+    # and a worker that does not exit gets SIGKILLed by the platform, which
+    # takes the in-flight agent run's finalization with it.
+    _secondary_lane_tasks.clear()
+    _secondary_lane_tasks.extend(
+        create_background_task(
+            LANE_WORKERS[lane].run_async(), name=f"worker-lane-{lane.value}"
+        )
+        for lane in secondary
+    )
+    try:
+        await LANE_WORKERS[primary].run_async()
+    finally:
+        # Normally already done, from inside the primary's lifespan teardown.
+        # Repeated here for the paths that never reach it — a primary that
+        # fails during startup still has to take the other lanes with it.
+        await _stop_secondary_lanes()
 
 
 async def load_job_observability_context(redis, job_id: str) -> dict[str, str]:
@@ -409,85 +749,123 @@ async def load_job_observability_context(redis, job_id: str) -> dict[str, str]:
         return {}
 
 
-@streaq_worker.middleware
-def observability_context_middleware(call_next):
-    """Recover correlation stored beside a task without changing its payload."""
+def _register_observability_middleware(
+    worker: Worker[AppWorkerContext],
+) -> None:
+    """Attach the tracing/metrics wrapper to one lane's worker.
 
-    async def run(*args, **kwargs):
-        task = observability_context_middleware.context
-        inherited = await load_job_observability_context(
-            streaq_worker.redis, task.task_id
-        )
-        token = otel_context.attach(extract(inherited))
-        started_at = time.perf_counter()
-        outcome = "succeeded"
-        try:
-            with tracer.start_as_current_span(
-                "lemma.worker.job",
-                kind=SpanKind.CONSUMER,
-                attributes={
-                    "lemma.job_id": task.task_id,
-                    "lemma.task_name": task.fn_name,
-                    "lemma.attempt": task.tries,
-                },
-            ) as span:
-                with bind_job_context(
-                    job_id=task.task_id,
-                    task_name=task.fn_name,
-                    attempt=task.tries,
-                    inherited=inherited,
-                ):
-                    try:
-                        result = await call_next(*args, **kwargs)
-                        span.set_attribute("lemma.outcome", outcome)
-                        return result
-                    except asyncio.CancelledError:
-                        outcome = "cancelled"
-                        span.set_attribute("lemma.outcome", outcome)
-                        raise
-                    except Exception as exc:
-                        terminal = task.tries >= JOB_MAX_RETRIES
-                        outcome = "failed" if terminal else "retrying"
-                        span.set_attribute("lemma.outcome", outcome)
-                        duration_ms = round(
-                            (time.perf_counter() - started_at) * 1000, 1
-                        )
-                        if terminal:
-                            logger.error(
-                                "worker.job.failed",
-                                attempt=task.tries,
-                                retryable=False,
-                                duration_ms=duration_ms,
-                                error_type=type(exc).__name__,
-                                exc_info=True,
+    Built per worker rather than shared, because streaq exposes the running task
+    on the object returned by ``Worker.middleware()`` — not on the function that
+    was passed in. Registering one shared function across lanes and discarding
+    those return values leaves the closure with no way to reach the current task.
+    """
+
+    def observability_context_middleware(call_next):
+        """Recover correlation stored beside a task without changing its payload."""
+
+        async def run(*args, **kwargs):
+            task = registered.context
+            inherited = await load_job_observability_context(
+                worker.redis, task.task_id
+            )
+            token = otel_context.attach(extract(inherited))
+            started_at = time.perf_counter()
+            outcome = "succeeded"
+            try:
+                with tracer.start_as_current_span(
+                    "lemma.worker.job",
+                    kind=SpanKind.CONSUMER,
+                    attributes={
+                        "lemma.job_id": task.task_id,
+                        "lemma.task_name": task.fn_name,
+                        "lemma.attempt": task.tries,
+                    },
+                ) as span:
+                    with bind_job_context(
+                        job_id=task.task_id,
+                        task_name=task.fn_name,
+                        attempt=task.tries,
+                        inherited=inherited,
+                    ):
+                        try:
+                            result = await call_next(*args, **kwargs)
+                            span.set_attribute("lemma.outcome", outcome)
+                            return result
+                        except asyncio.CancelledError:
+                            outcome = "cancelled"
+                            span.set_attribute("lemma.outcome", outcome)
+                            raise
+                        except Exception as exc:
+                            terminal = task.tries >= JOB_MAX_RETRIES
+                            outcome = "failed" if terminal else "retrying"
+                            span.set_attribute("lemma.outcome", outcome)
+                            duration_ms = round(
+                                (time.perf_counter() - started_at) * 1000, 1
                             )
-                        else:
-                            logger.debug(
-                                "worker.job.retrying",
-                                attempt=task.tries,
-                                retryable=True,
-                                error_type=type(exc).__name__,
-                            )
-                        raise
-        finally:
-            duration_ms = (time.perf_counter() - started_at) * 1000
-            labels = {"task_name": task.fn_name, "outcome": outcome}
-            job_counter.add(1, labels)
-            job_duration.record(duration_ms, labels)
-            otel_context.detach(token)
+                            if terminal:
+                                logger.error(
+                                    "worker.job.failed",
+                                    attempt=task.tries,
+                                    retryable=False,
+                                    duration_ms=duration_ms,
+                                    error_type=type(exc).__name__,
+                                    exc_info=True,
+                                )
+                            else:
+                                logger.debug(
+                                    "worker.job.retrying",
+                                    attempt=task.tries,
+                                    retryable=True,
+                                    error_type=type(exc).__name__,
+                                )
+                            raise
+            finally:
+                duration_ms = (time.perf_counter() - started_at) * 1000
+                labels = {"task_name": task.fn_name, "outcome": outcome}
+                job_counter.add(1, labels)
+                job_duration.record(duration_ms, labels)
+                otel_context.detach(token)
 
-    return run
+        return run
+
+    # `registered` is what exposes the running task to the closure above; it is
+    # bound before any task runs, so the late reference inside `run` is safe.
+    registered = worker.middleware(observability_context_middleware)
 
 
-def streaq_task(*args, **kwargs):
+# Every lane gets the same observability wrapper — a job must be traced the same
+# way regardless of which queue carried it.
+for _lane_worker in LANE_WORKERS.values():
+    _register_observability_middleware(_lane_worker)
+
+
+def _register_lane(name: str | None, lane: Lane) -> None:
+    if name:
+        TASK_LANES[name] = lane
+
+
+def streaq_task(*args, lane: Lane = Lane.INTERACTIVE, **kwargs):
+    """Register a task on ``lane``'s worker.
+
+    A task is registered on exactly one lane's Worker, so it is consumed from
+    exactly one queue and can never be picked up twice.
+    """
     kwargs.setdefault("max_tries", JOB_MAX_RETRIES)
     kwargs.setdefault("timeout", JOB_TIMEOUT_SECONDS)
     kwargs.setdefault("ttl", JOB_RESULT_TTL_SECONDS)
-    return streaq_worker.task(*args, **kwargs)
+    _register_lane(kwargs.get("name"), lane)
+    return LANE_WORKERS[lane].task(*args, **kwargs)
 
 
-def streaq_cron(tab: str, **kwargs):
+def streaq_cron(tab: str, *, lane: Lane = Lane.INTERACTIVE, **kwargs):
+    """Register a cron on ``lane``'s worker.
+
+    Registering on one lane is load-bearing: with several lanes running in the
+    same process, a cron registered on more than one Worker would fire once per
+    lane on every tick.
+    """
     kwargs.setdefault("max_tries", JOB_MAX_RETRIES)
     kwargs.setdefault("timeout", JOB_TIMEOUT_SECONDS)
     kwargs.setdefault("ttl", JOB_RESULT_TTL_SECONDS)
-    return streaq_worker.cron(tab, **kwargs)
+    _register_lane(kwargs.get("name"), lane)
+    return LANE_WORKERS[lane].cron(tab, **kwargs)

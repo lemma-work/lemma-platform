@@ -14,11 +14,14 @@ import psycopg
 POSTGRES_IMAGE = "docker.io/pgvector/pgvector:0.8.3-pg15"
 REDIS_IMAGE = "redis:7.4-alpine"
 SUPERTOKENS_IMAGE = "docker.io/supertokens/supertokens-postgresql:11.4.5"
-# The project moved orgs (kreuzberg-dev -> xberg-io); the old
-# ghcr.io/kreuzberg-dev/kreuzberg:4.9.9 tag now 404s ("manifest unknown"). This
-# is the same 4.9.9 on the current public namespace (matches docker-compose.yml).
-# The -core image is ~580MB and fetches OCR models on first use.
-KREUZBERG_IMAGE = "ghcr.io/xberg-io/kreuzberg:4.9.9-core"
+# Kreuzberg 4.8.0-4.9.9 shipped under the Elastic License 2.0, which forbids
+# offering the software as a managed service; 4.10.0 relicensed back to MIT.
+# ghcr.io/xberg-io/kreuzberg:4.9.9-core labels itself MIT, but the label is wrong
+# — the revision it names as its source (54dcb33a) carries an ELv2 LICENSE — so
+# that tag must not be used. 4.10.2 is the MIT LTS head and speaks the same v4
+# wire schema as 4.9.9, so no client change is needed.
+# The -core image fetches layout/OCR models from HuggingFace on first use.
+KREUZBERG_IMAGE = "ghcr.io/kreuzberg-dev/kreuzberg-core:4.10.2"
 POSTGRES_USER = "test"
 POSTGRES_PASSWORD = "test"
 POSTGRES_DB = "test"
