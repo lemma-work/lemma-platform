@@ -335,17 +335,17 @@ class Settings(BaseSettings):
         default="",
         description=(
             "Default model name for the OpenAI-compatible system model profile. "
-            "No built-in default: when LEMMA_OPENAI_API_KEY is set the model(s) "
-            "must be provided via LEMMA_OPENAI_MODEL_NAMES / "
-            "LEMMA_OPENAI_DEFAULT_MODEL, otherwise the profile build fails loudly."
+            "No built-in default: when unset, the first entry of "
+            "LEMMA_OPENAI_MODEL_NAMES becomes the default."
         ),
     )
     lemma_openai_model_names: str = Field(
-        default="",
+        default="gpt-5.6-sol,gpt-5.6-terra,gpt-5.6-luna",
         description=(
             "Comma-separated model names for the OpenAI-compatible system model "
-            "profile. Required (via env) when LEMMA_OPENAI_API_KEY is set; there "
-            "is no built-in model default."
+            "profile. Defaults to the GPT-5.6 family served by api.openai.com; "
+            "set it explicitly when LEMMA_OPENAI_BASE_URL points at another "
+            "OpenAI-compatible endpoint (Fireworks, a local server, a gateway)."
         ),
     )
     lemma_openai_vision_model_names: str = Field(
@@ -374,7 +374,7 @@ class Settings(BaseSettings):
         description="Default public model name for the server-provided Anthropic-compatible Lemma profile.",
     )
     lemma_anthropic_model_names: str = Field(
-        default="claude-sonnet-4-5,claude-haiku-4-5",
+        default="claude-sonnet-4-5,claude-haiku-4-5,claude-fable-5",
         description="Comma-separated public model names for the server-provided Anthropic-compatible Lemma profile.",
     )
     web_search_provider: Literal["auto", "duckduckgo", "searxng", "brave"] = Field(
