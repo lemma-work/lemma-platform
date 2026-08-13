@@ -75,7 +75,7 @@ def get_engine():
     if engine is None:
         engine_kwargs = {}
         connect_args = {}
-        if settings.environment == "testing":
+        if settings.environment == "testing" and not settings.db_pool_in_testing:
             engine_kwargs["poolclass"] = NullPool
         else:
             engine_kwargs["pool_size"] = settings.db_pool_size

@@ -934,7 +934,7 @@ async def sweep_pod_bundle_staging() -> None:
         get_pod_bundle_state_store(), BundleStagingStorage()
     )
     if reclaimed or recovered:
-        logger.debug("pod_bundle.handlers.pod_bundle_sweep_reclaimed_d.observed")
+        logger.debug("pod_bundle.handlers.swept", reclaimed=reclaimed, recovered=recovered)
 
 
 async def _sweep(store, staging) -> tuple[int, int]:
@@ -974,7 +974,6 @@ async def _sweep(store, staging) -> tuple[int, int]:
         try:
             archives = await staging.list_archives(kind)  # type: ignore[arg-type]
         except Exception:  # noqa: BLE001
-            logger.debug('pod_bundle.handlers.sweep_could_not_list_s.diagnostic')
             continue
         for job_id, _ in archives:
             state = await get_state(job_id)

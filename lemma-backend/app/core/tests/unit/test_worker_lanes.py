@@ -2,13 +2,17 @@
 
 Lanes exist so a burst of bulk work (document ingestion, pod imports) cannot
 occupy the worker slots that latency-sensitive work needs. That guarantee rests
-on three things, each covered here: lanes are genuinely separate Redis queues,
-every task is registered on exactly one lane, and a process only runs the lanes
-it was configured for.
+on four things, each covered here: lanes are genuinely separate Redis queues,
+every task is registered on exactly one lane, a process only runs the lanes it
+was configured for, and a process that merely *publishes* routes to the same
+lanes the worker consumes from.
 """
 
 from __future__ import annotations
 
+import subprocess
+import sys
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -76,6 +80,53 @@ def test_every_task_is_registered_on_exactly_one_lane():
                 continue
             overlap = registered & set(LANE_WORKERS[other].registry)
             assert not overlap, f"{lane}/{other} both register: {sorted(overlap)}"
+
+
+def test_a_publisher_only_process_still_routes_to_the_bulk_lane():
+    """The API enqueues bulk work but never imports the handlers that declare it.
+
+    ``TASK_LANES`` is filled by the ``@streaq_task`` decorators, i.e. as a side
+    effect of importing each module's handlers — which the worker does via
+    ``app.events`` and the API does not. So the API's table was empty, every
+    bulk task it enqueued was routed to the *interactive* queue, and the
+    interactive worker dropped each one as "missing function". Pod bundle
+    export, import and GitHub publish are enqueued only from the API, so all
+    three silently did nothing: the export sat at QUEUED until it expired.
+
+    This has to be a subprocess. The property under test is what a process that
+    never imported ``app.events`` sees, and by the time this suite runs, this
+    one has.
+    """
+    backend_root = Path(__file__).resolve().parents[4]
+    script = """
+import app.app  # the API process: controllers, no handlers
+from app.core.infrastructure.jobs.streaq_runtime import Lane, lane_for_task
+
+bulk = (
+    "export_pod_bundle",
+    "plan_pod_import",
+    "apply_pod_import",
+    "import_pod_url",
+    "import_pod_github",
+    "publish_pod_github",
+    "process_datastore_file_task",
+)
+wrong = [name for name in bulk if lane_for_task(name) is not Lane.BULK]
+print("MISROUTED:" + ",".join(wrong))
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(backend_root),
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+    assert result.returncode == 0, result.stderr[-4000:]
+    reported = [
+        line for line in result.stdout.splitlines() if line.startswith("MISROUTED:")
+    ]
+    assert reported, f"probe did not report: {result.stdout[-2000:]}"
+    assert reported[-1] == "MISROUTED:", reported[-1]
 
 
 @pytest.mark.parametrize(

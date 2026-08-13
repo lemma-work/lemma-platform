@@ -393,7 +393,6 @@ class TelegramPollingReceiverRunner:
                         )
                         _chat = _msg.get("chat") or {}
                         logger.debug("agent_surfaces.event_receiver_service.telegram_polling_received_update_id.observed", update_id=update_id)
-                        logger.debug("agent_surfaces.event_receiver_service.telegram_raw_update_s.observed")
                         if isinstance(update_id, int):
                             offset = update_id + 1
                             if self._candidate.surface_ids:

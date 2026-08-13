@@ -251,9 +251,6 @@ class FileUseCases:
                     files=files,
                 )
             except Exception:
-                logger.debug(
-                    'datastore.file_use_cases.enqueue_datastore_path_cleanup_s.diagnostic'
-                )
                 enqueued = False
         if not enqueued:
             await service.cleanup_deleted_paths(

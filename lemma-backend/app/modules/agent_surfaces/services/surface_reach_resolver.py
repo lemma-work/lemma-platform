@@ -13,6 +13,7 @@ succeed, so failures degrade to a fallback handle (or None) and never raise.
 
 from __future__ import annotations
 
+from contextlib import suppress
 import asyncio
 from typing import TYPE_CHECKING
 
@@ -153,7 +154,7 @@ class SurfaceReachResolver:
     async def _teams_handle(self, surface: AgentSurfaceEntity) -> str | None:
         app_id = surface_settings.microsoft_bot_app_id
         if app_id:
-            try:
+            with suppress(Exception):
                 tenant_id = surface.external_tenant_id or "botframework.com"
                 token = await get_graph_token(tenant_id)
                 if token:
@@ -170,10 +171,6 @@ class SurfaceReachResolver:
                                 name = str(body.get("displayName") or "").strip()
                                 if name:
                                     return name
-            except Exception:  # Application.Read.All may 403 — fall back
-                logger.debug(
-                    "agent_surfaces.surface_reach_resolver.teams_serviceprincipal_lookup_surface_s.observed"
-                )
         # Fallback: configured bot display name (still a live-derived handle for
         # write-through purposes, but requires no external call).
         return surface_settings.microsoft_bot_app_name or None

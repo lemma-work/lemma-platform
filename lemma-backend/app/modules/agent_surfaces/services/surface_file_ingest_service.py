@@ -199,9 +199,6 @@ class SurfaceFileIngestService:
                 attachment=attachment,
             )
         except Exception:
-            logger.debug(
-                'agent_surfaces.surface_file_ingest_service.surface_attachment_download_platform_s.diagnostic'
-            )
             return None
         if downloaded is None:
             return None
@@ -220,9 +217,6 @@ class SurfaceFileIngestService:
                 search_enabled=True,
             )
         except Exception:
-            logger.debug(
-                'agent_surfaces.surface_file_ingest_service.surface_attachment_persist_platform_s.diagnostic'
-            )
             return None
 
         content_type = attachment.get("content_type")

@@ -7,6 +7,7 @@ it is a self-contained concern that only reads.
 
 from __future__ import annotations
 
+from contextlib import suppress
 from app.modules.connectors.domain.account import OAuthCredentials
 from app.modules.connectors.domain.connector import AuthProvider, ConnectorEntity
 from app.modules.connectors.infrastructure.adapters.lemma_connector_factory import (
@@ -52,7 +53,7 @@ async def load_native_account_profile(
         return None
 
     operation_name, payload = config
-    try:
+    with suppress(Exception):
         client = create_lemma_execution_client(
             connector,
             credentials.model_dump(exclude_none=True),
@@ -61,8 +62,6 @@ async def load_native_account_profile(
         profile_dict = profile_to_dict(profile)
         if profile_dict is not None:
             return profile_dict
-    except Exception:
-        logger.debug('connectors.connector_service.enrich_native_account_profile_s.diagnostic')
     return None
 
 async def _load_slack_account_profile(
@@ -72,7 +71,7 @@ async def _load_slack_account_profile(
     if not credentials.access_token:
         return None
 
-    try:
+    with suppress(Exception):
         client = create_lemma_execution_client(
             connector,
             credentials.model_dump(exclude_none=True),
@@ -101,8 +100,6 @@ async def _load_slack_account_profile(
             except Exception:
                 logger.debug('connectors.connector_service.enrich_slack_user_profile_s.diagnostic', user_id=user_id)
         return profile
-    except Exception:
-        logger.debug('connectors.connector_service.enrich_native_account_profile_s.diagnostic')
     return None
 
 def profile_to_dict(profile: object) -> dict | None:

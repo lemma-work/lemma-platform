@@ -59,10 +59,41 @@ def _text(value: Any) -> str:
     )
 
 
+def _worth_reporting(
+    *,
+    length: int = 0,
+    delayed: int = 0,
+    caught_up: bool = True,
+    pending: int = 0,
+    reported_lag: int = 0,
+    consumers: int = 0,
+    active_consumers: int = 0,
+) -> bool:
+    """Whether this snapshot tells the reader anything.
+
+    Every declared stream and group used to be reported on every cycle, so an
+    idle deployment wrote a few dozen records saying nothing had happened —
+    measured at 88% of a worker's output — and a genuine backlog had to be
+    found among them. A record is now written only when some number in it is
+    not the boring one; the cycle summary below is what says the loop ran.
+    """
+    return bool(
+        not caught_up
+        or pending
+        or reported_lag
+        or delayed
+        or length
+        # Consumers registered but none alive is a stalled reader — the one
+        # unhealthy state an all-zero backlog would otherwise hide.
+        or (consumers and not active_consumers)
+    )
+
+
 async def _snapshot_stream(
     client,
     stream: str,
-) -> None:
+) -> int:
+    """Report this stream's groups, returning how many were worth reporting."""
     is_streaq = stream.startswith("streaq:") and ":queues:" in stream
     maxlen = (
         None if is_streaq else event_transport_settings.stream_maxlen_for(stream)
@@ -76,6 +107,10 @@ async def _snapshot_stream(
         else 0
     )
     if not await client.exists(stream):
+        # Nothing but the delayed set can be non-zero for a stream that has
+        # never been written to.
+        if not _worth_reporting(delayed=delayed):
+            return 0
         logger.info(
             "redis.stream.snapshot",
             stream=stream,
@@ -92,7 +127,7 @@ async def _snapshot_stream(
             memory_bytes=0,
             maxlen=maxlen or 0,
         )
-        return
+        return 1
 
     info = await client.xinfo_stream(stream)
     group_info = await client.xinfo_groups(stream)
@@ -101,6 +136,9 @@ async def _snapshot_stream(
     stream_length = int(_value(info, "length", 0) or 0)
     stream_memory = int(await client.memory_usage(stream) or 0)
     if not group_info:
+        # No group means nothing is reading it, so any backlog at all matters.
+        if not _worth_reporting(length=stream_length, delayed=delayed):
+            return 0
         logger.info(
             "redis.stream.snapshot",
             stream=stream,
@@ -117,8 +155,9 @@ async def _snapshot_stream(
             memory_bytes=stream_memory,
             maxlen=maxlen or 0,
         )
-        return
+        return 1
 
+    reported = 0
     for group in group_info:
         pending = int(_value(group, "pending", 0) or 0)
         raw_lag = _value(group, "lag", 0)
@@ -159,41 +198,68 @@ async def _snapshot_stream(
             if int(_value(consumer, "idle", active_consumer_idle_ms + 1) or 0)
             <= active_consumer_idle_ms
         )
+        caught_up = pending == 0 and _last_delivered_id(group) == stream_last_id
+        consumers = int(_value(group, "consumers", 0) or 0)
+        if not _worth_reporting(
+            length=stream_length,
+            delayed=delayed,
+            caught_up=caught_up,
+            pending=pending,
+            reported_lag=reported_lag,
+            consumers=consumers,
+            active_consumers=active_consumers,
+        ):
+            continue
+        reported += 1
         logger.info(
             "redis.stream.snapshot",
             stream=stream,
             group=_text(_value(group, "name", "unknown")),
             length=stream_length,
             delayed=delayed,
-            caught_up=pending == 0 and _last_delivered_id(group) == stream_last_id,
+            caught_up=caught_up,
             pending=pending,
             reported_lag=reported_lag,
             last_delivered_age_seconds=last_delivered_age_seconds,
             oldest_pending_ms=oldest_pending_ms,
-            consumers=int(_value(group, "consumers", 0) or 0),
+            consumers=consumers,
             active_consumers=active_consumers,
             memory_bytes=stream_memory,
             maxlen=maxlen or 0,
         )
+    return reported
 
 
 async def redis_stream_snapshot_loop(message_bus) -> None:
-    """Emit one bounded record per declared stream at the configured cadence."""
+    """Report the declared streams that need attention, at the configured cadence.
+
+    One summary per cycle plus one record per unhealthy stream, rather than one
+    record per stream per cycle. The summary is what proves the loop is alive
+    and how many streams it covered, which is the only thing the all-zero
+    records were really carrying.
+    """
     interval = event_transport_settings.redis_stream_snapshot_interval_seconds
     if interval <= 0:
         return
     client = await message_bus.redis_client()
     while True:
-        for stream in sorted(observable_streams()):
+        streams = sorted(observable_streams())
+        reported = 0
+        for stream in streams:
             incident = _snapshot_incidents.setdefault(
                 stream,
                 DependencyIncident(f"redis.stream.snapshot:{stream}", logger=logger),
             )
             try:
-                await _snapshot_stream(client, stream)
+                reported += await _snapshot_stream(client, stream)
                 incident.record_success()
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
                 incident.record_failure(error_type=type(exc).__name__)
+        logger.info(
+            "redis.stream.snapshot_cycle",
+            streams=len(streams),
+            reported=reported,
+        )
         await asyncio.sleep(interval)

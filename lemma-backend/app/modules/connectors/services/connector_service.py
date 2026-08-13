@@ -1,3 +1,4 @@
+from contextlib import suppress
 from datetime import datetime
 import secrets
 from typing import Any, Optional
@@ -1304,14 +1305,12 @@ class ConnectorService:
                 connector=connector,
                 auth_config=auth_config,
             ):
-                try:
+                with suppress(Exception):
                     await auth_provider.revoke_connection(
                         connector=effective_connector,
                         credentials=self._to_oauth_credentials(account.credentials),
                         user_id=account.user_id,
                     )
-                except Exception:
-                    logger.debug('connectors.connector_service.revoke_account_s_while_deleting.diagnostic')
             await self.account_repository.delete(account.id)
 
         await self.auth_config_repository.delete(auth_config.id)

@@ -15,6 +15,7 @@ and the storage phase can share them without an import cycle.
 
 from __future__ import annotations
 
+from contextlib import suppress
 from dataclasses import dataclass
 from typing import Callable
 from uuid import UUID
@@ -147,12 +148,8 @@ class FileStoragePhase:
             and plan.previous_storage_key
             and plan.previous_storage_key != plan.new_storage_key
         ):
-            try:
+            with suppress(DatastoreDomainError):
                 await self.storage.delete_file(plan.previous_storage_key)
-            except DatastoreDomainError:
-                logger.debug(
-                    'datastore.storage_phase.delete_superseded_original_s_s.diagnostic'
-                )
 
         await self._delete_move_sources(plan.storage_moves)
 
@@ -185,15 +182,11 @@ class FileStoragePhase:
             if updated_entity.is_file and updated_entity.search_enabled:
                 update_file_path = getattr(search_service, "update_file_path", None)
                 if update_file_path is not None:
-                    try:
+                    with suppress(Exception):
                         await update_file_path(
                             updated_entity.id,
                             updated_entity.path,
                             self.paths._parent_path(updated_entity.path),
-                        )
-                    except Exception:
-                        logger.debug(
-                            'datastore.storage_phase.update_indexed_path_metadata_s.diagnostic'
                         )
             await self.projection.delete_child_artifacts(
                 updated_entity.pod_id,
@@ -206,12 +199,8 @@ class FileStoragePhase:
         for move in storage_moves:
             if move.source_key == move.destination_key:
                 continue
-            try:
+            with suppress(DatastoreDomainError):
                 await self.storage.delete_file(move.source_key)
-            except DatastoreDomainError:
-                logger.debug(
-                    'datastore.storage_phase.delete_moved_original_s_s.diagnostic'
-                )
 
     async def cleanup_uncommitted_update(self, plan: _UpdatePlan) -> None:
         """Delete a newly written object when the following DB phase fails.
@@ -257,20 +246,14 @@ class FileStoragePhase:
         search_service = self._search_factory_provider()(pod_id)
         if is_folder:
             if folder_prefix:
-                try:
+                with suppress(DatastoreDomainError):
                     await self.storage.delete_prefix(folder_prefix)
-                except DatastoreDomainError:
-                    logger.debug(
-                        'datastore.storage_phase.delete_folder_contents_storage_s.diagnostic'
-                    )
             # The folder prefix removes canonical originals and colocated
             # derived children. Exact deletes remain idempotent and cover any
             # cleanup payload produced before a partial folder operation.
             for item in files:
-                try:
+                with suppress(Exception):
                     await self.storage.delete_file(item["storage_key"])
-                except Exception:
-                    logger.debug('datastore.storage_phase.delete_file_s_s.diagnostic')
                 try:
                     await search_service.remove_file(UUID(item["file_id"]))
                 except Exception:
@@ -280,10 +263,8 @@ class FileStoragePhase:
                     )
             return
         for item in files:
-            try:
+            with suppress(Exception):
                 await self.storage.delete_file(item["storage_key"])
-            except Exception:
-                logger.debug('datastore.storage_phase.delete_file_s_s.diagnostic')
             await self.projection.delete_child_artifacts(pod_id, item["path"])
             try:
                 await search_service.remove_file(UUID(item["file_id"]))

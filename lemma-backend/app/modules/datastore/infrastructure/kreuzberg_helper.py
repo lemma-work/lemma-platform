@@ -409,9 +409,6 @@ class KreuzbergHelper:
                 continue
 
         if last_error is not None:
-            logger.debug(
-                'datastore.kreuzberg_helper.kreuzberg_compatible_extraction_also_s.diagnostic'
-            )
             raise last_error
         raise RuntimeError("Kreuzberg extraction failed before sending a request")
 
