@@ -26,6 +26,9 @@ from app.modules.apps.domain.entities import AppAssetDocument, AppEntity
 from app.modules.apps.services.app_service import AppService
 from app.modules.apps.services.archive_validation import inspect_app_archive
 from app.core.concurrency.offload import run_blocking
+from app.core.log.log import get_logger
+
+logger = get_logger(__name__)
 
 
 class AppUseCases:
@@ -36,9 +39,18 @@ class AppUseCases:
         self,
         uow_factory: UnitOfWorkFactory,
         service_builder: Callable[[Any], AppService],
+        release_service_builder: Callable[[Any], Any] | None = None,
     ):
         self._uow_factory = uow_factory
         self._build = service_builder
+        self._release_builder = release_service_builder
+
+    def _build_releases(self, uow: Any):
+        if self._release_builder is not None:
+            return self._release_builder(uow)
+        from app.modules.apps.services.app_release_service import AppReleaseService
+
+        return AppReleaseService(self._build(uow).repository)
 
     async def delete_app(
         self, *, pod_id: UUID, app_name: str, request: Request, user_id: UUID
@@ -92,10 +104,46 @@ class AppUseCases:
                 self._uow_factory, request=request, user_id=user_id, pod_id=pod_id
             ) as scope2:
                 service = self._build(scope2.uow)
-                return await service.finalize_upload_bundle(plan, written, user_id)
+                app = await service.finalize_upload_bundle(plan, written, user_id)
         except BaseException:
             await service.cleanup_written_bundle(plan, written)
             raise
+        # A deploy is when this app's storage grows, so it is when surplus
+        # releases are worth removing -- no scheduled job needed for the common
+        # case. Best-effort by construction: the release is already live, and
+        # failing the deploy because a prune failed would be absurd. The daily
+        # sweep retries whatever this misses.
+        await self._prune_releases_quietly(pod_id, plan.name, request, user_id)
+        return app
+
+    async def _prune_releases_quietly(
+        self, pod_id: UUID, app_name: str, request: Request, user_id: UUID
+    ) -> None:
+        from app.modules.apps.services.app_release_retention import AppReleaseRetention
+
+        try:
+            async with pod_context_scope(
+                self._uow_factory, request=request, user_id=user_id, pod_id=pod_id
+            ) as scope:
+                service = self._build(scope.uow)
+                app = await service.get_app_by_name(
+                    pod_id, app_name, user_id, ctx=scope.ctx
+                )
+                if app is None:
+                    return
+                retention = AppReleaseRetention(
+                    service.repository, service.file_manager_factory
+                )
+                prune_plan = await retention.plan(app)
+            # Storage deletes run outside the unit of work, holding no pooled
+            # connection -- pruning can touch many objects.
+            await retention.execute(prune_plan)
+        except Exception:
+            logger.warning(
+                "apps.app_use_cases.release_retention.degraded",
+                pod_id=str(pod_id),
+                exc_info=True,
+            )
 
     async def serve_asset(
         self,
@@ -126,19 +174,61 @@ class AppUseCases:
         return await service.read_app_asset(resolved)
 
     async def serve_public_asset(
-        self, *, slug: str, asset_path: str | None, request_etag: str | None
+        self,
+        *,
+        slug: str,
+        asset_path: str | None,
+        request_etag: str | None,
+        release_ref: str | None = None,
     ) -> AppAssetDocument:
         """Resolve by public slug (short UoW, unauthenticated), release the
         connection, then read the asset bytes from storage. Highest-traffic path
-        (every app page load + static asset)."""
+        (every app page load + static asset).
+
+        ``release_ref`` serves a preview host's specific release instead of the
+        live one; it inherits the same PUBLIC-only rule, since a preview is the
+        same shell with the same separately-authorized data calls.
+        """
         async with uow_scope(self._uow_factory) as uow:
             service = self._build(uow)
             resolved = await service.resolve_app_asset_by_public_slug(
-                slug, asset_path=asset_path, request_etag=request_etag
+                slug,
+                asset_path=asset_path,
+                request_etag=request_etag,
+                release_ref=release_ref,
             )
         if isinstance(resolved, AppAssetDocument):
             return resolved
         return await service.read_app_asset(resolved)
+
+    async def list_releases(
+        self, *, pod_id: UUID, app_name: str, request: Request, user_id: UUID
+    ):
+        """List an app's release history (one short UoW, no storage)."""
+        async with pod_context_scope(
+            self._uow_factory, request=request, user_id=user_id, pod_id=pod_id
+        ) as scope:
+            return await self._build_releases(scope.uow).list_releases(
+                pod_id, app_name, ctx=scope.ctx
+            )
+
+    async def promote_release(
+        self,
+        *,
+        pod_id: UUID,
+        app_name: str,
+        release_ref: str,
+        request: Request,
+        user_id: UUID,
+    ):
+        """Make an existing release live. One short UoW -- promotion moves a
+        pointer, so no bytes are read or written."""
+        async with pod_context_scope(
+            self._uow_factory, request=request, user_id=user_id, pod_id=pod_id
+        ) as scope:
+            return await self._build_releases(scope.uow).promote_release(
+                pod_id, app_name, release_ref, ctx=scope.ctx
+            )
 
     async def download_source_archive(
         self, *, pod_id: UUID, app_name: str, request: Request, user_id: UUID

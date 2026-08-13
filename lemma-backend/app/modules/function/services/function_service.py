@@ -385,9 +385,24 @@ class FunctionService:
         await self._validate_resources(entity)
         return await self._create_function_checked(entity)
 
+    async def _record_revision(self, function: FunctionEntity) -> None:
+        """Index the revision this function now points at, in the caller's UoW.
+
+        Indexing lives here rather than in each use case so that every path that
+        compiles code -- the API's create and update, and a bundle import's
+        upsert -- records history without having to remember to.
+        """
+        from app.modules.function.services.function_revision_service import (
+            FunctionRevisionService,
+        )
+
+        await FunctionRevisionService(self.repository).record(function)
+
     async def persist_create(self, function: FunctionEntity) -> FunctionEntity:
         """Persist the schema/code fields onto the created row. DB only."""
-        return await self._update_function_row(function)
+        updated = await self._update_function_row(function)
+        await self._record_revision(function)
+        return updated
 
     async def resolve_update(
         self,
@@ -453,6 +468,8 @@ class FunctionService:
         """Persist the mutated row and re-read it (with ctx, for allowed_actions).
         DB only."""
         updated = await self._update_function_row(plan.function)
+        if plan.code is not None:
+            await self._record_revision(plan.function)
         async with self._repos() as (function_repository, _run_repository):
             refreshed = await function_repository.get_by_name(pod_id, name, ctx=ctx)
         return refreshed or updated
@@ -479,6 +496,24 @@ class FunctionService:
             raise FunctionNotFoundError(f"Function {name} not found")
         return function
 
+    async def cleanup_function_storage(self, function_id: UUID) -> None:
+        """Purge a deleted function's artifacts and source. Storage only.
+
+        Deleting a function has never touched storage, so every function ever
+        deleted left its artifacts behind forever with nothing able to find them
+        again -- the rows that named them were gone. Call this AFTER the deleting
+        unit of work has committed: it can touch many objects and must hold no
+        pooled connection.
+        """
+        storage = self.storage_factory(function_id)
+        delete_prefix = getattr(storage, "delete_prefix", None)
+        if delete_prefix is None:  # pragma: no cover - test doubles without deletion
+            return
+        try:
+            await delete_prefix("")
+        except FileNotFoundError:
+            return
+
     async def resolve_execute(
         self,
         pod_id: UUID,
@@ -489,6 +524,7 @@ class FunctionService:
         *,
         ctx: Context,
         dispatch_mode: FunctionDispatchMode | None = None,
+        revision_ref: str | None = None,
     ) -> ResolvedExecution:
         """Authorize FUNCTION_EXECUTE and persist its one PENDING run. DB only.
 
@@ -515,10 +551,16 @@ class FunctionService:
                 raise LegacyFunctionRevisionRequired(function)
             raise FunctionValidationError("Function has no ready executable revision")
 
+        revision_hash = function.revision_hash
+        if revision_ref is not None:
+            revision_hash = await self._resolve_pinned_revision(
+                function, revision_ref, ctx=ctx
+            )
+
         run_entity = FunctionRunEntity(
             id=uuid7(),
             function_id=function.id,
-            revision_hash=function.revision_hash,
+            revision_hash=revision_hash,
             user_id=user_id,
             user_email=user_email,
             input_data=input_data,
@@ -542,6 +584,38 @@ class FunctionService:
             run_entity.job_id = function_run_job_id(run_entity.id)
         run = await self._create_run(run_entity)
         return ResolvedExecution(function=function, run=run)
+
+    async def _resolve_pinned_revision(
+        self, function: FunctionEntity, revision_ref: str, *, ctx: Context
+    ) -> str:
+        """Resolve a run pinned to a specific revision, and gate it.
+
+        Testing an unpromoted build is an authoring action: someone who may only
+        execute this function gets the live revision, which is the one whose
+        behavior the pod has actually signed off on. Pinning additionally
+        requires FUNCTION_UPDATE.
+
+        Nothing downstream needs to know: the dispatcher and the runtime gateway
+        already derive the artifact from the RUN's hash and verify its digest, so
+        a pinned run is an ordinary run with a different hash on it.
+        """
+        from app.modules.function.services.function_revision_service import (
+            FunctionRevisionService,
+        )
+
+        assert function.id is not None
+        await ctx.require(
+            Permissions.FUNCTION_UPDATE,
+            ResourceRef(
+                resource_type=ResourceType.FUNCTION,
+                resource_id=function.id,
+                pod_id=function.pod_id,
+            ),
+        )
+        revision = await FunctionRevisionService(self.repository).resolve_revision(
+            function, revision_ref
+        )
+        return revision.revision_hash
 
     async def load_run_and_function(
         self, run_id: UUID

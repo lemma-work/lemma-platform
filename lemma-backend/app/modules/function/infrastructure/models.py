@@ -16,9 +16,10 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.core.infrastructure.db.base import UUIDAuditBase
+from app.core.infrastructure.db.base import UUIDAuditBase, UUIDCreatedBase
 from app.modules.function.domain.entities import (
     FunctionEntity,
+    FunctionRevisionEntity,
     FunctionRunEntity,
     FunctionStatus,
     FunctionRunStatus,
@@ -69,6 +70,53 @@ class FunctionModel(UUIDAuditBase):
     def to_entity(self) -> FunctionEntity:
         entity_data = self.__dict__.copy()
         return FunctionEntity.model_validate(entity_data)
+
+
+class FunctionRevisionModel(UUIDCreatedBase):
+    """One built, executable revision of a function.
+
+    The artifact and source bytes are content-addressed and were always kept;
+    this row is what makes them findable. The schemas are snapshotted because
+    they live on the ``functions`` row -- promoting an old revision has to
+    restore the contract its code actually implements.
+    """
+
+    __tablename__ = "function_revisions"
+    __table_args__ = (
+        UniqueConstraint(
+            "function_id", "revision_hash", name="uq_function_revision_hash"
+        ),
+        UniqueConstraint(
+            "function_id", "revision_number", name="uq_function_revision_number"
+        ),
+        Index(
+            "ix_function_revision_function_created",
+            "function_id",
+            text("created_at DESC"),
+        ),
+    )
+
+    function_id: Mapped[UUID] = mapped_column(
+        ForeignKey("functions.id", ondelete="CASCADE")
+    )
+    revision_number: Mapped[int] = mapped_column(nullable=False)
+    revision_hash: Mapped[str] = mapped_column(String(71), nullable=False)
+    code_path: Mapped[str] = mapped_column(String, nullable=False)
+    input_schema: Mapped[dict] = mapped_column(JSONB, default=dict)
+    output_schema: Mapped[dict] = mapped_column(JSONB, default=dict)
+    config_schema: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    created_by: Mapped[UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    label: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Set when retention removed this revision's artifact and source. The row
+    # stays so old runs still resolve the revision they executed.
+    pruned_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    def to_entity(self) -> FunctionRevisionEntity:
+        return FunctionRevisionEntity.model_validate(self)
 
 
 class FunctionRunModel(UUIDAuditBase):

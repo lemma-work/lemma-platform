@@ -661,14 +661,22 @@ def _download_app_assets(
     *,
     app_budget: _ByteBudget,
 ) -> None:
+    """Download an app's source AND its build.
+
+    Both, not one. Source alone meant every import rebuilt in a sandbox; the
+    build alone -- the fallback for an app with no source archive -- shipped a
+    bundle whose code was gone. Mirrors the backend exporter's
+    ``_export_app_assets``; the two must stay in step or an export round-trips
+    differently depending on which one produced it.
+    """
     pod_sdk = client.pod(pod_id)
     try:
         archive_bytes = pod_sdk.apps.download_source_archive(app_name)
     except LemmaAPIError:
         archive_bytes = b""
-    if archive_bytes:
-        if not app_budget.allow(name=f"apps/{app_name}/source", size=len(archive_bytes)):
-            return
+    if archive_bytes and app_budget.allow(
+        name=f"apps/{app_name}/source", size=len(archive_bytes)
+    ):
         source_dir = resource_dir / "source"
         source_dir.mkdir(parents=True, exist_ok=True)
         with ZipFile(io.BytesIO(archive_bytes)) as archive:
@@ -677,7 +685,6 @@ def _download_app_assets(
                 if not target.resolve().is_relative_to(source_dir.resolve()):
                     raise ValueError(f"Unsafe path in app source archive for {app_name}: {member.filename}")
             archive.extractall(source_dir)
-        return
 
     try:
         dist_archive = pod_sdk.apps.download_dist_archive(app_name)
@@ -687,6 +694,13 @@ def _download_app_assets(
         name=f"apps/{app_name}/dist.zip", size=len(dist_archive)
     ):
         (resource_dir / "dist.zip").write_bytes(dist_archive)
+        # Whether the importer may deploy this build as-is or must rebuild it.
+        from lemma_pod_bundle import dist_is_portable
+
+        (resource_dir / "dist.json").write_text(
+            json.dumps({"portable": dist_is_portable(dist_archive, pod_id=pod_id)},
+                       indent=2) + "\n"
+        )
 
 
 def _normalize_file_folders(file_folders: list[str] | None) -> list[str]:

@@ -67,6 +67,47 @@ class AppListResponse(BaseModel):
     next_page_token: Optional[str] = None
 
 
+class AppReleaseResponse(BaseModel):
+    """One entry in an app's release history."""
+
+    id: UUID
+    app_id: UUID
+    release_number: int
+    version: str = Field(description="sha256 digest of the release's dist archive.")
+    label: Optional[str] = None
+    created_by: Optional[UUID] = None
+    created_at: Any
+    is_live: bool = Field(
+        description="True for the release this app currently serves."
+    )
+    has_source: bool = Field(
+        description="Whether this release's own source archive is still stored."
+    )
+    pruned_at: Any = Field(
+        default=None,
+        description=(
+            "Set when retention removed this release's build. The entry stays "
+            "in the history, but it can no longer be previewed or promoted."
+        ),
+    )
+
+    @computed_field(return_type=str)
+    @property
+    def preview_url(self) -> str:
+        scheme = urlparse(settings.api_url).scheme or "https"
+        return (
+            f"{scheme}://{self.app_public_slug}--r{self.release_number}"
+            f".{settings.app_base_domain}"
+        )
+
+    # Carried so `preview_url` can be computed without a second app lookup.
+    app_public_slug: str = Field(exclude=True)
+
+
+class AppReleaseListResponse(BaseModel):
+    items: list[AppReleaseResponse]
+
+
 class AppMessageResponse(BaseModel):
     message: str
 

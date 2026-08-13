@@ -1158,6 +1158,14 @@ class Settings(BaseSettings):
             "sweep entirely."
         ),
     )
+    # Revision retention. See app.core.retention for the three-knob rule; the
+    # live revision is exempt, as is any revision with a run still in flight.
+    function_revision_retention_enabled: bool = Field(default=True)
+    function_revision_keep_last: int = Field(default=10, ge=1)
+    function_revision_keep_days: int = Field(default=30, ge=0)
+    function_revision_max_keep: int = Field(default=20, ge=1)
+    function_revision_retention_cron: str = Field(default="40 4 * * *")
+    function_revision_retention_batch: int = Field(default=200, ge=1)
     function_runtime_gateway_url: Optional[str] = Field(
         default=None,
         description="Backend URL reachable from function sandboxes",

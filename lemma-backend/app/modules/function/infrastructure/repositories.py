@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
-from uuid import UUID
+from datetime import datetime, timedelta, timezone
+from uuid import UUID, uuid7
 
-from sqlalchemy import and_, delete, or_, select, update
+from sqlalchemy import and_, delete, func, or_, select, update
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import load_only
 
 from app.core.authorization.context import Context, ResourceType, ResourceVisibility
@@ -23,6 +24,7 @@ from app.core.domain.message_bus import MessageBus
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.function.domain.entities import (
     FunctionEntity,
+    FunctionRevisionEntity,
     FunctionRunEntity,
     FunctionRunStatus,
     FunctionStatus,
@@ -41,6 +43,7 @@ from app.modules.function.domain.ports import (
 )
 from app.modules.function.infrastructure.models import (
     FunctionModel,
+    FunctionRevisionModel,
     FunctionRunModel,
 )
 
@@ -219,6 +222,135 @@ class FunctionRepository(FunctionRepositoryPort):
 
         await self.session.flush()
         return model.to_entity()
+
+    # -- revision history -------------------------------------------------
+
+    async def record_revision(
+        self, entity: FunctionRevisionEntity
+    ) -> FunctionRevisionEntity:
+        """Insert one revision, or return the existing row for its hash.
+
+        Idempotent on ``(function_id, revision_hash)`` because the artifact is
+        content-addressed: re-saving unchanged code rebuilds to the same hash and
+        must not mint a second revision. ``ON CONFLICT DO NOTHING`` rather than a
+        read-then-write so two concurrent saves of the same code cannot both
+        insert.
+        """
+        values = entity.model_dump(
+            exclude={"id", "created_at", "code", "revision_number"},
+        )
+        statement = (
+            insert(FunctionRevisionModel)
+            .values(
+                id=uuid7(),
+                created_at=datetime.now(timezone.utc),
+                revision_number=select(
+                    func.coalesce(func.max(FunctionRevisionModel.revision_number), 0)
+                    + 1
+                )
+                .where(FunctionRevisionModel.function_id == entity.function_id)
+                .scalar_subquery(),
+                **values,
+            )
+            .on_conflict_do_nothing(constraint="uq_function_revision_hash")
+            .returning(FunctionRevisionModel)
+        )
+        model = (await self.session.execute(statement)).scalar_one_or_none()
+        if model is not None:
+            return model.to_entity()
+        existing = await self.get_revision_by_hash(
+            entity.function_id, entity.revision_hash
+        )
+        assert existing is not None
+        return existing
+
+    async def get_revision_by_hash(
+        self, function_id: UUID, revision_hash: str
+    ) -> FunctionRevisionEntity | None:
+        statement = select(FunctionRevisionModel).where(
+            FunctionRevisionModel.function_id == function_id,
+            FunctionRevisionModel.revision_hash == revision_hash,
+        )
+        model = (await self.session.execute(statement)).scalar_one_or_none()
+        return model.to_entity() if model else None
+
+    async def get_revision_by_number(
+        self, function_id: UUID, revision_number: int
+    ) -> FunctionRevisionEntity | None:
+        statement = select(FunctionRevisionModel).where(
+            FunctionRevisionModel.function_id == function_id,
+            FunctionRevisionModel.revision_number == revision_number,
+        )
+        model = (await self.session.execute(statement)).scalar_one_or_none()
+        return model.to_entity() if model else None
+
+    async def list_revisions(self, function_id: UUID) -> list[FunctionRevisionEntity]:
+        statement = (
+            select(FunctionRevisionModel)
+            .where(FunctionRevisionModel.function_id == function_id)
+            .order_by(
+                FunctionRevisionModel.revision_number.desc(),
+            )
+        )
+        result = await self.session.execute(statement)
+        return [model.to_entity() for model in result.scalars().all()]
+
+    async def revision_hashes_with_runs_in_flight(
+        self, function_id: UUID
+    ) -> set[str]:
+        """Revision hashes a PENDING or RUNNING run is pinned to.
+
+        A run resolves its artifact from its OWN hash at execution time, so
+        deleting the artifact under a dispatched run makes it fail with a
+        digest error instead of running. Retention skips these.
+        """
+        statement = select(FunctionRunModel.revision_hash).where(
+            FunctionRunModel.function_id == function_id,
+            FunctionRunModel.revision_hash.is_not(None),
+            FunctionRunModel.status.in_(
+                [FunctionRunStatus.PENDING, FunctionRunStatus.RUNNING]
+            ),
+        )
+        result = await self.session.execute(statement)
+        return {row for row in result.scalars().all() if row}
+
+    async def mark_revisions_pruned(self, revision_ids: list[UUID]) -> None:
+        if not revision_ids:
+            return
+        await self.session.execute(
+            update(FunctionRevisionModel)
+            .where(
+                FunctionRevisionModel.id.in_(revision_ids),
+                FunctionRevisionModel.pruned_at.is_(None),
+            )
+            .values(pruned_at=datetime.now(timezone.utc))
+        )
+
+    async def activate_revision(
+        self, function_id: UUID, revision: FunctionRevisionEntity
+    ) -> FunctionEntity | None:
+        """Make ``revision`` the function's live one, contract included.
+
+        The schemas move with the hash: they live on the function row, and every
+        agent and workflow bound to this function reads them, so leaving the
+        newest schemas next to older code would advertise a contract the code
+        does not implement.
+        """
+        statement = (
+            update(FunctionModel)
+            .where(FunctionModel.id == function_id)
+            .values(
+                revision_hash=revision.revision_hash,
+                code_path=revision.code_path,
+                input_schema=revision.input_schema,
+                output_schema=revision.output_schema,
+                config_schema=revision.config_schema,
+                status=FunctionStatus.READY,
+            )
+            .returning(FunctionModel)
+        )
+        model = (await self.session.execute(statement)).scalar_one_or_none()
+        return model.to_entity() if model else None
 
     async def activate_revision_if_missing(
         self,

@@ -43,6 +43,22 @@ class AppAssetResolver:
         return f"{scheme}://{app.public_slug}.{settings.app_base_domain}"
 
     @staticmethod
+    def preview_url(app: AppEntity, release: AppReleaseEntity) -> str:
+        """The canonical host a specific release is previewed at.
+
+        ``--`` is the separator because ``normalize_public_slug`` collapses runs
+        of ``-``, so no real slug can contain one: the label always splits back
+        into exactly the slug and the release, however many hyphens the slug has.
+        The release number is used even when the caller addressed the release by
+        digest, so one release has one preview URL.
+        """
+        scheme = urlparse(settings.api_url).scheme or "https"
+        return (
+            f"{scheme}://{app.public_slug}--r{release.release_number}"
+            f".{settings.app_base_domain}"
+        )
+
+    @staticmethod
     def _quote_etag(etag: str | None) -> str | None:
         if not etag:
             return None
@@ -130,11 +146,17 @@ class AppAssetResolver:
         asset_path: str | None,
         request_etag: str | None = None,
         public_url: str | None = None,
+        release: AppReleaseEntity | None = None,
     ) -> _AssetReadInputs | AppAssetDocument:
-        release = await self.current_release(
-            app,
-            raise_not_found_name=raise_not_found_name,
-        )
+        # `release` lets a preview host serve a build that is not live through
+        # exactly this path -- one ETag rule, one branding rule, one runtime
+        # config injection -- instead of a parallel serving implementation that
+        # would drift from the live one.
+        if release is None:
+            release = await self.current_release(
+                app,
+                raise_not_found_name=raise_not_found_name,
+            )
         normalized_asset_path = self._normalize_asset_path(asset_path)
         app_identity = runtime_config.build_runtime_app_identity(
             app.name,

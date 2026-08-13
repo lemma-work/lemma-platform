@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from uuid import UUID
 
-from sqlalchemy import delete, desc, select
+from sqlalchemy import delete, desc, func, select, update
 
 from app.core.authorization.context import Context, ResourceType, ResourceVisibility
 from app.core.authorization.grants import delete_resource_sharing_grants
@@ -211,11 +212,72 @@ class AppRepository(AppRepositoryPort):
         model = result.scalar_one_or_none()
         return model.to_entity() if model else None
 
+    async def get_release_by_number(
+        self, app_id: UUID, release_number: int
+    ) -> AppReleaseEntity | None:
+        stmt = select(AppReleaseModel).where(
+            AppReleaseModel.app_id == app_id,
+            AppReleaseModel.release_number == release_number,
+        )
+        result = await self.session.execute(stmt)
+        model = result.scalar_one_or_none()
+        return model.to_entity() if model else None
+
+    async def attach_release_source(
+        self,
+        release_id: UUID,
+        *,
+        source_archive_path: str,
+        source_digest: str | None,
+    ) -> None:
+        await self.session.execute(
+            update(AppReleaseModel)
+            .where(AppReleaseModel.id == release_id)
+            .values(
+                source_archive_path=source_archive_path,
+                source_digest=source_digest,
+            )
+        )
+
+    async def set_current_release(self, app_id: UUID, release_id: UUID) -> None:
+        await self.session.execute(
+            update(AppModel)
+            .where(AppModel.id == app_id)
+            .values(current_release_id=release_id)
+        )
+
+    async def next_release_number(self, app_id: UUID) -> int:
+        """The next per-app release number.
+
+        Racing uploads can both read the same maximum; the caller retries on the
+        ``uq_app_release_number`` violation rather than serializing every upload
+        behind a lock.
+        """
+        stmt = select(func.coalesce(func.max(AppReleaseModel.release_number), 0)).where(
+            AppReleaseModel.app_id == app_id
+        )
+        result = await self.session.execute(stmt)
+        return int(result.scalar_one()) + 1
+
+    async def mark_releases_pruned(self, release_ids: list[UUID]) -> None:
+        """Stamp ``pruned_at`` before the bytes go, so a sweep that dies midway
+        never leaves a release the UI still offers to promote."""
+        if not release_ids:
+            return
+        await self.session.execute(
+            update(AppReleaseModel)
+            .where(
+                AppReleaseModel.id.in_(release_ids),
+                AppReleaseModel.pruned_at.is_(None),
+            )
+            .values(pruned_at=datetime.now(timezone.utc))
+        )
+
     async def list_releases(self, app_id: UUID) -> list[AppReleaseEntity]:
         stmt = (
             select(AppReleaseModel)
             .where(AppReleaseModel.app_id == app_id)
-            .order_by(desc(AppReleaseModel.created_at))
+            .order_by(desc(AppReleaseModel.created_at), desc(AppReleaseModel.id))
         )
         result = await self.session.execute(stmt)
         return [model.to_entity() for model in result.scalars().all()]

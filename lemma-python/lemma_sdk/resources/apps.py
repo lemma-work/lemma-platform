@@ -8,6 +8,8 @@ from ..openapi_client.api.apps import (
     app_dist_archive_get,
     app_get,
     app_list,
+    app_release_list,
+    app_release_promote,
     app_source_archive_get,
     app_update,
 )
@@ -15,6 +17,7 @@ from ..openapi_client.models.create_app_request import CreateAppRequest
 from ..openapi_client.models.app_detail_response import AppDetailResponse
 from ..openapi_client.models.app_bundle_upload_response import AppBundleUploadResponse
 from ..openapi_client.models.app_list_response import AppListResponse
+from ..openapi_client.models.app_release_list_response import AppReleaseListResponse
 from ..openapi_client.models.update_app_request import UpdateAppRequest
 from .base import BoundResource
 
@@ -66,6 +69,18 @@ class PodApps(BoundResource):
         if response.status_code >= 400:
             raise self._transport._error_from_response(response.status_code, None, response.content)
         return AppBundleUploadResponse.from_dict(response.json())
+
+    def list_releases(self, name: str) -> AppReleaseListResponse:
+        """This app's release history, newest first."""
+        return self._call(app_release_list, self._pod_uuid(), name)
+
+    def promote_release(self, name: str, release_ref: str) -> AppDetailResponse:
+        """Make an existing release the one this app serves.
+
+        ``release_ref`` is the release number (``7`` or ``v7``) or a prefix of
+        its dist digest. No bytes move -- the app's current-release pointer does.
+        """
+        return self._call(app_release_promote, self._pod_uuid(), name, release_ref)
 
     def download_source_archive(self, name: str) -> bytes:
         result = self._call(app_source_archive_get, self._pod_uuid(), name)

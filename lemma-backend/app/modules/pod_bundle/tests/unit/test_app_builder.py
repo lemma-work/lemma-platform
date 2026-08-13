@@ -4,7 +4,9 @@ the runner's artifact selection by tier — all without a DB or a real sandbox."
 from __future__ import annotations
 
 import io
+import json
 import zipfile
+from pathlib import Path
 from uuid import uuid4
 
 import pytest
@@ -143,6 +145,19 @@ class _ExplodingSandbox:
         raise AssertionError("no sandbox build should run for this tier")
 
 
+class _RecordingSandbox:
+    """A sandbox that records that it WAS needed."""
+
+    result = b"REBUILT"
+
+    def __init__(self):
+        self.calls = 0
+
+    async def build(self, **kwargs):
+        self.calls += 1
+        return self.result
+
+
 def _runner(sandbox):
     return AppStepRunner(uow_factory=object(), sandbox_builder=sandbox)
 
@@ -192,7 +207,10 @@ async def test_artifacts_dist_zip_fallback_when_no_source(tmp_path):
     source_bytes, dist_bytes = await _runner(_ExplodingSandbox())._artifacts(
         resource, "widget", app_slug="widget", pod_id=_POD, user_id=uuid4()
     )
-    assert source_bytes is None
+    # A prebuilt site has no build step behind it, so the build is also its
+    # source. Uploading no source here left the imported app source-less, so the
+    # target pod's next export dropped the app's code.
+    assert source_bytes == b"PREBUILT-DIST"
     assert dist_bytes == b"PREBUILT-DIST"
 
 
@@ -203,3 +221,73 @@ async def test_artifacts_missing_everything_raises(tmp_path):
         await _runner(_ExplodingSandbox())._artifacts(
             resource, "empty", app_slug="empty", pod_id=_POD, user_id=uuid4()
         )
+
+
+def _write_dist_bundle(resource: Path, *, portable: bool | None, package_json=True):
+    """A bundle carrying source AND a build, as exports now produce."""
+    source = resource / "source"
+    source.mkdir(parents=True, exist_ok=True)
+    if package_json:
+        (source / "package.json").write_text('{"name":"a"}')
+    (source / "index.html").write_text("<html></html>")
+    (resource / "dist.zip").write_bytes(b"EXPORTED-DIST")
+    if portable is not None:
+        (resource / "dist.json").write_text(json.dumps({"portable": portable}))
+
+
+async def test_a_portable_bundled_dist_is_deployed_without_rebuilding(tmp_path):
+    """The exported build bakes in nothing pod-specific, so rebuilding it would
+    spend minutes and a sandbox producing the same bytes."""
+    resource = tmp_path / "apps" / "vite"
+    _write_dist_bundle(resource, portable=True)
+
+    source_bytes, dist_bytes = await _runner(_ExplodingSandbox())._artifacts(
+        resource, "vite", app_slug="vite", pod_id=_POD, user_id=uuid4()
+    )
+
+    assert dist_bytes == b"EXPORTED-DIST"
+    assert source_bytes  # source still ships, and is still the primary artifact
+
+
+async def test_a_non_portable_bundled_dist_is_rebuilt(tmp_path):
+    """The build hardcoded the source pod, so deploying it would ship an app
+    pointed at someone else's data."""
+    resource = tmp_path / "apps" / "vite"
+    _write_dist_bundle(resource, portable=False)
+    sandbox = _RecordingSandbox()
+
+    _source_bytes, dist_bytes = await _runner(sandbox)._artifacts(
+        resource, "vite", app_slug="vite", pod_id=_POD, user_id=uuid4()
+    )
+
+    assert dist_bytes == sandbox.result
+    assert sandbox.calls == 1
+
+
+async def test_a_bundle_without_the_portability_marker_is_rebuilt(tmp_path):
+    """Exported before dist.json existed. Falling back to a rebuild is exactly
+    what happened before builds were exported at all."""
+    resource = tmp_path / "apps" / "vite"
+    _write_dist_bundle(resource, portable=None)
+    sandbox = _RecordingSandbox()
+
+    _source_bytes, dist_bytes = await _runner(sandbox)._artifacts(
+        resource, "vite", app_slug="vite", pod_id=_POD, user_id=uuid4()
+    )
+
+    assert dist_bytes == sandbox.result
+    assert sandbox.calls == 1
+
+
+async def test_a_static_app_ignores_the_bundled_dist_and_serves_its_source(tmp_path):
+    """A static site has no build step: its source IS the served site, so a
+    stale exported dist must not take precedence over it."""
+    resource = tmp_path / "apps" / "static"
+    _write_dist_bundle(resource, portable=True, package_json=False)
+
+    source_bytes, dist_bytes = await _runner(_ExplodingSandbox())._artifacts(
+        resource, "static", app_slug="static", pod_id=_POD, user_id=uuid4()
+    )
+
+    assert dist_bytes == source_bytes
+    assert dist_bytes != b"EXPORTED-DIST"

@@ -10,6 +10,7 @@ from app.modules.function.domain.entities import (
     FunctionArtifact,
     FunctionDispatchMode,
     FunctionEntity,
+    FunctionRevisionEntity,
     FunctionRunEntity,
     FunctionSchemaSet,
 )
@@ -35,6 +36,28 @@ class FunctionRepositoryPort(Protocol):
         code_path: str,
     ) -> FunctionEntity | None: ...
 
+    async def record_revision(
+        self, entity: FunctionRevisionEntity
+    ) -> FunctionRevisionEntity: ...
+
+    async def get_revision_by_hash(
+        self, function_id: UUID, revision_hash: str
+    ) -> FunctionRevisionEntity | None: ...
+
+    async def get_revision_by_number(
+        self, function_id: UUID, revision_number: int
+    ) -> FunctionRevisionEntity | None: ...
+
+    async def list_revisions(
+        self, function_id: UUID
+    ) -> list[FunctionRevisionEntity]: ...
+
+    async def mark_revisions_pruned(self, revision_ids: list[UUID]) -> None: ...
+
+    async def activate_revision(
+        self, function_id: UUID, revision: FunctionRevisionEntity
+    ) -> FunctionEntity | None: ...
+
     async def delete(self, id: UUID) -> bool: ...
 
     async def list_by_pod(
@@ -58,6 +81,19 @@ class FunctionRunRepositoryPort(Protocol):
     async def list_runs_by_function(
         self, function_id: UUID, limit: int = 100, cursor: str | None = None
     ) -> tuple[list[FunctionRunEntity], str | None]: ...
+
+
+class FunctionStorageDeletionPort(Protocol):
+    """Deletion, kept separate because most collaborators must not have it.
+
+    The compiler and the runtime gateway only ever read and write artifacts;
+    only function deletion and the retention sweep remove bytes, and they take
+    this narrower port so nothing else acquires the capability by accident.
+    """
+
+    async def delete_file(self, path: str) -> None: ...
+
+    async def delete_prefix(self, prefix: str) -> None: ...
 
 
 class FunctionStoragePort(Protocol):

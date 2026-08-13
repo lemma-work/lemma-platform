@@ -154,6 +154,36 @@ class FunctionEntity(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class FunctionRevisionEntity(BaseModel):
+    """One built revision of a function, with the contract its code implements."""
+
+    id: UUID | None = None
+    function_id: UUID
+    revision_number: int
+    revision_hash: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    code_path: str
+    input_schema: JsonObject = Field(default_factory=dict)
+    output_schema: JsonObject = Field(default_factory=dict)
+    config_schema: JsonObject | None = None
+    created_by: UUID | None = None
+    label: str | None = None
+    pruned_at: datetime | None = None
+    created_at: datetime | None = None
+    # Populated only when a caller asked for the code; reading it is a storage
+    # round trip, so listing revisions never pays for it.
+    code: str | None = None
+
+    model_config = {"from_attributes": True}
+
+    @property
+    def is_pruned(self) -> bool:
+        return self.pruned_at is not None
+
+    @property
+    def artifact_path(self) -> str:
+        return f"artifacts/{self.revision_hash.removeprefix('sha256:')}.zip"
+
+
 class FunctionUpdateEntity(BaseModel):
     """Entity for updating function fields."""
 

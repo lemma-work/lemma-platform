@@ -479,3 +479,205 @@ async def test_app_source_and_dist_archives_download_round_trip(
     )
     assert dist_res.status_code == status.HTTP_200_OK, dist_res.text
     assert dist_res.content == dist_bytes
+
+
+@pytest.mark.asyncio
+async def test_release_history_preview_and_rollback(
+    async_client,
+    authenticated_client,
+    test_pod,
+    monkeypatch,
+):
+    """Three deploys, then roll back to the first.
+
+    The bytes of every release were always kept; what was missing was a way to
+    name one, look at it without promoting it, and move the live pointer. This
+    exercises all three, including that a preview host serves a release the app
+    is NOT currently serving -- the case a path-prefixed preview could not do,
+    because a build asks for its assets at an absolute `/assets/...`.
+    """
+    monkeypatch.setattr(settings, "api_url", "http://api.apps.test")
+    monkeypatch.setattr(settings, "app_base_domain", "apps.test")
+
+    pod_id = test_pod["id"]
+    app_name = f"app_releases_{uuid4().hex[:8]}"
+    public_slug = f"releases-{uuid4().hex[:8]}"
+    markers = [f"BUILD_{index}_{uuid4().hex[:6]}" for index in range(3)]
+
+    create_res = await authenticated_client.post(
+        f"/pods/{pod_id}/apps",
+        json={"name": app_name, "public_slug": public_slug, "visibility": "PUBLIC"},
+    )
+    assert create_res.status_code == status.HTTP_201_CREATED, create_res.text
+
+    for marker in markers:
+        upload_res = await authenticated_client.post(
+            f"/pods/{pod_id}/apps/{app_name}/bundle",
+            files={
+                "source_archive": (
+                    "source.zip",
+                    build_source_archive(marker),
+                    "application/zip",
+                ),
+                "dist_archive": (
+                    "dist.zip",
+                    build_dist_archive(marker),
+                    "application/zip",
+                ),
+            },
+        )
+        assert upload_res.status_code == status.HTTP_200_OK, upload_res.text
+
+    list_res = await authenticated_client.get(
+        f"/pods/{pod_id}/apps/{app_name}/releases"
+    )
+    assert list_res.status_code == status.HTTP_200_OK, list_res.text
+    items = list_res.json()["items"]
+    assert [item["release_number"] for item in items] == [3, 2, 1]  # newest first
+    assert [item["is_live"] for item in items] == [True, False, False]
+    assert all(item["has_source"] for item in items)
+    assert all(item["pruned_at"] is None for item in items)
+    assert items[0]["preview_url"] == f"http://{public_slug}--r3.apps.test"
+
+    # The live host serves the newest build.
+    live_res = await async_client.get(
+        "/public/apps", headers={"X-App-Public-Slug": public_slug}
+    )
+    assert live_res.status_code == status.HTTP_200_OK, live_res.text
+    assert markers[2] in live_res.text
+
+    # A preview host serves an older release without promoting it -- including
+    # that release's own assets, which is the whole reason previews are a host.
+    preview_res = await async_client.get(
+        "/public/apps", headers={"X-App-Public-Slug": f"{public_slug}--r1"}
+    )
+    assert preview_res.status_code == status.HTTP_200_OK, preview_res.text
+    assert markers[0] in preview_res.text
+
+    preview_asset_res = await async_client.get(
+        "/public/apps/assets/app.js",
+        headers={"X-App-Public-Slug": f"{public_slug}--r1"},
+    )
+    assert preview_asset_res.status_code == status.HTTP_200_OK, preview_asset_res.text
+    assert markers[0] in preview_asset_res.text
+
+    # Previewing changed nothing about what is live.
+    still_live_res = await async_client.get(
+        "/public/apps", headers={"X-App-Public-Slug": public_slug}
+    )
+    assert markers[2] in still_live_res.text
+
+    promote_res = await authenticated_client.post(
+        f"/pods/{pod_id}/apps/{app_name}/releases/v1/promote"
+    )
+    assert promote_res.status_code == status.HTTP_200_OK, promote_res.text
+
+    rolled_back_res = await async_client.get(
+        "/public/apps", headers={"X-App-Public-Slug": public_slug}
+    )
+    assert rolled_back_res.status_code == status.HTTP_200_OK, rolled_back_res.text
+    assert markers[0] in rolled_back_res.text
+    assert markers[2] not in rolled_back_res.text
+
+    # The source pointer followed the release, so an export taken now ships the
+    # code that produced the running build rather than the newest code.
+    source_res = await authenticated_client.get(
+        f"/pods/{pod_id}/apps/{app_name}/source/archive"
+    )
+    assert source_res.status_code == status.HTTP_200_OK, source_res.text
+    with ZipFile(io.BytesIO(source_res.content)) as archive:
+        assert markers[0] in archive.read("src/index.ts").decode()
+
+    after_res = await authenticated_client.get(
+        f"/pods/{pod_id}/apps/{app_name}/releases"
+    )
+    assert [item["is_live"] for item in after_res.json()["items"]] == [
+        False,
+        False,
+        True,
+    ]
+
+    missing_res = await authenticated_client.post(
+        f"/pods/{pod_id}/apps/{app_name}/releases/v99/promote"
+    )
+    assert missing_res.status_code == status.HTTP_404_NOT_FOUND, missing_res.text
+
+
+@pytest.mark.asyncio
+async def test_retention_prunes_surplus_releases_but_never_the_live_one(
+    authenticated_client,
+    test_pod,
+    monkeypatch,
+):
+    """Deploy past the retention window and the surplus build's bytes go.
+
+    Nothing ever deleted a release before, so an app's storage grew by a whole
+    dist on every deploy forever. The row survives as a tombstone -- history
+    that silently skips v1 is worse than history that says the build was
+    removed -- and the live release is exempt at any age or rank.
+    """
+    from app.modules.apps.config import apps_settings
+
+    # A deliberately tight policy: floor and ceiling of one, no age grace.
+    monkeypatch.setattr(apps_settings, "app_release_keep_last", 1)
+    monkeypatch.setattr(apps_settings, "app_release_max_keep", 1)
+    monkeypatch.setattr(apps_settings, "app_release_keep_days", 0)
+
+    pod_id = test_pod["id"]
+    app_name = f"app_retain_{uuid4().hex[:8]}"
+    markers = [f"KEEP_{index}_{uuid4().hex[:6]}" for index in range(3)]
+
+    create_res = await authenticated_client.post(
+        f"/pods/{pod_id}/apps",
+        json={"name": app_name, "public_slug": f"retain-{uuid4().hex[:8]}"},
+    )
+    assert create_res.status_code == status.HTTP_201_CREATED, create_res.text
+    app_id = create_res.json()["id"]
+
+    for marker in markers:
+        upload_res = await authenticated_client.post(
+            f"/pods/{pod_id}/apps/{app_name}/bundle",
+            files={
+                "dist_archive": (
+                    "dist.zip",
+                    build_dist_archive(marker),
+                    "application/zip",
+                ),
+            },
+        )
+        assert upload_res.status_code == status.HTTP_200_OK, upload_res.text
+
+    list_res = await authenticated_client.get(
+        f"/pods/{pod_id}/apps/{app_name}/releases"
+    )
+    items = {item["release_number"]: item for item in list_res.json()["items"]}
+    assert len(items) == 3, "the rows survive as tombstones"
+    assert items[3]["is_live"] is True
+    assert items[3]["pruned_at"] is None, "the live release is never pruned"
+    assert items[1]["pruned_at"] is not None
+    assert items[2]["pruned_at"] is not None
+
+    # The live release's bytes are still on disk; the pruned ones are gone.
+    # Asserted on FILES, not directories: an emptied directory is a local
+    # filesystem artifact that object storage has no equivalent of, and the
+    # promise retention makes is about bytes.
+    releases_root = (
+        Path(settings.local_file_storage_root) / "common" / "apps" / app_id / "releases"
+    )
+    versions_with_bytes = {
+        path.relative_to(releases_root).parts[0]
+        for path in releases_root.rglob("*")
+        if path.is_file()
+    }
+    assert versions_with_bytes == {items[3]["version"]}
+
+    # A pruned release cannot be promoted -- and says why, rather than 404ing.
+    promote_res = await authenticated_client.post(
+        f"/pods/{pod_id}/apps/{app_name}/releases/v1/promote"
+    )
+    assert promote_res.status_code == status.HTTP_410_GONE, promote_res.text
+
+    # And the app still serves.
+    asset_res = await authenticated_client.get(f"/pods/{pod_id}/apps/{app_name}/assets")
+    assert asset_res.status_code == status.HTTP_200_OK, asset_res.text
+    assert markers[2] in asset_res.text

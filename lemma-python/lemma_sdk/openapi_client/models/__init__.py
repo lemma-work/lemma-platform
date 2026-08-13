@@ -94,6 +94,8 @@ _NAME_TO_MODULE = {
     'AppDetailResponse': 'app_detail_response',
     'AppListResponse': 'app_list_response',
     'AppMessageResponse': 'app_message_response',
+    'AppReleaseListResponse': 'app_release_list_response',
+    'AppReleaseResponse': 'app_release_response',
     'AppStatus': 'app_status',
     'AppTriggerListResponseSchema': 'app_trigger_list_response_schema',
     'AppTriggerResponseSchema': 'app_trigger_response_schema',
@@ -248,6 +250,9 @@ _NAME_TO_MODULE = {
     'FunctionPermissionsResponse': 'function_permissions_response',
     'FunctionResourcePermissionRequest': 'function_resource_permission_request',
     'FunctionResourcePermissionResponse': 'function_resource_permission_response',
+    'FunctionRevisionListResponse': 'function_revision_list_response',
+    'FunctionRevisionPromoteResponse': 'function_revision_promote_response',
+    'FunctionRevisionResponse': 'function_revision_response',
     'FunctionRunListResponse': 'function_run_list_response',
     'FunctionRunResponse': 'function_run_response',
     'FunctionRunStatus': 'function_run_status',
@@ -612,6 +617,8 @@ if TYPE_CHECKING:
     from .app_detail_response import AppDetailResponse
     from .app_list_response import AppListResponse
     from .app_message_response import AppMessageResponse
+    from .app_release_list_response import AppReleaseListResponse
+    from .app_release_response import AppReleaseResponse
     from .app_status import AppStatus
     from .app_trigger_list_response_schema import AppTriggerListResponseSchema
     from .app_trigger_response_schema import AppTriggerResponseSchema
@@ -766,6 +773,9 @@ if TYPE_CHECKING:
     from .function_permissions_response import FunctionPermissionsResponse
     from .function_resource_permission_request import FunctionResourcePermissionRequest
     from .function_resource_permission_response import FunctionResourcePermissionResponse
+    from .function_revision_list_response import FunctionRevisionListResponse
+    from .function_revision_promote_response import FunctionRevisionPromoteResponse
+    from .function_revision_response import FunctionRevisionResponse
     from .function_run_list_response import FunctionRunListResponse
     from .function_run_response import FunctionRunResponse
     from .function_run_status import FunctionRunStatus
@@ -1143,6 +1153,8 @@ __all__ = [
     'AppDetailResponse',
     'AppListResponse',
     'AppMessageResponse',
+    'AppReleaseListResponse',
+    'AppReleaseResponse',
     'AppStatus',
     'AppTriggerListResponseSchema',
     'AppTriggerResponseSchema',
@@ -1297,6 +1309,9 @@ __all__ = [
     'FunctionPermissionsResponse',
     'FunctionResourcePermissionRequest',
     'FunctionResourcePermissionResponse',
+    'FunctionRevisionListResponse',
+    'FunctionRevisionPromoteResponse',
+    'FunctionRevisionResponse',
     'FunctionRunListResponse',
     'FunctionRunResponse',
     'FunctionRunStatus',

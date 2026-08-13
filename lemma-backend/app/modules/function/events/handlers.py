@@ -18,10 +18,12 @@ from app.core.infrastructure.db.uow_factory import (
 from app.core.infrastructure.jobs.streaq_job_queue import get_streaq_job_queue
 from app.core.infrastructure.jobs.streaq_runtime import (
     AppWorkerContext,
+    Lane,
     streaq_cron,
     streaq_task,
     streaq_worker,
 )
+from app.core.config import settings
 from app.modules.function.domain.errors import (
     FunctionNotFoundError,
     FunctionRunNotFoundError,
@@ -220,3 +222,90 @@ async def _reconcile_function_runs() -> None:
             now=now,
             job_callback_grace_seconds=FUNCTION_JOB_CALLBACK_GRACE_SECONDS,
         )
+
+
+@streaq_cron(
+    settings.function_revision_retention_cron,
+    name="sweep_function_revisions",
+    lane=Lane.BULK,
+)
+async def sweep_function_revisions() -> None:
+    """Daily backstop for revisions whose retention window has passed.
+
+    Pruning already runs inline on a code save, which is when a function's
+    storage grows by an artifact. This catches what that structurally cannot: a
+    function that stops being edited, whose surplus revisions would otherwise
+    age forever with nothing re-evaluating them.
+
+    Bulk lane: it is slow, bursty and touches object storage.
+    """
+    if not settings.function_revision_retention_enabled:
+        return
+    try:
+        pruned = await _sweep_function_revisions(
+            provide_uow_factory(),
+            batch_size=settings.function_revision_retention_batch,
+        )
+        if pruned:
+            logger.info(
+                "function.handlers.sweep_function_revisions.observed",
+                pruned_function_count=pruned,
+            )
+    except Exception:
+        # Swallowed at the cron boundary so one bad tick does not stop the next.
+        logger.error("function.handlers.sweep_function_revisions.failed", exc_info=True)
+
+
+async def _sweep_function_revisions(
+    uow_factory: UnitOfWorkFactory, *, batch_size: int
+) -> int:
+    """Prune one bounded batch of functions. Extracted from the cron so it can be
+    driven directly in tests with a fake factory."""
+    from sqlalchemy import select
+
+    from app.modules.function.api.dependencies import build_function_service
+    from app.modules.function.infrastructure.models import FunctionModel
+    from app.modules.function.services.function_revision_retention import (
+        FunctionRevisionRetention,
+    )
+
+    async with uow_factory() as uow:
+        function_ids = list(
+            (
+                await uow.session.execute(
+                    select(FunctionModel.id)
+                    .order_by(FunctionModel.id)
+                    .limit(batch_size)
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+    pruned_functions = 0
+    for function_id in function_ids:
+        # One short unit of work per function, then its storage deletes outside
+        # it -- no connection is held across object deletion, and one bad
+        # function cannot abort the sweep.
+        try:
+            async with uow_factory() as uow:
+                service = build_function_service(uow)
+                function = await service.repository.get(function_id)
+                if function is None:
+                    continue
+                retention = FunctionRevisionRetention(
+                    service.repository, service.storage_factory
+                )
+                plan = await retention.plan(function)
+                await uow.commit()
+            if plan.is_empty:
+                continue
+            await retention.execute(plan)
+            pruned_functions += 1
+        except Exception:
+            logger.warning(
+                "function.handlers.sweep_function_revisions.skipped",
+                function_id=str(function_id),
+                exc_info=True,
+            )
+    return pruned_functions

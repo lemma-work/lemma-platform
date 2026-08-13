@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 from uuid import UUID
 
@@ -53,3 +54,42 @@ class FunctionFileManager:
             content = content.encode("utf-8")
 
         await obs.put_async(self.store, path, content)
+
+    async def delete_file(self, path: str) -> None:
+        try:
+            await obs.delete_async(self.store, path)
+        except ObstoreNotFoundError:
+            return
+
+    async def delete_prefix(self, prefix: str) -> None:
+        """Delete everything under ``prefix``.
+
+        Function bytes had no deletion path at all, so every deleted function
+        orphaned its artifacts permanently and retention had nothing to call.
+
+        Listing is async: the sync ListStream blocks the event loop on each page
+        fetch against a cloud store, and retention walks these prefixes often. A
+        concurrent sweep can delete the same key first, so a missing object on
+        the batch delete is not an error.
+        """
+        normalized_prefix = prefix.rstrip("/")
+        list_prefix = normalized_prefix or None
+        async for chunk in self.store.list_async(prefix=list_prefix):
+            paths = [
+                item["path"]
+                for item in chunk
+                if isinstance(item, dict) and item.get("path")
+            ]
+            if not paths:
+                continue
+            try:
+                await self.store.delete_async(paths)
+            except ObstoreNotFoundError:
+                continue
+        if self._local_base:
+            target_dir = (
+                self._local_base
+                if not normalized_prefix
+                else self._local_path(normalized_prefix)
+            )
+            shutil.rmtree(target_dir, ignore_errors=True)

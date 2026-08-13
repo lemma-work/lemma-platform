@@ -75,6 +75,17 @@ class AppService:
         # that holds NO repository (DB-free by construction).
         self._storage_phase = AppStoragePhase(file_manager_factory)
 
+    def _release_service(self):
+        """Release lookup over this service's own repository.
+
+        Built on demand rather than injected: it is a thin resolver, and sharing
+        it keeps release-reference parsing in one place instead of duplicating
+        "is this a number or a digest prefix" on the serving path.
+        """
+        from app.modules.apps.services.app_release_service import AppReleaseService
+
+        return AppReleaseService(self.repository)
+
     async def _validate_unique_public_slug(
         self,
         *,
@@ -207,14 +218,18 @@ class AppService:
         app = await self.create_app_with_context(
             AppEntity(**entity_data), user_id, ctx=ctx
         )
+        # The document IS the source for a promoted widget -- there is no build
+        # step behind it -- so it is uploaded as both. Deploying it as dist only
+        # left the app with no source archive, which meant a pod bundle exported
+        # this app's build and dropped its code (and every re-import propagated
+        # the gap). Source is an app's primary artifact; it always ships.
+        archive = await run_blocking(self._single_index_html_zip, document)
         return await self.upload_bundle(
             pod_id,
             app.name,
             user_id,
-            source_archive_bytes=None,
-            dist_archive_bytes=await run_blocking(
-                self._single_index_html_zip, document
-            ),
+            source_archive_bytes=archive,
+            dist_archive_bytes=archive,
             ctx=ctx,
         )
 
@@ -440,11 +455,25 @@ class AppService:
                 AppReleaseEntity(
                     app_id=app.id,
                     version=plan.version,
+                    release_number=await self.repository.next_release_number(app.id),
                     dist_root_path=plan.release_root,
                     dist_archive_path=written.dist_archive_path,
+                    source_archive_path=written.source_path,
+                    source_digest=written.source_digest,
+                    created_by=user_id,
                 )
             )
             release_id = release.id
+        elif release_id is not None and written.source_path is not None:
+            # This upload deduped onto an existing release: the dist bytes are
+            # identical, so it is the same release, not a new one. The source
+            # can still differ (a comment-only edit compiles to the same output),
+            # and the newest source is the better answer to "what built this".
+            await self.repository.attach_release_source(
+                release_id,
+                source_archive_path=written.source_path,
+                source_digest=written.source_digest,
+            )
         if written.source_path is not None:
             app.source_archive_path = written.source_path
         newly_published = plan.version is not None and app.status is not AppStatus.READY
@@ -542,8 +571,16 @@ class AppService:
         *,
         asset_path: str | None,
         request_etag: str | None = None,
+        release_ref: str | None = None,
     ) -> _AssetReadInputs | AppAssetDocument:
-        """DB phase for serving a public (unauthenticated) app asset by slug."""
+        """DB phase for serving a public (unauthenticated) app asset by slug.
+
+        ``release_ref`` serves a specific release instead of the live one -- the
+        preview host ``<slug>--r7.<app_base_domain>``. It is a host and not a
+        path prefix because a Vite build requests its assets at absolute
+        ``/assets/...``; under a prefix those would resolve against the live
+        release and the preview would silently serve a mixed build.
+        """
         app = await self.repository.get_by_public_slug(public_slug)
         if not app:
             raise AppNotFoundError(f"App with public slug '{public_slug}' not found")
@@ -555,12 +592,21 @@ class AppService:
         # slug exists to a caller who only guessed it.
         if normalize_resource_visibility(app.visibility) is not ResourceVisibility.PUBLIC:
             raise AppNotFoundError(f"App with public slug '{public_slug}' not found")
+        release = None
+        public_url = self._asset_resolver.public_url(app)
+        if release_ref is not None:
+            release = await self._release_service().resolve_release(app, release_ref)
+            # The preview identifies itself as the preview, so the branding badge
+            # and the og:url of a shared preview link do not claim to be the live
+            # app at a build nobody has promoted.
+            public_url = self._asset_resolver.preview_url(app, release)
         return await self._asset_resolver.resolve(
             app,
             raise_not_found_name=public_slug,
             asset_path=asset_path,
             request_etag=request_etag,
-            public_url=self._asset_resolver.public_url(app),
+            public_url=public_url,
+            release=release,
         )
 
     async def resolve_source_archive(

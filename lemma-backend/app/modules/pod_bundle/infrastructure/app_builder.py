@@ -353,31 +353,66 @@ class AppStepRunner:
     ) -> tuple[bytes | None, bytes]:
         """Produce ``(source_bytes, dist_bytes)`` for upload. A Vite source is built
         in a sandbox; a static source is deployed as-is; a bundle carrying only a
-        prebuilt ``dist.zip`` (widget/no-source app) is uploaded with no source."""
+        prebuilt ``dist.zip`` (widget/no-source app) deploys that build as its own
+        source."""
         source_dir = resource_dir / "source"
         dist_zip = resource_dir / "dist.zip"
 
         if source_dir.is_dir():
             source_bytes = await run_blocking(zip_dir, source_dir, limiter="cpu_bound")
             tier = classify_source_dir(source_dir)
-            if tier == "vite":
-                dist_bytes = await self._sandbox.build(
-                    user_id=user_id,
-                    pod_id=pod_id,
-                    app_slug=app_slug,
-                    source_zip=source_bytes,
-                )
-            else:  # static: the source *is* the served site.
-                dist_bytes = source_bytes
+            if tier != "vite":
+                # static: the source *is* the served site.
+                return source_bytes, source_bytes
+            bundled = await self._reusable_dist(resource_dir)
+            if bundled is not None:
+                # The bundle shipped a build with nothing pod-specific baked in,
+                # so rebuilding it would spend minutes and a sandbox to produce
+                # the same bytes.
+                return source_bytes, bundled
+            dist_bytes = await self._sandbox.build(
+                user_id=user_id,
+                pod_id=pod_id,
+                app_slug=app_slug,
+                source_zip=source_bytes,
+            )
             return source_bytes, dist_bytes
 
         if dist_zip.is_file():
             dist_bytes = await run_blocking(dist_zip.read_bytes, limiter="cpu_bound")
-            return None, dist_bytes
+            # No source/ directory: this bundle carries a prebuilt site with no
+            # build step behind it, so the build IS the source. Importing it with
+            # no source left the app source-less in the target pod, so the next
+            # export dropped its code again -- the same gap, one hop further on.
+            return dist_bytes, dist_bytes
 
         raise AppBuildFailedError(
             f"App '{name}' bundle has neither a source/ directory nor a dist.zip."
         )
+
+    @staticmethod
+    async def _reusable_dist(resource_dir: Path) -> bytes | None:
+        """The bundled build, when it may be deployed without a rebuild.
+
+        Only when the exporter positively marked it portable. A bundle exported
+        before ``dist.json`` existed, or one whose build baked in the source
+        pod's id, returns None and gets rebuilt -- the same thing that happened
+        before builds were exported at all, so the fallback is never worse than
+        the old behavior.
+        """
+        dist_zip = resource_dir / "dist.zip"
+        marker = resource_dir / "dist.json"
+        if not dist_zip.is_file() or not marker.is_file():
+            return None
+        try:
+            import json
+
+            portable = json.loads(await run_blocking(marker.read_text)).get("portable")
+        except (ValueError, OSError):
+            return None
+        if portable is not True:
+            return None
+        return await run_blocking(dist_zip.read_bytes, limiter="cpu_bound")
 
     # --- phase 3 ---------------------------------------------------------
 

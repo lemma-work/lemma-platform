@@ -613,14 +613,20 @@ class BundleExporter:
         ctx: Context,
         byte_budget: _ByteBudget,
     ) -> None:
-        """Bundle an app's code: its source (extracted to ``source/``), or — for a
-        widget/no-source app — its built ``dist.zip``. Best-effort and byte-budgeted:
-        an app with neither archive, or one over budget, exports metadata-only.
-        Mirrors the CLI's ``_download_app_assets`` for format parity."""
+        """Bundle an app's code: its source (extracted to ``source/``) AND its
+        built ``dist.zip``.
+
+        Both, not one. Exporting source alone meant every import rebuilt in a
+        sandbox; exporting the build alone -- which is what a widget-promoted app
+        with no source archive fell back to -- shipped an app whose code was
+        simply gone. Source is an app's primary artifact and always ships when it
+        exists; the build rides along so a portable one can be deployed directly.
+
+        Best-effort and byte-budgeted: the build is dropped first when the budget
+        is tight, since it is the reconstructible half. Mirrors the CLI's
+        ``_download_app_assets`` for format parity."""
         from app.modules.apps.contracts import AppNotFoundError
 
-        # Prefer source (rebuildable in the target pod); the exported vite dist is
-        # baked with the source pod id and is not portable.
         source_bytes: bytes | None = None
         try:
             app_id, source_path = await app_service.resolve_source_archive(
@@ -630,17 +636,15 @@ class BundleExporter:
         except AppNotFoundError:
             source_bytes = None
 
-        if source_bytes:
-            if byte_budget.allow(
-                name=f"apps/{app_name}/source", size=len(source_bytes)
-            ):
-                await run_blocking(
-                    _extract_zip_bytes,
-                    source_bytes,
-                    dest / "source",
-                    limiter="cpu_bound",
-                )
-            return
+        if source_bytes and byte_budget.allow(
+            name=f"apps/{app_name}/source", size=len(source_bytes)
+        ):
+            await run_blocking(
+                _extract_zip_bytes,
+                source_bytes,
+                dest / "source",
+                limiter="cpu_bound",
+            )
 
         dist_bytes: bytes | None = None
         try:
@@ -656,6 +660,17 @@ class BundleExporter:
         ):
             await run_blocking(
                 (dest / "dist.zip").write_bytes, dist_bytes, limiter="cpu_bound"
+            )
+            # Whether the importer may deploy this build as-is or must rebuild.
+            # Decided here, while the source pod id is known for certain.
+            from lemma_pod_bundle import dist_is_portable
+
+            portable = await run_blocking(
+                dist_is_portable, dist_bytes, pod_id=str(pod_id), limiter="cpu_bound"
+            )
+            await run_blocking(
+                _write_json, dest / "dist.json", {"portable": portable},
+                limiter="cpu_bound",
             )
 
     async def _export_pod_files(

@@ -45,6 +45,24 @@ class AppRepositoryPort(Protocol):
         self, app_id: UUID, version: str
     ) -> Optional[AppReleaseEntity]: ...
 
+    async def get_release_by_number(
+        self, app_id: UUID, release_number: int
+    ) -> Optional[AppReleaseEntity]: ...
+
+    async def attach_release_source(
+        self,
+        release_id: UUID,
+        *,
+        source_archive_path: str,
+        source_digest: str | None,
+    ) -> None: ...
+
+    async def set_current_release(self, app_id: UUID, release_id: UUID) -> None: ...
+
+    async def next_release_number(self, app_id: UUID) -> int: ...
+
+    async def mark_releases_pruned(self, release_ids: list[UUID]) -> None: ...
+
     async def list_releases(self, app_id: UUID) -> list[AppReleaseEntity]: ...
 
 

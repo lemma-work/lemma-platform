@@ -80,6 +80,10 @@ class _UploadPlan:
 class _WrittenBundle:
     source_path: str | None
     dist_archive_path: str | None
+    # The source archive's own digest, carried out of the storage phase so the
+    # release row can record which source produced it without re-hashing bytes
+    # the finalize phase no longer holds.
+    source_digest: str | None = None
 
 
 class AppStoragePhase:
@@ -157,6 +161,7 @@ class AppStoragePhase:
         resolve_upload_bundle and finalize_upload_bundle."""
         storage = self.file_manager_factory(plan.app_id)
         source_path: str | None = None
+        source_version: str | None = None
         dist_archive_path: str | None = None
         try:
             if plan.has_source and source_archive_bytes is not None:
@@ -182,11 +187,14 @@ class AppStoragePhase:
                 _WrittenBundle(
                     source_path=source_path,
                     dist_archive_path=dist_archive_path,
+                    source_digest=source_version,
                 ),
             )
             raise
         return _WrittenBundle(
-            source_path=source_path, dist_archive_path=dist_archive_path
+            source_path=source_path,
+            dist_archive_path=dist_archive_path,
+            source_digest=source_version,
         )
 
     async def cleanup_written_bundle(

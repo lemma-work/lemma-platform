@@ -21,5 +21,18 @@ class AppsSettings(BaseSettings):
     app_archive_max_uncompressed_bytes: int = Field(default=400 * 1024 * 1024)
     app_archive_max_compression_ratio: int = Field(default=200)
 
+    # Release retention. See app.core.retention for why there are three knobs:
+    # keep_last is the floor that keeps rollback possible for a dormant app,
+    # keep_days keeps work being iterated on, and max_keep is the ceiling that
+    # bounds a burst of deploys. The live release is exempt from all of them.
+    app_release_retention_enabled: bool = Field(default=True)
+    app_release_keep_last: int = Field(default=10, ge=1)
+    app_release_keep_days: int = Field(default=30, ge=0)
+    app_release_max_keep: int = Field(default=20, ge=1)
+    app_release_retention_cron: str = Field(default="20 4 * * *")
+    # How many apps one sweep tick may examine. Bounded so a tick is short and
+    # overlapping ticks cannot pile up.
+    app_release_retention_batch: int = Field(default=200, ge=1)
+
 
 apps_settings = AppsSettings()

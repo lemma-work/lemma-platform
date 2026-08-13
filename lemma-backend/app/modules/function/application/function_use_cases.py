@@ -26,6 +26,9 @@ from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.function.application.function_definition_compiler import (
     FunctionDefinitionCompiler,
 )
+from app.modules.function.application.function_revision_use_cases import (
+    FunctionRevisionUseCasesMixin,
+)
 from app.modules.function.domain.entities import (
     FunctionDispatchMode,
     FunctionEntity,
@@ -54,7 +57,7 @@ from app.core.log.log import get_logger
 logger = get_logger(__name__)
 
 
-class FunctionUseCases:
+class FunctionUseCases(FunctionRevisionUseCasesMixin):
     """Owns the function sagas. Built from a uow_factory + a per-phase bound
     service builder + the sandbox execution engine."""
 
@@ -235,7 +238,35 @@ class FunctionUseCases:
             )
         # Icon cleanup is a storage call — run it with no connection held.
         await service.delete_old_icon(plan.old_icon_url, refreshed.icon_url)
+        if plan.code is not None:
+            # A code save is when this function's storage grows by an artifact,
+            # so it is when surplus revisions are worth removing. Best-effort:
+            # the new revision is already live, and the daily sweep retries.
+            await self._prune_revisions_quietly(refreshed)
         return refreshed
+
+    async def _prune_revisions_quietly(self, function: FunctionEntity) -> None:
+        from app.modules.function.services.function_revision_retention import (
+            FunctionRevisionRetention,
+        )
+
+        if function.id is None:
+            return
+        try:
+            async with uow_scope(self._uow_factory) as uow:
+                service = self._build(uow)
+                retention = FunctionRevisionRetention(
+                    service.repository, service.storage_factory
+                )
+                prune_plan = await retention.plan(function)
+            # Storage deletes hold no pooled connection.
+            await retention.execute(prune_plan)
+        except Exception:
+            logger.warning(
+                "function.use_cases.revision_retention.degraded",
+                function_id=str(function.id),
+                exc_info=True,
+            )
 
     async def upsert_function_for_import(
         self,
@@ -344,8 +375,13 @@ class FunctionUseCases:
             function = await service.resolve_delete(
                 pod_id, name, user_id, ctx=scope.ctx
             )
-        # Icon cleanup is a storage call — no connection held.
+        # Icon and artifact cleanup are storage calls — no connection held. The
+        # function's rows (and its revision history) are already gone, so this is
+        # the last chance anything can find these objects; failing to run it
+        # orphans them permanently.
         await service.delete_icon(function.icon_url)
+        if function.id is not None:
+            await service.cleanup_function_storage(function.id)
 
     async def execute_function(
         self,
@@ -357,13 +393,20 @@ class FunctionUseCases:
         user_email: str | None,
         request: Request,
         run_as_workload: RunAsWorkload | None = None,
+        revision_ref: str | None = None,
     ) -> FunctionRunEntity:
         async def resolve_once() -> ResolvedExecution:
             async with pod_context_scope(
                 self._uow_factory, request=request, user_id=user_id, pod_id=pod_id
             ) as scope:
                 return await self._build(scope.uow).resolve_execute(
-                    pod_id, name, input_data, user_id, user_email, ctx=scope.ctx
+                    pod_id,
+                    name,
+                    input_data,
+                    user_id,
+                    user_email,
+                    ctx=scope.ctx,
+                    revision_ref=revision_ref,
                 )
 
         resolved = await self._resolve_with_revision_backfill(resolve_once)

@@ -36,6 +36,8 @@ from app.modules.apps.api.schemas.app_schemas import (
     AppDetailResponse,
     AppListResponse,
     AppMessageResponse,
+    AppReleaseListResponse,
+    AppReleaseResponse,
     UpdateAppRequest,
 )
 from app.modules.apps.domain.entities import (
@@ -64,6 +66,23 @@ ZIP_FILE_RESPONSE = {
 async def _app_detail_response(ctx: PodContextDep, app: AppEntity) -> AppDetailResponse:
     _ = ctx
     return AppDetailResponse.model_validate(app)
+
+
+def _release_response(entry, *, app_public_slug: str) -> AppReleaseResponse:
+    release = entry.release
+    return AppReleaseResponse(
+        id=release.id,
+        app_id=release.app_id,
+        release_number=release.release_number,
+        version=release.version,
+        label=release.label,
+        created_by=release.created_by,
+        created_at=release.created_at,
+        is_live=entry.is_live,
+        has_source=release.source_archive_path is not None,
+        pruned_at=release.pruned_at,
+        app_public_slug=app_public_slug,
+    )
 
 
 @router.post(
@@ -306,6 +325,65 @@ async def upload_app_bundle(
         message="Bundle uploaded successfully",
         app=AppDetailResponse.model_validate(app),
     )
+
+
+@router.get(
+    "/{app_name}/releases",
+    response_model=AppReleaseListResponse,
+    status_code=status.HTTP_200_OK,
+    operation_id="app.release.list",
+    summary="List App Releases",
+)
+async def list_app_releases(
+    pod_id: UUID,
+    app_name: str,
+    user: CurrentUser,
+    request: Request,
+    use_cases: AppUseCasesDep,
+) -> AppReleaseListResponse:
+    history = await use_cases.list_releases(
+        pod_id=pod_id, app_name=app_name, request=request, user_id=user.id
+    )
+    return AppReleaseListResponse(
+        items=[
+            _release_response(entry, app_public_slug=history.app_public_slug)
+            for entry in history.items
+        ]
+    )
+
+
+@router.post(
+    "/{app_name}/releases/{release_ref}/promote",
+    response_model=AppDetailResponse,
+    status_code=status.HTTP_200_OK,
+    operation_id="app.release.promote",
+    summary="Promote App Release",
+    description=(
+        "Make an existing release the one this app serves. The release keeps its "
+        "bytes; only the app's current-release pointer moves."
+    ),
+)
+async def promote_app_release(
+    pod_id: UUID,
+    app_name: str,
+    release_ref: str,
+    user: CurrentUser,
+    request: Request,
+    use_cases: AppUseCasesDep,
+    app_service: AppServiceDep,
+    ctx: PodContextDep,
+) -> AppDetailResponse:
+    await use_cases.promote_release(
+        pod_id=pod_id,
+        app_name=app_name,
+        release_ref=release_ref,
+        request=request,
+        user_id=user.id,
+    )
+    app = await app_service.get_app_by_name(
+        pod_id, app_name, user.id, raise_not_found=True, ctx=ctx
+    )
+    return await _app_detail_response(ctx, app)
 
 
 @router.get(

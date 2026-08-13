@@ -39,11 +39,33 @@ export class FunctionsNamespace {
       this.client.request(() => FunctionsService.functionPermissionsReplace(this.podId(), name, payload)),
   };
 
+  readonly revisions = {
+    /** This function's built revisions, newest first. */
+    list: (name: string) =>
+      this.client.request(() => FunctionsService.functionRevisionList(this.podId(), name)),
+
+    /** One revision, with its source and the schemas its code implements. */
+    get: (name: string, revisionRef: string) =>
+      this.client.request(() => FunctionsService.functionRevisionGet(this.podId(), name, revisionRef)),
+
+    /**
+     * Make an existing revision live. Its schemas are restored with it, since
+     * they are the contract its code implements; the response reports whether
+     * that contract differs from the one that was live.
+     */
+    promote: (name: string, revisionRef: string) =>
+      this.client.request(() => FunctionsService.functionRevisionPromote(this.podId(), name, revisionRef)),
+  };
+
   readonly runs = {
     create: (name: string, options: RunFunctionOptions = {}) =>
       this.client.request(() => {
         const payload: ExecuteFunctionRequest = {
           input_data: options.input as ExecuteFunctionRequest["input_data"],
+          // Runs a specific built revision instead of the live one. Requires
+          // function.update -- running a superseded build is an authoring
+          // action, not an execution one.
+          revision: options.revision,
         };
         return FunctionsService.functionRun(this.podId(), name, payload);
       }),

@@ -20,6 +20,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 from app.core.config import settings
 
 _SLUG_HEADER = b"x-app-public-slug"
+_RELEASE_HEADER = b"x-app-release"
 _APP_PATH_PREFIX = "/public/apps"
 
 # Real global backend routes that must stay reachable even on an app host — the
@@ -34,27 +35,52 @@ _GLOBAL_PUBLIC_PREFIXES = (
 )
 
 
-def app_slug_from_host(host: str) -> str | None:
-    """Return the app public slug encoded in ``host``, or None.
+def split_release_label(label: str) -> tuple[str | None, str | None]:
+    """Split an app host label into ``(slug, release_ref)``.
 
-    ``host`` may include a port. The slug is the single left-most label in
-    front of the configured ``app_base_domain``; the bare base domain (the
-    main API host) and multi-level hosts are not apps.
+    ``orders`` serves whatever is live; ``orders--r7`` previews release 7 of
+    ``orders``. ``--`` is unambiguous as the separator because
+    ``normalize_public_slug`` collapses runs of ``-``, so a stored slug never
+    contains one -- splitting on the LAST ``--`` recovers the slug exactly,
+    however many single hyphens it has.
+
+    This is shared by the local host middleware and the public controller on
+    purpose. The cloud nginx ingress resolves the slug from the host itself and
+    hands the backend the WHOLE label, so the controller has to be able to split
+    it too; routing previews through one function means the two deployments
+    cannot disagree about where a label divides.
+    """
+    if not label or "--" not in label:
+        return (label or None), None
+    slug, _, release_ref = label.rpartition("--")
+    # A label that is all separator ("--r7", "orders--") names no app or no
+    # release; treat it as unroutable rather than guessing which half was meant.
+    if not slug or not release_ref:
+        return None, None
+    return slug, release_ref
+
+
+def app_slug_from_host(host: str) -> tuple[str | None, str | None]:
+    """Return ``(slug, release_ref)`` for ``host``, or ``(None, None)``.
+
+    ``host`` may include a port. The label is the single left-most one in front
+    of the configured ``app_base_domain``; the bare base domain (the main API
+    host) and multi-level hosts are not apps.
     """
     base = settings.app_base_domain
     if not base:
-        return None
+        return None, None
     host_no_port = host.split(":", 1)[0].strip().lower()
     base_no_port = base.split(":", 1)[0].strip().lower()
     if not host_no_port or not base_no_port:
-        return None
+        return None, None
     suffix = f".{base_no_port}"
     if not host_no_port.endswith(suffix):
-        return None
+        return None, None
     label = host_no_port[: -len(suffix)]
     if not label or "." in label:
-        return None
-    return label
+        return None, None
+    return split_release_label(label)
 
 
 class AppHostRoutingMiddleware:
@@ -80,7 +106,7 @@ class AppHostRoutingMiddleware:
             if lowered == b"host":
                 host = value.decode("latin-1")
 
-        slug = app_slug_from_host(host)
+        slug, release_ref = app_slug_from_host(host)
         if slug is None:
             await self.app(scope, receive, send)
             return
@@ -102,7 +128,10 @@ class AppHostRoutingMiddleware:
         # request was logged as `route: "unmatched"`. That covered the whole
         # apps product: 52 slow 404s and 21 slow 200s in a day, none of them
         # attributable to a route on any per-route dashboard.
+        new_headers = headers + [(_SLUG_HEADER, slug.encode("latin-1"))]
+        if release_ref is not None:
+            new_headers.append((_RELEASE_HEADER, release_ref.encode("latin-1")))
         scope["path"] = new_path
         scope["raw_path"] = new_path.encode("latin-1")
-        scope["headers"] = headers + [(_SLUG_HEADER, slug.encode("latin-1"))]
+        scope["headers"] = new_headers
         await self.app(scope, receive, send)
