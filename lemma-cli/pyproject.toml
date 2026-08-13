@@ -34,9 +34,6 @@ dependencies = [
   # `uv tool install` upgrades an already-installed older lemma-sdk. The release
   # workflow rewrites this to the release version on every tagged build.
   "lemma-sdk>=0.7.0",
-  # Shared pod bundle format vocabulary (layout/jsonc/diff/portability/
-  # normalize/archive), extracted so the backend can consume the same format.
-  "lemma-pod-bundle>=0.1.0",
   "click>=8.3.0",
   "typer>=0.12.5",
   "rich>=13.9.4",
@@ -52,6 +49,15 @@ Issues = "https://github.com/lemma-work/lemma-platform/issues"
 
 [dependency-groups]
 dev = [
+  # Shared pod bundle format vocabulary (layout/jsonc/diff/portability/
+  # normalize/archive), extracted so the backend can consume the same format.
+  # A *dev* dependency rather than a runtime one because the package is not
+  # published to PyPI: setup.py vendors it into the wheel, and declaring it here
+  # keeps it out of Requires-Dist by construction — a runtime declaration would
+  # make every `pip install lemma-terminal` fail on a distribution that does not
+  # exist. Resolved from ../lemma-pod-bundle via [tool.uv.sources] for local
+  # work and the test suite.
+  "lemma-pod-bundle>=0.1.0",
   "pytest",
   "pytest-asyncio",
   "textual-dev",
@@ -82,7 +88,9 @@ version = { attr = "lemma_cli.__version__" }
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["lemma_cli*"]
+# lemma_pod_bundle is vendored in by setup.py at build time; it must be listed
+# here or the wheel would carry the copy without packaging it.
+include = ["lemma_cli*", "lemma_pod_bundle*"]
 exclude = ["build*", "dist*", "*.egg-info*", "docs*"]
 
 [tool.setuptools.package-data]

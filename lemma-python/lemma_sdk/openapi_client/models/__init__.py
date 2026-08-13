@@ -256,6 +256,9 @@ _NAME_TO_MODULE = {
     'FunctionSummaryResponse': 'function_summary_response',
     'FunctionType': 'function_type',
     'HarnessKind': 'harness_kind',
+    'HomeAgentResponse': 'home_agent_response',
+    'HomeAppResponse': 'home_app_response',
+    'HomePodResponse': 'home_pod_response',
     'HostHello': 'host_hello',
     'IconUploadRequest': 'icon_upload_request',
     'IconUploadResponse': 'icon_upload_response',
@@ -278,6 +281,9 @@ _NAME_TO_MODULE = {
     'MessageResponse': 'message_response',
     'MessageResponseMetadataType0': 'message_response_metadata_type_0',
     'MessageResponseSchema': 'message_response_schema',
+    'NavigationOrganizationResponse': 'navigation_organization_response',
+    'NavigationPodResponse': 'navigation_pod_response',
+    'NavigationResponse': 'navigation_response',
     'NotificationDeliveryStatus': 'notification_delivery_status',
     'NotificationListResponse': 'notification_list_response',
     'NotificationOriginKind': 'notification_origin_kind',
@@ -302,6 +308,7 @@ _NAME_TO_MODULE = {
     'OperationExecutionResponse': 'operation_execution_response',
     'OperationSummary': 'operation_summary',
     'OrganizationCreateRequest': 'organization_create_request',
+    'OrganizationHomeResponse': 'organization_home_response',
     'OrganizationInvitationListResponse': 'organization_invitation_list_response',
     'OrganizationInvitationRequest': 'organization_invitation_request',
     'OrganizationInvitationResponse': 'organization_invitation_response',
@@ -767,6 +774,9 @@ if TYPE_CHECKING:
     from .function_summary_response import FunctionSummaryResponse
     from .function_type import FunctionType
     from .harness_kind import HarnessKind
+    from .home_agent_response import HomeAgentResponse
+    from .home_app_response import HomeAppResponse
+    from .home_pod_response import HomePodResponse
     from .host_hello import HostHello
     from .icon_upload_request import IconUploadRequest
     from .icon_upload_response import IconUploadResponse
@@ -789,6 +799,9 @@ if TYPE_CHECKING:
     from .message_response import MessageResponse
     from .message_response_metadata_type_0 import MessageResponseMetadataType0
     from .message_response_schema import MessageResponseSchema
+    from .navigation_organization_response import NavigationOrganizationResponse
+    from .navigation_pod_response import NavigationPodResponse
+    from .navigation_response import NavigationResponse
     from .notification_delivery_status import NotificationDeliveryStatus
     from .notification_list_response import NotificationListResponse
     from .notification_origin_kind import NotificationOriginKind
@@ -813,6 +826,7 @@ if TYPE_CHECKING:
     from .operation_execution_response import OperationExecutionResponse
     from .operation_summary import OperationSummary
     from .organization_create_request import OrganizationCreateRequest
+    from .organization_home_response import OrganizationHomeResponse
     from .organization_invitation_list_response import OrganizationInvitationListResponse
     from .organization_invitation_request import OrganizationInvitationRequest
     from .organization_invitation_response import OrganizationInvitationResponse
@@ -1291,6 +1305,9 @@ __all__ = [
     'FunctionSummaryResponse',
     'FunctionType',
     'HarnessKind',
+    'HomeAgentResponse',
+    'HomeAppResponse',
+    'HomePodResponse',
     'HostHello',
     'IconUploadRequest',
     'IconUploadResponse',
@@ -1313,6 +1330,9 @@ __all__ = [
     'MessageResponse',
     'MessageResponseMetadataType0',
     'MessageResponseSchema',
+    'NavigationOrganizationResponse',
+    'NavigationPodResponse',
+    'NavigationResponse',
     'NotificationDeliveryStatus',
     'NotificationListResponse',
     'NotificationOriginKind',
@@ -1337,6 +1357,7 @@ __all__ = [
     'OperationExecutionResponse',
     'OperationSummary',
     'OrganizationCreateRequest',
+    'OrganizationHomeResponse',
     'OrganizationInvitationListResponse',
     'OrganizationInvitationRequest',
     'OrganizationInvitationResponse',

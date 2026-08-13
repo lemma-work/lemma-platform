@@ -141,3 +141,71 @@ class OrganizationMessageResponse(BaseSchema):
     message: str
     success: bool = True
     redirect_uri: str | None = None
+
+
+class NavigationPodResponse(BaseSchema):
+    """A pod as a navigation entry — enough to draw and to link to."""
+
+    id: UUID
+    name: str
+    icon_url: str | None = None
+
+
+class NavigationOrganizationResponse(BaseSchema):
+    """An organization and the pods the caller can see inside it."""
+
+    id: UUID
+    name: str
+    slug: str | None = None
+    role: str
+    pods: list[NavigationPodResponse]
+
+
+class NavigationResponse(BaseSchema):
+    """Everything a sidebar needs, for every organization, in one response.
+
+    Deliberately shallow: apps, agents and roles per pod are the detail endpoint's
+    job, because carrying them here would make the payload grow with the content
+    of every organization a person happens to belong to.
+    """
+
+    items: list[NavigationOrganizationResponse]
+
+
+class HomeAppResponse(BaseSchema):
+    id: UUID
+    name: str
+    description: str | None = None
+    url: str
+    status: str
+
+
+class HomeAgentResponse(BaseSchema):
+    id: UUID
+    name: str
+    description: str | None = None
+    icon_url: str | None = None
+
+
+class HomePodResponse(BaseSchema):
+    """A pod with what it contains and what the caller is to it."""
+
+    id: UUID
+    name: str
+    description: str | None = None
+    icon_url: str | None = None
+    #: Empty for an organization owner who can see the pod without having joined
+    #: it — visibility and membership are not the same thing here.
+    roles: list[str]
+    apps: list[HomeAppResponse]
+    agents: list[HomeAgentResponse]
+
+
+class OrganizationHomeResponse(BaseSchema):
+    """One organization's landing page in a single response."""
+
+    organization_id: UUID
+    name: str
+    slug: str | None = None
+    role: str
+    pods: list[HomePodResponse]
