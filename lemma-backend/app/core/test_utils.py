@@ -93,8 +93,14 @@ class LemmaDockerContainer:
 
     def __exit__(self, exc_type, exc, tb) -> None:
         if self.container_id:
+            # `-v` removes the anonymous volumes this container created. Images
+            # that declare VOLUME make one per `docker run` -- pgvector declares
+            # /var/lib/postgresql/data -- and removing the container without it
+            # orphans that volume permanently: nothing names it, no label
+            # matches it, and it holds a whole database. Hundreds of them, tens
+            # of GB, accumulated exactly this way.
             subprocess.run(
-                ["docker", "rm", "-f", self.container_id],
+                ["docker", "rm", "-f", "-v", self.container_id],
                 check=False,
                 capture_output=True,
             )
@@ -168,8 +174,10 @@ def _prune_e2e_containers() -> None:
     if not container_ids:
         return
 
+    # `-v` so a container left behind by a crashed run takes its anonymous
+    # volumes with it rather than orphaning them.
     subprocess.run(
-        ["docker", "rm", "-f", *container_ids], check=False, capture_output=True
+        ["docker", "rm", "-f", "-v", *container_ids], check=False, capture_output=True
     )
 
 
@@ -381,8 +389,9 @@ def start_shared_kreuzberg(name: str) -> str:
     worker. Not auto-stopped; the last worker out calls ``remove_named_container``
     (and the label-based prune sweeps any straggler).
     """
-    # Clear any straggler with this name from a previously crashed run.
-    subprocess.run(["docker", "rm", "-f", name], check=False, capture_output=True)
+    # Clear any straggler with this name from a previously crashed run, volumes
+    # included.
+    subprocess.run(["docker", "rm", "-f", "-v", name], check=False, capture_output=True)
     container = LemmaDockerContainer(KREUZBERG_IMAGE, 8000).with_run_args(
         "--name", name, "--restart", "unless-stopped"
     )
@@ -394,8 +403,8 @@ def start_shared_kreuzberg(name: str) -> str:
 
 
 def remove_named_container(name: str) -> None:
-    """Force-remove a container by name (best effort)."""
-    subprocess.run(["docker", "rm", "-f", name], check=False, capture_output=True)
+    """Force-remove a container by name, and its anonymous volumes (best effort)."""
+    subprocess.run(["docker", "rm", "-f", "-v", name], check=False, capture_output=True)
 
 
 SHARED_KREUZBERG_NAME = "lemma-e2e-kreuzberg-shared"

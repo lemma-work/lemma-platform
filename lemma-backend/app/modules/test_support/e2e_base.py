@@ -61,6 +61,30 @@ def _ensure_repo_root_on_path() -> None:
         sys.path.insert(0, repo_root_str)
 
 
+def _remove_workspace_volumes() -> None:
+    """Remove sandbox workspace volumes left by e2e runs.
+
+    Scoped to ``managed-by=lemma-workspace`` rather than pruning dangling
+    volumes: a broad prune is machine-wide and would take an unrelated project's
+    disks with it on a shared developer machine.
+    """
+    listed = subprocess.run(
+        ["docker", "volume", "ls", "-q", "--filter", "label=managed-by=lemma-workspace"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    names = [line.strip() for line in listed.stdout.splitlines() if line.strip()]
+    if names:
+        # A volume still mounted by a container Docker has not finished removing
+        # refuses deletion; the next sweep gets it.
+        subprocess.run(
+            ["docker", "volume", "rm", "-f", *sorted(set(names))],
+            check=False,
+            capture_output=True,
+        )
+
+
 def _cleanup_e2e_workspace_containers(*, sandboxes_only: bool = False) -> None:
     """Remove leftover Docker containers created by e2e runs.
 
@@ -111,7 +135,23 @@ def _cleanup_e2e_workspace_containers(*, sandboxes_only: bool = False) -> None:
             line.strip() for line in ps.stdout.splitlines() if line.strip()
         ]
     if container_ids:
-        subprocess.run(["docker", "rm", "-f", *sorted(set(container_ids))], check=False)
+        # `-v` takes each container's anonymous volumes with it. Without it, an
+        # image that declares VOLUME (pgvector declares the postgres data dir)
+        # orphans one per run -- unnamed, unlabelled, and holding a whole
+        # database. That is how hundreds of volumes and tens of GB accumulated.
+        subprocess.run(
+            ["docker", "rm", "-f", "-v", *sorted(set(container_ids))], check=False
+        )
+
+    # Sandbox volumes are NAMED and labelled, so the `-v` above does not touch
+    # them: a workspace disk is meant to outlive the container that mounts it.
+    # That is right in production, where the sweeper now reclaims them, but an
+    # e2e run's sandboxes have no sweeper and no rows behind them, so their
+    # disks are orphaned the moment their container goes. Safe in both modes
+    # precisely because it is scoped to the workspace label: the shared session
+    # containers (postgres/redis/supertokens) own no volume carrying it, and the
+    # sandboxes whose disks these are have just been removed above.
+    _remove_workspace_volumes()
 
     if sandboxes_only:
         return

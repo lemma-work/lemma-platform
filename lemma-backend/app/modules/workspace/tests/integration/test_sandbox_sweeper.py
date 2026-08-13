@@ -270,3 +270,147 @@ async def test_a_sandbox_that_cannot_be_probed_is_left_alone(
     provider.list_processes = _unreachable  # type: ignore[method-assign]
 
     assert await sweeper.release_idle(idle_after_seconds=0) == 0
+
+
+# --- volumes -----------------------------------------------------------------
+#
+# A workspace disk deliberately outlives every container that mounts it, so the
+# container delete keeps it. Nothing ever collected it afterwards: `destroy_volume`
+# existed on every provider and was called by nothing, and `list_objects` returned
+# containers only. Every sandbox ever created leaked its volume, forever.
+
+
+def _volume(*, name: str, sandbox_id: UUID | None, storage_generation: int | None):
+    return ProviderObject(
+        provider_id=name,
+        name=name,
+        sandbox_id=sandbox_id,
+        epoch=None,
+        running=False,
+        kind="volume",
+        storage_generation=storage_generation,
+    )
+
+
+async def test_a_volume_with_no_row_is_reclaimed(
+    sweeper: SandboxSweeper, provider: SweepableProvider
+) -> None:
+    """The disk of a sandbox that no longer exists. This is the 50GB."""
+    orphan = uuid4()
+    name = f"lemma-vol-{orphan.hex}-1"
+    provider.objects = [_volume(name=name, sandbox_id=orphan, storage_generation=1)]
+
+    reclaimed = await sweeper.reclaim_orphans()
+
+    assert reclaimed == (name,)
+    assert provider.destroyed_volumes == [name]
+    assert provider.destroyed == []
+
+
+async def test_a_live_sandboxs_volume_survives_an_epoch_bump(
+    sweeper: SandboxSweeper, provider: SweepableProvider, service: SandboxService
+) -> None:
+    """The regression this rule exists for.
+
+    A volume is the disk every container generation mounts, so judging it by
+    epoch the way a container is judged would delete a live workspace the first
+    time its container restarted.
+    """
+    sandbox = await _workspace(service)
+    first = await service.ensure(sandbox.id)
+    provider.containers.clear()
+    second = await service.ensure(sandbox.id)
+    assert second.epoch > first.epoch
+
+    name = f"lemma-vol-{sandbox.id.hex}-1"
+    provider.objects = [
+        _volume(name=name, sandbox_id=sandbox.id, storage_generation=1),
+        _object(name=second.provider_id, sandbox_id=sandbox.id, epoch=second.epoch),
+    ]
+
+    assert await sweeper.reclaim_orphans() == ()
+    assert provider.destroyed_volumes == []
+
+
+async def test_a_superseded_storage_generation_is_reclaimed(
+    sweeper: SandboxSweeper,
+    provider: SweepableProvider,
+    service: SandboxService,
+    sandbox_uow_factory,
+) -> None:
+    """A new disk generation makes the old disk garbage -- the one thing that
+    genuinely supersedes a volume."""
+    from app.modules.workspace.infrastructure.sandbox_repository import (
+        SandboxRepository,
+    )
+
+    sandbox = await _workspace(service)
+    async with sandbox_uow_factory() as uow:
+        await SandboxRepository(uow).bump_storage_generation(sandbox.id)
+        await uow.commit()
+
+    stale = f"lemma-vol-{sandbox.id.hex}-1"
+    current = f"lemma-vol-{sandbox.id.hex}-2"
+    provider.objects = [
+        _volume(name=stale, sandbox_id=sandbox.id, storage_generation=1),
+        _volume(name=current, sandbox_id=sandbox.id, storage_generation=2),
+    ]
+
+    reclaimed = await sweeper.reclaim_orphans()
+
+    assert reclaimed == (stale,)
+    assert provider.destroyed_volumes == [stale]
+
+
+async def test_a_volume_of_unknown_generation_is_left_alone_while_its_sandbox_lives(
+    sweeper: SandboxSweeper, provider: SweepableProvider, service: SandboxService
+) -> None:
+    """Pre-cutover volumes embed a random token, so their generation cannot be
+    read. Unparseable means unknown, never "generation zero"."""
+    sandbox = await _workspace(service)
+    provider.objects = [
+        _volume(name="lemma-vol-legacytoken", sandbox_id=sandbox.id, storage_generation=None)
+    ]
+
+    assert await sweeper.reclaim_orphans() == ()
+    assert provider.destroyed_volumes == []
+
+
+async def test_an_unidentifiable_volume_is_left_alone(
+    sweeper: SandboxSweeper, provider: SweepableProvider
+) -> None:
+    provider.objects = [
+        _volume(name="someone-elses-data", sandbox_id=None, storage_generation=None)
+    ]
+
+    assert await sweeper.reclaim_orphans() == ()
+    assert provider.destroyed_volumes == []
+
+
+async def test_containers_are_reclaimed_before_the_volumes_they_mount(
+    sweeper: SandboxSweeper, provider: SweepableProvider
+) -> None:
+    """Docker refuses to delete a volume a container still mounts, so taking the
+    container first is what makes the disk collectable in the same sweep."""
+    orphan = uuid4()
+    order: list[str] = []
+    provider.objects = [
+        _volume(name=f"lemma-vol-{orphan.hex}-1", sandbox_id=orphan, storage_generation=1),
+        _object(name=f"lemma-ws-{orphan.hex}-1", sandbox_id=orphan, epoch=1),
+    ]
+
+    async def record_container(name, *, deadline_at):
+        order.append(f"container:{name}")
+
+    async def record_volume(name, *, deadline_at):
+        order.append(f"volume:{name}")
+
+    provider.destroy = record_container
+    provider.destroy_volume = record_volume
+
+    await sweeper.reclaim_orphans()
+
+    assert order == [
+        f"container:lemma-ws-{orphan.hex}-1",
+        f"volume:lemma-vol-{orphan.hex}-1",
+    ]

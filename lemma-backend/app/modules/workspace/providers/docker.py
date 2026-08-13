@@ -448,7 +448,13 @@ class DockerSandboxProvider(DockerOpsMixin):
     async def list_objects(
         self, *, deadline_at: datetime
     ) -> tuple[ProviderObject, ...]:
-        """Everything this provider holds that a sweep may be responsible for."""
+        """Everything this provider holds that a sweep may be responsible for.
+
+        Volumes as well as containers. They were omitted, and since a container
+        is deliberately deleted without its volume (the disk has to survive a
+        restart), nothing could ever find a workspace disk again once its
+        sandbox was gone -- every sandbox ever created leaked one, forever.
+        """
         found: list[ProviderObject] = []
         for label_set in ({LABEL_MANAGED_BY: MANAGED_BY},):
             try:
@@ -459,6 +465,14 @@ class DockerSandboxProvider(DockerOpsMixin):
                 raise ProviderRejected(str(exc)) from exc
             for container in containers:
                 found.append(_as_object(container))
+        try:
+            volumes = await self._engine.list_volumes(
+                labels={LABEL_MANAGED_BY: MANAGED_BY}, deadline_at=deadline_at
+            )
+        except DockerEngineError as exc:
+            raise ProviderRejected(str(exc)) from exc
+        for volume in volumes:
+            found.append(_as_volume_object(volume))
         return tuple(found)
 
     async def close(self) -> None:
@@ -500,6 +514,44 @@ def _as_object(container) -> ProviderObject:
         # Every container this provider creates carries the current labels, so
         # nothing it lists is pre-cutover.
         legacy=False,
+    )
+
+
+def _as_volume_object(volume) -> ProviderObject:
+    """A workspace disk, as the sweep sees it.
+
+    ``epoch`` stays None on purpose. A volume is not bound to one container
+    generation -- it is the disk every generation mounts -- so it must never be
+    judged by epoch, only by whether its sandbox still exists and whether its
+    storage generation is current.
+    """
+    labels: Mapping[str, str] = volume.labels or {}
+    sandbox_id: UUID | None = None
+    storage_generation: int | None = None
+
+    parsed = naming.parse_volume_name(volume.name)
+    if parsed is not None:
+        sandbox_id, storage_generation = parsed
+    else:
+        # Pre-cutover volumes embed a random token in the name but still carry
+        # the logical id as a label. They are identifiable, but their generation
+        # is unknowable, which leaves them reclaimable only when their sandbox
+        # is gone.
+        raw_id = labels.get(LABEL_SANDBOX_ID)
+        if raw_id:
+            try:
+                sandbox_id = UUID(raw_id)
+            except ValueError:
+                sandbox_id = None
+
+    return ProviderObject(
+        provider_id=volume.name,
+        name=volume.name,
+        sandbox_id=sandbox_id,
+        epoch=None,
+        running=False,
+        kind="volume",
+        storage_generation=storage_generation,
     )
 
 
