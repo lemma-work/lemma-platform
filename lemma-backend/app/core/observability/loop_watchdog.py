@@ -31,8 +31,13 @@ from pathlib import Path
 import tempfile
 import time
 
+from app.core.concurrency.offload import run_blocking
 from app.core.config import settings
 from app.core.log.log import get_logger
+from app.core.observability.stall_sampler import (
+    start_loop_stall_sampler,
+    stop_loop_stall_sampler,
+)
 
 logger = get_logger(__name__)
 
@@ -175,25 +180,43 @@ async def loop_lag_watchdog(
     service_name: str = "lemma",
     heartbeat_path: str | None = None,
 ) -> None:
-    """Background task: measure loop lag + refresh the liveness heartbeat."""
+    """Background task: measure loop lag + refresh the liveness heartbeat.
+
+    Also starts the stall sampler, which answers the question this loop cannot:
+    the lag is measured *after* the loop is running again, so the blocking call
+    is already gone by the time there is a number to report. The sampler watches
+    from a thread and captures the culprit's stack during the stall.
+    """
     global _last_lag_seconds
     interval = max(0.05, settings.loop_lag_watchdog_interval_seconds)
     warn = settings.loop_lag_warn_seconds
-    while True:
-        scheduled_at = time.perf_counter()
-        await asyncio.sleep(interval)
-        lag = time.perf_counter() - scheduled_at - interval
-        lag = max(0.0, lag)
-        _last_lag_seconds = lag
+    sampler = start_loop_stall_sampler(
+        stall_seconds=max(warn, settings.loop_stall_sample_seconds),
+        service_name=service_name,
+    )
+    try:
+        while True:
+            scheduled_at = time.perf_counter()
+            await asyncio.sleep(interval)
+            lag = time.perf_counter() - scheduled_at - interval
+            lag = max(0.0, lag)
+            _last_lag_seconds = lag
+            sampler.note_loop_alive()
 
-        if heartbeat_path:
-            try:
-                _write_heartbeat(heartbeat_path)
-            except OSError as exc:  # pragma: no cover - defensive
-                logger.debug(
-                    "runtime.heartbeat.write_failed",
-                    error_type=type(exc).__name__,
-                    service=service_name,
-                )
+            if heartbeat_path:
+                try:
+                    # Offloaded because it is real filesystem I/O — mkdir, a
+                    # temp file, an atomic rename — on whatever volume the pod
+                    # was given. Small, but the one thing in this process that
+                    # must never be the reason the loop it measures stalls.
+                    await run_blocking(_write_heartbeat, heartbeat_path, limiter="cpu_bound")
+                except OSError as exc:  # pragma: no cover - defensive
+                    logger.debug(
+                        "runtime.heartbeat.write_failed",
+                        error_type=type(exc).__name__,
+                        service=service_name,
+                    )
 
-        _evaluate_lag(lag, warn, service_name=service_name)
+            _evaluate_lag(lag, warn, service_name=service_name)
+    finally:
+        stop_loop_stall_sampler()

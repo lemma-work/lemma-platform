@@ -5,6 +5,7 @@ from typing import Any
 from uuid import NAMESPACE_URL, uuid5
 
 from app.core.domain.errors import DomainError
+from app.core.errors.describe import describe_exception
 from app.core.log.log import get_logger
 from app.modules.agent.domain.vision import AgentVisionMode
 from app.modules.agent.tools.context import BaseAgentContext
@@ -100,7 +101,7 @@ def _workspace_tool_failure(
         process_id=process_id,
         error=(
             f"Workspace {operation} failed before the tool could complete: "
-            f"{type(exc).__name__}: {exc}. "
+            f"{describe_exception(exc)}. "
             "Treat this as a recoverable tool failure and retry if the operation "
             "is still needed."
         ),
@@ -124,7 +125,7 @@ def _python_workspace_tool_failure(
             "ename": "WorkspaceToolError",
             "evalue": (
                 f"Workspace {operation} failed before Python execution completed: "
-                f"{type(exc).__name__}: {exc}. "
+                f"{describe_exception(exc)}. "
                 "Treat this as a recoverable tool failure and retry if the operation "
                 "is still needed."
             ),
@@ -466,7 +467,7 @@ async def list_processes_internal(
             processes=[],
             error=(
                 f"Workspace list_processes failed before the tool could complete: "
-                f"{type(exc).__name__}: {exc}. Treat this as a recoverable tool "
+                f"{describe_exception(exc)}. Treat this as a recoverable tool "
                 "failure and retry if the operation is still needed."
             ),
         )
