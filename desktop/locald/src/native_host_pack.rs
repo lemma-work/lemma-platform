@@ -414,8 +414,8 @@ fn build(
         // there is no manager URL, key or database of its own here.
         ("WORKSPACE_PROVIDER", "lemma_local".to_owned()),
         ("WORKSPACE_RUNTIME_CREDENTIAL_KEY", runtime_key),
-        ("WORKSPACE_IMAGE", workspace_image),
-        ("FUNCTION_IMAGE", function_image),
+        ("WORKSPACE_IMAGE", workspace_image.clone()),
+        ("FUNCTION_IMAGE", function_image.clone()),
         ("WORKSPACE_ADD_HOST_GATEWAY", "false".to_owned()),
         ("WORKSPACE_HOST_ALIAS", "host.lemma.internal".to_owned()),
         ("WORKSPACE_LOCAL_CALLBACK_REQUIRED", "true".to_owned()),
@@ -548,6 +548,11 @@ fn build(
                 "postgres": postgres_image,
                 "redis": redis_image,
                 "supertokens": supertokens_image,
+                // Carried so start can warm them. They are only *used* by a
+                // sandbox, but pulling them the first time one is asked for
+                // stopped a pod mid-task with no progress and no explanation.
+                "workspace": workspace_image,
+                "function": function_image,
             },
             "credentials": {
                 "postgres_password": material.postgres_password,

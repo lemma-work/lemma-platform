@@ -66,15 +66,23 @@ impl ApiError {
     /// response.
     #[must_use]
     pub fn is_request_rejected(&self) -> bool {
-        matches!(
-            self,
-            Self::Status { status, .. }
-                if status.is_client_error()
-                    && *status != StatusCode::UNAUTHORIZED
-                    && *status != StatusCode::TOO_MANY_REQUESTS
-                    && *status != StatusCode::REQUEST_TIMEOUT
-        )
+        matches!(self, Self::Status { status, .. } if status_is_request_rejected(*status))
     }
+}
+
+/// The same judgement as [`ApiError::is_request_rejected`], over a bare status.
+///
+/// Split out for the MCP bridge, which holds a `reqwest::Response` rather than
+/// an `ApiError` and had no policy of its own: it treated every non-2xx as
+/// fatal and exited, so one 502 during a backend restart took the agent's whole
+/// Lemma toolset down with it for the rest of the run. Two callers, one rule,
+/// rather than a second opinion about which failures are worth another try.
+#[must_use]
+pub fn status_is_request_rejected(status: StatusCode) -> bool {
+    status.is_client_error()
+        && status != StatusCode::UNAUTHORIZED
+        && status != StatusCode::TOO_MANY_REQUESTS
+        && status != StatusCode::REQUEST_TIMEOUT
 }
 
 impl TargetClient {

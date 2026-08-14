@@ -217,6 +217,34 @@ impl ManagedRuntimeController {
             let _ = self.runtime.stop();
             return Err(error);
         }
+        // Last, and deliberately not fatal.
+        //
+        // A sandbox image is only needed once a pod runs something, and it used
+        // to be fetched at exactly that moment -- `pull --quiet`, no progress,
+        // several hundred megabytes -- so the first real piece of work anybody
+        // asked for stopped dead and said nothing. Spending it here spends it
+        // once, on a bar that is already on screen, and leaves the first run
+        // fast.
+        //
+        // But everything above this line is what makes Lemma work at all, and
+        // this is a warm-up. Someone installing on a plane should still get a
+        // working local Lemma; `sandbox.ensure` will pull what it needs later,
+        // exactly as it does today.
+        progress(
+            "sandbox-images",
+            "Preparing the workspace sandbox",
+            68,
+            "downloading the images pods run their work in",
+        );
+        if let Err(error) = self.runtime.request("core.sandbox_images", parameters) {
+            eprintln!("locald: sandbox images could not be warmed up: {error}");
+            progress(
+                "sandbox-images",
+                "Workspace sandbox will download later",
+                68,
+                "Lemma is ready; the first task in a pod will fetch it",
+            );
+        }
         *self.status.lock().expect("managed runtime status poisoned") = Some(status);
         Ok(())
     }
@@ -884,6 +912,8 @@ mod tests {
                     postgres: "postgres@sha256:test".into(),
                     redis: "redis@sha256:test".into(),
                     supertokens: "supertokens@sha256:test".into(),
+                    workspace: Some("workspace@sha256:test".into()),
+                    function: Some("function@sha256:test".into()),
                 },
                 credentials: crate::host_process::ManagedRuntimeCredentials {
                     postgres_password: "a".repeat(64),

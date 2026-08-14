@@ -25,6 +25,7 @@ import {
   latestPlanSummary,
   latestUserIndex,
 } from "lemma-sdk";
+import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import type {
   AssistantRenderableMessage,
@@ -86,6 +87,8 @@ import {
   AssistantExperienceConversation,
 } from "./assistant-experience-conversation";
 import { AssistantExperienceComposer } from "./assistant-experience-composer";
+import { agentHostBridge, useIsDesktopShell } from "@/lib/desktop/agent-host-bridge";
+import { isLocalAgentSignInFailure } from "@/components/agents/agent-runtime-helpers";
 // getActiveToolBanner moved to assistant-format; re-export to preserve the API.
 export { getActiveToolBanner } from "./assistant-format";
 
@@ -434,8 +437,23 @@ export function AssistantExperienceView({
     availableModelOptions,
   );
 
+  const isDesktopShell = useIsDesktopShell();
+  // Ask the host to look again, then let the user send the message again. The
+  // status this returns is one poll behind by design, so nothing here waits on
+  // it -- the harness list and the composer both re-read it on their own.
+  const recheckLocalAgents = useCallback(() => {
+    void agentHostBridge.refresh().then(
+      () => toast.success("Rechecking the coding agents on this Mac"),
+      (error: unknown) => toast.error(error instanceof Error ? error.message : String(error)),
+    );
+  }, []);
+
   const assistantErrorDetails = stringifyAssistantError(controller.error).trim();
   const showAssistantErrorInTranscript = !!controller.error && !isInlineAssistantErrorNoise(assistantErrorDetails);
+  // Offered only for the failure it fixes, and only where there is a host to
+  // ask. Outside the desktop shell `agentHostBridge` has nothing to call, and a
+  // button that throws is worse than no button.
+  const canRecheckLocalAgents = isDesktopShell && isLocalAgentSignInFailure(assistantErrorDetails);
   const assistantErrorTitle = assistantErrorDetails && assistantErrorDetails.length <= 120 && !assistantErrorDetails.includes("\n")
     ? assistantErrorDetails
     : "Assistant error";
@@ -610,6 +628,7 @@ export function AssistantExperienceView({
             onRetryFailedMessage={controller.canRetryFailedMessage && controller.retryFailedMessage
               ? () => { void controller.retryFailedMessage?.(); }
               : undefined}
+            onRecheckLocalAgents={canRecheckLocalAgents ? recheckLocalAgents : undefined}
             showScrollToBottom={!transcriptScroll.isFollowing}
             onScrollToBottom={() => scrollToBottom("smooth")}
             isConversationBusy={isConversationBusy}

@@ -416,7 +416,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v5
         with:
-          node-version: 24
+          node-version-file: .nvmrc
 
       - name: Import Windows host-pack signing certificate
         if: >-
@@ -870,7 +870,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v5
         with:
-          node-version: 22
+          node-version-file: .nvmrc
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable

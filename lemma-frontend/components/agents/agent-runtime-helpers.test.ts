@@ -18,6 +18,7 @@ import {
     harnessConfigControls,
     harnessProfileChanges,
     hydrateRuntimeModel,
+    isLocalAgentSignInFailure,
     isArchivedProfile,
     isDiscoveringHarnesses,
     HARNESS_DISCOVERY_WINDOW_MS,
@@ -430,5 +431,33 @@ describe('harnessProfileChanges', () => {
     it('notices a selection that was removed', () => {
         expect(harnessProfileChanges(stored, { ...stored, selections: {} }))
             .toEqual({ config_selections: {} });
+    });
+});
+
+describe('isLocalAgentSignInFailure', () => {
+    // The Agent Host's own wording, from `authentication_hint`. Matching it is
+    // what puts a Re-check button on the one failure where "try again" cannot
+    // work on its own: the harness stays AUTH_REQUIRED and admission keeps
+    // refusing until the host re-probes.
+    const hint =
+        'Claude Code is installed on this computer but not signed in. ' +
+        'Sign in to it in a terminal, then press Re-check. ' +
+        'Lemma runs it with your credentials and never sees them.';
+
+    it('recognises a signed-out coding agent', () => {
+        expect(isLocalAgentSignInFailure(hint)).toBe(true);
+    });
+
+    it('leaves every other failure alone', () => {
+        // Offering a re-probe here would be a button that fixes nothing.
+        expect(isLocalAgentSignInFailure('Agent run was interrupted (timeout or shutdown)')).toBe(false);
+        expect(isLocalAgentSignInFailure('No LLM model is configured on this server')).toBe(false);
+        expect(isLocalAgentSignInFailure('')).toBe(false);
+        expect(isLocalAgentSignInFailure(null)).toBe(false);
+        expect(isLocalAgentSignInFailure(undefined)).toBe(false);
+    });
+
+    it('is not fooled by an unrelated mention of signing in', () => {
+        expect(isLocalAgentSignInFailure('The user is not signed in to Lemma.')).toBe(false);
     });
 });
