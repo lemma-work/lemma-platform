@@ -628,3 +628,37 @@ def test_debug_only_noise_remains_available_by_default_at_debug(
     logging.getLogger(logger_name).debug("routine protocol chatter")
 
     assert captured_stdout()[-1]["event"] == "routine protocol chatter"
+
+
+def test_a_diagnostic_stack_field_is_not_swallowed_by_structlog(
+    captured_stdout,
+) -> None:
+    """The runtime detectors' stacks must survive to the log line.
+
+    ``stack`` is a reserved key: structlog's renderers pop it and handle it
+    themselves, so a field passed as ``stack=`` vanishes without any error --
+    and the event catalog happily listed ``stack`` as an expected field, so
+    nothing anywhere complained. Both runtime detectors shipped that way: they
+    reported *that* the loop stalled or a connection was held, and silently
+    dropped the one thing that says *where*, which is the entire reason they
+    capture a stack.
+
+    This asserts the property (a stack-bearing diagnostic field arrives intact)
+    rather than the current spelling, so renaming the field again is fine and
+    reintroducing a reserved name is not.
+    """
+    get_logger("app.demo").warning(
+        "runtime.loop_stall.degraded",
+        service="lemma-test",
+        stalled_ms=1049.6,
+        threshold_ms=1000.0,
+        stack_frames="app/foo.py:12 in slow_thing\napp/bar.py:44 in caller",
+    )
+    records = captured_stdout()
+    assert len(records) == 1
+    record = records[0]
+    assert record["event"] == "runtime.loop_stall.degraded"
+    assert "slow_thing" in record.get("stack_frames", ""), (
+        "the blocking call's stack did not survive the logging pipeline; a "
+        f"stall report without it names no culprit. Got: {sorted(record)}"
+    )

@@ -342,7 +342,7 @@ class ConnectionScopeMonitor:
             statements=hold.statements,
             threshold_ms=round(self._idle_hold_seconds * 1000, 1),
             in_transaction=hold.in_transaction,
-            stack=stack,
+            stack_frames=stack,
         )
 
 

@@ -127,7 +127,7 @@ class LoopStallSampler:
             service=self._service_name,
             stalled_ms=round(stalled_for * 1000, 1),
             threshold_ms=round(self._stall_seconds * 1000, 1),
-            stack=stack,
+            stack_frames=stack,
         )
 
     def _capture(self) -> str | None:
