@@ -50,10 +50,19 @@ def _is_interesting(frame: traceback.FrameSummary) -> bool:
     return not any(part in frame.filename for part in _UNINTERESTING)
 
 
+_MAX_STACK_CHARS = 7_000
+
+
 def format_hold_stack(frames: list[traceback.FrameSummary]) -> str:
-    """The application frames around a held connection, innermost last."""
+    """The application frames around a held connection, innermost last.
+
+    Clipped from the front for the same reason as ``format_stall_stack``: the
+    innermost frames name the holder, so an overlong stack must lose its head,
+    not its tail.
+    """
     interesting = [frame for frame in frames if _is_interesting(frame)]
-    return "".join(traceback.format_list((interesting or frames)[-12:])).rstrip()
+    formatted = "".join(traceback.format_list((interesting or frames)[-12:]))
+    return formatted.rstrip()[-_MAX_STACK_CHARS:]
 
 
 def holder_frames() -> list[traceback.FrameSummary]:

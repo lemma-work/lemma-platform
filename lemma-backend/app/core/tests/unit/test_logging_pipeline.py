@@ -662,3 +662,75 @@ def test_a_diagnostic_stack_field_is_not_swallowed_by_structlog(
         "the blocking call's stack did not survive the logging pipeline; a "
         f"stall report without it names no culprit. Got: {sorted(record)}"
     )
+
+
+def _bound(event: str, level: str, **fields) -> dict:
+    """Run the bounding processor directly.
+
+    Bypasses the event catalog on purpose: these assertions are about how a
+    field is bounded, dropped or rendered, not about which events exist, and
+    coupling them to a catalog entry would mean this test starts failing the
+    day someone retires an unrelated event name.
+    """
+    return logmod._bound_fields(  # noqa: SLF001
+        {"event": event, "level": level, **fields}
+    )
+
+
+def test_an_error_record_is_not_truncated_or_thinned() -> None:
+    """An error keeps everything.
+
+    It is the most valuable record the system emits, it is emitted once, and
+    the state that produced it is already gone. Bounding it saves log volume
+    nobody was struggling to afford -- errors are rare by construction -- and
+    spends the diagnosis to do it.
+    """
+    long_sql = "SELECT " + ", ".join(f"col_{i}" for i in range(400))
+    record = _bound(
+        "datastore.record.list.propagated",
+        "error",
+        statement=long_sql,
+        bind_params={"pod_id": "abc", "limit": 50},
+    )
+    assert record["statement"] == long_sql, (
+        "a long field on an error record was truncated; the tail of a "
+        "statement is often the part that explains the failure"
+    )
+    # A structured value is rendered, not dropped: the shape of the payload is
+    # frequently the whole diagnosis.
+    assert "pod_id" in record["bind_params"]
+    assert "dropped_fields" not in record
+
+
+def test_a_bounded_record_says_when_it_cut_something() -> None:
+    """Below error, fields stay bounded -- but never silently.
+
+    A cut value is otherwise indistinguishable from a complete one, so a
+    half-printed URL reads as the whole truth and sends the reader looking in
+    the wrong place.
+    """
+    record = _bound("service.started", "info", detail="x" * 900)
+    assert record["detail"].endswith("chars truncated]"), record["detail"][-60:]
+    assert "+388 chars truncated" in record["detail"]
+
+
+def test_a_dropped_field_is_named_not_just_counted() -> None:
+    """Names, never values. A bare count tells you something was lost and
+    leaves you guessing which call site to go read."""
+    record = _bound("service.started", "info", shape={"a": 1}, password="hunter2")
+    assert record["dropped_field_count"] == 2
+    assert record["dropped_fields"] == "password,shape"
+    assert "hunter2" not in json.dumps(record)
+
+
+def test_a_credential_is_withheld_even_from_an_error() -> None:
+    """The one thing an error does not get.
+
+    A credential in a log is an incident, not a diagnosis. Everything else
+    about the error survives, and the field is named so the omission is
+    visible rather than mysterious.
+    """
+    record = _bound("db.connect.failed", "error", password="hunter2", dsn="postgres://h/db")
+    assert "password" not in record
+    assert record["dropped_fields"] == "password"
+    assert record["dsn"] == "postgres://h/db"
