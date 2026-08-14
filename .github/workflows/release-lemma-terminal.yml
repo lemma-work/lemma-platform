@@ -78,41 +78,11 @@ jobs:
         working-directory: lemma-cli
         run: python -m build
 
-      - name: Verify skills are bundled
-        working-directory: lemma-cli
-        shell: bash
-        run: |
-          set -euo pipefail
-          count=$(python -c "import zipfile,glob; w=glob.glob('dist/*.whl')[0]; print(sum(1 for n in zipfile.ZipFile(w).namelist() if n.endswith('SKILL.md')))")
-          echo "SKILL.md files in wheel: $count"
-          test "$count" -ge 1 || { echo 'No skills bundled in the wheel — aborting release.'; exit 1; }
-
-      - name: Verify pod-bundle is vendored and not a PyPI dependency
-        working-directory: lemma-cli
-        shell: bash
-        run: |
-          set -euo pipefail
-          python - <<'PY'
-          import glob, sys, zipfile
-
-          wheel = glob.glob("dist/*.whl")[0]
-          zf = zipfile.ZipFile(wheel)
-          names = zf.namelist()
-
-          if "lemma_pod_bundle/__init__.py" not in names:
-              sys.exit("lemma_pod_bundle is not vendored into the wheel — aborting release.")
-
-          meta = next(n for n in names if n.endswith(".dist-info/METADATA"))
-          leaked = [
-              line
-              for line in zf.read(meta).decode().splitlines()
-              if line.startswith("Requires-Dist:") and "lemma-pod-bundle" in line
-          ]
-          if leaked:
-              sys.exit(f"lemma-pod-bundle still declared as a dependency {leaked} — aborting release.")
-
-          print("pod-bundle vendored into the wheel, no PyPI dependency — ok")
-          PY
+      # Skills, lemma_pod_bundle, and no unpublished distribution in
+      # Requires-Dist — the same check CI runs on every pull request that
+      # touches the CLI, so a release is never the first build anyone verified.
+      - name: Verify the distributions carry what PyPI cannot supply
+        run: python scripts/check_cli_wheel.py lemma-cli/dist
 
       - name: Check distribution
         working-directory: lemma-cli
