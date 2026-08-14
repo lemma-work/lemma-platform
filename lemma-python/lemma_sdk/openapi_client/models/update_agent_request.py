@@ -11,6 +11,9 @@ from ..models.resource_visibility import ResourceVisibility
 from ..types import UNSET, Unset
 
 if TYPE_CHECKING:
+    from ..models.agent_permissions_replace_request import (
+        AgentPermissionsReplaceRequest,
+    )
     from ..models.agent_runtime_config import AgentRuntimeConfig
     from ..models.update_agent_request_input_schema_type_0 import (
         UpdateAgentRequestInputSchemaType0,
@@ -37,6 +40,9 @@ class UpdateAgentRequest:
         instruction (None | str | Unset):
         metadata (None | Unset | UpdateAgentRequestMetadataType0):
         output_schema (None | Unset | UpdateAgentRequestOutputSchemaType0):
+        permissions (AgentPermissionsReplaceRequest | None | Unset): Optional resource grants to REPLACE on this agent,
+            in the same request. Equivalent to calling the permissions-replace endpoint right after update — grants are
+            keyed by resource_name. Omit the key to leave existing grants alone; an empty grant list revokes them.
         toolsets (list[AgentToolset] | None | Unset):
         visibility (None | ResourceVisibility | Unset):
     """
@@ -48,11 +54,15 @@ class UpdateAgentRequest:
     instruction: None | str | Unset = UNSET
     metadata: None | Unset | UpdateAgentRequestMetadataType0 = UNSET
     output_schema: None | Unset | UpdateAgentRequestOutputSchemaType0 = UNSET
+    permissions: AgentPermissionsReplaceRequest | None | Unset = UNSET
     toolsets: list[AgentToolset] | None | Unset = UNSET
     visibility: None | ResourceVisibility | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
+        from ..models.agent_permissions_replace_request import (
+            AgentPermissionsReplaceRequest,
+        )
         from ..models.agent_runtime_config import AgentRuntimeConfig
         from ..models.update_agent_request_input_schema_type_0 import (
             UpdateAgentRequestInputSchemaType0,
@@ -114,6 +124,14 @@ class UpdateAgentRequest:
         else:
             output_schema = self.output_schema
 
+        permissions: dict[str, Any] | None | Unset
+        if isinstance(self.permissions, Unset):
+            permissions = UNSET
+        elif isinstance(self.permissions, AgentPermissionsReplaceRequest):
+            permissions = self.permissions.to_dict()
+        else:
+            permissions = self.permissions
+
         toolsets: list[str] | None | Unset
         if isinstance(self.toolsets, Unset):
             toolsets = UNSET
@@ -151,6 +169,8 @@ class UpdateAgentRequest:
             field_dict["metadata"] = metadata
         if output_schema is not UNSET:
             field_dict["output_schema"] = output_schema
+        if permissions is not UNSET:
+            field_dict["permissions"] = permissions
         if toolsets is not UNSET:
             field_dict["toolsets"] = toolsets
         if visibility is not UNSET:
@@ -160,6 +180,9 @@ class UpdateAgentRequest:
 
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
+        from ..models.agent_permissions_replace_request import (
+            AgentPermissionsReplaceRequest,
+        )
         from ..models.agent_runtime_config import AgentRuntimeConfig
         from ..models.update_agent_request_input_schema_type_0 import (
             UpdateAgentRequestInputSchemaType0,
@@ -276,6 +299,25 @@ class UpdateAgentRequest:
 
         output_schema = _parse_output_schema(d.pop("output_schema", UNSET))
 
+        def _parse_permissions(
+            data: object,
+        ) -> AgentPermissionsReplaceRequest | None | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            try:
+                if not isinstance(data, dict):
+                    raise TypeError()
+                permissions_type_0 = AgentPermissionsReplaceRequest.from_dict(data)
+
+                return permissions_type_0
+            except TypeError, ValueError, AttributeError, KeyError:
+                pass
+            return cast(AgentPermissionsReplaceRequest | None | Unset, data)
+
+        permissions = _parse_permissions(d.pop("permissions", UNSET))
+
         def _parse_toolsets(data: object) -> list[AgentToolset] | None | Unset:
             if data is None:
                 return data
@@ -323,6 +365,7 @@ class UpdateAgentRequest:
             instruction=instruction,
             metadata=metadata,
             output_schema=output_schema,
+            permissions=permissions,
             toolsets=toolsets,
             visibility=visibility,
         )

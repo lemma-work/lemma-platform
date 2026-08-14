@@ -1,53 +1,10 @@
 version = 1
-revision = 2
+revision = 3
 requires-python = "==3.14.*"
 resolution-markers = [
     "sys_platform == 'win32'",
     "sys_platform == 'emscripten'",
     "sys_platform != 'emscripten' and sys_platform != 'win32'",
-]
-
-[[package]]
-name = "lemma-workspace-environment"
-version = "1.0.0"
-source = { virtual = "." }
-dependencies = [
-    { name = "fastapi", extra = ["standard"] },
-    { name = "ipykernel" },
-    { name = "lemma-pod-bundle" },
-    { name = "lemma-sdk" },
-    { name = "lemma-terminal" },
-    { name = "matplotlib" },
-    { name = "numpy" },
-    { name = "openpyxl" },
-    { name = "pandas" },
-    { name = "pillow" },
-    { name = "pip" },
-    { name = "pydantic" },
-    { name = "python-dateutil" },
-    { name = "requests" },
-    { name = "tabulate" },
-    { name = "uvicorn", extra = ["standard"] },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "fastapi", extras = ["standard"], specifier = ">=0.128.0" },
-    { name = "ipykernel", specifier = ">=6.31.0" },
-    { name = "lemma-pod-bundle", directory = "../../../../lemma-pod-bundle" },
-    { name = "lemma-sdk", directory = "../../../../lemma-python" },
-    { name = "lemma-terminal", directory = "../../../../lemma-cli" },
-    { name = "matplotlib" },
-    { name = "numpy" },
-    { name = "openpyxl" },
-    { name = "pandas" },
-    { name = "pillow" },
-    { name = "pip", specifier = ">=26.0" },
-    { name = "pydantic", specifier = ">=2.11.0" },
-    { name = "python-dateutil" },
-    { name = "requests" },
-    { name = "tabulate" },
-    { name = "uvicorn", extras = ["standard"], specifier = ">=0.42.0" },
 ]
 
 [[package]]
@@ -121,7 +78,7 @@ name = "cffi"
 version = "2.1.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "pycparser", marker = "implementation_name != 'PyPy'" },
+    { name = "pycparser" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/57/5f/ff100cae70ebe9d8df1c01a00e510e45d9adb5c1fdda84791b199141de97/cffi-2.1.0.tar.gz", hash = "sha256:efc1cdd798b1aaf39b4610bba7aad28c9bea9b910f25c784ccf9ec1fa719d1f9", size = 531036, upload-time = "2026-07-06T21:34:30.382Z" }
 wheels = [
@@ -712,7 +669,6 @@ name = "lemma-terminal"
 source = { directory = "../../../../lemma-cli" }
 dependencies = [
     { name = "click" },
-    { name = "lemma-pod-bundle" },
     { name = "lemma-sdk" },
     { name = "rich" },
     { name = "textual" },
@@ -723,7 +679,6 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "click", specifier = ">=8.3.0" },
-    { name = "lemma-pod-bundle", directory = "../../../../lemma-pod-bundle" },
     { name = "lemma-sdk", directory = "../../../../lemma-python" },
     { name = "rich", specifier = ">=13.9.4" },
     { name = "textual", specifier = ">=8.0" },
@@ -734,11 +689,55 @@ requires-dist = [
 [package.metadata.requires-dev]
 dev = [
     { name = "httpx", specifier = ">=0.27" },
+    { name = "lemma-pod-bundle", directory = "../../../../lemma-pod-bundle" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.1" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "ruff" },
     { name = "textual-dev" },
+]
+
+[[package]]
+name = "lemma-workspace-environment"
+version = "1.0.0"
+source = { virtual = "." }
+dependencies = [
+    { name = "fastapi", extra = ["standard"] },
+    { name = "ipykernel" },
+    { name = "lemma-pod-bundle" },
+    { name = "lemma-sdk" },
+    { name = "lemma-terminal" },
+    { name = "matplotlib" },
+    { name = "numpy" },
+    { name = "openpyxl" },
+    { name = "pandas" },
+    { name = "pillow" },
+    { name = "pip" },
+    { name = "pydantic" },
+    { name = "python-dateutil" },
+    { name = "requests" },
+    { name = "tabulate" },
+    { name = "uvicorn", extra = ["standard"] },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "fastapi", extras = ["standard"], specifier = ">=0.128.0" },
+    { name = "ipykernel", specifier = ">=6.31.0" },
+    { name = "lemma-pod-bundle", directory = "../../../../lemma-pod-bundle" },
+    { name = "lemma-sdk", directory = "../../../../lemma-python" },
+    { name = "lemma-terminal", directory = "../../../../lemma-cli" },
+    { name = "matplotlib" },
+    { name = "numpy" },
+    { name = "openpyxl" },
+    { name = "pandas" },
+    { name = "pillow" },
+    { name = "pip", specifier = ">=26.0" },
+    { name = "pydantic", specifier = ">=2.11.0" },
+    { name = "python-dateutil" },
+    { name = "requests" },
+    { name = "tabulate" },
+    { name = "uvicorn", extras = ["standard"], specifier = ">=0.42.0" },
 ]
 
 [[package]]
@@ -968,7 +967,7 @@ name = "pexpect"
 version = "4.9.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "ptyprocess", marker = "sys_platform != 'emscripten' and sys_platform != 'win32'" },
+    { name = "ptyprocess" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/42/92/cc564bf6381ff43ce1f4d06852fc19a2f11d180f23dc32d9588bee2f149d/pexpect-4.9.0.tar.gz", hash = "sha256:ee7d41123f3c9911050ea2c2dac107568dc43b2d3b0c7557a33212c398ead30f", size = 166450, upload-time = "2023-11-25T09:07:26.339Z" }
 wheels = [

@@ -10,6 +10,9 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterable, AsyncIterator
 from datetime import datetime, timezone
+import hashlib
+
+import anyio
 
 from sandbox_runtime.protocol import (
     ByteRange,
@@ -40,6 +43,7 @@ from app.modules.workspace.providers.e2b_common import (
     sdk_best_effort,
     sdk_errors,
 )
+from app.modules.workspace.providers.e2b_process_lifetime import seconds_until
 
 WORKSPACE_MOUNT = "/workspace"
 
@@ -181,6 +185,8 @@ class E2BOpsMixin:
                 process_id, channel=ProcessOutputChannel.STDERR, data=data.encode()
             )
 
+        process_seconds = seconds_until(deadline_at)
+
         with sdk_errors():
             if request.tty is not None:
                 async def on_pty(data: bytes) -> None:
@@ -193,6 +199,7 @@ class E2BOpsMixin:
                     on_data=on_pty,
                     cwd=request.cwd,
                     envs=environment,
+                    timeout=process_seconds,
                 )
                 if command:
                     # `pty.create` always starts a shell and takes no command,
@@ -211,6 +218,7 @@ class E2BOpsMixin:
                     envs=environment,
                     on_stdout=on_stdout,
                     on_stderr=on_stderr,
+                    timeout=process_seconds,
                 )
 
         # The caller addresses the process by its operation id, so the E2B pid
@@ -241,6 +249,17 @@ class E2BOpsMixin:
                 # A command that exits non-zero raises in some SDK versions;
                 # the exit code is still the thing the caller needs.
                 exit_code = getattr(exc, "exit_code", None)
+            except asyncio.CancelledError:
+                # `wait()` awaits an SDK-internal task, so a cancellation
+                # anywhere in that chain (a disconnect, a sandbox release)
+                # arrives here — and `except Exception` does not catch it.
+                # Skipping the record leaves the process reading as "still
+                # running" for the rest of the sandbox's life, and the agent
+                # polls a corpse until its own deadline. Record the outcome we
+                # have, then let the cancellation continue.
+                with anyio.CancelScope(shield=True):
+                    await self._output.record_exit(process_id, exit_code=None)
+                raise
             await self._output.record_exit(process_id, exit_code=exit_code)
 
         task = create_inherited_task(watch(), name=f"e2b-process-watch:{process_id}")
@@ -387,14 +406,24 @@ class E2BOpsMixin:
         expected_sha256: str | None,
         deadline_at: datetime,
     ) -> FileStat:
-        payload = b"".join([chunk async for chunk in data])
-        if expected_sha256 is not None:
-            import hashlib
-
-            digest = hashlib.sha256(payload).hexdigest()
-            if digest != expected_sha256.removeprefix("sha256:"):
+        # Hashed as the chunks arrive rather than in one pass over the joined
+        # payload. Both cost the same CPU; only this one has an await between
+        # the blocks, so a large file is a series of short bursts instead of a
+        # single uninterrupted one on the loop that also serves every other
+        # agent run in this process. `filesystem_manager.write_stream` and
+        # `stage_upload_limited` already do it this way.
+        digest = hashlib.sha256() if expected_sha256 is not None else None
+        blocks: list[bytes] = []
+        async for chunk in data:
+            blocks.append(chunk)
+            if digest is not None:
+                digest.update(chunk)
+        payload = b"".join(blocks)
+        if digest is not None and expected_sha256 is not None:
+            hexdigest = digest.hexdigest()
+            if hexdigest != expected_sha256.removeprefix("sha256:"):
                 raise SandboxRejected(
-                    f"content digest {digest} does not match the expected value"
+                    f"content digest {hexdigest} does not match the expected value"
                 )
         sandbox = await self._connect(instance.provider_id)
         with sdk_errors():

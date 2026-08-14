@@ -210,6 +210,16 @@ class Settings(BaseSettings):
             "``LOOP_LAG_WARN_SECONDS``."
         ),
     )
+    loop_stall_sample_seconds: float = Field(
+        default=1.0,
+        description=(
+            "How long the loop may go unscheduled before the stall sampler "
+            "captures the stack of whatever is blocking it. Higher than the "
+            "warn threshold on purpose: a brief lag is worth a number, a "
+            "second-long stall is worth a name. Env: "
+            "``LOOP_STALL_SAMPLE_SECONDS``."
+        ),
+    )
     loop_lag_unhealthy_seconds: float = Field(
         default=5.0,
         description=(

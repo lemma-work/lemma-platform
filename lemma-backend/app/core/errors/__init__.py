@@ -1,0 +1,1 @@
+"""Shared error-rendering helpers."""
