@@ -53,8 +53,14 @@ class DatastoreFileChunkRepository:
             )
 
         async with self._session_factory() as session:
+            # SET LOCAL, never bare SET: the connection goes back to the pool
+            # when this session closes, and a bare SET would leave this pod's
+            # schema on the search_path for whoever borrows it next. Every
+            # statement here is schema-qualified anyway, so the setting is
+            # belt-and-braces — but leaking session state across borrowers is
+            # also what makes a transaction-mode connection pooler unusable.
             await session.execute(
-                text(f'SET search_path TO "{self.schema_name}", public')
+                text(f'SET LOCAL search_path TO "{self.schema_name}", public')
             )
             await session.execute(
                 text(
@@ -76,7 +82,7 @@ class DatastoreFileChunkRepository:
     async def remove_chunks_by_file(self, file_id: UUID) -> bool:
         async with self._session_factory() as session:
             await session.execute(
-                text(f'SET search_path TO "{self.schema_name}", public')
+                text(f'SET LOCAL search_path TO "{self.schema_name}", public')
             )
             await session.execute(
                 text(
@@ -95,7 +101,7 @@ class DatastoreFileChunkRepository:
     ) -> bool:
         async with self._session_factory() as session:
             await session.execute(
-                text(f'SET search_path TO "{self.schema_name}", public')
+                text(f'SET LOCAL search_path TO "{self.schema_name}", public')
             )
             await session.execute(
                 text(
@@ -141,7 +147,7 @@ class DatastoreFileChunkRepository:
         dim = settings.embedding_dimension
         async with self._session_factory() as session:
             await session.execute(
-                text(f'SET search_path TO "{self.schema_name}", public')
+                text(f'SET LOCAL search_path TO "{self.schema_name}", public')
             )
             # Tune the HNSW scan for this query. iterative_scan keeps pulling
             # candidates from the index until enough survive the WHERE filter
@@ -231,7 +237,7 @@ class DatastoreFileChunkRepository:
             return []
         async with self._session_factory() as session:
             await session.execute(
-                text(f'SET search_path TO "{self.schema_name}", public')
+                text(f'SET LOCAL search_path TO "{self.schema_name}", public')
             )
             file_filter = ""
             params: dict[str, Any] = {

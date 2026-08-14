@@ -234,10 +234,6 @@ def lane_for_task(task_name: str) -> Lane:
     return TASK_LANES.get(task_name, Lane.INTERACTIVE)
 
 
-# Headroom between task concurrency and the DB pool, leaving room for the
-# crons, event handlers and reconcilers that share the worker.
-_DB_POOL_SAFETY_FACTOR = 0.8
-
 # How long the non-primary lanes get to unwind once the primary has shut down.
 # The primary has already served its own grace period by this point, so the
 # remaining lanes are only closing connections. Short, because the alternative
@@ -468,32 +464,17 @@ async def worker_lifespan() -> AsyncGenerator[AppWorkerContext]:
 
     configure_thread_pool()
 
-    # Guardrail: each task that opens a DB session holds a pooled connection for
-    # its duration, so concurrency above the pool capacity means tasks block on
-    # connection checkout — which looks like the whole worker hanging. Warn (not
-    # fail, to keep dev flexible) when the margin is too thin so it can't
-    # silently regress.
-    # The shipped defaults sit exactly on this line: concurrency 20 against a
-    # pool of 20. `worker_concurrency`'s own docstring calls that acceptable
-    # ("should not exceed"), but equal is not enough — the worker also runs
-    # crons, event-bus handlers and reconcilers that each need a connection, so
-    # at parity the first one of those blocks behind a full pool. Hence the 0.8
-    # margin, and hence logging the numbers: a bare "degraded" event tells an
-    # operator nothing about which of the two knobs to move.
+    # There used to be a guardrail here requiring worker concurrency to fit
+    # inside the DB pool, on the theory that a task holds a pooled connection
+    # for its whole lifetime. It doesn't: every task takes a session per unit of
+    # work and gives it back before any LLM call, HTTP request, sandbox
+    # operation or thread offload — `make lint-session-scope` fails the build if
+    # that stops being true. So concurrency is bounded by the pod's RAM and CPU,
+    # not by the pool, and the two knobs are independent. Real pool pressure is
+    # reported from measurement instead: the `database_pool_capacity` incident
+    # in app/core/infrastructure/db/session.py fires on sustained checkout
+    # saturation, which is the signal that actually means something.
     #
-    # Concurrency is summed across the lanes this process actually runs: with
-    # both enabled, interactive and bulk tasks draw from the same pool at the
-    # same time, so their combined budget is what can exhaust it.
-    pool_capacity = settings.db_pool_size + settings.db_max_overflow
-    safe_concurrency = int(pool_capacity * _DB_POOL_SAFETY_FACTOR)
-    configured_concurrency = sum(lane_concurrency(lane) for lane in enabled_lanes())
-    if pool_capacity and configured_concurrency > safe_concurrency:
-        logger.warning(
-            "infrastructure.streaq_runtime.worker_concurrency_exceeds_safe_db.degraded",
-            configured_concurrency=configured_concurrency,
-            pool_capacity=pool_capacity,
-            safe_concurrency=safe_concurrency,
-        )
     # Pre-create Redis consumer groups BEFORE the broker starts its subscribers.
     # Several subscribers share a stream (e.g. workflow + surface both consume
     # `schedule_events`); at broker.start FastStream races to create each group,

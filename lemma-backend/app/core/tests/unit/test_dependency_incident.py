@@ -61,7 +61,7 @@ def test_db_pool_pressure_emits_one_transition_pair(monkeypatch) -> None:
     )
 
     class _Pool:
-        _max_overflow = 5
+        """Pool of 5. There is no overflow, so size() is the whole ceiling."""
 
         def __init__(self, checked_out: int) -> None:
             self._checked_out = checked_out
@@ -77,7 +77,7 @@ def test_db_pool_pressure_emits_one_transition_pair(monkeypatch) -> None:
             self.pool = _Pool(checked_out)
 
     for _ in range(4):
-        session_module._log_pool_utilization(None, _ConnectionRecord(9))
+        session_module._log_pool_utilization(None, _ConnectionRecord(4))
     session_module._log_pool_utilization(None, _ConnectionRecord(1))
 
     assert [record[:2] for record in logger.records] == [

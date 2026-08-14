@@ -40,9 +40,12 @@ def _build_connect_args() -> dict:
     """
     connect_args: dict = {}
     server_settings: dict[str, str] = {}
-    timeout_ms = int(settings.db_idle_in_transaction_timeout_seconds * 1000)
-    if timeout_ms > 0:
-        server_settings["idle_in_transaction_session_timeout"] = str(timeout_ms)
+    idle_ms = int(settings.db_idle_in_transaction_timeout_seconds * 1000)
+    if idle_ms > 0:
+        server_settings["idle_in_transaction_session_timeout"] = str(idle_ms)
+    statement_ms = int(settings.db_statement_timeout_seconds * 1000)
+    if statement_ms > 0:
+        server_settings["statement_timeout"] = str(statement_ms)
     if server_settings:
         connect_args["server_settings"] = server_settings
     return connect_args
@@ -60,7 +63,7 @@ def _log_pool_utilization(dbapi_conn, connection_record, proxy=None):
     """
     try:
         pool = connection_record.pool
-        max_conn = pool.size() + pool._max_overflow  # noqa: SLF001
+        max_conn = pool.size()
         checked_out = pool.checkedout()
         if max_conn > 0 and checked_out / max_conn >= 0.8:
             _pool_pressure_incident.record_failure(error_type="PoolUtilizationHigh")
@@ -79,9 +82,19 @@ def get_engine():
             engine_kwargs["poolclass"] = NullPool
         else:
             engine_kwargs["pool_size"] = settings.db_pool_size
-            engine_kwargs["max_overflow"] = settings.db_max_overflow
+            # max_overflow=0 on purpose. Overflow makes the per-process ceiling
+            # non-deterministic, which is exactly the property that breaks
+            # capacity planning once replicas autoscale; and overflow
+            # connections are discarded on return, so they are the expensive
+            # kind. pool_size IS the ceiling.
+            engine_kwargs["max_overflow"] = 0
             engine_kwargs["pool_timeout"] = settings.db_pool_timeout_seconds
             engine_kwargs["pool_recycle"] = settings.db_pool_recycle_seconds
+            # LIFO: keep reusing the hottest connections so the tail of the pool
+            # ages out under pool_recycle instead of being kept warm by
+            # round-robin. A burst-shaped workload then settles back to a small
+            # number of live backends between bursts.
+            engine_kwargs["pool_use_lifo"] = True
             connect_args = _build_connect_args()
         engine = create_async_engine(
             settings.database_url,
@@ -92,30 +105,7 @@ def get_engine():
         )
         if settings.environment != "testing":
             event.listen(engine.sync_engine.pool, "checkout", _log_pool_utilization)
-            _log_connection_budget()
     return engine
-
-
-def _log_connection_budget() -> None:
-    """Log the per-process DB connection ceiling and warn about multi-pod math.
-
-    Each process (API or worker pod) can open up to:
-      (db_pool_size + db_max_overflow) + (datastore_db_pool_size + datastore_db_max_overflow)
-
-    With N replicas, the cluster-wide ceiling is N × per_process_max.
-    This must stay under Postgres max_connections (default 100).
-    """
-    main_max = settings.db_pool_size + settings.db_max_overflow
-    datastore_max = settings.datastore_db_pool_size + settings.datastore_db_max_overflow
-    per_process = main_max + datastore_max
-    pg_max = settings.postgres_max_connections
-
-    if per_process >= pg_max:
-        logger.debug(
-            "infrastructure.session.per_process_db_connection_ceiling.diagnostic"
-        )
-    elif per_process * 2 > pg_max:
-        logger.debug("infrastructure.session.two_processes_api_worker_would.diagnostic")
 
 
 def get_session_maker():
