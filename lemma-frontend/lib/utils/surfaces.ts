@@ -1,14 +1,5 @@
 import type { AssistantSurface } from '@/lib/types';
 
-export const SURFACE_PLATFORM_META: Record<string, { label: string; logoSrc: string }> = {
-    SLACK: { label: 'Slack', logoSrc: '/surfaces/slack.png' },
-    TEAMS: { label: 'Teams', logoSrc: '/surfaces/teams.png' },
-    GMAIL: { label: 'Gmail', logoSrc: '/surfaces/gmail.png' },
-    OUTLOOK: { label: 'Outlook', logoSrc: '/surfaces/outlook.png' },
-    TELEGRAM: { label: 'Telegram', logoSrc: '/surfaces/telegram.png' },
-    WHATSAPP: { label: 'WhatsApp', logoSrc: '/surfaces/whatsapp.png' },
-};
-
 export function getSurfacePlatformKey(surface: AssistantSurface): string {
     const config = (surface.config ?? {}) as Record<string, unknown>;
     const raw = typeof surface.platform === 'string' && surface.platform
@@ -114,6 +105,30 @@ export function getSurfaceIdentity(surface: AssistantSurface): string | null {
 }
 
 /**
+ * The email address this surface *is*, or null when it merely has one.
+ *
+ * Only `RESEND`. Gmail and Outlook also carry a `surface_identity_email`, but
+ * that is the mailbox someone connected — the address is theirs, and it was
+ * theirs before Lemma saw it. A Resend address is the agent's own, minted for it
+ * at creation, and it is the only one worth putting in front of a person as
+ * "this is how you write to it".
+ */
+export function getSurfaceEmail(surface: AssistantSurface): string | null {
+    if (getSurfacePlatformKey(surface) !== 'RESEND') return null;
+    const address = (surface.reach?.email || surface.surface_identity_email || '').trim();
+    return address || null;
+}
+
+/** The address an agent answers on, given every surface that reaches it. */
+export function agentEmailAddress(surfaces: AssistantSurface[]): string | null {
+    for (const surface of surfaces) {
+        const address = getSurfaceEmail(surface);
+        if (address) return address;
+    }
+    return null;
+}
+
+/**
  * A direct link to message the surface itself (not this app) — e.g. a `wa.me`
  * chat link or a `t.me` bot link. Returns null for platforms with no such
  * direct-open convention (Slack, Teams, Gmail, Outlook) or a missing identity.
@@ -163,6 +178,9 @@ function channelLabel(route: { channel_id?: string | null; channel_name?: string
     return name.startsWith('#') ? name : `#${name}`;
 }
 
+/** Platforms where the surface's own reach is an inbox, not a chat. */
+const MAIL_PLATFORMS = new Set(['RESEND', 'GMAIL', 'OUTLOOK']);
+
 /**
  * Every place this surface reaches one agent. `reachFor` is the agent name whose
  * perspective we render; `null` means the pod default assistant.
@@ -177,14 +195,23 @@ export function surfaceReaches(
     const reaches: SurfaceReach[] = [];
     const isDefault = surfaceDefaultAgent(surface) === reachFor;
     const chosenBy = surfaceDirectMessageChoosers(surface, reachFor).length;
+    // Nobody DMs a mailbox. "Direct messages" is Slack, Telegram and WhatsApp —
+    // a person opening a chat with the bot — and an email surface wore the label
+    // anyway, so the agent page's tooltip read "Live · Direct messages" over an
+    // address and the agents list called an inbox a place you send DMs. The
+    // per-person half is Slack-only (`dm_agent_by_user`), so mail never reaches
+    // it: an address answers whoever writes to it, full stop.
+    const isMail = MAIL_PLATFORMS.has(getSurfacePlatformKey(surface));
     if (isDefault || chosenBy > 0) {
         reaches.push({
             key: 'dm',
             kind: 'dm',
-            label: 'Direct messages',
-            detail: isDefault
-                ? 'Answers anyone who hasn’t chosen'
-                : `${chosenBy} ${chosenBy === 1 ? 'person' : 'people'} chose this agent`,
+            label: isMail ? 'Email' : 'Direct messages',
+            detail: isMail
+                ? 'Mail sent here becomes work'
+                : isDefault
+                    ? 'Answers anyone who hasn’t chosen'
+                    : `${chosenBy} ${chosenBy === 1 ? 'person' : 'people'} chose this agent`,
         });
     }
 

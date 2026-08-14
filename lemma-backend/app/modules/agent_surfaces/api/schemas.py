@@ -465,6 +465,12 @@ class AvailableSurface(BaseModel):
     # a manager bot (Telegram). Lets the setup UI offer that path only where it
     # actually works, instead of failing once the user has committed to it.
     managed_setup_available: bool = False
+    # Email only: the domain every managed address is minted under. Published
+    # because an agent's address is decided by ``email_address_allocation`` from
+    # its own name and the pod's — everything except this domain, which is
+    # deployment configuration. With it the builder can show someone the address
+    # their agent is about to get, instead of promising one.
+    email_domain: str | None = None
 
 
 class AvailableSurfacesResponse(BaseModel):

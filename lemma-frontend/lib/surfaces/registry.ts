@@ -1,3 +1,5 @@
+import { Mail, type LemmaIcon } from '@/components/ui/icons';
+
 import type { SurfacePlatformValue } from '@/lib/hooks/use-pod-surfaces';
 
 /**
@@ -44,7 +46,22 @@ export interface SurfaceIdentityOption {
 export interface SurfacePlatformDefinition {
     platform: SurfacePlatformValue;
     label: string;
+    /**
+     * The platform's own brand mark. SVG on purpose: these render at 14–20px in
+     * chips, and the raster set they replaced included a Gmail file with no
+     * alpha channel — a white rectangle at any size, and a visible block in dark
+     * mode. Shared with the connector catalog, which draws the same six brands.
+     */
     logoSrc?: string;
+    /**
+     * Drawn instead of a logo, for the platform that is not a brand.
+     *
+     * Email-of-its-own is Lemma's, not a vendor's — there is no mark to borrow,
+     * and borrowing Gmail's (which the recipe previews did) says the address
+     * lives in a Google mailbox, which is the one thing it doesn't. A glyph also
+     * takes `currentColor`, so it is the only mark here that themes.
+     */
+    glyph?: LemmaIcon;
     /** Second-person promise for the modal header. `{agent}` is substituted. */
     promise: string;
     /** Shown on the agent page when this platform isn't connected yet. */
@@ -91,7 +108,7 @@ const DEFINITIONS: SurfacePlatformDefinition[] = [
     {
         platform: 'TELEGRAM',
         label: 'Telegram',
-        logoSrc: '/surfaces/telegram.png',
+        logoSrc: '/connector-logos/telegram.svg',
         promise: 'Let people reach {agent} on Telegram',
         connectHint: 'A Telegram bot of your own. People message it directly.',
         // Every Telegram bot is the user's own now, so the question isn't whose
@@ -121,7 +138,7 @@ const DEFINITIONS: SurfacePlatformDefinition[] = [
     {
         platform: 'WHATSAPP',
         label: 'WhatsApp',
-        logoSrc: '/surfaces/whatsapp.png',
+        logoSrc: '/connector-logos/whatsapp.svg',
         promise: 'Let people reach {agent} on WhatsApp',
         connectHint: 'A WhatsApp number people message like any other contact.',
         identityOptions: [
@@ -169,7 +186,7 @@ const DEFINITIONS: SurfacePlatformDefinition[] = [
     {
         platform: 'SLACK',
         label: 'Slack',
-        logoSrc: '/surfaces/slack.png',
+        logoSrc: '/connector-logos/slack.svg',
         promise: 'Let people reach {agent} in Slack',
         connectHint: 'Add Lemma to your workspace, then invite it to a channel.',
         // No identity fork *at connect time*. Connecting installs a Slack app
@@ -204,7 +221,7 @@ const DEFINITIONS: SurfacePlatformDefinition[] = [
     {
         platform: 'TEAMS',
         label: 'Teams',
-        logoSrc: '/surfaces/teams.png',
+        logoSrc: '/connector-logos/teams.svg',
         promise: 'Let people reach {agent} in Teams',
         connectHint: 'Answers chats, plus any Teams channel you route here.',
         identityOptions: null,
@@ -219,7 +236,7 @@ const DEFINITIONS: SurfacePlatformDefinition[] = [
     {
         platform: 'GMAIL',
         label: 'Gmail',
-        logoSrc: '/surfaces/gmail.png',
+        logoSrc: '/connector-logos/gmail.svg',
         promise: 'Turn mail in a Gmail mailbox into work for {agent}',
         connectHint: 'Mail from a mailbox you connect becomes work here.',
         identityOptions: null,
@@ -234,7 +251,7 @@ const DEFINITIONS: SurfacePlatformDefinition[] = [
     {
         platform: 'OUTLOOK',
         label: 'Outlook',
-        logoSrc: '/surfaces/outlook.png',
+        logoSrc: '/connector-logos/outlook.svg',
         promise: 'Turn mail in an Outlook mailbox into work for {agent}',
         connectHint: 'Mail from a mailbox you connect becomes work here.',
         identityOptions: null,
@@ -249,8 +266,14 @@ const DEFINITIONS: SurfacePlatformDefinition[] = [
     {
         platform: 'RESEND',
         label: 'Email',
+        // No logo, by design — see `glyph`. Lemma runs this mailbox; there is no
+        // vendor whose mark belongs on it.
+        glyph: Mail,
         promise: 'Give {agent} an email address of its own',
-        connectHint: 'An address Lemma runs for you. No mailbox to connect.',
+        // Every agent already has one. This chip exists for the pod that turned
+        // its address off, or a deployment that had no mail domain when the
+        // agent was made — so it reads as "back on", not "new".
+        connectHint: 'The address Lemma already runs for this agent.',
         identityOptions: null,
         accountLabel: 'Managed address',
         capabilities: {

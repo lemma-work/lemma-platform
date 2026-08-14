@@ -6,11 +6,11 @@ import { cn } from '@/lib/utils';
 const PLATFORM_PREVIEWS = new Set<RecipePreviewKind>(['whatsapp', 'telegram', 'slack', 'email', 'teams']);
 
 const PLATFORM_META: Partial<Record<RecipePreviewKind, { label: string; logo: string }>> = {
-    whatsapp: { label: 'WhatsApp', logo: '/surfaces/whatsapp.png' },
-    telegram: { label: 'Telegram', logo: '/surfaces/telegram.png' },
-    slack: { label: 'Slack', logo: '/surfaces/slack.png' },
-    email: { label: 'Gmail + Outlook', logo: '/surfaces/gmail.png' },
-    teams: { label: 'Microsoft Teams', logo: '/surfaces/teams.png' },
+    whatsapp: { label: 'WhatsApp', logo: '/connector-logos/whatsapp.svg' },
+    telegram: { label: 'Telegram', logo: '/connector-logos/telegram.svg' },
+    slack: { label: 'Slack', logo: '/connector-logos/slack.svg' },
+    email: { label: 'Gmail + Outlook', logo: '/surfaces/email.svg' },
+    teams: { label: 'Microsoft Teams', logo: '/connector-logos/teams.svg' },
 };
 
 export function StarterPreview({ recipe, compact = false }: { recipe: Recipe; compact?: boolean }) {
