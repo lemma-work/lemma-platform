@@ -17,11 +17,12 @@ import pytest
 from sqlalchemy.dialects import postgresql
 
 from app.modules.agent.infrastructure.repositories import ConversationRepository
+from app.modules.test_support.mappers import configure_test_mappers
 
-# Configure the mapper graph the same way ``migrations/env.py`` does, so this
-# file passes standalone rather than only after something else imported them.
-from app.modules.pod.infrastructure import models as _pod_models  # noqa: F401
-from app.modules.identity.infrastructure import models as _identity_models  # noqa: F401
+# Compiling a statement configures the mappers, and a partial model graph fails
+# to resolve its relationship targets by name — so without this the file passes
+# in a suite and fails on its own.
+configure_test_mappers()
 
 
 class _Result:

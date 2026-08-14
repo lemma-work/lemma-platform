@@ -20,13 +20,12 @@ from app.modules.datastore.domain.file_projections import DispatchableFileRef
 from app.modules.datastore.infrastructure.repositories.file_recovery_queries import (
     DatastoreFileRecoveryQueriesMixin,
 )
+from app.modules.test_support.mappers import configure_test_mappers
 
-# Compiling a statement configures the mappers, and a partially-imported model
-# graph fails to resolve its relationship targets by name. Imported the same
-# way ``migrations/env.py`` does it, so this file passes standalone and not only
-# as part of a suite that happened to import them first.
-from app.modules.pod.infrastructure import models as _pod_models  # noqa: F401,E402
-from app.modules.identity.infrastructure import models as _identity_models  # noqa: F401,E402
+# Compiling a statement configures the mappers, and a partial model graph fails
+# to resolve its relationship targets by name — so without this the file passes
+# in a suite and fails on its own.
+configure_test_mappers()
 
 
 class _Row:
