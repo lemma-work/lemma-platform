@@ -21,6 +21,11 @@ from app.modules.usage.infrastructure.models import (
     UsageRecord as UsageRecordModel,
 )
 
+#: Hard ceiling on a usage listing, applied whatever the caller asks for.
+#: ``usage_records`` gains a row per model call and is never pruned, so an
+#: unbounded listing is a table export wearing an endpoint's clothes.
+MAX_USAGE_PAGE_SIZE = 1_000
+
 
 class UsageRepository(UsageRepositoryPort):
     def __init__(self, uow: SqlAlchemyUnitOfWork):
@@ -115,9 +120,14 @@ class UsageRepository(UsageRepositoryPort):
             source_type=source_type,
             status=status,
         )
-        stmt = stmt.order_by(UsageRecordModel.occurred_at.desc(), UsageRecordModel.id.desc())
-        if limit:
-            stmt = stmt.limit(limit)
+        # Always bounded. ``limit`` was optional, so a caller passing None or 0
+        # asked for every record in the window — on the table that gains a row
+        # per model call, that is unbounded by construction. The ceiling applies
+        # even when a caller names a larger one; a listing endpoint is not the
+        # way to export the whole table.
+        stmt = stmt.order_by(
+            UsageRecordModel.occurred_at.desc(), UsageRecordModel.id.desc()
+        ).limit(min(limit or MAX_USAGE_PAGE_SIZE, MAX_USAGE_PAGE_SIZE))
         result = await self.session.execute(stmt)
         return [record.to_entity() for record in result.scalars().all()]
 
@@ -137,12 +147,19 @@ class UsageRepository(UsageRepositoryPort):
         source_type: str | None = None,
         status: str | None = None,
     ) -> UsageSummary:
-        stmt = select(UsageRecordModel).where(
-            UsageRecordModel.occurred_at >= start,
-            UsageRecordModel.occurred_at <= end,
-        )
-        stmt = self._apply_filters(
-            stmt,
+        """Totals for a window, aggregated by the database.
+
+        This used to select every matching row, hydrate each into a Pydantic
+        entity and add it up in Python. One row per model call means a busy
+        organization's 90-day summary pulled hundreds of thousands of rows
+        across the wire to produce a few dozen numbers, and it got slower every
+        day the table grew.
+
+        Three grouped aggregates answer the same question in a fixed number of
+        rows — one per profile, model and kind actually used — so the cost now
+        tracks how many distinct things were used, not how often.
+        """
+        filters = dict(
             organization_id=organization_id,
             pod_id=pod_id,
             user_id=user_id,
@@ -154,7 +171,6 @@ class UsageRepository(UsageRepositoryPort):
             source_type=source_type,
             status=status,
         )
-        result = await self.session.execute(stmt)
         summary = UsageSummary(
             organization_id=organization_id,
             pod_id=pod_id,
@@ -164,9 +180,57 @@ class UsageRepository(UsageRepositoryPort):
             end_date=end,
             period_days=(end - start).days,
         )
-        for record in result.scalars().all():
-            summary.add_usage(record.to_entity())
+        for target, column in (
+            (summary.total_by_profile, UsageRecordModel.profile_id),
+            (summary.total_by_model, UsageRecordModel.model_name),
+            (summary.total_by_kind, UsageRecordModel.usage_kind),
+        ):
+            for row in await self._grouped_totals(
+                column, start=start, end=end, filters=filters
+            ):
+                target[row.key] = {
+                    "input_tokens": int(row.input_tokens or 0),
+                    "output_tokens": int(row.output_tokens or 0),
+                    "total_tokens": int(row.input_tokens or 0)
+                    + int(row.output_tokens or 0),
+                    "units": float(row.units or 0.0),
+                    "system_cost_usd": float(row.cost_usd or 0.0),
+                    "record_count": int(row.record_count or 0),
+                }
+        # Overall totals come from one of the groupings rather than a fourth
+        # query: every record lands in exactly one model bucket, so the bucket
+        # sums are the window sums.
+        for bucket in summary.total_by_model.values():
+            summary.total_input_tokens += int(bucket["input_tokens"])
+            summary.total_output_tokens += int(bucket["output_tokens"])
+            summary.total_units += float(bucket["units"])
+            summary.system_cost_usd += float(bucket["system_cost_usd"])
         return summary
+
+    async def _grouped_totals(
+        self,
+        group_column,
+        *,
+        start: datetime,
+        end: datetime,
+        filters: dict,
+    ):
+        stmt = select(
+            group_column.label("key"),
+            func.sum(UsageRecordModel.input_tokens).label("input_tokens"),
+            func.sum(UsageRecordModel.output_tokens).label("output_tokens"),
+            func.sum(UsageRecordModel.units).label("units"),
+            # COALESCE, not SUM alone: an unpriced model meters tokens with a
+            # null cost, and summing nulls into the total would erase every
+            # priced row in the same bucket.
+            func.sum(func.coalesce(UsageRecordModel.cost_usd, 0.0)).label("cost_usd"),
+            func.count().label("record_count"),
+        ).where(
+            UsageRecordModel.occurred_at >= start,
+            UsageRecordModel.occurred_at <= end,
+        )
+        stmt = self._apply_filters(stmt, **filters).group_by(group_column)
+        return (await self.session.execute(stmt)).all()
 
     async def get_system_cost(
         self,

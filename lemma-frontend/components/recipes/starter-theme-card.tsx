@@ -15,11 +15,11 @@ import { cn } from '@/lib/utils';
 import { renderRecipeIcon } from './recipe-icon';
 
 export const THEME_LOGOS: Partial<Record<StarterThemeId, { src: string; alt: string }>> = {
-    whatsapp: { src: '/surfaces/whatsapp.png', alt: 'WhatsApp' },
-    telegram: { src: '/surfaces/telegram.png', alt: 'Telegram' },
-    slack: { src: '/surfaces/slack.png', alt: 'Slack' },
-    email: { src: '/surfaces/gmail.png', alt: 'Email' },
-    teams: { src: '/surfaces/teams.png', alt: 'Microsoft Teams' },
+    whatsapp: { src: '/connector-logos/whatsapp.svg', alt: 'WhatsApp' },
+    telegram: { src: '/connector-logos/telegram.svg', alt: 'Telegram' },
+    slack: { src: '/connector-logos/slack.svg', alt: 'Slack' },
+    email: { src: '/surfaces/email.svg', alt: 'Email' },
+    teams: { src: '/connector-logos/teams.svg', alt: 'Microsoft Teams' },
 };
 
 export function StarterThemePicker({

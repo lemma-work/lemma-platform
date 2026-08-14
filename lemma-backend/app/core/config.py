@@ -45,21 +45,25 @@ class Settings(BaseSettings):
     db_pool_size: int = Field(
         default=10,
         description=(
-            "Primary SQLAlchemy connection pool size PER PROCESS. Each API or "
-            "worker pod opens up to db_pool_size + db_max_overflow connections. "
-            "With N replicas total, the ceiling is N × (db_pool_size + "
-            "db_max_overflow + datastore_db_pool_size + "
-            "datastore_db_max_overflow). This MUST stay under Postgres "
-            "max_connections (default 100). Scale down when adding replicas. "
-            "Default 10 is safe for 1 API + 1 worker (60 total with defaults). "
-            "Standalone dev can set DB_POOL_SIZE=20 DB_MAX_OVERFLOW=30."
-        ),
-    )
-    db_max_overflow: int = Field(
-        default=10,
-        description=(
-            "Overflow connections beyond db_pool_size before checkout blocks. "
-            "Default 10 keeps per-process main pool at 20 max."
+            "SQLAlchemy connection pool size PER PROCESS, for both the primary "
+            "and the datastore engine. This is a hard ceiling: ``max_overflow`` "
+            "is pinned to 0 so a process can never open more than this per "
+            "engine, which is what makes cluster-wide capacity predictable "
+            "under an autoscaler.\n\n"
+            "Size it from concurrent in-flight QUERIES, not from request or "
+            "task concurrency. A session holds its connection only for the "
+            "duration of a unit of work — never across an LLM call, HTTP "
+            "request, sandbox operation or thread offload (enforced by "
+            "``make lint-session-scope``) — so by Little's Law the steady-state "
+            "demand is ``queries_per_second × seconds_per_query``. An agent run "
+            "is 95%+ non-DB latency, so a worker at concurrency 50 still needs "
+            "single-digit connections in steady state; the pool exists to "
+            "absorb the burst at run start and finish, and to bound the damage "
+            "when something does go wrong.\n\n"
+            "Deliberately NOT derived from ``worker_concurrency``: the two were "
+            "coupled back when a task could hold a connection for its whole "
+            "lifetime. Raise it only in response to observed checkout waits "
+            "(the ``database_pool_capacity`` incident), not in anticipation."
         ),
     )
     db_pool_in_testing: bool = Field(
@@ -102,32 +106,53 @@ class Settings(BaseSettings):
             "during external I/O' anti-pattern at the database level."
         ),
     )
-    datastore_db_pool_size: int = Field(
-        default=5,
+    db_statement_timeout_seconds: float = Field(
+        default=60.0,
         description=(
-            "Datastore SQLAlchemy connection pool size PER PROCESS. Each API "
-            "or worker pod opens up to datastore_db_pool_size + "
-            "datastore_db_max_overflow connections to the datastore database. "
-            "Scale down when adding replicas. Default 5 keeps per-process "
-            "datastore pool at 10 max."
+            "Postgres statement_timeout in seconds, applied to every app "
+            "connection. Bounds how long one runaway query can pin a pooled "
+            "connection and a Postgres backend. The companion to "
+            "``db_idle_in_transaction_timeout_seconds``: that one catches a "
+            "session held open while NOT querying, this one catches a session "
+            "held open BY a query. Set to 0 to disable. Ad-hoc pod SQL and "
+            "connector queries set their own, tighter, per-statement limits."
         ),
     )
-    datastore_db_max_overflow: int = Field(
-        default=5,
+    # --- Connection-scope monitor (app.core.observability.connection_scope) ---
+    db_connection_idle_hold_seconds: float = Field(
+        default=1.0,
         description=(
-            "Overflow connections beyond datastore_db_pool_size. "
-            "Default 5 keeps per-process datastore pool at 10 max."
+            "How long a pooled connection may be checked out WITHOUT a statement "
+            "running before the monitor reports it. That difference — held time "
+            "minus querying time — is the runtime measurement of the same "
+            "property ``make lint-session-scope`` checks statically, and unlike "
+            "the static gate it cannot be fooled by a call shape it has no "
+            "pattern for. Set to 0 to disable. Env: "
+            "``DB_CONNECTION_IDLE_HOLD_SECONDS``."
+        ),
+    )
+    db_connection_scope_strict: bool = Field(
+        default=False,
+        description=(
+            "Fail instead of warn when a connection is held across non-database "
+            "work. Tests turn this on so a regression is a red build rather than "
+            "a log line nobody reads; production leaves it off and takes the "
+            "bounded warning. Also captures a stack at every checkout, which is "
+            "why it is not free enough to leave on in production. Env: "
+            "``DB_CONNECTION_SCOPE_STRICT``."
         ),
     )
     worker_concurrency: int = Field(
-        default=20,
+        default=50,
         description=(
             "Maximum concurrent streaq tasks on the INTERACTIVE lane per worker "
-            "process. Should not exceed db_pool_size + db_max_overflow "
-            "(default 20), since each task that opens a DB session consumes one "
-            "pooled connection. The bulk lane is budgeted separately via "
-            "``worker_bulk_concurrency``; when a process runs both lanes, their "
-            "sum is what the connection pool must absorb."
+            "process. This is a MEMORY and CPU budget, not a database one: a "
+            "task holds a pooled connection only for each unit of work, so "
+            "concurrency no longer has to fit inside ``db_pool_size``. Size it "
+            "from the pod's RAM against the peak footprint of one agent run "
+            "(conversation history plus tool results), and from how much "
+            "event-loop time the tasks need. The bulk lane is budgeted "
+            "separately via ``worker_bulk_concurrency``."
         ),
     )
     worker_lanes: str = Field(
@@ -185,6 +210,27 @@ class Settings(BaseSettings):
             "like Composio, OAuth token exchanges). Sized near worker_concurrency "
             "so connector-heavy runs aren't throttled, while still bounded. Env: "
             "``OFFLOAD_EXTERNAL_HTTP_LIMIT``."
+        ),
+    )
+    offload_inference_limit: int = Field(
+        default=2,
+        description=(
+            "Max concurrent local model offloads (embedding, reranking). Small "
+            "and separate on purpose: the ONNX sessions behind these serialize "
+            "on their own mutex and size their own thread pools, so extra "
+            "callers queue rather than compute. Sharing ``cpu_bound`` let a "
+            "burst of ingestion park all of its slots on that mutex and starve "
+            "the chunking and zip offloads. Env: ``OFFLOAD_INFERENCE_LIMIT``."
+        ),
+    )
+    offload_local_bridge_limit: int = Field(
+        default=8,
+        description=(
+            "Max concurrent local sandbox-bridge subprocess offloads. Separate "
+            "from ``external_http`` because a bridge call is bounded by the "
+            "request deadline rather than an HTTP timeout, so a burst of "
+            "long-running sandbox operations could otherwise hold every slot "
+            "the connector SDKs share. Env: ``OFFLOAD_LOCAL_BRIDGE_LIMIT``."
         ),
     )
     offload_crypto_limit: int = Field(
@@ -259,14 +305,6 @@ class Settings(BaseSettings):
             "mid-run and must be the sole consumer of the run it dispatches."
         ),
     )
-    postgres_max_connections: int = Field(
-        default=100,
-        description=(
-            "PostgreSQL max_connections setting. Used at startup to warn if "
-            "the per-process pool ceiling could exceed the server limit. "
-            "Set to the actual value in your Postgres config."
-        ),
-    )
     redis_url: str = Field(
         default="redis://localhost:6379",
         description="Redis connection URL",
@@ -274,6 +312,40 @@ class Settings(BaseSettings):
     max_request_body_bytes: int = Field(
         default=220 * 1024 * 1024,
         description="Global ASGI request-body ceiling, enforced while receiving bytes.",
+    )
+    auth_jwks_unknown_kid_ttl_seconds: float = Field(
+        default=60.0,
+        description=(
+            "How long a JWKS key id that was looked up and not found is refused "
+            "without going back to the network. SuperTokens reads `kid` from the "
+            "token header BEFORE verifying the signature and has no negative "
+            "cache, so without this an unauthenticated client sending forged "
+            "tokens with random `kid` values forces one synchronous HTTP round "
+            "trip per request, on the event loop, under a lock that excludes "
+            "every other verification. Set to 0 to disable the guard. Env: "
+            "``AUTH_JWKS_UNKNOWN_KID_TTL_SECONDS``."
+        ),
+    )
+    auth_jwks_unknown_kid_cache_size: int = Field(
+        default=1024,
+        description=(
+            "Maximum key ids remembered as not-found. The sender chooses the "
+            "ids, so the map has to be bounded or the guard just moves the "
+            "damage from the event loop to memory. Env: "
+            "``AUTH_JWKS_UNKNOWN_KID_CACHE_SIZE``."
+        ),
+    )
+    redis_read_timeout_seconds: float = Field(
+        default=5.0,
+        description=(
+            "Read timeout applied to every Redis command except those from "
+            "callers that declare themselves blocking (Pub/Sub listeners, "
+            "stream readers). Without it, a Redis that accepts the connection "
+            "and then stops answering is waited on until TCP keepalive gives "
+            "up — tens of minutes — and any lock, transaction or pooled "
+            "database connection the caller holds waits with it. Set to 0 to "
+            "disable. Env: ``REDIS_READ_TIMEOUT_SECONDS``."
+        ),
     )
     redis_max_connections: int = Field(
         default=200,
@@ -295,6 +367,26 @@ class Settings(BaseSettings):
             "this is what stops an org admin pointing a connector at the cloud "
             "metadata service or walking internal services. Self-hosted "
             "deployments running connectors against their own network turn it on."
+        ),
+    )
+    outbound_http_timeout_seconds: float = Field(
+        default=30.0,
+        description=(
+            "Total timeout for outbound aiohttp calls built through "
+            "``app.core.net.aiohttp_client``. aiohttp's own default is FIVE "
+            "MINUTES, against httpx's five seconds — so an aiohttp session with "
+            "no opinion is the dangerous one, and where the caller holds a "
+            "database session it pins a pooled connection for the whole wait. "
+            "Env: ``OUTBOUND_HTTP_TIMEOUT_SECONDS``."
+        ),
+    )
+    outbound_http_connect_timeout_seconds: float = Field(
+        default=5.0,
+        description=(
+            "Connect-phase budget for outbound aiohttp calls. Separate from the "
+            "total so a host that is simply unreachable fails fast instead of "
+            "consuming the whole budget first. Env: "
+            "``OUTBOUND_HTTP_CONNECT_TIMEOUT_SECONDS``."
         ),
     )
     outbound_http_max_keepalive: int = Field(
@@ -967,6 +1059,50 @@ class Settings(BaseSettings):
     )
     function_api_deadline_seconds: int = Field(default=120, ge=1, le=3600)
     function_job_deadline_seconds: int = Field(default=600, ge=1, le=3_000)
+    workflow_wait_retention_days: int = Field(
+        default=30,
+        ge=1,
+        description=(
+            "How long a finished machine wait (FUNCTION/AGENT/TIME) is kept. "
+            "HUMAN waits are excluded from the sweep entirely at any age -- "
+            "they record who approved what, which is not scaffolding."
+        ),
+    )
+    workflow_wait_retention_batch_size: int = Field(default=1_000, ge=1, le=10_000)
+    workflow_wait_retention_budget_seconds: float = Field(
+        default=45.0,
+        ge=0.0,
+        description=(
+            "Wall-clock budget for one workflow-wait sweep. Zero disables it."
+        ),
+    )
+    function_run_retention_days: int = Field(
+        default=30,
+        ge=1,
+        description=(
+            "How long a terminal function run is kept. Runs carry their whole "
+            "input and output payload plus captured logs, so this table grows "
+            "faster in bytes than in rows, and until this existed nothing ever "
+            "removed one. Longer than the event-delivery window because these "
+            "rows are user-visible run history, not delivery receipts."
+        ),
+    )
+    function_run_retention_batch_size: int = Field(
+        default=1_000,
+        ge=1,
+        le=10_000,
+        description="Rows removed per transaction by the function-run sweep.",
+    )
+    function_run_retention_budget_seconds: float = Field(
+        default=45.0,
+        ge=0.0,
+        description=(
+            "Wall-clock budget for one function-run retention sweep. Deletes "
+            "run in batches until drained or the budget is spent, so a backlog "
+            "clears over successive runs rather than never. Zero disables the "
+            "sweep entirely."
+        ),
+    )
     function_runtime_gateway_url: Optional[str] = Field(
         default=None,
         description="Backend URL reachable from function sandboxes",
@@ -1088,6 +1224,17 @@ class Settings(BaseSettings):
         description=(
             "Deprecated compatibility selector. Standard OTEL_*_EXPORTER variables "
             "take precedence; missing or empty legacy selection means traces-only."
+        ),
+    )
+    backlog_gauge_interval_seconds: float = Field(
+        default=60.0,
+        ge=0.0,
+        description=(
+            "How often the worker samples queue depth and pending event-table "
+            "rows for the backlog gauges. Matching the metric export interval "
+            "is the useful floor -- sampling faster only costs queries, since "
+            "the exporter reports the latest reading either way. Zero disables "
+            "the sampler. Env: ``BACKLOG_GAUGE_INTERVAL_SECONDS``."
         ),
     )
     observability_metrics_export_interval_millis: int = Field(

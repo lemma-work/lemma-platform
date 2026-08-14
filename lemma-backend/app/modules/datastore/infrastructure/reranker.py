@@ -19,6 +19,7 @@ import httpx
 from app.core.config import reveal_secret, settings
 from app.core.log.log import get_logger
 from app.modules.datastore.domain.file_entities import DatastoreFileSearchResult
+from app.core.concurrency.offload import run_blocking
 
 logger = get_logger(__name__)
 
@@ -49,6 +50,10 @@ class LocalCrossEncoderReranker:
             self._model = CrossEncoder(self.model_name)
         return self._model
 
+    def _score_pairs(self, pairs: list[tuple[str, str]]):
+        """Load-and-score, so both halves run off the loop."""
+        return self._load_model().predict(pairs)
+
     async def rerank(
         self,
         query: str,
@@ -59,11 +64,13 @@ class LocalCrossEncoderReranker:
         if not results:
             return []
         try:
-            import anyio
-
-            model = self._load_model()
             pairs = [(query, result.content or "") for result in results]
-            scores = await anyio.to_thread.run_sync(lambda: model.predict(pairs))
+            # Load INSIDE the offload, like the embedder does. _load_model
+            # imports sentence_transformers and constructs a CrossEncoder on
+            # first use — hundreds of megabytes of weights and a torch import —
+            # and doing that here left the whole of it on the event loop for
+            # the first search after a boot. Only the predict call was offloaded.
+            scores = await run_blocking(self._score_pairs, pairs, limiter="inference")
             order = sorted(
                 range(len(results)),
                 key=lambda index: float(scores[index]),

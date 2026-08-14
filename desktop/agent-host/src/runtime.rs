@@ -11,7 +11,6 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use chrono::Utc;
 use serde_json::Value;
-use sha2::{Digest, Sha256};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc, watch};
 use tokio::task::JoinHandle;
 use uuid::Uuid;
@@ -23,9 +22,9 @@ use crate::config::{HostConfig, HostPaths, TargetConfig};
 use crate::journal::{AcceptOutcome, Checkpoint, Journal};
 use crate::permissions::{PermissionDecision, PermissionGate};
 use crate::protocol::{
-    Command, CommandKind, CommandRejection, EventType, HarnessCapabilities, HarnessHealth,
-    HarnessSnapshot, HostCapacity, HostStatus, JsonMap, PollResponse, RejectionCode, RunCheckpoint,
-    RunSpec, RunState,
+    Command, CommandKind, CommandRejection, ConfigOption, EventType, HarnessCapabilities,
+    HarnessHealth, HarnessSnapshot, HostCapacity, HostStatus, JsonMap, PollResponse, RejectionCode,
+    RunCheckpoint, RunSpec, RunState,
 };
 
 const HARNESS_REFRESH_INTERVAL: Duration = Duration::from_secs(15 * 60);
@@ -338,10 +337,11 @@ struct TargetWorker {
     max_runs: u16,
     shutdown: watch::Receiver<bool>,
     harnesses: BTreeMap<Uuid, PublishedHarness>,
-    /// What each probed adapter said it can do, keyed by harness key. Lemma is
-    /// told the same thing, but a run needs it locally and synchronously to
-    /// decide whether resuming a session is even on the table.
-    capabilities: HashMap<String, HarnessCapabilities>,
+    /// What each probe learned, keyed by harness key. Lemma is told the same
+    /// thing, but a run needs it locally and synchronously — to decide whether
+    /// resuming a session is on the table, and to know which configuration
+    /// this harness was published as offering.
+    probes: HashMap<String, ProbedHarness>,
     active_runs: HashMap<Uuid, ActiveRun>,
     permissions: PermissionGate,
     /// Runs whose event batches Lemma has rejected, and how often. Kept per
@@ -354,6 +354,14 @@ struct TargetWorker {
     refused_heartbeats: HashMap<Uuid, u32>,
     draining: bool,
     refresh_due: std::time::Instant,
+    /// Raised by a run that failed because its agent is signed out.
+    ///
+    /// A signed-out harness is only *discovered* by probing, and probing is on
+    /// a fifteen-minute timer -- so a run failing for exactly that reason was
+    /// the freshest information the host had, and it threw it away. The
+    /// harness stayed READY in the workspace, the next run failed the same
+    /// way, and signing in did nothing until someone restarted the host.
+    reprobe_requested: Arc<AtomicBool>,
     events_ready: Arc<tokio::sync::Notify>,
     /// Enriched harnesses from probes that ran off the poll loop's critical
     /// path. Drained each iteration so a slow probe never delays a heartbeat.
@@ -378,7 +386,19 @@ struct ActiveRun {
 /// One completed refresh: what Lemma accepted, and what the probes learned.
 struct ProbedHarnesses {
     published: Vec<PublishedHarness>,
-    capabilities: HashMap<String, HarnessCapabilities>,
+    probes: HashMap<String, ProbedHarness>,
+}
+
+/// What one adapter's probe found, kept for the runs that need it in hand.
+///
+/// `config_options` is here because it is the *published* answer to "what does
+/// this harness offer" — the one Lemma validated a profile against. A run's own
+/// session can disagree with it (see `AcpRunRequest::published_config_options`),
+/// and when it does, this is the version that was actually agreed.
+#[derive(Clone, Default)]
+struct ProbedHarness {
+    capabilities: HarnessCapabilities,
+    config_options: Vec<ConfigOption>,
 }
 
 impl TargetWorker {
@@ -410,13 +430,14 @@ impl TargetWorker {
             max_runs,
             shutdown,
             harnesses: BTreeMap::new(),
-            capabilities: HashMap::new(),
+            probes: HashMap::new(),
             active_runs: HashMap::new(),
             permissions: PermissionGate::new(),
             event_rejections: HashMap::new(),
             refused_heartbeats: HashMap::new(),
             draining,
             refresh_due: std::time::Instant::now(),
+            reprobe_requested: Arc::new(AtomicBool::new(false)),
             events_ready: Arc::new(tokio::sync::Notify::new()),
             probed: mpsc::unbounded_channel(),
         })
@@ -441,7 +462,9 @@ impl TargetWorker {
                     }
                 }
             }
-            if self.refresh_due <= std::time::Instant::now() {
+            if self.reprobe_requested.swap(false, Ordering::SeqCst)
+                || self.refresh_due <= std::time::Instant::now()
+            {
                 self.refresh_harnesses();
                 self.refresh_due = std::time::Instant::now() + HARNESS_REFRESH_INTERVAL;
             }
@@ -628,10 +651,19 @@ impl TargetWorker {
             .get(&spec.harness_id)
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("command references an unknown harness"))?;
-        anyhow::ensure!(
-            published.config_revision == spec.profile_revision,
-            "harness configuration revision changed"
-        );
+        if published.config_revision != spec.profile_revision {
+            // Both revisions, because the question a reader has is always "how
+            // far behind was the command?", and one hash alone cannot answer
+            // it. Lemma re-mints the command against the revision it is told
+            // here, so this line is also the record of what it was told.
+            tracing::warn!(
+                harness = %published.harness_key,
+                commanded = %short_revision(&spec.profile_revision),
+                published = %short_revision(&published.config_revision),
+                "rejecting a run minted against a superseded harness revision"
+            );
+            anyhow::bail!("harness configuration revision changed");
+        }
         if self.active_runs.contains_key(&spec.agent_run_id) {
             let outcome = self.journal.accept_start(
                 self.target.target_id,
@@ -651,10 +683,11 @@ impl TargetWorker {
         // fallback, so waiting on the semaphore after that point can duplicate
         // provider work.
         let adapter = self.manifest.resolve(&published.harness_key)?;
-        let can_load_session = self
-            .capabilities
-            .get(&published.harness_key)
-            .is_some_and(|capabilities| capabilities.load_session);
+        let probe = self.probes.get(&published.harness_key).cloned();
+        let can_load_session = probe
+            .as_ref()
+            .is_some_and(|probe| probe.capabilities.load_session);
+        let published_config_options = probe.map(|probe| probe.config_options).unwrap_or_default();
         let permit = Arc::clone(&self.global_capacity)
             .try_acquire_owned()
             .map_err(|_| anyhow::anyhow!("Agent Host capacity changed; command will be retried"))?;
@@ -668,7 +701,13 @@ impl TargetWorker {
         if outcome == AcceptOutcome::Duplicate {
             return Ok(());
         }
-        self.spawn_run(spec, adapter, can_load_session, permit);
+        self.spawn_run(
+            spec,
+            adapter,
+            can_load_session,
+            published_config_options,
+            permit,
+        );
         Ok(())
     }
 
@@ -677,6 +716,7 @@ impl TargetWorker {
         spec: RunSpec,
         adapter: ResolvedAdapter,
         can_load_session: bool,
+        published_config_options: Vec<ConfigOption>,
         permit: OwnedSemaphorePermit,
     ) {
         let target_id = self.target.target_id;
@@ -686,6 +726,7 @@ impl TargetWorker {
         let paths = self.paths.clone();
         let permissions = self.permissions.clone();
         let events_ready = Arc::clone(&self.events_ready);
+        let reprobe_requested = Arc::clone(&self.reprobe_requested);
         let run_id = spec.agent_run_id;
         // Captured before the task takes ownership of `adapter`, so a failure
         // can name the agent rather than describing it as an internal error.
@@ -771,6 +812,7 @@ impl TargetWorker {
                 scratch_directory: scratch.clone(),
                 mcp_server: Some(mcp_server),
                 can_load_session,
+                published_config_options,
                 permissions: permissions.clone(),
                 permission_timeout: PERMISSION_DECISION_TIMEOUT,
                 cancel: cancel_rx,
@@ -826,10 +868,31 @@ impl TargetWorker {
                         RunState::Failed
                     };
                     let raw = error.to_string();
-                    let message = authentication_hint(&adapter_name, &raw)
-                        .or_else(|| adapter_failure_message(&adapter_name, &redact_error(&raw)))
-                        .unwrap_or_else(|| redact_error(&raw));
-                    terminal_failure(&journal, target_id, run_id, lease_epoch, state, &message)?;
+                    // A recognised failure is one we are restating in our own
+                    // words -- and the adapter has already streamed its own
+                    // into the transcript, so Lemma is told to drop that.
+                    if authentication_hint(&adapter_name, &raw).is_some() {
+                        // The freshest evidence anyone has that this agent is
+                        // signed out. Probing is what publishes AUTH_REQUIRED,
+                        // and it is otherwise up to fifteen minutes away, so
+                        // ask for one now -- that is what makes the workspace
+                        // say "Sign-in needed" while the user is still looking
+                        // at the failure that told them.
+                        reprobe_requested.store(true, Ordering::SeqCst);
+                    }
+                    let rewritten = authentication_hint(&adapter_name, &raw)
+                        .or_else(|| adapter_failure_message(&adapter_name, &redact_error(&raw)));
+                    let supersedes = rewritten.is_some();
+                    let message = rewritten.unwrap_or_else(|| redact_error(&raw));
+                    terminal_failure_detail(
+                        &journal,
+                        target_id,
+                        run_id,
+                        lease_epoch,
+                        state,
+                        &message,
+                        supersedes,
+                    )?;
                 }
                 Err(_) => {
                     terminal_failure(
@@ -1035,8 +1098,15 @@ impl TargetWorker {
                         return snapshot;
                     }
                     let Ok(adapter) = manifest.resolve(&snapshot.harness_key) else {
+                        tracing::info!(
+                            harness = %snapshot.harness_key,
+                            outcome = "unresolved",
+                            "harness probe skipped"
+                        );
                         return snapshot;
                     };
+                    let started = std::time::Instant::now();
+                    let previous_revision = snapshot.config_revision.clone();
                     match tokio::time::timeout(
                         Duration::from_secs(20),
                         driver.probe(adapter, scratch),
@@ -1046,7 +1116,18 @@ impl TargetWorker {
                         Ok(Ok(probe)) => {
                             snapshot.config_options = probe.config_options;
                             snapshot.capabilities = capabilities_from_acp(&probe.capabilities);
-                            snapshot.config_revision = snapshot_revision(&snapshot);
+                            snapshot.config_revision = snapshot.revision();
+                            tracing::info!(
+                                harness = %snapshot.harness_key,
+                                outcome = "ready",
+                                elapsed_ms = started.elapsed().as_millis(),
+                                models = model_option_count(&snapshot.config_options),
+                                revision_changed =
+                                    previous_revision != snapshot.config_revision,
+                                revision = %short_revision(&snapshot.config_revision),
+                                auth_methods = %probe.auth_methods,
+                                "harness probe finished"
+                            );
                         }
                         Ok(Err(error)) => {
                             let raw = error.to_string();
@@ -1062,10 +1143,23 @@ impl TargetWorker {
                                 snapshot.health = HarnessHealth::ProbeFailed;
                                 snapshot.stale_reason = Some(redact_error(&raw));
                             }
+                            tracing::info!(
+                                harness = %snapshot.harness_key,
+                                outcome = ?snapshot.health,
+                                elapsed_ms = started.elapsed().as_millis(),
+                                detail = %redact_error(&raw),
+                                "harness probe finished"
+                            );
                         }
                         Err(_) => {
                             snapshot.health = HarnessHealth::ProbeFailed;
                             snapshot.stale_reason = Some("ACP probe timed out".to_owned());
+                            tracing::info!(
+                                harness = %snapshot.harness_key,
+                                outcome = "timeout",
+                                elapsed_ms = started.elapsed().as_millis(),
+                                "harness probe finished"
+                            );
                         }
                     }
                     snapshot
@@ -1088,16 +1182,50 @@ impl TargetWorker {
         tokio::spawn(async move {
             let discovered = discover_manifest.discover();
             let enriched = futures_util::future::join_all(build_probes(discovered)).await;
-            let capabilities = enriched
+            let probes = enriched
                 .iter()
-                .map(|snapshot| (snapshot.harness_key.clone(), snapshot.capabilities.clone()))
+                .map(|snapshot| {
+                    (
+                        snapshot.harness_key.clone(),
+                        ProbedHarness {
+                            capabilities: snapshot.capabilities.clone(),
+                            config_options: snapshot.config_options.clone(),
+                        },
+                    )
+                })
                 .collect();
+            // Logged before the request, and again with its outcome, because a
+            // publish that never returns is indistinguishable in a log from one
+            // that was never attempted -- and "was this host even trying?" is
+            // the first question asked of a machine whose agents never answer.
+            let attempted = enriched
+                .iter()
+                .map(|snapshot| {
+                    format!(
+                        "{}={:?}@{}",
+                        snapshot.harness_key,
+                        snapshot.health,
+                        short_revision(&snapshot.config_revision)
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(" ");
+            tracing::info!(harnesses = %attempted, "publishing probed harnesses");
             match client.publish_harnesses(enriched).await {
                 Ok(published) => {
-                    let _ = sender.send(Some(ProbedHarnesses {
-                        published,
-                        capabilities,
-                    }));
+                    let accepted = published
+                        .iter()
+                        .map(|harness| {
+                            format!(
+                                "{}@{}",
+                                harness.harness_key,
+                                short_revision(&harness.config_revision)
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    tracing::info!(harnesses = %accepted, "published probed harnesses");
+                    let _ = sender.send(Some(ProbedHarnesses { published, probes }));
                 }
                 Err(error) => {
                     tracing::warn!(%error, "publishing probed harnesses failed");
@@ -1117,7 +1245,7 @@ impl TargetWorker {
             .into_iter()
             .map(|harness| (harness.id, harness))
             .collect();
-        self.capabilities = probed.capabilities;
+        self.probes = probed.probes;
     }
 
     /// The control updates due for delivery, minus the ones Lemma refuses.
@@ -1706,9 +1834,51 @@ fn terminal_failure(
     state: RunState,
     message: &str,
 ) -> anyhow::Result<()> {
+    terminal_failure_detail(
+        journal,
+        target_id,
+        run_id,
+        lease_epoch,
+        state,
+        message,
+        false,
+    )
+}
+
+/// The shared body, plus the one thing a caller may say about its message.
+///
+/// `supersedes_stream` means "this message is a rewrite of text the agent has
+/// already streamed". An adapter reporting its own failure does it twice: once
+/// as an ordinary `agent_message_chunk`, which Lemma turns into assistant text
+/// in the transcript, and again when the turn ends. So a signed-out Claude Code
+/// produced a bare "Failed to authenticate: OAuth session expired…" message
+/// *and* the card saying the same thing in words the user can act on.
+///
+/// That is worse than untidy. Lemma only offers Retry on a failed run whose
+/// messages are all the user's (`AgentRun.is_safely_retryable`), because
+/// retrying a run that produced output can duplicate work -- so the stray
+/// assistant message is also what removed the button. The one failure a retry
+/// obviously fixes was the one failure that never offered one.
+///
+/// Set it only where the message really is a rewrite. A run that answered for
+/// three paragraphs and then hit its deadline keeps all three, and keeps
+/// blocking Retry, which is correct.
+#[allow(clippy::fn_params_excessive_bools)]
+fn terminal_failure_detail(
+    journal: &Journal,
+    target_id: Uuid,
+    run_id: Uuid,
+    lease_epoch: u32,
+    state: RunState,
+    message: &str,
+    supersedes_stream: bool,
+) -> anyhow::Result<()> {
     let mut detail = JsonMap::new();
     detail.insert("state".to_owned(), serde_json::to_value(state)?);
     detail.insert("message".to_owned(), Value::String(message.to_owned()));
+    if supersedes_stream {
+        detail.insert("supersedes_stream".to_owned(), Value::Bool(true));
+    }
     journal.append_event(
         target_id,
         run_id,
@@ -1855,16 +2025,26 @@ fn generated_image_signature_matches(bytes: &[u8], mime_type: &str) -> bool {
     }
 }
 
-fn snapshot_revision(snapshot: &HarnessSnapshot) -> String {
-    let value = serde_json::json!({
-        "adapter_version": snapshot.adapter_version,
-        "upstream_version": snapshot.upstream_version,
-        "config_options": snapshot.config_options,
-        "capabilities": snapshot.capabilities,
-    });
-    hex::encode(Sha256::digest(
-        serde_json::to_vec(&value).expect("snapshot revision serialization"),
-    ))
+/// Enough of a revision to correlate two log lines, without the other 56 chars.
+///
+/// Revisions are only ever compared for equality, and a reader tracing a run
+/// that was rejected for naming the wrong one needs to see *that* they differ,
+/// not which bytes.
+fn short_revision(revision: &str) -> &str {
+    &revision[..revision.len().min(8)]
+}
+
+/// How many models a probe came back with, for the probe log line.
+///
+/// The interesting failure is a harness that probes fine and offers nothing:
+/// that is what leaves a saved model unselectable and a run rejected for a
+/// model "the harness does not offer".
+fn model_option_count(options: &[ConfigOption]) -> usize {
+    options
+        .iter()
+        .filter(|option| option.category == "model")
+        .map(|option| option.options.len())
+        .sum()
 }
 
 fn capabilities_from_acp(value: &Value) -> HarnessCapabilities {
@@ -1906,9 +2086,15 @@ fn authentication_hint(harness: &str, error: &str) -> Option<String> {
     if !looks_like_auth {
         return None;
     }
+    // "…and send the message again" was wrong, and wrong in a way that cost
+    // people a restart: a signed-out harness is published AUTH_REQUIRED, and
+    // admission refuses every run against it until the next probe — up to
+    // fifteen minutes away. Sending again does nothing for that whole window.
+    // What does work is asking the host to look again, which is what the
+    // "Re-check" action on the failure does.
     Some(format!(
         "{harness} is installed on this computer but not signed in. \
-         Open it in a terminal, sign in, and send the message again. \
+         Sign in to it in a terminal, then press Re-check. \
          Lemma runs it with your credentials and never sees them."
     ))
 }

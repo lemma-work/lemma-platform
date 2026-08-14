@@ -58,8 +58,20 @@ async def stage_domain_events(session, events: list[DomainEvent]) -> None:
         }
         for event in events
     ]
+    # executemany, not `.values(rows)`.
+    #
+    # `.values()` with a list renders one INSERT carrying every row inline, so
+    # the compiled SQL depends on how many rows there are -- which means the
+    # statement cache misses on every batch size it has not seen, and each miss
+    # recompiles from scratch. Caught in a real-LLM e2e run: a single stall of
+    # 1027ms inside `_extend_values_for_multiparams`, pure CPU on the event
+    # loop, in this transaction, with the row locks from the write that
+    # produced these events still held.
+    #
+    # Passing the rows as executemany parameters compiles one statement
+    # regardless of batch size, so it is a cache hit from the second call on and
+    # the driver does the batching.
     await session.execute(
-        insert(DomainEventOutbox)
-        .values(rows)
-        .on_conflict_do_nothing(index_elements=["id"])
+        insert(DomainEventOutbox).on_conflict_do_nothing(index_elements=["id"]),
+        rows,
     )

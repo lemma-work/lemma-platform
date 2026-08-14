@@ -1,0 +1,4 @@
+{
+  "_comment": "Pre-existing thread offloads that bypass the named limiters, and aiohttp sessions with no timeout. This file may shrink freely; growing it means new unbounded I/O. See scripts/check_io_hygiene.py.",
+  "violations": []
+}

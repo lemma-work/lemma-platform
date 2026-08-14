@@ -17,3 +17,20 @@ other:
 - `archive` — deterministic zip packing and safe extraction of bundle dirs
 
 Stdlib only; no runtime dependencies.
+
+## How it ships
+
+This package is not published to PyPI. Inside the repo, both consumers resolve
+it from this directory through `[tool.uv.sources]`. For distribution,
+`lemma-cli/setup.py` vendors `lemma_pod_bundle/` into the `lemma-terminal`
+wheel at build time, since an installed CLI has no other way to get it.
+
+## License
+
+Apache-2.0 — see [LICENSE](LICENSE).
+
+This is the permissive side of the repo's [licensing
+boundary](../ARCHITECTURE.md#licensing-boundary), and deliberately so: the
+Apache-2.0 CLI and the AGPLv3 backend both depend on this package, and it
+travels inside an Apache-2.0 wheel. Keep it stdlib-only and do not import
+anything AGPL-licensed into it.

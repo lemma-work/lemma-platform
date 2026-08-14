@@ -19,7 +19,7 @@
  * together.
  */
 
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -55,6 +55,14 @@ import {
     isArchivedProfile,
     isDiscoveringHarnesses,
 } from "@/components/agents/agent-runtime-helpers";
+import { HarnessRow } from "@/components/agents/harness-row";
+import {
+    discoveryHeadline,
+    discoveryLines,
+    discoveryPhase,
+    harnessRowStates,
+} from "@/components/agents/harness-discovery-rows";
+import { agentHostBridge } from "@/lib/desktop/agent-host-bridge";
 import { RuntimeProfileKind } from "lemma-sdk";
 import { SetupPrimaryButton, SetupSplitPanel } from "./account-onboarding-chrome";
 import type { SetupStep } from "./account-onboarding-helpers";
@@ -103,6 +111,34 @@ function LocalPreview({
  * LAN or public-link visitor, whose origin is deliberately absent from the
  * desktop capability.
  */
+/**
+ * A known agent this computer has not reported yet, or has reported nothing for.
+ *
+ * Its whole job is to make waiting legible: the row is there from the first
+ * frame with the agent's name on it, shimmering while the host looks, and
+ * settles into "Not installed" only once the scan is genuinely over. Before
+ * this, an unresolved list was a single line of prose in an otherwise empty
+ * panel, sitting next to a preview that named three agents as if they were
+ * already there.
+ */
+function SkeletonHarnessRow({ displayName, looking }: { displayName: string; looking: boolean }) {
+    return (
+        <div className="flex flex-wrap items-center gap-3 rounded-md border border-[var(--border-subtle)] bg-[var(--surface-1)] px-3 py-3">
+            <span className="flex size-7 shrink-0 items-center justify-center rounded-md bg-[var(--surface-2)]">
+                <TerminalSquare className="size-3.5 text-[var(--text-tertiary)]" />
+            </span>
+            <span className="min-w-0 flex-1 truncate text-sm text-[var(--text-tertiary)]">{displayName}</span>
+            {looking ? (
+                /* A placeholder, not a liveness pulse: there is no content here
+                   yet. The design system keeps those two apart deliberately. */
+                <span className="lemma-skeleton h-4 w-16 shrink-0 rounded-full" aria-label="Looking" />
+            ) : (
+                <span className="shrink-0 text-xs text-[var(--text-tertiary)]">Not installed</span>
+            )}
+        </div>
+    );
+}
+
 function BridgeUnavailableNote() {
     return (
         <p className="rounded-md border border-[var(--border-subtle)] bg-[var(--surface-2)] px-3 py-2 text-xs text-[var(--text-tertiary)]">
@@ -171,7 +207,28 @@ export function LocalIntelligenceStep({
     const [applying, setApplying] = useState(false);
     const [dialog, setDialog] = useState<HarnessDialogTarget | null>(null);
 
-    const detected = harnesses.data?.items ?? [];
+    const detected = useMemo(() => harnesses.data?.items ?? [], [harnesses.data?.items]);
+    // One reading of "where are we", used by both halves of this screen. They
+    // used to answer separately: the left column reported a scan in progress
+    // while the right promised three agents by name, which is two screens'
+    // worth of confidence in one.
+    const phase = discoveryPhase({
+        hostAvailable: status?.available,
+        paired: status?.paired,
+        fetching: harnesses.isLoading || harnesses.isFetching,
+        stillDiscovering: !!host && isDiscoveringHarnesses(host, detected.length),
+    });
+    const rows = useMemo(() => harnessRowStates(detected, phase), [detected, phase]);
+    const foundCount = rows.filter((row) => row.state === "found").length;
+    const recheck = useCallback(() => {
+        void agentHostBridge.refresh().then(
+            () => {
+                toast.success("Rechecking the agents on this Mac");
+                setTimeout(() => void harnesses.refetch(), 1200);
+            },
+            (error: unknown) => toast.error(error instanceof Error ? error.message : String(error)),
+        );
+    }, [harnesses]);
     // Which harnesses already have a profile, so a row can say so instead of
     // offering to add the same agent again. Mutations invalidate the whole
     // agent-runtime tree, so this updates itself the moment one is saved.
@@ -244,12 +301,8 @@ export function LocalIntelligenceStep({
             preview={
                 <LocalPreview
                     icon={<Sparkles className="size-5" />}
-                    headline="Two ways to get a working agent"
-                    lines={[
-                        "Claude Code, Codex, or OpenCode — no key, no model id.",
-                        "Or Ollama, LM Studio, OpenAI, Anthropic, OpenRouter.",
-                        "Lemma lists what a provider offers; you pick the default.",
-                    ]}
+                    headline={discoveryHeadline(phase, foundCount)}
+                    lines={discoveryLines(phase, foundCount)}
                 />
             }
             onBack={onBack}
@@ -280,85 +333,91 @@ export function LocalIntelligenceStep({
                         </Button>
                     </div>
 
-                    {detected.map((harness) => {
-                        const saved = savedByHarnessId.get(harness.id);
+                    {/*
+                     * Every agent Lemma can drive, from the first frame, each
+                     * resolving on its own. The previous version showed an empty
+                     * panel with one sentence in it for the whole minute a first
+                     * probe takes — which reads as broken rather than busy — and
+                     * then had the list appear out of nothing.
+                     */}
+                    {rows.map((row) => {
+                        if (row.state !== "found") {
+                            return (
+                                <SkeletonHarnessRow
+                                    key={row.key}
+                                    displayName={row.displayName}
+                                    looking={row.state === "looking"}
+                                />
+                            );
+                        }
+                        const saved = savedByHarnessId.get(row.harness.id);
                         return (
-                            <div
-                                key={harness.id}
-                                className="flex flex-wrap items-center gap-3 rounded-md border border-[var(--border-subtle)] bg-[var(--surface-1)] px-3 py-2.5"
-                            >
-                                <TerminalSquare className="size-4 shrink-0 text-[var(--text-tertiary)]" />
-                                <span className="min-w-0 flex-1 truncate text-sm text-[var(--text-primary)]">
-                                    {harness.display_name}
-                                </span>
-                                {saved?.archived && organizationId ? (
-                                    // Restoring rather than adding: the archived
-                                    // profile still owns the name, so a second
-                                    // "Use in chats" would only ever 409 on it.
-                                    <Button
-                                        type="button"
-                                        variant="quiet"
-                                        size="sm"
-                                        className="gap-1.5 px-2"
-                                        onClick={() => {
-                                            void restore
-                                                .mutateAsync({
-                                                    organizationId,
-                                                    profileId: saved.id,
-                                                })
-                                                .then(() => {
-                                                    toast.success(`${saved.name} restored`);
-                                                    void managed.refetch();
-                                                })
-                                                .catch((error: unknown) =>
-                                                    toast.error(
-                                                        error instanceof Error
-                                                            ? error.message
-                                                            : String(error),
-                                                    ),
-                                                );
-                                        }}
-                                    >
-                                        <RefreshCw className="size-3.5" />
-                                        Restore {saved.name}
-                                    </Button>
-                                ) : saved ? (
-                                    <span className="flex items-center gap-1.5 text-xs text-[var(--state-success)]">
-                                        <Check className="size-3.5" />
-                                        Added as {saved.name}
-                                    </span>
-                                ) : organizationId ? (
-                                    <Button
-                                        type="button"
-                                        variant="quiet"
-                                        size="sm"
-                                        className="gap-1.5 px-2"
-                                        onClick={() => setDialog({ mode: "create", harness })}
-                                    >
-                                        <Plus className="size-3.5" />
-                                        Use in chats
-                                    </Button>
-                                ) : null}
-                            </div>
+                            <HarnessRow
+                                key={row.harness.id}
+                                harness={row.harness}
+                                savedProfile={saved ? { name: saved.name, archived: saved.archived } : null}
+                                onRecheck={recheck}
+                                className="border border-[var(--border-subtle)]"
+                                action={(usable) => {
+                                    if (!organizationId) return null;
+                                    if (saved?.archived) {
+                                        // Restoring rather than adding: the
+                                        // archived profile still owns the name,
+                                        // so a second "Use in chats" would only
+                                        // ever 409 on it.
+                                        return (
+                                            <Button
+                                                type="button"
+                                                variant="quiet"
+                                                size="sm"
+                                                className="gap-1.5 px-2"
+                                                onClick={() => {
+                                                    void restore
+                                                        .mutateAsync({ organizationId, profileId: saved.id })
+                                                        .then(() => {
+                                                            toast.success(`${saved.name} restored`);
+                                                            void managed.refetch();
+                                                        })
+                                                        .catch((error: unknown) =>
+                                                            toast.error(
+                                                                error instanceof Error
+                                                                    ? error.message
+                                                                    : String(error),
+                                                            ),
+                                                        );
+                                                }}
+                                            >
+                                                <RefreshCw className="size-3.5" />
+                                                Restore {saved.name}
+                                            </Button>
+                                        );
+                                    }
+                                    // Withheld for a harness that cannot take
+                                    // the profile — a signed-out agent used to
+                                    // offer this, walk the user through the
+                                    // dialog, and fail on save.
+                                    if (saved || !usable) return null;
+                                    return (
+                                        <Button
+                                            type="button"
+                                            variant="quiet"
+                                            size="sm"
+                                            className="gap-1.5 px-2"
+                                            onClick={() => setDialog({ mode: "create", harness: row.harness })}
+                                        >
+                                            <Plus className="size-3.5" />
+                                            Use in chats
+                                        </Button>
+                                    );
+                                }}
+                            />
                         );
                     })}
 
-                    {/*
-                     * Three honest states, because the previous version showed
-                     * one — "no agents found" — whether it was still connecting,
-                     * still scanning, or genuinely finished with nothing.
-                     */}
-                    {!detected.length ? (
-                        <p className="rounded-md border border-[var(--border-subtle)] bg-[var(--surface-2)] px-3 py-2.5 text-sm text-[var(--text-tertiary)]">
-                            {!status?.available
-                                ? "Looking for the Agent Host…"
-                                : !status.paired
-                                  ? "Connecting this computer…"
-                                  : harnesses.isLoading || harnesses.isFetching
-                                    ? "Scanning for installed agents…"
-                                    : host && isDiscoveringHarnesses(host, detected.length)
-                                      ? "Still looking for coding agents on this Mac…"
-                                      : "No coding agents found. macOS may ask for file access the first time one is probed — allow it and press Rescan."}
+                    {phase === "settled" && foundCount === 0 ? (
+                        <p className="px-1 text-xs text-[var(--text-tertiary)]">
+                            macOS may ask for file access the first time an agent is probed — allow it
+                            and press Rescan.
                         </p>
                     ) : null}
                 </section>
@@ -460,11 +519,20 @@ export function LocalIntelligenceStep({
                     everyone. A coding agent stays on this Mac and uses its own credentials.
                 </p>
 
-                <div className="flex flex-wrap items-center gap-3 pt-1">
+                {/*
+                  * `pt-9` and `!mt-0` together, because `SetupPrimaryButton`
+                  * carries `mx-auto mt-8` of its own. This row already cancelled
+                  * the centring; leaving the top margin meant `items-center`
+                  * centred the button's *margin* box while the "Ready" pip
+                  * centred on the line, so the pip sat visibly above the middle
+                  * of the button. The 2rem moves to the container, where it
+                  * applies to the whole row.
+                  */}
+                <div className="flex flex-wrap items-center gap-3 pt-9">
                     <SetupPrimaryButton
                         type="button"
                         onClick={() => onContinue(configured ? "ready" : "deferred")}
-                        className="!mx-0"
+                        className="!mx-0 !mt-0"
                     >
                         Continue
                         <ArrowRight className="h-4 w-4" />

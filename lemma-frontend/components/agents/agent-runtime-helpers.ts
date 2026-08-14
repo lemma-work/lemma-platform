@@ -264,6 +264,29 @@ const AGENT_HOST_HARNESS_HEALTH: Record<string, { label: string; detail: string 
     DISABLED: { label: 'Disabled', detail: 'Turned off in the Agent Host configuration on that computer.' },
 };
 
+// The sentence the Agent Host writes when a coding agent on this Mac is
+// installed but signed out (`authentication_hint`, desktop/agent-host/src/runtime.rs).
+// It reaches the user through two different doors — a harness row's
+// `stale_reason` and a failed run's error — and only one of them used to offer
+// anything to press.
+const LOCAL_AGENT_SIGN_IN_MARKER = 'installed on this computer but not signed in';
+
+/**
+ * Whether this failure is a local coding agent that just needs signing in.
+ *
+ * Matters because "send the message again" does not fix it: a signed-out
+ * harness is published AUTH_REQUIRED and admission refuses every run against it
+ * until the host re-probes, which is otherwise up to fifteen minutes away. The
+ * fix is to ask the host to look again — so the failure carries that action
+ * rather than advice that cannot work yet.
+ *
+ * Deliberately a substring test on one stable clause, not a parse: the message
+ * is written for a person and its wording will move.
+ */
+export function isLocalAgentSignInFailure(detail: string | null | undefined): boolean {
+    return typeof detail === 'string' && detail.includes(LOCAL_AGENT_SIGN_IN_MARKER);
+}
+
 export function agentHostHarnessHealth(health: string): { label: string; detail: string; ready: boolean } {
     const known = AGENT_HOST_HARNESS_HEALTH[health];
     if (known) return { ...known, ready: health === 'READY' };

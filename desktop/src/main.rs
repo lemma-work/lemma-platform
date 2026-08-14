@@ -6597,6 +6597,37 @@ mod tests {
         assert!(!html.contains("Nothing leaves your machine"));
     }
 
+    /// Both choices invite you in the same words.
+    ///
+    /// Cloud keeps the recommendation -- that is a product decision, and the
+    /// gold rail and badge are untouched. What was wrong was the *verb*: cloud
+    /// said "Continue →" and local said "Review →", so the option someone
+    /// downloaded a desktop app to pick read as the one with homework attached.
+    /// A tester installed the DMG, landed on lemma.work, and had to find the
+    /// Connection menu to get back.
+    ///
+    /// The disclosure screen local opens is unchanged and still runs before
+    /// anything is installed, which is what the old label was trying to promise.
+    #[test]
+    fn neither_connection_choice_reads_as_the_effortful_one() {
+        let html = include_str!("../ui/index.html");
+
+        assert!(
+            !html.contains("<span class=\"choice-action\">Review →</span>"),
+            "the local choice should invite in the same words as the cloud one"
+        );
+        assert_eq!(
+            html.matches("<span class=\"choice-action\">Continue →</span>")
+                .count(),
+            2,
+            "both choices should carry the same call to action"
+        );
+        // Still gated: nothing is installed until the review screen is answered.
+        assert!(html.contains("id=\"local-confirm\""));
+        assert!(html.contains("Install local services"));
+        assert!(html.contains("no local services are installed until you confirm"));
+    }
+
     #[test]
     fn local_settings_exposes_honest_runtime_repair_and_rollback_boundaries() {
         let html = include_str!("../ui/control.html");

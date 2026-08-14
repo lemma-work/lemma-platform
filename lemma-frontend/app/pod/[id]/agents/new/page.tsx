@@ -25,6 +25,7 @@ import { toast } from 'sonner';
 
 import { SchemaBuilder } from '@/components/agents/schema-builder';
 import { AgentAvatarPicker } from '@/components/agents/agent-avatar-picker';
+import { AgentEmail } from '@/components/surfaces/agent-email';
 import { formatAgentRuntime, resolveDefaultAgentRuntime } from '@/components/agents/agent-runtime-helpers';
 import { RuntimeModelPicker } from '@/components/lemma/assistant/model-picker';
 import { PodPageHeader } from '@/components/pod/pod-page-header';
@@ -37,7 +38,11 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { useAgentRuntimes } from '@/lib/hooks/use-agent-runtime';
 import { useCreateAgent } from '@/lib/hooks/use-agents';
 import { usePodAccess } from '@/lib/hooks/use-pod-access';
+import { useAvailableSurfaces } from '@/lib/hooks/use-pod-surfaces';
 import { usePod } from '@/lib/hooks/use-pods';
+import { buildAgentEmailPreview } from '@/lib/surfaces/agent-email';
+import { managedEmailDomain } from '@/lib/surfaces/catalog';
+import { AGENT_MASCOTS } from '@/lib/data/agent-mascots';
 import { cn } from '@/lib/utils';
 import { formatAgentName } from '@/lib/utils/agents';
 import { Agent, AccessMode, ToolSet } from '@/lib/types';
@@ -125,6 +130,9 @@ export default function NewAgentPage({
     const { data: pod } = usePod(podId);
     const { data: runtimeCatalog } = useAgentRuntimes(pod?.organization_id);
     const defaultRuntime = resolveDefaultAgentRuntime(runtimeCatalog, pod?.config?.default_profile_id);
+    // Only for the domain. Every other part of the address is already on this
+    // page — the name being typed, and the pod it's being made in.
+    const { data: surfaceCatalog } = useAvailableSurfaces(podId);
     const [currentStep, setCurrentStep] = useState<BuilderStepId>('identity');
     const [showTaskFields, setShowTaskFields] = useState(false);
     const [showOutputFields, setShowOutputFields] = useState(false);
@@ -174,6 +182,17 @@ export default function NewAgentPage({
     };
     const canGoNext = currentStep !== 'identity' || hasName;
     const nextStep = BUILDER_STEPS[Math.min(safeStepIndex + 1, BUILDER_STEPS.length - 1)];
+    // Derived, not fetched: the backend mints this from the same two names the
+    // moment the agent is created. Null where this deployment runs no mail
+    // domain, and the copy falls back to saying nothing rather than promising.
+    const emailPreview = useMemo(
+        () => buildAgentEmailPreview({
+            agentName: draftAgent.name,
+            podName: pod?.name,
+            domain: managedEmailDomain(surfaceCatalog),
+        }),
+        [draftAgent.name, pod?.name, surfaceCatalog],
+    );
 
     const updateDraft = (updates: Partial<Agent>) => {
         setDraftAgent((prev) => ({ ...prev, ...updates }));
@@ -289,6 +308,13 @@ export default function NewAgentPage({
                                             placeholder="Customer Thread Briefing"
                                             className="form-field-control mt-2 h-9 w-full px-3 text-sm font-medium tracking-normal text-[var(--text-primary)] outline-none placeholder:text-[var(--text-tertiary)]"
                                         />
+                                        {/* The name is not only a label — it decides the
+                                            address, and the address is the thing that
+                                            makes an agent reachable by anyone who never
+                                            opens Lemma. Naming it here, live, is the
+                                            only moment where that lands as a
+                                            consequence of what you just typed. */}
+                                        <AgentEmailNote address={emailPreview} hasName={hasName} />
                                     </div>
                                     <div>
                                         <label className="text-sm font-medium text-[var(--text-secondary)]">
@@ -552,6 +578,7 @@ export default function NewAgentPage({
                                 appsCount={draftAgent.accessible_connectors?.length || 0}
                                 runtimeLabel={formatAgentRuntime(draftAgent.agent_runtime ?? defaultRuntime, runtimeCatalog)}
                                 visibility={draftAgent.visibility}
+                                email={emailPreview}
                             />
                         ) : null}
 
@@ -606,6 +633,29 @@ export default function NewAgentPage({
                 </div>
             </footer>
         </div>
+    );
+}
+
+/**
+ * What the name you just typed buys you: an address.
+ *
+ * Creating an agent provisions a mailbox for it — it has done so all along, and
+ * nothing in this builder said so, so the first anyone heard of it was a
+ * truncated chip on a page they had to go looking for. Stated here it is a
+ * reason to finish naming the thing.
+ *
+ * Silent when this deployment mints no addresses. A promise of mail on an
+ * install with no domain configured is worse than saying nothing.
+ */
+function AgentEmailNote({ address, hasName }: { address: string | null; hasName: boolean }) {
+    if (!hasName) return null;
+    if (!address) return null;
+
+    return (
+        <p className="agent-builder-email-note">
+            <span className="text-[var(--text-secondary)]">People will be able to email it at</span>
+            <AgentEmail address={address} size="sm" preview />
+        </p>
     );
 }
 
@@ -760,6 +810,7 @@ function LaunchReview({
     appsCount,
     runtimeLabel,
     visibility,
+    email,
 }: {
     name: string;
     iconUrl?: string | null;
@@ -776,6 +827,8 @@ function LaunchReview({
     appsCount: number;
     runtimeLabel: string;
     visibility?: string | null;
+    /** The address creating this agent will mint, where mail is configured. */
+    email?: string | null;
 }) {
     const accessCount = toolsCount + tablesCount + foldersCount + appsCount;
     const displayName = name.trim() || 'Untitled agent';
@@ -816,6 +869,13 @@ function LaunchReview({
                             ) : null}
                         </div>
                         <p className="mt-2 max-w-2xl text-sm leading-6 text-[var(--text-secondary)]">{purpose}</p>
+
+                        {/* Sits with the name and purpose, not among the chips
+                            below: it is part of who this agent will be, and the
+                            chips are what it will be able to do. Same sentence
+                            as the naming step, so the address doesn't arrive
+                            here as a new fact. */}
+                        <AgentEmailNote address={email ?? null} hasName={hasName} />
 
                         <div className="mt-4 flex flex-wrap gap-2">
                             <ResourceVisibilityBadge visibility={visibility} resourceLabel="agents" />

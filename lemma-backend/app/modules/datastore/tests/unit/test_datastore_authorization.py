@@ -242,3 +242,40 @@ async def test_pod_file_write_uses_document_permission():
     assert ctx.require.await_args.args[0] == Permissions.FOLDER_WRITE
     assert ctx.require.await_args.args[1].resource_type == ResourceType.DOCUMENT
     assert ctx.require.await_args.args[1].resource_id == file_entity.id
+
+
+async def test_the_check_releases_the_application_connection_when_nothing_is_pending():
+    """Authorization reads from the application DB; what follows uses the datastore.
+
+    Holding the application connection past the check is what made a bulk
+    record write sit on one for seconds with the database asked nothing.
+    """
+    from unittest.mock import AsyncMock
+    from types import SimpleNamespace
+
+    session = SimpleNamespace(new=(), dirty=(), deleted=(), commit=AsyncMock())
+    authz = DatastoreAuthorization(SimpleNamespace(session=session))
+
+    await authz._release_application_connection()
+
+    session.commit.assert_awaited_once()
+
+
+async def test_the_release_leaves_a_session_with_pending_writes_alone():
+    """Committing here would make someone else's work durable earlier than asked.
+
+    The checks are read-only, so normally nothing is pending. When something
+    is, the safe answer is to keep the old behaviour rather than to commit on
+    the caller's behalf.
+    """
+    from unittest.mock import AsyncMock
+    from types import SimpleNamespace
+
+    session = SimpleNamespace(
+        new=(object(),), dirty=(), deleted=(), commit=AsyncMock()
+    )
+    authz = DatastoreAuthorization(SimpleNamespace(session=session))
+
+    await authz._release_application_connection()
+
+    session.commit.assert_not_awaited()

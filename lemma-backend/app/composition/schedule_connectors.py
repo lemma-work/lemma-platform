@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from typing import Any
 
 from composio import Composio
@@ -55,6 +54,7 @@ from app.modules.schedule.domain.interfaces import (
     WebhookVerifier,
 )
 from app.modules.schedule.domain.schedule import ScheduleEntity, ScheduleType
+from app.core.concurrency.offload import run_blocking
 
 logger = get_logger(__name__)
 
@@ -85,7 +85,7 @@ class ComposioScheduleManager:
             )
 
         try:
-            response = await asyncio.to_thread(create_trigger)
+            response = await run_blocking(create_trigger, limiter="external_http")
         except Exception as exc:
             logger.debug(
                 'runtime.schedule_connectors.composio_trigger_creation.diagnostic',
@@ -99,7 +99,9 @@ class ComposioScheduleManager:
     async def delete_schedule(self, account: AccountEntity, provider_id: str) -> None:
         del account
         try:
-            await asyncio.to_thread(self._client().triggers.delete, provider_id)
+            await run_blocking(
+                self._client().triggers.delete, provider_id, limiter="external_http"
+            )
         except Exception as exc:
             logger.debug(
                 'runtime.schedule_connectors.composio_trigger_deletion.diagnostic',
@@ -114,7 +116,9 @@ class ComposioScheduleManager:
     ) -> object | None:
         del account
         try:
-            return await asyncio.to_thread(self._client().triggers.get, provider_id)
+            return await run_blocking(
+                self._client().triggers.get, provider_id, limiter="external_http"
+            )
         except Exception as exc:
             logger.debug(
                 "runtime.schedule_connectors.composio_trigger_lookup.observed",

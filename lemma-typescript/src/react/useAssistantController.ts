@@ -479,7 +479,7 @@ function mapConversationMessage(
 // a TOOL_RETURN is already folded into its originating TOOL_CALL below, so a
 // second pass finds invocations that are already `state: "result"` and rewrites
 // them to the values they hold — producing fresh object identities on every
-// render for no gain. See docs/design/conversation-messages.md.
+// render for no gain.
 export function mapConversationMessages(messages: AssistantApiConversationMessage[]): AssistantRenderableMessage[] {
   const mappedMessages: AssistantRenderableMessage[] = [];
   const pendingToolCalls = new Map<string, AssistantToolInvocation>();

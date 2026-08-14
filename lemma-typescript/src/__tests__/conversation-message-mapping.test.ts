@@ -6,8 +6,6 @@ import type { AssistantRenderableMessage, AssistantToolInvocation } from "../cor
 // messages and merge tool returns a second time on top of this output, on the
 // belief that the mapper dropped them. These cases pin what the mapper actually
 // produces, so that belief cannot come back.
-//
-// See docs/design/conversation-messages.md.
 
 let clock = 0;
 function at(): string {

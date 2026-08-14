@@ -9,8 +9,6 @@ import type { AssistantRenderableMessage } from "../core/agent/renderable.js";
 // The most recent run stays open — folding it the instant it ended was the
 // largest jerk in the transcript, and deciding by "did this session watch it"
 // made a live conversation render differently from the same one reloaded.
-//
-// See docs/design/conversation-messages.md.
 
 const RUN_ID = "run-1";
 

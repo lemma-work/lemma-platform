@@ -3,7 +3,7 @@
 Imported for side effects by ``module.register_streaq`` at worker startup.
 Tasks land slice by slice: export, plan, apply, GitHub import, publish, sweep.
 
-Export job phases (see ``docs/design/pod-bundle-share-import.md``):
+Export job phases:
   (a) mark ``EXPORTING`` + publish status
   (b) one short UoW: build ctx, assemble the archive bytes via ``BundleExporter``
       (list+get reads inside the scope; progress writes bump Redis)
@@ -19,7 +19,6 @@ always safe.
 from __future__ import annotations
 
 import tempfile
-from pathlib import Path
 from uuid import UUID
 
 from streaq import StreaqRetry
@@ -47,6 +46,9 @@ from app.modules.pod_bundle.domain.state import (
     ImportState,
     ImportStatus,
     PublishStatus,
+)
+from app.modules.pod_bundle.infrastructure.archive_offload import (
+    extract_bundle_offloaded,
 )
 from app.modules.pod_bundle.infrastructure.exporter import BundleExporter
 from app.modules.pod_bundle.infrastructure import github_fetcher
@@ -364,14 +366,8 @@ async def _plan_from_staging(worker_ctx, store, staging, state: ImportState) -> 
     await _raise_if_cancelled(store, import_id)
 
     with tempfile.TemporaryDirectory(prefix="lemma-pod-import-") as tmp:
-        from lemma_pod_bundle import extract_bundle
-
         try:
-            bundle_root = extract_bundle(
-                archive,
-                Path(tmp),
-                max_uncompressed_bytes=pod_bundle_settings.pod_bundle_max_uncompressed_bytes,
-            )
+            bundle_root = await extract_bundle_offloaded(archive, tmp)
         except ValueError as exc:
             raise BundleInvalidError(str(exc)) from exc
         publish_manifest.prepare_published_bundle(bundle_root)
@@ -593,14 +589,8 @@ async def apply_pod_import(context: dict[str, str | None]) -> None:
         function_runner = None
 
         with tempfile.TemporaryDirectory(prefix="lemma-pod-apply-") as tmp:
-            from lemma_pod_bundle import extract_bundle
-
             try:
-                bundle_root = extract_bundle(
-                    archive,
-                    Path(tmp),
-                    max_uncompressed_bytes=pod_bundle_settings.pod_bundle_max_uncompressed_bytes,
-                )
+                bundle_root = await extract_bundle_offloaded(archive, tmp)
             except ValueError as exc:
                 raise BundleInvalidError(str(exc)) from exc
             publish_manifest.prepare_published_bundle(bundle_root)

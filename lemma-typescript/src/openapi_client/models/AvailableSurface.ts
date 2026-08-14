@@ -18,6 +18,7 @@ export type AvailableSurface = {
     connector_available?: boolean;
     connector_id: string;
     description?: (string | null);
+    email_domain?: (string | null);
     icon?: (string | null);
     kind: string;
     managed_setup_available?: boolean;

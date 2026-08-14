@@ -111,7 +111,5 @@ publishes the shared `datastore_events` stream.
 ## Tests and operations
 
 Tests cover schema/record validation, SQL safety, RLS, files, storage adapters,
-document processing, recovery, signed URLs, WebSockets, and e2e CRUD. Current
-unit coverage is 66.5% (4,316 of 6,487 statements); one MarkItDown unit test is
-skipped when the optional package is absent. Upload-memory and event-reliability
-findings are in [issues.md](issues.md).
+document processing, recovery, signed URLs, WebSockets, and e2e CRUD. One
+MarkItDown unit test is skipped when the optional package is absent.

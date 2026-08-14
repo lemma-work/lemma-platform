@@ -1300,17 +1300,37 @@ class ConnectorService:
             self._provider_value(auth_config)
         )
 
-        for account in accounts:
-            if account.credentials and self._should_revoke_account(
+        # Revoke first, with no connection held, then delete. Interleaving the
+        # two meant a pooled connection stayed checked out across one provider
+        # round trip per account, unbounded in the number of accounts — and
+        # this runs under a request-scoped session, so it is a request holding
+        # a connection for as long as the slowest provider takes, times N.
+        revocable = [
+            account
+            for account in accounts
+            if account.credentials
+            and self._should_revoke_account(
                 connector=connector,
                 auth_config=auth_config,
-            ):
-                with suppress(Exception):
-                    await auth_provider.revoke_connection(
-                        connector=effective_connector,
-                        credentials=self._to_oauth_credentials(account.credentials),
-                        user_id=account.user_id,
-                    )
+            )
+        ]
+        credentials_to_revoke = [
+            (account.user_id, self._to_oauth_credentials(account.credentials))
+            for account in revocable
+        ]
+        await self.uow.commit()
+
+        for user_id, credentials in credentials_to_revoke:
+            # Best-effort, as before: a provider that will not revoke must not
+            # strand the account rows in Lemma.
+            with suppress(Exception):
+                await auth_provider.revoke_connection(
+                    connector=effective_connector,
+                    credentials=credentials,
+                    user_id=user_id,
+                )
+
+        for account in accounts:
             await self.account_repository.delete(account.id)
 
         await self.auth_config_repository.delete(auth_config.id)

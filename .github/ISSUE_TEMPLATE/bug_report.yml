@@ -1,0 +1,110 @@
+name: Bug report
+description: Something behaves differently from how it is documented or intended.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for filing this. A report with exact steps is genuinely the first
+        step toward a fix.
+
+        **Do not report a security vulnerability here.** Use the
+        [private advisory flow](https://github.com/lemma-work/lemma-platform/security/advisories/new)
+        instead, and do not include credentials, tokens, customer data, or
+        production dumps anywhere in this issue.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you saw, and what you expected instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: >-
+        The smallest sequence that shows the problem. Exact commands beat prose.
+      placeholder: |
+        1. lemma pod create demo --with-starter
+        2. …
+        3. Observed: …
+    validations:
+      required: true
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      description: Where the problem shows up. Pick the closest one.
+      options:
+        - Not sure
+        - Desktop app
+        - Backend / API
+        - Frontend / workspace UI
+        - CLI (lemma-terminal)
+        - Python SDK
+        - TypeScript SDK
+        - Agent skills
+        - Agent Host
+        - Sandboxes (workspace or function runs)
+        - Surfaces (Slack, Teams, Gmail, Outlook, Telegram, WhatsApp)
+        - Connectors
+        - Documentation
+    validations:
+      required: true
+
+  - type: dropdown
+    id: how-run
+    attributes:
+      label: How are you running Lemma?
+      options:
+        - Lemma Desktop (Local)
+        - Lemma Cloud
+        - From a checkout (make dev)
+        - Self-hosted deployment
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: >-
+        Desktop → **Local Control Center → Diagnostics**, or `lemma --version`,
+        or the commit SHA for a checkout.
+      placeholder: "0.7.0 / lemma-terminal 0.7.0 / commit 41818ff"
+    validations:
+      required: true
+
+  - type: input
+    id: platform
+    attributes:
+      label: Operating system
+      placeholder: "macOS 15.2 Apple silicon / Windows 11 23H2 / Ubuntu 24.04"
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or error output
+      description: >-
+        Paste the relevant part, not the whole file. `lemma-stack logs backend`
+        for a managed install; `make logs` from a checkout. **Redact tokens,
+        keys, and email addresses before pasting.**
+      render: shell
+
+  - type: checkboxes
+    id: confirm
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues for this problem.
+          required: true
+        - label: This is not a security vulnerability.
+          required: true
+        - label: I removed credentials and personal data from everything above.
+          required: true

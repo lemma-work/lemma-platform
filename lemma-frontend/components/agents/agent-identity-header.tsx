@@ -134,6 +134,10 @@ export function AgentIdentityHeader({
                 ) : agent.description ? (
                     <p className="agent-identity-description-static">{agent.description}</p>
                 ) : null}
+
+                {/* No agent address here, deliberately: "Reached by" owns reach,
+                    renders the address in full, and is what you click to change
+                    it. Repeated here it was the same string twice on one card. */}
             </div>
 
             <div className="agent-identity-chips">

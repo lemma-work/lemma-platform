@@ -143,9 +143,13 @@ async def lifespan(app: FastAPI):
 
         # Core startup
         from app.core.concurrency.offload import configure_thread_pool
+        from app.core.observability.connection_scope import (
+            start_connection_scope_monitor_from_settings,
+        )
         from app.core.observability.loop_watchdog import loop_lag_watchdog
 
         configure_thread_pool()
+        start_connection_scope_monitor_from_settings(service_name="lemma-api")
         watchdog_task = (
             None
             if getattr(app.state, "embedded_worker", False)
@@ -301,7 +305,12 @@ class RequestObserverMiddleware:
                 attributes = {
                     "http.request.method": str(scope.get("method", "UNKNOWN")),
                     "http.route": route,
-                    "http.response.status_class": f"{status_code // 100}xx",
+                    # The exact code, not the class. The FastAPI instrumentation's
+                    # own histogram records exact codes but no route, and this
+                    # counter records the route -- matching the vocabularies is
+                    # what lets a dashboard join them into per-route error rate.
+                    # Cardinality is bounded by the codes we actually return.
+                    "http.response.status_code": status_code,
                 }
                 http_request_count.add(1, attributes)
                 http_request_duration.record(duration_ms, attributes)

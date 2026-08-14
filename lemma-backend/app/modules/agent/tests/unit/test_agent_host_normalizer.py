@@ -768,3 +768,116 @@ class TestFinalAnswerTextFallback:
         )
 
         assert "structured_output" not in self._metadata(out)
+
+
+class TestAFailureIsNotAlsoAnAnswer:
+    """A signed-out agent reported itself twice, and cost Retry doing it.
+
+    An adapter that cannot start reports its own error as an ordinary
+    `agent_message_chunk` — which becomes assistant text in the transcript —
+    and the Agent Host then rewrites the same failure into words the user can
+    act on and sends it again as the terminal message. Both landed, so the
+    screenshot shows a bare "Failed to authenticate: OAuth session expired…"
+    above a card explaining that Claude Code needs signing in.
+
+    Worse than untidy: Lemma only offers Retry on a failed run whose messages
+    are all the user's (`AgentRun.is_safely_retryable`), because retrying a run
+    that produced output can duplicate work. So the stray assistant message was
+    also what removed the button from the one failure a retry obviously fixes.
+
+    The host says which of its terminal messages are rewrites; nothing here
+    guesses.
+    """
+
+    def test_a_superseded_stream_leaves_no_assistant_message(self) -> None:
+        n = _normalizer()
+        n.normalize(
+            _event(
+                1,
+                AgentHostEventType.AGENT_MESSAGE_CHUNK,
+                {"text": "Failed to authenticate: OAuth session expired"},
+            )
+        )
+        out = n.normalize(
+            _event(
+                2,
+                AgentHostEventType.TERMINAL,
+                {
+                    "state": "FAILED",
+                    "message": "Claude Code is installed on this computer but not signed in.",
+                    "supersedes_stream": True,
+                },
+            )
+        )
+
+        assert _text_messages(out) == []
+        assert [e.type for e in out if is_terminal_event(e)] == [
+            AgentEventType.ERROR
+        ]
+
+    def test_the_failure_itself_still_reaches_the_user(self) -> None:
+        """Dropping the duplicate must not drop the explanation with it."""
+        n = _normalizer()
+        n.normalize(
+            _event(1, AgentHostEventType.AGENT_MESSAGE_CHUNK, {"text": "raw adapter error"})
+        )
+        out = n.normalize(
+            _event(
+                2,
+                AgentHostEventType.TERMINAL,
+                {
+                    "state": "FAILED",
+                    "message": "Claude Code is installed on this computer but not signed in.",
+                    "supersedes_stream": True,
+                },
+            )
+        )
+
+        terminal = next(e for e in out if is_terminal_event(e))
+        assert "not signed in" in str(terminal.data)
+
+    def test_a_partial_answer_is_never_thrown_away(self) -> None:
+        """The line this must not cross.
+
+        A run that answered for three paragraphs and then hit its deadline
+        keeps all three — and keeps blocking Retry, which is correct: that work
+        happened and repeating it could repeat its side effects. Only a message
+        the host says it is restating is dropped.
+        """
+        n = _normalizer()
+        n.normalize(
+            _event(1, AgentHostEventType.AGENT_MESSAGE_CHUNK, {"text": "a real partial answer"})
+        )
+        out = n.normalize(
+            _event(
+                2,
+                AgentHostEventType.TERMINAL,
+                {"state": "FAILED", "message": "Agent Host run deadline elapsed"},
+            )
+        )
+
+        assert [m.data.text for m in _text_messages(out)] == ["a real partial answer"]
+
+    def test_reasoning_survives_a_superseded_failure(self) -> None:
+        """A thought is never mistaken for an answer, and it is the only record
+        of what the agent was doing when it failed."""
+        n = _normalizer()
+        n.normalize(
+            _event(1, AgentHostEventType.AGENT_THOUGHT_CHUNK, {"text": "checking credentials"})
+        )
+        n.normalize(
+            _event(2, AgentHostEventType.AGENT_MESSAGE_CHUNK, {"text": "Failed to authenticate"})
+        )
+        out = n.normalize(
+            _event(
+                3,
+                AgentHostEventType.TERMINAL,
+                {
+                    "state": "FAILED",
+                    "message": "Claude Code is installed on this computer but not signed in.",
+                    "supersedes_stream": True,
+                },
+            )
+        )
+
+        assert [m.data.text for m in _text_messages(out)] == ["checking credentials"]

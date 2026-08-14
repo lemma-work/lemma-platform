@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+import time
+from collections.abc import Coroutine
+from datetime import datetime, timedelta, timezone
+from typing import Any
 from uuid import UUID
 
 from faststream.redis import RedisRouter
@@ -127,24 +130,93 @@ async def _reconcile_unqueued_function_runs(
     return published
 
 
+async def _guard_cron(task_name: str, body: Coroutine[Any, Any, None]) -> None:
+    """Keep one failed tick from taking the schedule down with it.
+
+    A cron that raises stops contributing until the next tick anyway, so the
+    only thing an escaping exception buys is a less useful log line. Both crons
+    in this module share this boundary so the module keeps exactly one broad
+    catch rather than one per schedule.
+    """
+
+    try:
+        await body
+    except Exception:
+        logger.error(
+            "function.handlers.cron.failed",
+            task_name=task_name,
+            exc_info=True,
+        )
+
+
+@streaq_cron("17 * * * *", name="prune_function_runs")
+async def prune_function_runs() -> None:
+    """Reclaim finished runs past the retention window.
+
+    Nothing removed a function run before this existed, and a run carries its
+    input, its output and its captured logs -- so the table grew in bytes
+    faster than in rows, and every query over it got slower for the life of the
+    install.
+
+    Batched and budgeted for the same reason as the event-delivery sweep: the
+    first run against an install that has never pruned has a large backlog to
+    work through, and it has to do that without monopolising the database or
+    running into the next tick. Stopping early costs nothing -- the cutoff is
+    recomputed on the next run and the remainder is still eligible.
+
+    Offset off the hour so it does not start alongside the event-delivery
+    sweep; both are delete-heavy on the same database.
+    """
+
+    await _guard_cron("prune_function_runs", _prune_function_runs())
+
+
+async def _prune_function_runs() -> None:
+    from app.core.config import settings
+
+    budget = settings.function_run_retention_budget_seconds
+    if budget <= 0:
+        return
+
+    batch_size = settings.function_run_retention_batch_size
+    cutoff = datetime.now(timezone.utc) - timedelta(
+        days=settings.function_run_retention_days
+    )
+    uow_factory = provide_uow_factory()
+    started = time.monotonic()
+    removed = 0
+    while True:
+        async with uow_factory() as uow:
+            batch = await FunctionRunRepository(uow).delete_terminal_before(
+                cutoff=cutoff,
+                batch_size=batch_size,
+            )
+        removed += batch
+        if batch < batch_size or (time.monotonic() - started) >= budget:
+            break
+    if removed:
+        logger.debug(
+            "function.handlers.prune_function_runs.observed",
+            deleted_count=removed,
+        )
+
+
 @streaq_cron("* * * * *", name="reconcile_function_runs")
 async def reconcile_function_runs() -> None:
     """Recover unqueued runs and fail executions past their immutable deadline."""
 
-    try:
-        now = datetime.now(timezone.utc)
-        uow_factory = provide_uow_factory()
-        await _reconcile_unqueued_function_runs(
-            uow_factory=uow_factory,
+    await _guard_cron("reconcile_function_runs", _reconcile_function_runs())
+
+
+async def _reconcile_function_runs() -> None:
+    now = datetime.now(timezone.utc)
+    uow_factory = provide_uow_factory()
+    await _reconcile_unqueued_function_runs(
+        uow_factory=uow_factory,
+        now=now,
+    )
+    async with uow_factory() as uow:
+        await FunctionRunRepository(uow).fail_expired(
             now=now,
-        )
-        async with uow_factory() as uow:
-            await FunctionRunRepository(uow).fail_expired(
-                now=now,
-                job_callback_grace_seconds=FUNCTION_JOB_CALLBACK_GRACE_SECONDS,
-            )
-    except Exception:
-        logger.error(
-            "function.handlers.reconcile_function_runs.failed",
-            exc_info=True,
+            job_callback_grace_seconds=FUNCTION_JOB_CALLBACK_GRACE_SECONDS,
         )

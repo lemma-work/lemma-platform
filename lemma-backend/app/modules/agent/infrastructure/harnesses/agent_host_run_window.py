@@ -139,6 +139,17 @@ def credential_bounded_timeout(
     than a minute later for a reason nobody can see.
     """
     if credential_expires_at is None:
+        # An opaque credential silently disables all three of the protections
+        # in this module: nothing schedules a refresh, nothing caps the
+        # deadline, and `credential_exhausted` can never fire. The run then
+        # outlives its token and the agent experiences its Lemma tools failing
+        # one by one, which is exactly the failure the rest of this file was
+        # written to prevent. Said out loud, because the alternative is
+        # diagnosing it from a transcript.
+        logger.warning(
+            "agent.harnesses.agent_host.credential_expiry_unknown.degraded",
+            agent_run_id=str(agent_run_id),
+        )
         return configured_seconds, False
     usable = (
         credential_expires_at - now

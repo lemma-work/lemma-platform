@@ -3142,6 +3142,17 @@
             ],
             "title": "Description"
           },
+          "email_domain": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Email Domain"
+          },
           "icon": {
             "anyOf": [
               {

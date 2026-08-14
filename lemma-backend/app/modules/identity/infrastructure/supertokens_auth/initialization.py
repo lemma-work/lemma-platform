@@ -32,6 +32,9 @@ from app.modules.identity.infrastructure.supertokens_auth.override_email_verific
     override_email_verification_apis,
     override_email_verification_functions,
 )
+from app.modules.identity.infrastructure.supertokens_auth.jwks_guard import (
+    install_jwks_guard,
+)
 from app.core.log.log import get_logger
 
 logger = get_logger(__name__)
@@ -116,6 +119,8 @@ def build_thirdparty_providers() -> list[ProviderInput]:
 
 
 def initialize_supertokens():
+    # Before init, so no verification can run against the unguarded function.
+    install_jwks_guard()
     init(
         app_info=build_supertokens_app_info(),
         supertokens_config=SupertokensConfig(

@@ -23,6 +23,7 @@ from app.modules.agent_surfaces.domain.models import (
 from app.modules.agent_surfaces.platforms.base import BaseSurfaceAdapter
 from app.modules.agent_surfaces.platforms.teams import client
 from app.modules.agent_surfaces.platforms.teams.client import GRAPH_BASE
+from app.core.net.aiohttp_client import new_aiohttp_session
 from app.modules.agent_surfaces.platforms.teams.parser import (
     TEAMS_APPROVAL_DECISION_KEY,
     TEAMS_FORM_CALLBACK_KEY,
@@ -164,7 +165,7 @@ class TeamsSurfaceAdapter(BaseSurfaceAdapter):
                 f"{GRAPH_BASE}/users/{quote(str(identifier))}"
                 "?$select=id,displayName,mail,userPrincipalName,mobilePhone"
             )
-            async with aiohttp.ClientSession() as session:
+            async with new_aiohttp_session() as session:
                 async with session.get(
                     url, headers=client.auth_headers(graph_token)
                 ) as response:
@@ -463,7 +464,7 @@ class TeamsSurfaceAdapter(BaseSurfaceAdapter):
             f"/v3/conversations/{quote(str(conversation_id))}/activities"
         )
         try:
-            async with aiohttp.ClientSession() as session:
+            async with new_aiohttp_session() as session:
                 async with session.post(
                     url,
                     headers=client.auth_headers(bot_token),
@@ -606,7 +607,7 @@ class TeamsSurfaceAdapter(BaseSurfaceAdapter):
             f"/v3/conversations/{quote(str(conversation_id))}/members/{quote(bf_user_id)}"
         )
         try:
-            async with aiohttp.ClientSession() as session:
+            async with new_aiohttp_session() as session:
                 async with session.get(
                     url, headers=client.auth_headers(bot_token)
                 ) as response:

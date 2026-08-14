@@ -53,9 +53,38 @@ class EventTransportSettings(BaseSettings):
     redis_stream_snapshot_interval_seconds: float = Field(default=300.0, ge=0)
     redis_stream_stale_consumer_seconds: int = Field(default=900, ge=1)
     consumer_group_reconcile_interval_seconds: float = Field(default=30.0, ge=0)
-    event_completed_retention_days: int = Field(default=30, ge=1)
-    event_dead_letter_retention_days: int = Field(default=90, ge=1)
+    event_completed_retention_days: int = Field(
+        default=7,
+        ge=1,
+        description=(
+            "How long a published outbox row or completed inbox row is kept. "
+            "These are delivery receipts, not history: the event itself lives "
+            "in its Redis stream and its effects live in the domain tables. "
+            "Thirty days of them is what let the outbox reach several hundred "
+            "thousand rows."
+        ),
+    )
+    event_dead_letter_retention_days: int = Field(
+        default=90,
+        ge=1,
+        description=(
+            "How long a dead-lettered row is kept. Deliberately far longer "
+            "than the completed window -- this set stays small and is the one "
+            "an operator actually needs to read after an incident."
+        ),
+    )
     event_retention_batch_size: int = Field(default=1_000, ge=1, le=10_000)
+    event_retention_run_budget_seconds: float = Field(
+        default=45.0,
+        ge=0.0,
+        description=(
+            "Wall-clock budget for one retention sweep. The sweep deletes in "
+            "batches until a category is drained or this budget is spent, so a "
+            "backlog larger than one batch is cleared over successive runs "
+            "instead of never. Zero restores the old one-batch-per-category "
+            "behaviour. Keep it well under the cron period."
+        ),
+    )
 
     def stream_maxlen_for(self, stream: str) -> int | None:
         configured = self.redis_stream_maxlen_overrides.get(

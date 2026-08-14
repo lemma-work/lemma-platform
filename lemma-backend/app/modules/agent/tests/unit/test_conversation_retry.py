@@ -51,7 +51,7 @@ def _service():
         lock_conversation=AsyncMock(),
         get_active_agent_run_for_update=AsyncMock(return_value=None),
         get_latest_agent_run_for_conversation=AsyncMock(),
-        list_agent_runs_with_messages_by_run_id=AsyncMock(),
+        run_has_only_user_messages=AsyncMock(return_value=True),
         create_agent_run=AsyncMock(),
     )
     uow = SimpleNamespace(collect_events=MagicMock(), commit=AsyncMock())
@@ -77,7 +77,7 @@ async def test_retry_failed_run_reuses_runtime_without_appending_message() -> No
     retry_run = _run(status=AgentRunStatus.RUNNING)
     retry_run.conversation_id = conversation.id
     repository.get_latest_agent_run_for_conversation.return_value = failed_run
-    repository.list_agent_runs_with_messages_by_run_id.return_value = [failed_run]
+    repository.run_has_only_user_messages.return_value = True
     repository.create_agent_run.return_value = retry_run
     service._authorized_conversation = AsyncMock(return_value=conversation)
     service._assert_usage_preflight_allowed = AsyncMock()
@@ -100,9 +100,8 @@ async def test_retry_failed_run_reuses_runtime_without_appending_message() -> No
     )
     uow.collect_events.assert_called_once()
     uow.commit.assert_awaited_once()
-    repository.list_agent_runs_with_messages_by_run_id.assert_awaited_once_with(
-        failed_run.id
-    )
+    # Asked about this one run, not handed every run of the conversation.
+    repository.run_has_only_user_messages.assert_awaited_once_with(failed_run.id)
 
 
 @pytest.mark.asyncio
@@ -185,7 +184,8 @@ async def test_retry_failed_run_rejects_failed_run_with_non_user_activity() -> N
             text="partial output",
         )
     )
-    repository.list_agent_runs_with_messages_by_run_id.return_value = [failed_run]
+    # The run said something, so the database reports it is not replay-safe.
+    repository.run_has_only_user_messages.return_value = False
     service._authorized_conversation = AsyncMock(return_value=conversation)
 
     with pytest.raises(ConversationStateError, match="retried safely"):
@@ -206,7 +206,8 @@ async def test_retry_failed_run_requires_a_persisted_user_turn() -> None:
     failed_run.conversation_id = conversation.id
     failed_run.messages = []
     repository.get_latest_agent_run_for_conversation.return_value = failed_run
-    repository.list_agent_runs_with_messages_by_run_id.return_value = [failed_run]
+    # No messages at all: there is no user turn to replay.
+    repository.run_has_only_user_messages.return_value = False
     service._authorized_conversation = AsyncMock(return_value=conversation)
 
     with pytest.raises(ConversationStateError, match="retried safely"):
@@ -245,6 +246,7 @@ async def test_conversation_detail_reports_persisted_retryability(
     conversation.agent_runs = [failed_run]
     conversation.last_run_status = AgentRunStatus.FAILED
     repository.get_conversation.return_value = conversation
+    repository.run_has_only_user_messages.return_value = not has_non_user_activity
     service._expected_agent_id = AsyncMock(return_value=None)
     service._require_agent_action = AsyncMock()
 

@@ -22,6 +22,7 @@ from uuid import UUID
 from app.core.log.log import get_logger
 from app.modules.connectors.config import connector_settings
 from app.modules.connectors.domain.errors import OperationExecutionValidationError
+from app.core.concurrency.offload import run_blocking
 from app.modules.connectors.services.files.capture import (
     BinaryCandidate,
     find_binary,
@@ -71,6 +72,31 @@ class BinaryResultWriter:
     def __init__(self, pod_file_gateway: Any | None):
         self._gateway = pod_file_gateway
 
+    async def resolve(
+        self, result: Any
+    ) -> tuple[BinaryCandidate, bytes] | None:
+        """Find the binary and get its bytes. Touches no database.
+
+        Deliberately separate from persisting it: this walks and base64-decodes
+        the whole third-party response, and for a URL-sourced result it also
+        downloads the file. Doing that inside the session that persists it held
+        a pooled connection across both.
+        """
+        candidate = await run_blocking(find_binary, result, limiter="cpu_bound")
+        if candidate is None:
+            return None
+
+        data = candidate.data if candidate.source == "inline" else await _fetch(candidate)
+        if data is None:
+            return None
+
+        if len(data) > connector_settings.connector_response_max_bytes:
+            raise OperationExecutionValidationError(
+                "Operation returned a file larger than the allowed limit.",
+                details={"reason": "response_too_large"},
+            )
+        return candidate, data
+
     async def capture(
         self,
         result: Any,
@@ -79,20 +105,18 @@ class BinaryResultWriter:
         pod_id: UUID | None,
         ctx: Any | None,
         output_path: str | None = None,
+        resolved: tuple[BinaryCandidate, bytes] | None = None,
     ) -> Any:
-        candidate = find_binary(result)
-        if candidate is None:
-            return result
+        """Persist the binary in ``result``. Needs a database session.
 
-        data = candidate.data if candidate.source == "inline" else await _fetch(candidate)
-        if data is None:
+        Call :meth:`resolve` first and pass its answer in when the caller wants
+        the expensive half to happen outside a session — which is the whole
+        reason the two are separable.
+        """
+        resolved = resolved or await self.resolve(result)
+        if resolved is None:
             return result
-
-        if len(data) > connector_settings.connector_response_max_bytes:
-            raise OperationExecutionValidationError(
-                "Operation returned a file larger than the allowed limit.",
-                details={"reason": "response_too_large"},
-            )
+        candidate, data = resolved
 
         wants_persist = (
             output_path is not None

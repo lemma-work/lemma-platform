@@ -158,6 +158,24 @@ def _managed_setup_available(platform: SurfacePlatform) -> bool:
     )
 
 
+def _email_domain(
+    platform: SurfacePlatform, *, modes: list[SurfaceCredentialMode]
+) -> str | None:
+    """The domain this deployment mints managed addresses under, or None.
+
+    Only Resend has one: it is the platform where Lemma *owns* the mailbox, so
+    an address exists for an agent that connected nothing. Gated on SYSTEM being
+    a supported mode for the same reason ``email_is_configured`` is — without the
+    key there is no address, and a domain published anyway would have the builder
+    promise one that never arrives.
+    """
+    if platform is not SurfacePlatform.RESEND:
+        return None
+    if SurfaceCredentialMode.SYSTEM not in modes:
+        return None
+    return surface_settings.resend_inbound_domain or None
+
+
 async def build_available_surfaces(
     *,
     connector_service: ConnectorService,
@@ -193,6 +211,7 @@ async def build_available_surfaces(
                     surface_repository=surface_repository,
                 ),
                 managed_setup_available=_managed_setup_available(platform),
+                email_domain=_email_domain(platform, modes=modes),
             )
         )
     return AvailableSurfacesResponse(surfaces=surfaces)

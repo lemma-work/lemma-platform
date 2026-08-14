@@ -6,6 +6,8 @@ from collections.abc import Iterable, Mapping
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
+from opentelemetry import metrics
+
 from app.modules.usage.contracts import AgentRunUsage, ModelPricing
 from app.modules.usage.domain.entities import (
     UsageLimitCounterScope,
@@ -21,6 +23,16 @@ from app.modules.usage.domain.events import (
 from app.modules.usage.infrastructure.repositories import UsageRepository
 from app.modules.usage.services.usage_context import UsageExecutionContext
 from app.modules.usage.services.pricing import UsagePricing
+
+meter = metrics.get_meter(__name__)
+# Every record is already durable in ``usage_records``; these make the same
+# numbers chartable next to latency and error rate instead of only queryable
+# per-trace. Labelled by model and token type only -- organization and pod stay
+# out of the label set, because spend per tenant is a question for the table,
+# not for a metric whose cardinality would then track the customer count.
+token_counter = meter.create_counter("lemma.llm.tokens")
+cost_counter = meter.create_counter("lemma.llm.cost_usd")
+
 
 class UsageService(UsagePricing):
     """Service for profile-aware usage recording and system-profile limits."""
@@ -210,6 +222,13 @@ class UsageService(UsagePricing):
             metadata=metadata,
         )
         saved = await self.usage_repository.create(record)
+        self._record_usage_metrics(
+            model_name=model_name,
+            usage_kind=usage_data.usage_kind,
+            input_tokens=usage_data.input_tokens,
+            output_tokens=usage_data.output_tokens,
+            cost_usd=cost_usd,
+        )
         if reservation is not None:
             actual_cost = cost_usd or 0.0
             await self.usage_repository.consume_reservation(
@@ -219,6 +238,38 @@ class UsageService(UsagePricing):
             )
         self._collect_recorded_event(saved)
         return saved
+
+    @staticmethod
+    def _record_usage_metrics(
+        *,
+        model_name: str,
+        usage_kind: str,
+        input_tokens: int,
+        output_tokens: int,
+        cost_usd: float | None,
+    ) -> None:
+        """Mirror one usage record onto the metrics pipeline.
+
+        Split by token type rather than summed: input and output are priced
+        differently and move independently, so one series for both hides the
+        thing you would actually want to see. Cost is emitted separately
+        because an unpriced model still meters tokens with a null cost, and
+        adding zero there would understate spend rather than leave a gap.
+        """
+        labels = {
+            "gen_ai.request.model": model_name,
+            "operation": usage_kind,
+        }
+        if input_tokens > 0:
+            token_counter.add(
+                input_tokens, {**labels, "gen_ai.token.type": "input"}
+            )
+        if output_tokens > 0:
+            token_counter.add(
+                output_tokens, {**labels, "gen_ai.token.type": "output"}
+            )
+        if cost_usd:
+            cost_counter.add(cost_usd, labels)
 
     async def record_pydantic_ai_result_usage(
         self,

@@ -69,5 +69,4 @@ No infrastructure-job state is stored on the pod aggregate.
 ## Tests and operations
 
 Tests cover CRUD, custom roles, join policy, resource grants, authorization
-hardening, delegation, and event behavior. See [issues.md](issues.md) for the
-module-coupling findings.
+hardening, delegation, and event behavior.

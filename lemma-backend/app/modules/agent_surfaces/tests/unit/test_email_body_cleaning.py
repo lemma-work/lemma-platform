@@ -199,3 +199,34 @@ def test_a_subject_merely_containing_fwd_is_not_a_forward():
     body = "Looks right to me.\n\nOn Mon, Ops wrote:\n> see attached"
 
     assert strip_quoted_reply(body, "Re: Fwd: invoice") == "Looks right to me."
+
+
+def test_an_enormous_html_body_is_bounded_before_parsing():
+    """The sender chooses the body size, so it cannot choose the parse time.
+
+    `html.parser` is pure Python at roughly a megabyte a second, and this runs
+    on the event loop while an inbound message is handled. Asserted as wall
+    clock with a wide margin, because the cost is the wall clock.
+    """
+    import time
+
+    from app.modules.agent_surfaces.platforms.email_common import (
+        _MAX_HTML_CHARS,
+        plain_text_from_html,
+    )
+
+    # Ten times the cap, in markup the parser has to actually walk.
+    huge = "<p>hello <b>there</b></p>" * ((_MAX_HTML_CHARS * 10) // 25)
+
+    started = time.monotonic()
+    text = plain_text_from_html(huge)
+    elapsed = time.monotonic() - started
+
+    assert "hello" in text
+    assert elapsed < 5.0, f"parse was not bounded: took {elapsed:.1f}s"
+
+
+def test_an_ordinary_body_is_untouched_by_the_cap():
+    from app.modules.agent_surfaces.platforms.email_common import plain_text_from_html
+
+    assert "Hi there" in plain_text_from_html("<p>Hi there</p><p>Thanks!</p>")

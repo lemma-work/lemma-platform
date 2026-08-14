@@ -141,25 +141,32 @@ class ConnectorOperationUseCases:
         in Composio's own envelope -- now resolves at all. Persisting is decided
         by size; ``output_path`` only chooses the destination.
         """
-        from app.modules.connectors.services.files.capture import find_binary
         from app.modules.connectors.services.files.capture_writer import (
             BinaryResultWriter,
         )
 
         result = getattr(response, "result", None)
-        if find_binary(result) is None:
+        # Resolve BEFORE opening a session. Finding the binary walks and
+        # base64-decodes the whole third-party response, and for a URL-sourced
+        # result it downloads the file too — seconds of work proportional to
+        # something we do not control. Only persisting it needs the database.
+        writer = BinaryResultWriter(None)
+        resolved = await writer.resolve(result)
+        if resolved is None:
             return response
 
         async with current_context_scope(
             self._uow_factory, request=request, user_id=user_id
         ) as scope:
-            gateway = self._pod_file_gateway_factory(scope.uow)
-            captured = await BinaryResultWriter(gateway).capture(
+            captured = await BinaryResultWriter(
+                self._pod_file_gateway_factory(scope.uow)
+            ).capture(
                 result,
                 connector_id=connector_id,
                 pod_id=getattr(scope.ctx, "pod_id", None),
                 ctx=scope.ctx,
                 output_path=(payload or {}).get("output_path"),
+                resolved=resolved,
             )
         return OperationExecutionResponse(result=captured)
 

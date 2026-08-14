@@ -34,6 +34,7 @@ class AvailableSurface:
             connect (None | SurfaceConnectDescriptor | Unset):
             connector_available (bool | Unset):  Default: True.
             description (None | str | Unset):
+            email_domain (None | str | Unset):
             icon (None | str | Unset):
             managed_setup_available (bool | Unset):  Default: False.
             system_claim (None | SurfaceSystemClaim | Unset):
@@ -47,6 +48,7 @@ class AvailableSurface:
     connect: None | SurfaceConnectDescriptor | Unset = UNSET
     connector_available: bool | Unset = True
     description: None | str | Unset = UNSET
+    email_domain: None | str | Unset = UNSET
     icon: None | str | Unset = UNSET
     managed_setup_available: bool | Unset = False
     system_claim: None | SurfaceSystemClaim | Unset = UNSET
@@ -83,6 +85,12 @@ class AvailableSurface:
             description = UNSET
         else:
             description = self.description
+
+        email_domain: None | str | Unset
+        if isinstance(self.email_domain, Unset):
+            email_domain = UNSET
+        else:
+            email_domain = self.email_domain
 
         icon: None | str | Unset
         if isinstance(self.icon, Unset):
@@ -122,6 +130,8 @@ class AvailableSurface:
             field_dict["connector_available"] = connector_available
         if description is not UNSET:
             field_dict["description"] = description
+        if email_domain is not UNSET:
+            field_dict["email_domain"] = email_domain
         if icon is not UNSET:
             field_dict["icon"] = icon
         if managed_setup_available is not UNSET:
@@ -182,6 +192,15 @@ class AvailableSurface:
 
         description = _parse_description(d.pop("description", UNSET))
 
+        def _parse_email_domain(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        email_domain = _parse_email_domain(d.pop("email_domain", UNSET))
+
         def _parse_icon(data: object) -> None | str | Unset:
             if data is None:
                 return data
@@ -227,6 +246,7 @@ class AvailableSurface:
             connect=connect,
             connector_available=connector_available,
             description=description,
+            email_domain=email_domain,
             icon=icon,
             managed_setup_available=managed_setup_available,
             system_claim=system_claim,

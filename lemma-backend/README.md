@@ -5,11 +5,9 @@ FastAPI backend platform for building AI-powered connectors around isolated pods
 The backend lives in `lemma-backend/` inside the `lemma-platform` monorepo. It is a normal Python project with its own `pyproject.toml`, `uv.lock`, migrations, scripts, and Docker Compose files.
 
 > Engineering conventions (DB sessions/connections, caching, the authorization
-> model, secrets) live in [docs/development.md](docs/development.md); test
-> notes in `docs/tests/`. The runtime module catalog is in
-> [docs/modules/README.md](docs/modules/README.md), with prioritized review
-> findings in [docs/modules/issues.md](docs/modules/issues.md). This README covers
-> setup and running the stack.
+> model, secrets) live in [docs/development.md](docs/development.md). The
+> runtime module catalog is in [docs/modules/README.md](docs/modules/README.md).
+> This README covers setup and running the stack.
 
 ## Stack
 
@@ -172,8 +170,7 @@ make load-test-monitor                              # poll pg_stat_activity duri
 make load-test-down
 ```
 
-Latest results: [load_tests/REPORT_full_surface_100u.md](load_tests/REPORT_full_surface_100u.md).
-Mocked-e2e design notes: [docs/tests/e2e_fast_mode_plan.md](docs/tests/e2e_fast_mode_plan.md).
+Each run writes its own report under `load_tests/`.
 
 ## Migrations
 

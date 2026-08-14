@@ -17,9 +17,11 @@ from app.modules.datastore.domain.datastore_entities import (
     DatastoreTableEntity,
 )
 from app.modules.datastore.infrastructure.record_update_sql import (
+    build_bulk_statements,
     bulk_returning_statement,
     chunk_for_parameter_limit,
     extract_previous_image,
+    order_bulk_keys,
     previous_image_alias,
 )
 from app.modules.datastore.services.table_context import TableContext
@@ -138,3 +140,56 @@ def test_the_conflict_clause_lands_before_returning():
         ctx, ["id"], [{"id": "a"}], ' ON CONFLICT ("id") DO UPDATE SET "x" = 1'
     )
     assert sql.index("ON CONFLICT") < sql.index("RETURNING")
+
+
+def _order_bulk_keys_as_it_was_inline(primary_key: str, all_keys: set[str]) -> list[str]:
+    """The loop `order_bulk_keys` replaced, kept verbatim as the oracle."""
+    ordered_keys: list[str] = []
+    if primary_key in all_keys:
+        ordered_keys.append(primary_key)
+    ordered_keys.extend(sorted(key for key in all_keys if key != primary_key))
+    return ordered_keys
+
+
+def test_order_bulk_keys_matches_the_loop_it_replaced():
+    """Column order decides the generated SQL, so the extraction has to be exact.
+
+    This moved out of `_bulk_write_records` to keep that file under the
+    architecture ratchet. A refactor that silently reordered columns would still
+    produce valid SQL and would corrupt every bulk write, so it is pinned
+    against the original loop rather than against a hand-written expectation.
+    """
+    cases = [
+        ("id", {"id", "name", "created_at"}),
+        ("id", {"name", "created_at"}),  # primary key absent from the payload
+        ("id", {"id"}),
+        ("sku", {"sku", "a", "Z", "_x"}),  # non-"id" primary key, mixed case
+        ("id", set()),
+    ]
+    for primary_key, all_keys in cases:
+        assert order_bulk_keys(primary_key, all_keys) == (
+            _order_bulk_keys_as_it_was_inline(primary_key, all_keys)
+        ), f"order changed for {primary_key!r} over {sorted(all_keys)}"
+
+
+def test_build_bulk_statements_covers_every_record_once():
+    """One (sql, params) pair per chunk, and no record dropped or duplicated.
+
+    The other half of the same extraction. Chunking exists because Postgres caps
+    bind parameters per statement, so the failure this guards against is a large
+    bulk write silently writing a subset.
+    """
+    ctx = _context("id", "name")
+    ordered_keys = ["id", "name"]
+    records = [{"id": index, "name": f"row-{index}"} for index in range(250)]
+
+    statements = build_bulk_statements(ctx, ordered_keys, records, "")
+
+    expected_chunks = list(chunk_for_parameter_limit(records, len(ordered_keys)))
+    assert len(statements) == len(expected_chunks)
+    assert [
+        bulk_returning_statement(ctx, ordered_keys, chunk, "")
+        for chunk in expected_chunks
+    ] == statements
+    total = sum(len(params) // len(ordered_keys) for _sql, params in statements)
+    assert total == len(records), "a bulk write would have written a subset"

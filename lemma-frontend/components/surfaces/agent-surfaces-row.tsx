@@ -2,8 +2,10 @@
 
 import { useState } from 'react';
 import Image from 'next/image';
-import { MessageCircle, Plus } from '@/components/ui/icons';
+import { Plus } from '@/components/ui/icons';
 
+import { AgentEmail } from '@/components/surfaces/agent-email';
+import { PlatformMark } from '@/components/surfaces/platform-mark';
 import { SurfaceModal, type SurfaceModalTarget } from '@/components/surfaces/surface-modal';
 import { Button } from '@/components/ui/button';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
@@ -14,6 +16,7 @@ import {
     describeConnection,
     describeReach,
     getSurfaceDeepLink,
+    getSurfaceEmail,
     getSurfaceIdentity,
     getSurfacePlatformKey,
     getSurfaceStatus,
@@ -160,8 +163,21 @@ function SurfaceChips({
     );
 }
 
-const chipClass =
-    'inline-flex max-w-[240px] items-center gap-2 rounded-lg border border-[var(--border-subtle)] bg-[var(--card-bg)] py-1 pl-1 pr-2.5 shadow-[var(--shadow-xs)] transition-colors hover:border-[var(--border-strong)]';
+const chipBase =
+    'inline-flex items-center gap-2 rounded-lg border border-[var(--border-subtle)] bg-[var(--card-bg)] py-1 pl-1 pr-2.5 shadow-[var(--shadow-xs)] transition-colors hover:border-[var(--border-strong)]';
+
+const chipClass = `${chipBase} max-w-[240px]`;
+
+/**
+ * An address needs the room an address takes.
+ *
+ * A handle is a word — `@roundtable_lemmabot`, `+91 80502 95334` — and 240px
+ * holds one. An email is two halves plus a domain that repeats on every address
+ * in the deployment, so the same ceiling cut `roundtable@ops.lemma.work` down to
+ * `roundtable@ops.lemm…`: the one string on the row a person is meant to copy
+ * was the one string they couldn't read.
+ */
+const emailChipClass = `${chipBase} max-w-[26rem]`;
 
 function ReachChip({
     surface,
@@ -188,15 +204,26 @@ function ReachChip({
     // the chip, because otherwise you only find out when it stops answering.
     const connection = describeConnection(surface);
     const tone = connection?.problem && status.tone === 'success' ? 'warning' : status.tone;
+    // Only when this chip stands for the whole surface: a Slack channel routed
+    // to an agent is `#sales`, whatever the workspace's mailbox is called.
+    const address = labelOverride ? null : getSurfaceEmail(surface);
 
     return (
         <Tooltip>
             <TooltipTrigger asChild>
-                <button type="button" onClick={onOpen} className={cn('resource-chip-button', chipClass, 'custom-focus-ring')}>
-                    <PlatformMark platform={platform} logoSrc={definition?.logoSrc} />
-                    <span className="truncate text-sm font-medium text-[var(--text-primary)]">
-                        {labelOverride || identity || definition?.label || platform}
-                    </span>
+                <button
+                    type="button"
+                    onClick={onOpen}
+                    className={cn('resource-chip-button', address ? emailChipClass : chipClass, 'custom-focus-ring')}
+                >
+                    <PlatformMark platform={platform} />
+                    {address ? (
+                        <AgentEmail address={address} size="sm" showCopy={false} className="min-w-0" />
+                    ) : (
+                        <span className="truncate text-sm font-medium text-[var(--text-primary)]">
+                            {labelOverride || identity || definition?.label || platform}
+                        </span>
+                    )}
                     <span
                         className={cn(
                             'h-1.5 w-1.5 shrink-0 rounded-full',
@@ -311,19 +338,5 @@ function ConnectChip({
             </TooltipTrigger>
             <TooltipContent>{definition.connectHint}</TooltipContent>
         </Tooltip>
-    );
-}
-
-function PlatformMark({ platform, logoSrc }: { platform: string; logoSrc?: string }) {
-    return (
-        <span
-            className="surface-platform-mark surface-platform-mark-logo shrink-0"
-            data-platform={platform.toLowerCase()}
-        >
-            {logoSrc ? (
-                <Image src={logoSrc} alt="" width={16} height={16} className="surface-platform-logo" aria-hidden="true" />
-            ) : null}
-            <MessageCircle className="surface-platform-icon-fallback h-4 w-4" />
-        </span>
     );
 }

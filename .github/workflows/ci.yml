@@ -161,6 +161,20 @@ jobs:
         run: make lint
       - name: Async-safety lint
         run: make lint-async
+      # The pool is sized on the promise that a connection is never held across
+      # non-database work, and worker concurrency is sized on the promise that
+      # blocking work is bounded. These two gates are what keep both true.
+      - name: DB connection scope
+        run: make lint-session-scope
+      - name: I/O hygiene (bounded offloads, timed HTTP sessions)
+        run: make lint-io-hygiene
+      # The static gates above check the shapes they can see. This one runs the
+      # flows and measures: a connection checked out with no statement running
+      # is a hold, whatever the code looks like. Deliberately a small marked
+      # subset rather than the whole e2e suite — this gates merges, so it has to
+      # stay hermetic and fast. The full suite stays advisory in e2e.yml.
+      - name: DB connection scope (runtime)
+        run: make test-connection-scope
       - name: Critical domain type safety
         run: make typecheck-critical
       - name: Architecture, complexity, and broad-catch ratchet
@@ -299,7 +313,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v5
         with:
-          node-version: 24
+          node-version-file: .nvmrc
       - run: npm ci
       - name: Typecheck (src)
         run: npx tsc --noEmit -p tsconfig.json
@@ -332,7 +346,7 @@ jobs:
           python-version: "3.14"
       - uses: actions/setup-node@v5
         with:
-          node-version: 24
+          node-version-file: .nvmrc
       - name: Install uv
         run: pip install uv
       - name: Regenerate Python client from committed spec
@@ -367,7 +381,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v5
         with:
-          node-version: 24
+          node-version-file: .nvmrc
           cache: npm
           cache-dependency-path: |
             lemma-typescript/package-lock.json
@@ -395,7 +409,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v5
         with:
-          node-version: 24
+          node-version-file: .nvmrc
           cache: npm
           cache-dependency-path: |
             lemma-typescript/package-lock.json
@@ -541,7 +555,7 @@ jobs:
 
       - uses: actions/setup-node@v5
         with:
-          node-version: 22
+          node-version-file: .nvmrc
 
       - uses: astral-sh/setup-uv@v6
         with:
@@ -763,7 +777,7 @@ jobs:
 
       - uses: actions/setup-node@v5
         with:
-          node-version: 22
+          node-version-file: .nvmrc
 
       - uses: dtolnay/rust-toolchain@stable
         with:

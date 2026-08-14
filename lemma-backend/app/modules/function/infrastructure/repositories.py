@@ -361,6 +361,22 @@ class FunctionRunRepository(FunctionRunRepositoryPort):
 
         statement = (
             select(FunctionRunModel)
+            # The sweep needs the deadline arithmetic, the failure event's
+            # fields, and nothing else. Without this it also dragged
+            # ``input_data`` and ``output_data`` -- two JSONB columns, TOASTed
+            # and detoasted per row -- through a query that never reads them.
+            .options(
+                load_only(
+                    FunctionRunModel.id,
+                    FunctionRunModel.function_id,
+                    FunctionRunModel.status,
+                    FunctionRunModel.error,
+                    FunctionRunModel.logs,
+                    FunctionRunModel.started_at,
+                    FunctionRunModel.deadline_at,
+                    FunctionRunModel.completed_at,
+                )
+            )
             .where(
                 or_(
                     and_(
@@ -412,6 +428,47 @@ class FunctionRunRepository(FunctionRunRepositoryPort):
         if runs:
             await self.session.flush()
         return len(runs)
+
+    async def delete_terminal_before(
+        self,
+        *,
+        cutoff: datetime,
+        batch_size: int,
+    ) -> int:
+        """Remove one batch of finished runs older than ``cutoff``.
+
+        Only terminal runs are eligible: an unfinished run is either live work
+        or something the deadline sweep still has to fail, and deleting it
+        would strand whatever is waiting on the result.
+
+        ``SKIP LOCKED`` keeps this off rows another statement is already
+        holding, so the sweep never blocks the execution path -- it just leaves
+        those rows for the next batch.
+        """
+
+        claimed = (
+            select(FunctionRunModel.id)
+            .where(
+                FunctionRunModel.status.in_(
+                    (
+                        FunctionRunStatus.COMPLETED,
+                        FunctionRunStatus.FAILED,
+                        FunctionRunStatus.CANCELLED,
+                    )
+                ),
+                FunctionRunModel.created_at < cutoff,
+            )
+            .order_by(FunctionRunModel.id)
+            .limit(batch_size)
+            .with_for_update(skip_locked=True)
+            .cte("function_run_retention_batch")
+        )
+        result = await self.session.execute(
+            delete(FunctionRunModel).where(
+                FunctionRunModel.id.in_(select(claimed.c.id))
+            )
+        )
+        return int(getattr(result, "rowcount", 0) or 0)
 
     async def list_pending_async_runs(
         self,

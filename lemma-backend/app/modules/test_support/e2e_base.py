@@ -318,6 +318,52 @@ def test_redis_url(redis_container) -> str:
     return get_redis_url(redis_container)
 
 
+
+def _seed_system_model_pricing() -> None:
+    """Give the system default model a price, so cost assertions have one.
+
+    Cost is only computed for models present in
+    ``LEMMA_SYSTEM_MODEL_METADATA_JSON``; the table is otherwise empty, so
+    ``cost_usd`` comes back None and any test asserting on it fails for a
+    reason that has nothing to do with what it is testing. That is an ambient
+    dependency on a deployment setting, and it made two usage e2e tests pass or
+    fail depending on whose machine they ran on.
+
+    Set here rather than in a test because the recording happens in the worker
+    SUBPROCESS, which reads this at module import — a monkeypatch inside the
+    test would be both too late and in the wrong process. Never overrides a
+    real value, so a deployment-shaped run keeps its own pricing.
+    """
+    if os.environ.get("LEMMA_SYSTEM_MODEL_METADATA_JSON"):
+        return
+    from app.core.config import settings
+
+    # Every configured model, not just the default: one test deliberately runs
+    # a NON-default one, to prove a model without a price entry cannot slip past
+    # the usage limits by having its record dropped.
+    names = os.environ.get("LEMMA_OPENAI_MODEL_NAMES") or (
+        settings.lemma_openai_model_names or ""
+    )
+    default = os.environ.get("LEMMA_OPENAI_DEFAULT_MODEL") or (
+        settings.lemma_openai_default_model
+    )
+    models = {name.strip() for name in names.split(",") if name.strip()}
+    if default:
+        models.add(default)
+    if not models:
+        return
+    # Arbitrary non-zero rates. The assertions are "a cost was computed", not
+    # "this many dollars", and a real price here would be a lie that drifts.
+    os.environ["LEMMA_SYSTEM_MODEL_METADATA_JSON"] = json.dumps(
+        {
+            model: {
+                "input_per_million_usd": 0.1,
+                "output_per_million_usd": 0.4,
+            }
+            for model in sorted(models)
+        }
+    )
+
 @pytest.fixture(scope="session")
 def e2e_settings(test_database_url, test_redis_url, supertokens_container):
     from app.core.config import settings
@@ -385,6 +431,7 @@ def e2e_settings(test_database_url, test_redis_url, supertokens_container):
     settings.e2e_sandbox_mode = sandbox_mode
     os.environ["E2E_LLM_MODE"] = llm_mode
     os.environ["E2E_SANDBOX_MODE"] = sandbox_mode
+    _seed_system_model_pricing()
     if llm_mode == "mock":
         # system:lemma normally requires an operator credential and model
         # catalog. The deterministic FunctionModel never contacts that
@@ -844,14 +891,23 @@ async def fixed_test_org(authenticated_client: "AsyncClient"):
 
 @pytest.fixture
 def sample_pod_entity():
-    from app.modules.pod.domain.pod_entities import PodEntity, PodStatus, PodType
+    """An unsaved ``PodEntity``.
+
+    Kept in sync with the entity by hand: it drifted to constructing ``slug``,
+    ``status`` and ``type`` -- and importing ``PodStatus``/``PodType``, which no
+    longer exist -- so every test requesting it failed at collection with an
+    ImportError rather than an assertion. Nothing referenced it at the time, so
+    the breakage was invisible.
+
+    Note this is a detached entity, never persisted. A test that needs a pod the
+    authorization layer will recognise has to create one through the API so the
+    membership and role rows exist.
+    """
+    from app.modules.pod.domain.pod_entities import PodEntity
 
     return PodEntity(
         name=f"Test Pod {uuid4().hex[:8]}",
-        slug=f"test-pod-{uuid4().hex[:8]}",
         description="A test pod",
-        status=PodStatus.ACTIVE,
-        type=PodType.AUTOMATION,
         user_id=uuid4(),
         organization_id=uuid4(),
     )

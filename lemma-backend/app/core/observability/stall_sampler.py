@@ -42,6 +42,13 @@ _UNINTERESTING = (
 )
 
 
+# Clipped from the *front* if it overruns: the innermost frames name what
+# blocked, and the outermost are scaffolding. Kept under the logging pipeline's
+# own `stack_frames` allowance so the clip happens here, where the end that
+# matters is known, rather than there, where it is not.
+_MAX_STACK_CHARS = 7_000
+
+
 def _is_interesting(frame_summary: traceback.FrameSummary) -> bool:
     return not any(part in frame_summary.filename for part in _UNINTERESTING)
 
@@ -56,7 +63,7 @@ def format_stall_stack(frames: Iterable[traceback.FrameSummary]) -> str:
 
     interesting = [frame for frame in frames if _is_interesting(frame)]
     selected = (interesting or list(frames))[-12:]
-    return "".join(traceback.format_list(selected)).rstrip()
+    return "".join(traceback.format_list(selected)).rstrip()[-_MAX_STACK_CHARS:]
 
 
 class LoopStallSampler:
@@ -127,7 +134,7 @@ class LoopStallSampler:
             service=self._service_name,
             stalled_ms=round(stalled_for * 1000, 1),
             threshold_ms=round(self._stall_seconds * 1000, 1),
-            stack=stack,
+            stack_frames=stack,
         )
 
     def _capture(self) -> str | None:
