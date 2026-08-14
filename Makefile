@@ -1250,7 +1250,10 @@ lint:
 # that a red PR is something you can reproduce and fix here instead of learning
 # about it twenty minutes after pushing.
 
-# Everything the "lemma-backend quality gates" job runs, in its order.
+# Everything the "lemma-backend quality gates" job runs, in its order — except
+# the runtime connection-scope suite, which needs Docker. Run that with
+# `make -C lemma-backend test-connection-scope`. Stated rather than implied,
+# because the last comment here claiming parity was wrong for weeks.
 quality:
 	@echo "→ Ruff…"
 	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint

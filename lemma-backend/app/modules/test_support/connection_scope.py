@@ -26,7 +26,7 @@ from collections.abc import Iterator
 import pytest
 
 from app.core.observability import connection_scope
-from app.core.observability.connection_scope import ConnectionScopeMonitor
+from app.core.observability.connection_scope import ConnectionHold, ConnectionScopeMonitor
 
 # Tighter than the production default: a test should not hold a connection for
 # a fifth of a second, and a tight threshold is what makes the gate useful on a
@@ -69,3 +69,71 @@ def strict_connection_scope() -> Iterator[ConnectionScopeMonitor]:
             f"non-database work:\n\n{report}",
             pytrace=False,
         )
+
+
+# --- Sweep mode -------------------------------------------------------------
+#
+# Turning the strict fixture on test by test proves the paths it names. It says
+# nothing about the paths nobody thought to name — which, given the audit found
+# ~103 of those, is the more interesting question.
+#
+# ``LEMMA_CONNECTION_SCOPE_REPORT=1`` runs the monitor for the whole pytest
+# session in report-only mode and writes what it saw to
+# ``LEMMA_CONNECTION_SCOPE_REPORT_PATH`` (default /tmp/lemma_connection_holds.txt).
+# Nothing fails; the point is to discover, which is what makes it safe to run
+# over a suite that is not clean yet.
+
+SWEEP_ENV = "LEMMA_CONNECTION_SCOPE_REPORT"
+SWEEP_PATH_ENV = "LEMMA_CONNECTION_SCOPE_REPORT_PATH"
+DEFAULT_SWEEP_PATH = "/tmp/lemma_connection_holds.txt"
+
+
+def sweep_enabled() -> bool:
+    import os
+
+    return os.environ.get(SWEEP_ENV, "").lower() in {"1", "true", "yes"}
+
+
+def start_sweep() -> ConnectionScopeMonitor:
+    """Watch every connection this pytest session checks out."""
+    monitor = connection_scope.start_connection_scope_monitor(
+        idle_hold_seconds=STRICT_IDLE_HOLD_SECONDS, strict=True
+    )
+    # No cooldown in a sweep: the whole point is the complete list.
+    monitor._cooldown_seconds = 0.0  # noqa: SLF001
+    return monitor
+
+
+def write_sweep_report() -> str | None:
+    """Write what the sweep found, newest last. Returns the path, or None."""
+    import os
+    from collections import Counter
+
+    monitor = connection_scope.get_connection_scope_monitor()
+    connection_scope.stop_connection_scope_monitor()
+    if monitor is None or not monitor.violations:
+        return None
+
+    path = os.environ.get(SWEEP_PATH_ENV, DEFAULT_SWEEP_PATH)
+    # Group by the innermost application frame: one bug produces many holds,
+    # and a list of 400 individually-formatted holds is not a work list.
+    by_site: Counter[str] = Counter()
+    worst: dict[str, ConnectionHold] = {}
+    for hold in monitor.violations:
+        site = hold.stack.strip().splitlines()[-2].strip() if hold.stack else "<unknown>"
+        by_site[site] += 1
+        if site not in worst or hold.gap_seconds > worst[site].gap_seconds:
+            worst[site] = hold
+
+    lines = [
+        f"{len(monitor.violations)} connection hold(s) across {len(by_site)} site(s)",
+        "",
+    ]
+    for site, count in by_site.most_common():
+        hold = worst[site]
+        lines.append(f"### {count}x  worst gap {hold.gap_seconds * 1000:.0f}ms  {site}")
+        lines.append(hold.render())
+        lines.append("")
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.write("\n".join(lines))
+    return path

@@ -21,7 +21,7 @@ from app.core.infrastructure.db.session import async_session_maker
 from app.modules.test_support import connection_scope as connection_scope_support
 from app.modules.test_support.e2e import fixtures as e2e_fixtures
 
-pytestmark = pytest.mark.e2e
+pytestmark = [pytest.mark.e2e, pytest.mark.connection_scope]
 
 test_network = e2e_fixtures.test_network
 postgres_container = e2e_fixtures.postgres_container

@@ -221,3 +221,25 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
     # Never sweep every ``lemma.e2e=true`` container here: a separately invoked
     # pytest session may be running concurrently and uses the same shared label.
     e2e_base._close_shared_contexts()
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _connection_scope_sweep():
+    """Optionally watch every connection this session checks out.
+
+    Off unless LEMMA_CONNECTION_SCOPE_REPORT=1. See
+    app/modules/test_support/connection_scope.py for why discovery mode reports
+    instead of failing.
+    """
+    from app.modules.test_support import connection_scope as sweep
+
+    if not sweep.sweep_enabled():
+        yield
+        return
+    sweep.start_sweep()
+    try:
+        yield
+    finally:
+        path = sweep.write_sweep_report()
+        if path:
+            print(f"\nconnection-hold report: {path}")

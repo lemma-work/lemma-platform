@@ -168,6 +168,13 @@ jobs:
         run: make lint-session-scope
       - name: I/O hygiene (bounded offloads, timed HTTP sessions)
         run: make lint-io-hygiene
+      # The static gates above check the shapes they can see. This one runs the
+      # flows and measures: a connection checked out with no statement running
+      # is a hold, whatever the code looks like. Deliberately a small marked
+      # subset rather than the whole e2e suite — this gates merges, so it has to
+      # stay hermetic and fast. The full suite stays advisory in e2e.yml.
+      - name: DB connection scope (runtime)
+        run: make test-connection-scope
       - name: Critical domain type safety
         run: make typecheck-critical
       - name: Architecture, complexity, and broad-catch ratchet

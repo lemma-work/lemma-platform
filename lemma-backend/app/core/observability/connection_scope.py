@@ -77,19 +77,40 @@ def current_await_stack() -> list[traceback.FrameSummary]:
     frames: list[traceback.FrameSummary] = []
     awaitable: object | None = task.get_coro()
     seen = 0
-    while awaitable is not None and seen < 60:
+    while awaitable is not None and seen < 120:
         seen += 1
-        frame = getattr(awaitable, "cr_frame", None) or getattr(awaitable, "gi_frame", None)
+        frame = getattr(awaitable, "cr_frame", None) or getattr(
+            awaitable, "gi_frame", None
+        )
         if frame is not None:
             frames.append(
                 traceback.FrameSummary(
                     frame.f_code.co_filename, frame.f_lineno, frame.f_code.co_name
                 )
             )
-        awaitable = getattr(awaitable, "cr_await", None) or getattr(
-            awaitable, "gi_yieldfrom", None
-        )
+        awaitable = _next_awaitable(awaitable)
     return frames
+
+
+def _next_awaitable(awaitable: object) -> object | None:
+    """Step one link down the await chain.
+
+    A plain ``cr_await`` walk stops at the first thing that is not a coroutine,
+    which in practice is almost immediately: an inner Task, or the
+    ``agen.asend`` wrapper a streaming response is suspended in. Following those
+    is the difference between a report naming the request handler and a report
+    naming the one line the developer has to change.
+    """
+    for attribute in ("cr_await", "gi_yieldfrom", "ag_await"):
+        nxt = getattr(awaitable, attribute, None)
+        if nxt is not None:
+            return nxt
+    # An awaited Task/Future: continue into whatever it is running.
+    get_coro = getattr(awaitable, "get_coro", None)
+    if callable(get_coro):
+        coro = get_coro()
+        return coro if coro is not awaitable else None
+    return None
 
 
 @dataclass
