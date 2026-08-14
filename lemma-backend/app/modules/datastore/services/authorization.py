@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from uuid import UUID
 
+from app.core.infrastructure.db.transaction_locks import (
+    holds_transaction_scoped_lock,
+)
 from app.core.authorization.context import ActorType, Context, ResourceRef, ResourceType
 from app.core.authorization.current import get_current_context
 from app.core.authorization.permissions import Permissions
@@ -45,6 +48,12 @@ class DatastoreAuthorization:
         if session is None:
             return
         if session.new or session.dirty or session.deleted:
+            return
+        if holds_transaction_scoped_lock(session):
+            # A transaction-scoped advisory lock is released by the commit that
+            # would return this connection, so the caller loses its mutual
+            # exclusion. `session.new/dirty/deleted` cannot see that: the lock
+            # lives in the transaction, not the identity map.
             return
         await session.commit()
 

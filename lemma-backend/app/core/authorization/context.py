@@ -10,6 +10,9 @@ from uuid import UUID
 
 from app.core.authorization.permissions import equivalent_permission_ids
 from app.core.domain.errors import DomainError
+from app.core.infrastructure.db.transaction_locks import (
+    holds_transaction_scoped_lock,
+)
 
 
 class ActorType(str, Enum):
@@ -448,5 +451,10 @@ class Context:
         if session is None:
             return
         if session.new or session.dirty or session.deleted:
+            return
+        if holds_transaction_scoped_lock(session):
+            # See transaction_locks: committing here would drop an advisory
+            # lock the caller is relying on, and nothing in the identity map
+            # says so.
             return
         await session.commit()

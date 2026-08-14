@@ -4,6 +4,9 @@ from typing import TYPE_CHECKING
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.dialects.postgresql import insert
 
+from app.core.infrastructure.db.transaction_locks import (
+    clear_transaction_scoped_lock,
+)
 from app.core.domain.uow import IUnitOfWork
 from app.core.domain.message_bus import MessageBus
 from app.core.infrastructure.events.models import DomainEventOutbox
@@ -74,6 +77,9 @@ class SqlAlchemyUnitOfWork(IUnitOfWork):
         """Stage pending events and commit them with domain state."""
         await self._stage_pending_events()
         await self.session.commit()
+        # The transaction that held any advisory lock has ended, so a later
+        # release in this request is free to commit again.
+        clear_transaction_scoped_lock(self.session)
         self._pending_events.clear()
         callbacks, self._after_commit = self._after_commit, []
         for callback in callbacks:
