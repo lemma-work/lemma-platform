@@ -24,7 +24,6 @@
     "app/modules/agent_surfaces/events/handlers.py::_process_surface_webhook::non-db-await::platform adapter: handler.try_handle_lifecycle": 1,
     "app/modules/agent_surfaces/events/handlers.py::_process_surface_webhook::non-db-await::via _prepare_platform_webhook_ingress: handler.prepare_ingress": 1,
     "app/modules/agent_surfaces/services/surface_file_ingest_service.py::SurfaceFileIngestService.ingest_attachments::non-db-await::via _ingest_one: self._ingest_all": 1,
-    "app/modules/pod/api/controllers/pod_member_controller.py::remove_member::non-db-await/request-scoped::via revoke_member_authorization: pod_member_service.remove_member_from_pod": 1,
     "app/modules/pod_bundle/api/controllers/import_controller.py::stream_import_events::nested-session/request-scoped::pod_context_scope": 1,
     "app/modules/pod_bundle/api/controllers/import_controller.py::upload_bundle::non-db-await/request-scoped::thread offload: use_cases.stage_upload": 1,
     "app/modules/pod_bundle/api/controllers/publish_controller.py::stream_publish_events::nested-session/request-scoped::pod_context_scope": 1
