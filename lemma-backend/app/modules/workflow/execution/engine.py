@@ -211,10 +211,12 @@ class WorkflowEngine:
         # create() persisted only the entry-node state; write the post-advance state
         # (final node, status, step history, context) before committing.
         run = await self.run_repo.update(run)
-        await self._persist_wait(run, result)
+        pending_wait = await self._persist_wait(run, result)
         self._collect_terminal_event(run)
         await self.uow.commit()
         await self._announce(run)
+        if pending_wait is not None:
+            await self._announce_human_wait(run, pending_wait)
 
         return run
 
@@ -279,10 +281,12 @@ class WorkflowEngine:
         result = await self._stepper(ctx).continue_after(run, flow, node_id)
 
         run = await self.run_repo.update(run)
-        await self._persist_wait(run, result)
+        pending_wait = await self._persist_wait(run, result)
         self._collect_terminal_event(run)
         await self.uow.commit()
         await self._announce(run)
+        if pending_wait is not None:
+            await self._announce_human_wait(run, pending_wait)
         return run
 
     async def resume_internal(
@@ -331,10 +335,12 @@ class WorkflowEngine:
         result = await self._stepper(ctx).continue_after(run, flow, wait.node_id)
 
         run = await self.run_repo.update(run)
-        await self._persist_wait(run, result)
+        pending_wait = await self._persist_wait(run, result)
         self._collect_terminal_event(run)
         await self.uow.commit()
         await self._announce(run)
+        if pending_wait is not None:
+            await self._announce_human_wait(run, pending_wait)
         return run
 
     async def fail_internal(
@@ -529,15 +535,24 @@ class WorkflowEngine:
             function_adapter=self.function_adapter,
         )
 
-    async def _persist_wait(self, run: WorkflowRunEntity, result: StepResult) -> None:
+    async def _persist_wait(
+        self, run: WorkflowRunEntity, result: StepResult
+    ) -> WorkflowRunWaitEntity | None:
+        """Write the wait row. Telling the assignee happens after the commit.
+
+        It used to happen here, which put a Slack/Teams/WhatsApp/email send
+        inside the run transaction and under the run's row lock — for the
+        seconds a platform API can take, with a pooled connection held. The
+        cheap Redis announce next door already had the right sequencing, and
+        says why in its own docstring; the expensive one had the opposite.
+        """
         if result.wait is None or run.status not in (
             WorkflowRunStatus.WAITING,
             WorkflowRunStatus.RUNNING,
         ):
-            return
+            return None
         assert run.current_node_id is not None
-        wait = await self.wait_repo.create(self._wait_entity(run, result.wait))
-        await self._announce_human_wait(run, wait)
+        return await self.wait_repo.create(self._wait_entity(run, result.wait))
 
     async def _announce_human_wait(
         self, run: WorkflowRunEntity, wait: WorkflowRunWaitEntity

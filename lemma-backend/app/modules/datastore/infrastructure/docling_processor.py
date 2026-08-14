@@ -28,7 +28,6 @@ import os
 import tempfile
 
 import aiohttp
-import anyio
 
 from app.core.concurrency.offload import run_blocking
 from app.modules.datastore.infrastructure.streaming import read_file_bytes
@@ -105,7 +104,7 @@ class DoclingDocumentProcessor(PdfPageRenderingMixin):
             if markdown.strip()
             else []
         )
-        pages = await anyio.to_thread.run_sync(
+        pages = await run_blocking(
             self._pdf_pages, content, mime_type, filename
         )
         return DocumentExtraction(

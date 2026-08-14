@@ -14,6 +14,9 @@ from app.core.authorization.sql_actions import (
     allowed_actions_expr,
 )
 from app.modules.datastore.domain.errors import DatastoreRecordNotFoundError
+from app.core.infrastructure.db.transaction_locks import (
+    mark_transaction_scoped_lock,
+)
 from app.modules.datastore.domain.file_entities import (
     DatastoreFileEntity,
     FileStatus,
@@ -79,6 +82,11 @@ class DatastoreFileRepository(
             ),
             {"path_key": f"{pod_id}:{path}"},
         )
+        # This lock dies at commit, so nothing may commit this session until the
+        # caller does. Connection-scope releases guard on pending ORM work and
+        # would otherwise see a clean session and hand the connection back,
+        # taking the mutual exclusion with it.
+        mark_transaction_scoped_lock(self.session)
 
     async def create(self, entity: DatastoreFileEntity) -> DatastoreFileEntity:
         instance = DatastoreFile(**_file_payload(entity))

@@ -574,20 +574,23 @@ class SchemaManager:
         *,
         is_pod_admin: bool = False,
     ) -> None:
-        """Sets the RLS context for the current session."""
-        await session.execute(
-            text("SELECT set_config('app.current_user_id', :user_id, true)"),
-            {"user_id": str(user_id)},
-        )
+        """Set the RLS context for the current session, in one round trip.
+
+        This runs before every RLS-guarded read and write, so a second statement
+        here is a second round trip on the hottest path there is. Both settings
+        stay transaction-local (``set_config(..., true)`` is the function form
+        of ``SET LOCAL``), so nothing leaks to the next borrower of the
+        connection and a transaction-mode pooler stays usable.
+        """
         await session.execute(
             text(
-                "SELECT set_config("
-                "'app.current_user_is_pod_admin', "
-                ":is_pod_admin, "
-                "true"
-                ")"
+                "SELECT set_config('app.current_user_id', :user_id, true), "
+                "set_config('app.current_user_is_pod_admin', :is_pod_admin, true)"
             ),
-            {"is_pod_admin": "true" if is_pod_admin else "false"},
+            {
+                "user_id": str(user_id),
+                "is_pod_admin": "true" if is_pod_admin else "false",
+            },
         )
 
     async def close(self) -> None:

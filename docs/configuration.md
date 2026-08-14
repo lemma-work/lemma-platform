@@ -56,14 +56,47 @@ DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/lemma
 DATASTORE_DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/lemma_datastore
 REDIS_URL=redis://localhost:6379
 
-# Pool sizing. The ceiling that matters is POSTGRES_MAX_CONNECTIONS: every API
-# and worker process opens up to DB_POOL_SIZE + DB_MAX_OVERFLOW, so the product
-# across all replicas has to stay under what the server allows.
+# Pool sizing. One number, used by both engines, and it is a hard ceiling —
+# there is no overflow — so a process opens at most DB_POOL_SIZE connections per
+# engine and cluster capacity stays predictable when replicas autoscale.
 DB_POOL_SIZE=10
-DB_MAX_OVERFLOW=10
-POSTGRES_MAX_CONNECTIONS=100
-WORKER_CONCURRENCY=20
+WORKER_CONCURRENCY=50
 ```
+
+### Sizing the pool
+
+Size `DB_POOL_SIZE` from concurrent in-flight *queries*, not from request or
+task concurrency. A session holds its connection only for one unit of work and
+gives it back before any LLM call, HTTP request, sandbox operation or thread
+offload — `make lint-session-scope` fails the build if that stops being true.
+So the steady-state demand is roughly `queries_per_second × seconds_per_query`.
+An agent run spends 95%+ of its wall clock outside the database, which is why a
+worker at `WORKER_CONCURRENCY=50` still needs single-digit connections in
+steady state. The pool is there to absorb the burst at task start and finish.
+
+Raise it in response to measurement, not anticipation: the backend reports a
+`database_pool_capacity` incident when checkout saturation is sustained, and
+`pg_stat_activity` shows what the server actually sees. `WORKER_CONCURRENCY` is
+a RAM and CPU budget for the pod, unrelated to the pool.
+
+### Enforcing the cluster-wide ceiling
+
+Per-process arithmetic (`replicas × pool size < max_connections`) stops holding
+the moment an autoscaler, a rolling deploy or a migration job changes the
+replica count. Enforce it where it is actually enforceable — at the server:
+
+```sql
+ALTER ROLE lemma_app CONNECTION LIMIT 200;
+```
+
+Postgres then refuses connection 201 instead of letting a runaway deployment
+consume the slots reserved for administration. For deployments large enough
+that the total starts to matter, put a transaction-mode pooler (PgBouncer, or
+whatever your managed provider offers) in front and let the per-process pools
+stay small and uniform. Two things in this codebase are deliberately kept
+compatible with that: no session-level state outside a transaction (always
+`SET LOCAL`, never bare `SET`), and only transaction-scoped advisory locks
+(`pg_advisory_xact_lock`).
 
 ## Sandboxes
 

@@ -100,6 +100,40 @@ class RedisJsonCache(Generic[T]):
         redis = await self._get_redis()
         await redis.delete(self.build_key(suffix))
 
+    async def track_in_index(self, index_suffix: str, suffix: str) -> None:
+        """Remember that ``suffix`` exists, so it can be deleted without a scan."""
+        redis = await self._get_redis()
+        index_key = self.build_key(f"index:{index_suffix}")
+        await redis.sadd(index_key, suffix)
+        # The index must not outlive the entries it points at.
+        await redis.expire(index_key, self._ttl_seconds)
+
+    async def delete_indexed(self, index_suffix: str) -> int:
+        """Delete everything recorded under an index. O(matched), not O(keyspace).
+
+        ``delete_prefix`` below uses ``SCAN MATCH``, which Redis evaluates
+        against the WHOLE keyspace regardless of how many keys match — so a
+        mutation affecting one principal walked every key in the database. This
+        walks only that principal's own list.
+
+        Returns the number deleted so a caller can fall back when the index is
+        missing (it expires with the entries, and a snapshot written before this
+        existed has none).
+        """
+        redis = await self._get_redis()
+        index_key = self.build_key(f"index:{index_suffix}")
+        suffixes = await redis.smembers(index_key)
+        if not suffixes:
+            return 0
+        keys = [
+            self.build_key(
+                item.decode() if isinstance(item, bytes) else str(item)
+            )
+            for item in suffixes
+        ]
+        await redis.delete(*keys, index_key)
+        return len(keys)
+
     async def delete_prefix(self, sub_prefix: str) -> None:
         """Delete every key under ``{key_prefix}:{sub_prefix}*`` (SCAN + DEL).
 

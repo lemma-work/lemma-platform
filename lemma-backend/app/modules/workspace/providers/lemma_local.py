@@ -48,6 +48,7 @@ from app.modules.workspace.providers.base import (
 )
 from app.modules.workspace.providers.docker import RuntimeCredentialSigner
 from app.modules.workspace.providers.profiles import profile_for
+from app.core.concurrency.offload import run_blocking
 from app.modules.workspace.providers.lemma_local_ops import (
     LemmaLocalOpsMixin,
     _status_object,
@@ -482,8 +483,11 @@ class LemmaLocalSandboxProvider(LemmaLocalOpsMixin):
 
         try:
             # The bridge is a blocking subprocess, so it is run off the event
-            # loop; leaving it inline would stall every other request.
-            process = await asyncio.to_thread(invoke)
+            # loop; leaving it inline would stall every other request. Its own
+            # limiter rather than ``external_http``: this call is bounded by the
+            # request deadline, not an HTTP timeout, so a burst of long sandbox
+            # operations would otherwise hold every slot the connector SDKs use.
+            process = await run_blocking(invoke, limiter="local_bridge")
         except subprocess.TimeoutExpired as exc:
             raise asyncio.TimeoutError from exc
 

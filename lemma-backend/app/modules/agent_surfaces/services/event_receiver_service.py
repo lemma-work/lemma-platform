@@ -148,7 +148,8 @@ class NativeSurfaceReceiverCoordinator:
         }
 
     async def run(self) -> None:
-        self._redis = get_redis(url=self._redis_url)
+        # Holds a Pub/Sub subscription open, so a silent connection is normal.
+        self._redis = get_redis(url=self._redis_url, blocking=True)
         self._listener_task = create_background_task(
             self._listen_for_wakeups(), name="surface-receiver-wakeups"
         )

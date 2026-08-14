@@ -1,0 +1,139 @@
+"""Fail a test that holds a pooled connection across non-database work.
+
+Opt-in, by naming the fixture. Deliberately not autouse:
+
+* ``session-scope-baseline.json`` still lists known violations, so an autouse
+  gate would be red on day one and would grow an opt-out flag within a week —
+  at which point the flag becomes the default and the gate means nothing.
+* The e2e harness holds sessions across blocking fixture work on purpose, which
+  is exactly why ``scripts/check_session_scope.py`` excludes ``tests`` and
+  ``test_support``. A runtime gate should not re-introduce what the static gate
+  deliberately leaves out.
+
+Reporting happens at check-in, which fires synchronously inside the test's own
+execution — so there is no polling, no interval, and nothing to flake.
+
+Usage::
+
+    async def test_import_does_not_hold_a_connection(strict_connection_scope, ...):
+        ...
+"""
+
+from __future__ import annotations
+
+from collections.abc import Iterator
+
+import pytest
+
+from app.core.observability import connection_scope
+from app.core.observability.connection_scope import ConnectionHold, ConnectionScopeMonitor
+
+# Tighter than the production default: a test should not hold a connection for
+# a fifth of a second, and a tight threshold is what makes the gate useful on a
+# fast machine. Loose enough to survive a loaded CI runner.
+STRICT_IDLE_HOLD_SECONDS = 0.2
+
+
+@pytest.fixture
+def strict_connection_scope() -> Iterator[ConnectionScopeMonitor]:
+    """Fail this test if it holds a pooled connection while not querying.
+
+    Works under ``NullPool`` — the testing default — because checkout and
+    check-in fire there exactly as they do on a real pool. No engine juggling
+    is needed, so do not "fix" this by flipping ``settings.environment``.
+    """
+    from app.core.infrastructure.db.session import get_engine
+
+    monitor = connection_scope.start_connection_scope_monitor(
+        idle_hold_seconds=STRICT_IDLE_HOLD_SECONDS, strict=True
+    )
+    # The engines are usually built before this fixture runs, so attach here
+    # rather than relying on construction-time wiring.
+    monitor.attach(get_engine())
+    try:
+        from app.modules.datastore.infrastructure.session import get_datastore_engine
+
+        monitor.attach(get_datastore_engine())
+    except Exception:  # pragma: no cover - datastore is optional in some suites
+        pass
+
+    try:
+        yield monitor
+    finally:
+        connection_scope.stop_connection_scope_monitor()
+
+    if monitor.violations:
+        report = "\n\n".join(hold.render() for hold in monitor.violations)
+        pytest.fail(
+            f"{len(monitor.violations)} pooled connection(s) held across "
+            f"non-database work:\n\n{report}",
+            pytrace=False,
+        )
+
+
+# --- Sweep mode -------------------------------------------------------------
+#
+# Turning the strict fixture on test by test proves the paths it names. It says
+# nothing about the paths nobody thought to name — which, given the audit found
+# ~103 of those, is the more interesting question.
+#
+# ``LEMMA_CONNECTION_SCOPE_REPORT=1`` runs the monitor for the whole pytest
+# session in report-only mode and writes what it saw to
+# ``LEMMA_CONNECTION_SCOPE_REPORT_PATH`` (default /tmp/lemma_connection_holds.txt).
+# Nothing fails; the point is to discover, which is what makes it safe to run
+# over a suite that is not clean yet.
+
+SWEEP_ENV = "LEMMA_CONNECTION_SCOPE_REPORT"
+SWEEP_PATH_ENV = "LEMMA_CONNECTION_SCOPE_REPORT_PATH"
+DEFAULT_SWEEP_PATH = "/tmp/lemma_connection_holds.txt"
+
+
+def sweep_enabled() -> bool:
+    import os
+
+    return os.environ.get(SWEEP_ENV, "").lower() in {"1", "true", "yes"}
+
+
+def start_sweep() -> ConnectionScopeMonitor:
+    """Watch every connection this pytest session checks out."""
+    monitor = connection_scope.start_connection_scope_monitor(
+        idle_hold_seconds=STRICT_IDLE_HOLD_SECONDS, strict=True
+    )
+    # No cooldown in a sweep: the whole point is the complete list.
+    monitor._cooldown_seconds = 0.0  # noqa: SLF001
+    return monitor
+
+
+def write_sweep_report() -> str | None:
+    """Write what the sweep found, newest last. Returns the path, or None."""
+    import os
+    from collections import Counter
+
+    monitor = connection_scope.get_connection_scope_monitor()
+    connection_scope.stop_connection_scope_monitor()
+    if monitor is None or not monitor.violations:
+        return None
+
+    path = os.environ.get(SWEEP_PATH_ENV, DEFAULT_SWEEP_PATH)
+    # Group by the innermost application frame: one bug produces many holds,
+    # and a list of 400 individually-formatted holds is not a work list.
+    by_site: Counter[str] = Counter()
+    worst: dict[str, ConnectionHold] = {}
+    for hold in monitor.violations:
+        site = hold.stack.strip().splitlines()[-2].strip() if hold.stack else "<unknown>"
+        by_site[site] += 1
+        if site not in worst or hold.gap_seconds > worst[site].gap_seconds:
+            worst[site] = hold
+
+    lines = [
+        f"{len(monitor.violations)} connection hold(s) across {len(by_site)} site(s)",
+        "",
+    ]
+    for site, count in by_site.most_common():
+        hold = worst[site]
+        lines.append(f"### {count}x  worst gap {hold.gap_seconds * 1000:.0f}ms  {site}")
+        lines.append(hold.render())
+        lines.append("")
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.write("\n".join(lines))
+    return path

@@ -14,10 +14,10 @@ import os
 import tempfile
 from functools import partial
 
-import anyio
 
 from app.modules.datastore.config import datastore_settings
 from app.modules.datastore.infrastructure.pdf_renderer import render_pdf_pages
+from app.core.concurrency.offload import run_blocking
 
 _PDF_MIME = "application/pdf"
 
@@ -60,7 +60,7 @@ class PdfPageRenderingMixin:
                 jpeg_quality=jpeg_quality,
             )
             async with _render_semaphore:
-                return await anyio.to_thread.run_sync(render, tmp.name, page_numbers)
+                return await run_blocking(render, tmp.name, page_numbers)
         finally:
             try:
                 os.unlink(tmp.name)

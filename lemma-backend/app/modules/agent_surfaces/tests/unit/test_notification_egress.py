@@ -825,3 +825,52 @@ async def test_a_named_agent_still_gets_its_own_name_in_the_address(monkeypatch)
     _, passed_agent_id, agent_name = provisioner.await_args.args
     assert passed_agent_id == agent_id
     assert agent_name == "curator"
+
+
+async def test_the_connection_is_released_before_the_platform_send(monkeypatch):
+    """Commit has to happen before the send, not after the whole delivery.
+
+    Two things ride on the ordering. "Persist before send" only means anything
+    if the row is committed — an uncommitted row is not a message anyone can
+    read. And the send is a platform API call that can take seconds, so holding
+    the transaction across it pins a pooled connection and the row locks it sits
+    on for that whole time.
+
+    Asserted as an ordering rather than a timing, because the ordering is the
+    property; the mocked send here is instant and always will be.
+    """
+    _email_configured(monkeypatch)
+
+    agent_id = uuid4()
+    chat_surface = _surface_for(agent_id, SurfacePlatform.SLACK)
+    service = _notification_service(
+        surfaces=(chat_surface,),
+        external_user=SimpleNamespace(external_user_id="U123"),
+    )
+    link = _link_for(chat_surface)
+    service.channels.links.get_latest_by_surface_and_external_user = AsyncMock(
+        return_value=link
+    )
+    service.conversation_service.conversation_repository.get_conversation = AsyncMock(
+        return_value=_Conversation(link.conversation_id)
+    )
+    service.notifications.update = AsyncMock(side_effect=lambda entity: entity)
+
+    order: list[str] = []
+    service.uow.commit = AsyncMock(side_effect=lambda: order.append("commit"))
+    original_send = service.egress.send
+
+    async def _recording_send(*args, **kwargs):
+        order.append("send")
+        return await original_send(*args, **kwargs)
+
+    service.egress.send = _recording_send
+
+    await service.deliver(
+        _notification(pod_id=chat_surface.pod_id, actor_agent_id=agent_id)
+    )
+
+    assert "send" in order, "the test never reached the platform send"
+    assert order.index("commit") < order.index("send"), (
+        f"connection held across the send; call order was {order}"
+    )

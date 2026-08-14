@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -444,9 +445,14 @@ async def test_extract_retries_transient_connection_error_then_succeeds(monkeypa
 
     monkeypatch.setattr(kreuzberg_module.asyncio, "sleep", _fake_sleep)
 
+    # `read`, not `json`: the helper reads bytes and parses them off the event
+    # loop, because an extract response carries the whole document and can
+    # carry base64 images with it.
+    _body = [{"content": "ok", "chunks": [{"text": "ok"}]}]
     response = SimpleNamespace(
         status=200,
-        json=AsyncMock(return_value=[{"content": "ok", "chunks": [{"text": "ok"}]}]),
+        json=AsyncMock(return_value=_body),
+        read=AsyncMock(return_value=json.dumps(_body).encode()),
     )
     session = SimpleNamespace(post=_FlakyPost(fail_times=2, response=response))
 
@@ -548,9 +554,14 @@ async def test_extract_streams_content_path_instead_of_buffering(monkeypatch, tm
 
     monkeypatch.setattr(kreuzberg_module, "open_binary", _spy_open)
 
+    # `read`, not `json`: the helper reads bytes and parses them off the event
+    # loop, because an extract response carries the whole document and can
+    # carry base64 images with it.
+    _body = [{"content": "ok", "chunks": [{"text": "ok"}]}]
     response = SimpleNamespace(
         status=200,
-        json=AsyncMock(return_value=[{"content": "ok", "chunks": [{"text": "ok"}]}]),
+        json=AsyncMock(return_value=_body),
+        read=AsyncMock(return_value=json.dumps(_body).encode()),
     )
     session = SimpleNamespace(post=_FlakyPost(fail_times=0, response=response))
 

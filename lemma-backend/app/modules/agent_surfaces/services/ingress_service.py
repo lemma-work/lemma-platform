@@ -911,6 +911,7 @@ class AgentSurfaceIngressService(SurfaceConfigurationMixin, SurfaceProgressMixin
         if not clean_message:
             return False
         message_metadata = await self._egress_metadata_with_agent_name(target, metadata)
+        await self._release_connection_before_platform_call()
         await target.adapter.send_message(
             credentials=target.credentials,
             event=target.event,
@@ -957,6 +958,7 @@ class AgentSurfaceIngressService(SurfaceConfigurationMixin, SurfaceProgressMixin
         ):
             return True
         message_metadata = await self._egress_metadata_with_agent_name(target, metadata)
+        await self._release_connection_before_platform_call()
         await target.adapter.send_display_resource(
             credentials=target.credentials,
             event=target.event,
@@ -1030,6 +1032,7 @@ class AgentSurfaceIngressService(SurfaceConfigurationMixin, SurfaceProgressMixin
             tool_call_id=str(pending.get("tool_call_id") or tool_call_id or ""),
         )
         metadata = await self._egress_metadata_with_agent_name(target, None)
+        await self._release_connection_before_platform_call()
         try:
             if await target.adapter.send_questions(
                 credentials=target.credentials,
@@ -1118,6 +1121,7 @@ class AgentSurfaceIngressService(SurfaceConfigurationMixin, SurfaceProgressMixin
             allow_session=allow_session,
         )
         metadata = await self._egress_metadata_with_agent_name(target, None)
+        await self._release_connection_before_platform_call()
         try:
             if await target.adapter.send_approval(
                 credentials=target.credentials,
@@ -1195,6 +1199,7 @@ class AgentSurfaceIngressService(SurfaceConfigurationMixin, SurfaceProgressMixin
             return False
 
         mime = entity.mime_type or "audio/ogg"
+        await self._release_connection_before_platform_call()
         try:
             if await target.adapter.send_voice_note(
                 credentials=target.credentials,
@@ -1268,6 +1273,7 @@ class AgentSurfaceIngressService(SurfaceConfigurationMixin, SurfaceProgressMixin
                 conversation_id=conversation_id,
             )
             return False
+        await self._release_connection_before_platform_call()
         return await target.adapter.send_file_attachment(
             credentials=target.credentials,
             event=target.event,
@@ -1521,6 +1527,7 @@ class AgentSurfaceIngressService(SurfaceConfigurationMixin, SurfaceProgressMixin
         indicator_metadata = await self._egress_metadata_with_agent_name(
             target, metadata
         )
+        await self._release_connection_before_platform_call()
         await target.adapter.add_processing_indicator(
             credentials=target.credentials,
             event=target.event,

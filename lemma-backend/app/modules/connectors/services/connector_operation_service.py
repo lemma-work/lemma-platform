@@ -470,7 +470,7 @@ class ConnectorOperationService:
             organization_id=organization_id,
             auth_config_name=auth_config_name,
         )
-        return await self._resolve_execution(
+        return await self.resolve_execution(
             connector_id=connector_id,
             operation_name=operation_name,
             payload=payload,
@@ -485,7 +485,7 @@ class ConnectorOperationService:
             auth_config=auth_config,
         )
 
-    async def _resolve_execution(
+    async def resolve_execution(
         self,
         *,
         connector_id: str,
@@ -644,7 +644,7 @@ class ConnectorOperationService:
         account_id: UUID | None = None,
         auth_config_id: UUID | None = None,
     ) -> OperationExecutionResponse:
-        resolved = await self._resolve_execution(
+        resolved = await self.resolve_execution(
             connector_id=connector_id,
             operation_name=operation_name,
             payload=payload,

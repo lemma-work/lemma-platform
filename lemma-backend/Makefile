@@ -60,7 +60,7 @@ FUNCTION_BENCH_ENV = \
 	FUNCTION_BENCH_TERMINAL_TIMEOUT_SECONDS=$(FUNCTION_BENCH_TERMINAL_TIMEOUT_SECONDS)
 FUNCTION_BENCH_TEST = app/modules/function/tests/perf/test_function_execution_benchmark.py
 
-.PHONY: help test test-unit test-e2e test-e2e-real test-e2e-fast test-e2e-runtime test-module coverage coverage-unit coverage-e2e coverage-backend-unit coverage-backend-e2e-shard coverage-backend-report coverage-backend-gate test-collect lint lint-async typecheck-critical architecture migrate docker-build docker-build-cloud docker-build-arm64 docker-build-amd64 benchmark-functions-docker benchmark-functions-e2b teams-manifest-zip load-test-build load-test-up load-test-migrate load-test-setup load-test-run load-test-sse load-test-journey load-test-datastore-up load-test-datastore-setup load-test-datastore-files load-test-datastore-stats load-test-datastore-down load-test-monitor load-test-down load-test
+.PHONY: help test test-unit test-e2e test-e2e-real test-e2e-fast test-e2e-runtime test-module coverage coverage-unit coverage-e2e coverage-backend-unit coverage-backend-e2e-shard coverage-backend-report coverage-backend-gate test-collect lint lint-async lint-session-scope lint-io-hygiene test-connection-scope typecheck-critical architecture migrate docker-build docker-build-cloud docker-build-arm64 docker-build-amd64 benchmark-functions-docker benchmark-functions-e2b teams-manifest-zip load-test-build load-test-up load-test-migrate load-test-setup load-test-run load-test-sse load-test-journey load-test-datastore-up load-test-datastore-setup load-test-datastore-files load-test-datastore-stats load-test-datastore-down load-test-monitor load-test-down load-test
 
 help:
 	@echo "Lemma backend:"
@@ -76,6 +76,10 @@ help:
 	@echo "  make coverage-backend-unit     # backend unit coverage + markdown"
 	@echo "  make coverage-backend-e2e-shard # backend e2e shard coverage + markdown"
 	@echo "  make lint              # run ruff checks"
+	@echo "  make lint-async        # blocking-call gate for async code"
+	@echo "  make lint-session-scope # DB connection held across non-DB work"
+	@echo "  make lint-io-hygiene   # unbounded thread offloads / untimed aiohttp"
+	@echo "  make test-connection-scope # runtime: no connection held across non-DB work"
 	@echo "  make typecheck-critical # strict reliability/domain type gate"
 	@echo "  make architecture      # dependency/complexity/exception ratchet"
 	@echo "  make migrate           # apply database migrations"
@@ -251,6 +255,31 @@ architecture:
 # (subprocess), ASYNC230 (blocking open), ASYNC251 (time.sleep).
 lint-async:
 	uv run ruff check --select ASYNC --ignore ASYNC109,ASYNC110,ASYNC240 app/
+
+# Connection-scope gate (enforced in CI). The ASYNC rules above stop the event
+# loop being blocked; this one stops a pooled Postgres connection being held
+# across work that isn't a query — an LLM call, an HTTP request, a sandbox
+# operation, a thread offload. Together they are what make it safe to size
+# worker concurrency from RAM rather than from `db_pool_size`.
+# Ratcheted against session-scope-baseline.json: the baseline may shrink freely,
+# and anything new fails the build.
+lint-session-scope:
+	uv run python scripts/check_session_scope.py
+
+# I/O hygiene gate (enforced in CI). Blocking work must go through
+# run_blocking's named limiters rather than asyncio's unbounded default
+# executor, and every aiohttp session must carry a timeout — aiohttp's default
+# is five minutes, long enough to pin a pooled connection with it.
+# Ratcheted against io-hygiene-baseline.json.
+lint-io-hygiene:
+	uv run python scripts/check_io_hygiene.py
+
+# Runtime proof that the pool discipline holds, not just that the AST looks
+# right. Small and hermetic by design: this is the one connection/loop suite
+# that gates merges, so it has to stay inside a lint-job time budget. The full
+# e2e suite still runs (advisory) in its own workflow.
+test-connection-scope:
+	uv run pytest -m "connection_scope" -o timeout=300 -p no:randomly
 
 migrate:
 	uv run alembic upgrade head

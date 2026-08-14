@@ -8,6 +8,9 @@ from uuid import UUID
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.infrastructure.db.transaction_locks import (
+    mark_transaction_scoped_lock,
+)
 from app.modules.identity.infrastructure.models import User
 
 
@@ -27,6 +30,11 @@ async def acquire_mobile_number_claim_lock(session: AsyncSession, digits: str) -
         text("SELECT pg_advisory_xact_lock(:lock_key)"),
         {"lock_key": _claim_lock_key(digits)},
     )
+    # Held on a Session, so a connection-scope release could commit it and drop
+    # the lock mid-claim. The two other advisory locks in the codebase are taken
+    # on a raw connection inside `engine.begin()`, which no release helper can
+    # reach, so only this one needs the mark.
+    mark_transaction_scoped_lock(session)
 
 
 async def get_other_mobile_number_owner_id(

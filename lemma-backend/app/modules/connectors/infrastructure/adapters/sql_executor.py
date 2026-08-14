@@ -50,9 +50,19 @@ _DIALECT_DRIVERS = {"postgresql": "postgresql+asyncpg", "postgres": "postgresql+
 _DEFAULT_ROW_CAP = 1000
 _MAX_ROW_CAP = 10_000
 _DEFAULT_STATEMENT_TIMEOUT_MS = 30_000
+# Parsing is CPU on the event loop and the query is tenant-supplied, so its
+# length has to be bounded by something other than the caller's goodwill.
+# Generous against any hand-written or generated analytical query; a megabyte
+# of SQL is a payload, not a question.
+_MAX_SQL_CHARS = 256 * 1024
 
 
 def _ensure_read_only(sql: str) -> None:
+    if len(sql) > _MAX_SQL_CHARS:
+        raise OperationExecutionValidationError(
+            f"SQL query exceeds the {_MAX_SQL_CHARS} character limit.",
+            details={"reason": "query_too_long"},
+        )
     try:
         statements = [s for s in sqlglot.parse(sql, dialect="postgres") if s is not None]
     except SqlglotError as exc:

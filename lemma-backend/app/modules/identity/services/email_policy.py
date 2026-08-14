@@ -4,7 +4,6 @@ from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 
-from anyio import to_thread
 from email_validator import (
     EmailNotValidError,
     EmailSyntaxError,
@@ -17,6 +16,7 @@ from app.core.config import settings
 from app.core.infrastructure.db.session import async_session_maker
 from app.modules.identity.domain.email import normalize_identity_email
 from app.modules.identity.infrastructure.models.user_models import User
+from app.core.concurrency.offload import run_blocking
 
 
 _DISPOSABLE_FILE = (
@@ -50,8 +50,11 @@ def _disposable_domains() -> frozenset[str]:
 
 
 async def _validate_with_dns(email: str):
-    return await to_thread.run_sync(
-        lambda: validate_email(email, check_deliverability=True)
+    # Deliverability does a DNS lookup against an attacker-supplied domain on
+    # the unauthenticated sign-up path, so it is network work, not CPU work.
+    return await run_blocking(
+        lambda: validate_email(email, check_deliverability=True),
+        limiter="external_http",
     )
 
 

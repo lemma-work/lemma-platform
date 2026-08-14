@@ -11,14 +11,13 @@ Two things this centralizes:
    shares one process-wide pool; a burst of one kind of blocking call (say 20
    concurrent connector HTTP calls) can then starve unrelated offloads (PDF
    rasterization, embeddings). Partitioning by workload class — ``cpu_bound``,
-   ``external_http``, ``crypto`` — bounds each independently so one can't drain
+   ``external_http``, ``crypto``, ``inference`` — bounds each independently so one can't drain
    the others. ``asyncio.to_thread`` (a *different* default executor) is
    replaced by this so there is a single, coherent, bounded system.
 
 2. **Thread-pool headroom.** :func:`configure_thread_pool` raises anyio's global
-   default limiter at startup so the residual un-limited offloads (e.g. the
-   embedder / reranker) and the named limiters (which sum above the default 40)
-   all have room.
+   default limiter at startup so the named limiters -- which sum above anyio's
+   default 40 -- and anything still running unclassified both have room.
 
 Usage::
 
@@ -47,6 +46,8 @@ _LIMITER_SETTINGS: dict[str, str] = {
     "cpu_bound": "offload_cpu_bound_limit",
     "external_http": "offload_external_http_limit",
     "crypto": "offload_crypto_limit",
+    "inference": "offload_inference_limit",
+    "local_bridge": "offload_local_bridge_limit",
 }
 
 _limiters: dict[str, anyio.CapacityLimiter] = {}
@@ -77,7 +78,8 @@ async def run_blocking(
 
     ``limiter`` selects the workload class ("cpu_bound" for CPU work like
     chunking / zipping / tokenizing, "external_http" for blocking network SDKs,
-    "crypto" for KMS). Keyword args are bound before dispatch.
+    "crypto" for KMS, "inference" for local embedding/reranking models). Keyword
+    args are bound before dispatch.
     """
     return await anyio.to_thread.run_sync(
         partial(fn, *args, **kwargs), limiter=get_limiter(limiter)

@@ -628,3 +628,109 @@ def test_debug_only_noise_remains_available_by_default_at_debug(
     logging.getLogger(logger_name).debug("routine protocol chatter")
 
     assert captured_stdout()[-1]["event"] == "routine protocol chatter"
+
+
+def test_a_diagnostic_stack_field_is_not_swallowed_by_structlog(
+    captured_stdout,
+) -> None:
+    """The runtime detectors' stacks must survive to the log line.
+
+    ``stack`` is a reserved key: structlog's renderers pop it and handle it
+    themselves, so a field passed as ``stack=`` vanishes without any error --
+    and the event catalog happily listed ``stack`` as an expected field, so
+    nothing anywhere complained. Both runtime detectors shipped that way: they
+    reported *that* the loop stalled or a connection was held, and silently
+    dropped the one thing that says *where*, which is the entire reason they
+    capture a stack.
+
+    This asserts the property (a stack-bearing diagnostic field arrives intact)
+    rather than the current spelling, so renaming the field again is fine and
+    reintroducing a reserved name is not.
+    """
+    get_logger("app.demo").warning(
+        "runtime.loop_stall.degraded",
+        service="lemma-test",
+        stalled_ms=1049.6,
+        threshold_ms=1000.0,
+        stack_frames="app/foo.py:12 in slow_thing\napp/bar.py:44 in caller",
+    )
+    records = captured_stdout()
+    assert len(records) == 1
+    record = records[0]
+    assert record["event"] == "runtime.loop_stall.degraded"
+    assert "slow_thing" in record.get("stack_frames", ""), (
+        "the blocking call's stack did not survive the logging pipeline; a "
+        f"stall report without it names no culprit. Got: {sorted(record)}"
+    )
+
+
+def _bound(event: str, level: str, **fields) -> dict:
+    """Run the bounding processor directly.
+
+    Bypasses the event catalog on purpose: these assertions are about how a
+    field is bounded, dropped or rendered, not about which events exist, and
+    coupling them to a catalog entry would mean this test starts failing the
+    day someone retires an unrelated event name.
+    """
+    return logmod._bound_fields(  # noqa: SLF001
+        {"event": event, "level": level, **fields}
+    )
+
+
+def test_an_error_record_is_not_truncated_or_thinned() -> None:
+    """An error keeps everything.
+
+    It is the most valuable record the system emits, it is emitted once, and
+    the state that produced it is already gone. Bounding it saves log volume
+    nobody was struggling to afford -- errors are rare by construction -- and
+    spends the diagnosis to do it.
+    """
+    long_sql = "SELECT " + ", ".join(f"col_{i}" for i in range(400))
+    record = _bound(
+        "datastore.record.list.propagated",
+        "error",
+        statement=long_sql,
+        bind_params={"pod_id": "abc", "limit": 50},
+    )
+    assert record["statement"] == long_sql, (
+        "a long field on an error record was truncated; the tail of a "
+        "statement is often the part that explains the failure"
+    )
+    # A structured value is rendered, not dropped: the shape of the payload is
+    # frequently the whole diagnosis.
+    assert "pod_id" in record["bind_params"]
+    assert "dropped_fields" not in record
+
+
+def test_a_bounded_record_says_when_it_cut_something() -> None:
+    """Below error, fields stay bounded -- but never silently.
+
+    A cut value is otherwise indistinguishable from a complete one, so a
+    half-printed URL reads as the whole truth and sends the reader looking in
+    the wrong place.
+    """
+    record = _bound("service.started", "info", detail="x" * 900)
+    assert record["detail"].endswith("chars truncated]"), record["detail"][-60:]
+    assert "+388 chars truncated" in record["detail"]
+
+
+def test_a_dropped_field_is_named_not_just_counted() -> None:
+    """Names, never values. A bare count tells you something was lost and
+    leaves you guessing which call site to go read."""
+    record = _bound("service.started", "info", shape={"a": 1}, password="hunter2")
+    assert record["dropped_field_count"] == 2
+    assert record["dropped_fields"] == "password,shape"
+    assert "hunter2" not in json.dumps(record)
+
+
+def test_a_credential_is_withheld_even_from_an_error() -> None:
+    """The one thing an error does not get.
+
+    A credential in a log is an incident, not a diagnosis. Everything else
+    about the error survives, and the field is named so the omission is
+    visible rather than mysterious.
+    """
+    record = _bound("db.connect.failed", "error", password="hunter2", dsn="postgres://h/db")
+    assert "password" not in record
+    assert record["dropped_fields"] == "password"
+    assert record["dsn"] == "postgres://h/db"

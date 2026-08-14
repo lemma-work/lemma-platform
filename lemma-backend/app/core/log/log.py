@@ -37,6 +37,7 @@ _CONTRACT_METADATA_FIELDS = {
     "correlation_id",
     "deployment.environment",
     "dropped_field_count",
+    "dropped_fields",
     "error_frames",
     "error_message",
     "error_stack_hash",
@@ -154,9 +155,16 @@ def _dependency_floor_applies(configured_level: int, name: str) -> bool:
 # Emitted whole rather than flattened and truncated to 512 characters — a
 # one-line traceback is not a traceback. The caps are generous; they exist only
 # so a pathological recursion cannot produce a megabyte log line.
-_UNTRUNCATED_FIELDS = {"error_traceback", "error_message"}
+_UNTRUNCATED_FIELDS = {"error_traceback", "error_message", "stack_frames"}
 _MAX_ERROR_MESSAGE_CHARS = 4_000
 _MAX_ERROR_TRACEBACK_CHARS = 20_000
+# ``stack_frames`` joins them: the runtime detectors' captured stacks are
+# tracebacks by another name, and were being flattened and cut at 512
+# characters -- which kept the outermost scaffolding frames and discarded the
+# innermost ones, the only part that names what blocked. It carries no cap here
+# because the bound belongs at the producer: `format_stall_stack` and
+# `format_hold_stack` clip from the front, and only they know that the tail is
+# the end worth keeping.
 
 # Only genuine credentials. This list used to also hide `body`, `message`,
 # `response`, `traceback`, `sql` and `url` — which meant that when something
@@ -178,6 +186,56 @@ _PROHIBITED_FIELDS = {
     "password",
     "secret",
 }
+
+
+_MAX_FIELD_CHARS = 512
+_FULL_DETAIL_LEVELS = {"error", "critical", "exception"}
+
+
+def _is_full_detail(event_dict: dict[str, Any]) -> bool:
+    """Whether this record gets everything, uncut.
+
+    An error is the most valuable thing the system emits, and it is emitted
+    once, after the state that produced it is gone. Bounding it trades the
+    diagnosis for log volume that nobody was struggling to afford: errors are
+    rare by construction, and a service emitting enough of them to matter has a
+    bigger problem than its log bill.
+
+    Warnings and below stay bounded. Those are the high-cardinality records --
+    one per request, per job, per tick -- and they are where an unbounded field
+    genuinely does become a megabyte of console per minute.
+    """
+    return str(event_dict.get("level", "")).lower() in _FULL_DETAIL_LEVELS
+
+
+def _bounded(value: str) -> str:
+    """Flatten and cap a string, and *say so* when something was removed.
+
+    Silent truncation is its own bug: a cut value is indistinguishable from a
+    complete one, so a half-printed URL or a stack ending mid-frame reads as
+    the whole truth and sends the reader looking in the wrong place.
+    """
+    flattened = " ".join(value.splitlines())
+    if len(flattened) <= _MAX_FIELD_CHARS:
+        return flattened
+    removed = len(flattened) - _MAX_FIELD_CHARS
+    return f"{flattened[:_MAX_FIELD_CHARS]}…[+{removed} chars truncated]"
+
+
+def _renderable(value: object) -> str:
+    """A faithful string for a value the JSON renderer cannot take as-is.
+
+    Used only on full-detail records, where dropping the field outright is the
+    worse answer: the shape of a payload is often the whole diagnosis.
+    """
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    try:
+        import json as _json
+
+        return _json.dumps(value, default=repr, sort_keys=True)
+    except (TypeError, ValueError):
+        return repr(value)
 
 
 class ReleaseIdentityError(RuntimeError):
@@ -362,6 +420,63 @@ def _install_safe_exception_filter(handler: logging.Handler) -> None:
         handler.addFilter(_SafeExceptionFilter())
 
 
+def _bound_fields(event_dict: dict[str, Any]) -> dict[str, Any]:
+    """Bound, render or drop each field, according to the record's level.
+
+    Split out from the contract check so it can be tested on its own: the two
+    answer different questions -- "is this event allowed to exist" versus "how
+    much of it survives to the log" -- and only the second one is what a reader
+    browsing pod logs actually feels.
+    """
+    # An error record keeps everything. Below error, fields stay bounded and a
+    # value the renderer cannot take is dropped -- those records are emitted per
+    # request and per tick, and that is where unbounded output actually hurts.
+    full_detail = _is_full_detail(event_dict)
+    dropped: list[str] = []
+    for key in list(event_dict):
+        if key.startswith("_"):
+            continue
+        value = event_dict[key]
+        lowered = key.lower()
+        if lowered in _PROHIBITED_FIELDS:
+            # The one thing still withheld from an error, because a credential
+            # in a log is an incident rather than a diagnosis. Everything else
+            # about the error survives, and `redact_event_dict` has already
+            # replaced secrets *inside* values by pattern, so the traceback that
+            # carried one still arrives with its frames intact.
+            event_dict.pop(key, None)
+            dropped.append(key)
+            continue
+        if lowered in _UNTRUNCATED_FIELDS:
+            # A traceback flattened onto one line and cut at 512 characters is
+            # not a traceback. These carry the actual diagnosis, so they are
+            # emitted whole, newlines and all.
+            continue
+        if isinstance(value, str):
+            event_dict[key] = value if full_detail else _bounded(value)
+        elif isinstance(value, UUID):
+            event_dict[key] = str(value)
+        elif isinstance(value, Enum) and isinstance(value.value, str | int):
+            event_dict[key] = value.value
+        elif key == "error_frames" and isinstance(value, list):
+            continue
+        elif isinstance(value, bytes | dict | list | tuple | set) or (
+            not isinstance(value, bool | int | float) and value is not None
+        ):
+            if full_detail:
+                event_dict[key] = _renderable(value)
+            else:
+                event_dict.pop(key, None)
+                dropped.append(key)
+    if dropped:
+        event_dict["dropped_field_count"] = len(dropped)
+        # Names, never values. A bare count tells you something was lost and
+        # leaves you guessing which call site to go read; the names are
+        # code-authored identifiers, so they carry no payload.
+        event_dict["dropped_fields"] = ",".join(sorted(dropped))
+    return event_dict
+
+
 def _bounded_contract(_: Any, __: str, event_dict: dict[str, Any]) -> dict[str, Any]:
     """Drop unsafe/unbounded values before they can reach stdout or OTLP."""
     global _contract_violation_emitted
@@ -414,41 +529,7 @@ def _bounded_contract(_: Any, __: str, event_dict: dict[str, Any]) -> dict[str, 
         event_dict["level"] = "error"
         event_dict["contract_violation"] = violation
 
-    dropped = 0
-    for key in list(event_dict):
-        if key.startswith("_"):
-            continue
-        value = event_dict[key]
-        lowered = key.lower()
-        if lowered in _PROHIBITED_FIELDS:
-            event_dict.pop(key, None)
-            dropped += 1
-            continue
-        if lowered in _UNTRUNCATED_FIELDS:
-            # A traceback flattened onto one line and cut at 512 characters is
-            # not a traceback. These carry the actual diagnosis, so they are
-            # emitted whole, newlines and all.
-            continue
-        if isinstance(value, str):
-            event_dict[key] = " ".join(value.splitlines())[:512]
-        elif isinstance(value, UUID):
-            event_dict[key] = str(value)
-        elif isinstance(value, Enum) and isinstance(value.value, str | int):
-            event_dict[key] = value.value
-        elif isinstance(value, bytes):
-            event_dict.pop(key, None)
-            dropped += 1
-        elif key == "error_frames" and isinstance(value, list):
-            continue
-        elif isinstance(value, (dict, list, tuple, set)):
-            event_dict.pop(key, None)
-            dropped += 1
-        elif not isinstance(value, bool | int | float) and value is not None:
-            event_dict.pop(key, None)
-            dropped += 1
-    if dropped:
-        event_dict["dropped_field_count"] = dropped
-    return event_dict
+    return _bound_fields(event_dict)
 
 
 def _is_otel_handler(handler: logging.Handler) -> bool:

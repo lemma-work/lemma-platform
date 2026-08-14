@@ -225,7 +225,13 @@ class ComposioAuthProvider(AuthProviderInterface):
                 "not direct credentials."
             )
 
-        composio = self._composio_client_factory()
+        # Constructing the client is not free — it reads config, builds an
+        # httpx client and imports the SDK's lazy namespaces on first use.
+        # Only the SDK CALL below was offloaded, so the construction sat on
+        # the event loop: measured at 76ms cold, 4ms warm, per call site.
+        composio = await run_blocking(
+            self._composio_client_factory, limiter="external_http"
+        )
         auth_config_id = await self._resolve_auth_config_id(
             connector,
             composio,
@@ -255,7 +261,9 @@ class ComposioAuthProvider(AuthProviderInterface):
         state: str,
         redirect_uri: str,
     ) -> Tuple[str, str]:
-        composio = self._composio_client_factory()
+        composio = await run_blocking(
+            self._composio_client_factory, limiter="external_http"
+        )
 
         auth_config_id = await self._resolve_auth_config_id(connector, composio)
 
@@ -294,7 +302,9 @@ class ComposioAuthProvider(AuthProviderInterface):
 
         connected_account_id = connected_account_id_list[0]
 
-        composio = self._composio_client_factory()
+        composio = await run_blocking(
+            self._composio_client_factory, limiter="external_http"
+        )
         connection_account = await run_blocking(
             lambda: composio.connected_accounts.get(connected_account_id),
             limiter="external_http",
@@ -336,7 +346,9 @@ class ComposioAuthProvider(AuthProviderInterface):
                 "Connection ID required for Composio refresh"
             )
 
-        composio = self._composio_client_factory()
+        composio = await run_blocking(
+            self._composio_client_factory, limiter="external_http"
+        )
         connection_account = await run_blocking(
             lambda: composio.connected_accounts.get(credentials.connection_id),
             limiter="external_http",
@@ -372,7 +384,9 @@ class ComposioAuthProvider(AuthProviderInterface):
                 "Connection ID required for Composio revocation"
             )
 
-        composio = self._composio_client_factory()
+        composio = await run_blocking(
+            self._composio_client_factory, limiter="external_http"
+        )
         await run_blocking(
             lambda: composio.connected_accounts.delete(credentials.connection_id),
             limiter="external_http",
