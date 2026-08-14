@@ -144,6 +144,22 @@ class DatastoreRecordRepository(DatastoreRecordRepositoryPort):
             else ""
         )
 
+        # Build every chunk's SQL and parameters *before* opening the
+        # transaction. This used to happen between the executes inside it, so a
+        # bulk write spent its string-building time holding a connection with an
+        # open write transaction -- row locks and all. Measured on a real-LLM
+        # e2e run: eleven holds on this line, the worst with a 784ms stretch
+        # where the database was asked nothing. None of this work needs a
+        # connection.
+        statements: list[tuple[str, Any]] = []
+        if event_factory is not None:
+            statements = [
+                bulk_returning_statement(ctx, ordered_keys, chunk, conflict_sql)
+                for chunk in chunk_for_parameter_limit(
+                    prepared_records, len(ordered_keys)
+                )
+            ]
+
         try:
             async with self.schema_manager.session_factory() as session:
                 if ctx.enable_rls:
@@ -160,18 +176,19 @@ class DatastoreRecordRepository(DatastoreRecordRepositoryPort):
                         ],
                     )
                 else:
-                    events: list[DomainEvent] = []
-                    for chunk in chunk_for_parameter_limit(
-                        prepared_records, len(ordered_keys)
-                    ):
-                        sql, params = bulk_returning_statement(
-                            ctx, ordered_keys, chunk, conflict_sql
-                        )
+                    # Execute back to back, keeping only the raw rows. Turning
+                    # each row into an entity and a domain event is per-row
+                    # Python, and doing it between the executes put that cost
+                    # inside the transaction once per chunk; done after the last
+                    # statement it is one stretch rather than N.
+                    returned: list[Any] = []
+                    for sql, params in statements:
                         result = await session.execute(text(sql), params)
-                        events.extend(
-                            event_factory(self._row_to_entity(dict(row._mapping), ctx))
-                            for row in result.fetchall()
-                        )
+                        returned.extend(result.fetchall())
+                    events: list[DomainEvent] = [
+                        event_factory(self._row_to_entity(dict(row._mapping), ctx))
+                        for row in returned
+                    ]
                     await stage_domain_events(session, events)
 
                 await session.commit()
