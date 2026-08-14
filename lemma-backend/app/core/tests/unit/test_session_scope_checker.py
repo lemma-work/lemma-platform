@@ -454,3 +454,68 @@ def test_a_constructor_from_a_remote_module_is_not_a_blocking_call() -> None:
         "        await uow.session.execute(query)\n"
     )
     assert [v.rule for v in violations] == []
+
+
+# --- how propagation decides a name is slow ------------------------------------
+
+
+def test_one_fast_definition_no_longer_silences_the_slow_ones() -> None:
+    """The rule used to be all-or-nothing, which was brittle in a bad direction.
+
+    Names are matched without a receiver type, so `_name_is_slow` is the
+    precision/recall dial for the whole propagation pass. Requiring *every*
+    definition of a name to be slow meant that adding one fast method sharing a
+    name with several slow ones turned the rule off for all of them -- silently,
+    from anywhere in the tree, for a name nobody was thinking about.
+
+    Here `fetch_remote` is slow in three definitions and fast in a fourth. It
+    must stay slow.
+    """
+    checker = _load_checker()
+    index = checker.DependencyIndex()
+    index.definitions["fetch_remote"] = [
+        {"reason": "outbound HTTP", "awaits": set()},
+        {"reason": "outbound HTTP", "awaits": set()},
+        {"reason": "outbound HTTP", "awaits": set()},
+        {"reason": None, "awaits": set()},
+    ]
+
+    assert index._name_is_slow("fetch_remote") is True
+    assert index.why_slow("helper.fetch_remote") == "outbound HTTP"
+
+
+def test_a_name_that_is_usually_fast_is_still_not_slow() -> None:
+    """The other direction, which is why `any` is not the answer.
+
+    `get` has 56 definitions in this tree and four are slow; `create` has 58 and
+    four. Marking either slow would report most of the codebase and the gate
+    would be switched off within a week.
+    """
+    checker = _load_checker()
+    index = checker.DependencyIndex()
+    index.definitions["get"] = [{"reason": None, "awaits": set()} for _ in range(52)] + [
+        {"reason": "outbound HTTP", "awaits": set()} for _ in range(4)
+    ]
+
+    assert index._name_is_slow("get") is False
+    assert index.why_slow("thing.get") is None
+
+
+def test_a_mixed_name_reports_a_reason_rather_than_crashing() -> None:
+    """`why_slow` sorted a set that could contain `None`.
+
+    Unreachable under the old all-or-nothing rule -- a mixed name never got
+    this far -- so it was a `TypeError` waiting for the first loosening, which
+    is precisely the change above. Found by measuring thresholds, not by
+    reading.
+    """
+    checker = _load_checker()
+    index = checker.DependencyIndex()
+    index.definitions["mixed"] = [
+        {"reason": "redis", "awaits": set()},
+        {"reason": "outbound HTTP", "awaits": set()},
+        {"reason": "outbound HTTP", "awaits": set()},
+        {"reason": None, "awaits": set()},
+    ]
+
+    assert index.why_slow("thing.mixed") == "outbound HTTP"

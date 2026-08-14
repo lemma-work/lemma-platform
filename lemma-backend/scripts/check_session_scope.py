@@ -359,13 +359,33 @@ class DependencyIndex:
                             changed = True
                             break
 
+    #: How much of a name's definitions must be slow before a call to that name
+    #: is treated as slow. Names are matched without a receiver type, so this is
+    #: the precision/recall dial for the whole propagation pass.
+    #:
+    #: It used to be `all`, which is brittle in one direction and useless in the
+    #: other. `get` has 56 definitions in this tree and 4 are slow; `create` has
+    #: 58 and 4. Treating either as slow (i.e. `any`) would flood the gate and
+    #: get it switched off. But requiring *every* definition meant one fast
+    #: method sharing a name with seven slow ones silenced all seven -- a future
+    #: edit anywhere in the tree could de-fang propagation for a name nobody was
+    #: thinking about.
+    #:
+    #: Measured across the tree: 1.0, 0.9 and 0.75 all report exactly the same
+    #: 33 violations today, so this is a robustness change rather than a
+    #: behaviour change -- adding one fast `download_attachment_bytes` to the
+    #: six slow ones no longer turns the rule off. 0.6 adds four more, which is
+    #: a judgement call for its own change with its own evidence.
+    SLOW_DEFINITION_RATIO = 0.75
+
     def _name_is_slow(self, name: str) -> bool:
         if name in self.remote_names:
             return True
         definitions = self.definitions.get(name)
         if not definitions:
             return False
-        return all(definition["reason"] is not None for definition in definitions)
+        slow = sum(1 for d in definitions if d["reason"] is not None)
+        return slow / len(definitions) >= self.SLOW_DEFINITION_RATIO
 
     def why_slow(self, callee: str) -> str | None:
         """Reason `callee` is non-database work, if it is."""
@@ -383,7 +403,13 @@ class DependencyIndex:
             return "remote SDK"
         if not self._name_is_slow(name):
             return None
-        reasons = {d["reason"] for d in self.definitions.get(name, [])}
+        # `None` is filtered before sorting. With the old all-or-nothing rule a
+        # mixed name could never reach here, so mixing `str` and `None` in this
+        # set was a latent `TypeError` waiting for the first loosening of
+        # `_name_is_slow` -- which is exactly the change above.
+        reasons = {
+            d["reason"] for d in self.definitions.get(name, []) if d["reason"]
+        }
         return sorted(reasons)[0] if reasons else None
 
     def _ingest_alias(self, node: ast.Assign) -> None:
