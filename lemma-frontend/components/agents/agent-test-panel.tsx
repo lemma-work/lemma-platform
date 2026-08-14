@@ -201,6 +201,10 @@ export function AgentTestPanel({
         podId,
         agentName: agent?.name || agentName,
         enabled: Boolean(agent),
+        // The history here is this agent's runs, not the pod's conversations —
+        // a run list that answers "what has anything in this pod done lately"
+        // is the wrong question on an agent's own page.
+        historyScope: 'agent',
     });
     const conversationMessages = useConversationMessages({
         client,
