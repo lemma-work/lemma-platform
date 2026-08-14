@@ -292,6 +292,28 @@ class Settings(BaseSettings):
         default=220 * 1024 * 1024,
         description="Global ASGI request-body ceiling, enforced while receiving bytes.",
     )
+    auth_jwks_unknown_kid_ttl_seconds: float = Field(
+        default=60.0,
+        description=(
+            "How long a JWKS key id that was looked up and not found is refused "
+            "without going back to the network. SuperTokens reads `kid` from the "
+            "token header BEFORE verifying the signature and has no negative "
+            "cache, so without this an unauthenticated client sending forged "
+            "tokens with random `kid` values forces one synchronous HTTP round "
+            "trip per request, on the event loop, under a lock that excludes "
+            "every other verification. Set to 0 to disable the guard. Env: "
+            "``AUTH_JWKS_UNKNOWN_KID_TTL_SECONDS``."
+        ),
+    )
+    auth_jwks_unknown_kid_cache_size: int = Field(
+        default=1024,
+        description=(
+            "Maximum key ids remembered as not-found. The sender chooses the "
+            "ids, so the map has to be bounded or the guard just moves the "
+            "damage from the event loop to memory. Env: "
+            "``AUTH_JWKS_UNKNOWN_KID_CACHE_SIZE``."
+        ),
+    )
     redis_read_timeout_seconds: float = Field(
         default=5.0,
         description=(

@@ -495,6 +495,8 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'runtime.heartbeat.write_failed': EventSpec('debug', frozenset({'error_type', 'service'})),
     'runtime.loop_lag.degraded': EventSpec('warning', frozenset({'breach_count', 'lag_ms', 'service', 'threshold_ms', 'unhealthy'})),
     'runtime.loop_lag.recovered': EventSpec('info', frozenset({'breach_count', 'degraded_duration_ms', 'max_lag_ms', 'service'})),
+    'identity.jwks_guard.install_failed.degraded': EventSpec('warning', frozenset()),
+    'identity.jwks_guard.unknown_kid_cache_full.degraded': EventSpec('warning', frozenset()),
     'runtime.connection_scope.degraded': EventSpec('warning', frozenset({'gap_ms', 'held_ms', 'in_transaction', 'querying_ms', 'stack', 'statements', 'threshold_ms'})),
     'runtime.loop_stall.degraded': EventSpec('warning', frozenset({'service', 'stack', 'stalled_ms', 'threshold_ms'})),
     'runtime.schedule_connectors.composio_trigger_creation.diagnostic': EventSpec('debug', frozenset({'error_type'})),

@@ -79,8 +79,19 @@ def get_loop_lag_seconds() -> float:
 
 
 def is_loop_healthy() -> bool:
-    """False when measured lag exceeds the unhealthy threshold (for /health/live)."""
-    return _lag.seconds < settings.loop_lag_unhealthy_seconds
+    """False while the loop is stalling (for ``/health/live``).
+
+    Reads the degraded flag as well as the last sample, because the last sample
+    alone is almost never true when a prober looks. A process that spent four
+    seconds wedged reports the stall on exactly one probe and then, on the very
+    next one, measures a healthy lag and says ``ok`` — so a Kubernetes liveness
+    check on a multi-second interval sees a wedged process as healthy nearly
+    every time. The degraded flag persists across the incident, which is what
+    makes it observable from outside.
+    """
+    if _lag.seconds >= settings.loop_lag_unhealthy_seconds:
+        return False
+    return not (_degraded and _max_lag_seconds >= settings.loop_lag_unhealthy_seconds)
 
 
 def reset_loop_watchdog_state() -> None:

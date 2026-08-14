@@ -215,3 +215,31 @@ def test_both_processes_start_the_watchdog(module_path: str, service: str):
     source = inspect.getsource(importlib.import_module(module_path))
 
     assert "loop_lag_watchdog(" in source
+
+
+def test_liveness_stays_false_across_a_stall_not_just_on_the_probe_that_saw_it(
+    monkeypatch,
+) -> None:
+    """A wedged process must not report ok on the next healthy sample.
+
+    Lag is sampled every ``loop_lag_watchdog_interval_seconds``; a liveness
+    probe runs on a multi-second interval. Reading only the last sample means
+    the probe almost never lands on the one that saw the stall, so a process
+    that spent seconds wedged looked healthy every time it was asked.
+    """
+    loop_watchdog.reset_loop_watchdog_state()
+    monkeypatch.setattr(loop_watchdog.settings, "loop_lag_unhealthy_seconds", 5.0)
+    try:
+        # Three warning samples take it degraded, with a peak past the
+        # unhealthy threshold.
+        for _ in range(3):
+            loop_watchdog._evaluate_lag(6.0, 0.3, service_name="test")
+
+        loop_watchdog._lag.seconds = 6.0
+        assert loop_watchdog.is_loop_healthy() is False
+
+        # The stall ended; this sample is fine, but the incident is not over.
+        loop_watchdog._lag.seconds = 0.001
+        assert loop_watchdog.is_loop_healthy() is False
+    finally:
+        loop_watchdog.reset_loop_watchdog_state()
