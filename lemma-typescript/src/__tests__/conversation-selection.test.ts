@@ -38,14 +38,19 @@ function conversation(id: string, updatedAt: string): Conversation {
   } as Conversation;
 }
 
-function fakeClient(items: Conversation[]) {
+function fakeClient(items: Conversation[], itemsByAgent?: Record<string, Conversation[]>) {
   const createdConversation = conversation("created", "2026-07-16T12:00:00.000Z");
-  const list = vi.fn(async () => ({
-    items,
-    limit: 30,
-    next_page_token: null,
-    total: items.length,
-  }));
+  const list = vi.fn(async (options: { agent_name?: string | null } = {}) => {
+    const scoped = itemsByAgent && typeof options.agent_name === "string"
+      ? itemsByAgent[options.agent_name] ?? []
+      : items;
+    return {
+      items: scoped,
+      limit: 30,
+      next_page_token: null,
+      total: scoped.length,
+    };
+  });
   const create = vi.fn(async () => createdConversation);
   const get = vi.fn(async (id: string) => (
     items.find((item) => item.id === id)
@@ -170,6 +175,52 @@ describe("explicit conversation selection", () => {
     expect(controller.get().openedConversationId).toBeNull();
     expect(controller.get().conversations.map((item) => item.id)).toEqual(historyBeforeAgentChange);
     expect(list).toHaveBeenCalledOnce();
+  });
+
+  it("scopes controller history to one agent when asked", async () => {
+    const { client, list } = fakeClient([], {
+      alpha: [conversation("alpha-run", "2026-07-16T12:00:00.000Z")],
+      beta: [conversation("beta-run", "2026-07-15T12:00:00.000Z")],
+    });
+    const controller = captureHookResult<UseAssistantControllerResult>();
+
+    function Harness({ agentName }: { agentName: string }) {
+      controller.set(useAssistantController({
+        client,
+        podId: "pod-1",
+        agentName,
+        historyScope: "agent",
+        autoLoadMessages: false,
+      }));
+      return null;
+    }
+
+    const root = await render(createElement(Harness, { agentName: "alpha" }));
+    await settle();
+
+    expect(list).toHaveBeenCalledWith({
+      pod_id: "pod-1",
+      agent_name: "alpha",
+      limit: 30,
+      page_token: undefined,
+    });
+    expect(controller.get().conversations.map((item) => item.id)).toEqual(["alpha-run"]);
+
+    // The other agent's runs replace them rather than joining them — under this
+    // scope the list is the agent's, so switching agents is a different list.
+    await act(async () => {
+      root.render(createElement(Harness, { agentName: "beta" }));
+      await Promise.resolve();
+    });
+    await settle();
+
+    expect(list).toHaveBeenLastCalledWith({
+      pod_id: "pod-1",
+      agent_name: "beta",
+      limit: 30,
+      page_token: undefined,
+    });
+    expect(controller.get().conversations.map((item) => item.id)).toEqual(["beta-run"]);
   });
 
   it("requires list selection and preserves an explicitly selected off-page conversation", async () => {

@@ -3171,3 +3171,62 @@ def test_with_data_is_quiet_when_a_table_has_no_seed_file(tmp_path: Path, capsys
     import_pod_bundle(client, pod_id="pod_1", source_dir=tmp_path, with_data=True)
 
     assert "skipped the data seed" not in capsys.readouterr().err
+
+
+def test_import_pod_bundle_uploads_a_no_build_app_as_source_and_dist(tmp_path: Path):
+    """An HTML app's files ARE its source — there is no build step making one
+    tree from another, so both archives must be uploaded.
+
+    Sending only the dist left the pod with no source archive, and export falls
+    back to writing `dist.zip` when there is none. So `html.html` went in and a
+    dist zip came out: the round trip lost the thing the author actually edits.
+    """
+    (tmp_path / "pod.json").write_text(
+        json.dumps({"name": "demo", "format_version": 1}), encoding="utf-8"
+    )
+    app_dir = tmp_path / "apps" / "landing"
+    app_dir.mkdir(parents=True)
+    (app_dir / "html.html").write_text("<h1>hello</h1>", encoding="utf-8")
+    (app_dir / "landing.json").write_text(
+        json.dumps({"name": "landing", "description": "app"}), encoding="utf-8"
+    )
+
+    uploads: list[dict[str, object]] = []
+
+    client = FakeClient(
+        pods=SimpleNamespace(update=lambda pod_id, request: {"id": pod_id, **_plain(request)}),
+        tables=SimpleNamespace(list=lambda pod_id, limit=1000: {"items": []}),
+        functions=SimpleNamespace(list=lambda pod_id, limit=1000: {"items": []}),
+        agents=SimpleNamespace(list=lambda pod_id, limit=1000: {"items": []}),
+        workflows=SimpleNamespace(list=lambda pod_id, limit=1000: {"items": []}),
+        apps=SimpleNamespace(
+            list=lambda pod_id, limit=1000: {"items": []},
+            create=lambda pod_id, payload: {"name": _plain(payload)["name"]},
+            upload_bundle=lambda pod_id, app_name, **kwargs: uploads.append(
+                {"app_name": app_name, **kwargs}
+            )
+            or {"ok": True},
+        ),
+        files=SimpleNamespace(
+            tree=lambda pod_id, root_path="/", files_per_directory=20: {
+                "tree": {"path": "/", "name": "/", "kind": "FOLDER", "children": []}
+            }
+        ),
+    )
+
+    from lemma_cli.cli_app import pod_bundle
+
+    original_build = pod_bundle._build_app_bundle
+    pod_bundle._build_app_bundle = (
+        lambda resource_dir, stream_output: resource_dir / "dist.zip"
+    )
+    try:
+        import_pod_bundle(client, pod_id="pod_123", source_dir=tmp_path)
+    finally:
+        pod_bundle._build_app_bundle = original_build
+
+    assert len(uploads) == 1, uploads
+    upload = uploads[0]
+    assert upload["dist_archive"] == app_dir / "dist.zip"
+    # The regression: this key used to be absent entirely.
+    assert upload["source_archive"] == upload["dist_archive"]

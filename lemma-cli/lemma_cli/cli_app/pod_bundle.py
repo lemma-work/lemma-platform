@@ -2459,8 +2459,16 @@ def import_pod_bundle(
                 stream_output=True,
             )
             _progress_start("app", app_name, "uploading bundle")
+            # A no-build app's files ARE its source: there is no build step that
+            # turns one tree into another, so the same archive is both. Uploading
+            # only the dist left the pod with no source archive, and export falls
+            # back to writing `dist.zip` when there is none — so `html.html` went
+            # in and a dist zip came out, and the next import had nothing to edit.
+            # A Vite app is the case where the two genuinely differ, and it takes
+            # the `source/` branch above, which uploads both.
             pod_sdk.apps.upload_bundle(
                 app_name,
+                source_archive=dist_archive_path,
                 dist_archive=dist_archive_path,
             )
             _progress_done("app", app_name, "uploaded bundle")

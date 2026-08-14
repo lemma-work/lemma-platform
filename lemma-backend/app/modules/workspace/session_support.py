@@ -18,6 +18,7 @@ import httpx
 from redis.exceptions import RedisError
 
 from sandbox_runtime.protocol import TerminalSize, WorkloadKind
+from app.core.errors.describe import describe_exception
 from app.core.log.log import get_logger
 from sandbox_runtime.errors import (
     SandboxError,
@@ -69,7 +70,7 @@ def describe_sandbox_failure(exc: BaseException) -> tuple[str, bool]:
         return (f"Workspace unavailable: {exc}", True)
     if isinstance(exc, SandboxRejected):
         return (f"Workspace refused the operation: {exc}", False)
-    return (f"Workspace transport failed: {type(exc).__name__}: {exc}", True)
+    return (f"Workspace transport failed: {describe_exception(exc)}", True)
 
 
 def sandbox_failure_types() -> tuple[type[BaseException], ...]:
@@ -234,14 +235,14 @@ async def resize_process_terminal(
         )
     except SandboxError as exc:
         return sandbox_command_failure(
-            error=f"{type(exc).__name__}: {exc}",
+            error=f"{describe_exception(exc)}",
             retryable=isinstance(exc, SandboxUnavailable),
             process_id=process_id,
             completed=False,
         )
     except (httpx.HTTPError, OSError, ValueError) as exc:
         return sandbox_command_failure(
-            error=f"the sandbox runtime terminal resize failed: {type(exc).__name__}: {exc}",
+            error=f"the sandbox runtime terminal resize failed: {describe_exception(exc)}",
             retryable=True,
             process_id=process_id,
             completed=False,

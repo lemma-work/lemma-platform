@@ -80,6 +80,18 @@ logger = get_logger(__name__)
 StopChecker = Callable[[], Awaitable[bool]]
 
 
+class HarnessDriverCancelled(Exception):
+    """The graph-driving task was cancelled while the run was still healthy.
+
+    An ordinary `Exception` rather than a `CancelledError` subclass on purpose:
+    nothing about *this* task is being cancelled, so every `except
+    CancelledError` between here and the runner would draw the wrong conclusion
+    and re-raise a cancellation that isn't happening. Raised as a failure
+    because that is what it is — the graph stopped mid-node and whatever tool
+    was executing was cancelled with it.
+    """
+
+
 def _user_facing_error_message(exc: Exception) -> str:
     """Return a sanitized, actionable message for the UI.
 
@@ -130,6 +142,14 @@ def _user_facing_error_message(exc: Exception) -> str:
             "The agent run hit a usage limit. "
             "Please check the agent runtime configuration."
         )
+    if isinstance(exc, HarnessDriverCancelled):
+        # Whatever the agent was doing stopped part-way, so "try again" is the
+        # honest advice. Everything it finished before that point is persisted.
+        return (
+            "The agent stopped part-way through a step and could not finish. "
+            "Nothing you sent was lost — send another message, or press Retry "
+            "to pick up where it stopped."
+        )
     return (
         "The model provider returned an error. "
         "Please check the agent runtime configuration."
@@ -145,6 +165,46 @@ DEFAULT_TOOL_RETRIES = 5
 
 # Ceiling for the pause between stream-drop retries; see `_retry_backoff`.
 _RETRY_BACKOFF_CAP_SECONDS = 6.0
+
+
+def _reraise_driver_failure(
+    pending_error: BaseException | None,
+    *,
+    cancelled_by_us: bool,
+    agent_run_id: UUID,
+) -> None:
+    """Decide what a failure relayed out of the driver task means.
+
+    A real error is re-raised so ``run()``'s handlers (ModelHTTPError,
+    UsageLimitExceeded, AgentInputRequired, …) still fire.
+
+    A relayed ``CancelledError`` is only ours to drop when we are the ones who
+    cancelled — either our own cancellation is already propagating out of the
+    consumer loop, or we tore the driver down on the way out. Otherwise the
+    driver died under a healthy parent: the graph stopped mid-node, so any tool
+    still executing was cancelled with it and its call will never get a result.
+
+    Dropping that silently is how a truncated run came to report success. The
+    generator returned normally, so ``run()`` emitted COMPLETED and the run was
+    finalized with no error, no log line, and a trailing tool call that nothing
+    ever answered — the agent simply stopped, and every layer above said it went
+    fine.
+    """
+
+    if pending_error is None:
+        return
+    if not isinstance(pending_error, asyncio.CancelledError):
+        raise pending_error
+    if cancelled_by_us:
+        return
+    logger.error(
+        "agent.pydantic_ai.driver_cancelled_mid_run.failed",
+        agent_run_id=str(agent_run_id),
+        exc_info=pending_error,
+    )
+    raise HarnessDriverCancelled(
+        "The agent run was cancelled while a tool call was still running."
+    ) from pending_error
 
 
 async def _drive_with_retry(
@@ -629,6 +689,7 @@ class PydanticAIHarness:
 
         task = create_inherited_task(_drive(), name="agent-model-stream")
         pending_error: BaseException | None = None
+        cancelled_by_us = False
         try:
             while True:
                 kind, payload = await queue.get()
@@ -640,6 +701,7 @@ class PydanticAIHarness:
                 yield payload  # type: ignore[misc]
         finally:
             if not task.done():
+                cancelled_by_us = True
                 task.cancel()
             # Let the child finish unwinding pydantic's scopes (in its own task),
             # shielded so our own cancellation doesn't abandon that cleanup.
@@ -649,14 +711,11 @@ class PydanticAIHarness:
                 except BaseException:
                     pass
 
-        # On normal completion, re-raise a real error from the driver so run()'s
-        # handlers (ModelHTTPError, UsageLimitExceeded, AgentInputRequired, …)
-        # still fire. A CancelledError relayed here is dropped: the parent's own
-        # cancellation (if any) already propagated out of the loop above.
-        if pending_error is not None and not isinstance(
-            pending_error, asyncio.CancelledError
-        ):
-            raise pending_error
+        _reraise_driver_failure(
+            pending_error,
+            cancelled_by_us=cancelled_by_us,
+            agent_run_id=agent_run_id,
+        )
 
     async def _stream_model_request(
         self,

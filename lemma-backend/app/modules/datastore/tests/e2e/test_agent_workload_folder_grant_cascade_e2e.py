@@ -273,3 +273,81 @@ async def test_agent_workload_folder_grant_authorizer_decision(
     )
     assert not denied.allowed
     assert denied.reason_code == "MISSING_WORKLOAD_RESOURCE_GRANT"
+
+
+@pytest.mark.asyncio
+async def test_a_grant_on_a_nested_folder_works_without_granting_its_parent(
+    test_app,
+    authenticated_client,
+    fixed_test_org,
+    fixed_test_user,
+    index_datastore_file,
+):
+    """The production failure, which the test above cannot reach.
+
+    That one grants ``/library`` — the top of the tree — so walking the
+    ancestors of a file finds every folder above it granted and search
+    succeeds either way. Grant ``/library/revision`` instead and the walk climbs
+    to ``/library``, which nobody granted because nobody meant to, and hides the
+    file the grant was written for.
+
+    Reading the same file by path already worked, because the single-file path
+    judges the file alone. So the two disagreed: an agent could open a file it
+    could not see listed. In production that was 241 of 241 files withheld from
+    an agent holding a real grant on the folder containing 200 of them.
+    """
+    pod_id = await _create_pod(authenticated_client, fixed_test_org)
+    owner = DatastoreApi(authenticated_client, pod_id)
+    tree = await _seed_library_tree(owner, index_datastore_file)
+
+    agent_name = f"nested_grant_agent_{uuid4().hex[:8]}"
+    agent = await _create_agent(authenticated_client, pod_id, agent_name)
+
+    await _replace_agent_grants(
+        authenticated_client,
+        pod_id,
+        agent_name,
+        [
+            {
+                "resource_type": "agent",
+                "resource_name": agent_name,
+                "permission_ids": ["agent.read"],
+            },
+            {
+                # The nested folder only. `/library` above it stays ungranted.
+                "resource_type": "folder",
+                "resource_name": REVISION,
+                "permission_ids": ["folder.read"],
+            },
+        ],
+    )
+
+    agent_client = await _mint_agent_client(
+        test_app,
+        user_id=fixed_test_user["id"],
+        agent_id=agent["id"],
+        agent_name=agent_name,
+        pod_id=pod_id,
+    )
+    agent_api = DatastoreApi(agent_client, pod_id)
+    try:
+        # Search is the operation that broke: it filters every file in the pod
+        # through `get_visible_file_ids`, which is where the ancestor walk ran.
+        # That is also the call that logged `241 of 241 withheld`.
+        results = await agent_api.search_files(NEEDLE, search_method="TEXT")
+        assert tree["leaf"]["id"] in {r["file_id"] for r in results["items"]}, results
+
+        # Searching and reading must agree — the disagreement was the bug.
+        meta = await agent_api.get_file(FILE_PATH)
+        assert meta["id"] == tree["leaf"]["id"], meta
+
+        # And the grant must not have leaked upward or sideways: dropping the
+        # ancestor walk must not turn "no grant" into access anywhere.
+        assert tree["sibling"]["id"] not in {
+            r["file_id"] for r in results["items"]
+        }, results
+        await agent_api.get_file(
+            SIBLING_FILE, expected_status=status.HTTP_403_FORBIDDEN
+        )
+    finally:
+        await agent_client.aclose()

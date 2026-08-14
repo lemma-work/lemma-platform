@@ -2,6 +2,7 @@
 
 from app.modules.agent.services.runtime_model_factory import (
     require_pydantic_ai_model_from_runtime_profile,
+    usage_limits_for,
 )
 from app.modules.agent.services.runtime_profile_service import (
     DEFAULT_SYSTEM_AGENT_RUNTIME_PROFILE_ID,
@@ -20,4 +21,5 @@ __all__ = [
     "record_pydantic_ai_result_usage",
     "require_pydantic_ai_model_from_runtime_profile",
     "reserve_usage_for_runtime",
+    "usage_limits_for",
 ]

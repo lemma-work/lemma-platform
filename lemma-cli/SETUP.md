@@ -19,6 +19,26 @@ For local development from this repository (editable, picks up source changes):
 uv tool install --force --editable lemma-cli
 ```
 
+To install straight from GitHub without a checkout — an unreleased `main`, or a
+tag newer than the last PyPI publish:
+
+```bash
+uv tool install --force --python 3.14 "lemma-terminal @ git+https://github.com/lemma-work/lemma-platform.git#subdirectory=lemma-cli"
+```
+
+`main` carries the version currently being developed, and its `lemma-sdk` pin
+names that same version — which is on PyPI only from the moment that release is
+published. Until then, take the SDK from the same commit, so the two are resolved
+together instead of against the index:
+
+```bash
+uv tool install --force --python 3.14 "lemma-terminal @ git+https://github.com/lemma-work/lemma-platform.git#subdirectory=lemma-cli" --with "lemma-sdk @ git+https://github.com/lemma-work/lemma-platform.git#subdirectory=lemma-python"
+```
+
+Append `@<tag-or-commit>` before the `#` to pin a ref (e.g.
+`...lemma-platform.git@v0.6.2#subdirectory=lemma-cli`); a released tag needs no
+`--with`, since its SDK is on PyPI.
+
 > **After the SDK schema changes** (regenerating `lemma-python`), re-run the
 > `--force` install so the bundled `lemma-sdk` is rebuilt. `lemma doctor` flags
 > when the installed SDK has drifted from the server it is talking to — the exact

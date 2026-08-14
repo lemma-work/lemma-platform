@@ -13,7 +13,7 @@ async def test_watchdog_writes_heartbeat_and_measures_low_lag(tmp_path, monkeypa
     heartbeat = tmp_path / "worker_heartbeat"
     monkeypatch.setattr(settings, "worker_heartbeat_path", str(heartbeat))
     monkeypatch.setattr(settings, "loop_lag_watchdog_interval_seconds", 0.05)
-    monkeypatch.setattr(loop_watchdog, "_last_lag_seconds", 0.0)
+    monkeypatch.setattr(loop_watchdog._lag, "seconds", 0.0)
 
     task = asyncio.create_task(
         loop_watchdog.loop_lag_watchdog(
@@ -39,9 +39,9 @@ async def test_watchdog_writes_heartbeat_and_measures_low_lag(tmp_path, monkeypa
 
 def test_is_loop_healthy_reflects_unhealthy_threshold(monkeypatch):
     monkeypatch.setattr(settings, "loop_lag_unhealthy_seconds", 1.0)
-    monkeypatch.setattr(loop_watchdog, "_last_lag_seconds", 0.2)
+    monkeypatch.setattr(loop_watchdog._lag, "seconds", 0.2)
     assert loop_watchdog.is_loop_healthy() is True
-    monkeypatch.setattr(loop_watchdog, "_last_lag_seconds", 5.0)
+    monkeypatch.setattr(loop_watchdog._lag, "seconds", 5.0)
     assert loop_watchdog.is_loop_healthy() is False
 
 
@@ -171,3 +171,47 @@ def test_incident_pair_has_five_minute_cooldown_even_for_unhealthy_sample(
     loop_watchdog._evaluate_lag(5.3, 0.3, service_name="test", now=300.0)
     degraded = [e for e in _events(buf) if e["event"] == "runtime.loop_lag.degraded"]
     assert len(degraded) == 2
+
+
+@pytest.mark.asyncio
+async def test_the_watchdog_installs_the_stall_sampler(monkeypatch):
+    """The lag number and the culprit's stack come from two different
+    mechanisms, and only one of them is a coroutine. If the watchdog stops
+    starting the sampler, stalls go back to being anonymous."""
+    from app.core.observability import stall_sampler
+
+    monkeypatch.setattr(settings, "loop_lag_watchdog_interval_seconds", 0.05)
+    assert stall_sampler.get_loop_stall_sampler() is None
+
+    task = asyncio.create_task(loop_watchdog.loop_lag_watchdog(service_name="test"))
+    try:
+        await asyncio.sleep(0.1)
+        sampler = stall_sampler.get_loop_stall_sampler()
+        assert sampler is not None
+        assert sampler._thread is not None and sampler._thread.is_alive()  # noqa: SLF001
+    finally:
+        task.cancel()
+        outcome = await asyncio.gather(task, return_exceptions=True)
+        assert isinstance(outcome[0], asyncio.CancelledError), outcome[0]
+
+    # Shutdown must take the thread with it: a daemon thread per restarted
+    # watchdog is a leak that only shows up under test reruns and reloads.
+    assert stall_sampler.get_loop_stall_sampler() is None
+
+
+@pytest.mark.parametrize(
+    "module_path, service",
+    [
+        ("app.app", "lemma-api"),
+        ("app.core.infrastructure.jobs.streaq_runtime", "lemma-worker"),
+    ],
+)
+def test_both_processes_start_the_watchdog(module_path: str, service: str):
+    """The API and the worker each run everything on one loop, and the worker
+    is the one that wedged. Neither gets the watchdog by inheritance."""
+    import importlib
+    import inspect
+
+    source = inspect.getsource(importlib.import_module(module_path))
+
+    assert "loop_lag_watchdog(" in source

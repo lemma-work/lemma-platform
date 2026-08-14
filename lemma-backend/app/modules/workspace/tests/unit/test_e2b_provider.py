@@ -430,6 +430,78 @@ async def test_a_tty_process_streams_on_the_pty_channel(
 
 
 # ---------------------------------------------------------------------------
+# Process lifetime, which E2B enforces and defaults to one minute
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def buffered_provider(provider: E2BSandboxProvider, monkeypatch) -> E2BSandboxProvider:
+    from app.modules.workspace.testing.fake_output_buffer import InMemoryOutputBuffer
+
+    buffer = InMemoryOutputBuffer()
+    monkeypatch.setattr(provider, "_output", buffer)
+    monkeypatch.setattr(provider, "_remember_pid", buffer.remember_pid)
+    monkeypatch.setattr(provider, "_recall_pid", buffer.recall_pid)
+    return provider
+
+
+async def _start(provider: E2BSandboxProvider, *, deadline_at, tty=None) -> None:
+    instance = await provider.create(_spec(uuid4()))
+    await provider.start_process(
+        instance,
+        StartProcessRequest(
+            operation_id=uuid4(),
+            shell_command="npm run build",
+            argv=None,
+            cwd="/workspace",
+            environment=(),
+            tty=tty,
+            output_limit_bytes=1024,
+            deadline_at=deadline_at,
+            initial_input=None,
+        ),
+        deadline_at=deadline_at,
+    )
+
+
+@pytest.mark.parametrize("tty", [None, TerminalSize(rows=24, cols=80)])
+async def test_a_process_lives_as_long_as_its_deadline_says(
+    buffered_provider: E2BSandboxProvider, world: FakeE2B, tty
+) -> None:
+    """The regression that cost every long build its last 59 minutes.
+
+    E2B kills a command at `timeout` and defaults that to 60 seconds. This
+    provider accepted a `deadline_at` on every operation and passed it to
+    nothing, so a build given an hour was killed after a minute — mid-flight,
+    while the agent was still polling it. Both process kinds are checked
+    because they are started through different SDK calls with the same default.
+    """
+    await _start(
+        buffered_provider,
+        deadline_at=datetime.now(timezone.utc) + timedelta(hours=1),
+        tty=tty,
+    )
+
+    assert world.process_timeouts, "no process was started"
+    granted = world.process_timeouts[-1]
+    assert granted is not None, "no lifetime passed: E2B would apply its 60s default"
+    assert granted == pytest.approx(3600, abs=5)
+
+
+async def test_an_expired_deadline_does_not_become_an_immortal_process(
+    buffered_provider: E2BSandboxProvider, world: FakeE2B
+) -> None:
+    """E2B reads a non-positive timeout as "no timeout"."""
+    await _start(
+        buffered_provider,
+        deadline_at=datetime.now(timezone.utc) - timedelta(minutes=5),
+    )
+
+    granted = world.process_timeouts[-1]
+    assert granted is not None and granted > 0
+
+
+# ---------------------------------------------------------------------------
 # Filesystem
 # ---------------------------------------------------------------------------
 

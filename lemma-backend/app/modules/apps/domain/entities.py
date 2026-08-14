@@ -66,3 +66,18 @@ class AppAssetDocument(BaseModel):
     etag: str | None = None
     not_modified: bool = False
     is_entrypoint: bool = False
+
+
+def public_app_url(public_slug: str) -> str:
+    """Where an app is served: ``<public_slug>.<app_base_domain>``.
+
+    One definition, because two copies of a URL rule drift and each caller then
+    describes a slightly different app. Host-based routing
+    (``apps/api/host_routing.py``) is the other half of this contract.
+    """
+    from urllib.parse import urlparse
+
+    from app.core.config import settings
+
+    scheme = urlparse(settings.api_url).scheme or "https"
+    return f"{scheme}://{public_slug}.{settings.app_base_domain}"

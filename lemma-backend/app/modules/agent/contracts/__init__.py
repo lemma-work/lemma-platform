@@ -1,6 +1,10 @@
 """Stable agent DTOs shared with delivery surfaces."""
 
 from app.modules.agent.domain.entities import Conversation
+from app.modules.agent.contracts.pod_summaries import (
+    PodAgentSummary,
+    list_agent_summaries_by_pod,
+)
 from app.modules.agent.domain.value_objects import (
     AgentEvent,
     AgentEventType,
@@ -19,6 +23,8 @@ from app.modules.agent.tools.user_interaction.models import (
 )
 
 __all__ = [
+    "PodAgentSummary",
+    "list_agent_summaries_by_pod",
     "AgentEvent",
     "AgentEventType",
     "AgentRunApprovalDecision",

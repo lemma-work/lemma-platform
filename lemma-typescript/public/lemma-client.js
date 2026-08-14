@@ -13513,6 +13513,18 @@ var LemmaClient = (() => {
       });
     }
     /**
+     * List Organizations And Their Pods
+     * Every organization the current user belongs to, each with the pods they can see in it. Replaces fetching the organization list and then one pod list per organization; the payload stays shallow so it does not grow with the contents of each pod.
+     * @returns NavigationResponse Successful Response
+     * @throws ApiError
+     */
+    static orgNavigation() {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/organizations/navigation"
+      });
+    }
+    /**
      * Check Organization Slug Availability
      * Check whether an organization slug is available, and optionally whether a candidate name is still free
      * @param slug
@@ -13590,6 +13602,25 @@ var LemmaClient = (() => {
         },
         body: requestBody,
         mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Get Organization Home
+     * One organization's landing page: every pod the current user can see, with its apps, its agents, and the user's roles in that pod. Replaces fetching apps and agents per pod. Cached briefly per user.
+     * @param orgId
+     * @returns OrganizationHomeResponse Successful Response
+     * @throws ApiError
+     */
+    static orgHome(orgId) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/organizations/{org_id}/home",
+        path: {
+          "org_id": orgId
+        },
         errors: {
           422: `Validation Error`
         }

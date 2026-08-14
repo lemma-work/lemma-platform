@@ -172,6 +172,16 @@ def test_rate_limit_logs_throttled_warning(log_buf):
 
 
 def test_5xx_domain_error_logs_error_once(log_buf):
+    """A 500 is a server bug however it was raised, so it is logged like one.
+
+    This used to assert the opposite — that a 5xx `DomainError`'s message stayed
+    out of the log — which made a handled 500 strictly less diagnosable than an
+    unhandled one while both returned the identical opaque envelope. Eleven
+    upload failures reached production as `error_type: DomainError` and nothing
+    else, and could not be investigated at all. The 4xx rules below are
+    unchanged: those messages are written for the client and still never reach
+    the log.
+    """
     c = _client()
     r = c.get("/domain500")
     assert r.status_code == 500
@@ -180,7 +190,28 @@ def test_5xx_domain_error_logs_error_once(log_buf):
     assert ev[0]["level"] == "error"
     assert ev[0]["error_code"] == "WIDGET_BROKE"
     assert ev[0]["error_type"] == "DomainError"
-    assert "server boom" not in log_buf.getvalue()
+    assert ev[0]["error_message"] == "server boom"
+    assert "Traceback (most recent call last):" in ev[0]["error_traceback"]
+    # The traceback is the part that was missing and the part that only ever
+    # belongs in the log. A domain error's *message* is authored copy and the
+    # envelope has always carried it; that is not what changed here.
+    assert "Traceback" not in r.text
+
+
+def test_4xx_domain_error_still_keeps_its_message_out_of_the_log(log_buf):
+    """The other half of the rule, and the reason it is the status code that
+    decides: a 4xx message quotes what the client sent."""
+    c = _client()
+    c.get("/domain404")
+
+    assert "nope" not in log_buf.getvalue()
+
+
+def test_4xx_http_exception_still_keeps_its_detail_out_of_the_log(log_buf):
+    c = _client()
+    c.get("/http401")
+
+    assert "no token" not in log_buf.getvalue()
 
 
 def test_unhandled_500_logs_error_once_with_traceback(log_buf):

@@ -221,8 +221,33 @@ class FileAuthorizer:
             file_ids=[item.id for item in context_items],
         )
 
+        actor_type = getattr(ctx, "actor_type", None)
+        is_workload = actor_type in (
+            ActorType.AGENT,
+            ActorType.FUNCTION,
+            ActorType.DELEGATED_USER_WORKLOAD,
+        )
+
         visible_ids: set[UUID] = set()
         for item in items:
+            if is_workload:
+                # The same rule `_ensure_pod_document_path_access` applies when
+                # authorizing one file: judge the row alone. `filter_visible_ids`
+                # already resolves the grant cascade, so a grant on any ancestor
+                # folder has authorized this row before it gets here.
+                #
+                # Walking the ancestors again re-derives inheritance under the
+                # opposite rule — every folder above must *itself* be granted —
+                # and that cancels the cascade it is walking over. A grant on
+                # /docs/eng/runbooks authorized the file and then lost to /docs,
+                # which nobody granted because nobody meant to. The two paths
+                # disagreed, so an agent could open a file by name and not see it
+                # in a listing: 241 of 241 files withheld from an agent that held
+                # a real grant on the folder holding 200 of them.
+                if item.id in allowed_context_ids:
+                    visible_ids.add(item.id)
+                continue
+
             current = item
             visible = True
             while True:
