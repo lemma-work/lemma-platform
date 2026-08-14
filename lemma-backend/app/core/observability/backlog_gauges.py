@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Iterable
+from dataclasses import dataclass, field
 
 from opentelemetry import metrics
 from opentelemetry.metrics import CallbackOptions, Observation
@@ -28,13 +29,35 @@ from app.core.observability.dependency_incident import DependencyIncident
 logger = get_logger(__name__)
 meter = metrics.get_meter(__name__)
 
-#: Last successful reading per lane, and for each event table. A gauge reports
-#: a level, so a stale reading is worse than no reading: on a failed sample the
-#: entry is dropped and the series simply reports nothing for that interval,
-#: rather than flatlining at a number that stopped being true.
-_queue_depth: dict[str, int] = {}
-_outbox_pending: int | None = None
-_inbox_pending: int | None = None
+
+@dataclass
+class _Backlog:
+    """Last successful reading of each backlog, held for the gauge callbacks.
+
+    An object rather than bare module globals, matching ``_LagGauge`` in
+    ``loop_watchdog``: the sampler writes and never reads, so plain globals
+    would need a ``global`` declaration that reads as a dead store to anyone
+    (and to any analyser) looking at that function alone.
+
+    ``None`` and an empty mapping mean "not measured", which is deliberately
+    distinct from a measured zero. A gauge reports a level, so a reading left
+    in place after sampling starts failing flatlines at whatever was last true
+    -- and a flat line reads as a healthy steady state rather than an outage.
+    """
+
+    queue_depth: dict[str, int] = field(default_factory=dict)
+    outbox_pending: int | None = None
+    inbox_pending: int | None = None
+
+    def forget_queues(self) -> None:
+        self.queue_depth = {}
+
+    def forget_event_tables(self) -> None:
+        self.outbox_pending = None
+        self.inbox_pending = None
+
+
+_backlog = _Backlog()
 
 _queue_incident = DependencyIncident("backlog.queue_depth", logger=logger)
 _events_incident = DependencyIncident("backlog.event_tables", logger=logger)
@@ -43,18 +66,21 @@ _events_incident = DependencyIncident("backlog.event_tables", logger=logger)
 def _observe_queue_depth(options: CallbackOptions) -> Iterable[Observation]:
     del options
     return [
-        Observation(depth, {"lane": lane}) for lane, depth in _queue_depth.items()
+        Observation(depth, {"lane": lane})
+        for lane, depth in _backlog.queue_depth.items()
     ]
 
 
 def _observe_outbox_pending(options: CallbackOptions) -> Iterable[Observation]:
     del options
-    return [] if _outbox_pending is None else [Observation(_outbox_pending)]
+    pending = _backlog.outbox_pending
+    return [] if pending is None else [Observation(pending)]
 
 
 def _observe_inbox_pending(options: CallbackOptions) -> Iterable[Observation]:
     del options
-    return [] if _inbox_pending is None else [Observation(_inbox_pending)]
+    pending = _backlog.inbox_pending
+    return [] if pending is None else [Observation(pending)]
 
 
 meter.create_observable_gauge(
@@ -77,18 +103,20 @@ meter.create_observable_gauge(
 async def _sample_queue_depth() -> None:
     from app.core.infrastructure.jobs.streaq_runtime import LANE_WORKERS
 
-    for lane, worker in LANE_WORKERS.items():
-        _queue_depth[lane.value] = await worker.queue_size()
+    depth = {
+        lane.value: await worker.queue_size() for lane, worker in LANE_WORKERS.items()
+    }
+    # Replaced wholesale rather than updated in place, so a lane that stops
+    # reporting disappears instead of keeping its last value forever.
+    _backlog.queue_depth = depth
 
 
 async def _sample_event_tables(session_maker) -> None:
-    global _outbox_pending, _inbox_pending
-
     async with session_maker() as session:
         # Both counts ride an existing partial/leading index over the small
         # unfinished set, so neither scans the table -- which matters, because
         # a gauge that measures a backlog must not become part of it.
-        _outbox_pending = await session.scalar(
+        outbox_pending = await session.scalar(
             select(func.count())
             .select_from(DomainEventOutbox)
             .where(
@@ -96,11 +124,15 @@ async def _sample_event_tables(session_maker) -> None:
                 DomainEventOutbox.dead_lettered_at.is_(None),
             )
         )
-        _inbox_pending = await session.scalar(
+        inbox_pending = await session.scalar(
             select(func.count())
             .select_from(DomainEventInbox)
             .where(DomainEventInbox.status == "PROCESSING")
         )
+    # Assigned only once both counts succeeded, so a failure part-way through
+    # cannot leave one table's reading fresh and the other's stale.
+    _backlog.outbox_pending = outbox_pending
+    _backlog.inbox_pending = inbox_pending
 
 
 async def backlog_gauge_loop(session_maker, *, interval_seconds: float) -> None:
@@ -118,7 +150,7 @@ async def backlog_gauge_loop(session_maker, *, interval_seconds: float) -> None:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            _queue_depth.clear()
+            _backlog.forget_queues()
             _queue_incident.record_failure(error_type=type(exc).__name__)
 
         try:
@@ -127,9 +159,7 @@ async def backlog_gauge_loop(session_maker, *, interval_seconds: float) -> None:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            global _outbox_pending, _inbox_pending
-            _outbox_pending = None
-            _inbox_pending = None
+            _backlog.forget_event_tables()
             _events_incident.record_failure(error_type=type(exc).__name__)
 
         await asyncio.sleep(interval_seconds)

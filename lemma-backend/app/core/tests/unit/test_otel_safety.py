@@ -298,7 +298,7 @@ def test_every_process_identifies_itself_on_the_resource(monkeypatch) -> None:
     collector derives one target from it, and concurrent writers to the same
     series are dropped as duplicate samples.
     """
-    monkeypatch.setattr(telemetry, "_get_settings", lambda: _settings())
+    monkeypatch.setattr(telemetry, "_get_settings", _settings)
     monkeypatch.setattr(telemetry.socket, "gethostname", lambda: "lemma-api-7d9f-2xk4")
 
     resource = telemetry._build_resource("lemma-api")
@@ -325,7 +325,7 @@ def test_an_explicit_instance_id_wins_over_the_hostname(monkeypatch) -> None:
 
 def test_an_unusable_hostname_is_omitted_rather_than_exported(monkeypatch) -> None:
     """The resource crosses the export boundary, so it gets the same scrutiny."""
-    monkeypatch.setattr(telemetry, "_get_settings", lambda: _settings())
+    monkeypatch.setattr(telemetry, "_get_settings", _settings)
     monkeypatch.setattr(
         telemetry.socket, "gethostname", lambda: "host with spaces/and-slashes"
     )
@@ -345,11 +345,6 @@ def test_http_clients_are_instrumented_under_stable_semconv(monkeypatch) -> None
     monkeypatch.delenv("OTEL_SEMCONV_STABILITY_OPT_IN", raising=False)
     monkeypatch.setattr(telemetry, "_libraries_instrumented", False)
     instrumented: list[str] = []
-    monkeypatch.setattr(
-        telemetry,
-        "_instrument_libraries",
-        telemetry._instrument_libraries,
-    )
 
     import opentelemetry.instrumentation.aiohttp_client as aiohttp_mod
     import opentelemetry.instrumentation.httpx as httpx_mod

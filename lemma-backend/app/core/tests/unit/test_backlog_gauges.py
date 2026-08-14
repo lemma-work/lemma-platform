@@ -11,13 +11,13 @@ from app.core.observability import backlog_gauges
 
 @pytest.fixture(autouse=True)
 def _clean_snapshot():
-    backlog_gauges._queue_depth.clear()
-    backlog_gauges._outbox_pending = None
-    backlog_gauges._inbox_pending = None
+    def reset() -> None:
+        backlog_gauges._backlog.forget_queues()
+        backlog_gauges._backlog.forget_event_tables()
+
+    reset()
     yield
-    backlog_gauges._queue_depth.clear()
-    backlog_gauges._outbox_pending = None
-    backlog_gauges._inbox_pending = None
+    reset()
 
 
 def _observations(callback):
@@ -37,7 +37,7 @@ def test_a_gauge_reports_nothing_until_something_has_been_sampled() -> None:
 
 
 def test_queue_depth_is_reported_per_lane() -> None:
-    backlog_gauges._queue_depth.update({"interactive": 3, "bulk": 41})
+    backlog_gauges._backlog.queue_depth = {"interactive": 3, "bulk": 41}
 
     observed = {
         obs.attributes["lane"]: obs.value
@@ -57,8 +57,8 @@ async def test_a_failed_sample_drops_the_reading_rather_than_repeating_it(
     sampler starts failing flatlines at whatever was true last -- and a flat
     line reads as a healthy steady state, not as an outage.
     """
-    backlog_gauges._queue_depth.update({"interactive": 5})
-    backlog_gauges._outbox_pending = 900
+    backlog_gauges._backlog.queue_depth = {"interactive": 5}
+    backlog_gauges._backlog.outbox_pending = 900
 
     async def _explode(*args, **kwargs):
         raise ConnectionError("redis unavailable")
@@ -73,7 +73,7 @@ async def test_a_failed_sample_drops_the_reading_rather_than_repeating_it(
     await asyncio.sleep(0)
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
-        await task
+        await asyncio.wait_for(task, timeout=1)
 
     assert _observations(backlog_gauges._observe_queue_depth) == []
     assert _observations(backlog_gauges._observe_outbox_pending) == []
@@ -102,7 +102,7 @@ async def test_cancellation_is_never_swallowed_by_the_error_handling(
         backlog_gauges.backlog_gauge_loop(object(), interval_seconds=30)
     )
     with pytest.raises(asyncio.CancelledError):
-        await task
+        await asyncio.wait_for(task, timeout=1)
 
 
 def test_the_labels_these_gauges_use_survive_the_export_boundary() -> None:
