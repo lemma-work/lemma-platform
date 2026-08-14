@@ -276,6 +276,46 @@ lands in a particular place, which is arithmetic), and the PNG one asserts wall
 clock with a wide margin, because the cost *is* the wall clock. Each was checked
 against the unfixed code — the PNG walk reproduces the audit's 73 ms exactly.
 
+## What the stalls actually were
+
+The first sweep with stall stacks intact (they had been silently dropped — see
+the reserved-name note above) reported four stalls over a second. Exactly one
+was a production bug. The taxonomy is worth keeping, because three of the four
+look alarming in a dashboard and are not worth anyone's afternoon:
+
+| Stall | Cause | Verdict |
+| --- | --- | --- |
+| 1027 ms | `insert(...).values(rows)` in `stage_domain_events` recompiling per batch size | **real, fixed** |
+| 1025 ms | SQLAlchemy logging every row at DEBUG during `fetchall` | DEBUG-only |
+| 1045 ms | `subprocess.run` removing containers in pytest teardown | test harness |
+| 1065 ms | `inspect.get_annotations` at import | cold start |
+
+The real one: `.values(list)` renders every row inline, so the compiled SQL is a
+function of the row count and the statement cache misses on every batch size it
+has not seen. Recompiling landed on the loop *inside* the write transaction,
+holding the locks of the write that produced those events. Executemany
+parameters compile once for every size.
+
+The DEBUG one cannot happen in production: `_dependency_floor_applies` holds
+`sqlalchemy.engine` at WARNING whenever the configured level is INFO. At DEBUG
+it logs a line per row, and `LOG_QUIET_DEPENDENCIES=1` is the existing opt-out.
+
+The lesson for the next person reading a stall report: check whether the
+deepest frames are ours before doing anything. Three of these four were the
+harness or the interpreter warming up.
+
+## A regression this caught, which is the point of having it
+
+`_bulk_write_records` converts each chunk's returned rows into entities and
+domain events. Batching all of that until after the last execute is tidier and
+measurably worse -- the worst gap went from 784 ms to 2163 ms. The events must
+be staged in the same transaction for the outbox to be atomic, so the work
+cannot leave it; collecting it turns N short gaps into one long one.
+
+The detector triggers on the longest *contiguous* gap, because that is the
+stretch actually holding row locks. Optimising for fewer gaps instead of shorter
+ones makes the number of incidents go down and the damage go up.
+
 ## What authorization costs
 
 Authorization runs on essentially every API request and every agent tool call,
