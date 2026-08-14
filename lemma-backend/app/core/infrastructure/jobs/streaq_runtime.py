@@ -399,7 +399,7 @@ async def _ensure_consumer_groups_once() -> None:
 
     # FastStream and streaq speak raw bytes, so this shares the
     # decode_responses=False pool rather than the application one.
-    client = get_redis(decode_responses=False)
+    client = get_redis(decode_responses=False, blocking=True)
     try:
         len(registered_stream_groups())
         await ensure_consumer_groups(client, warn_on_create=False)
@@ -422,7 +422,7 @@ async def _consumer_group_reconcile_loop() -> None:
     from app.core.infrastructure.events.stream_subscriber import ensure_consumer_groups
 
     interval = event_transport_settings.consumer_group_reconcile_interval_seconds
-    client = get_redis(decode_responses=False)
+    client = get_redis(decode_responses=False, blocking=True)
     try:
         while True:
             try:

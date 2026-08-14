@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from io import BytesIO
 from pathlib import Path
 from uuid import UUID
@@ -50,6 +49,7 @@ from app.modules.apps.services.app_storage_phase import (
     _WrittenBundle,
 )
 from app.modules.pod.contracts import PodRole
+from app.core.concurrency.offload import run_blocking
 
 logger = structlog.get_logger()
 
@@ -388,8 +388,8 @@ class AppService:
             # Validate the bundle up front (raises AppValidationError on a missing
             # root index.html), regardless of dedup — matches prior behavior and
             # ensures no storage write happens for an invalid bundle.
-            await asyncio.to_thread(load_app_dist_bundle, dist_archive_bytes)
-            version = await asyncio.to_thread(upload_source_sha256, dist_archive_bytes)
+            await run_blocking(load_app_dist_bundle, dist_archive_bytes)
+            version = await run_blocking(upload_source_sha256, dist_archive_bytes)
             release_root = f"releases/{version}/dist/"
             existing = await self.repository.get_release_by_version(app.id, version)
             existing_release_id = existing.id if existing is not None else None

@@ -11,7 +11,6 @@ that point the ``plan_pod_import`` worker is the only writer of the state doc.
 
 from __future__ import annotations
 
-import asyncio
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import UUID, uuid4
@@ -45,6 +44,7 @@ from app.modules.pod_bundle.infrastructure.rate_limiter import (
     get_bundle_rate_limiter,
 )
 from app.modules.pod_bundle.infrastructure.staging import BundleStagingStorage
+from app.core.concurrency.offload import run_blocking
 from app.modules.pod_bundle.infrastructure.state_store import (
     PodBundleStateStore,
     get_pod_bundle_state_store,
@@ -151,7 +151,7 @@ class ImportUseCases:
                 "The uploaded bundle exceeds the maximum allowed size."
             )
         prefix = (
-            await asyncio.to_thread(_read_prefix, data, 4)
+            await run_blocking(_read_prefix, data, 4)
             if isinstance(data, Path)
             else data[:4]
         )

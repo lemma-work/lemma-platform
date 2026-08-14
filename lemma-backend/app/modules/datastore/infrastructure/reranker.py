@@ -19,6 +19,7 @@ import httpx
 from app.core.config import reveal_secret, settings
 from app.core.log.log import get_logger
 from app.modules.datastore.domain.file_entities import DatastoreFileSearchResult
+from app.core.concurrency.offload import run_blocking
 
 logger = get_logger(__name__)
 
@@ -59,11 +60,10 @@ class LocalCrossEncoderReranker:
         if not results:
             return []
         try:
-            import anyio
 
             model = self._load_model()
             pairs = [(query, result.content or "") for result in results]
-            scores = await anyio.to_thread.run_sync(lambda: model.predict(pairs))
+            scores = await run_blocking(lambda: model.predict(pairs))
             order = sorted(
                 range(len(results)),
                 key=lambda index: float(scores[index]),

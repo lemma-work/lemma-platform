@@ -292,6 +292,18 @@ class Settings(BaseSettings):
         default=220 * 1024 * 1024,
         description="Global ASGI request-body ceiling, enforced while receiving bytes.",
     )
+    redis_read_timeout_seconds: float = Field(
+        default=5.0,
+        description=(
+            "Read timeout applied to every Redis command except those from "
+            "callers that declare themselves blocking (Pub/Sub listeners, "
+            "stream readers). Without it, a Redis that accepts the connection "
+            "and then stops answering is waited on until TCP keepalive gives "
+            "up — tens of minutes — and any lock, transaction or pooled "
+            "database connection the caller holds waits with it. Set to 0 to "
+            "disable. Env: ``REDIS_READ_TIMEOUT_SECONDS``."
+        ),
+    )
     redis_max_connections: int = Field(
         default=200,
         description="Maximum pooled Redis connections per process",
@@ -312,6 +324,26 @@ class Settings(BaseSettings):
             "this is what stops an org admin pointing a connector at the cloud "
             "metadata service or walking internal services. Self-hosted "
             "deployments running connectors against their own network turn it on."
+        ),
+    )
+    outbound_http_timeout_seconds: float = Field(
+        default=30.0,
+        description=(
+            "Total timeout for outbound aiohttp calls built through "
+            "``app.core.net.aiohttp_client``. aiohttp's own default is FIVE "
+            "MINUTES, against httpx's five seconds — so an aiohttp session with "
+            "no opinion is the dangerous one, and where the caller holds a "
+            "database session it pins a pooled connection for the whole wait. "
+            "Env: ``OUTBOUND_HTTP_TIMEOUT_SECONDS``."
+        ),
+    )
+    outbound_http_connect_timeout_seconds: float = Field(
+        default=5.0,
+        description=(
+            "Connect-phase budget for outbound aiohttp calls. Separate from the "
+            "total so a host that is simply unreachable fails fast instead of "
+            "consuming the whole budget first. Env: "
+            "``OUTBOUND_HTTP_CONNECT_TIMEOUT_SECONDS``."
         ),
     )
     outbound_http_max_keepalive: int = Field(

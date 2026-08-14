@@ -39,6 +39,7 @@ from app.modules.agent_surfaces.platforms.teams.models import (
     TeamsMessageAttachmentSnapshot,
 )
 from app.core.log.log import get_logger
+from app.core.net.aiohttp_client import new_aiohttp_session
 
 logger = get_logger(__name__)
 # Graph answers `/content` with a redirect to a pre-signed URL, so redirects have
@@ -145,7 +146,7 @@ class TeamsPlatformService:
             )
 
         try:
-            async with aiohttp.ClientSession() as session:
+            async with new_aiohttp_session() as session:
                 graph_team_id = await client.resolve_graph_team_id(
                     raw_team_id=team_id,
                     team_aad_group_id=team_aad_group_id,
@@ -256,7 +257,7 @@ class TeamsPlatformService:
             token = await client.get_graph_token(tenant_id)
             if not token:
                 return []
-            async with aiohttp.ClientSession() as session:
+            async with new_aiohttp_session() as session:
                 graph_team_id = await client.resolve_graph_team_id(
                     raw_team_id=team_id,
                     team_aad_group_id=getattr(meta, "team_aad_group_id", None),

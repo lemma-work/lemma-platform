@@ -8,7 +8,6 @@ import tempfile
 from typing import Any
 
 import aiohttp
-import anyio
 
 from app.core.concurrency.offload import run_blocking
 from app.modules.datastore.config import datastore_settings
@@ -213,7 +212,7 @@ class KreuzbergHelper:
 
         async def _probe(path: str) -> bool:
             try:
-                pages_sampled, total_chars = await anyio.to_thread.run_sync(probe, path)
+                pages_sampled, total_chars = await run_blocking(probe, path)
             except Exception:
                 logger.debug(
                     "datastore.kreuzberg_helper.pdfium_ocr_probe_defaulting_native.observed",

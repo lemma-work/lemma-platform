@@ -14,6 +14,7 @@ from typing import Any
 
 from fastapi import Request
 from python_multipart.multipart import MultipartParser, parse_options_header
+from app.core.concurrency.offload import run_blocking
 
 from app.core.api.uploads import (
     SNIFF_PREFIX_BYTES,
@@ -382,8 +383,8 @@ async def stream_multipart_form(
         async for chunk in request.stream():
             await coordinator.reserve(len(chunk))
             reserved += len(chunk)
-            await asyncio.to_thread(parser.write, chunk)
-        await asyncio.to_thread(parser.finalize)
+            await run_blocking(parser.write, chunk)
+        await run_blocking(parser.finalize)
         collector.validate_required()
         yield collector.form
     finally:

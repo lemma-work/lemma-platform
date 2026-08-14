@@ -23,6 +23,7 @@ from app.core.request_context import correlation_headers
 from app.modules.schedule.domain.interfaces import SchedulerService
 from app.modules.schedule.domain.schedule import ScheduleEntity, ScheduleType
 from app.modules.schedule.config import schedule_settings
+from app.core.net.aiohttp_client import new_aiohttp_session
 from app.modules.schedule.services.time_schedule_policy import (
     validate_time_schedule_config,
 )
@@ -114,7 +115,7 @@ class SchedulerAPIClient(SchedulerService):
 
     async def __aenter__(self):
         """Async context manager entry."""
-        self._session = aiohttp.ClientSession()
+        self._session = new_aiohttp_session()
         self._managed_session = True
         return self
 
@@ -158,7 +159,7 @@ class SchedulerAPIClient(SchedulerService):
             return await self._make_request(self._session, method, url, json_data)
 
         # Otherwise, create a temporary session for this request
-        async with aiohttp.ClientSession() as session:
+        async with new_aiohttp_session() as session:
             return await self._make_request(session, method, url, json_data)
 
     async def _make_request(

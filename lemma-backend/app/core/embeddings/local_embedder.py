@@ -6,12 +6,12 @@ from pathlib import Path
 from threading import Lock
 from typing import Any, List
 
-import anyio
 from filelock import FileLock
 
 from app.core.config import settings
 from app.core.embeddings.embeddings import Embedder
 from app.core.log.log import get_logger
+from app.core.concurrency.offload import run_blocking
 
 logger = get_logger(__name__)
 
@@ -63,7 +63,7 @@ class FastEmbedLocalEmbedder(Embedder):
         vectors: List[List[float]] = []
         for start in range(0, len(pending), slice_size):
             chunk = pending[start : start + slice_size]
-            vectors.extend(await anyio.to_thread.run_sync(self._encode_batch, chunk))
+            vectors.extend(await run_blocking(self._encode_batch, chunk))
         return vectors
 
     def _threading_kwargs(self) -> dict[str, int]:

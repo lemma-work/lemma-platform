@@ -18,6 +18,7 @@ from app.modules.function.domain.entities import (
 )
 from app.modules.function.domain.errors import FunctionValidationError
 from app.modules.function.domain.ports import FunctionStorageFactoryPort
+from app.core.concurrency.offload import run_blocking
 
 
 FUNCTION_PYTHON_VERSION = "3.14"
@@ -96,7 +97,7 @@ class FunctionArtifactBuilder:
         python_packages: tuple[str, ...],
     ) -> FunctionArtifact:
         header = parse_runtime_header(code)
-        build_root = Path(await asyncio.to_thread(tempfile.mkdtemp, prefix="lemma-fn-"))
+        build_root = Path(await run_blocking(tempfile.mkdtemp, prefix="lemma-fn-"))
         try:
             dependency_lock = await self._build_dependencies(
                 build_root, python_packages
@@ -113,7 +114,7 @@ class FunctionArtifactBuilder:
                     "site-packages" if python_packages else None
                 ),
             )
-            archive = await asyncio.to_thread(
+            archive = await run_blocking(
                 self._archive,
                 build_root,
                 code,
@@ -128,7 +129,7 @@ class FunctionArtifactBuilder:
                 revision_hash=revision_hash,
             )
         finally:
-            await asyncio.to_thread(shutil.rmtree, build_root, True)
+            await run_blocking(shutil.rmtree, build_root, True)
 
     async def _build_dependencies(
         self, root: Path, packages: tuple[str, ...]
@@ -137,7 +138,7 @@ class FunctionArtifactBuilder:
             return ()
         requirements = root / "requirements.in"
         lock = root / "requirements.lock"
-        await asyncio.to_thread(
+        await run_blocking(
             requirements.write_text,
             "\n".join(packages) + "\n",
             "utf-8",
@@ -173,7 +174,7 @@ class FunctionArtifactBuilder:
         )
         lines = tuple(
             line.strip()
-            for line in (await asyncio.to_thread(lock.read_text, "utf-8")).splitlines()
+            for line in (await run_blocking(lock.read_text, "utf-8")).splitlines()
             if line.strip() and not line.startswith("#")
         )
         return lines

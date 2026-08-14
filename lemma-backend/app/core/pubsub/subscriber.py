@@ -43,7 +43,7 @@ class RedisStreamReader:
         instead of relying on ``"$"`` being evaluated at the first blocking
         ``xread``.
         """
-        redis = get_redis(decode_responses=False)
+        redis = get_redis(decode_responses=False, blocking=True)
         try:
             info = await redis.xinfo_stream(self.channel_or_stream)
         except Exception:
@@ -61,7 +61,7 @@ class RedisStreamReader:
         Pass a concrete id (e.g. the last id a client saw) to resume and replay
         missed entries.
         """
-        redis = get_redis(decode_responses=False)
+        redis = get_redis(decode_responses=False, blocking=True)
         last_id: Any = start_id
         while True:
             streams = await redis.xread(
