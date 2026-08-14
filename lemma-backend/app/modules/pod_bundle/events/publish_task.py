@@ -149,16 +149,18 @@ def _operation_runner(
     user_id: UUID,
 ):
     async def run(operation_name: str, payload: dict) -> dict:
+        from app.composition.pod_bundle_resources import (
+            build_connector_operation_service,
+        )
+
+        # Phase 1 (short scope): authorize and resolve the execution plan,
+        # including credentials. Exiting the scope commits any OAuth-token
+        # refresh and returns the connection to the pool.
         async with uow_scope(worker_ctx.uow_factory) as uow:
             actor = await AuthorizationDataService(uow.session).build_user_context(
                 user_id=user_id, pod_id=pod_id
             )
-            from app.composition.pod_bundle_resources import (
-                build_connector_operation_service,
-            )
-
-            service = build_connector_operation_service(uow)
-            response = await service.execute_operation(
+            resolved = await build_connector_operation_service(uow).resolve_execution(
                 connector_id="github",
                 operation_name=operation_name,
                 payload=payload,
@@ -166,6 +168,19 @@ def _operation_runner(
                 actor=actor,
                 account_id=state.account_id,
             )
+
+        # Phase 2: the GitHub round trip, with NO pooled connection held. This
+        # matters more here than at most call sites: ``_create_blobs`` runs up
+        # to ``_BLOB_CONCURRENCY`` of these at once, so holding the connection
+        # across the call meant one publish could occupy eight connections of a
+        # pool of ten for the length of eight HTTP requests. ``execute_resolved``
+        # issues no DB I/O, so the short scope below never checks a connection
+        # out across the call -- it only supplies the service collaborator.
+        async with uow_scope(worker_ctx.uow_factory) as uow:
+            response = await build_connector_operation_service(uow).execute_resolved(
+                resolved
+            )
+
         if hasattr(response, "model_dump"):
             return response.model_dump()
         return response if isinstance(response, dict) else {}

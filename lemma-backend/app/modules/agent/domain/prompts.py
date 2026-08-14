@@ -102,6 +102,7 @@ def build_agent_instructions(
     conversation: Conversation,
     ctx: AgentContext,
     include_toolset_prompts: bool = True,
+    runs_as_remote_process: bool = False,
 ) -> str:
     """Compose the full system prompt for an agent run.
 
@@ -112,6 +113,12 @@ def build_agent_instructions(
     folded in here. The in-process LEMMA harness passes ``False`` because those
     fragments are contributed by the matching pydantic-ai capabilities instead;
     remote harnesses keep ``True`` since they have no capability layer.
+
+    ``runs_as_remote_process`` says this run is a coding agent executing as a
+    real OS process on somebody's own computer, rather than inside the
+    workspace sandbox. It changes what the working-directory section has to
+    say, because such an agent has *two* directories and `pwd` answers with the
+    wrong one.
     """
 
     if conversation.is_pod_assistant:
@@ -143,8 +150,24 @@ def build_agent_instructions(
     # can't live in a static fragment. Inject it here so BOTH harnesses (in-process
     # passes include_toolset_prompts=False; remote passes True) and BOTH agent types
     # (pod-default + user) get told their cwd whenever they can run workspace tools.
-    if AgentToolset.WORKSPACE_CLI in enabled:
-        sections.append(_workspace_directory_section(ctx=ctx, conversation=conversation))
+    #
+    # `runs_as_remote_process` widens that to every Agent Host run, whether or
+    # not it has workspace tools. A remote harness is a coding agent running as
+    # a real OS process on somebody's Mac, and its *own* cwd is a Lemma scratch
+    # directory that has nothing to do with the workspace. Left unsaid, the
+    # agent believes the empty directory it was started in is the workspace --
+    # which is exactly what "we want to build this on lemma (but locally)"
+    # walked into. The in-process harness has no such second directory, so it
+    # only needs this when it can act on it.
+    if AgentToolset.WORKSPACE_CLI in enabled or runs_as_remote_process:
+        sections.append(
+            _workspace_directory_section(
+                ctx=ctx,
+                conversation=conversation,
+                has_workspace_tools=AgentToolset.WORKSPACE_CLI in enabled,
+                runs_as_remote_process=runs_as_remote_process,
+            )
+        )
 
     if agent.instruction.strip():
         sections.append("# Agent Instructions\n" + agent.instruction.strip())
@@ -208,8 +231,24 @@ def _workspace_directory_section(
     *,
     ctx: AgentContext,
     conversation: Conversation,
+    has_workspace_tools: bool = True,
+    runs_as_remote_process: bool = False,
 ) -> str:
     cwd = _workspace_cwd(ctx, conversation)
+    if not has_workspace_tools:
+        # A remote harness with no workspace toolset. It still has a local
+        # process directory that looks exactly like a working directory, so the
+        # only useful thing to say is that it is not one.
+        return (
+            "# Working Directory\n"
+            "The directory this process started in is scratch space belonging "
+            "to Lemma, not a workspace. It is not backed up, nobody else can "
+            "see it, and it is swept once this conversation goes quiet.\n\n"
+            "You have no workspace tools on this run, so there is nowhere to "
+            "run commands or keep files. Do the work in your reply. If the task "
+            "genuinely needs a shell or a filesystem, say so rather than using "
+            "the machine you are running on."
+        )
     repo = _workspace_repo(ctx)
     orientation = (
         _project_paragraph(repo)
@@ -222,10 +261,34 @@ def _workspace_directory_section(
             "the workspace was recreated."
         )
     )
+    # For a remote harness the sentence "your working directory is X" is not
+    # only informative, it is a correction: the agent is a real OS process and
+    # `pwd` will answer with something else entirely. Naming both, and saying
+    # which one is real, is the whole point.
+    where = (
+        (
+            f"Your working directory is `{cwd}`, and you reach it **only "
+            "through the Lemma tools** — `exec_command`, `execute_python` and "
+            "the file tools. That is the workspace: a sandbox Lemma runs for "
+            "this conversation.\n\n"
+            "It is **not** the directory this process started in. `pwd` will "
+            "answer with a Lemma scratch directory on somebody's own computer: "
+            "it is swept, nobody can see it, and nothing you leave there is "
+            "part of the conversation. Do not read or write anywhere else on "
+            "that machine either — not the home directory, not a project "
+            "folder, not even one the user names. If they ask for work on a "
+            "local folder, say you work in the Lemma workspace and offer to do "
+            "it there."
+        )
+        if runs_as_remote_process
+        else (
+            f"Your working directory is `{cwd}`. Files you write here are "
+            "private to you until you upload them to pod files."
+        )
+    )
     return (
         "# Working Directory\n"
-        f"Your working directory is `{cwd}`. Files you write here are private "
-        "to you until you upload them to pod files.\n\n"
+        f"{where}\n\n"
         f"{orientation}\n\n"
         "Files under `/workspace` survive an idle pause; running processes and "
         "your `execute_python` kernel do not, so don't plan around a background "

@@ -6,7 +6,6 @@ provider profile need it, and neither needs the rest of that module.
 
 from __future__ import annotations
 
-import asyncio
 import ipaddress
 import socket
 from dataclasses import dataclass
@@ -16,6 +15,7 @@ import httpx
 
 from app.core.config import settings
 from app.core.log.log import get_logger
+from app.core.concurrency.offload import run_blocking
 from app.modules.agent.domain.runtime_profiles import (
     RuntimeModelCapability,
     RuntimeModelCatalogEntry,
@@ -162,7 +162,9 @@ async def _validate_public_base_url(url: str) -> None:
         candidates.append(host)
     except ValueError:
         try:
-            infos = await asyncio.to_thread(socket.getaddrinfo, host, None)
+            infos = await run_blocking(
+                socket.getaddrinfo, host, None, limiter="external_http"
+            )
         except OSError as exc:
             raise ValueError(_PUBLIC_URL_ERROR) from exc
         candidates.extend(info[4][0] for info in infos)

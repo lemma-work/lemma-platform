@@ -71,6 +71,14 @@ pub struct ManagedRuntimeImages {
     pub postgres: String,
     pub redis: String,
     pub supertokens: String,
+    /// The sandbox images, warmed at start rather than on first use.
+    ///
+    /// Optional because a host pack written before this carries neither, and a
+    /// missing warm-up is a slower first run rather than a broken install.
+    #[serde(default)]
+    pub workspace: Option<String>,
+    #[serde(default)]
+    pub function: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

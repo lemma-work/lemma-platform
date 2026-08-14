@@ -30,15 +30,24 @@ reached, which converts a brief burst into failed commands. Only
 these clients use: a caller queues for up to ``_POOL_WAIT_SECONDS`` and only
 then fails.
 
-Connect timeouts are set here for everyone. Read timeouts are opt-in per
-caller, because redis-py applies ``socket_timeout`` to *every* read including
-the indefinite one Pub/Sub's ``listen()`` performs — a global value would tear
-down and resubscribe the realtime multiplexer on every idle interval. Callers
-that never block, or that block for a bounded window well inside the value they
-ask for, pass ``socket_timeout`` and get their own pool. They should: a Redis
-that accepts the connection and then stops answering otherwise waits for TCP
-keepalive to give up, which is tens of minutes, and any lock or transaction the
-caller is holding waits with it.
+Connect timeouts are set here for everyone, and so are read timeouts — but the
+read timeout used to be opt-in, and exactly one of the forty-odd call sites
+opted in. Everything else, including every cache on the request path, would wait
+for TCP keepalive to give up if Redis accepted the connection and then stopped
+answering. That is tens of minutes, and any lock, transaction or pooled database
+connection the caller is holding waits with it.
+
+The reason it was opt-in is real: redis-py applies ``socket_timeout`` to *every*
+read, including the indefinite one Pub/Sub's ``listen()`` performs, so a global
+value would tear down and resubscribe the realtime multiplexer on every idle
+interval. But that makes the safe choice the one you have to remember, which is
+how thirty-nine call sites ended up unbounded.
+
+So the default is inverted. Callers get a read timeout unless they declare
+themselves ``blocking=True``, which is true of exactly four things: Pub/Sub
+listeners, the streaq/FastStream stream readers, and the realtime multiplexer.
+Those hold a connection for their whole duration by design and must not be
+interrupted; everything else is a command that should answer promptly or fail.
 """
 
 from __future__ import annotations
@@ -64,8 +73,17 @@ def get_redis(
     decode_responses: bool = True,
     url: str | None = None,
     socket_timeout: float | None = None,
+    blocking: bool = False,
 ) -> Redis:
-    """Return the shared client for these settings, creating it on first use."""
+    """Return the shared client for these settings, creating it on first use.
+
+    ``blocking=True`` is for callers that hold a connection open waiting for the
+    server to say something — Pub/Sub ``listen()``, ``XREAD BLOCK``. They get no
+    read timeout, because for them a silent connection is the normal state.
+    Everything else gets ``redis_read_timeout_seconds``.
+    """
+    if socket_timeout is None and not blocking:
+        socket_timeout = settings.redis_read_timeout_seconds or None
     key = (url or settings.redis_url, decode_responses, socket_timeout)
     client = _clients.get(key)
     if client is None:

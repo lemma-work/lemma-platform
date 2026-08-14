@@ -372,3 +372,50 @@ def test_capacity_exhaustion_reports_pre_execution_failure() -> None:
         "Function sandbox unavailable "
         "(provider active sandbox capacity is exhausted)"
     )
+
+
+def test_terminal_logs_redacts_a_secret_that_straddles_the_size_limit():
+    """Trimming before redacting must not let a credential survive the cut.
+
+    The whole point of trimming first is to stop thirteen regex passes running
+    over megabytes nobody keeps. That is only safe because the slice carries a
+    margin past the limit, so a secret sitting on the boundary is still inside
+    the window the patterns ran over. Without the margin its tail would be
+    trimmed away and its head kept, in the clear.
+    """
+    from types import SimpleNamespace
+
+    from app.core.redaction import REDACTED
+    from app.modules.function.application.function_dispatcher import (
+        _LOG_LIMIT_BYTES,
+        FunctionDispatcher,
+    )
+
+    secret = "Authorization: Bearer sk-livetokenvalue1234567890abcdefghijklmnop"
+    # Land the secret so it begins just before the limit and ends after it.
+    filler = "x" * (_LOG_LIMIT_BYTES - 20)
+    request = SimpleNamespace(
+        stdout=filler + secret + ("y" * 1024),
+        stderr=None,
+        output_truncated=False,
+    )
+
+    logs = FunctionDispatcher._terminal_logs(request)
+
+    assert logs is not None
+    # The property that matters: no part of the credential survives. The
+    # [REDACTED] marker itself may fall past the final cut, because redaction
+    # shortens the text and shifts everything after it left — that is fine, and
+    # asserting on the marker would be asserting on arithmetic rather than on
+    # the secret.
+    assert "sk-livetokenvalue" not in logs
+    assert len(logs) <= _LOG_LIMIT_BYTES
+
+    # And a secret comfortably inside the limit is replaced, marker and all.
+    inside = SimpleNamespace(
+        stdout=f"start\n{secret}\nend", stderr=None, output_truncated=False
+    )
+    redacted = FunctionDispatcher._terminal_logs(inside)
+    assert redacted is not None
+    assert "sk-livetokenvalue" not in redacted
+    assert REDACTED in redacted

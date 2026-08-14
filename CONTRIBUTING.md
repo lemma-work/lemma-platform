@@ -21,6 +21,17 @@ make dev         # infra + backend + frontend
 `make help` lists everything else. The dev stack uses ports 3710 (frontend) and
 8710 (backend).
 
+### Toolchain versions
+
+Node is pinned by [`.nvmrc`](.nvmrc) at the repo root, and that file is the only
+place the version is written. `nvm use` (or `fnm use`, or any tool that reads
+`.nvmrc`) picks it up; CI reads the same file through `node-version-file`, both
+`package.json` files declare it under `engines`, and the frontend Dockerfile
+builds on the matching image. Change it in one place and everything follows.
+
+Python is 3.14 for the backend, managed by `uv`; Rust follows the toolchain the
+desktop workspace pins.
+
 ## Find the right component
 
 Each component has its own setup and its own checks. Run the ones you touched.

@@ -17,7 +17,6 @@ from contextlib import suppress
 import asyncio
 from typing import TYPE_CHECKING
 
-import aiohttp
 
 from app.core.log.log import get_logger
 from app.modules.agent_surfaces.api.schemas import SurfaceReach
@@ -26,6 +25,7 @@ from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
     SurfacePlatform,
 )
+from app.core.net.aiohttp_client import new_aiohttp_session
 from app.modules.agent_surfaces.platforms.teams.client import (
     GRAPH_BASE,
     auth_headers,
@@ -162,7 +162,7 @@ class SurfaceReachResolver:
                         f"{GRAPH_BASE}/servicePrincipals(appId='{app_id}')"
                         "?$select=displayName"
                     )
-                    async with aiohttp.ClientSession() as session:
+                    async with new_aiohttp_session() as session:
                         async with session.get(
                             url, headers=auth_headers(token)
                         ) as response:

@@ -16,6 +16,9 @@ from app.modules.schedule.scheduler.api.scheduler_controller import (
     router as scheduler_router,
 )
 from app.modules.schedule.scheduler.internal_auth import get_internal_token
+from app.core.observability.connection_scope import (
+    start_connection_scope_monitor_from_settings,
+)
 from app.modules.schedule.scheduler.scheduler_service import get_scheduler_service
 from app.core.config import settings
 from app.core.log.log import setup_logging, get_logger, validate_release_identity
@@ -55,6 +58,7 @@ async def lifespan(app: FastAPI):
         log_level=settings.log_level,
     )
     validate_release_identity(settings.environment)
+    start_connection_scope_monitor_from_settings(service_name="lemma-scheduler")
     # Split from the backend, the two processes cannot agree on a token minted
     # at startup, so an operator has to supply one. Refuse to serve the job API
     # without it rather than expose the control plane unauthenticated.

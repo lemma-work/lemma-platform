@@ -41,6 +41,24 @@ def _sdk_call_target(node: ast.Call) -> str | None:
     return f"{root.id}.{namespace.attr}.{func.attr}"
 
 
+# Building the client is not free either: it reads config, builds an httpx
+# client, and imports the SDK's lazy namespaces on first use — 76ms cold, 4ms
+# warm. Only the METHOD calls were guarded, so every call site constructed its
+# client on the loop and then carefully offloaded the cheap part.
+_SDK_CONSTRUCTORS = {"Composio"}
+_SDK_FACTORIES = {"_composio_client_factory", "composio_client_factory"}
+
+
+def _sdk_construction_target(node: ast.Call) -> str | None:
+    """Return the name if this call BUILDS an SDK client."""
+    func = node.func
+    if isinstance(func, ast.Name) and func.id in _SDK_CONSTRUCTORS:
+        return f"{func.id}()"
+    if isinstance(func, ast.Attribute) and func.attr in _SDK_FACTORIES:
+        return f"{func.attr}()"
+    return None
+
+
 def _calls_on_the_event_loop(tree: ast.AST) -> list[ast.Call]:
     """Calls whose *nearest enclosing function* is an ``async def``.
 
@@ -84,7 +102,7 @@ def test_composio_sdk_is_never_called_on_the_event_loop(path: Path) -> None:
         f"{path.name}:{node.lineno}: {target} runs on the event loop; "
         f"wrap it in run_blocking(limiter='external_http')"
         for node in _calls_on_the_event_loop(tree)
-        if (target := _sdk_call_target(node))
+        if (target := _sdk_call_target(node) or _sdk_construction_target(node))
     ]
     assert not violations, "\n".join(violations)
 

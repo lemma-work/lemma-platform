@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import json
 import mimetypes
 from typing import Any
 
@@ -36,10 +37,23 @@ from app.modules.agent_surfaces.platforms.composio_email import (
     is_composio_credentials,
 )
 from app.modules.agent_surfaces.platforms.outlook.parser import OutlookMessageParser
+from app.core.concurrency.offload import run_blocking
 
 _GRAPH_API_BASE = "https://graph.microsoft.com"
 _OUTLOOK_APP_ID = "outlook"
 
+
+
+def _decode_graph_attachment(raw: bytes) -> bytes:
+    """Parse a Graph attachment response and decode its payload, off the loop."""
+    payload = json.loads(raw)
+    content_bytes = str((payload or {}).get("contentBytes") or "").strip()
+    if not content_bytes:
+        raise ValueError(
+            "Outlook attachment response did not include contentBytes. "
+            "Linked or non-file attachments are not supported by this tool."
+        )
+    return base64.b64decode(content_bytes.encode("ascii"))
 
 class OutlookPlatformService:
     def __init__(self, credentials: dict[str, Any]):
@@ -296,15 +310,13 @@ class OutlookPlatformService:
                 headers={"Authorization": f"Bearer {self._access_token}"},
             )
             response.raise_for_status()
-            payload = response.json()
+            raw = response.content
 
-        content_bytes = str((payload or {}).get("contentBytes") or "").strip()
-        if not content_bytes:
-            raise ValueError(
-                "Outlook attachment response did not include contentBytes. "
-                "Linked or non-file attachments are not supported by this tool."
-            )
-        return base64.b64decode(content_bytes.encode("ascii"))
+        # Graph returns the file base64-encoded INSIDE the JSON body, so a 50 MB
+        # attachment arrives as ~67 MB of JSON. Parsing that and then decoding
+        # the base64 is CPU proportional to the attachment, and both halves ran
+        # on the event loop.
+        return await run_blocking(_decode_graph_attachment, raw, limiter="cpu_bound")
 
     async def download_attachment_bytes(
         self,

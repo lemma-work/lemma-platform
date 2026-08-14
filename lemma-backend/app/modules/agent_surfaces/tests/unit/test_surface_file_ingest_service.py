@@ -198,3 +198,46 @@ def test_safe_file_name_strips_paths_and_falls_back():
     assert _safe_file_name("a/b/c.txt") == "c.txt"
     assert _safe_file_name("") == "attachment"
     assert _safe_file_name(None) == "attachment"
+
+
+async def test_the_connection_is_released_before_every_attachment_download():
+    """One release per attachment, each before its download.
+
+    The loop runs inside a transaction that has already written rows, and each
+    attachment is up to 50 MB fetched over a 60s-timeout HTTP call. Holding the
+    connection across that pins it — and the row locks — for the whole
+    download, once per attachment.
+
+    An ordering assertion, not a timing one: the fake adapter returns instantly
+    and always will, so only the sequence can carry the property.
+    """
+    service = _service()
+    adapter = _FakeAdapter(
+        results={
+            "a1": (b"hello", "report.pdf", "application/pdf"),
+            "a2": (b"world!!", "data.csv", "text/csv"),
+        }
+    )
+    order: list[str] = []
+
+    class _RecordingAdapter:
+        async def download_attachment(self, **kwargs):
+            order.append("download")
+            return await adapter.download_attachment(**kwargs)
+
+    async def _release() -> None:
+        order.append("release")
+
+    await service._ingest_all(
+        adapter=_RecordingAdapter(),
+        pod_id=uuid4(),
+        platform="TELEGRAM",
+        parsed=_event([{"file_id": "a1"}, {"file_id": "a2"}]),
+        credentials={},
+        file_service=_FakeFileService(),
+        ctx=SimpleNamespace(),
+        attachments=[{"file_id": "a1"}, {"file_id": "a2"}],
+        release=_release,
+    )
+
+    assert order == ["release", "download", "release", "download"]

@@ -9,6 +9,7 @@ This file necessarily *mentions* every forbidden symbol, so it excludes itself
 from the scan rather than obfuscating the strings.
 """
 
+import re
 from pathlib import Path
 
 
@@ -44,10 +45,23 @@ FORBIDDEN_REFERENCES = (
 )
 
 
+# Adjacent string literals, which Python concatenates at compile time. A
+# reference split across two of them reads as one dotted path to the
+# interpreter and as two harmless fragments to a substring scan — which is
+# exactly how a stale `monkeypatch.setattr` target for a deleted module
+# survived this ratchet until a real-execution e2e run tripped over it.
+_LITERAL_SEAM = re.compile(r"""["']\s*\n?\s*["']""")
+
+
+def _joined(source: str) -> str:
+    """Source with implicit string concatenation closed up."""
+    return _LITERAL_SEAM.sub("", source)
+
+
 def _scanned_sources() -> list[tuple[Path, str]]:
     this_file = Path(__file__).resolve()
     return [
-        (path, path.read_text())
+        (path, _joined(path.read_text()))
         for path in APP_ROOT.rglob("*.py")
         if "__pycache__" not in path.parts and path.resolve() != this_file
     ]

@@ -11,8 +11,6 @@ import {
 // back to a conversation you had just been reading meant a blank frame, a
 // skeleton, and a refetch of messages that had been in memory a moment earlier.
 // These cases pin the retention window that replaced it.
-//
-// See docs/design/conversation-messages.md.
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 

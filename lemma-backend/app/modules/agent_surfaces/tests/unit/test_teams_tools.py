@@ -104,7 +104,10 @@ class _FakeSession:
 
 
 def _session_factory(planned: list[_PlannedResponse], calls: list[dict]):
-    def _factory():
+    # Accepts whatever the real constructor is given — production builds its
+    # sessions through ``new_aiohttp_session``, which always passes a timeout.
+    def _factory(*args, **kwargs):
+        del args, kwargs
         return _FakeSession(planned, calls)
 
     return _factory

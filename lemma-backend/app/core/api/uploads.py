@@ -10,11 +10,11 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
-import asyncio
 
 from fastapi import UploadFile
 
 from app.core.domain.errors import PayloadTooLargeError
+from app.core.concurrency.offload import run_blocking
 
 
 UPLOAD_CHUNK_BYTES = 1024 * 1024
@@ -66,7 +66,7 @@ class StagedUpload:
     prefix: bytes
 
     async def read_bytes(self) -> bytes:
-        return await asyncio.to_thread(self.path.read_bytes)
+        return await run_blocking(self.path.read_bytes)
 
 
 @dataclass(slots=True)
@@ -150,13 +150,13 @@ async def stage_upload_limited(
                 path = _new_staging_path()
                 buffered = b"".join(chunks)
                 chunks.clear()
-                await asyncio.to_thread(path.write_bytes, buffered + chunk)
+                await run_blocking(path.write_bytes, buffered + chunk)
             else:
-                await asyncio.to_thread(_append_bytes, path, chunk)
+                await run_blocking(_append_bytes, path, chunk)
 
         if path is None:
             path = _new_staging_path()
-            await asyncio.to_thread(path.write_bytes, b"".join(chunks))
+            await run_blocking(path.write_bytes, b"".join(chunks))
         yield StagedUpload(
             path=path,
             size=size,
@@ -166,4 +166,4 @@ async def stage_upload_limited(
     finally:
         await upload.close()
         if path is not None:
-            await asyncio.to_thread(path.unlink, missing_ok=True)
+            await run_blocking(path.unlink, missing_ok=True)
