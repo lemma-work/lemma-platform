@@ -39,6 +39,7 @@ from app.core.infrastructure.events.outbox import outbox_dispatcher_lifespan
 from app.core.infrastructure.events.stream_observability import (
     redis_stream_snapshot_loop,
 )
+from app.core.observability.backlog_gauges import backlog_gauge_loop
 from app.core.infrastructure.jobs.streaq_job_queue import (
     SharedStreaqJobQueue,
     close_streaq_job_queue,
@@ -548,6 +549,16 @@ async def worker_lifespan() -> AsyncGenerator[AppWorkerContext]:
         redis_stream_snapshot_loop(get_message_bus()),
         name="redis-stream-snapshot",
     )
+    # Runs on the worker only: it is the process that owns the queues, and one
+    # sampler is enough -- lane depth and pending-row counts are properties of
+    # the shared Redis and database, not of the sampling process.
+    backlog_gauge_task = create_background_task(
+        backlog_gauge_loop(
+            async_session_maker,
+            interval_seconds=settings.backlog_gauge_interval_seconds,
+        ),
+        name="backlog-gauges",
+    )
 
     started = False
     global _primary_lane_context
@@ -584,6 +595,7 @@ async def worker_lifespan() -> AsyncGenerator[AppWorkerContext]:
             watchdog_task,
             heartbeat_task,
             stream_snapshot_task,
+            backlog_gauge_task,
         ):
             if background_task is not None and not background_task.done():
                 background_task.cancel()

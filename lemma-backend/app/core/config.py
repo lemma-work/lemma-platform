@@ -967,6 +967,33 @@ class Settings(BaseSettings):
     )
     function_api_deadline_seconds: int = Field(default=120, ge=1, le=3600)
     function_job_deadline_seconds: int = Field(default=600, ge=1, le=3_000)
+    function_run_retention_days: int = Field(
+        default=30,
+        ge=1,
+        description=(
+            "How long a terminal function run is kept. Runs carry their whole "
+            "input and output payload plus captured logs, so this table grows "
+            "faster in bytes than in rows, and until this existed nothing ever "
+            "removed one. Longer than the event-delivery window because these "
+            "rows are user-visible run history, not delivery receipts."
+        ),
+    )
+    function_run_retention_batch_size: int = Field(
+        default=1_000,
+        ge=1,
+        le=10_000,
+        description="Rows removed per transaction by the function-run sweep.",
+    )
+    function_run_retention_budget_seconds: float = Field(
+        default=45.0,
+        ge=0.0,
+        description=(
+            "Wall-clock budget for one function-run retention sweep. Deletes "
+            "run in batches until drained or the budget is spent, so a backlog "
+            "clears over successive runs rather than never. Zero disables the "
+            "sweep entirely."
+        ),
+    )
     function_runtime_gateway_url: Optional[str] = Field(
         default=None,
         description="Backend URL reachable from function sandboxes",
@@ -1088,6 +1115,17 @@ class Settings(BaseSettings):
         description=(
             "Deprecated compatibility selector. Standard OTEL_*_EXPORTER variables "
             "take precedence; missing or empty legacy selection means traces-only."
+        ),
+    )
+    backlog_gauge_interval_seconds: float = Field(
+        default=60.0,
+        ge=0.0,
+        description=(
+            "How often the worker samples queue depth and pending event-table "
+            "rows for the backlog gauges. Matching the metric export interval "
+            "is the useful floor -- sampling faster only costs queries, since "
+            "the exporter reports the latest reading either way. Zero disables "
+            "the sampler. Env: ``BACKLOG_GAUGE_INTERVAL_SECONDS``."
         ),
     )
     observability_metrics_export_interval_millis: int = Field(

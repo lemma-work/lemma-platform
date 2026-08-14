@@ -51,6 +51,11 @@ def get_datastore_engine():
             json_serializer=lambda obj: json.dumps(obj, default=_json_serial),
             pool_pre_ping=True,
             connect_args=connect_args,
+            # Distinguishes this pool from the primary one in the connection
+            # metrics. When both point at the same database the two pools are
+            # otherwise indistinguishable, and their readings sum into a single
+            # meaningless series.
+            pool_logging_name="datastore",
             **engine_kwargs,
         )
     return _engine
