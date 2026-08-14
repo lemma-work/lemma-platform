@@ -167,6 +167,23 @@ pub struct LemmaMcpEndpoint {
     deletes: Arc<Mutex<Vec<Option<String>>>>,
     transport: McpTransport,
     accepted: Arc<Mutex<Vec<String>>>,
+    scripted: Arc<Mutex<Vec<ScriptedFailure>>>,
+}
+
+/// A failure to serve instead of the next real answer.
+///
+/// The endpoint could not fail at all before this: it answered 200, 202, or
+/// 401 and nothing else, so the bridge's own behaviour on a restarting backend
+/// -- the case that took every Lemma tool away from a running agent -- had no
+/// way to be exercised.
+#[derive(Clone, Debug)]
+pub enum ScriptedFailure {
+    /// Answer with this HTTP status and no useful body.
+    Status(StatusCode),
+    /// Answer 200 with a JSON-RPC error, the shape a dead run token really
+    /// takes: Lemma authorizes inside the handler, so the refusal never
+    /// reaches the status line.
+    Unauthorized,
 }
 
 /// Which of the two wire shapes the bridge must cope with. Lemma mounts
@@ -189,6 +206,7 @@ struct McpState {
     /// credential is rotated in flight, and a real Lemma accepts the
     /// replacement it just issued alongside the one still in use.
     accepted: Arc<Mutex<Vec<String>>>,
+    scripted: Arc<Mutex<Vec<ScriptedFailure>>>,
 }
 
 impl LemmaMcpEndpoint {
@@ -198,11 +216,13 @@ impl LemmaMcpEndpoint {
         let requests = Arc::new(Mutex::new(Vec::new()));
         let deletes = Arc::new(Mutex::new(Vec::new()));
         let accepted = Arc::new(Mutex::new(vec![format!("Bearer {MCP_BEARER}")]));
+        let scripted = Arc::new(Mutex::new(Vec::new()));
         let state = McpState {
             requests: Arc::clone(&requests),
             deletes: Arc::clone(&deletes),
             transport,
             accepted: Arc::clone(&accepted),
+            scripted: Arc::clone(&scripted),
         };
         let app = Router::new()
             .route(
@@ -223,7 +243,16 @@ impl LemmaMcpEndpoint {
             deletes,
             transport,
             accepted,
+            scripted,
         }
+    }
+
+    /// Fail the next calls in order, then serve normally again.
+    ///
+    /// # Panics
+    /// If the mutex is poisoned.
+    pub fn fail_next(&self, failures: impl IntoIterator<Item = ScriptedFailure>) {
+        self.scripted.lock().unwrap().extend(failures);
     }
 
     /// Also serve `authorization`, as Lemma does for a credential it has just
@@ -300,6 +329,28 @@ async fn mcp_post(
         session_id: header(&headers, "mcp-session-id"),
         accept: header(&headers, "accept"),
     });
+    let scripted = {
+        let mut scripted = state.scripted.lock().unwrap();
+        if scripted.is_empty() {
+            None
+        } else {
+            Some(scripted.remove(0))
+        }
+    };
+    match scripted {
+        Some(ScriptedFailure::Status(status)) => {
+            return (status, "scripted failure").into_response();
+        }
+        Some(ScriptedFailure::Unauthorized) => {
+            return Json(json!({
+                "jsonrpc": "2.0",
+                "id": request.get("id").cloned().unwrap_or(Value::Null),
+                "error": {"code": -32603, "message": "Unauthorized MCP token"},
+            }))
+            .into_response();
+        }
+        None => {}
+    }
     let presented = header(&headers, "authorization");
     if !state
         .accepted

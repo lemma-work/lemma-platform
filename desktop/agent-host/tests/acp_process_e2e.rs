@@ -124,6 +124,7 @@ async fn official_sdk_negotiates_probes_config_and_streams_a_prompt() {
                 scratch_directory: directory.path().join("run"),
                 mcp_server: None,
                 can_load_session: false,
+                published_config_options: Vec::new(),
                 permissions: PermissionGate::new(),
                 permission_timeout: Duration::ZERO,
                 cancel: lemma_agent_host::acp::never_cancelled(),

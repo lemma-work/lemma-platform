@@ -374,6 +374,7 @@ async fn an_unanswered_request_is_denied_when_the_timeout_elapses() {
                 scratch_directory: scratch.path().join("run"),
                 mcp_server: None,
                 can_load_session: false,
+                published_config_options: Vec::new(),
                 permissions: PermissionGate::new(),
                 permission_timeout: Duration::from_millis(300),
                 cancel: lemma_agent_host::acp::never_cancelled(),

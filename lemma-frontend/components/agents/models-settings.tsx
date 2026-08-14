@@ -29,7 +29,7 @@ import { DestructiveConfirmationDialog } from '@/components/shared/destructive-c
 import { DestructiveResourceActionItem, ResourceActionsMenu } from '@/components/shared/resource-actions-menu';
 import { SettingsList, SettingsPanel, SettingsRow, SettingsStack } from '@/components/settings/settings-kit';
 import { declineAutoConnect } from '@/lib/desktop/auto-connect';
-import { useIsDesktopShell } from '@/lib/desktop/agent-host-bridge';
+import { agentHostBridge, useIsDesktopShell } from '@/lib/desktop/agent-host-bridge';
 import {
     useAgentHostHarnesses,
     useAgentHostHarnessOwners,
@@ -42,13 +42,12 @@ import {
     type AgentHostHarness,
 } from '@/lib/hooks/use-agent-runtime';
 import { ThisComputerCard } from './this-computer-card';
+import { HarnessRow, StatusBadge } from './harness-row';
 import { HarnessProfileDialog, type HarnessDialogTarget } from './harness-profile-dialog';
 import { ProviderProfileDialog, type ProviderDialogTarget } from './provider-profile-dialog';
 import { cn } from '@/lib/utils';
 import {
     CUSTOM_PROVIDER_OPTIONS,
-    agentHostHarnessHealth,
-    agentHostHarnessModelCount,
     agentHostStatusLabel,
     isArchivedProfile,
     isDiscoveringHarnesses,
@@ -703,6 +702,19 @@ function AgentHostCard({
     const harnesses = useAgentHostHarnesses(host.id);
     // An empty list means "still looking" for as long as looking is plausible.
     const discovering = isDiscoveringHarnesses(host, harnesses.data?.items.length ?? 0);
+    // Only this computer can be asked to look again from here: the bridge talks
+    // to the Agent Host in this process, not to somebody else's laptop.
+    const onRecheckThisComputer = useCallback(() => {
+        void agentHostBridge.refresh().then(
+            () => {
+                toast.success('Rechecking the agents on this computer');
+                // The host answers on locald's event stream, so the harness
+                // list this returns was read before the re-probe finished.
+                setTimeout(() => void harnesses.refetch(), 1200);
+            },
+            (error: unknown) => toast.error(error instanceof Error ? error.message : String(error)),
+        );
+    }, [harnesses]);
     const revoke = useRevokeAgentHost();
     const [confirmDisconnect, setConfirmDisconnect] = useState(false);
     const activeRuns = host.capacity?.active_runs ?? 0;
@@ -802,6 +814,7 @@ function AgentHostCard({
                         hostOnline={online}
                         savedProfile={savedProfileByHarnessId.get(harness.id) ?? null}
                         onRefresh={onRefresh}
+                        onRecheck={isThisComputer ? onRecheckThisComputer : undefined}
                     />
                 ))}
                 {!harnesses.isLoading && !discovering && !(harnesses.data?.items.length ?? 0) ? (
@@ -822,27 +835,17 @@ function AgentHostHarnessRow({
     hostOnline,
     savedProfile,
     onRefresh,
+    onRecheck,
 }: {
     harness: AgentHostHarness;
     organizationId: string;
     hostOnline: boolean;
     savedProfile: AgentRuntimeProfileResponse | null;
     onRefresh?: () => void;
+    onRecheck?: () => void;
 }) {
     const [dialog, setDialog] = useState<HarnessDialogTarget | null>(null);
     const restore = useRestoreAgentRuntime();
-    const health = agentHostHarnessHealth(harness.health);
-    const modelCount = agentHostHarnessModelCount(harness.config_options ?? []);
-    const logo = harnessLogo(harness.harness_key);
-    // A healthy harness on an offline computer still can't take work, so say so
-    // instead of showing a green badge next to an unreachable machine.
-    const usable = health.ready && hostOnline;
-    const blockedReason = health.ready
-        ? hostOnline
-            ? null
-            : 'That computer is offline. Runs resume when Agent Host reconnects.'
-        : health.detail;
-
     const archived = savedProfile ? isArchivedProfile(savedProfile) : false;
 
     const restoreSaved = async () => {
@@ -857,73 +860,53 @@ function AgentHostHarnessRow({
     };
 
     return (
-        <div className="rounded-md bg-[var(--surface-1)] px-3 py-3">
-            <div className="flex flex-wrap items-center gap-3">
-                <span className="flex size-7 shrink-0 items-center justify-center rounded-md bg-[var(--surface-2)]">
-                    {logo ? (
-                        <Image src={logo} alt="" width={16} height={16} className="size-4 object-contain" />
-                    ) : (
-                        <TerminalSquare className="size-3.5 text-[var(--text-tertiary)]" />
-                    )}
-                </span>
-                <div className="min-w-0 flex-1">
-                    <div className="truncate text-sm font-medium text-[var(--text-primary)]">{harness.display_name}</div>
-                    <div className="text-xs text-[var(--text-tertiary)]">
-                        adapter {harness.adapter_version}
-                        {harness.upstream_version ? ` · agent ${harness.upstream_version}` : ''}
-                        {modelCount ? ` · ${modelCount} model${modelCount === 1 ? '' : 's'}` : ''}
-                    </div>
-                </div>
-                {savedProfile ? (
-                    <StatusBadge
-                        label={archived ? `Archived as ${savedProfile.name}` : `Added as ${savedProfile.name}`}
-                        tone="muted"
-                    />
-                ) : null}
-                <StatusBadge label={health.label} tone={usable ? 'ok' : 'muted'} />
-            </div>
-            {blockedReason ? <p className="mt-2 text-xs text-[var(--text-tertiary)]">{blockedReason}</p> : null}
-            {/*
-             * Offered only when the computer can actually take the profile.
-             * Creating one binds it to a live harness — the backend reads the
-             * host's config options to validate the selections — so offering
-             * this against a sleeping laptop meant taking the user through the
-             * whole dialog and then failing on save. Everything else on this
-             * row still renders while offline; only creating is withheld.
-             */}
-            {!savedProfile && usable ? (
-                <div className="mt-2">
-                    <Button
-                        type="button"
-                        size="sm"
-                        variant="quiet"
-                        className="gap-1.5 px-2"
-                        onClick={() => setDialog({ mode: 'create', harness })}
-                    >
-                        <Plus className="size-3.5" />
-                        Add to models
-                    </Button>
-                </div>
-            ) : null}
-            {archived ? (
-                <div className="mt-2">
-                    <Button
-                        type="button"
-                        size="sm"
-                        variant="quiet"
-                        className="gap-1.5 px-2"
-                        loading={restore.isPending}
-                        loadingLabel="Restoring"
-                        onClick={() => void restoreSaved()}
-                    >
-                        <RotateCcw className="size-3.5" />
-                        Restore
-                    </Button>
-                </div>
-            ) : null}
-            {harness.stale_reason ? (
-                <p className="mt-1 text-xs text-[var(--text-tertiary)]">{harness.stale_reason}</p>
-            ) : null}
+        <>
+            <HarnessRow
+                harness={harness}
+                hostOnline={hostOnline}
+                savedProfile={savedProfile ? { name: savedProfile.name, archived } : null}
+                onRecheck={onRecheck}
+                action={(usable: boolean) => {
+                    if (archived) {
+                        return (
+                            <Button
+                                type="button"
+                                size="sm"
+                                variant="quiet"
+                                className="gap-1.5 px-2"
+                                loading={restore.isPending}
+                                loadingLabel="Restoring"
+                                onClick={() => void restoreSaved()}
+                            >
+                                <RotateCcw className="size-3.5" />
+                                Restore
+                            </Button>
+                        );
+                    }
+                    /*
+                     * Offered only when the computer can actually take the
+                     * profile. Creating one binds it to a live harness — the
+                     * backend reads the host's config options to validate the
+                     * selections — so offering this against a sleeping laptop
+                     * meant taking the user through the whole dialog and then
+                     * failing on save. Everything else on the row still renders
+                     * while offline; only creating is withheld.
+                     */
+                    if (savedProfile || !usable) return null;
+                    return (
+                        <Button
+                            type="button"
+                            size="sm"
+                            variant="quiet"
+                            className="gap-1.5 px-2"
+                            onClick={() => setDialog({ mode: 'create', harness })}
+                        >
+                            <Plus className="size-3.5" />
+                            Add to models
+                        </Button>
+                    );
+                }}
+            />
 
             <HarnessProfileDialog
                 target={dialog}
@@ -931,21 +914,7 @@ function AgentHostHarnessRow({
                 onClose={() => setDialog(null)}
                 onSaved={onRefresh}
             />
-        </div>
+        </>
     );
 }
 
-function StatusBadge({ label, tone }: { label: string; tone: 'ok' | 'muted' }) {
-    return (
-        <span
-            className={cn(
-                'shrink-0 rounded-full px-2 py-0.5 text-xs font-medium',
-                tone === 'ok'
-                    ? 'bg-[var(--state-success-soft,var(--surface-1))] text-[var(--state-success,var(--text-secondary))]'
-                    : 'bg-[var(--surface-1)] text-[var(--text-tertiary)]',
-            )}
-        >
-            {label}
-        </span>
-    );
-}

@@ -402,6 +402,7 @@ async fn main() -> anyhow::Result<()> {
                         scratch_directory: scratch,
                         mcp_server: None,
                         can_load_session: false,
+                        published_config_options: Vec::new(),
                         // A local one-off run has no Lemma target to ask, so a
                         // native permission request is denied immediately
                         // rather than stalling on a prompt nobody will see.
