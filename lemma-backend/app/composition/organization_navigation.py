@@ -8,9 +8,11 @@ grew from there.
 
 So there are two shapes, deliberately not one:
 
-``load_navigation`` is the whole sidebar in a single call: every organization
-the caller belongs to and the pods within each, carrying names and ids and
-nothing else. It stays small however many organizations someone is in.
+``load_navigation`` is the whole sidebar — and the pod list behind it — in a
+single call: every organization the caller belongs to and the pods within each,
+carrying each pod's own columns and nothing that requires looking inside a pod.
+It stays small however many organizations someone is in, because it grows with
+the number of pods rather than with their contents.
 
 ``load_organization_home`` is one organization in detail — its pods with their
 apps, agents and the caller's roles. Detail is per organization on purpose: a
@@ -30,6 +32,7 @@ spans modules is allowed to be assembled.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime
 from uuid import UUID
 
 from sqlalchemy import select
@@ -51,7 +54,9 @@ from app.modules.pod.contracts import VisiblePod, list_visible_pods
 class NavigationPod:
     id: UUID
     name: str
+    description: str | None
     icon_url: str | None
+    updated_at: datetime
 
 
 @dataclass(frozen=True, slots=True)
@@ -164,7 +169,13 @@ async def load_navigation(*, session, user_id: UUID) -> list[NavigationOrganizat
             slug=membership.slug,
             role=membership.role,
             pods=[
-                NavigationPod(id=pod.id, name=pod.name, icon_url=pod.icon_url)
+                NavigationPod(
+                    id=pod.id,
+                    name=pod.name,
+                    description=pod.description,
+                    icon_url=pod.icon_url,
+                    updated_at=pod.updated_at,
+                )
                 for pod in grouped.get(membership.organization_id, [])
             ],
         )
