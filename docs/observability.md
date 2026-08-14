@@ -115,17 +115,35 @@ The backlog gauges are sampled by a loop on the **worker** and report nothing
 until the first successful sample — a gauge that reports a stale level reads as
 a healthy steady state, which is the failure these exist to catch.
 
-### HTTP client semantic conventions
+### HTTP semantic conventions
 
-`OTEL_SEMCONV_STABILITY_OPT_IN=http` is set in-process before the aiohttp and
-httpx instrumentations are installed, so all three HTTP clients in the process
-speak one vocabulary — pyqwest, which arrives transitively via `e2b` and
-`connectrpc`, already emits the stable conventions. A deployment can still pin
-the old behaviour by setting the variable itself.
+`OTEL_SEMCONV_STABILITY_OPT_IN=http/dup` is set in-process before the aiohttp
+and httpx instrumentations are installed. Those two default to the superseded
+conventions, which key outbound calls by `net.peer.name` — and that key is not
+on the metric allowlist, so every third party collapsed into one series. pyqwest
+(via `e2b` and `connectrpc`) already emits the stable conventions, so the
+process was describing the same calls two ways.
 
-This means the client metric is `http.client.request.duration` **in seconds**,
-not `http.client.duration` in milliseconds. Anything reading the old name or
-assuming milliseconds needs migrating.
+**`dup`, not `http`, and the distinction matters.** This variable is
+process-global, and the ASGI/FastAPI **server** instrumentation reads it too.
+Setting it to `http` would also rename the inbound histogram —
+`http.server.duration` (ms) → `http.server.request.duration` (s) — silently
+breaking every dashboard on request latency, which is not a change anyone asked
+for by wanting a host label on outbound calls.
+
+`dup` emits both vocabularies at once:
+
+| | old (still emitted) | new (also emitted) |
+|---|---|---|
+| client | `http.client.duration` (ms) | `http.client.request.duration` (s), with `server.address` |
+| server | `http.server.duration` (ms) | `http.server.request.duration` (s) |
+
+Nothing breaks, the new dimensions are available immediately, and dashboards
+migrate on their own schedule. The cost is duplicate series while both are live.
+
+Flipping to plain `http` and dropping the old series is a deliberate follow-up —
+do it once the dashboards read the new names, not as a side effect of this. A
+deployment can set the variable itself to pin either behaviour.
 
 ## LLM observability
 

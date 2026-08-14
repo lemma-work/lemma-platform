@@ -639,18 +639,26 @@ def _instrument_libraries() -> None:
     if _libraries_instrumented:
         return
 
-    # Both instrumentations read this at instrument time and default to the
-    # superseded conventions, which emit ``http.client.duration`` in
-    # milliseconds keyed by ``net.peer.name``. Other HTTP clients in this
-    # process -- pyqwest, reached transitively through e2b and connectrpc --
-    # already emit the stable ones, so leaving these two on the old vocabulary
-    # meant two metric names under two schemas describing the same thing.
-    # ``setdefault`` so a deployment can still pin the old behaviour.
+    # The aiohttp and httpx instrumentations default to the superseded
+    # conventions, which emit ``http.client.duration`` in milliseconds keyed by
+    # ``net.peer.name`` -- and ``net.peer.name`` is what the export boundary was
+    # dropping, so outbound calls collapsed into one undifferentiated series.
+    # pyqwest, reached transitively through e2b and connectrpc, already emits
+    # the stable conventions, so the process was describing the same calls under
+    # two names and two schemas.
     #
-    # Changing this renames the metric to ``http.client.request.duration`` and
-    # changes its unit from milliseconds to seconds. Dashboards and alerts
-    # reading the old series have to move with it.
-    os.environ.setdefault("OTEL_SEMCONV_STABILITY_OPT_IN", "http")
+    # ``http/dup`` rather than ``http``, deliberately. This variable is
+    # process-global and the ASGI/FastAPI *server* instrumentation reads it
+    # too, so ``http`` would also rename ``http.server.duration`` (ms) to
+    # ``http.server.request.duration`` (s) -- a silent break of every dashboard
+    # on inbound latency, which is not a change this was meant to make. ``dup``
+    # emits both vocabularies: the old series keep working, the new ones appear
+    # with ``server.address``, and whoever owns the dashboards migrates on their
+    # own schedule. Flipping to ``http`` and dropping the duplicates is a
+    # deliberate follow-up, not a side effect of wanting a host label.
+    #
+    # ``setdefault`` so a deployment can pin either behaviour itself.
+    os.environ.setdefault("OTEL_SEMCONV_STABILITY_OPT_IN", "http/dup")
 
     from opentelemetry.instrumentation.aiohttp_client import (
         AioHttpClientInstrumentor,

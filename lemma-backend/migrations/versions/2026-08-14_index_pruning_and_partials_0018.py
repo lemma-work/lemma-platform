@@ -74,6 +74,12 @@ _DEAD_USAGE_INDEXES = (
     "ix_usage_records_usage_kind",
     "ix_usage_records_model_name",
     "ix_usage_records_profile_scope",
+    # No query filters source_id at all -- it appears in entities, schemas and
+    # the (source_type, source_id, occurred_at) composite, never in a WHERE.
+    "ix_usage_records_source_id",
+    # profile_id is filtered, but only ever alongside organization_id, where
+    # ix_usage_org_profile_time is the better plan. Zero scans in production.
+    "ix_usage_records_profile_id",
 )
 
 _USAGE_COLUMNS = {
@@ -89,6 +95,8 @@ _USAGE_COLUMNS = {
     "ix_usage_records_usage_kind": "usage_kind",
     "ix_usage_records_model_name": "model_name",
     "ix_usage_records_profile_scope": "profile_scope",
+    "ix_usage_records_source_id": "source_id",
+    "ix_usage_records_profile_id": "profile_id",
 }
 
 
