@@ -71,6 +71,15 @@ EXCLUDED_PARTS = ("tests", "test_support")
 # Matched against the dotted callee of an `async with` item. Covers the UoW
 # factories, the raw session makers (primary and datastore), and direct engine
 # checkouts.
+# The inverse of SESSION_OPENERS: a block that hands the pooled connection back
+# for its duration. Recognised structurally so "I released first" stops being a
+# claim in a comment and becomes something the gate can check -- and so the ten
+# baselined sites that were already correct stop being reported as wrong. The
+# runtime half is `app/core/infrastructure/db/transaction_locks.connection_released`,
+# which commits when `safe_to_release` allows.
+SESSION_RELEASERS = re.compile(r"(^|\.)connection_released$")
+
+
 SESSION_OPENERS = re.compile(
     r"""(?x)
     (^|\.)(
@@ -455,6 +464,12 @@ def _awaited_calls(
     """Bare names this function awaits, and why it is directly non-DB (if it is).
 
     Nested function definitions are skipped: their awaits belong to them.
+
+    Awaits inside a ``connection_released`` block are skipped too, and for the
+    same reason propagation exists at all: this index answers "does calling this
+    hold a connection across slow work", not "is this slow". A function that
+    hands the connection back before its slow call does not, and neither does
+    anything that calls it -- so it must not poison the name for every caller.
     """
     awaited: set[str] = set()
     direct: str | None = None
@@ -462,6 +477,11 @@ def _awaited_calls(
     while stack:
         current = stack.pop()
         if isinstance(current, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if isinstance(current, ast.AsyncWith) and any(
+            SESSION_RELEASERS.search(_dotted(item.context_expr))
+            for item in current.items
+        ):
             continue
         if isinstance(current, ast.Await) and isinstance(current.value, ast.Call):
             callee = _dotted(current.value.func)
@@ -603,6 +623,19 @@ class SessionScopeChecker(ast.NodeVisitor):
         self._scope.pop()
 
     def visit_AsyncWith(self, node: ast.AsyncWith) -> None:
+        if any(
+            SESSION_RELEASERS.search(_dotted(item.context_expr))
+            for item in node.items
+        ):
+            # The connection is given back for the body of this block, so work
+            # inside it holds nothing. Restored afterwards: the caller may go on
+            # to query again, and the next await is judged normally.
+            outer = self._session_depth
+            self._session_depth = 0
+            for child in node.body:
+                self.visit(child)
+            self._session_depth = outer
+            return
         if not _opens_session(node, self._openers):
             self.generic_visit(node)
             return

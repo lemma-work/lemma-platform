@@ -35,6 +35,7 @@ from app.core.authorization.session_approvals import has_session_approval
 
 
 from app.core.domain.errors import DomainError
+from app.core.infrastructure.db.transaction_locks import connection_released
 from app.core.authorization.grants import (
     delete_grantee_grants,
     grant_resource_type_values,
@@ -453,6 +454,32 @@ class AuthorizationDataService:
         )
         return normalized
 
+    async def _cache_snapshot_without_holding(
+        self, user_id: UUID, snapshot: RoleSnapshot
+    ) -> None:
+        """Write the derived snapshot to Redis with no pooled connection held.
+
+        The read side is already free: ``get_role_snapshot`` runs before this
+        service touches the session, so a cache hit costs no database time at
+        all. The write is the opposite -- it lands *after* the pod, membership
+        and role reads that derive the snapshot, so the connection those reads
+        checked out is still held across a Redis round trip.
+
+        It looks small, and it was the single largest entry in the connection
+        gate's baseline: 37 of 108 violations, because ``build_user_context``
+        propagates through ``build_delegated_workload_context`` into every
+        caller across twenty files.
+
+        Committing first returns the connection. ``safe_to_release`` decides
+        whether that is allowed -- it refuses when the caller has pending or
+        flushed writes, staged outbox events, or a transaction-scoped advisory
+        lock. When it refuses we write anyway and keep the old behaviour: a
+        cache miss that had to hold is strictly better than a caller whose
+        transaction we ended underneath it.
+        """
+        async with connection_released(getattr(self, "session", None)):
+            await set_role_snapshot(user_id=user_id, snapshot=snapshot)
+
     async def build_user_context(
         self,
         *,
@@ -476,11 +503,12 @@ class AuthorizationDataService:
         # read at all — the snapshot carries the organization in its payload.
         # This used to read the Pod row first, purely to build the key, and paid
         # for it on every pod request no matter how warm the cache was.
-        cached = await get_role_snapshot(
-            user_id=user_id,
-            organization_id=organization_id,
-            pod_id=pod_id,
-        )
+        async with connection_released(getattr(self, "session", None)):
+            cached = await get_role_snapshot(
+                user_id=user_id,
+                organization_id=organization_id,
+                pod_id=pod_id,
+            )
         if cached is None and pod_id is not None:
             # Miss: the snapshot has to be derived, and that needs the org.
             pod = await self.session.get(Pod, pod_id)
@@ -547,7 +575,7 @@ class AuthorizationDataService:
             principal_refs=frozenset(principal_refs),
             grant_principal_sets=(frozenset(principal_refs),),
         )
-        await set_role_snapshot(user_id=user_id, snapshot=snapshot)
+        await self._cache_snapshot_without_holding(user_id, snapshot)
         return Context(
             actor_type=ActorType.USER,
             actor_id=str(user_id),
@@ -579,11 +607,12 @@ class AuthorizationDataService:
 
         # The role snapshot cache is keyed by principal id; workload principals
         # (agent/function ids) share it with user ids without collision.
-        cached = await get_role_snapshot(
-            user_id=principal_id,
-            organization_id=organization_id,
-            pod_id=pod_id,
-        )
+        async with connection_released(getattr(self, "session", None)):
+            cached = await get_role_snapshot(
+                user_id=principal_id,
+                organization_id=organization_id,
+                pod_id=pod_id,
+            )
         if cached is not None:
             return Context(
                 actor_type=actor_type,
@@ -628,7 +657,7 @@ class AuthorizationDataService:
             principal_refs=frozenset(principal_refs),
             grant_principal_sets=(frozenset(principal_refs),),
         )
-        await set_role_snapshot(user_id=principal_id, snapshot=snapshot)
+        await self._cache_snapshot_without_holding(principal_id, snapshot)
         return Context(
             actor_type=actor_type,
             actor_id=str(principal_id),

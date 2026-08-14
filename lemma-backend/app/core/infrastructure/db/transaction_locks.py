@@ -23,6 +23,8 @@ helpers leave a marked session alone until its own commit clears the mark.
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import Any
 
 _MARKER = "lemma_holds_transaction_scoped_lock"
@@ -70,7 +72,10 @@ def safe_to_release(session: Any) -> bool:
 
     Read-only checks -- which is what authorization does -- satisfy all four.
     """
-    if session.new or session.dirty or session.deleted:
+    # Read defensively, matching `_has_uncommitted_writes` below: a real session
+    # always has these, a test double often does not, and refusing every release
+    # when an attribute is missing would silently disable the feature under test.
+    if any(getattr(session, attr, None) for attr in ("new", "dirty", "deleted")):
         return False
     if holds_transaction_scoped_lock(session):
         return False
@@ -101,3 +106,35 @@ def _has_uncommitted_writes(session: Any) -> bool:
     """
     transaction = getattr(session, "_transaction", None)
     return bool(getattr(transaction, "_dirty", False))
+
+
+@asynccontextmanager
+async def connection_released(session: Any) -> AsyncIterator[None]:
+    """Hand the pooled connection back for the duration of the block.
+
+    The problem this solves is that "I released the connection first" was only
+    ever true in a comment. ``_release_after_authorization`` and
+    ``_release_connection_before_platform_call`` both commit before their slow
+    call and are correct -- and the static gate flags them anyway, because it is
+    lexical and cannot see a commit inside a callee. Ten baselined violations
+    are sites that were already right.
+
+    Making the release a block fixes both halves at once. At runtime it commits
+    when ``safe_to_release`` allows (see that function for the four reasons it
+    refuses, every one of which has bitten us). Statically, the gate recognises
+    this context manager as *closing* the session scope, so an await inside the
+    block is not a violation -- and an await outside it still is.
+
+    Use it around the non-database work, not around the query::
+
+        async with connection_released(session):
+            await some_platform_api.send(payload)
+
+    If ``safe_to_release`` refuses, the block still runs; the caller keeps its
+    connection and the old behaviour. That is deliberate: ending a caller's
+    transaction underneath it is worse than holding a connection.
+    """
+    commit = getattr(session, "commit", None)
+    if callable(commit) and safe_to_release(session):
+        await commit()
+    yield
