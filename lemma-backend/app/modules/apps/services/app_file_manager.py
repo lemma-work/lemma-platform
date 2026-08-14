@@ -10,6 +10,7 @@ from uuid import UUID
 import obstore as obs
 from obstore.exceptions import NotFoundError as ObstoreNotFoundError
 from obstore.store import LocalStore, ObjectStore
+from app.core.concurrency.offload import run_blocking
 
 
 class AppFileManager:
@@ -79,10 +80,18 @@ class AppFileManager:
         normalized_prefix = prefix.rstrip("/")
 
         list_prefix = normalized_prefix or None
-        for chunk in self.store.list(prefix=list_prefix):
+        # `async for`, not `for`. The stream supports both, and driving the
+        # synchronous side from a coroutine means every page of the listing is a
+        # blocking round trip to object storage on the event loop — once per
+        # page, for as many pages as the release has files.
+        async for chunk in self.store.list(prefix=list_prefix):
             paths = [item["path"] for item in chunk]
             if paths:
                 await self.store.delete_async(paths)
         if self._local_base:
             target_dir = self._local_base if not normalized_prefix else self._local_path(normalized_prefix)
-            shutil.rmtree(target_dir, ignore_errors=True)
+            # Recursive unlink over a whole release tree: filesystem work
+            # proportional to the app, so it goes off the loop like the rest.
+            await run_blocking(
+                shutil.rmtree, target_dir, ignore_errors=True, limiter="cpu_bound"
+            )
