@@ -41,6 +41,11 @@ htmlcov/
 # MANIFEST.in). NOT tracked — regenerated from source on every build.
 lemma_cli/skills/
 
+# Vendored bundle format, same deal: setup.py copies ../lemma-pod-bundle in on
+# every build. Listed here because it was not, so any `git add -A` run after a
+# build committed a stale second copy of a package that lives elsewhere.
+lemma_pod_bundle/
+
 # Local Node usage (e.g. while testing the scaffolded app template).
 # NOTE: the bundled template under cli_core/assets/app_vite_template/ is tracked
 # package data and is NOT ignored — only stray local installs are.
