@@ -228,7 +228,7 @@ export function AgentTestPanel({
     );
     // The controller's messages already carry `metadata`, `tool_name`, and
     // `tool_call_id` straight from the API, so there is no raw copy to fetch and
-    // patch on top of them. See docs/design/conversation-messages.md.
+    // patch on top of them.
     const controllerView = controller as unknown as AssistantControllerView;
     const conversationOutputText = conversationMessages.finalOutputText || conversationMessages.outputText;
     const assistantText = conversationOutputText || latestAssistantText(controller.messages);

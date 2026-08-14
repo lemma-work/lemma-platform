@@ -1,8 +1,8 @@
-# The sandbox runtime Sandbox Protocol
+# Sandbox protocol
 
 **Status:** Implemented and verified for Docker and E2B; Kubernetes deferred
 
-**Parent:** [the sandbox runtime](README.md)
+**Parent:** [Sandbox fabric](README.md)
 
 **Test contract:** [Testing strategy](testing-strategy.md)
 
@@ -331,7 +331,7 @@ ephemeral cache root. Symlink resolution is checked at the adapter boundary.
 Writes use a temporary sibling file, fsync when supported, and atomic rename. The
 API streams binary bytes and never base64-encodes through a shell command. Range
 reads and a configured maximum transfer size support large files without buffering
-them entirely in the sandbox runtime memory. The default transfer bound is 256 MiB and may be
+them entirely in the sandbox runtime's memory. The default transfer bound is 256 MiB and may be
 configured up to 2 GiB. Docker streams through the private workspace runtime. E2B
 downloads through its native async reader and uploads through a bounded spooled
 file because the E2B SDK accepts file-like upload bodies. A failed or oversized

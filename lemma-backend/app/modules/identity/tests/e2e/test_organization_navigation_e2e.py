@@ -7,6 +7,7 @@ job, and that is what the budget tests pin.
 
 from __future__ import annotations
 
+import time
 from contextlib import contextmanager
 from uuid import uuid4
 
@@ -87,6 +88,41 @@ async def test_navigation_returns_every_organization_with_its_pods(
     assert len(by_id[first_org]["pods"]) == 1
     assert len(by_id[second_org]["pods"]) == 1
     assert by_id[first_org]["role"] == "ORG_OWNER"
+
+
+async def test_navigation_carries_the_columns_a_pod_list_renders(
+    authenticated_client, fixed_test_org
+):
+    """The home screen labels and sorts on these, so they have to be here.
+
+    They are the pod's own columns, so they cost nothing beyond the query that
+    already found the pod — unlike apps or agents, which is where the line is.
+    """
+    org_id = fixed_test_org["id"]
+    pod_name = f"labelled-{uuid4().hex[:6]}"
+    created = await authenticated_client.post(
+        "/pods",
+        json={
+            "name": pod_name,
+            "type": "ASSISTANT",
+            "organization_id": org_id,
+            "description": "what this pod is for",
+        },
+    )
+    assert created.status_code == status.HTTP_201_CREATED, created.text
+
+    response = await authenticated_client.get("/organizations/navigation")
+    assert response.status_code == status.HTTP_200_OK, response.text
+
+    organization = next(
+        item for item in response.json()["items"] if item["id"] == org_id
+    )
+    pod = next(item for item in organization["pods"] if item["name"] == pod_name)
+    assert pod["description"] == "what this pod is for"
+    assert pod["updated_at"]
+    # Still no per-pod contents: that is the detail endpoint's job.
+    assert "apps" not in pod
+    assert "agents" not in pod
 
 
 async def test_navigation_query_count_is_flat_across_organizations(
@@ -273,3 +309,116 @@ async def test_home_refuses_an_organization_the_caller_is_not_in(
         headers={"Authorization": f"Bearer {outsider['token']}"},
     )
     assert response.status_code == status.HTTP_403_FORBIDDEN, response.text
+
+
+@pytest.mark.slow
+async def test_a_realistic_multi_org_workspace_stays_fast(
+    authenticated_client, fixed_test_org, capsys
+):
+    """Five organizations, twenty pods, apps and agents — what the change is for.
+
+    The shapes only pay off at the size that hurt: one organization with one pod
+    hides a waterfall, five with four each is where a user actually felt it.
+    This builds that, then measures what the sidebar costs against what it used
+    to cost, so the claim in the pull request is a number and not an argument.
+
+    The ceilings are deliberately loose. Wall clock on a laptop running Docker
+    is not a contract, and a tight timing gate here would only teach people to
+    rerun it; the query-count tests above are the real guarantee. What this
+    catches is an order-of-magnitude regression.
+    """
+    org_ids = [fixed_test_org["id"]]
+    for index in range(4):
+        org_ids.append(
+            await _create_org(authenticated_client, f"Scale Org {index}-{uuid4().hex[:6]}")
+        )
+
+    pods_by_org: dict[str, list[str]] = {}
+    for org_id in org_ids:
+        pods_by_org[org_id] = [
+            await _create_pod(authenticated_client, org_id, f"pod-{uuid4().hex[:8]}")
+            for _ in range(4)
+        ]
+
+    # Contents on the organization whose landing page gets measured, so `home`
+    # is doing real work rather than returning empty lists.
+    detail_org = org_ids[0]
+    for pod_id in pods_by_org[detail_org]:
+        for _ in range(2):
+            await _create_app(authenticated_client, pod_id, f"app{uuid4().hex[:8]}")
+            await _create_agent(authenticated_client, pod_id, f"agent{uuid4().hex[:8]}")
+
+    async def timed(call, samples: int = 10) -> tuple[float, float, float]:
+        """Cold first call, then p50/p95 of the steady state.
+
+        The first call is reported separately because ``home`` caches: measuring
+        only the warm path would quote a cache hit as if it were the cost of
+        building the page.
+        """
+        started = time.perf_counter()
+        first = await call()
+        cold = (time.perf_counter() - started) * 1000
+        assert first.status_code == status.HTTP_200_OK, first.text
+
+        timings = []
+        for _ in range(samples):
+            started = time.perf_counter()
+            response = await call()
+            timings.append(time.perf_counter() - started)
+            assert response.status_code == status.HTTP_200_OK, response.text
+        timings.sort()
+        return (
+            cold,
+            timings[len(timings) // 2] * 1000,
+            timings[int(len(timings) * 0.95) - 1] * 1000,
+        )
+
+    navigation_cold, navigation_p50, navigation_p95 = await timed(
+        lambda: authenticated_client.get("/organizations/navigation")
+    )
+    home_cold, home_p50, home_p95 = await timed(
+        lambda: authenticated_client.get(f"/organizations/{detail_org}/home")
+    )
+
+    # The shape this replaced: the organization list, then a pod list per
+    # organization, each waiting on the one before it.
+    async def legacy_fan_out():
+        response = await authenticated_client.get("/organizations")
+        assert response.status_code == status.HTTP_200_OK, response.text
+        for org_id in org_ids:
+            response = await authenticated_client.get(f"/pods/organization/{org_id}")
+            assert response.status_code == status.HTTP_200_OK, response.text
+        return response
+
+    _, legacy_p50, legacy_p95 = await timed(legacy_fan_out, samples=5)
+
+    navigation = await authenticated_client.get("/organizations/navigation")
+    payload = navigation.json()["items"]
+    assert len(payload) >= len(org_ids)
+    assert sum(len(entry["pods"]) for entry in payload) >= 20
+
+    home = await authenticated_client.get(f"/organizations/{detail_org}/home")
+    home_pods = home.json()["pods"]
+    assert len(home_pods) == 4
+    assert all(len(pod["apps"]) == 2 for pod in home_pods)
+    assert all(len(pod["agents"]) == 2 for pod in home_pods)
+
+    with capsys.disabled():
+        print(
+            f"\n  5 organizations, 20 pods, 8 apps and 8 agents on the detail org"
+            f"\n  {'route':44} {'cold':>9} {'p50':>9} {'p95':>9}"
+            f"\n  {'GET /organizations/navigation':44} {navigation_cold:7.1f}ms {navigation_p50:7.1f}ms {navigation_p95:7.1f}ms"
+            f"\n  {'GET /organizations/{id}/home':44} {home_cold:7.1f}ms {home_p50:7.1f}ms {home_p95:7.1f}ms"
+            f"\n  {'was: /organizations + 5x /pods/organization':44} {'':9} {legacy_p50:7.1f}ms {legacy_p95:7.1f}ms"
+            f"\n  → the sidebar costs {legacy_p50 / navigation_p50:.1f}x less than the fan-out it replaces"
+            f"\n  → home's p50 is a cache hit; {home_cold:.1f}ms is what building it costs"
+        )
+
+    # An order of magnitude, not a stopwatch: one request cannot reasonably be
+    # slower than the six it replaced.
+    assert navigation_p50 < legacy_p50, (
+        f"navigation ({navigation_p50:.1f}ms) should beat the fan-out "
+        f"({legacy_p50:.1f}ms) it replaces"
+    )
+    assert navigation_p95 < 250, f"navigation p95 {navigation_p95:.1f}ms"
+    assert home_p95 < 250, f"home p95 {home_p95:.1f}ms"

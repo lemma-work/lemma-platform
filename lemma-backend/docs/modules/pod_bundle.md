@@ -69,7 +69,4 @@ logged-in user in addition to the token.
 
 Unit/e2e tests cover format/diff, staging, limits, plan/apply idempotency,
 variables, executable imported resources, apps, surfaces, GitHub import/publish,
-SSE, expiry, and cleanup. Current unit coverage is 70.4% (1,977 of 2,807
-statements). Cancellation concurrency and request-buffering findings are in
-[issues.md](issues.md). The deeper design rationale remains in
-[pod-bundle-share-import.md](../../../docs/design/pod-bundle-share-import.md).
+SSE, expiry, and cleanup.
