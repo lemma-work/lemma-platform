@@ -123,6 +123,29 @@ async def uow_scope(session_maker):
     assert _run(source) == []
 
 
+def test_discovers_the_projects_own_session_yielding_context_managers():
+    """`async with pod_services(...)` holds a connection just as much.
+
+    These are found, not listed: hardcoding names meant every new helper
+    started life invisible to the gate.
+    """
+    source = """
+from contextlib import asynccontextmanager
+
+@asynccontextmanager
+async def pod_services(uow_factory):
+    async with uow_factory() as uow:
+        yield Services(uow)
+
+async def tool(uow_factory, client):
+    async with pod_services(uow_factory) as services:
+        await client.post("https://example.test/hook")
+"""
+    violations = _run(source)
+    assert [v.scope for v in violations] == ["tool"]
+    assert violations[0].rule == "non-db-await"
+
+
 def test_flags_a_nested_session():
     source = """
 async def outer(uow_factory):
@@ -185,6 +208,69 @@ async def handler(service: ServiceDep, client):
     await client.post("https://example.test/hook")
 """
     assert "non-db-await/request-scoped" in _rules(source)
+
+
+def test_decorator_dependencies_hold_a_connection_too():
+    """`dependencies=[...]` never appears in the signature but still runs.
+
+    Two pod_bundle SSE routes pin a connection for the length of the stream
+    this way, while carrying a comment saying they hold none.
+    """
+    source = """
+from fastapi import Depends
+
+async def get_uow():
+    async with create_uow_from_session_maker(async_session_maker) as uow:
+        yield uow
+
+def require_pod_role(role):
+    return require_action(role)
+
+def require_action(permission):
+    return Depends(_dependency)
+
+async def _dependency(uow: UoWDep):
+    return uow
+
+UoWDep = Annotated[object, Depends(get_uow)]
+PodViewerDep = require_pod_role("viewer")
+
+@router.get("/x", dependencies=[PodViewerDep])
+async def stream_events(client):
+    await client.post("https://example.test/hook")
+"""
+    assert "non-db-await/request-scoped" in _rules(source)
+
+
+def test_a_name_collision_does_not_make_every_route_request_scoped():
+    """`get_current_user` is both a plain dependency and a route handler.
+
+    Keyed by name with overwrite, the handler's `uow: UoWDep` won and every
+    authenticated route in the codebase counted as holding a connection.
+    """
+    source = """
+from fastapi import Depends
+
+async def get_uow():
+    async with create_uow_from_session_maker(async_session_maker) as uow:
+        yield uow
+
+UoWDep = Annotated[object, Depends(get_uow)]
+
+def get_current_user(request):
+    return request.state.user
+
+CurrentUser = Annotated[object, Depends(get_current_user)]
+
+async def get_current_user(uow: UoWDep):
+    return await uow.session.execute("select 1")
+
+async def some_route(user: CurrentUser, client):
+    await client.post("https://example.test/hook")
+"""
+    # `get_uow` itself is reported, as always; the point is that `some_route`
+    # is not dragged in with it.
+    assert [v.scope for v in _run(source)] == ["get_uow"]
 
 
 def test_slowness_propagates_through_an_unambiguous_callee():

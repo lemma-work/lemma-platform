@@ -89,10 +89,6 @@ SESSION_OPENERS = re.compile(
         # `async with ctx.uow() as uow:` is the standard form in streaq tasks,
         # so omitting it left the entire worker surface unchecked.
         | uow
-        # Authorization scopes that yield a UoW alongside a resolved context.
-        | uow_scope
-        | pod_context_scope
-        | current_context_scope
     )$
     |
     (^|\.)(engine|_engine)\.(begin|connect)$
@@ -188,8 +184,13 @@ class DependencyIndex:
     def __init__(self) -> None:
         # `UoWDep = Annotated[SqlAlchemyUnitOfWork, Depends(get_uow)]`
         self.alias_to_providers: dict[str, set[str]] = {}
-        # provider/handler name -> the dependency names its parameters name
-        self.params: dict[str, set[str]] = {}
+        # provider/handler name -> one entry per definition sharing that name.
+        # A list, not a set: `get_current_user` is both a plain dependency in
+        # core/api/dependencies.py AND a route handler in user_controller.py
+        # that takes `uow: UoWDep`. Keyed by name with overwrite, the handler
+        # won, `CurrentUser` looked session-scoped, and every authenticated
+        # route in the codebase was miscounted as holding a connection.
+        self.params: dict[str, list[set[str]]] = {}
         # providers that yield while holding a session, e.g. `get_uow`
         self.seeds: set[str] = set()
         self.session_scoped: set[str] = set()
@@ -204,6 +205,17 @@ class DependencyIndex:
         # definition inside app/, so the call graph cannot discover them.
         self.remote_names: set[str] = set()
         self.remote_roots: set[str] = set()
+        # Dependency FACTORIES: `PodViewerDep = require_pod_role(PodRole.VIEWER)`
+        # returns `require_action(...)` which returns `Depends(_dependency)`.
+        # Two hops, no `Annotated` anywhere, and `_dependency` takes a context
+        # that holds a session -- so these routes hold a connection for the
+        # whole response while carrying a comment saying they do not.
+        # Project context managers that yield a live session to their caller.
+        self.session_cms: set[str] = set()
+        self._cm_bodies: list[tuple[str, ast.AST]] = []
+        self.returns_depends: dict[str, set[str]] = {}
+        self.returns_calls: dict[str, set[str]] = {}
+        self.alias_factories: dict[str, set[str]] = {}
 
     def ingest(self, tree: ast.Module) -> None:
         for node in ast.walk(tree):
@@ -212,12 +224,34 @@ class DependencyIndex:
             elif isinstance(node, (ast.Import, ast.ImportFrom)):
                 self._ingest_import(node)
             elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                self.params[node.name] = _dependency_names(node)
+                self.params.setdefault(node.name, []).append(_dependency_names(node))
                 if _yields_inside_session(node):
                     self.seeds.add(node.name)
+                if _is_context_manager(node):
+                    self._cm_bodies.append((node.name, node))
+                    if _yields_inside_session(node, allow_context_manager=True):
+                        self.session_cms.add(node.name)
                 awaited, direct = _awaited_calls(node)
                 self.definitions.setdefault(node.name, []).append(
                     {"awaits": awaited, "reason": direct}
+                )
+                self._ingest_returns(node)
+
+    def _ingest_returns(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> None:
+        """Record what a dependency factory hands back, so aliases can follow it."""
+        for child in ast.walk(node):
+            if not isinstance(child, ast.Return):
+                continue
+            if not isinstance(child.value, ast.Call):
+                continue
+            returned = child.value
+            if _dotted(returned.func).split(".")[-1] == "Depends" and returned.args:
+                self.returns_depends.setdefault(node.name, set()).add(
+                    _dotted(returned.args[0]).split(".")[-1]
+                )
+            else:
+                self.returns_calls.setdefault(node.name, set()).add(
+                    _dotted(returned.func).split(".")[-1]
                 )
 
     def _ingest_import(self, node: ast.Import | ast.ImportFrom) -> None:
@@ -286,20 +320,73 @@ class DependencyIndex:
 
     def _ingest_alias(self, node: ast.Assign) -> None:
         targets = [t.id for t in node.targets if isinstance(t, ast.Name)]
+        if not targets:
+            return
         providers = _depends_callees(node.value)
-        if targets and providers:
-            for target in targets:
+        for target in targets:
+            if providers:
                 self.alias_to_providers.setdefault(target, set()).update(providers)
+            if isinstance(node.value, ast.Call):
+                self.alias_factories.setdefault(target, set()).add(
+                    _dotted(node.value.func).split(".")[-1]
+                )
+
+    def expand_session_context_managers(self) -> None:
+        """Grow the derived opener set: a CM yielding inside another CM's session."""
+        changed = True
+        while changed:
+            changed = False
+            for name, node in self._cm_bodies:
+                if name in self.session_cms:
+                    continue
+                if _yields_inside_session(
+                    node, frozenset(self.session_cms), allow_context_manager=True
+                ):
+                    self.session_cms.add(name)
+                    changed = True
+
+    def _expand_factories(self) -> None:
+        """Resolve `X = factory(...)` to whatever `Depends` the factory returns."""
+        yields: dict[str, set[str]] = {
+            name: set(targets) for name, targets in self.returns_depends.items()
+        }
+        changed = True
+        while changed:
+            changed = False
+            for name, callees in sorted(self.returns_calls.items()):
+                current = yields.setdefault(name, set())
+                for callee in sorted(callees):
+                    addition = yields.get(callee, set()) - current
+                    if addition:
+                        current |= addition
+                        changed = True
+        for alias, factories in self.alias_factories.items():
+            for factory in factories:
+                if yields.get(factory):
+                    self.alias_to_providers.setdefault(alias, set()).update(
+                        yields[factory]
+                    )
 
     def resolve(self) -> None:
+        """Fixed point over dependency providers.
+
+        A name counts as session-scoped only when EVERY definition sharing it
+        is -- the same rule the slowness propagation uses, and for the same
+        reason. One definition holding a session says nothing about a different
+        function that happens to share its name.
+        """
+        self._expand_factories()
         self.session_scoped = set(self.seeds)
         changed = True
         while changed:
             changed = False
-            for name, dependencies in self.params.items():
+            for name, definitions in sorted(self.params.items()):
                 if name in self.session_scoped:
                     continue
-                if any(self._reaches_session(dep) for dep in dependencies):
+                if all(
+                    any(self._reaches_session(dep) for dep in dependencies)
+                    for dependencies in definitions
+                ):
                     self.session_scoped.add(name)
                     changed = True
 
@@ -329,8 +416,25 @@ def _depends_callees(node: ast.AST) -> set[str]:
 
 
 def _dependency_names(node: ast.FunctionDef | ast.AsyncFunctionDef) -> set[str]:
-    """Dependency names a signature refers to, via annotation alias or Depends()."""
+    """Dependency names a route depends on, from its signature AND its decorator.
+
+    `@router.get(..., dependencies=[PodViewerDep])` binds a dependency that
+    never appears in the signature. It still runs, and if it yields a session it
+    still holds a connection for the whole response -- which is exactly how two
+    pod_bundle SSE routes pin a connection for the length of the stream while
+    carrying a comment saying they hold none.
+    """
     names: set[str] = set()
+    for decorator in node.decorator_list:
+        if not isinstance(decorator, ast.Call):
+            continue
+        for keyword in decorator.keywords:
+            if keyword.arg != "dependencies":
+                continue
+            names.update(_depends_callees(keyword.value))
+            for child in ast.walk(keyword.value):
+                if isinstance(child, ast.Name):
+                    names.add(child.id)
     arguments = node.args
     for arg in (*arguments.posonlyargs, *arguments.args, *arguments.kwonlyargs):
         if arg.annotation is None:
@@ -368,12 +472,22 @@ def _awaited_calls(
     return awaited, direct
 
 
-def _yields_inside_session(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
-    """True for a `get_uow`-shaped provider: opens a session, yields inside it."""
-    if _is_context_manager(node):
+def _yields_inside_session(
+    node: ast.FunctionDef | ast.AsyncFunctionDef,
+    derived: frozenset[str] = frozenset(),
+    *,
+    allow_context_manager: bool = False,
+) -> bool:
+    """True for a provider that opens a session and yields while holding it.
+
+    Used two ways: to seed `get_uow`-shaped FastAPI dependencies (which are not
+    context managers), and to discover the project's own session-yielding
+    context managers, where the `@asynccontextmanager` exemption must not apply.
+    """
+    if _is_context_manager(node) and not allow_context_manager:
         return False
     for child in ast.walk(node):
-        if isinstance(child, ast.AsyncWith) and _opens_session(child):
+        if isinstance(child, ast.AsyncWith) and _opens_session(child, derived):
             if any(
                 isinstance(inner, (ast.Yield, ast.YieldFrom))
                 for stmt in child.body
@@ -414,10 +528,23 @@ def _dotted(node: ast.AST) -> str:
     return ""
 
 
-def _opens_session(node: ast.AsyncWith) -> bool:
-    return any(
-        SESSION_OPENERS.search(_dotted(item.context_expr)) for item in node.items
-    )
+def _opens_session(node: ast.AsyncWith, derived: frozenset[str] = frozenset()) -> bool:
+    """True if this `async with` checks out a pooled connection.
+
+    `derived` carries the project's own session-yielding context managers,
+    discovered rather than listed: `uow_scope`, `pod_context_scope`,
+    `pod_services`, `connector_services` and friends all wrap a session and hand
+    it to their caller, so an `async with` on one holds a connection exactly as
+    an `async with session_maker()` does. Hardcoding the names meant every new
+    helper started life invisible to the gate.
+    """
+    for item in node.items:
+        callee = _dotted(item.context_expr)
+        if SESSION_OPENERS.search(callee):
+            return True
+        if callee.rsplit(".", 1)[-1] in derived:
+            return True
+    return False
 
 
 def _classify_non_db(callee: str) -> str | None:
@@ -441,6 +568,7 @@ class SessionScopeChecker(ast.NodeVisitor):
     def __init__(self, path: str, index: DependencyIndex) -> None:
         self.path = path
         self.index = index
+        self._openers = frozenset(index.session_cms)
         self.violations: list[Violation] = []
         self._scope: list[str] = []
         self._session_depth = 0
@@ -475,7 +603,7 @@ class SessionScopeChecker(ast.NodeVisitor):
         self._scope.pop()
 
     def visit_AsyncWith(self, node: ast.AsyncWith) -> None:
-        if not _opens_session(node):
+        if not _opens_session(node, self._openers):
             self.generic_visit(node)
             return
         if self._session_depth:
@@ -543,6 +671,7 @@ def collect(paths: list[Path]) -> list[Violation]:
     index = DependencyIndex()
     for _, tree in parsed:
         index.ingest(tree)
+    index.expand_session_context_managers()
     index.resolve()
     index.resolve_slow()
 
