@@ -1311,9 +1311,11 @@ class AgentSurfaceIngressService(SurfaceConfigurationMixin, SurfaceProgressMixin
             adapter = self.adapter_registry.get(platform) if platform else None
         if adapter is None:
             return False
-        parsed = await adapter.parse_inbound_interaction(
-            request.payload, request.headers
-        )
+        # Egress: the connection goes back for the platform round trip.
+        async with connection_released(self.uow.session):
+            parsed = await adapter.parse_inbound_interaction(
+                request.payload, request.headers
+            )
         if parsed is None:
             return False
         if parsed.interaction_state == "expired":
@@ -1324,13 +1326,15 @@ class AgentSurfaceIngressService(SurfaceConfigurationMixin, SurfaceProgressMixin
                         break
             if surface is not None:
                 credentials = await self._resolve_credentials(surface)
-                await adapter.acknowledge_interaction(
-                    credentials=credentials,
-                    interaction=parsed,
-                    text="This action expired. Please ask again.",
-                    show_alert=True,
-                    clear_actions=True,
-                )
+                # Egress: the connection goes back for the platform round trip.
+                async with connection_released(self.uow.session):
+                    await adapter.acknowledge_interaction(
+                        credentials=credentials,
+                        interaction=parsed,
+                        text="This action expired. Please ask again.",
+                        show_alert=True,
+                        clear_actions=True,
+                    )
             return True
         await self.handle_interaction(parsed)
         return True
@@ -1366,11 +1370,13 @@ class AgentSurfaceIngressService(SurfaceConfigurationMixin, SurfaceProgressMixin
             conversation_id = link.conversation_id
 
             if parsed.interaction_state == "other":
-                await adapter.acknowledge_interaction(
-                    credentials=credentials,
-                    interaction=parsed,
-                    text="Reply with your own answer.",
-                )
+                # Egress: the connection goes back for the platform round trip.
+                async with connection_released(self.uow.session):
+                    await adapter.acknowledge_interaction(
+                        credentials=credentials,
+                        interaction=parsed,
+                        text="Reply with your own answer.",
+                    )
                 return
 
             # Replay protection: each submission is processed once. A repeat is an
@@ -1420,25 +1426,29 @@ class AgentSurfaceIngressService(SurfaceConfigurationMixin, SurfaceProgressMixin
                     return
                 link, conversation, restarted = refreshed
                 if restarted:
-                    await adapter.acknowledge_interaction(
-                        credentials=credentials,
-                        interaction=parsed,
-                        text="This chat started a new conversation. Send your message again.",
-                        show_alert=True,
-                        clear_actions=True,
-                    )
+                    # Egress: the connection goes back for the platform round trip.
+                    async with connection_released(self.uow.session):
+                        await adapter.acknowledge_interaction(
+                            credentials=credentials,
+                            interaction=parsed,
+                            text="This chat started a new conversation. Send your message again.",
+                            show_alert=True,
+                            clear_actions=True,
+                        )
                     return
                 await retry_interaction_conversation(
                     conversation_service=self.conversation_service,
                     uow=self.uow,
                     conversation=conversation,
                 )
-                await adapter.acknowledge_interaction(
-                    credentials=credentials,
-                    interaction=parsed,
-                    text="Retrying…",
-                    clear_actions=True,
-                )
+                # Egress: the connection goes back for the platform round trip.
+                async with connection_released(self.uow.session):
+                    await adapter.acknowledge_interaction(
+                        credentials=credentials,
+                        interaction=parsed,
+                        text="Retrying…",
+                        clear_actions=True,
+                    )
                 return
 
             # An approval button carries an explicit decision (approve / deny /
@@ -1470,20 +1480,24 @@ class AgentSurfaceIngressService(SurfaceConfigurationMixin, SurfaceProgressMixin
                 )
             finally:
                 reset_current_context(token)
-            await adapter.acknowledge_interaction(
-                credentials=credentials,
-                interaction=parsed,
-                text="Done",
-                clear_actions=True,
-            )
-        except Exception:
-            if adapter is not None and credentials is not None:
+            # Egress: the connection goes back for the platform round trip.
+            async with connection_released(self.uow.session):
                 await adapter.acknowledge_interaction(
                     credentials=credentials,
                     interaction=parsed,
-                    text="I couldn’t complete that action.",
-                    show_alert=True,
+                    text="Done",
+                    clear_actions=True,
                 )
+        except Exception:
+            if adapter is not None and credentials is not None:
+                # Egress: the connection goes back for the platform round trip.
+                async with connection_released(self.uow.session):
+                    await adapter.acknowledge_interaction(
+                        credentials=credentials,
+                        interaction=parsed,
+                        text="I couldn’t complete that action.",
+                        show_alert=True,
+                    )
 
     async def _refresh_interaction_conversation(
         self,
