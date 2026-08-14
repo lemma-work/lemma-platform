@@ -150,10 +150,11 @@ async def set_role_snapshot(
     if cache is None:
         return
     try:
-        await cache.set_raw(
-            _snapshot_suffix(user_id, snapshot.organization_id, snapshot.pod_id),
-            _serialize(snapshot),
-        )
+        suffix = _snapshot_suffix(user_id, snapshot.organization_id, snapshot.pod_id)
+        await cache.set_raw(suffix, _serialize(snapshot))
+        # Record it against this principal so invalidation can delete by list
+        # rather than by scanning the keyspace.
+        await cache.track_in_index(str(user_id), suffix)
     except Exception as exc:
         # Redis unavailable -> skip caching; sustained failures are aggregated.
         _role_cache_incident.record_failure(error_type=type(exc).__name__)
@@ -187,7 +188,11 @@ async def invalidate_role_snapshot_cache(
         return
     try:
         if user_id is not None:
-            await cache.delete_prefix(f"{user_id}:")
+            # Delete this principal's own list. Falls back to the scan when the
+            # index is absent — it expires with the entries it points at, and a
+            # snapshot written before the index existed has none.
+            if await cache.delete_indexed(str(user_id)) == 0:
+                await cache.delete_prefix(f"{user_id}:")
         else:
             await cache.clear_prefix()
     except Exception as exc:
