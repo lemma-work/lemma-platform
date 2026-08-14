@@ -4,6 +4,8 @@ import { useRef, useState, type ChangeEvent, type DragEvent, type KeyboardEvent,
 import { cn } from '@/lib/utils';
 import { ArrowUp, Plus, Square } from '@/components/ui/icons';
 import { StepLoader } from '@/components/brand/loader';
+import { Button } from '@/components/ui/button';
+import { Textarea } from '@/components/ui/textarea';
 
 /**
  * The box you type into. One of them, everywhere.
@@ -141,7 +143,7 @@ export function Composer({
               * the heaviest thing in a control whose entire purpose is the
               * sentence you are writing.
               */}
-            <textarea
+            <Textarea
                 ref={inputRef}
                 value={draft}
                 onChange={onDraftChange}
@@ -151,14 +153,17 @@ export function Composer({
                 onSelect={onSelectionChange}
                 placeholder={placeholder}
                 rows={1}
+                disableFocusRing
                 disabled={disabled && !isBusy}
                 className="lm-composer-input"
             />
 
             <div className="lm-composer-controls">
                 {onAttach ? (
-                    <button
+                    <Button
                         type="button"
+                        variant="quiet"
+                        size="icon"
                         aria-label="Attach files"
                         title="Attach files"
                         onClick={onAttach}
@@ -166,7 +171,7 @@ export function Composer({
                         className="lm-composer-attach custom-focus-ring"
                     >
                         {isAttaching ? <StepLoader size="xs" /> : <Plus className="h-4 w-4" />}
-                    </button>
+                    </Button>
                 ) : null}
 
                 {controls ? <div className="lm-composer-slot">{controls}</div> : null}
@@ -179,8 +184,10 @@ export function Composer({
                   * as disabled furniture rather than as the thing you are aiming
                   * at — and it is the one control whose position a person learns.
                   */}
-                <button
+                <Button
                     type={showStop ? 'button' : 'submit'}
+                    variant="quiet"
+                    size="icon"
                     onClick={showStop ? onStop : undefined}
                     disabled={!showStop && !canSend}
                     aria-label={showStop ? 'Stop' : 'Send'}
@@ -195,7 +202,7 @@ export function Composer({
                     ) : (
                         <ArrowUp className="h-4 w-4" />
                     )}
-                </button>
+                </Button>
             </div>
         </form>
     );

@@ -28,6 +28,9 @@
     --identity-sclera: #fdfcf8;
     --identity-pupil: #2b2924;
     --identity-pip-ring: #fdfcf8;
+    /* Darkens whatever tone sits under it — a shared edge, a rim — so one value
+       serves all five tones in both appearances. */
+    --identity-shade: #000000;
 }
 
 /**
@@ -51,6 +54,7 @@
     --identity-sclera: #f5f3ed;
     --identity-pupil: #131311;
     --identity-pip-ring: #1b1b19;
+    --identity-shade: #000000;
 }
 
 /**

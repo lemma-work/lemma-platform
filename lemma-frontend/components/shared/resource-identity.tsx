@@ -139,7 +139,7 @@ export function ResourceIdentity({
                       * exactly the clash this composition was rebuilt to avoid.
                       */}
                     <g clipPath={`url(#${clipFirst})`}>
-                        <path d={FORMS[second.form]} transform={place(second)} fill="#000" opacity=".18" />
+                        <path d={FORMS[second.form]} transform={place(second)} fill="var(--identity-shade)" opacity=".18" />
                     </g>
                 </svg>
             </span>
@@ -202,7 +202,7 @@ export function ResourceIdentity({
                 <g fill="currentColor" dangerouslySetInnerHTML={{ __html: CRESTS[genes.crest] }} />
                 <path d={FORMS[genes.form]} fill="currentColor" />
                 <g clipPath={`url(#${clipId})`} dangerouslySetInnerHTML={{ __html: FORM_DEPTH[genes.form] }} />
-                <path d={FORMS[genes.form]} fill="none" stroke="#000" strokeOpacity=".14" strokeWidth="1.5" />
+                <path d={FORMS[genes.form]} fill="none" stroke="var(--identity-shade)" strokeOpacity=".14" strokeWidth="1.5" />
 
                 <g className="lm-identity-eyes">
                     {look.eye.kind === 'closed'

@@ -34,7 +34,7 @@ import { buildScopedConversationHref } from '@/lib/assistant/conversation-compos
 import { useSchedules } from '@/lib/hooks/use-schedules';
 import { PodHomePresence } from '@/components/pod/pod-home-presence';
 import { Composer } from '@/components/shared/composer';
-import { ConversationAgentPicker } from '@/components/conversations/conversation-composer-context';
+import { ConversationAgentPicker } from '@/components/conversations/conversation-agent-picker';
 import { ResourceCover } from '@/components/shared/resource-identity';
 import { cn } from '@/lib/utils';
 import { formatAgentName } from '@/lib/utils/agents';
