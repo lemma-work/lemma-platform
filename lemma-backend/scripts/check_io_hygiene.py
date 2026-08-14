@@ -45,6 +45,7 @@ import argparse
 import ast
 import json
 import sys
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -63,6 +64,14 @@ UNLIMITED_OFFLOADS = {
     "asyncio.to_thread",
     "anyio.to_thread.run_sync",
     "to_thread.run_sync",
+    # The session-scope gate has counted this as a thread offload since it was
+    # written; this one did not, so the two gates disagreed about the same call
+    # and a `loop.run_in_executor(None, ...)` -- which offloads onto an
+    # *unbounded* default executor -- passed here without comment.
+    "run_in_executor",
+    "loop.run_in_executor",
+    "get_event_loop.run_in_executor",
+    "get_running_loop.run_in_executor",
 }
 
 
@@ -93,6 +102,12 @@ def _dotted(node: ast.AST) -> str:
     return ""
 
 
+
+def _is_none(node: ast.AST) -> bool:
+    """Whether an argument is a literal ``None``."""
+    return isinstance(node, ast.Constant) and node.value is None
+
+
 class IoHygieneChecker(ast.NodeVisitor):
     def __init__(self, path: str) -> None:
         self.path = path
@@ -119,8 +134,17 @@ class IoHygieneChecker(ast.NodeVisitor):
         if callee in UNLIMITED_OFFLOADS and not self._offload_owner:
             self._record(node.lineno, "unlimited-offload", callee)
         elif callee.endswith("aiohttp.ClientSession") or callee == "ClientSession":
-            if not any(keyword.arg == "timeout" for keyword in node.keywords):
+            timeout = next(
+                (kw for kw in node.keywords if kw.arg == "timeout"), None
+            )
+            if timeout is None:
                 self._record(node.lineno, "untimed-aiohttp-session", callee)
+            elif _is_none(timeout.value):
+                # `timeout=None` disables aiohttp's timeout entirely, so the
+                # keyword being *present* proved nothing. A request to a hung
+                # upstream then hangs for the life of the process, which is the
+                # exact failure this rule exists to prevent -- and it passed.
+                self._record(node.lineno, "disabled-aiohttp-timeout", callee)
         self.generic_visit(node)
 
     def _record(self, line: int, rule: str, detail: str) -> None:
@@ -146,6 +170,15 @@ def source_files() -> list[Path]:
     )
 
 
+
+def _load_baseline(path: Path) -> dict[str, int]:
+    """Read the baseline, accepting the older list form (one occurrence each)."""
+    entries = json.loads(path.read_text(encoding="utf-8"))["violations"]
+    if isinstance(entries, dict):
+        return {key: int(count) for key, count in entries.items()}
+    return dict(Counter(entries))
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--baseline", type=Path, default=DEFAULT_BASELINE)
@@ -165,20 +198,33 @@ def main() -> int:
                 "aiohttp sessions with no timeout. This file may shrink freely; "
                 "growing it means new unbounded I/O. See scripts/check_io_hygiene.py."
             ),
-            "violations": sorted({v.key() for v in violations}),
+            "violations": dict(sorted(Counter(v.key() for v in violations).items())),
         }
         args.baseline.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
-        print(f"✓ baseline written: {len(payload['violations'])} entries")
+        print(f"✓ baseline written: {sum(payload['violations'].values())} entries")
         return 0
 
-    baseline = set(json.loads(args.baseline.read_text(encoding="utf-8"))["violations"])
-    new = [v for v in violations if v.key() not in baseline]
-    fixed = baseline - {v.key() for v in violations}
+    baseline = _load_baseline(args.baseline)
+
+    # Counted, not a set. The key carries no line number so that edits above a
+    # violation do not churn the file -- which used to mean a second identical
+    # call in an already-baselined function slipped through unreported. The
+    # sibling gate had the same hole and it was hiding two real ones.
+    counts = Counter(v.key() for v in violations)
+    new: list[Violation] = []
+    seen: Counter[str] = Counter()
+    for violation in violations:
+        seen[violation.key()] += 1
+        if seen[violation.key()] > baseline.get(violation.key(), 0):
+            new.append(violation)
+    fixed = sum(
+        max(0, allowed - counts.get(key, 0)) for key, allowed in baseline.items()
+    )
 
     if fixed:
-        print(f"✓ {len(fixed)} baselined violation(s) gone — run --update-baseline")
+        print(f"✓ {fixed} baselined violation(s) gone — run --update-baseline")
     if not new:
-        print(f"✓ I/O hygiene: no new violations ({len(baseline)} baselined)")
+        print(f"✓ I/O hygiene: no new violations ({sum(baseline.values())} baselined)")
         return 0
 
     print(f"✗ I/O hygiene: {len(new)} new violation(s)\n")

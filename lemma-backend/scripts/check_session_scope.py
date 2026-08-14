@@ -55,6 +55,7 @@ import ast
 import json
 import re
 import sys
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -156,7 +157,23 @@ NON_DB_PATTERNS = tuple((re.compile(pattern), label) for pattern, label in NON_D
 # method called `enqueue_run` writes an admission row; `store.save_import`
 # writes a row. Without this the deny-list's verb matching would fire on the
 # data-access layer, which is the one place it must not.
-DB_RECEIVERS = re.compile(r"(repository|repositories|uow|session|dao|outbox|admission)")
+#
+# Anchored to whole dotted segments, and that is the whole point of the pattern
+# being this fiddly. It used to be a bare substring match, so *any* receiver
+# containing one of these words was unconditionally "a database call" --
+# `session_client.post`, `uow_llm.complete`, `outbox_webhook.send` all silenced
+# the gate completely, and nothing would ever have reported it. A segment now
+# has to *end* with one of these words (with an optional snake_case prefix, so
+# `schedule_repository`, `self.__uow` and `AgentHostDispatchRepository(uow)` all
+# still match), which is the thing that was actually meant. Case-insensitive
+# because the receiver is often a class rather than an attribute -- the four
+# `AgentHostDispatchRepository(...).enqueue_*` calls are precisely the
+# "repository method named enqueue_run writes an admission row" case this
+# exemption was written for.
+DB_RECEIVERS = re.compile(
+    r"(^|\.)[A-Za-z0-9_]*(repository|repositories|uow|session|dao|outbox|admission)(\.|$)",
+    re.IGNORECASE,
+)
 
 # Third-party modules that talk to something over a network. A call to a symbol
 # imported from one of these is non-database work by construction, and the
@@ -761,6 +778,21 @@ def source_files() -> list[Path]:
     )
 
 
+
+def _load_baseline(path: Path) -> dict[str, int]:
+    """Read the baseline, accepting the older list form.
+
+    It used to be a list of keys, which could only express "this key is
+    allowed" -- not how many times. Reading a list as one-each keeps an
+    un-migrated checkout working and makes the first `--update-baseline`
+    write the counted form.
+    """
+    entries = json.loads(path.read_text(encoding="utf-8"))["violations"]
+    if isinstance(entries, dict):
+        return {key: int(count) for key, count in entries.items()}
+    return dict(Counter(entries))
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--baseline", type=Path, default=DEFAULT_BASELINE)
@@ -774,28 +806,51 @@ def main() -> int:
 
     violations = collect(source_files())
 
+    counts = Counter(v.key() for v in violations)
+
     if args.update_baseline:
         payload = {
             "_comment": (
                 "Pre-existing places where a DB connection is held across non-database "
                 "work. This file may shrink freely; growing it means a new connection "
                 "is being held across an LLM call, an HTTP request or a thread offload. "
+                "Entries are {key: count}: the key has no line number so that edits "
+                "above a violation do not churn the file, and the count is what stops "
+                "a baselined function having a free slot for a second one. "
                 "See scripts/check_session_scope.py."
             ),
-            "violations": sorted({v.key() for v in violations}),
+            "violations": dict(sorted(counts.items())),
         }
         args.baseline.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
-        print(f"✓ baseline written: {len(payload['violations'])} entries")
+        print(f"✓ baseline written: {sum(counts.values())} entries")
         return 0
 
-    baseline = set(json.loads(args.baseline.read_text(encoding="utf-8"))["violations"])
-    new = [v for v in violations if v.key() not in baseline]
-    fixed = baseline - {v.key() for v in violations}
+    baseline = _load_baseline(args.baseline)
+
+    # Report every violation whose key now occurs more often than the baseline
+    # allows. Keys carry no line number -- deliberately, so that unrelated edits
+    # above a violation do not churn the file -- which used to mean a second
+    # identical await in an already-baselined function was accepted in silence.
+    # Counting closes that without reintroducing the churn.
+    new: list[Violation] = []
+    seen: Counter[str] = Counter()
+    for violation in violations:
+        key = violation.key()
+        seen[key] += 1
+        if seen[key] > baseline.get(key, 0):
+            new.append(violation)
+
+    fixed = sum(
+        max(0, allowed - counts.get(key, 0)) for key, allowed in baseline.items()
+    )
 
     if fixed:
-        print(f"✓ {len(fixed)} baselined violation(s) gone — run --update-baseline")
+        print(f"✓ {fixed} baselined violation(s) gone — run --update-baseline")
     if not new:
-        print(f"✓ session scope: no new violations ({len(baseline)} baselined)")
+        print(
+            "✓ session scope: no new violations "
+            f"({sum(baseline.values())} baselined)"
+        )
         return 0
 
     print(f"✗ session scope: {len(new)} new violation(s)\n")
