@@ -9,6 +9,8 @@ port with Kreuzberg v5 alone; callers don't change.
 
 from __future__ import annotations
 
+import codecs
+
 from app.core.log.log import get_logger
 from app.modules.datastore.config import datastore_settings
 from app.modules.datastore.domain.document_processing import (
@@ -187,17 +189,29 @@ class KreuzbergDocumentProcessor(PdfPageRenderingMixin):
         """Map UTF-8 byte offsets (Kreuzberg's page boundaries index into the
         UTF-8 bytes of ``content``) to character indices in ``content``."""
         targets = sorted(set(byte_offsets))
+        if not targets:
+            return {}
+        # Decode forward in slices between the offsets we actually care about,
+        # rather than encoding every character to measure it. The old version
+        # called ``char.encode("utf-8")`` once per character of the whole
+        # document — a Python-level loop over millions of characters on the
+        # event loop, to answer a question about a handful of page boundaries.
+        #
+        # An INCREMENTAL decoder, not a plain slice-and-decode: it keeps the
+        # bytes of a character split across a boundary, so the count stays exact
+        # and no bytes are dropped between slices.
+        decoder = codecs.getincrementaldecoder("utf-8")("ignore")
+        data = content.encode("utf-8")
         mapping: dict[int, int] = {}
-        cursor = 0
-        nbytes = 0
-        for char_index, char in enumerate(content):
-            while cursor < len(targets) and targets[cursor] <= nbytes:
-                mapping[targets[cursor]] = char_index
-                cursor += 1
-            nbytes += len(char.encode("utf-8"))
-        while cursor < len(targets):
-            mapping[targets[cursor]] = len(content)
-            cursor += 1
+        chars = 0
+        previous = 0
+        for target in targets:
+            chars += len(decoder.decode(data[previous:target]))
+            # A target landing inside a multi-byte character maps to that
+            # character, which is what the per-character version reported.
+            pending = decoder.getstate()[0]
+            mapping[target] = min(chars + (1 if pending else 0), len(content))
+            previous = target
         return mapping
 
     def _insert_page_markers_by_bytes(

@@ -221,6 +221,39 @@ in-tree references: `managed_bot_configurator.py`,
 `whatsapp_mobile_verification.py`, and `schedule/handlers/schedule_consumer.py`
 (whose docstring states the rule, and whose datastore sibling violated it).
 
+## The loop half
+
+`app/modules/test_support/loop_scope.py` is the sibling gate. `stall_sampler`
+(from #349) already does the hard part — it watches from an OS thread, so it
+runs *during* a stall and captures the stack of the call that is blocking
+rather than the scaffolding around it. The fixture adds a verdict and a tick to
+watch, and `make test-connection-scope` runs both.
+
+It exists because `make lint-async` cannot see this class of bug at all: the
+ruff ASYNC rules know the synchronous I/O primitives and nothing about CPU. A
+per-character loop over a document, thirteen regex passes over 8 MiB, or a chunk
+walk whose iteration count the uploader chooses are all invisible to it.
+
+Two findings fixed and pinned this way:
+
+- **Function terminal logs** redacted the whole of stdout+stderr — up to 8 MiB,
+  thirteen regex passes — and then kept the first 4 MiB. Half the work was spent
+  on text nobody would see. It now trims first, with a margin past the limit so
+  a credential straddling the final cut is still inside the window the patterns
+  ran over, and the whole thing is offloaded.
+- **Icon PNG validation** walked the container's chunk list, and a chunk
+  declaring length 0 advances only its 12-byte header — so a file of nothing but
+  empty chunks costs `len(data)/12` passes. Measured at **73 ms** of
+  uninterruptible loop for 5 MiB, from an upload, and the dimension limits could
+  not help because they are checked after the walk returns. Now bounded at 4096
+  chunks, which no real icon approaches.
+
+Both tests assert the property rather than the implementation: the redaction one
+asserts no part of the credential survives (not that the `[REDACTED]` marker
+lands in a particular place, which is arithmetic), and the PNG one asserts wall
+clock with a wide margin, because the cost *is* the wall clock. Each was checked
+against the unfixed code — the PNG walk reproduces the audit's 73 ms exactly.
+
 ## Pooler compatibility
 
 Nothing here requires a middle-tier pooler, but two invariants keep one usable

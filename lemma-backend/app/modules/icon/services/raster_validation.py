@@ -19,6 +19,11 @@ _FORMAT_MEDIA_TYPES = {
 }
 
 
+# Generous against any real PNG (a photo with full metadata has tens of chunks)
+# and small enough that the walk is bounded work whatever is uploaded.
+_MAX_PNG_CHUNKS = 4096
+
+
 @dataclass(frozen=True, slots=True)
 class RasterInfo:
     media_type: str
@@ -29,7 +34,19 @@ class RasterInfo:
 def _container_ends_at_eof(data: bytes, media_type: str) -> bool:
     if media_type == "image/png":
         position = 8
-        while position + 12 <= len(data):
+        # Bounded because the iteration count is the UPLOADER's to choose: a
+        # chunk declaring length 0 advances only the 12-byte header, so a file
+        # of nothing but empty chunks costs len(data)/12 passes of this loop —
+        # ~437k for 5 MiB, measured at 74ms of uninterruptible event loop, from
+        # an unauthenticated-shaped upload. The dimension limits below cannot
+        # help: they are checked after this returns.
+        #
+        # A real icon has tens of chunks. Anything past the cap is refused as
+        # malformed rather than walked, which is the same answer the caller
+        # would eventually have given.
+        for _ in range(_MAX_PNG_CHUNKS):
+            if position + 12 > len(data):
+                return False
             length = struct.unpack(">I", data[position : position + 4])[0]
             chunk_type = data[position + 4 : position + 8]
             position += length + 12
