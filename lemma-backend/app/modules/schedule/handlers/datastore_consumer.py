@@ -65,7 +65,9 @@ async def handle_datastore_event(
                 ),
                 schedule_processor=create_schedule_processor(),
             )
-            schedule_ids = await handler.handle_datastore_event(record_event)
+            schedule_ids = await handler.handle_datastore_event(
+                record_event, release=uow.commit
+            )
         if schedule_ids:
             logger.debug(
                 "schedule.datastore_consumer.fired_s_datastore_schedules.observed",
