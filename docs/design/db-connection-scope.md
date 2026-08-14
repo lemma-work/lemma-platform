@@ -104,6 +104,47 @@ possible without any engine juggling. In production it warns; in a test that
 names the fixture, it fails with the stack of the code that took the
 connection.
 
+Naming the culprit took three attempts, all corrected by running it rather than
+reasoning about it, and the wrong answers are worth knowing because they are the
+obvious ones:
+
+1. `traceback.extract_stack()` — SQLAlchemy's async layer runs pool listeners
+   inside a greenlet it spawns, so this returns the greenlet's own stack: a few
+   frames of SQLAlchemy internals and no caller at all.
+2. Walking the task's `cr_await` chain — only meaningful while a task is
+   *suspended*. Check-in runs synchronously inside the greenlet, so the task is
+   running, so the chain is empty. Measured on a four-deep call chain: one frame.
+3. Walking the **parent greenlet's** frames — correct. Same four-deep chain:
+   eleven frames, three of them the ones a developer needs.
+
+### How much a clean sweep actually proves
+
+`LEMMA_CONNECTION_SCOPE_REPORT=1` runs the monitor over a whole pytest session
+and writes what it saw, grouped by site. Early results:
+
+| Suite | Tests | Holds |
+| --- | --- | --- |
+| pod e2e | 97 | 1 |
+| datastore + apps e2e | 98 | 4 (3 sites) |
+| datastore records e2e, run alone | 17 | 0 |
+
+That last row is the important one. The same file contributed a 546 ms hold in
+the combined run and none on its own, so those were **cold-start artifacts** —
+first-touch model loading and schema setup — not per-request holds.
+
+Which sets the real limit on this evidence: **the hermetic e2e suite mocks
+exactly the calls that cause the worst holds.** `E2E_LLM_MODE=mock` replaces the
+model with a `FunctionModel`, and platform sends are stubbed. A clean sweep
+therefore proves the database-only paths are clean and that the *mocks* are
+fast. It says nothing about whether the code would still hold a connection if
+the Slack call took four seconds.
+
+So a `connection_scope` test should not rely on a collaborator happening to be
+slow. It should **inject a delay into the collaborator** and assert no
+connection is held across it — that tests the structure (was the session closed
+before the call?), which is the property that actually has to hold, and it
+tests it in the hermetic suite where the real call never happens.
+
 ## The audit
 
 Every module was audited (2026-08-14) against both defect classes — a
