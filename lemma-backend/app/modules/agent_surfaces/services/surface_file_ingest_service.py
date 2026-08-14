@@ -31,6 +31,7 @@ from app.modules.agent_surfaces.domain.entities import ParsedInboundSurfaceEvent
 from app.modules.agent_surfaces.infrastructure.adapters.registry import (
     SurfacePlatformAdapterRegistry,
 )
+from app.core.net.capped_read import ResponseTooLargeError
 from app.modules.agent_surfaces.platforms.attachment_limits import (
     INBOUND_ATTACHMENT_BYTE_CAP,
     INBOUND_VOICE_TRANSCRIBE_BYTE_CAP,
@@ -216,13 +217,41 @@ class SurfaceFileIngestService:
                 event=parsed,
                 attachment=attachment,
             )
+        except ResponseTooLargeError:
+            # Its own case because it is not a failure: the adapter abandoned
+            # the transfer mid-stream, on purpose, rather than letting the
+            # sender pick how much of this replica's heap to fill.
+            logger.info(
+                "agent_surfaces.file_ingest.attachment_over_cap",
+                platform=platform,
+                cap_bytes=INBOUND_ATTACHMENT_BYTE_CAP,
+            )
+            return None
         except Exception:
+            # Skipping one attachment should not sink the whole message, so the
+            # broad catch stays -- but it used to swallow the reason entirely
+            # and return None, which made "the file never arrived" unanswerable
+            # from the logs. Now the traceback is there.
+            logger.warning(
+                "agent_surfaces.file_ingest.attachment_download_failed.degraded",
+                platform=platform,
+                exc_info=True,
+            )
             return None
         if downloaded is None:
             return None
 
         content, name, mime = downloaded
         if len(content) > INBOUND_ATTACHMENT_BYTE_CAP:
+            # Belt and braces. Adapters stream under the cap now, so reaching
+            # this means one of them read a whole body some other way -- keep
+            # the check, and say so rather than dropping the file in silence.
+            logger.warning(
+                "agent_surfaces.file_ingest.attachment_over_cap_after_read.degraded",
+                platform=platform,
+                size_bytes=len(content),
+                cap_bytes=INBOUND_ATTACHMENT_BYTE_CAP,
+            )
             return None
 
         try:
@@ -235,6 +264,11 @@ class SurfaceFileIngestService:
                 search_enabled=True,
             )
         except Exception:
+            logger.warning(
+                "agent_surfaces.file_ingest.attachment_store_failed.degraded",
+                platform=platform,
+                exc_info=True,
+            )
             return None
 
         content_type = attachment.get("content_type")

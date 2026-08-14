@@ -495,12 +495,38 @@ async def test_telegram_download_attachment_bytes_getfile_then_download(monkeypa
         calls.append(url)
         return _Resp(json_body={"ok": True, "result": {"file_path": "docs/a.pdf"}})
 
-    async def fake_get(self, url, **kwargs):
+    class _Stream:
+        """The file body arrives in chunks now, so the fake yields them.
+
+        The adapter streams under `INBOUND_ATTACHMENT_BYTE_CAP` rather than
+        taking `response.content`, so a fake that only offers `.content` no
+        longer resembles what it talks to.
+        """
+
+        def __init__(self, url, chunks):
+            self._url = url
+            self._chunks = chunks
+            self.status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+        async def aiter_bytes(self):
+            for chunk in self._chunks:
+                yield chunk
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+    def fake_stream(self, method, url, **kwargs):
         calls.append(url)
-        return _Resp(content=b"PDFDATA")
+        return _Stream(url, [b"PDF", b"DATA"])
 
     monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
-    monkeypatch.setattr(httpx.AsyncClient, "get", fake_get)
+    monkeypatch.setattr(httpx.AsyncClient, "stream", fake_stream)
 
     event = ParsedInboundSurfaceEvent(
         platform="TELEGRAM",

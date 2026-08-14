@@ -535,15 +535,35 @@ def _is_otel_handler(handler: logging.Handler) -> bool:
 
 
 def _is_console_handler(handler: logging.Handler) -> bool:
+    """Whether a handler writes records somewhere we already own.
+
+    This used to require ``handler.stream`` to *be* the current ``sys.stdout``
+    or ``sys.stderr`` object, which is a stricter question than the one being
+    asked. A library that grabs the stream at import time keeps whatever object
+    was current then; anything that later replaces ``sys.stderr`` -- pytest's
+    capture, a supervisor, a redirect -- breaks the identity while the handler
+    still writes to a console. It then survives reconciliation, and because
+    logger handlers run before propagation, whatever it does to the record is
+    what our pipeline receives.
+
+    That is not hypothetical. ``supertokens_python`` installs a StreamHandler at
+    import whose ``emit`` rewrites ``record.msg`` into its own JSON envelope, in
+    place. With the handler surviving, every ``com.supertokens`` record reached
+    our formatter with the message replaced by a blob -- the ``event`` field
+    ruined for exactly the dependency that reports auth failures.
+
+    So the question is simply "does this write to a stream that is not a file",
+    which is what a console handler *is*. ``FileHandler`` subclasses
+    ``StreamHandler``, so it has to be excluded first; a deliberately configured
+    file sink is still preserved.
+    """
     if getattr(handler, _CONSOLE_HANDLER_MARKER, False):
         return True
     if handler.__class__.__module__ == "rich.logging":
         return True
     if isinstance(handler, logging.FileHandler):
         return False
-    return isinstance(handler, logging.StreamHandler) and getattr(
-        handler, "stream", None
-    ) in {sys.stdout, sys.stderr}
+    return isinstance(handler, logging.StreamHandler)
 
 
 def _deployment_environment(env: str) -> str:

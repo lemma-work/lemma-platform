@@ -50,6 +50,10 @@ from app.modules.agent_surfaces.platforms.telegram.models import (
 from app.core.config import settings
 from app.core.infrastructure.cache.redis_json_cache import RedisJsonCache
 from app.core.log.log import get_logger
+from app.core.net.capped_read import read_capped
+from app.modules.agent_surfaces.platforms.attachment_limits import (
+    INBOUND_ATTACHMENT_BYTE_CAP,
+)
 
 logger = get_logger(__name__)
 
@@ -479,9 +483,12 @@ class TelegramPlatformService:
             if not file_path:
                 return None
             download_url = f"{self._client.file_base_url}/{file_path.lstrip('/')}"
-            file_response = await client.get(download_url)
-            file_response.raise_for_status()
-            content = file_response.content
+            async with client.stream("GET", download_url) as file_response:
+                file_response.raise_for_status()
+                content = await read_capped(
+                    file_response.aiter_bytes(),
+                    max_bytes=INBOUND_ATTACHMENT_BYTE_CAP,
+                )
         file_name = (
             str(attachment.get("name") or "").strip()
             or Path(file_path).name
