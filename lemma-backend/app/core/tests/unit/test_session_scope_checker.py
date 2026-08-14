@@ -202,6 +202,54 @@ async def handler(uow_factory, client, payload):
     assert violations[0].detail == "outbound HTTP: _deliver_to_slack"
 
 
+def test_ambiguous_names_propagate_when_every_definition_is_slow():
+    """Ambiguity only matters when the alternatives disagree.
+
+    `refresh_credentials` has four implementations and all of them are thread
+    offloads; refusing to follow it threw away real findings for no safety gain.
+    """
+    source = """
+class SlackAdapter:
+    async def deliver(self, payload):
+        await self.client.post("https://slack.test", json=payload)
+
+class TeamsAdapter:
+    async def deliver(self, payload):
+        await self.client.post("https://teams.test", json=payload)
+
+async def handler(uow_factory, adapter, payload):
+    async with uow_factory() as uow:
+        await adapter.deliver(payload)
+"""
+    assert "non-db-await" in _rules(source)
+
+
+def test_symbols_imported_from_a_networked_sdk_are_slow():
+    """These have no definition in app/, so the call graph cannot find them."""
+    source = """
+from supertokens_python.recipe.session.asyncio import revoke_all_sessions_for_user
+
+async def deactivate(uow_factory, user_id):
+    async with uow_factory() as uow:
+        await uow.session.execute("update users ...")
+        await revoke_all_sessions_for_user(user_id)
+"""
+    violations = _run(source)
+    assert [v.rule for v in violations] == ["non-db-await"]
+    assert violations[0].detail.startswith("remote SDK")
+
+
+def test_a_local_module_is_not_mistaken_for_a_remote_one():
+    source = """
+from app.modules.pod.services import load_pod
+
+async def handler(uow_factory, pod_id):
+    async with uow_factory() as uow:
+        await load_pod(uow, pod_id)
+"""
+    assert _run(source) == []
+
+
 def test_ambiguous_names_do_not_propagate():
     """Two definitions of one name means resolution is a guess -- stay quiet.
 

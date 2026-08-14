@@ -81,6 +81,18 @@ SESSION_OPENERS = re.compile(
         | _?session_factory
         | uow_factory
         | create_uow_from_session_maker
+        # `async with SessionUnitOfWorkFactory(async_session_maker)() as uow:`
+        # constructs the factory inline and calls it. Without this the whole
+        # block was invisible to every rule -- 20+ production sites, including
+        # ones that hold an open write transaction across an HTTP download.
+        | SessionUnitOfWorkFactory
+        # `async with ctx.uow() as uow:` is the standard form in streaq tasks,
+        # so omitting it left the entire worker surface unchecked.
+        | uow
+        # Authorization scopes that yield a UoW alongside a resolved context.
+        | uow_scope
+        | pod_context_scope
+        | current_context_scope
     )$
     |
     (^|\.)(engine|_engine)\.(begin|connect)$
@@ -111,6 +123,9 @@ NON_DB_AWAITS: tuple[tuple[str, str], ...] = (
     (r"(^|\.)(client|_client|http_client|_http_client)\.(get|post|put|patch|delete|head|request|send|stream)$", "outbound HTTP"),
     (r"(^|\.)httpx\.", "outbound HTTP"),
     (r"(^|\.)_request$", "outbound HTTP"),
+    # The surface egress family all bottoms out in `target.adapter.<send>()`.
+    # Anchored so `account_adapter.get` (a SQLAlchemy port) does not match.
+    (r"(^|\.)adapter\.", "platform adapter"),
     (r"(^|\.)(fetch_spec|fetch_url|download_file|download)$", "outbound HTTP"),
     # Object storage.
     (r"(^|\.)storage\.", "object storage"),
@@ -132,6 +147,21 @@ NON_DB_PATTERNS = tuple((re.compile(pattern), label) for pattern, label in NON_D
 # writes a row. Without this the deny-list's verb matching would fire on the
 # data-access layer, which is the one place it must not.
 DB_RECEIVERS = re.compile(r"(repository|repositories|uow|session|dao|outbox|admission)")
+
+# Third-party modules that talk to something over a network. A call to a symbol
+# imported from one of these is non-database work by construction, and the
+# call-graph propagation below can never learn that on its own: these functions
+# have no definition inside `app/`, so a name lookup finds nothing and the call
+# looks local and cheap.
+REMOTE_MODULES = re.compile(
+    r"""(?x)^(
+          supertokens_python | aiohttp | httpx | requests | composio
+        | slack_sdk | telegram | msal | resend | e2b | docker
+        | redis | boto3 | botocore | azure
+        | google\.(cloud|auth|oauth2) | googleapiclient
+        | openai | anthropic | pydantic_ai | cohere | litellm
+    )(\.|$)"""
+)
 
 # `@asynccontextmanager` helpers yield the session by construction -- that IS
 # the mechanism, and the scope that matters is the caller's `async with`, which
@@ -167,71 +197,92 @@ class DependencyIndex:
         # rarely calls httpx itself; it calls a service method that calls an
         # adapter that calls httpx. Matching only the leaf would miss every
         # real finding, so slowness is propagated up the call graph by name.
-        self.awaits: dict[str, set[str]] = {}
-        self.slow_reason: dict[str, str] = {}
-        # How many definitions share each bare name. Without type inference,
-        # `await thing.execute(...)` can only be resolved by name -- and
-        # `execute` is defined on dozens of classes, most of them repositories.
-        # Propagating through an ambiguous name poisons the whole graph (it
-        # marked `conn.execute` as an HTTP call). So propagation is restricted
-        # to names with exactly one definition, where resolution is certain.
-        # That trades recall for precision on purpose: a gate that cries wolf
-        # gets baselined into irrelevance.
-        self.definition_counts: dict[str, int] = {}
+        # One entry per *definition*, not per name: `execute` has 21 of them and
+        # they do not agree with each other.
+        self.definitions: dict[str, list[dict]] = {}
+        # Names imported from a networked third-party module. These have no
+        # definition inside app/, so the call graph cannot discover them.
+        self.remote_names: set[str] = set()
+        self.remote_roots: set[str] = set()
 
     def ingest(self, tree: ast.Module) -> None:
         for node in ast.walk(tree):
             if isinstance(node, ast.Assign):
                 self._ingest_alias(node)
+            elif isinstance(node, (ast.Import, ast.ImportFrom)):
+                self._ingest_import(node)
             elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 self.params[node.name] = _dependency_names(node)
                 if _yields_inside_session(node):
                     self.seeds.add(node.name)
-                self.definition_counts[node.name] = (
-                    self.definition_counts.get(node.name, 0) + 1
-                )
                 awaited, direct = _awaited_calls(node)
-                self.awaits.setdefault(node.name, set()).update(awaited)
-                if direct is not None and node.name not in self.slow_reason:
-                    self.slow_reason[node.name] = direct
+                self.definitions.setdefault(node.name, []).append(
+                    {"awaits": awaited, "reason": direct}
+                )
 
-    def _unambiguous(self, name: str) -> bool:
-        return self.definition_counts.get(name, 0) == 1
+    def _ingest_import(self, node: ast.Import | ast.ImportFrom) -> None:
+        if isinstance(node, ast.ImportFrom):
+            if node.module and REMOTE_MODULES.search(node.module):
+                for alias in node.names:
+                    self.remote_names.add(alias.asname or alias.name)
+            return
+        for alias in node.names:
+            if REMOTE_MODULES.search(alias.name):
+                self.remote_roots.add(alias.asname or alias.name.split(".")[0])
 
     def resolve_slow(self) -> None:
-        """Fixed point: awaiting something unambiguously slow makes you slow."""
+        """Fixed point over definitions, resolved by name.
+
+        A name is usable for propagation when EVERY definition sharing it is
+        slow. Ambiguity only matters when the alternatives disagree: `execute`
+        is 21 definitions of which most are queries, so it stays unusable, while
+        `refresh_credentials` is 4 definitions that are all thread offloads and
+        is perfectly safe to follow. The earlier revision required exactly one
+        definition, which threw away every finding reached through a service
+        interface with more than one implementation -- which is most of them.
+        """
         changed = True
         while changed:
             changed = False
-            # Sorted so the recorded reason is the same on every run: the
-            # baseline keys include it, and a reason that flips between two
-            # equally-true callees would churn the file for no reason.
-            for name, callees in sorted(self.awaits.items()):
-                if name in self.slow_reason or not self._unambiguous(name):
-                    continue
-                for callee in sorted(callees):
-                    if (
-                        callee != name
-                        and callee in self.slow_reason
-                        and self._unambiguous(callee)
-                    ):
-                        self.slow_reason[name] = f"via {callee}"
-                        changed = True
-                        break
+            # Sorted so the recorded reason is identical on every run: the
+            # baseline keys include it, and a reason flipping between two
+            # equally-true callees would churn the file for nothing.
+            for name, definitions in sorted(self.definitions.items()):
+                for definition in definitions:
+                    if definition["reason"] is not None:
+                        continue
+                    for callee in sorted(definition["awaits"]):
+                        if callee != name and self._name_is_slow(callee):
+                            definition["reason"] = f"via {callee}"
+                            changed = True
+                            break
+
+    def _name_is_slow(self, name: str) -> bool:
+        if name in self.remote_names:
+            return True
+        definitions = self.definitions.get(name)
+        if not definitions:
+            return False
+        return all(definition["reason"] is not None for definition in definitions)
 
     def why_slow(self, callee: str) -> str | None:
         """Reason `callee` is non-database work, if it is."""
         direct = _classify_non_db(callee)
         if direct is not None:
             return direct
-        bare = callee.rsplit(".", 1)
-        receiver = bare[0] if len(bare) > 1 else ""
+        parts = callee.split(".")
+        if parts[0] in self.remote_roots:
+            return "remote SDK"
+        receiver = ".".join(parts[:-1])
         if receiver and DB_RECEIVERS.search(receiver.lower()):
             return None
-        name = bare[-1]
-        if not self._unambiguous(name):
+        name = parts[-1]
+        if name in self.remote_names:
+            return "remote SDK"
+        if not self._name_is_slow(name):
             return None
-        return self.slow_reason.get(name)
+        reasons = {d["reason"] for d in self.definitions.get(name, [])}
+        return sorted(reasons)[0] if reasons else None
 
     def _ingest_alias(self, node: ast.Assign) -> None:
         targets = [t.id for t in node.targets if isinstance(t, ast.Name)]
