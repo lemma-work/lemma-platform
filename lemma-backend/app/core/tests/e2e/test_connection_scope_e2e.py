@@ -18,6 +18,7 @@ import pytest
 from sqlalchemy import text
 
 from app.core.infrastructure.db.session import async_session_maker
+from app.core.observability import connection_scope
 from app.modules.test_support import connection_scope as connection_scope_support
 from app.modules.test_support.e2e import fixtures as e2e_fixtures
 
@@ -97,3 +98,68 @@ async def test_a_session_doing_ordinary_work_is_silent(
         await session.commit()
 
     assert strict_connection_scope.reports == 0
+
+
+async def test_stopping_the_monitor_unbinds_its_listeners(db_manager) -> None:
+    """A stopped monitor must stop receiving pool events.
+
+    `stop_connection_scope_monitor` only cleared the module global. The
+    SQLAlchemy listeners it installed stayed bound to the discarded monitor for
+    the life of the process, so each start/stop cycle left another dead monitor
+    receiving checkouts. Two of them then race over the same per-connection
+    state and the live one stops reporting -- a detector that has gone blind
+    while still looking green, which is the worst way for this particular thing
+    to fail.
+
+    Asserted structurally rather than by counting reports: the listener either
+    is bound or it is not.
+    """
+    from sqlalchemy import event
+
+    from app.core.infrastructure.db.session import get_engine
+
+    monitor = connection_scope.start_connection_scope_monitor(
+        idle_hold_seconds=0.05, strict=True
+    )
+    monitor.attach(get_engine())
+    sync_engine = get_engine().sync_engine
+
+    assert event.contains(sync_engine.pool, "checkout", monitor._on_checkout)
+
+    connection_scope.stop_connection_scope_monitor()
+
+    assert not event.contains(sync_engine.pool, "checkout", monitor._on_checkout), (
+        "a stopped monitor is still bound to the pool; the next monitor will "
+        "race it and the detector goes blind"
+    )
+    assert not event.contains(sync_engine, "handle_error", monitor._on_statement_error)
+
+
+async def test_two_monitors_in_a_row_both_detect(db_manager) -> None:
+    """The behavioural half of the test above.
+
+    Without the unbind, the second monitor in a process silently detected
+    nothing. That is exactly how it was found: a test that armed the monitor
+    twice reported DID NOT RAISE on a hold that was plainly there.
+    """
+    import asyncio
+
+    from app.core.infrastructure.db.session import async_session_maker, get_engine
+
+    for attempt in range(2):
+        monitor = connection_scope.start_connection_scope_monitor(
+            idle_hold_seconds=0.05, strict=True
+        )
+        monitor.attach(get_engine())
+        try:
+            async with async_session_maker() as session:
+                await session.execute(text("SELECT 1"))
+                await asyncio.sleep(0.3)
+                await session.commit()
+        finally:
+            connection_scope.stop_connection_scope_monitor()
+
+        assert monitor.reports >= 1, (
+            f"monitor {attempt + 1} saw nothing; listeners from the previous "
+            "monitor are still bound and racing it"
+        )

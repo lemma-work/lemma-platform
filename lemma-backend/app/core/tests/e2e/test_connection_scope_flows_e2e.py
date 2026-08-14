@@ -161,3 +161,42 @@ async def test_the_guard_itself_still_catches_a_hold(
                 await session.commit()
 
     assert "held across non-database work" in str(excinfo.value)
+
+
+async def test_a_commit_actually_returns_the_connection_to_the_pool(
+    db_manager, scoped_connection_guard
+) -> None:
+    """The single assumption the whole release strategy rests on.
+
+    `_release_after_authorization` commits and calls the connection released.
+    So does `connection_released`, and so does `safe_to_release` by implication.
+    Three separate mechanisms in this codebase are built on "commit hands the
+    pooled connection back", and until now nothing asserted it — which is a lot
+    of weight on a fact about SQLAlchemy that was inferred rather than checked.
+
+    The two halves are asserted together on purpose. Without the second, the
+    first would pass against an implementation where commit released nothing
+    and the monitor simply never fired.
+    """
+    import asyncio
+
+    from sqlalchemy import text
+
+    from app.core.infrastructure.db.session import async_session_maker
+
+    # Held: a statement, then idle, then commit. Must be reported.
+    with pytest.raises(pytest.fail.Exception):
+        async with scoped_connection_guard(idle_hold_seconds=0.05):
+            async with async_session_maker() as session:
+                await session.execute(text("SELECT 1"))
+                await asyncio.sleep(0.3)
+                await session.commit()
+
+    # Released: the same statement, committed *first*, then idle. Must be clean.
+    # If this ever starts failing, every `_release_after_authorization` call in
+    # the tree is decorative and the pool is being held through every response.
+    async with scoped_connection_guard(idle_hold_seconds=0.05):
+        async with async_session_maker() as session:
+            await session.execute(text("SELECT 1"))
+            await session.commit()
+            await asyncio.sleep(0.3)
