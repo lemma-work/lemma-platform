@@ -5,7 +5,7 @@ import { cn } from "@/lib/utils";
 import { useLoadingGate } from "@/components/shared/loading";
 import { InlineLoader } from "@/components/brand/loader";
 import { Button } from "@/components/ui/button";
-import { ArrowDown, RotateCcw } from "@/components/ui/icons";
+import { ArrowDown, RefreshCw, RotateCcw } from "@/components/ui/icons";
 import {
   collectCompletedRunTraceGroups,
   messageHasToolActivity,
@@ -160,6 +160,15 @@ export interface AssistantExperienceConversationProps {
   assistantErrorTitle: string;
   assistantErrorDetails: string;
   onRetryFailedMessage?: () => void;
+  /**
+   * Ask this computer's Agent Host to re-probe its coding agents.
+   *
+   * Only ever passed for a failure that says an agent is installed but signed
+   * out, because that is the only failure it fixes — and it is the failure
+   * where "try again" cannot work on its own: the harness stays AUTH_REQUIRED,
+   * and admission keeps refusing, until the host looks again.
+   */
+  onRecheckLocalAgents?: () => void;
   showScrollToBottom: boolean;
   onScrollToBottom: () => void;
   isConversationBusy: boolean;
@@ -190,6 +199,7 @@ export function AssistantExperienceConversation({
   assistantErrorTitle,
   assistantErrorDetails,
   onRetryFailedMessage,
+  onRecheckLocalAgents,
   showScrollToBottom,
   onScrollToBottom,
   isConversationBusy,
@@ -311,18 +321,32 @@ export function AssistantExperienceConversation({
                 </pre>
               ) : null}
             </div>
-            {onRetryFailedMessage ? (
-              <Button
-                type="button"
-                variant="secondary"
-                size="sm"
-                onClick={onRetryFailedMessage}
-                className="h-8 shrink-0 gap-1.5 bg-transparent px-2.5"
-              >
-                <RotateCcw className="size-3.5" aria-hidden="true" />
-                Retry
-              </Button>
-            ) : null}
+            <div className="flex shrink-0 items-center gap-1.5">
+              {onRecheckLocalAgents ? (
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  onClick={onRecheckLocalAgents}
+                  className="h-8 shrink-0 gap-1.5 bg-transparent px-2.5"
+                >
+                  <RefreshCw className="size-3.5" aria-hidden="true" />
+                  Re-check
+                </Button>
+              ) : null}
+              {onRetryFailedMessage ? (
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  onClick={onRetryFailedMessage}
+                  className="h-8 shrink-0 gap-1.5 bg-transparent px-2.5"
+                >
+                  <RotateCcw className="size-3.5" aria-hidden="true" />
+                  Retry
+                </Button>
+              ) : null}
+            </div>
           </div>
         </div>
       ) : null}

@@ -49,4 +49,6 @@ pod-bundle steps are not compensated automatically; cancellation exposes
 `PARTIALLY_CANCELLED` and its committed steps.
 
 The architecture baseline is a debt ratchet, not proof that existing cycles are
-safe. Existing violations remain tracked in `lemma-backend/docs/modules/issues.md`.
+safe. The violations it tolerates are enumerated in
+`lemma-backend/architecture-baseline.json` and enforced by `make architecture`,
+which fails on any growth.

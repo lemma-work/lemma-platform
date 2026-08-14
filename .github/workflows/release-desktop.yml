@@ -133,7 +133,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v5
         with:
-          node-version: 22
+          node-version-file: .nvmrc
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -386,7 +386,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v5
         with:
-          node-version: 22
+          node-version-file: .nvmrc
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
