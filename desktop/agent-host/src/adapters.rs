@@ -244,12 +244,36 @@ impl AdapterManifest {
     }
 
     #[must_use]
+    /// Every certified adapter, resolved against this machine.
+    ///
+    /// Logged per adapter, because a GUI-launched app inherits
+    /// `/usr/bin:/bin:/usr/sbin:/sbin` and never a login shell's `PATH` -- so
+    /// the well-known-directory search *is* detection here, and the cost of it
+    /// missing a directory is an agent the user can see installed that Lemma
+    /// insists does not exist. Which path answered, or why none did, is the
+    /// first thing worth knowing about that and was previously written nowhere.
     pub fn discover(&self) -> Vec<HarnessSnapshot> {
         self.adapters
             .iter()
             .map(|adapter| match self.resolve(&adapter.key) {
-                Ok(resolved) => snapshot_ready(&resolved),
-                Err(error) => snapshot_unavailable(adapter, &error.to_string()),
+                Ok(resolved) => {
+                    tracing::info!(
+                        harness = %adapter.key,
+                        command = %resolved.command.display(),
+                        upstream = %resolved.upstream_command.display(),
+                        version = resolved.upstream_version.as_deref().unwrap_or("unknown"),
+                        "adapter resolved"
+                    );
+                    snapshot_ready(&resolved)
+                }
+                Err(error) => {
+                    tracing::info!(
+                        harness = %adapter.key,
+                        error = %error,
+                        "adapter not available on this computer"
+                    );
+                    snapshot_unavailable(adapter, &error.to_string())
+                }
             })
             .collect()
     }
@@ -427,16 +451,7 @@ impl ResolvedAdapter {
 
 fn snapshot_ready(adapter: &ResolvedAdapter) -> HarnessSnapshot {
     let now = Utc::now();
-    let config_options = Vec::<ConfigOption>::new();
-    let revision_input = serde_json::json!({
-        "adapter": adapter.spec.adapter_version,
-        "upstream": adapter.upstream_version,
-        "config": config_options,
-    });
-    let config_revision = hex::encode(Sha256::digest(
-        serde_json::to_vec(&revision_input).expect("snapshot serialization"),
-    ));
-    HarnessSnapshot {
+    let mut snapshot = HarnessSnapshot {
         harness_key: adapter.spec.key.clone(),
         display_name: adapter.spec.display_name.clone(),
         adapter_version: adapter.spec.adapter_version.clone(),
@@ -447,11 +462,16 @@ fn snapshot_ready(adapter: &ResolvedAdapter) -> HarnessSnapshot {
             usage: true,
             ..HarnessCapabilities::default()
         },
-        config_revision,
-        config_options,
+        // Replaced immediately below, and again by the probe once it lands.
+        // `HarnessSnapshot::revision` reads the whole snapshot, so it cannot be
+        // computed before there is one.
+        config_revision: String::new(),
+        config_options: Vec::<ConfigOption>::new(),
         stale_after: now + SNAPSHOT_TTL,
         stale_reason: None,
-    }
+    };
+    snapshot.config_revision = snapshot.revision();
+    snapshot
 }
 
 fn snapshot_unavailable(spec: &AdapterSpec, reason: &str) -> HarnessSnapshot {

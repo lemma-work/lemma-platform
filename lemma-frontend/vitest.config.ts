@@ -16,6 +16,11 @@ export default defineConfig({
         environment: 'node',
         include: [
             'components/agents/agent-runtime-helpers.{test,spec}.ts',
+            // Which agents the onboarding panel lists, and which of its four
+            // states it is in. Pure, because the panel around it is not — and
+            // because its whole job is to stop two halves of one screen
+            // contradicting each other.
+            'components/agents/harness-discovery-rows.{test,spec}.ts',
             // What the Computers card says about this machine, extracted from the
             // card for the same reason as the helpers above: the logic is pure,
             // the component around it is not.

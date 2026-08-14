@@ -236,12 +236,22 @@ class AgentHostEventNormalizer:
         self._token_kind = None
         return events
 
-    def _flush_messages(self, *, final: bool) -> list[AgentEvent]:
+    def _flush_messages(
+        self,
+        *,
+        final: bool,
+        discard_text: bool = False,
+    ) -> list[AgentEvent]:
         """Emit accumulated text as messages.
 
         Only the terminal flush marks its message as the final answer. A run
         that pauses mid-way and resumes would otherwise produce several
         messages all claiming to be the final one.
+
+        ``discard_text`` drops the accumulated *message* while still taking it,
+        so nothing leaks into a later flush. Reasoning is unaffected: a thought
+        is never mistaken for an answer, and losing it would lose the only
+        record of what the agent was doing when it failed.
         """
         events = self._drain_tokens()
         thought, thought_id = self._thought.take()
@@ -260,6 +270,8 @@ class AgentHostEventNormalizer:
                 )
             )
         message, message_id = self._message.take()
+        if discard_text:
+            message = ""
         metadata: JsonObject = {
             "agent_host_object_id": message_id,
             "is_final_answer": final,
@@ -505,7 +517,21 @@ class AgentHostEventNormalizer:
         row: AgentHostEventEnvelope,
         payload: JsonObject,
     ) -> list[AgentEvent]:
-        events = self._flush_messages(final=True)
+        # The host says so when its terminal message is a rewrite of text the
+        # adapter already streamed -- a signed-out agent reports itself once as
+        # ordinary assistant text and again as the reason the turn ended. Both
+        # reached the transcript, so the user saw the failure twice, in two
+        # different voices.
+        #
+        # Dropping the streamed half is not only tidier. Retry is offered only
+        # on a failed run whose messages are all the user's
+        # (`AgentRun.is_safely_retryable`), so persisting the adapter's own
+        # error as an assistant message is what took the button away from the
+        # one failure a retry actually fixes.
+        events = self._flush_messages(
+            final=True,
+            discard_text=bool(payload.get("supersedes_stream")),
+        )
         terminal = terminal_event(
             agent_run_id=self.agent_run_id,
             state=str(payload.get("state") or payload.get("status") or "FAILED"),

@@ -393,12 +393,10 @@ class AgentHostEventAck(BaseModel):
     acked_through: int = Field(ge=0)
 
 
-def validate_agent_host_selections(
-    *,
+def _agent_host_options_by_key(
     config_options: list[object],
-    selections: JsonObject,
-) -> JsonObject:
-    """Validate provider-owned selections without translating their values."""
+) -> dict[str, dict[str, object]]:
+    """Index a harness's options by both the names a selection may use."""
     options_by_key: dict[str, dict[str, object]] = {}
     for raw_option in config_options:
         if not isinstance(raw_option, dict):
@@ -409,6 +407,16 @@ def validate_agent_host_selections(
             options_by_key[option_id] = raw_option
         if category:
             options_by_key[category] = raw_option
+    return options_by_key
+
+
+def validate_agent_host_selections(
+    *,
+    config_options: list[object],
+    selections: JsonObject,
+) -> JsonObject:
+    """Validate provider-owned selections without translating their values."""
+    options_by_key = _agent_host_options_by_key(config_options)
 
     normalized: JsonObject = {}
     for key, value in selections.items():
@@ -428,7 +436,7 @@ def validate_agent_host_selections(
             # own safe default, which is what the built-in harness does too.
             continue
         # Deny-list first, then membership - the order ``selection_is_allowed``
-        # uses in acp.rs:625. It matters: harnesses *do* enumerate their
+        # uses in acp.rs. It matters: harnesses *do* enumerate their
         # permission modes, so a value like ``bypassPermissions`` is a legal
         # member of the option's own list and the host refuses it anyway.
         # Checking membership first would let exactly the common case through,
@@ -468,6 +476,79 @@ def validate_agent_host_model(
     if not has_model_option or normalized not in model_options:
         raise ValueError("default_model_name is not offered by this harness")
     return normalized
+
+
+class AgentHostSelectionRefused(ValueError):
+    """A carried-over selection the re-published harness must not be given."""
+
+
+def carry_agent_host_selections(
+    *,
+    config_options: list[object],
+    selections: JsonObject,
+) -> JsonObject:
+    """Carry saved selections across a harness re-publish, dropping what moved.
+
+    The lenient sibling of :func:`validate_agent_host_selections`, for the one
+    caller that is not a user pressing Save: a run already in flight whose
+    harness re-published a different set of options underneath it. There, a
+    selection the harness no longer offers is news about the harness, not a
+    mistake by the person -- refusing it would fail a run over a value nobody
+    chose to change.
+
+    So an unknown key and a value that is no longer a member are *dropped*, and
+    the harness applies its own default for them.
+
+    A policy-bearing value is the exception and still refuses, by raising:
+    ``_is_disallowed_policy_selection`` is what stops a stored profile turning
+    off the human-approval gate, and "the harness changed" is not a reason to
+    stop enforcing it. The caller fails the run rather than dispatching it.
+    """
+    options_by_key = _agent_host_options_by_key(config_options)
+    carried: JsonObject = {}
+    for key, value in selections.items():
+        normalized_key = str(key).strip()
+        option = options_by_key.get(normalized_key)
+        if option is None:
+            continue
+        option_category = str(option.get("category") or "").strip()
+        if option_category == "model" or option_category in (
+            _PLATFORM_OWNED_OPTION_CATEGORIES
+        ):
+            continue
+        if _is_disallowed_policy_selection(option, value):
+            raise AgentHostSelectionRefused(
+                f"That value is not allowed for Agent Host configuration: {key}"
+            )
+        allowed_values = _agent_host_option_values(option.get("options"))
+        if allowed_values and value not in allowed_values:
+            continue
+        carried[normalized_key] = value
+    return carried
+
+
+def carry_agent_host_model(
+    *,
+    config_options: list[object],
+    model_name: str | None,
+) -> str | None:
+    """The pinned model if the re-published harness still offers it, else None.
+
+    ``None`` means "let the harness use its own default", which is what an
+    unpinned profile already sends. Unlike :func:`validate_agent_host_model`
+    this never raises: a model is a preference, not a permission, and the
+    codebase already treats it that way when a profile is edited
+    (``runtime_profile_editor`` clears a stale pin rather than refusing) and
+    when one is dispatched (``_selected_model`` falls back to the catalog).
+    """
+    if model_name is None:
+        return None
+    try:
+        return validate_agent_host_model(
+            config_options=config_options, model_name=model_name
+        )
+    except ValueError:
+        return None
 
 
 # Mirrors the Agent Host's own policy filter (desktop/agent-host/src/acp.rs:569-600):

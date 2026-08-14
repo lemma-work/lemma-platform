@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::{HOST_RELEASE, PROTOCOL_VERSION};
@@ -260,6 +261,38 @@ pub struct HarnessSnapshot {
     pub stale_reason: Option<String>,
 }
 
+impl HarnessSnapshot {
+    /// The identity Lemma fences a dispatched run against.
+    ///
+    /// Lives here, on the snapshot, because there used to be two of these:
+    /// `adapters::snapshot_ready` hashed `{adapter, upstream, config}` for a
+    /// harness that had been discovered but not yet probed, and `runtime`
+    /// hashed `{adapter_version, upstream_version, config_options,
+    /// capabilities}` once the probe landed. Same concept, different keys — so
+    /// the same harness state hashed differently depending on which path
+    /// produced it, and a revision could change with nothing about the harness
+    /// changing at all.
+    ///
+    /// `upstream_version` is deliberately **not** an input. It is the version
+    /// of the agent's own CLI, which updates itself: including it meant every
+    /// Claude Code patch release minted a new revision, and a run command
+    /// already in flight was then rejected for naming the old one. What the
+    /// fence is actually protecting is the *configuration* a profile was bound
+    /// against — the options offered and the capabilities advertised — and a
+    /// release that changes either of those changes them here too.
+    #[must_use]
+    pub fn revision(&self) -> String {
+        let value = serde_json::json!({
+            "adapter_version": self.adapter_version,
+            "config_options": self.config_options,
+            "capabilities": self.capabilities,
+        });
+        hex::encode(Sha256::digest(
+            serde_json::to_vec(&value).expect("snapshot revision serialization"),
+        ))
+    }
+}
+
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum HarnessHealth {
@@ -305,5 +338,80 @@ mod tests {
         assert!(RunState::Succeeded.is_terminal());
         assert!(RunState::DispatchUnknown.is_terminal());
         assert!(!RunState::Running.is_terminal());
+    }
+
+    fn snapshot() -> HarnessSnapshot {
+        HarnessSnapshot {
+            harness_key: "claude-code".into(),
+            display_name: "Claude Code".into(),
+            adapter_version: "0.62.0".into(),
+            upstream_version: Some("2.1.0".into()),
+            health: HarnessHealth::Ready,
+            capabilities: HarnessCapabilities::default(),
+            config_revision: String::new(),
+            config_options: Vec::new(),
+            stale_after: Utc::now(),
+            stale_reason: None,
+        }
+    }
+
+    /// The whole point of dropping `upstream_version` from the hash.
+    ///
+    /// Claude Code updates itself. While its version was an input, every patch
+    /// release minted a revision Lemma had not dispatched against, and any run
+    /// command already in flight was refused for naming the old one — a
+    /// permanently failed run, caused by an agent quietly keeping itself up to
+    /// date.
+    #[test]
+    fn an_agent_updating_itself_does_not_change_the_revision() {
+        let before = snapshot();
+        let mut after = snapshot();
+        after.upstream_version = Some("2.4.1".into());
+
+        assert_eq!(before.revision(), after.revision());
+    }
+
+    /// What the fence is actually protecting: a profile was bound against a
+    /// set of options, and those changing is exactly when its saved selections
+    /// need revalidating.
+    #[test]
+    fn a_changed_option_set_changes_the_revision() {
+        let before = snapshot();
+        let mut after = snapshot();
+        after.config_options.push(ConfigOption {
+            id: "model".into(),
+            category: "model".into(),
+            name: "Model".into(),
+            description: None,
+            current_value: Value::Null,
+            options: Vec::new(),
+            metadata: JsonMap::new(),
+        });
+
+        assert_ne!(before.revision(), after.revision());
+    }
+
+    /// Capabilities decide whether a run may resume a session, so a harness
+    /// that stopped supporting `session/load` is not the one a profile bound.
+    #[test]
+    fn changed_capabilities_change_the_revision() {
+        let before = snapshot();
+        let mut after = snapshot();
+        after.capabilities.load_session = true;
+
+        assert_ne!(before.revision(), after.revision());
+    }
+
+    /// Health is reported alongside the revision, not inside it: a signed-out
+    /// agent is refused by admission on `health`, and folding it in here would
+    /// mint a new revision every time a session expired and was renewed.
+    #[test]
+    fn health_is_not_part_of_the_revision() {
+        let before = snapshot();
+        let mut after = snapshot();
+        after.health = HarnessHealth::AuthRequired;
+        after.stale_reason = Some("not signed in".into());
+
+        assert_eq!(before.revision(), after.revision());
     }
 }

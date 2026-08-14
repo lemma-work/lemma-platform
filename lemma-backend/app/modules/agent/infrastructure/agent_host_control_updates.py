@@ -25,11 +25,16 @@ from app.modules.agent.domain.agent_host import (
     AgentHostCommandKind,
     AgentHostCommandRejection,
     AgentHostCommandState,
+    AgentHostRejectionCode,
     AgentHostRunCheckpoint,
     AgentHostRunState,
     run_state_progresses,
 )
 from app.modules.agent.infrastructure import agent_host_session_memory
+from app.modules.agent.infrastructure.agent_host_command_remint import (
+    RemintOutcome,
+    remint_for_current_revision,
+)
 from app.modules.agent.infrastructure.agent_host_repository_common import (
     DEFAULT_RUN_LEASE_SECONDS,
     AgentHostNotFound,
@@ -129,23 +134,21 @@ async def apply_control_updates(
             )
     return changed
 
-async def apply_rejection(
+async def _rejection_target(
     session: AsyncSession,
     *,
     host_id: UUID,
     rejection: AgentHostCommandRejection,
-    now: datetime | None = None,
-) -> bool:
-    """Persist one fenced pre-dispatch rejection atomically.
+) -> tuple[AgentHostCommandModel, AgentHostRunLeaseModel] | None:
+    """The rows this receipt is allowed to move, or ``None`` if it is stale.
 
-    A receipt can requeue an unaccepted command or terminalize it, but it
-    can never move an accepted lease backwards. Duplicate and stale
-    receipts therefore become harmless no-ops.
-
-    Returns whether this receipt changed anything, so a resent one is not
-    mistaken for news.
+    Two different kinds of "no" live here. A receipt whose identity does not
+    match its command is a protocol violation and raises -- that is a host
+    sending us something incoherent. A receipt for a lease that has moved on is
+    simply late, and must be a silent no-op: the host resends anything we
+    refuse, and the poll carrying it is also the only way commands reach that
+    host, so an error here would wedge it.
     """
-    timestamp = now or utcnow()
     command = await session.get(
         AgentHostCommandModel,
         rejection.command_id,
@@ -173,21 +176,86 @@ async def apply_rejection(
         or lease.host_id != host_id
         or lease.lease_epoch != rejection.lease_epoch
     ):
-        return False
+        return None
     if (
         lease.accepted_at is not None
         or command.state == AgentHostCommandState.ACKNOWLEDGED.value
         or AgentHostRunState(lease.state) in TERMINAL_AGENT_HOST_RUN_STATES
     ):
+        return None
+    return command, lease
+
+
+async def _answer_stale_revision(
+    session: AsyncSession,
+    *,
+    host_id: UUID,
+    rejection: AgentHostCommandRejection,
+    command: AgentHostCommandModel,
+) -> RemintOutcome:
+    """Re-aim a command the host refused for naming a superseded revision.
+
+    Every other rejection gets an inert outcome and is simply recorded.
+
+    Decided on the *code*, not on the host's ``retryable`` flag, and this is the
+    only place in the backend that reads it. That way an older Agent Host still
+    gets the repair -- it has no idea this exists -- and a newer one talking to
+    an older Lemma still fails fast rather than spinning on a payload nobody
+    re-aims.
+    """
+    if rejection.code is not AgentHostRejectionCode.CONFIG_REVISION_STALE:
+        return RemintOutcome(requeue=False, attempts=0)
+    remint = await remint_for_current_revision(session, command=command)
+    if remint.refusal is not None:
+        logger.warning(
+            "agent.infrastructure.agent_host_command_remint.refused",
+            agent_run_id=str(rejection.run_id),
+            host_id=str(host_id),
+            harness_key=None,
+            attempt=remint.attempts,
+            refusal=remint.refusal,
+        )
+    return remint
+
+
+async def apply_rejection(
+    session: AsyncSession,
+    *,
+    host_id: UUID,
+    rejection: AgentHostCommandRejection,
+    now: datetime | None = None,
+) -> bool:
+    """Persist one fenced pre-dispatch rejection atomically.
+
+    A receipt can requeue an unaccepted command or terminalize it, but it
+    can never move an accepted lease backwards. Duplicate and stale
+    receipts therefore become harmless no-ops.
+
+    Returns whether this receipt changed anything, so a resent one is not
+    mistaken for news.
+    """
+    timestamp = now or utcnow()
+    target = await _rejection_target(session, host_id=host_id, rejection=rejection)
+    if target is None:
         return False
+    command, lease = target
+
+    remint = await _answer_stale_revision(
+        session, host_id=host_id, rejection=rejection, command=command
+    )
+    detail = remint.refusal or rejection.detail
 
     command.rejection = {
         "code": rejection.code.value,
         "retryable": rejection.retryable,
-        "detail": rejection.detail,
+        "detail": detail,
         "rejected_at": timestamp.isoformat(),
+        # Carried on the command rather than in a new column, because it is the
+        # only thing that bounds the re-aim loop: the poll hands back whatever
+        # is QUEUED and counts nothing.
+        **remint.receipt,
     }
-    if rejection.retryable:
+    if rejection.retryable or remint.requeue:
         command.state = AgentHostCommandState.QUEUED.value
         command.delivered_at = None
         lease.state = AgentHostRunState.QUEUED_FOR_HOST.value
@@ -197,7 +265,7 @@ async def apply_rejection(
         lease.state = AgentHostRunState.FAILED.value
         lease.terminal_at = timestamp
         lease.error_code = rejection.code.value
-        lease.error_detail = rejection.detail
+        lease.error_detail = detail
     lease.updated_at = timestamp
     await session.flush()
     return True

@@ -32,6 +32,17 @@ pub struct AcpRunRequest {
     /// Whether this harness advertised `loadSession` at probe time. A run only
     /// tries to resume `run_spec.resume_session_id` when it did.
     pub can_load_session: bool,
+    /// The configuration this harness was *published* as offering, from its
+    /// probe.
+    ///
+    /// A run's own session is supposed to report the same thing, and mostly
+    /// does — but ACP makes `configOptions` optional on `session/load`, and a
+    /// Lemma conversation resumes on every turn after the first. An adapter
+    /// that answers `session/new` with a model list and `session/load` with
+    /// nothing left the second turn unable to find the model the first turn
+    /// ran on, and failed it. This is the answer Lemma validated the profile
+    /// against, so it is the one to fall back to.
+    pub published_config_options: Vec<ConfigOption>,
     /// Where a native permission request parks while Lemma decides.
     pub permissions: PermissionGate,
     /// How long a parked request waits before it is denied, so a prompt
@@ -64,6 +75,18 @@ pub struct AcpRunOutcome {
 pub struct AcpProbeOutcome {
     pub config_options: Vec<ConfigOption>,
     pub capabilities: Value,
+    /// What the agent said about authenticating, from `initialize`.
+    ///
+    /// Not acted on: ACP's `authMethods` lists the ways a client *could* sign
+    /// in, and no adapter is required to clear it once signed in — so an
+    /// empty-or-not test would be a guess. It is recorded because a signed-out
+    /// Claude Code was observed opening `session/new` quite happily and only
+    /// failing at `session/prompt`, which is why it published as READY and the
+    /// user learned it was signed out from a chat. Whether any adapter
+    /// distinguishes the two states here is answerable from one build's log,
+    /// and not from reading.
+    #[serde(default)]
+    pub auth_methods: Value,
 }
 
 pub trait AcpCallbacks: Send + Sync + 'static {
@@ -115,6 +138,8 @@ impl AgentDriver for AcpDriver {
                     .send_request(NewSessionRequest::new(scratch_directory))
                     .block_task()
                     .await?;
+                let auth_methods = serde_json::to_value(&initialization.auth_methods)
+                    .unwrap_or_else(|_| Value::Array(Vec::new()));
                 let capabilities = serde_json::to_value(initialization.agent_capabilities)
                     .unwrap_or_else(|_| Value::Object(Map::new()));
                 let config_options = session
@@ -126,6 +151,7 @@ impl AgentDriver for AcpDriver {
                 Ok(AcpProbeOutcome {
                     config_options,
                     capabilities,
+                    auth_methods,
                 })
             })
             .await?;
@@ -147,6 +173,7 @@ impl AgentDriver for AcpDriver {
         let permission_timeout = request.permission_timeout;
         let permission_run_id = request.run_spec.agent_run_id;
         let can_load_session = request.can_load_session;
+        let published_config_options = request.published_config_options;
         let mut cancel = request.cancel;
         let cancel_grace = request.cancel_grace;
         let run_spec = request.run_spec;
@@ -274,6 +301,7 @@ impl AgentDriver for AcpDriver {
                 // lets the agent answer "what did I just say" instead of meeting
                 // the user again every turn.
                 let mut established = None;
+                let resumed = resume_session_id.is_some();
                 if let Some(existing) = resume_session_id {
                     match connection
                         .send_request(
@@ -307,11 +335,31 @@ impl AgentDriver for AcpDriver {
                         .await?;
                     (session.session_id, session.config_options)
                 };
-                let safe_options = config_options
+                let session_options = config_options
                     .unwrap_or_default()
                     .iter()
                     .filter_map(|option| convert_config_option(&adapter_key, option))
                     .collect::<Vec<_>>();
+                // `configOptions` is optional on `session/load`, and a Lemma
+                // conversation resumes on every turn after its first. An
+                // adapter that reports its models on `session/new` and nothing
+                // on `session/load` therefore left the second turn looking for
+                // a model in an empty list -- and failing the run over it. Fall
+                // back to what the probe published, which is the answer Lemma
+                // validated the profile against.
+                let safe_options = if session_options.is_empty() {
+                    if !published_config_options.is_empty() {
+                        tracing::info!(
+                            harness = %adapter_key,
+                            published = published_config_options.len(),
+                            resumed,
+                            "session reported no configuration; using the probed options"
+                        );
+                    }
+                    published_config_options
+                } else {
+                    session_options
+                };
 
                 // A user's provider configuration may have been left in an
                 // unrestricted mode outside Lemma. New Agent Host sessions
@@ -338,27 +386,48 @@ impl AgentDriver for AcpDriver {
                         .block_task()
                         .await?;
                 }
+                // A model this harness will not take is a preference we cannot
+                // honour, not a reason to lose the turn. Both of these used to
+                // fail the run outright -- and the way they were reached was
+                // never the user's doing: a coding agent renaming its models
+                // between releases, or a `session/load` that reported fewer
+                // than `session/new` did. So say what happened and let the
+                // agent answer on its own default.
                 if let Some(model_name) = &run_spec.model_name {
-                    let option = safe_options
+                    let usable = safe_options
                         .iter()
                         .find(|option| option.category == "model")
-                        .ok_or_else(|| {
-                            agent_client_protocol::schema::v1::Error::invalid_params()
-                                .data("this harness does not expose model selection")
-                        })?;
-                    let selection = Value::String(model_name.clone());
-                    if !selection_is_allowed(option, &selection) {
-                        return Err(agent_client_protocol::schema::v1::Error::invalid_params()
-                            .data("selected model is not offered by this harness"));
+                        .filter(|option| {
+                            selection_is_allowed(option, &Value::String(model_name.clone()))
+                        });
+                    if let Some(option) = usable {
+                        connection
+                            .send_request(SetSessionConfigOptionRequest::new(
+                                session_id.clone(),
+                                option.id.clone(),
+                                SessionConfigOptionValue::value_id(model_name.clone()),
+                            ))
+                            .block_task()
+                            .await?;
+                    } else {
+                        // Reported, not raised. Nothing about the failure is
+                        // the user's doing -- an agent renamed its models
+                        // between releases, or resumed a session that reports
+                        // fewer than it opened with -- and the answer they
+                        // asked for is still available on the harness's own
+                        // default. Losing the turn over the label was the
+                        // worse of the two outcomes.
+                        callbacks
+                            .event(
+                                EventType::ConfigUpdate,
+                                None,
+                                model_unavailable_payload(model_name, &safe_options),
+                            )
+                            .map_err(|error| {
+                                agent_client_protocol::schema::v1::Error::internal_error()
+                                    .data(error.to_string())
+                            })?;
                     }
-                    connection
-                        .send_request(SetSessionConfigOptionRequest::new(
-                            session_id.clone(),
-                            option.id.clone(),
-                            SessionConfigOptionValue::value_id(model_name.clone()),
-                        ))
-                        .block_task()
-                        .await?;
                 }
                 for (key, selection) in &run_spec.config_selections {
                     let option = safe_options
@@ -1039,6 +1108,40 @@ fn preferred_safe_value(adapter_key: &str, options: &[JsonMap]) -> Option<Value>
         .or_else(|| options.iter().find_map(option_value).cloned())
 }
 
+/// Say which model was asked for, and what the harness has instead.
+///
+/// Naming the alternatives matters more than it looks: the two ways to reach
+/// this are an agent renaming its models between releases and a resumed session
+/// reporting fewer than it opened with, and the list is what tells those apart
+/// for whoever reads the transcript afterwards.
+fn model_unavailable_payload(requested: &str, options: &[ConfigOption]) -> JsonMap {
+    let offered = options
+        .iter()
+        .filter(|option| option.category == "model")
+        .flat_map(|option| option.options.iter())
+        .filter_map(option_value)
+        .filter_map(Value::as_str)
+        .take(12)
+        .collect::<Vec<_>>()
+        .join(", ");
+    let detail = if offered.is_empty() {
+        format!(
+            "This agent did not offer {requested}, or any other model, for this \
+             turn. It answered on its own default."
+        )
+    } else {
+        format!(
+            "This agent no longer offers {requested}. It answered on its own \
+             default; it does offer: {offered}."
+        )
+    };
+    let mut payload = JsonMap::new();
+    payload.insert("status".to_owned(), Value::from("model_unavailable"));
+    payload.insert("requested_model".to_owned(), Value::from(requested));
+    payload.insert("detail".to_owned(), Value::from(detail));
+    payload
+}
+
 fn selection_is_allowed(option: &ConfigOption, selection: &Value) -> bool {
     if is_policy_bearing_option(&option.id, &option.category)
         && is_disallowed_policy_value(selection)
@@ -1121,6 +1224,86 @@ mod tests {
         let (state, message) = outcome_for("some_future_reason");
         assert_eq!(state, RunState::Failed);
         assert!(message.is_some_and(|message| message.contains("some_future_reason")));
+    }
+
+    fn model_option(values: &[&str]) -> ConfigOption {
+        ConfigOption {
+            id: "model".into(),
+            category: "model".into(),
+            name: "Model".into(),
+            description: None,
+            current_value: Value::Null,
+            options: values
+                .iter()
+                .map(|value| {
+                    let mut entry = JsonMap::new();
+                    entry.insert("value".to_owned(), Value::from(*value));
+                    entry
+                })
+                .collect(),
+            metadata: JsonMap::new(),
+        }
+    }
+
+    /// The turn-two failure, in the form the user actually reported it.
+    ///
+    /// A Lemma conversation resumes its provider session on every turn after
+    /// the first, and ACP makes `configOptions` optional on `session/load`.
+    /// Turn one opened with `opus[1m]` in the list and ran; turn two loaded a
+    /// session that reported nothing and the run died on
+    /// "selected model is not offered by this harness" -- a model the picker
+    /// had offered a minute earlier.
+    #[test]
+    fn a_model_the_session_stopped_reporting_is_reported_not_fatal() {
+        let none_offered: Vec<ConfigOption> = Vec::new();
+        let payload = model_unavailable_payload("opus[1m]", &none_offered);
+
+        assert_eq!(
+            payload.get("status").and_then(Value::as_str),
+            Some("model_unavailable")
+        );
+        assert_eq!(
+            payload.get("requested_model").and_then(Value::as_str),
+            Some("opus[1m]")
+        );
+        let detail = payload
+            .get("detail")
+            .and_then(Value::as_str)
+            .expect("a status the user can read");
+        assert!(detail.contains("opus[1m]"), "the detail named no model");
+        assert!(detail.contains("own default"), "{detail}");
+    }
+
+    /// Naming the alternatives is what tells the two causes apart afterwards:
+    /// an agent that renamed its models still lists some, a session that
+    /// reported nothing lists none.
+    #[test]
+    fn an_unavailable_model_says_what_the_harness_does_offer() {
+        let detail = model_unavailable_payload("opus[1m]", &[model_option(&["sonnet", "haiku"])])
+            .get("detail")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .expect("a status the user can read");
+
+        assert!(detail.contains("sonnet"), "{detail}");
+        assert!(detail.contains("haiku"), "{detail}");
+    }
+
+    /// An empty option list is permissive by design -- a harness that
+    /// enumerates nothing constrains nothing -- so the fallback must only ever
+    /// be reached when the session genuinely reported no options at all.
+    #[test]
+    fn a_model_the_session_still_offers_is_left_alone() {
+        let option = model_option(&["opus[1m]", "sonnet"]);
+
+        assert!(selection_is_allowed(
+            &option,
+            &Value::String("opus[1m]".into())
+        ));
+        assert!(!selection_is_allowed(
+            &option,
+            &Value::String("claude-fable-5[1m]".into())
+        ));
     }
 
     /// `PromptRequest` takes a `Vec<ContentBlock>` so that non-text content can
