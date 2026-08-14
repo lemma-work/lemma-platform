@@ -412,6 +412,8 @@ function AgentProfileCard({
                         label={agent.name}
                         imageClassName="object-contain p-1"
                         className="h-11 w-11 shrink-0 rounded-lg bg-transparent"
+                        identitySeed={agent.id || agent.name}
+                        identitySize={44}
                         fallback={<AgentMonogram name={agent.name} />}
                     />
                 </Link>

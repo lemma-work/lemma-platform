@@ -125,6 +125,184 @@ describe("collectCompletedRunTraceGroups", () => {
   });
 });
 
+describe("an answer told over more than one message", () => {
+  // The agent often lands its answer as several messages — a paragraph, then
+  // the caveat, then the question. Only the last one was being shown: the rule
+  // took the *last* run-closing row as the answer and folded everything before
+  // it, so the transcript opened mid-thought at "One honest flag: …" and the
+  // paragraph that set it up was hidden inside "Worked for 1m 30s".
+  const messages = [
+    user("u1", "hey"),
+    toolTurn("a1", RUN_ID),
+    answer("a2", "You have 5 drafts waiting.", RUN_ID),
+    answer("a3", "One honest flag: these came in July 2.", RUN_ID),
+    answer("a4", "What do you want to do?", RUN_ID),
+  ];
+
+  it("shows every trailing message, not just the last", () => {
+    const { groupedIndexes } = foldingFor(messages);
+    // Row 0 is the user turn; row 1 is the tool work and folds.
+    expect(groupedIndexes.has(1)).toBe(true);
+    expect(groupedIndexes.has(2)).toBe(false);
+    expect(groupedIndexes.has(3)).toBe(false);
+    expect(groupedIndexes.has(4)).toBe(false);
+  });
+
+  it("counts none of the answer as working-out", () => {
+    const { traceIndexes } = foldingFor(messages);
+    expect(traceIndexes.has(1)).toBe(true);
+    expect(traceIndexes.has(2)).toBe(false);
+    expect(traceIndexes.has(3)).toBe(false);
+  });
+
+  it("still folds narration that came before more work", () => {
+    // Text with another tool call after it was working-out, not the answer.
+    const withLaterWork = [
+      user("u1", "hey"),
+      toolTurn("a1", RUN_ID),
+      answer("a2", "Checking the drafts table.", RUN_ID),
+      toolTurn("a3", RUN_ID),
+      answer("a4", "You have 5 drafts waiting.", RUN_ID),
+    ];
+    const { groupedIndexes } = foldingFor(withLaterWork);
+    expect(groupedIndexes.has(2)).toBe(true);
+    expect(groupedIndexes.has(3)).toBe(true);
+    expect(groupedIndexes.has(4)).toBe(false);
+  });
+});
+
+describe("an answer that also shows a resource", () => {
+  // The shape that still hid text after the first fix: the agent says what it
+  // found *and* calls display_resource in the same message. The card is hoisted
+  // out of the rollup and drawn under the answer, so the reader sees the Drafts
+  // table — but the sentence introducing it stays folded, and the answer opens
+  // at the caveat that follows.
+  function answerWithCard(id: string, content: string, runId: string | null): AssistantRenderableMessage {
+    return {
+      id,
+      role: "assistant",
+      content,
+      createdAt: at(),
+      kind: "TEXT",
+      agent_run_id: runId,
+      toolInvocations: [{
+        toolCallId: `${id}-call`,
+        toolName: "display_resource",
+        args: {},
+        state: "result",
+        result: { ok: true },
+      }],
+      parts: [{
+        id: `${id}-tool`,
+        type: "tool",
+        toolInvocation: {
+          toolCallId: `${id}-call`,
+          toolName: "display_resource",
+          args: {},
+          state: "result",
+          result: { ok: true },
+        },
+      }],
+    };
+  }
+
+  const messages = [
+    user("u1", "hey"),
+    toolTurn("a1", RUN_ID),
+    answerWithCard("a2", "You have 5 drafts waiting.", RUN_ID),
+    answer("a3", "One honest flag: these came in July 2.", RUN_ID),
+  ];
+
+  it("keeps the sentence that introduces the card", () => {
+    const { groupedIndexes } = foldingFor(messages);
+    expect(groupedIndexes.has(1)).toBe(true);
+    expect(groupedIndexes.has(2)).toBe(false);
+    expect(groupedIndexes.has(3)).toBe(false);
+  });
+});
+
+describe("the real smart-inbox transcript", () => {
+  // Taken from an actual conversation. Every assistant TEXT message carries
+  // `is_final_answer: true` — the backend sets it on all of them — so the flag
+  // cannot pick out "the answer" on its own. What matters is that seq 23, the
+  // findings table, is the substance of the reply and was being folded away,
+  // leaving the transcript to open at seq 27's "One honest flag: …".
+  function thinking(id: string): AssistantRenderableMessage {
+    return { id, role: "assistant", content: "considering", createdAt: at(), kind: "THINKING", agent_run_id: RUN_ID };
+  }
+  function displayResource(id: string): AssistantRenderableMessage {
+    return {
+      id,
+      role: "assistant",
+      content: "",
+      createdAt: at(),
+      kind: "TOOL_CALL",
+      agent_run_id: RUN_ID,
+      toolInvocations: [{
+        toolCallId: `${id}-call`,
+        toolName: "display_resource",
+        args: {},
+        state: "result",
+        result: { success: true },
+      }],
+      parts: [{
+        id: `${id}-tool`,
+        type: "tool",
+        toolInvocation: {
+          toolCallId: `${id}-call`,
+          toolName: "display_resource",
+          args: {},
+          state: "result",
+          result: { success: true },
+        },
+      }],
+    };
+  }
+
+  const messages: AssistantRenderableMessage[] = [
+    user("s0", "hey"),
+    thinking("s1"),
+    answer("s2", "Hey! Let me pull up where your inbox stands.", RUN_ID),
+    toolTurn("s3", RUN_ID),
+    thinking("s7"),
+    answer("s8", "Query is locked down on this pod — using records list instead.", RUN_ID),
+    toolTurn("s9", RUN_ID),
+    thinking("s22"),
+    answer("s23", "Your inbox is fully triaged. 5 drafts waiting on your approval.", RUN_ID),
+    displayResource("s24"),
+    thinking("s26"),
+    answer("s27", "One honest flag: these came in July 2.", RUN_ID),
+  ];
+
+  it("still folds the narration that came before the work", () => {
+    // "Let me pull up where your inbox stands" and "Query is locked down" are
+    // narration with tool work after them. They carry `is_final_answer` too,
+    // which is exactly why that flag cannot be the rule — showing all four
+    // would make one turn read as four answers.
+    const rows = buildDisplayMessageRows(messages);
+    const { groupedIndexes } = collectCompletedRunTraceGroups(rows, messages, false);
+    const textOf = (i: number) => String(rows[i]?.message?.content ?? "");
+    const preamble = rows.findIndex((_, i) => textOf(i).startsWith("Hey! Let me pull up"));
+    const fallbackNote = rows.findIndex((_, i) => textOf(i).startsWith("Query is locked down"));
+
+    expect(groupedIndexes.has(preamble)).toBe(true);
+    expect(groupedIndexes.has(fallbackNote)).toBe(true);
+  });
+
+  it("shows the findings, not just the closing caveat", () => {
+    const rows = buildDisplayMessageRows(messages);
+    const { groupedIndexes } = collectCompletedRunTraceGroups(rows, messages, false);
+    const textOf = (i: number) => String(rows[i]?.message?.content ?? "");
+    const findings = rows.findIndex((_, i) => textOf(i).startsWith("Your inbox is fully triaged"));
+    const caveat = rows.findIndex((_, i) => textOf(i).startsWith("One honest flag"));
+
+    expect(findings).toBeGreaterThan(-1);
+    expect(caveat).toBeGreaterThan(-1);
+    expect(groupedIndexes.has(caveat)).toBe(false);
+    expect(groupedIndexes.has(findings)).toBe(false);
+  });
+});
+
 describe("buildDisplayMessageRows keys", () => {
   it("keeps a collapsible row's id stable as the cluster grows", () => {
     const one = buildDisplayMessageRows([user("u1", "go"), toolTurn("a1", RUN_ID)]);

@@ -116,30 +116,13 @@
    design, so this reads as the place you act from rather than as a search box
    pinned to the top of a list.
    ──────────────────────────────────────────── */
+/* Layout only. The shell — border, background, focus ring — belongs to the
+   shared `Composer` inside it now; leaving it here too drew the box twice, one
+   rounded rectangle inside another. */
 .pod-home-composer {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2-5);
-  min-height: 3.875rem;
-  padding: 0 0.75rem 0 0.875rem;
-  border: 1px solid var(--border-default);
-  border-radius: var(--radius-xl);
-  background: var(--surface-1);
-  box-shadow: var(--shadow-sm);
-  transition:
-    border-color var(--dur-fast) var(--ease-standard),
-    box-shadow var(--dur-fast) var(--ease-standard);
-}
-
-.pod-home-composer:hover {
-  border-color: var(--border-strong);
-}
-
-.pod-home-composer:focus-within {
-  border-color: color-mix(in srgb, rgb(var(--accent-rgb)) 55%, transparent);
-  box-shadow:
-    var(--shadow-sm),
-    0 0 0 3px color-mix(in srgb, rgb(var(--accent-rgb)) 12%, transparent);
+  display: block;
+  width: 100%;
+  min-width: 0;
 }
 
 .pod-home-composer-input {
@@ -544,9 +527,17 @@
 /* Brand surface logos (Slack, Gmail, Telegram…) are drawn for light backgrounds.
    Chip them on white in both light and dark mode so Gmail's baked-in white edge
    reads as an intentional app tile instead of a stray box on a dark surface. */
+/* Brand marks keep a light ground because several of them are dark-inked and
+   vanish on a dark chip — but pure white on `#131311` reads as a hole punched
+   in the page, which is what it looked like. Warm off-white on dark stock. */
 .surface-logo-chip {
   background: #ffffff;
   border: 0.5px solid color-mix(in srgb, var(--border-subtle) 55%, transparent);
+}
+
+.dark .surface-logo-chip {
+  background: #e9e7e1;
+  border-color: color-mix(in srgb, #000 22%, transparent);
 }
 
 .pod-home-surfaces-panel[data-state="ready"] {
@@ -598,4 +589,62 @@
   .pod-home-surfaces-list > li {
     animation: none;
   }
+}
+
+/* Apps on pod home.
+
+   A quarter the size of the cards on the apps index, because home is the
+   composer's page and this sits beneath it. The cover carries the recognition,
+   so the tile needs nothing but a thumbnail and a name — no description, no
+   metadata row, no actions. */
+.pod-home-app-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(8.5rem, 1fr));
+  gap: var(--space-3);
+}
+
+.pod-home-app-tile {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 0.5rem;
+  border-radius: var(--radius-lg);
+  text-decoration: none;
+}
+
+.pod-home-app-cover {
+  display: block;
+  overflow: hidden;
+  aspect-ratio: 16 / 9;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  transition: border-color var(--dur-control) var(--ease-standard);
+}
+
+.pod-home-app-tile:hover .pod-home-app-cover,
+.pod-home-app-tile:focus-visible .pod-home-app-cover {
+  border-color: var(--border-default);
+}
+
+.pod-home-app-name {
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pod-home-app-tile:hover .pod-home-app-name {
+  color: var(--text-primary);
+}
+
+.pod-home-app-all {
+  color: var(--text-tertiary);
+  font-size: var(--text-sm);
+  text-decoration: none;
+}
+
+.pod-home-app-all:hover {
+  color: var(--text-secondary);
 }

@@ -335,7 +335,7 @@ export const AssistantComposer = forwardRef<HTMLDivElement, AssistantComposerPro
       )}
 
       {pendingFiles ? (
-        <div className={cn("mx-auto flex w-full flex-wrap gap-1.5", innerClassName)}>
+        <div className={cn("lm-composer-files mx-auto w-full", innerClassName)}>
           {pendingFiles}
         </div>
       ) : null}

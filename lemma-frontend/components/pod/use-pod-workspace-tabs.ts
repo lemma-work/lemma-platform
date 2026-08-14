@@ -16,7 +16,7 @@ import {
     promoteNewConversationTab,
     routeWorkspaceTab,
     serializeWorkspaceTabs,
-    syncPinnedAppTabs,
+    syncAppWorkspaceTabs,
     syncWorkspaceTabMetadata,
     upsertWorkspaceTab,
     type PodWorkspaceTab,
@@ -205,7 +205,7 @@ export function usePodWorkspaceTabs({
         updatePodWorkspaceTabs(
             podId,
             (current) => syncWorkspaceTabMetadata(
-                syncPinnedAppTabs(current, pages),
+                syncAppWorkspaceTabs(current, pages),
                 conversations,
             ),
         );

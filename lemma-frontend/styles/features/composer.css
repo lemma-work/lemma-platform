@@ -1,0 +1,267 @@
+/**
+ * The composer shell.
+ *
+ * One set of rules for pod home, `/new` and a running conversation, because
+ * they are one control. What differs between them is density, not design.
+ */
+.lm-composer {
+    position: relative;
+    display: flex;
+    width: 100%;
+    min-width: 0;
+    flex-direction: column;
+    gap: var(--space-2);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-xl);
+    background: var(--surface-1);
+    padding: var(--space-3) var(--space-3-5) var(--space-2-5);
+    transition:
+        border-color var(--dur-control) var(--ease-standard),
+        box-shadow var(--dur-control) var(--ease-standard);
+}
+
+.lm-composer:focus-within {
+    border-color: color-mix(in srgb, var(--action-primary) 34%, var(--border-default));
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--action-primary) 12%, transparent);
+}
+
+.lm-composer-tight {
+    gap: var(--space-1-5);
+    border-radius: var(--radius-lg);
+    padding: var(--space-2-5) var(--space-3) var(--space-2);
+}
+
+.lm-composer-header {
+    min-width: 0;
+}
+
+/* Auto-sizing from one row up, rather than a fixed tall box.
+
+   The assistant's composer reserved `min-h-24` on the shell *and* a 12-unit
+   textarea inside it, so an empty composer opened as a deep empty band with the
+   placeholder stranded at the top — the gap you could see under "Message". A
+   composer should be the size of what is in it. */
+.lm-composer-input.lm-composer-input {
+    width: 100%;
+    min-width: 0;
+    min-height: 1.75rem;
+    max-height: 13.75rem;
+    resize: none;
+    border: 0;
+    background: transparent;
+    box-shadow: none;
+    padding: 0;
+    color: var(--text-primary);
+    font-size: var(--text-sm);
+    line-height: 1.6;
+    field-sizing: content;
+}
+
+.lm-composer-input.lm-composer-input:focus,
+.lm-composer-input.lm-composer-input:focus-visible,
+.lm-composer-input.lm-composer-input:hover {
+    border: 0;
+    background: transparent;
+    box-shadow: none;
+    outline: none;
+    transform: none;
+}
+
+.lm-composer-input.lm-composer-input::placeholder {
+    color: var(--text-tertiary);
+}
+
+.lm-composer-tight .lm-composer-input.lm-composer-input {
+    max-height: 8rem;
+}
+
+.lm-composer-controls {
+    display: flex;
+    min-width: 0;
+    align-items: center;
+    gap: var(--space-1-5);
+}
+
+.lm-composer-slot {
+    display: flex;
+    min-width: 0;
+    align-items: center;
+    gap: var(--space-1-5);
+}
+
+.lm-composer-spacer {
+    flex: 1 1 auto;
+    min-width: var(--space-2);
+}
+
+/* The pickers serve the sentence; they must not outweigh it.
+
+   Home's runtime chip carried a border and a fill while the input carried
+   neither, so the loudest element in the composer was the one you touch least.
+   Anything dropped into the slot is quieted to a text control that gains its
+   surface on hover. */
+.lm-composer-slot :is(button, [role='button']) {
+    border-color: transparent;
+    background: transparent;
+    color: var(--text-secondary);
+    font-weight: 400;
+}
+
+.lm-composer-slot :is(button, [role='button']):hover {
+    background: var(--bg-subtle);
+    color: var(--text-primary);
+}
+
+.lm-composer-attach {
+    display: inline-flex;
+    height: 2rem;
+    width: 2rem;
+    flex-shrink: 0;
+    align-items: center;
+    justify-content: center;
+    border-radius: var(--radius-md);
+    color: var(--text-tertiary);
+    transition:
+        background-color var(--dur-control) var(--ease-standard),
+        color var(--dur-control) var(--ease-standard);
+}
+
+.lm-composer-attach:hover:not(:disabled) {
+    background: var(--bg-subtle);
+    color: var(--text-primary);
+}
+
+.lm-composer-attach:disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
+}
+
+.lm-composer-send {
+    display: inline-flex;
+    height: 2rem;
+    width: 2rem;
+    flex-shrink: 0;
+    align-items: center;
+    justify-content: center;
+    border-radius: var(--radius-full, 999px);
+    background: var(--action-primary);
+    color: var(--text-on-brand);
+    transition:
+        background-color var(--dur-control) var(--ease-standard),
+        color var(--dur-control) var(--ease-standard);
+}
+
+.lm-composer-send:hover:not(:disabled) {
+    background: var(--action-primary-hover);
+}
+
+/* Idle is a filled, muted target — not an absent one. */
+.lm-composer-send[data-state='idle'] {
+    background: var(--surface-3);
+    color: var(--text-tertiary);
+}
+
+.lm-composer-send[data-state='busy'] {
+    background: var(--state-error);
+    color: var(--text-inverse);
+}
+
+.lm-composer-send:disabled {
+    cursor: not-allowed;
+}
+
+/* A dropped-file target.
+
+   Every surface accepts a drop now, so the affordance has to be legible
+   without moving anything — an inserted banner would reflow the composer under
+   the pointer mid-drag. The ring and the hint sit on top of the layout instead. */
+.lm-composer[data-drop-target] {
+    border-color: color-mix(in srgb, var(--action-primary) 55%, transparent);
+    background: color-mix(in srgb, var(--action-primary) 5%, var(--surface-1));
+}
+
+.lm-composer-drop-hint {
+    position: absolute;
+    inset-inline: 0;
+    top: 50%;
+    transform: translateY(-50%);
+    pointer-events: none;
+    text-align: center;
+    color: var(--text-accent, var(--action-primary));
+    font-size: var(--text-sm);
+}
+
+.lm-composer[data-drop-target] > :not(.lm-composer-drop-hint) {
+    opacity: 0.35;
+}
+
+/* Staged files.
+
+   One row, not three. The first pass gave the name two lines and its size a
+   line beneath, so four attachments stood taller than the composer they were
+   attached to. A chip needs to say which file and how big, and stop. */
+.lm-composer-files {
+    display: flex;
+    min-width: 0;
+    flex-wrap: wrap;
+    justify-content: flex-start;
+    gap: var(--space-1-5);
+}
+
+.lm-file-chip {
+    display: inline-flex;
+    max-width: 15rem;
+    min-width: 0;
+    height: 1.75rem;
+    align-items: center;
+    gap: 0.375rem;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    background: var(--surface-2);
+    padding: 0 0.25rem 0 0.4375rem;
+}
+
+.lm-file-chip[data-status='failed'] {
+    border-color: color-mix(in srgb, var(--state-error) 40%, var(--border-subtle));
+    background: color-mix(in srgb, var(--state-error) 7%, var(--surface-2));
+}
+
+.lm-file-chip-mark {
+    display: inline-flex;
+    flex-shrink: 0;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-tertiary);
+}
+
+.lm-file-chip[data-status='uploaded'] .lm-file-chip-mark {
+    color: var(--state-success);
+}
+
+.lm-file-chip[data-status='failed'] .lm-file-chip-mark {
+    color: var(--state-error);
+}
+
+.lm-file-chip-name {
+    overflow: hidden;
+    min-width: 0;
+    color: var(--text-primary);
+    font-size: 0.75rem;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.lm-file-chip-meta {
+    flex-shrink: 0;
+    color: var(--text-tertiary);
+    font-size: 0.6875rem;
+}
+
+.lm-file-chip-remove {
+    flex-shrink: 0;
+    color: var(--text-tertiary);
+}
+
+.lm-file-chip-remove:hover {
+    color: var(--text-primary);
+}

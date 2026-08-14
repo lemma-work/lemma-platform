@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { getLemmaClient } from '@/lib/sdk/lemma-client';
 import { ResourceIcon } from './resource-icon';
+import { parseResourceIcon } from '@/lib/utils/resource-icon-value';
 import { StepLoader } from '@/components/brand/loader';
 
 type IconTemplate = {
@@ -75,6 +76,14 @@ interface ResourceIconUploaderProps {
     showTemplates?: boolean;
     disabled?: boolean;
     className?: string;
+    /**
+     * When set, "no icon" means the generated identity rather than an absence,
+     * so the preview shows it and the reset button clears the field instead of
+     * uploading a monogram. Resources that are not wired to the generated
+     * identity yet omit this and keep the old monogram behaviour.
+     */
+    identitySeed?: string;
+    identityKind?: 'being' | 'mark' | 'team';
 }
 
 export function ResourceIconUploader({
@@ -88,6 +97,8 @@ export function ResourceIconUploader({
     showTemplates = false,
     disabled = false,
     className,
+    identitySeed,
+    identityKind = 'being',
 }: ResourceIconUploaderProps) {
     const inputRef = useRef<HTMLInputElement>(null);
     const [isUploading, setIsUploading] = useState(false);
@@ -97,6 +108,11 @@ export function ResourceIconUploader({
         () => ICON_TEMPLATES[hash(`${kind}:${name}`) % ICON_TEMPLATES.length],
         [kind, name]
     );
+    // A chosen identity variant is still the generated picture, not an upload,
+    // so it must not offer to be reset back to "generated" — the face grid is
+    // where that choice is made and unmade.
+    const iconValue = useMemo(() => parseResourceIcon(value), [value]);
+    const hasCustomPicture = iconValue?.kind === 'url' || iconValue?.kind === 'glyph';
 
     const uploadIcon = async (file: File) => {
         setIsUploading(true);
@@ -143,6 +159,9 @@ export function ResourceIconUploader({
                         iconUrl={value}
                         alt={`${kind} icon`}
                         label={name}
+                        identitySeed={identitySeed}
+                        identityKind={identityKind}
+                        identitySize={isHero ? 80 : compact ? 40 : 56}
                         className={cn(
                             compact ? 'h-10 w-10' : 'h-14 w-14',
                             isHero && 'resource-icon-hero-image relative h-20 w-20 rounded-lg',
@@ -180,32 +199,47 @@ export function ResourceIconUploader({
                         Upload
                     </Button>
 
-                    <Button
-                        type="button"
-                        size={compact ? 'sm' : 'sm'}
-                        variant={compact && !isHero ? 'quiet' : 'secondary'}
-                        className={cn(
-                            compact ? 'h-8 gap-1 px-2 text-xs text-[var(--text-secondary)]' : 'gap-1.5',
-                            isHero && 'h-9 rounded-lg border-[color:var(--button-secondary-border)] bg-[var(--button-secondary-bg)] px-3 text-xs text-[var(--button-secondary-fg)]'
-                        )}
-                        disabled={isBusy}
-                        onClick={() => handleTemplateUpload(seededTemplate)}
-                    >
-                        <Sparkles className="h-3.5 w-3.5" />
-                        Default
-                    </Button>
+                    {/*
+                      * "Default" used to *upload* a generated monogram, which
+                      * left the resource with a stored file and no way back to
+                      * having no icon at all. Where a generated identity exists
+                      * the default is genuinely the empty field, so clearing is
+                      * the whole action — and the button below is the one that
+                      * does it, rather than a second control beside it.
+                      */}
+                    {!identitySeed && (
+                        <Button
+                            type="button"
+                            size={compact ? 'sm' : 'sm'}
+                            variant={compact && !isHero ? 'quiet' : 'secondary'}
+                            className={cn(
+                                compact ? 'h-8 gap-1 px-2 text-xs text-[var(--text-secondary)]' : 'gap-1.5',
+                                isHero && 'h-9 rounded-lg border-[color:var(--button-secondary-border)] bg-[var(--button-secondary-bg)] px-3 text-xs text-[var(--button-secondary-fg)]'
+                            )}
+                            disabled={isBusy}
+                            onClick={() => handleTemplateUpload(seededTemplate)}
+                        >
+                            <Sparkles className="h-3.5 w-3.5" />
+                            Default
+                        </Button>
+                    )}
 
-                    {value && (
+                    {hasCustomPicture && (
                         <Button
                             type="button"
                             size={compact ? 'sm' : 'sm'}
                             variant="quiet"
-                            className={cn('gap-1.5 text-[var(--state-error)]', compact && 'h-8 px-2 text-xs', isHero && 'h-9 rounded-lg px-3')}
+                            className={cn(
+                                'gap-1.5',
+                                identitySeed ? 'text-[var(--text-secondary)]' : 'text-[var(--state-error)]',
+                                compact && 'h-8 px-2 text-xs',
+                                isHero && 'h-9 rounded-lg px-3'
+                            )}
                             disabled={isBusy}
                             onClick={() => onChange(null)}
                         >
-                            <Trash2 className="h-3.5 w-3.5" />
-                            Remove
+                            {identitySeed ? <Sparkles className="h-3.5 w-3.5" /> : <Trash2 className="h-3.5 w-3.5" />}
+                            {identitySeed ? 'Use generated' : 'Remove'}
                         </Button>
                     )}
                 </div>

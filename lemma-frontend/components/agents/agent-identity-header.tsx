@@ -74,6 +74,8 @@ export function AgentIdentityHeader({
             label={label}
             imageClassName="object-contain p-1"
             className="h-full w-full rounded-xl"
+            identitySeed={agent.id || agent.name}
+            identitySize={32}
             fallback={(
                 <span className="resource-monogram flex h-full w-full items-center justify-center rounded-xl text-sm font-semibold">
                     {agentInitials(label)}
@@ -191,6 +193,7 @@ export function AgentIdentityHeader({
                     </DialogHeader>
                     <AgentAvatarPicker
                         name={label}
+                        seed={agent.id || agent.name}
                         value={agent.icon_url}
                         onChange={(iconUrl) => onUpdate({ icon_url: iconUrl || undefined })}
                     />

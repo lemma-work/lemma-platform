@@ -38,7 +38,6 @@ import { useAgentRuntimes } from '@/lib/hooks/use-agent-runtime';
 import { useCreateAgent } from '@/lib/hooks/use-agents';
 import { usePodAccess } from '@/lib/hooks/use-pod-access';
 import { usePod } from '@/lib/hooks/use-pods';
-import { AGENT_MASCOTS } from '@/lib/data/agent-mascots';
 import { cn } from '@/lib/utils';
 import { formatAgentName } from '@/lib/utils/agents';
 import { Agent, AccessMode, ToolSet } from '@/lib/types';
@@ -136,7 +135,11 @@ export default function NewAgentPage({
         user_id: 'current-user',
         name: '',
         description: '',
-        icon_url: AGENT_MASCOTS[0]?.src || null,
+        // No mascot by default. Seeding every new agent with the same PNG is
+        // what made a roster of them read as one repeated character; leaving
+        // this empty lets the generated identity take over, and the picker is
+        // still there for anyone who wants a specific face.
+        icon_url: null,
         agent_runtime: null,
         instruction: '',
         input_schema: {},
@@ -302,6 +305,9 @@ export default function NewAgentPage({
                                 <div className="agent-builder-side-section">
                                     <AgentAvatarPicker
                                         name={draftAgent.name || 'Agent'}
+                                        // Matches the preview's `displayName`, or an
+                                        // unnamed draft shows two different creatures.
+                                        seed={draftAgent.name?.trim() || 'Untitled agent'}
                                         value={draftAgent.icon_url}
                                         onChange={(iconUrl) => updateDraft({ icon_url: iconUrl || undefined })}
                                         compact
@@ -795,6 +801,8 @@ function LaunchReview({
                         label={displayName}
                         imageClassName="object-contain p-1"
                         className="h-20 w-20 shrink-0 !border-0 !bg-transparent"
+                        identitySeed={displayName}
+                        identitySize={80}
                         fallback={<Bot className="h-7 w-7 text-[var(--text-tertiary)]" />}
                     />
                     <div className="min-w-0 flex-1">

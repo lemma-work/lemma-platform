@@ -61,7 +61,6 @@ export function ConversationComposerContext({
     const githubProjects = useGithubProjects({ enabled: isNewConversation });
     const agentLabel = agentDisplayLabel
         ?? (selectedAgentName ? formatAgentName(selectedAgentName) : 'Pod default');
-    const agentValue = selectedAgentName || POD_DEFAULT_AGENT_VALUE;
     // Neither runtime is required to carry a model — an inherited default names
     // only its profile — so resolve both through the catalog the run will use.
     // "Default" survives only until the catalog loads, or where nothing is set
@@ -105,29 +104,13 @@ export function ConversationComposerContext({
 
     return (
         <div className="flex min-w-0 items-center gap-1">
-            <Select
-                value={agentValue}
-                onValueChange={(value) => onAgentChange(value === POD_DEFAULT_AGENT_VALUE ? null : value)}
+            <ConversationAgentPicker
+                agents={agents}
+                selectedAgentName={selectedAgentName}
+                onAgentChange={onAgentChange}
                 disabled={!canWrite}
-            >
-                <SelectTrigger
-                    className="h-8 w-auto max-w-24 rounded-lg border border-[var(--row-border)] bg-[var(--field-bg)] px-2 py-0 text-xs font-normal shadow-none sm:max-w-44"
-                    aria-label="Conversation agent"
-                    title={`Agent: ${agentLabel}`}
-                >
-                    <SelectValue>{agentLabel}</SelectValue>
-                </SelectTrigger>
-                <SelectContent align="start">
-                    <SelectItem value={POD_DEFAULT_AGENT_VALUE}>Pod default</SelectItem>
-                    {agents.map((agent) => (
-                        <SelectItem key={agent.id || agent.name} value={agent.name}>
-                            {formatAgentName(agent.name)}
-                        </SelectItem>
-                    ))}
-                </SelectContent>
-            </Select>
-
-            <span aria-hidden="true" className="shrink-0 text-xs text-[var(--text-soft)]">·</span>
+                label={agentLabel}
+            />
 
             <RuntimeModelPicker
                 catalog={runtimeCatalog}
@@ -168,5 +151,53 @@ export function ConversationComposerContext({
                 </>
             ) : null}
         </div>
+    );
+}
+
+/**
+ * Who should answer.
+ *
+ * Lifted out of `ConversationComposerContext` so pod home can render it too —
+ * home could pick a *model* but not an agent, so starting a conversation with
+ * a particular agent meant going to /new and retyping the sentence there.
+ */
+export function ConversationAgentPicker({
+    agents,
+    selectedAgentName,
+    onAgentChange,
+    disabled = false,
+    label,
+}: {
+    agents: Agent[];
+    selectedAgentName: string | null;
+    onAgentChange: (agentName: string | null) => void;
+    disabled?: boolean;
+    label?: string;
+}) {
+    const value = selectedAgentName || POD_DEFAULT_AGENT_VALUE;
+    const shown = label ?? (selectedAgentName ? formatAgentName(selectedAgentName) : 'Pod default');
+
+    return (
+        <Select
+            value={value}
+            onValueChange={(next) => onAgentChange(next === POD_DEFAULT_AGENT_VALUE ? null : next)}
+            disabled={disabled}
+        >
+            <SelectTrigger
+                className="h-8 w-auto max-w-24 rounded-lg border border-[var(--row-border)] bg-[var(--field-bg)] px-2 py-0 text-xs font-normal shadow-none sm:max-w-44"
+                aria-label="Conversation agent"
+                title={`Agent: ${shown}`}
+            >
+                <SelectValue>{shown}</SelectValue>
+            </SelectTrigger>
+            <SelectContent align="start">
+                <SelectItem value={POD_DEFAULT_AGENT_VALUE}>Pod default</SelectItem>
+                {agents.map((agent) => (
+                    <SelectItem key={agent.id || agent.name} value={agent.name}>
+                        {formatAgentName(agent.name)}
+                    </SelectItem>
+                ))}
+            </SelectContent>
+        </Select>
     );
 }

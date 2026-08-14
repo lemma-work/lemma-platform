@@ -11,11 +11,12 @@ import { ConceptHint } from '@/components/education/concept-hint';
 import { SectionPrimer } from '@/components/education/section-primer';
 import { ResourceHeader, ResourceIndexShell } from '@/components/pod/resource-layout';
 import { RecipeCard } from '@/components/recipes/recipe-card';
+import { ResourceCover } from '@/components/shared/resource-identity';
+import { identityGenes } from '@/lib/identity/seeded-identity';
 import { DestructiveConfirmationDialog } from '@/components/shared/destructive-confirmation-dialog';
 import { EmptyState } from '@/components/shared/empty-state';
 import { DestructiveResourceActionItem, ResourceActionsMenu } from '@/components/shared/resource-actions-menu';
 import { ResourceShareButton, ResourceVisibilityBadge, type ResourceVisibilityValue } from '@/components/shared/resource-visibility';
-import { getAppAccent } from '@/lib/app/app-accent';
 import { formatRelativeTime } from '@/components/pod/recent-conversations';
 import { Button } from '@/components/ui/button';
 import { DropdownMenuItem } from '@/components/ui/dropdown-menu';
@@ -186,17 +187,17 @@ export default function AppPagesRoute({ params }: { params: Promise<{ id: string
                     />
                 )
             ) : (
-                <section className="resource-index-grid resource-index-grid-md-2 resource-index-grid-xl-3 sm:grid-cols-2 xl:grid-cols-3">
+                <section className="resource-index-grid resource-index-grid-md-2 resource-index-grid-xl-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
                     {pages.map((page) => {
                         const title = formatDisplayName(page.title || page.slug);
                         const viewHref = buildAppViewHref(podId, page.slug, searchParams);
                         const canShareApp = resourceAllows(page, 'app.update', canUpdateApp);
                         const canDeleteThisApp = resourceAllows(page, 'app.delete', canDeleteApp);
-                        // Hash the slug rather than cycle by index: an app keeps its colour
-                        // when a neighbour is added or deleted. Cycling by position also
-                        // could not separate neighbours — brand, collaboration and info all
-                        // resolve to the same accent.
-                        const accent = getAppAccent(page.slug);
+                        // One hue per card, taken from the same seed the cover is
+                        // drawn from. This used to be `getAppAccent(page.slug)`, a
+                        // second independent hash, which meant the monogram and the
+                        // cover routinely disagreed — a green badge on a pink cover.
+                        const hue = identityGenes(page.slug).tone;
                         const appName = page.appName || page.title;
                         const isReady = (page.status || '').toUpperCase() === 'READY';
                         const updatedLabel = formatRelativeTime(page.updatedAt);
@@ -208,37 +209,46 @@ export default function AppPagesRoute({ params }: { params: Promise<{ id: string
                         return (
                             <article
                                 key={page.slug}
-                                data-accent={accent}
-                                className="resource-index-card app-tile group relative min-h-40 p-4"
+                                className={`resource-index-card app-tile lm-identity-hue-${hue} group relative overflow-hidden`}
                             >
                                 {/* Mouse affordance only: the whole card is clickable, but
                                     keyboard and screen readers get the labelled controls in
                                     the footer instead of a second link to the same href. */}
                                 <Link href={viewHref} aria-hidden tabIndex={-1} className="app-tile-hit" />
 
-                                <div className="flex items-start justify-between gap-3">
-                                    <span className="app-icon flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-base font-medium">
-                                        {page.icon || title.charAt(0)}
-                                    </span>
+                                {/* An app is the one resource that *is* a screen, and the card
+                                    used to show none of it — a monogram in a box above three
+                                    lines of text. Until real thumbnails exist, a seeded
+                                    abstraction of a layout at least gives every app in the
+                                    grid its own silhouette. */}
+                                <div className="app-tile-cover">
+                                    <ResourceCover seed={page.slug} />
                                     {/* An app is READY from its first bundle upload onward, so
                                         "live" is true of nearly every card and says nothing.
                                         Only the exception — not yet deployed — is worth a badge. */}
                                     {!isReady ? (
-                                        <span className="inline-flex shrink-0 items-center gap-1.5 text-xs font-medium text-[var(--text-tertiary)]">
+                                        <span className="app-tile-status">
                                             <span className="h-1.5 w-1.5 rounded-full bg-current" aria-hidden />
                                             Draft
                                         </span>
                                     ) : null}
                                 </div>
 
-                                <div className="mt-3 min-w-0">
-                                    <h2 className="resource-index-card-title truncate text-base font-medium text-[var(--text-primary)]">{title}</h2>
-                                    <p className="resource-index-card-summary mt-1 line-clamp-2 min-h-10 text-[var(--text-secondary)]">
-                                        {page.description}
-                                    </p>
-                                </div>
+                                <div className="app-tile-body p-4">
+                                    <span className="app-icon app-tile-mark flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-base font-medium">
+                                        {page.icon || title.charAt(0)}
+                                    </span>
 
-                                <div className="mt-3 flex items-center justify-between gap-2 text-xs text-[var(--text-tertiary)]">
+                                    <div className="mt-2.5 min-w-0">
+                                        <h2 className="resource-index-card-title truncate text-base font-medium text-[var(--text-primary)]">{title}</h2>
+                                        {page.description ? (
+                                            <p className="resource-index-card-summary mt-1 line-clamp-2 text-[var(--text-secondary)]">
+                                                {page.description}
+                                            </p>
+                                        ) : null}
+                                    </div>
+
+                                    <div className="mt-3 flex items-center justify-between gap-2 text-xs text-[var(--text-tertiary)]">
                                     <div className="flex min-w-0 items-center gap-3">
                                         <ResourceVisibilityBadge visibility={page.visibility} resourceLabel="apps" resourceType="app" hideWhenDefault />
                                         {updatedLabel ? <span className="truncate">Updated {updatedLabel}</span> : null}
@@ -307,6 +317,7 @@ export default function AppPagesRoute({ params }: { params: Promise<{ id: string
                                             ) : null}
                                         </ResourceActionsMenu>
                                     ) : null}
+                                    </div>
                                     </div>
                                 </div>
                             </article>
