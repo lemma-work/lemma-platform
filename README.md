@@ -230,7 +230,7 @@ a chat model.
 
 Desktop compiles, ships, and supervises Agent Host, which is why there is no
 separate install and no background service to manage. See
-[Agent Host in the desktop app](docs/design/agent-host-desktop.md).
+[Agent Host in the desktop app](docs/architecture/agent-host.md).
 
 Any agent operates a pod directly through the CLI:
 
@@ -265,10 +265,12 @@ Python and TypeScript SDKs (with 25+ React hooks) live in [`lemma-python/`](lemm
 | `lemma-python/` | `lemma-sdk` — Python SDK | Apache-2.0 |
 | `lemma-typescript/` | `lemma-sdk` — TypeScript/JavaScript SDK for Node, browser, and React | Apache-2.0 |
 | `lemma-skills/` | Built-in agent skills | Apache-2.0 |
-| `docs/` | Installation and setup guides | — |
+| `lemma-pod-bundle/` | `lemma-pod-bundle` — the pod bundle format, shared by the CLI and the backend | Apache-2.0 |
+| `docs/` | Installation, configuration, architecture, and security documentation | — |
 | `install.sh` | One-line bootstrap installer | — |
 
 Everything is a normal directory in one repo.
+[ARCHITECTURE.md](ARCHITECTURE.md) explains how the pieces fit together.
 
 ## Development
 
@@ -304,10 +306,13 @@ make lint
 make migrate
 ```
 
-See [`docs/installation.md`](docs/installation.md) for the full setup guide,
-[`docs/configuration.md`](docs/configuration.md) for what every setting does,
-[`lemma-backend/README.md`](lemma-backend/README.md) for backend details, and
-[`lemma-frontend/README.md`](lemma-frontend/README.md) for frontend details.
+Start at [`docs/`](docs/README.md) — it indexes everything. The most-used
+entries: [installation](docs/installation.md) for the full setup guide,
+[configuration](docs/configuration.md) for what every setting does,
+[ARCHITECTURE.md](ARCHITECTURE.md) for how the components fit together,
+[CONTRIBUTING.md](CONTRIBUTING.md) for what a pull request needs, and
+[`lemma-backend/README.md`](lemma-backend/README.md) /
+[`lemma-frontend/README.md`](lemma-frontend/README.md) for per-component detail.
 
 ## Licensing
 
@@ -330,9 +335,15 @@ must release your modified source under the same terms.
 - `lemma-python/` — the Python SDK
 - `lemma-typescript/` — the TypeScript SDK
 - `lemma-skills/` — agent skills
+- `lemma-pod-bundle/` — the shared pod bundle format
 
 These are intended for broad embedding, installation, and adaptation, so they
 remain Apache-2.0 and include their own `LICENSE` files.
+
+`lemma-pod-bundle` is Apache-2.0 rather than AGPLv3 on purpose: it is the
+dependency-free vocabulary that lets the Apache-2.0 CLI and the AGPLv3 backend
+agree on the bundle format without either depending on the other, and it is
+vendored into the published `lemma-terminal` wheel.
 
 **Commercial licensing and exceptions** are available from Folks and Machines,
 Inc. for organizations whose procurement policies do not accommodate AGPLv3. The

@@ -52,5 +52,5 @@ sure both pass locally first.
 ## Reporting issues
 
 Open a GitHub issue with steps to reproduce, what you expected, and what
-happened. For security-sensitive reports, please email the address configured in
-`NEXT_PUBLIC_SUPPORT_EMAIL` rather than filing a public issue.
+happened. For a suspected vulnerability, use the private advisory flow described
+in [SECURITY.md](../SECURITY.md) rather than filing a public issue.

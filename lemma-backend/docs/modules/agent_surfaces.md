@@ -131,10 +131,7 @@ represented as contacts. Redis dedup guards repeat provider deliveries.
 
 The large unit/e2e matrix uses real payload fixtures and mock provider servers
 for platform parsing, signatures, conversation reuse, identity, attachments,
-approvals/forms, progress, and delivery. Current unit coverage is 69% (8,737 of
-12,722 statements), from
-`uv run pytest -m "not e2e" app/modules/agent_surfaces --cov=app/modules/agent_surfaces`
-— re-measure rather than trusting this line, since nothing checks it.
-The in-module README is a pointer back here and
-deliberately carries no route examples of its own. Event-loss, complexity, and
-boundary findings are in [issues.md](issues.md).
+approvals/forms, progress, and delivery. Measure this module's coverage with
+`uv run pytest -m "not e2e" app/modules/agent_surfaces --cov=app/modules/agent_surfaces`;
+CI enforces the committed floor. The in-module README is a pointer back here and
+deliberately carries no route examples of its own.

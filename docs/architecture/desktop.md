@@ -1,7 +1,12 @@
-# Lemma Desktop technical design
+# Lemma Desktop architecture
 
-Status: PR #215 stabilization architecture
-Companion: [product specification](local-desktop-product-spec.md)
+How the desktop app, its `lemma-locald` control plane, and the private local
+runtime fit together: process ownership, the lifecycle protocol, ports, and
+where state lives.
+
+For installing and operating Desktop, see
+[Install and run Lemma locally](../installation.md). For building and releasing
+it, see the [Desktop maintainer guide](../../desktop/README.md).
 
 ## 1. System topology
 
@@ -245,7 +250,7 @@ canonical home for anything a cloud workspace also needs. The Agent Host is the
 case in point: its Runtime panel shows status, restart, and the log - what is
 useful when the workspace itself will not load - while connecting, choosing
 agents, and turning it off live in the workspace page, which a hosted user can
-also reach. See [Agent Host in the desktop app](agent-host-desktop.md).
+also reach. See [Agent Host in the desktop app](agent-host.md).
 
 ## 7.2 Sharing and canonical origin
 
