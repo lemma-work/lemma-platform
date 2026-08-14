@@ -12,7 +12,6 @@ of them lives in :mod:`spec_import`.
 
 from __future__ import annotations
 
-import copy
 import re
 from typing import Any
 
@@ -60,7 +59,15 @@ def deep_resolve_refs(
     seen_refs: set[str] | None = None,
 ) -> Any:
     seen_refs = seen_refs or set()
-    value = copy.deepcopy(value)
+    # No deepcopy here. It used to copy the whole subtree at EVERY level of the
+    # recursion, so resolving one spec copied its nested structures once per
+    # level of nesting — quadratic in depth, on the event loop, over a
+    # tenant-supplied document.
+    #
+    # It was also redundant: this function never mutates `value`. Both branches
+    # below build fresh containers (the dict and list comprehensions), and the
+    # only values returned by reference are immutable scalars. The caller's spec
+    # is as untouched as it was before, which the test asserts directly.
     if isinstance(value, dict):
         if "$ref" in value:
             ref = value["$ref"]
