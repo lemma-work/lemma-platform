@@ -153,6 +153,43 @@ NON_DB_AWAITS: tuple[tuple[str, str], ...] = (
 
 NON_DB_PATTERNS = tuple((re.compile(pattern), label) for pattern, label in NON_DB_AWAITS)
 
+# --- Synchronous work that blocks the whole event loop ------------------------
+#
+# Everything above is about an `await`. But the checker only ever visited
+# `ast.Await`, so a *synchronous* blocking call inside a session was invisible
+# to it -- and that is strictly worse than the async case: an await at least
+# lets other tasks run while the connection is pinned, whereas a sync call
+# pins the connection *and* stops the loop.
+#
+# This is not hypothetical. `ComposioWebhookVerifier.verify` ran the synchronous
+# Composio SDK on the event loop from an unauthenticated route, and no gate in
+# the repo could see it.
+#
+# Kept to calls that are unambiguously blocking. A general "un-awaited call to
+# a remote name" rule would fire on every `httpx.AsyncClient(...)` construction,
+# and a gate with false positives gets baselined into irrelevance.
+SYNC_BLOCKING_CALLS: tuple[tuple[str, str], ...] = (
+    (r"^time\.sleep$", "blocking sleep"),
+    (r"^(requests|urllib\.request)\.", "blocking HTTP"),
+    (r"^requests\.sessions\.Session\.", "blocking HTTP"),
+    (r"^subprocess\.(run|call|check_call|check_output|Popen)$", "subprocess"),
+    (r"^os\.system$", "subprocess"),
+    (r"^socket\.(create_connection|socket)$", "blocking socket"),
+    # Reading a whole file synchronously on the loop, holding a connection.
+    (r"^(pathlib\.)?Path\.(read_bytes|read_text|write_bytes|write_text)$", "blocking file I/O"),
+)
+
+SYNC_BLOCKING_PATTERNS = tuple(
+    (re.compile(pattern), label) for pattern, label in SYNC_BLOCKING_CALLS
+)
+
+
+def _sync_blocking_label(callee: str) -> str | None:
+    for pattern, label in SYNC_BLOCKING_PATTERNS:
+        if pattern.search(callee):
+            return label
+    return None
+
 # Receivers that make a call a query no matter what it is named. A repository
 # method called `enqueue_run` writes an admission row; `store.save_import`
 # writes a row. Without this the deny-list's verb matching would fire on the
@@ -710,6 +747,18 @@ class SessionScopeChecker(ast.NodeVisitor):
             label = self.index.why_slow(callee)
             if label is not None:
                 self._record(node.lineno, "non-db-await", f"{label}: {callee}")
+        self.generic_visit(node)
+
+    def visit_Call(self, node: ast.Call) -> None:
+        # Synchronous blocking work inside a session. Worse than the awaited
+        # kind: the connection is pinned *and* the loop cannot make progress
+        # for anyone else while it happens.
+        if self._session_depth:
+            label = _sync_blocking_label(_dotted(node.func))
+            if label is not None:
+                self._record(
+                    node.lineno, "sync-blocking-call", f"{label}: {_dotted(node.func)}"
+                )
         self.generic_visit(node)
 
     def visit_AsyncFor(self, node: ast.AsyncFor) -> None:

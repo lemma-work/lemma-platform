@@ -389,3 +389,68 @@ def test_baseline_matches_the_tree():
 
 if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(pytest.main([__file__]))
+
+
+# --- synchronous blocking work ------------------------------------------------
+#
+# The checker only ever visited `ast.Await`, so a *synchronous* blocking call
+# inside a session was invisible -- and that case is strictly worse than the
+# awaited one. An await at least lets other tasks run while the connection is
+# pinned; a sync call pins the connection *and* stops the loop for everyone.
+#
+# `ComposioWebhookVerifier.verify` ran the synchronous Composio SDK on the event
+# loop from an unauthenticated route, and no gate in this repo could see it.
+
+
+@pytest.mark.parametrize(
+    ("call", "label"),
+    [
+        ("time.sleep(2)", "blocking sleep"),
+        ("requests.post(url, json=body)", "blocking HTTP"),
+        ("subprocess.run(['ls'])", "subprocess"),
+        ("os.system('ls')", "subprocess"),
+    ],
+)
+def test_synchronous_blocking_work_inside_a_session_is_reported(
+    call: str, label: str
+) -> None:
+    violations = _run(
+        "async def handler(uow_factory):\n"
+        "    async with uow_factory() as uow:\n"
+        "        await uow.session.execute(query)\n"
+        f"        {call}\n"
+    )
+    assert [v.rule for v in violations] == ["sync-blocking-call"]
+    assert violations[0].detail.startswith(label)
+
+
+def test_the_same_call_outside_the_session_is_not_reported() -> None:
+    """The rule is about the hold, not about blocking in general.
+
+    Blocking the loop outside a session is a different problem with a different
+    gate (`check_io_hygiene`). Reporting it here would make this gate noisy
+    about something it is not measuring, and a noisy gate gets baselined.
+    """
+    violations = _run(
+        "async def handler(uow_factory):\n"
+        "    async with uow_factory() as uow:\n"
+        "        await uow.session.execute(query)\n"
+        "    time.sleep(2)\n"
+    )
+    assert violations == []
+
+
+def test_a_constructor_from_a_remote_module_is_not_a_blocking_call() -> None:
+    """Deliberately narrow: building a client is not doing I/O.
+
+    A general "un-awaited call to a remote name" rule would fire on every
+    `httpx.AsyncClient(...)`, and false positives are how a gate ends up
+    switched off. Only calls that unambiguously block are listed.
+    """
+    violations = _run(
+        "async def handler(uow_factory):\n"
+        "    async with uow_factory() as uow:\n"
+        "        client = httpx.AsyncClient(timeout=30)\n"
+        "        await uow.session.execute(query)\n"
+    )
+    assert [v.rule for v in violations] == []
