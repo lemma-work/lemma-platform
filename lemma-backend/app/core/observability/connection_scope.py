@@ -356,6 +356,8 @@ class ConnectionScopeMonitor:
 
 
 _monitor: ConnectionScopeMonitor | None = None
+# Engines seen by ``attach``, so a monitor started later still covers them.
+_known_engines: list = []
 
 
 def get_connection_scope_monitor() -> ConnectionScopeMonitor | None:
@@ -365,11 +367,19 @@ def get_connection_scope_monitor() -> ConnectionScopeMonitor | None:
 def start_connection_scope_monitor(
     *, idle_hold_seconds: float, strict: bool = False
 ) -> ConnectionScopeMonitor:
-    """Install the process-wide monitor. Attach engines to it afterwards."""
+    """Install the process-wide monitor and instrument every known engine.
+
+    Engines are built lazily, so whether one exists yet depends on what the
+    process happened to touch first. Attaching to the ones already built makes
+    start-up order irrelevant -- the alternative is a monitor that silently
+    watches nothing because a health check opened a session first.
+    """
     global _monitor
     _monitor = ConnectionScopeMonitor(
         idle_hold_seconds=idle_hold_seconds, strict=strict
     )
+    for engine in _known_engines:
+        _monitor.attach(engine)
     return _monitor
 
 
@@ -379,10 +389,40 @@ def stop_connection_scope_monitor() -> None:
 
 
 def attach_connection_scope_monitor(engine) -> None:
-    """Instrument ``engine`` if a monitor is installed. No-op otherwise.
+    """Instrument ``engine``, now or when a monitor is installed.
 
     Called from engine construction so both the primary and the datastore engine
-    are covered without either module knowing the monitor exists.
+    are covered without either module knowing the monitor exists. The engine is
+    remembered either way, because construction usually happens first.
     """
+    _known_engines.append(engine)
     if _monitor is not None:
         _monitor.attach(engine)
+
+
+def start_connection_scope_monitor_from_settings(*, service_name: str) -> None:
+    """Install the monitor for a long-lived process, per configuration.
+
+    Every entry point calls this: the API, the worker and the scheduler all hold
+    pooled connections and all can hold one across an await. The static gate is
+    a ratchet over a deny-list and says so, and 108 violations are still
+    baselined -- this is the half that cannot be fooled, and it only helps if it
+    is actually running.
+
+    ``db_connection_idle_hold_seconds <= 0`` disables it. Strict mode raises in
+    tests; production leaves it off and takes the bounded warning.
+    """
+    from app.core.config import settings
+
+    threshold = settings.db_connection_idle_hold_seconds
+    if threshold <= 0:
+        return
+    start_connection_scope_monitor(
+        idle_hold_seconds=threshold,
+        strict=settings.db_connection_scope_strict,
+    )
+    logger.info(
+        "runtime.connection_scope.armed",
+        service=service_name,
+        threshold_ms=round(threshold * 1000, 1),
+    )

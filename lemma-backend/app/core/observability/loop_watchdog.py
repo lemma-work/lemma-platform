@@ -69,8 +69,15 @@ _healthy_since: float | None = None
 _breach_count: int = 0
 _last_incident_at: float = -1e9
 
+_last_unhealthy_at: float | None = None
+
 _WARN_SAMPLES_TO_DEGRADE = 3
 _RECOVERY_HEALTHY_SECONDS = 30.0
+# How long a finished stall keeps `/health/live` failing. Long enough that a
+# prober on a multi-second period observes it, short enough to sit well inside
+# any realistic `periodSeconds x failureThreshold` window so a recovered
+# process is never restarted for a stall it survived.
+_LIVENESS_STICKY_SECONDS = 5.0
 _INCIDENT_COOLDOWN_SECONDS = 300.0
 
 
@@ -79,26 +86,42 @@ def get_loop_lag_seconds() -> float:
 
 
 def is_loop_healthy() -> bool:
-    """False while the loop is stalling (for ``/health/live``).
+    """False while the loop is stalling, plus a short tail (for ``/health/live``).
 
-    Reads the degraded flag as well as the last sample, because the last sample
-    alone is almost never true when a prober looks. A process that spent four
-    seconds wedged reports the stall on exactly one probe and then, on the very
-    next one, measures a healthy lag and says ``ok`` — so a Kubernetes liveness
-    check on a multi-second interval sees a wedged process as healthy nearly
-    every time. The degraded flag persists across the incident, which is what
-    makes it observable from outside.
+    The last sample alone is a poor probe answer: a process that spent four
+    seconds wedged reports the stall on exactly one probe and reads healthy on
+    the next, so a liveness check on a multi-second interval sees a wedged
+    process as fine nearly every time. Hence the tail -- a stall stays visible
+    for ``_LIVENESS_STICKY_SECONDS`` after it ends, long enough for a prober to
+    catch it.
+
+    It is deliberately NOT the ``_degraded`` flag, which holds for
+    ``_RECOVERY_HEALTHY_SECONDS`` (30) so the telemetry does not flap. Liveness
+    is not telemetry: with a typical ``periodSeconds: 10`` and
+    ``failureThreshold: 3``, a 30-second unhealthy window is exactly a kill, so
+    tying liveness to it converts every recovered stall into a guaranteed
+    restart.
+
+    A loop that is genuinely wedged keeps failing the current-lag check on its
+    own merit and still gets restarted -- stickiness only ever changes the
+    answer for a process that has already recovered, which is the one case
+    where restarting is pure harm.
     """
     if _lag.seconds >= settings.loop_lag_unhealthy_seconds:
         return False
-    return not (_degraded and _max_lag_seconds >= settings.loop_lag_unhealthy_seconds)
+    if _last_unhealthy_at is None:
+        return True
+    return (
+        time.monotonic() - _last_unhealthy_at
+    ) >= _LIVENESS_STICKY_SECONDS
 
 
 def reset_loop_watchdog_state() -> None:
     """Reset the degraded-state machine (for tests and process restart)."""
     global _degraded, _degraded_since, _max_lag_seconds, _warning_streak
-    global _healthy_since, _breach_count, _last_incident_at
+    global _healthy_since, _breach_count, _last_incident_at, _last_unhealthy_at
     _degraded = False
+    _last_unhealthy_at = None
     _degraded_since = 0.0
     _max_lag_seconds = 0.0
     _warning_streak = 0
@@ -124,9 +147,14 @@ def _evaluate_lag(
     deterministic.
     """
     global _degraded, _degraded_since, _max_lag_seconds, _warning_streak
-    global _healthy_since, _breach_count, _last_incident_at
+    global _healthy_since, _breach_count, _last_incident_at, _last_unhealthy_at
     clock = time.monotonic() if now is None else now
     unhealthy = settings.loop_lag_unhealthy_seconds
+    if lag >= unhealthy:
+        # Stamped on every unhealthy sample, so `/health/live` keeps failing for
+        # a few seconds after the stall ends and a prober on a multi-second
+        # period can still see it.
+        _last_unhealthy_at = clock
     if lag > warn:
         _healthy_since = None
         _warning_streak += 1

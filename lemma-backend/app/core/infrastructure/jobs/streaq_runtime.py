@@ -461,8 +461,12 @@ async def worker_lifespan() -> AsyncGenerator[AppWorkerContext]:
     instrument_database_engine(get_engine())
     # Size the thread-offload pool before any task runs blocking work off-loop.
     from app.core.concurrency.offload import configure_thread_pool
+    from app.core.observability.connection_scope import (
+        start_connection_scope_monitor_from_settings,
+    )
 
     configure_thread_pool()
+    start_connection_scope_monitor_from_settings(service_name="lemma-worker")
 
     # There used to be a guardrail here requiring worker concurrency to fit
     # inside the DB pool, on the theory that a task holds a pooled connection

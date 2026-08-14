@@ -104,10 +104,14 @@ class SqlAlchemyUnitOfWork(IUnitOfWork):
             }
             for event in self._pending_events
         ]
+        # executemany, not `.values(rows)`: the latter renders every row inline,
+        # so the compiled SQL is a function of the batch size and the statement
+        # cache misses on every size it has not seen. Measured on the datastore
+        # twin of this insert as a 1027ms event-loop stall inside the
+        # transaction. Same fix, same reason.
         await self.session.execute(
-            insert(DomainEventOutbox)
-            .values(rows)
-            .on_conflict_do_nothing(index_elements=["id"])
+            insert(DomainEventOutbox).on_conflict_do_nothing(index_elements=["id"]),
+            rows,
         )
         logger.debug(
             "infrastructure.uow.staged_domain_events_transactional_outbox.observed",
@@ -115,9 +119,15 @@ class SqlAlchemyUnitOfWork(IUnitOfWork):
         )
 
     async def rollback(self) -> None:
-        """Rollback transaction and discard pending events."""
+        """Rollback transaction and discard pending events and callbacks."""
         await self.session.rollback()
         self._pending_events.clear()
+        # After-commit callbacks belong to the work that just got thrown away.
+        # Keeping them would fire a rolled-back mutation's side effect at the
+        # next successful commit of a reused unit of work. Harmless for cache
+        # invalidation, which is all that registers today, and wrong as a
+        # primitive.
+        self._after_commit = []
 
     def has_pending_events(self) -> bool:
         """Check if there are pending events."""

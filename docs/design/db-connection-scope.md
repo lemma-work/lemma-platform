@@ -353,34 +353,36 @@ Two adjacent hazards worth knowing:
 - **Cold is ~10× warm**, which is what justifies the snapshot cache existing.
   It is paid once per principal per `authorization_role_cache_ttl_seconds`.
 
-## What does not work: committing the request UoW from a handler body
+## Releasing the request UoW from a handler body: works in one place, fails in another
 
-The obvious fix for a request-scoped hold is to commit the unit of work once the
-handler has finished reading, so the connection goes back before model
-validation, serialization and the write to the client. Tried on
-``GET /pods/{}/functions/{}/runs/{}`` -- the top hold site at seventeen holds --
-and it fails:
+`record_controller._get_table_context` commits the request-scoped unit of work
+from the handler side, across nine endpoints, and is fine -- its e2e suite
+passes and the sweep shows the hold gone. That is the pattern working.
+
+The same shape applied to `GET /pods/{}/functions/{}/runs/{}` killed the run:
 
 ```
 RuntimeError: Attempted to exit a cancel scope that isn't the current
               task's current cancel scope
 ```
 
-A/B against the same commit: without the release the test passes in 79s, with it
-the run dies. The unit of work is a FastAPI yield-dependency whose ``async with``
-was entered by the dependency solver's exit stack; committing it from inside the
-handler body unwinds that scope in a different task context than the one that
-entered it.
+A/B at the same commit: 79s pass without the release, dead run with it. So the
+release is not universally unsafe, and it is not universally safe either --
+something about that endpoint's dependency graph or response path differs, and
+**it has not been root-caused**. Candidates not yet eliminated: the endpoint
+resolves both `PodContextDep` and `UoWDep`, and its response is built from a
+larger payload.
 
-Note the distinction from ``_release_after_authorization``, which does the same
-``await uow.commit()`` and is fine: it runs *inside a dependency*, during
-dependency resolution, not from the handler body afterwards. That is why the
-authorization release works and this one does not.
+What this means practically: releasing a request UoW is a per-endpoint change
+that needs an e2e run behind it, not a sweep. Do not assume either outcome from
+reading the code -- the two call sites look the same. Anyone picking up the
+remaining ~40 request-scope holds should treat root-causing this difference as
+the first task, because it decides whether the fix is one dependency or forty
+endpoints.
 
-So the remaining request-scope holds need a different mechanism -- a
-release-aware dependency, or moving the read into a scope the handler owns
-outright -- not a commit bolted onto the end of a handler. Anything that looks
-like the snippet above should be assumed broken until an e2e run says otherwise.
+Note the contrast with `_release_after_authorization`, which commits the same
+kind of object and has never failed: it runs *inside a dependency*, during
+resolution. That may be the relevant distinction, or may be coincidence.
 
 ## Known debt
 

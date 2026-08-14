@@ -243,3 +243,40 @@ def test_liveness_stays_false_across_a_stall_not_just_on_the_probe_that_saw_it(
         assert loop_watchdog.is_loop_healthy() is False
     finally:
         loop_watchdog.reset_loop_watchdog_state()
+
+
+def test_a_recovered_process_reports_healthy_again_well_before_a_probe_kills_it(
+    monkeypatch,
+) -> None:
+    """Liveness must not stay stuck to the telemetry hysteresis.
+
+    ``_degraded`` holds for 30 healthy seconds so the recovered/degraded events
+    do not flap. A liveness probe with the usual ``periodSeconds: 10`` and
+    ``failureThreshold: 3`` kills a pod after 30 unhealthy seconds -- so tying
+    liveness to that flag turns every stall a process *survived* into a
+    guaranteed restart.
+
+    A genuinely wedged loop keeps failing on current lag and is still killed;
+    stickiness only ever changes the answer for a process that recovered.
+    """
+    loop_watchdog.reset_loop_watchdog_state()
+    monkeypatch.setattr(loop_watchdog.settings, "loop_lag_unhealthy_seconds", 5.0)
+    try:
+        for _ in range(3):
+            loop_watchdog._evaluate_lag(6.0, 0.3, service_name="test")
+        loop_watchdog._lag.seconds = 0.001
+
+        # Still inside the short window a prober needs to observe the stall.
+        assert loop_watchdog.is_loop_healthy() is False
+
+        # The incident is over and the telemetry is still degraded -- liveness
+        # must not be.
+        loop_watchdog._last_unhealthy_at = (
+            loop_watchdog.time.monotonic()
+            - loop_watchdog._LIVENESS_STICKY_SECONDS
+            - 1.0
+        )
+        assert loop_watchdog._degraded is True, "precondition: telemetry still degraded"
+        assert loop_watchdog.is_loop_healthy() is True
+    finally:
+        loop_watchdog.reset_loop_watchdog_state()

@@ -143,9 +143,13 @@ async def lifespan(app: FastAPI):
 
         # Core startup
         from app.core.concurrency.offload import configure_thread_pool
+        from app.core.observability.connection_scope import (
+            start_connection_scope_monitor_from_settings,
+        )
         from app.core.observability.loop_watchdog import loop_lag_watchdog
 
         configure_thread_pool()
+        start_connection_scope_monitor_from_settings(service_name="lemma-api")
         watchdog_task = (
             None
             if getattr(app.state, "embedded_worker", False)

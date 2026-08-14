@@ -10,9 +10,7 @@ from uuid import UUID
 
 from app.core.authorization.permissions import equivalent_permission_ids
 from app.core.domain.errors import DomainError
-from app.core.infrastructure.db.transaction_locks import (
-    holds_transaction_scoped_lock,
-)
+from app.core.infrastructure.db.transaction_locks import safe_to_release
 
 
 class ActorType(str, Enum):
@@ -450,11 +448,10 @@ class Context:
         session = getattr(self.authorizer, "session", None)
         if session is None:
             return
-        if session.new or session.dirty or session.deleted:
-            return
-        if holds_transaction_scoped_lock(session):
-            # See transaction_locks: committing here would drop an advisory
-            # lock the caller is relying on, and nothing in the identity map
-            # says so.
+        # `safe_to_release` carries the full list of reasons not to: pending or
+        # flushed writes, staged outbox events, a transaction-scoped advisory
+        # lock. This runs mid-flow from services and agent tools, not only from
+        # route dependencies, so the caller's transaction is not ours to end.
+        if not safe_to_release(session):
             return
         await session.commit()

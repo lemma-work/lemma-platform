@@ -584,6 +584,14 @@ class KreuzbergHelper:
             async with session.post(f"{self.base_url}/chunk", json=payload) as response:
                 await self._raise_for_status(response)
                 raw = await response.read()
+            # Parsing stays inside the try. Returning [] is what makes the
+            # caller fall back to in-process chunking, and a 200 carrying
+            # something that is not JSON -- a proxy error page, an engine that
+            # dropped this endpoint -- has to reach that fallback rather than
+            # raise out of extract().
+            return await run_blocking(
+                self._normalize_chunk_bytes, raw, limiter="cpu_bound"
+            )
         except Exception:
             logger.debug(
                 'datastore.kreuzberg_helper.chunking_request_text_chunker_s.diagnostic',
@@ -591,10 +599,6 @@ class KreuzbergHelper:
                 exc_info=True,
             )
             return []
-
-        return await run_blocking(
-            self._normalize_chunk_bytes, raw, limiter="cpu_bound"
-        )
 
     def _parse_extract_bytes(self, raw: bytes) -> KreuzbergExtractionResult:
         """Parse and normalize an extract response, off the event loop."""
