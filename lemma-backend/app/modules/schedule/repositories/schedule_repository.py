@@ -33,6 +33,11 @@ from app.core.log.log import get_logger
 
 logger = get_logger(__name__)
 
+#: How many schedules one provider-webhook match may fan out to. Generous
+#: relative to the one row this is expected to find, low enough that a data
+#: problem cannot turn one inbound webhook into an unbounded read.
+_CONFIG_MATCH_LIMIT = 50
+
 
 
 def cursor_for(entity_or_config, *, is_active: bool, schedule_type) -> datetime | None:
@@ -378,15 +383,41 @@ class ScheduleRepository(ScheduleRepositoryInterface):
         schedule_type: ScheduleType,
         criteria: dict[str, Any] | None = None,
     ) -> List[ScheduleEntity]:
-        """Find schedules matching criteria using JSONB contains operator."""
+        """Find schedules matching criteria using JSONB contains operator.
+
+        Bounded, and it matters here more than in most reads: the only caller
+        resolves an inbound provider webhook to the schedule it belongs to, so
+        the row count is chosen by whatever the provider sends, across every
+        tenant at once -- this filters on type and containment, not on a pod.
+        The containment is served by ``ix_schedules_config_gin``, so the cost is
+        in what comes back, not in finding it.
+
+        In practice a ``provider_trigger_id`` is unique and this returns one
+        row. Nothing in the schema enforces that, though, so hitting the bound
+        is logged rather than silently truncated: a saturated result means
+        several schedules claim one provider trigger, which is a data problem
+        worth seeing rather than a query to quietly cut short.
+        """
         criteria = criteria or {}
-        stmt = select(Schedule).where(
-            Schedule.schedule_type == schedule_type,
-            Schedule.is_active.is_(True),
-            Schedule.config.op("@>")(criteria),
+        stmt = (
+            select(Schedule)
+            .where(
+                Schedule.schedule_type == schedule_type,
+                Schedule.is_active.is_(True),
+                Schedule.config.op("@>")(criteria),
+            )
+            .order_by(Schedule.id)
+            .limit(_CONFIG_MATCH_LIMIT)
         )
         result = await self.session.execute(stmt)
-        return [t.to_entity() for t in result.scalars().all()]
+        matches = list(result.scalars().all())
+        if len(matches) == _CONFIG_MATCH_LIMIT:
+            logger.warning(
+                "schedule.repository.config_match_saturated.degraded",
+                schedule_type=str(schedule_type),
+                limit=_CONFIG_MATCH_LIMIT,
+            )
+        return [t.to_entity() for t in matches]
 
     async def find_active_by_workflow(
         self,

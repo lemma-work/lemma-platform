@@ -120,7 +120,12 @@ class FunctionArtifactBuilder:
                 code,
                 manifest,
             )
-            revision_hash = f"sha256:{hashlib.sha256(archive).hexdigest()}"
+            # Offloaded like the archive build either side of it. This hashes
+            # the whole function bundle -- user code plus resolved
+            # site-packages -- so it grows with the dependency tree, and it sat
+            # on the loop between two calls that were already careful not to.
+            digest = await run_blocking(lambda: hashlib.sha256(archive).hexdigest())
+            revision_hash = f"sha256:{digest}"
             artifact_path = f"artifacts/{revision_hash.removeprefix('sha256:')}.zip"
             await self._storage_factory(function_id).write_file(
                 artifact_path, archive

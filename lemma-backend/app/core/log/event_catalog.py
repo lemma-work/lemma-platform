@@ -525,6 +525,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'schedule.filter.not_found': EventSpec('debug', frozenset({'schedule_id'})),
     'schedule.fire.latency_ms': EventSpec('debug', frozenset({'latency_ms', 'schedule_id'})),
     'schedule.fire_telemetry.failed': EventSpec('debug', frozenset({'schedule_id'})),
+    'schedule.repository.config_match_saturated.degraded': EventSpec('warning', frozenset({'limit', 'schedule_type'})),
     'schedule.runs.recovered': EventSpec('warning', frozenset({'dead_lettered', 'reconciled', 'redelivered'})),
     'schedule.schedule_consumer.s_has_no_filter_instruction.diagnostic': EventSpec('debug', frozenset({'schedule_id'})),
     'schedule.schedule_event_publisher.staged_schedule_event_schedule_s.observed': EventSpec('debug', frozenset({'source_event_id'})),

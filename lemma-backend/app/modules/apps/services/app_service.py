@@ -211,7 +211,9 @@ class AppService:
             app.name,
             user_id,
             source_archive_bytes=None,
-            dist_archive_bytes=self._single_index_html_zip(document),
+            dist_archive_bytes=await run_blocking(
+                self._single_index_html_zip, document
+            ),
             ctx=ctx,
         )
 
