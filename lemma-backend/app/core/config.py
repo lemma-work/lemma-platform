@@ -967,6 +967,23 @@ class Settings(BaseSettings):
     )
     function_api_deadline_seconds: int = Field(default=120, ge=1, le=3600)
     function_job_deadline_seconds: int = Field(default=600, ge=1, le=3_000)
+    workflow_wait_retention_days: int = Field(
+        default=30,
+        ge=1,
+        description=(
+            "How long a finished machine wait (FUNCTION/AGENT/TIME) is kept. "
+            "HUMAN waits are excluded from the sweep entirely at any age -- "
+            "they record who approved what, which is not scaffolding."
+        ),
+    )
+    workflow_wait_retention_batch_size: int = Field(default=1_000, ge=1, le=10_000)
+    workflow_wait_retention_budget_seconds: float = Field(
+        default=45.0,
+        ge=0.0,
+        description=(
+            "Wall-clock budget for one workflow-wait sweep. Zero disables it."
+        ),
+    )
     function_run_retention_days: int = Field(
         default=30,
         ge=1,

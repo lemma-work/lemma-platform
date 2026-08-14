@@ -585,6 +585,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'workflow.form.invalid_schema': EventSpec('warning', frozenset({'node_id'})),
     'workflow.handlers.ignoring_agentruncompleted_non_workflow_conversation.observed': EventSpec('debug', frozenset({'conversation_id'})),
     'workflow.handlers.job_resuming_workflow_run_waiting.observed': EventSpec('debug', frozenset({'agent_conversation_id', 'function_run_id'})),
+    'workflow.handlers.prune_workflow_run_waits.observed': EventSpec('debug', frozenset({'deleted_count'})),
     'workflow.notifications.assignee_unresolved.degraded': EventSpec('warning', frozenset({'node_id', 'run_id'})),
     'workflow.notifications.cancel_failed.degraded': EventSpec('warning', frozenset({'error', 'run_id'})),
     'workflow.notifications.form_close_failed.degraded': EventSpec('warning', frozenset({'error', 'node_id', 'run_id'})),

@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid7
 
 from sqlalchemy import or_, select
+from sqlalchemy.orm import load_only
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent.infrastructure.models import ConversationModel
@@ -71,6 +72,8 @@ class ScheduleRunRecoveryService:
         reconciled = 0
         dead_lettered = 0
         breaker_schedule_ids: set[UUID] = set()
+
+        await self._warm_targets(run for run, _ in rows)
 
         for run, schedule in rows:
             target_exists, outcome, completed_at = await self._resolve_target(run)
@@ -149,6 +152,51 @@ class ScheduleRunRecoveryService:
             reconciled=reconciled,
             dead_lettered=dead_lettered,
         )
+
+    async def _warm_targets(self, runs) -> None:
+        """Load every target this sweep will inspect, in two queries.
+
+        ``_resolve_target`` reads two scalars per run but ``session.get`` loads
+        the whole row, and a workflow run carries four JSONB columns including
+        ``step_history``, which grows with every step the workflow took. At a
+        hundred runs a tick that was a hundred round trips each dragging an
+        unbounded payload to read a status and a timestamp.
+
+        Batched by kind with a column projection, the identity map is warm
+        before the loop starts, so the ``session.get`` calls below resolve
+        locally. They stay as ``get`` on purpose: the projection means a miss
+        would still be correct, just slow, rather than wrong.
+        """
+        by_kind: dict[str, set[UUID]] = {"WORKFLOW": set(), "AGENT": set()}
+        for run in runs:
+            target_ids = by_kind.get(run.target_kind)
+            if target_ids is None or run.target_run_id is None:
+                continue
+            try:
+                target_ids.add(UUID(str(run.target_run_id)))
+            except TypeError, ValueError:
+                continue
+
+        for kind, model, columns in (
+            (
+                "WORKFLOW",
+                WorkflowRunModel,
+                (WorkflowRunModel.id, WorkflowRunModel.status, WorkflowRunModel.completed_at),
+            ),
+            (
+                "AGENT",
+                ConversationModel,
+                (ConversationModel.id, ConversationModel.status, ConversationModel.updated_at),
+            ),
+        ):
+            target_ids = by_kind[kind]
+            if not target_ids:
+                continue
+            await self.session.execute(
+                select(model)
+                .where(model.id.in_(target_ids))
+                .options(load_only(*columns))
+            )
 
     async def _resolve_target(
         self, run: ScheduleRun
