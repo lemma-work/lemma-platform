@@ -235,7 +235,9 @@ class AgentSurfaceIngressService(SurfaceConfigurationMixin, SurfaceProgressMixin
         if adapter is None:
             return None
 
-        parsed = await adapter.parse_inbound_event(request.payload, request.headers)
+        # No connection held for the platform call; see `connection_released`.
+        async with connection_released(self.uow.session):
+            parsed = await adapter.parse_inbound_event(request.payload, request.headers)
         if parsed is None:
             logger.debug(
                 "agent_surfaces.ingress_service.agent_surface_ignored_webhook_because.observed",
@@ -356,7 +358,8 @@ class AgentSurfaceIngressService(SurfaceConfigurationMixin, SurfaceProgressMixin
         if adapter is None:
             return None
 
-        parsed = await adapter.parse_inbound_event(request.payload, request.headers)
+        async with connection_released(self.uow.session):
+            parsed = await adapter.parse_inbound_event(request.payload, request.headers)
         if parsed is None:
             return None
 
@@ -382,7 +385,8 @@ class AgentSurfaceIngressService(SurfaceConfigurationMixin, SurfaceProgressMixin
         if adapter is None:
             return None
 
-        parsed = await adapter.parse_inbound_event(request.payload, {})
+        async with connection_released(self.uow.session):
+            parsed = await adapter.parse_inbound_event(request.payload, {})
         if parsed is None:
             return None
 
@@ -1311,7 +1315,6 @@ class AgentSurfaceIngressService(SurfaceConfigurationMixin, SurfaceProgressMixin
             adapter = self.adapter_registry.get(platform) if platform else None
         if adapter is None:
             return False
-        # Egress: the connection goes back for the platform round trip.
         async with connection_released(self.uow.session):
             parsed = await adapter.parse_inbound_interaction(
                 request.payload, request.headers
@@ -1326,7 +1329,6 @@ class AgentSurfaceIngressService(SurfaceConfigurationMixin, SurfaceProgressMixin
                         break
             if surface is not None:
                 credentials = await self._resolve_credentials(surface)
-                # Egress: the connection goes back for the platform round trip.
                 async with connection_released(self.uow.session):
                     await adapter.acknowledge_interaction(
                         credentials=credentials,
@@ -1370,7 +1372,6 @@ class AgentSurfaceIngressService(SurfaceConfigurationMixin, SurfaceProgressMixin
             conversation_id = link.conversation_id
 
             if parsed.interaction_state == "other":
-                # Egress: the connection goes back for the platform round trip.
                 async with connection_released(self.uow.session):
                     await adapter.acknowledge_interaction(
                         credentials=credentials,
@@ -1426,7 +1427,6 @@ class AgentSurfaceIngressService(SurfaceConfigurationMixin, SurfaceProgressMixin
                     return
                 link, conversation, restarted = refreshed
                 if restarted:
-                    # Egress: the connection goes back for the platform round trip.
                     async with connection_released(self.uow.session):
                         await adapter.acknowledge_interaction(
                             credentials=credentials,
@@ -1441,7 +1441,6 @@ class AgentSurfaceIngressService(SurfaceConfigurationMixin, SurfaceProgressMixin
                     uow=self.uow,
                     conversation=conversation,
                 )
-                # Egress: the connection goes back for the platform round trip.
                 async with connection_released(self.uow.session):
                     await adapter.acknowledge_interaction(
                         credentials=credentials,
@@ -1480,7 +1479,6 @@ class AgentSurfaceIngressService(SurfaceConfigurationMixin, SurfaceProgressMixin
                 )
             finally:
                 reset_current_context(token)
-            # Egress: the connection goes back for the platform round trip.
             async with connection_released(self.uow.session):
                 await adapter.acknowledge_interaction(
                     credentials=credentials,
@@ -1490,7 +1488,6 @@ class AgentSurfaceIngressService(SurfaceConfigurationMixin, SurfaceProgressMixin
                 )
         except Exception:
             if adapter is not None and credentials is not None:
-                # Egress: the connection goes back for the platform round trip.
                 async with connection_released(self.uow.session):
                     await adapter.acknowledge_interaction(
                         credentials=credentials,
@@ -1858,9 +1855,11 @@ class AgentSurfaceIngressService(SurfaceConfigurationMixin, SurfaceProgressMixin
         fallback_agent_name = await self.agent_name_for_surface(surface)
         fallback_agent_display_name = fallback_agent_name or "Lemma"
 
-        enriched = await enrich_or_drop(
-            adapter=adapter, surface=surface, parsed=parsed, credentials=credentials
-        )
+        # `enrich_or_drop` is module-level: no session of its own to release.
+        async with connection_released(self.uow.session):
+            enriched = await enrich_or_drop(
+                adapter=adapter, surface=surface, parsed=parsed, credentials=credentials
+            )
         if enriched is None:
             return None
         parsed = enriched
@@ -2358,10 +2357,11 @@ class AgentSurfaceIngressService(SurfaceConfigurationMixin, SurfaceProgressMixin
         credentials: dict[str, Any],
     ) -> ResolvedSurfaceUser:
         try:
-            sender_profile = await adapter.fetch_sender_profile(
-                credentials=credentials,
-                event=parsed,
-            )
+            async with connection_released(self.uow.session):
+                sender_profile = await adapter.fetch_sender_profile(
+                    credentials=credentials,
+                    event=parsed,
+                )
         except Exception:
             sender_profile = None
         resolved = await self.identity_service.resolve(
