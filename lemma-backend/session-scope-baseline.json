@@ -8,7 +8,6 @@
     "app/modules/agent/api/controllers/runtime_config_controller.py::create_runtime_profile::non-db-await/request-scoped::via _discover_openai_compatible_models: service.create_openai_compatible_profile": 1,
     "app/modules/agent/api/controllers/runtime_config_controller.py::update_runtime_profile::non-db-await/request-scoped::via _update_provider: editor.update_anthropic_compatible_profile": 1,
     "app/modules/agent/api/controllers/runtime_config_controller.py::update_runtime_profile::non-db-await/request-scoped::via _update_provider: editor.update_openai_compatible_profile": 1,
-    "app/modules/agent/api/controllers/widget_controller.py::serve_widget::non-db-await/request-scoped::via get_session: _resolve_widget_viewer": 1,
     "app/modules/agent/events/handlers.py::reconcile_agent_approval_now::non-db-await::via _reconcile_approval_resume: service.resolve_user_approval_internal": 1,
     "app/modules/agent/services/subagent_service.py::SubAgentService.send::non-db-await::event publish: service.add_user_message_and_start_run": 1,
     "app/modules/agent/services/subagent_service.py::SubAgentService.spawn::non-db-await::event publish: service.add_user_message_and_start_run": 1,
