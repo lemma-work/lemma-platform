@@ -52,7 +52,10 @@ class SurfaceConfigurationMixin(SurfaceConfigurationAuthorizationMixin):
         adapter, platform = self._adapter_for_request(request)
         if adapter is None:
             return False
-        setup = await adapter.parse_channel_setup(request.payload, request.headers)
+        # Egress: connection back for the platform round trip. Every
+        # `connection_released` below is the same idea.
+        async with connection_released(self.uow.session):
+            setup = await adapter.parse_channel_setup(request.payload, request.headers)
         if setup is None:
             return False
 
@@ -146,27 +149,29 @@ class SurfaceConfigurationMixin(SurfaceConfigurationAuthorizationMixin):
         if not channel_id or not actor or not candidates:
             return
         prompt_surface = authorized[0][0] if authorized else candidates[0]
-        await adapter.send_channel_setup_prompt(
-            credentials=await self._resolve_credentials(prompt_surface),
-            channel_id=channel_id,
-            user_id=actor,
-            surface_choices=(
-                await self._surface_choice_labels(authorized)
-                if len(authorized) > 1
-                else None
-            ),
-            configuration_error=(
-                None
-                if authorized
-                else "Only a Lemma pod editor can configure this channel. Ask a pod admin to set it up."
-            ),
-        )
+        async with connection_released(self.uow.session):
+            await adapter.send_channel_setup_prompt(
+                credentials=await self._resolve_credentials(prompt_surface),
+                channel_id=channel_id,
+                user_id=actor,
+                surface_choices=(
+                    await self._surface_choice_labels(authorized)
+                    if len(authorized) > 1
+                    else None
+                ),
+                configuration_error=(
+                    None
+                    if authorized
+                    else "Only a Lemma pod editor can configure this channel. Ask a pod admin to set it up."
+                ),
+            )
 
     async def _dispatch_configuration_action(
         self, *, kind, setup, surface, ctx, adapter, credentials, channel_id
     ) -> None:
         if kind == "starter_prompt":
-            await self._send_starter_prompt(adapter, credentials, setup)
+            async with connection_released(self.uow.session):
+                await self._send_starter_prompt(adapter, credentials, setup)
         elif kind == "open_dm":
             await self._open_dm_setup(adapter, credentials, setup, surface, ctx)
         elif kind == "submit_dm":
@@ -182,6 +187,7 @@ class SurfaceConfigurationMixin(SurfaceConfigurationAuthorizationMixin):
 
     @staticmethod
     async def _send_starter_prompt(adapter, credentials, setup) -> None:
+        """Pure egress. The caller releases the connection around this."""
         await adapter.send_starter_prompt(
             credentials=credentials,
             user_id=str(setup.get("actor_external_user_id") or ""),
@@ -192,15 +198,16 @@ class SurfaceConfigurationMixin(SurfaceConfigurationAuthorizationMixin):
         agents = await self._visible_agents(
             surface=surface, ctx=ctx, action=Permissions.AGENT_READ
         )
-        await adapter.open_dm_agent_modal(
-            credentials=credentials,
-            trigger_id=str(setup.get("trigger_id") or ""),
-            agent_names=[agent.name for agent in agents],
-            current=surface.config.slack.choice_for_user(
-                setup.get("actor_external_user_id")
-            ),
-            surface_id=str(surface.id),
-        )
+        async with connection_released(self.uow.session):
+            await adapter.open_dm_agent_modal(
+                credentials=credentials,
+                trigger_id=str(setup.get("trigger_id") or ""),
+                agent_names=[agent.name for agent in agents],
+                current=surface.config.slack.choice_for_user(
+                    setup.get("actor_external_user_id")
+                ),
+                surface_id=str(surface.id),
+            )
 
     async def _submit_dm_setup(self, adapter, credentials, setup, surface, ctx) -> None:
         agent_name = await self._validated_agent_choice(
@@ -231,16 +238,17 @@ class SurfaceConfigurationMixin(SurfaceConfigurationAuthorizationMixin):
         agents = await self._visible_agents(
             surface=surface, ctx=ctx, action=Permissions.AGENT_UPDATE
         )
-        await adapter.open_channel_setup_modal(
-            credentials=credentials,
-            trigger_id=str(setup.get("trigger_id") or ""),
-            channel_id=channel_id,
-            channel_label=await adapter.channel_name(
-                credentials=credentials, channel_id=channel_id
-            ),
-            agent_names=[agent.name for agent in agents],
-            surface_id=str(surface.id),
-        )
+        async with connection_released(self.uow.session):
+            await adapter.open_channel_setup_modal(
+                credentials=credentials,
+                trigger_id=str(setup.get("trigger_id") or ""),
+                channel_id=channel_id,
+                channel_label=await adapter.channel_name(
+                    credentials=credentials, channel_id=channel_id
+                ),
+                agent_names=[agent.name for agent in agents],
+                surface_id=str(surface.id),
+            )
 
     async def _submit_channel_setup(
         self, adapter, credentials, setup, surface, ctx, channel_id
@@ -256,12 +264,13 @@ class SurfaceConfigurationMixin(SurfaceConfigurationAuthorizationMixin):
         await self._route_channel_to_agent(
             surface=surface, channel_id=channel_id, agent_name=agent_name
         )
-        await adapter.send_channel_setup_prompt(
-            credentials=credentials,
-            channel_id=channel_id,
-            user_id=str(setup.get("actor_external_user_id") or ""),
-            confirmed_agent=agent_name or "the pod assistant",
-        )
+        async with connection_released(self.uow.session):
+            await adapter.send_channel_setup_prompt(
+                credentials=credentials,
+                channel_id=channel_id,
+                user_id=str(setup.get("actor_external_user_id") or ""),
+                confirmed_agent=agent_name or "the pod assistant",
+            )
 
     async def _set_dm_agent_for_user(
         self,
@@ -469,7 +478,6 @@ class SurfaceConfigurationMixin(SurfaceConfigurationAuthorizationMixin):
             credentials = await self._resolve_credentials(prompt_surface)
             if not authorized:
                 if parsed.kind is SurfaceLifecycleKind.HOME_OPENED:
-                    # Egress: the connection goes back for the platform round trip.
                     async with connection_released(self.uow.session):
                         await adapter.publish_home_view(
                             credentials=credentials,
@@ -487,7 +495,6 @@ class SurfaceConfigurationMixin(SurfaceConfigurationAuthorizationMixin):
                     parsed.kind is SurfaceLifecycleKind.JOINED_CHANNEL
                     and parsed.external_channel_id
                 ):
-                    # Egress: the connection goes back for the platform round trip.
                     async with connection_released(self.uow.session):
                         await adapter.send_channel_setup_prompt(
                             credentials=credentials,
@@ -500,7 +507,6 @@ class SurfaceConfigurationMixin(SurfaceConfigurationAuthorizationMixin):
                 return True
             choices = await self._surface_choice_labels(authorized)
             if parsed.kind is SurfaceLifecycleKind.HOME_OPENED:
-                # Egress: the connection goes back for the platform round trip.
                 async with connection_released(self.uow.session):
                     await adapter.publish_home_view(
                         credentials=credentials,
@@ -516,7 +522,6 @@ class SurfaceConfigurationMixin(SurfaceConfigurationAuthorizationMixin):
                 parsed.kind is SurfaceLifecycleKind.JOINED_CHANNEL
                 and parsed.external_channel_id
             ):
-                # Egress: the connection goes back for the platform round trip.
                 async with connection_released(self.uow.session):
                     await adapter.send_channel_setup_prompt(
                         credentials=credentials,
@@ -578,7 +583,6 @@ class SurfaceConfigurationMixin(SurfaceConfigurationAuthorizationMixin):
             channel_id=parsed.external_channel_id, channel_name=""
         ):
             return
-        # Egress: the connection goes back for the platform round trip.
         async with connection_released(self.uow.session):
             await adapter.send_channel_setup_prompt(
                 credentials=credentials,
