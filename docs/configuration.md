@@ -43,7 +43,37 @@ LOG_LEVEL=INFO
 JSON_LOGS_ENABLED=true
 # Per-request access logs. Noisy in production, useful in a checkout.
 LOCAL_HTTP_ACCESS_LOGS_ENABLED=false
+# The source commit this image was built from. Required in production —
+# startup refuses to continue without it. See "Release identity" below.
+LEMMA_RELEASE_SHA=4f2c1a9e8b7d3f5a1c0e6b2d8a4f7c3e9b1d5a02
 ```
+
+### Release identity
+
+`LEMMA_RELEASE_SHA` is what makes a metric, a log line, or a trace attributable
+to a deploy. It becomes `service.version` on the OpenTelemetry resource and
+`service.version`/`release.sha` on every log line, and without it you cannot
+answer whether a release caused a latency change.
+
+It must be the **full 40-character lowercase hex git SHA**. Nothing else is
+accepted, and the failure is quiet in the direction that matters: a short SHA,
+an image digest (`sha256:…`), a tag, or a branch name all fail the format check
+and fall back to the string `unknown`, which is what every dashboard then
+groups by. Set it from the source commit and bump it alongside the image digest
+at release.
+
+Production is stricter — startup raises if the value is missing or malformed.
+So a *running* production process reporting `service.version=unknown` means
+`ENVIRONMENT` is not being seen as `production` either, and that is worth
+fixing first.
+
+There is no `OTEL_SERVICE_VERSION`; the OTel SDK does not define one, and this
+setting is where the value comes from.
+
+`SERVICE_INSTANCE_ID` is not a setting — `service.instance.id` is derived
+automatically from `LEMMA_RUNTIME_INSTANCE_ID` if set, and otherwise from the
+hostname, which under Kubernetes is the pod name. It is what keeps replicas
+from colliding on the same metric series.
 
 ## Database and Redis
 
@@ -482,7 +512,15 @@ OBSERVABILITY_ENABLED=true
 OTEL_EXPORTER_OTLP_ENDPOINT=http://collector:4317
 OTEL_SERVICE_NAME=lemma-backend
 OTEL_TRACES_SAMPLER_ARG=0.05
+# How often the worker samples queue depth and pending event rows. Matching the
+# metric export interval is the useful floor; sampling faster only costs
+# queries. Zero disables the backlog gauges.
+BACKLOG_GAUGE_INTERVAL_SECONDS=60
 ```
+
+Set `LEMMA_RELEASE_SHA` too — see [Release identity](#release-identity). Without
+it every signal reports `service.version=unknown` and nothing correlates to a
+deploy.
 
 ## Chat surfaces
 

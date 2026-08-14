@@ -89,6 +89,28 @@ class ScheduleRun(UUIDAuditBase):
             unique=True,
             postgresql_where=text("redrive_of_run_id IS NOT NULL"),
         ),
+        # Serves the five-minute recovery sweep. There was already an index for
+        # that sweep -- ix_schedule_runs_retryable_recovery, created in 0003 --
+        # but its predicate covered RECEIVED/PROCESSING/FAILED while the query
+        # asks about PROCESSING/FAILED/DISPATCHED. Postgres cannot use a partial
+        # index it cannot prove covers the query, so it never did: zero scans in
+        # production while the sweep sequentially scanned the table.
+        #
+        # It was also declared only in the migration and not here, so databases
+        # built by create_all -- every test database -- never had it at all.
+        #
+        # The status set is what keeps this small: terminal runs are almost the
+        # whole table and none of them can match. Leading with (updated_at, id)
+        # answers the query's ORDER BY from the index instead of sorting.
+        Index(
+            "ix_schedule_runs_recoverable",
+            "updated_at",
+            "id",
+            postgresql_where=text(
+                "target_outcome IS NULL "
+                "AND status IN ('PROCESSING', 'FAILED', 'DISPATCHED')"
+            ),
+        ),
     )
 
     def to_entity(self) -> ScheduleRunEntity:

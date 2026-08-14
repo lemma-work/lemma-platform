@@ -289,7 +289,7 @@ class ConversationService(PauseResumeMixin):
             pod_id=pod_id,
             agent_name=agent_name,
         )
-        # Include run messages so failure diagnostics also carry retry safety.
+        # The latest run carries the failure diagnostics and the retry decision.
         conversation = await self.conversation_repository.get_conversation(
             conversation_id,
             include_runs=True,
@@ -310,8 +310,26 @@ class ConversationService(PauseResumeMixin):
                 agent_id=conversation.agent_id,
                 action=Permissions.AGENT_READ,
             )
-        conversation.last_run_retryable = bool(conversation.agent_runs and conversation.agent_runs[-1].is_safely_retryable)
+        conversation.last_run_retryable = await self._latest_run_is_retryable(
+            conversation
+        )
         return conversation
+
+    async def _latest_run_is_retryable(self, conversation: Conversation) -> bool:
+        """Whether the newest run can be replayed without duplicating output.
+
+        The status check runs first and short-circuits: a run that did not fail
+        is not retryable whatever its messages say, and that is nearly every
+        conversation, so the message query below is rarely reached. Asking the
+        database that question directly is what replaced eager-loading the
+        whole transcript to evaluate it in Python.
+        """
+        latest = conversation.agent_runs[-1] if conversation.agent_runs else None
+        if latest is None or latest.status != AgentRunStatus.FAILED:
+            return False
+        return await self.conversation_repository.run_has_only_user_messages(
+            latest.id
+        )
 
     async def update_conversation(
         self,

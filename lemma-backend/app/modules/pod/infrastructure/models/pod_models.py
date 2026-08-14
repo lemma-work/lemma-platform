@@ -41,6 +41,12 @@ class Pod(UUIDAuditBase):
         "PodMember",
         back_populates="pod",
         cascade="all, delete-orphan",
+        # The FK already declares ON DELETE CASCADE, so the database removes
+        # these rows itself. Without passive_deletes SQLAlchemy insists on
+        # loading every child into the session first and deleting them one
+        # at a time -- which on a large collection is a memory event, not a
+        # slow query.
+        passive_deletes=True,
     )
     __table_args__ = (
         Index("ix_pod_user_name", "user_id", "name"),

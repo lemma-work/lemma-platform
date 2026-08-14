@@ -61,6 +61,7 @@ def _settings(**overrides):
         "otel_traces_sampler_arg": 0.05,
         "otel_service_name": None,
         "otel_service_namespace": None,
+        "lemma_runtime_instance_id": "",
         "environment": "testing",
         "llm_otel_enabled": False,
         "llm_otel_exporter_otlp_endpoint": None,
@@ -110,6 +111,7 @@ def _adversarial_span(
     http_route: str = "/pods/{pod_id}",
     kind: SpanKind = SpanKind.SERVER,
     scope_name: str = "opentelemetry.instrumentation.fastapi",
+    extra: dict | None = None,
 ) -> ReadableSpan:
     context = SpanContext(
         trace_id=1,
@@ -139,6 +141,7 @@ def _adversarial_span(
             "gen_ai.request.model": "safe-model",
             "lemma.request_id": "request-1",
             "binary": b"CANARY",
+            **(extra or {}),
         },
         events=(
             Event(
@@ -232,6 +235,156 @@ def test_fastapi_route_patch_filters_labels_before_span_and_metric_collection(
         )
         is None
     )
+
+
+@pytest.mark.parametrize(
+    "key, value",
+    [
+        # Per-route error rate. The counter emits this and the FastAPI
+        # histogram emits it too, which is what makes the two joinable.
+        ("http.response.status_code", 503),
+        # Which third party a client call went to.
+        ("server.address", "api.example-provider.com"),
+        # Connection-pool identity and slot state, which have to survive
+        # together or the pool metric collapses to one label-less series.
+        ("pool.name", "primary"),
+        ("state", "used"),
+        # Worker queue identity for the depth gauge.
+        ("lane", "bulk"),
+    ],
+)
+def test_metric_labels_the_dashboards_need_survive_the_export_boundary(
+    key, value
+) -> None:
+    from app.core.observability.span_sanitizer import METRIC_ATTRIBUTE_KEYS
+
+    assert key in METRIC_ATTRIBUTE_KEYS, (
+        f"{key!r} is emitted but would be stripped by the metric view; a "
+        "dashboard cannot group by a label that never leaves the process"
+    )
+    assert isinstance(value, (str, int))
+
+
+def test_tenancy_reaches_spans_and_stays_off_metrics() -> None:
+    """Tenant attribution belongs on spans, never on metric labels.
+
+    A span attribute costs storage proportional to sampled traffic. The same
+    key as a metric label multiplies every series by the customer count, which
+    is how a cardinality incident starts.
+    """
+    from app.core.observability.span_sanitizer import (
+        GENERAL_SPAN_ATTRIBUTE_KEYS,
+        METRIC_ATTRIBUTE_KEYS,
+    )
+
+    assert "lemma.organization_id" in GENERAL_SPAN_ATTRIBUTE_KEYS
+    assert "lemma.organization_id" not in METRIC_ATTRIBUTE_KEYS
+
+    capture = _CaptureExporter()
+    exporter = SanitizingSpanExporter(capture)
+    assert (
+        exporter.export(
+            [_adversarial_span(extra={"lemma.organization_id": "org-abc123"})]
+        )
+        is SpanExportResult.SUCCESS
+    )
+    assert capture.spans[0].attributes["lemma.organization_id"] == "org-abc123"
+
+
+def test_every_process_identifies_itself_on_the_resource(monkeypatch) -> None:
+    """Replicas must be distinguishable or a Prometheus backend rejects them.
+
+    Without this, every replica exports a byte-identical resource, the
+    collector derives one target from it, and concurrent writers to the same
+    series are dropped as duplicate samples.
+    """
+    monkeypatch.setattr(telemetry, "_get_settings", _settings)
+    monkeypatch.setattr(telemetry.socket, "gethostname", lambda: "lemma-api-7d9f-2xk4")
+
+    resource = telemetry._build_resource("lemma-api")
+
+    assert resource.attributes["service.instance.id"] == "lemma-api-7d9f-2xk4"
+
+    from app.core.observability.span_sanitizer import RESOURCE_ATTRIBUTE_KEYS
+
+    assert "service.instance.id" in RESOURCE_ATTRIBUTE_KEYS
+
+
+def test_an_explicit_instance_id_wins_over_the_hostname(monkeypatch) -> None:
+    monkeypatch.setattr(
+        telemetry,
+        "_get_settings",
+        lambda: _settings(lemma_runtime_instance_id="launch-123"),
+    )
+    monkeypatch.setattr(telemetry.socket, "gethostname", lambda: "some-host")
+
+    resource = telemetry._build_resource("lemma-api")
+
+    assert resource.attributes["service.instance.id"] == "launch-123"
+
+
+def test_an_unusable_hostname_is_omitted_rather_than_exported(monkeypatch) -> None:
+    """The resource crosses the export boundary, so it gets the same scrutiny."""
+    monkeypatch.setattr(telemetry, "_get_settings", _settings)
+    monkeypatch.setattr(
+        telemetry.socket, "gethostname", lambda: "host with spaces/and-slashes"
+    )
+
+    resource = telemetry._build_resource("lemma-api")
+
+    assert "service.instance.id" not in resource.attributes
+
+
+def test_http_clients_are_instrumented_under_stable_semconv(monkeypatch) -> None:
+    """All three HTTP clients must speak one vocabulary -- additively.
+
+    pyqwest (via e2b and connectrpc) already emits the stable conventions, so
+    aiohttp and httpx have to reach them too. But this variable is
+    process-global and the ASGI server instrumentation reads it as well, so the
+    plain ``http`` value would silently rename the inbound latency histogram.
+    ``dup`` emits both, which is what keeps existing dashboards working.
+    """
+    monkeypatch.delenv("OTEL_SEMCONV_STABILITY_OPT_IN", raising=False)
+    monkeypatch.setattr(telemetry, "_libraries_instrumented", False)
+    instrumented: list[str] = []
+
+    import opentelemetry.instrumentation.aiohttp_client as aiohttp_mod
+    import opentelemetry.instrumentation.httpx as httpx_mod
+
+    monkeypatch.setattr(
+        aiohttp_mod.AioHttpClientInstrumentor,
+        "instrument",
+        lambda self, **kwargs: instrumented.append("aiohttp"),
+    )
+    monkeypatch.setattr(
+        httpx_mod.HTTPXClientInstrumentor,
+        "instrument",
+        lambda self, **kwargs: instrumented.append("httpx"),
+    )
+
+    telemetry._instrument_libraries()
+
+    assert instrumented == ["aiohttp", "httpx"]
+    assert telemetry.os.environ["OTEL_SEMCONV_STABILITY_OPT_IN"] == "http/dup"
+
+
+def test_a_deployment_can_still_pin_the_old_http_conventions(monkeypatch) -> None:
+    monkeypatch.setenv("OTEL_SEMCONV_STABILITY_OPT_IN", "")
+    monkeypatch.setattr(telemetry, "_libraries_instrumented", False)
+
+    import opentelemetry.instrumentation.aiohttp_client as aiohttp_mod
+    import opentelemetry.instrumentation.httpx as httpx_mod
+
+    monkeypatch.setattr(
+        aiohttp_mod.AioHttpClientInstrumentor, "instrument", lambda self, **kw: None
+    )
+    monkeypatch.setattr(
+        httpx_mod.HTTPXClientInstrumentor, "instrument", lambda self, **kw: None
+    )
+
+    telemetry._instrument_libraries()
+
+    assert telemetry.os.environ["OTEL_SEMCONV_STABILITY_OPT_IN"] == ""
 
 
 def test_exporter_drops_only_fastapi_asgi_internal_spans() -> None:

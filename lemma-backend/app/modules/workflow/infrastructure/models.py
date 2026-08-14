@@ -56,7 +56,15 @@ class WorkflowModel(UUIDAuditBase):
     visibility: Mapped[str] = mapped_column(String(30), default="POD", nullable=False)
 
     runs: Mapped[list["WorkflowRunModel"]] = relationship(
-        "WorkflowRunModel", back_populates="flow", cascade="all, delete-orphan"
+        "WorkflowRunModel",
+        back_populates="flow",
+        cascade="all, delete-orphan",
+        # The FK already declares ON DELETE CASCADE, so the database removes
+        # these rows itself. Without passive_deletes SQLAlchemy insists on
+        # loading every child into the session first and deleting them one
+        # at a time -- which on a large collection is a memory event, not a
+        # slow query.
+        passive_deletes=True,
     )
 
     def __str__(self) -> str:

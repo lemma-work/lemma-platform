@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from uuid import UUID
 
 from pydantic import ValidationError
@@ -69,11 +69,13 @@ from app.modules.agent.infrastructure.runtime_models import (
 from app.modules.agent.infrastructure.conversation_origin_store import (
     create_conversation_for_origin,
 )
+from app.modules.agent.infrastructure.conversation_run_queries import (
+    ConversationRunQueriesMixin,
+)
 from app.modules.agent.infrastructure.repository_status import (
     conversation_status_values_for_db as _conversation_status_values_for_db,
     run_status_values_for_db as _run_status_values_for_db,
 )
-from app.modules.agent.infrastructure.run_projections import StaleAgentRunRef
 from app.modules.connectors.contracts import SecretEncryptionPort
 
 
@@ -525,7 +527,7 @@ class AgentRepository:
         return self._to_entity_with_allowed_actions(row[0], row[1]) if row else None
 
 
-class ConversationRepository:
+class ConversationRepository(ConversationRunQueriesMixin):
     """Repository for conversations, agent runs, and messages."""
 
     def __init__(self, uow: SqlAlchemyUnitOfWork):
@@ -655,14 +657,38 @@ class ConversationRepository:
         include_messages: bool = False,
         include_runs: bool = False,
     ) -> ConversationEntity | None:
+        """Load a conversation, optionally with its messages and its latest run.
+
+        ``include_runs`` used to eager-load every run of the conversation and
+        every message of every run. Nothing consumed that: the entity derives
+        four scalars from ``agent_runs[-1]``, and the three callers that pass
+        this flag read the latest run or nothing at all. On a long-lived thread
+        it meant re-reading the whole transcript — the worst conversation in
+        production carries 13,688 messages — to answer a question about one row.
+
+        Now it fetches exactly that one run, through the index that already
+        exists for it. ``agent_runs`` still carries a single element so
+        ``[-1]`` keeps working for callers, and ``to_entity()`` derives
+        ``status`` and the ``last_run_*`` fields from it unchanged.
+        """
         stmt = select(ConversationModel).where(ConversationModel.id == conversation_id)
         if include_messages:
             stmt = stmt.options(selectinload(ConversationModel.messages))
-        if include_runs:
-            stmt = stmt.options(selectinload(ConversationModel.agent_runs).selectinload(AgentRunModel.messages))
         result = await self.session.execute(stmt)
         model = result.scalar_one_or_none()
-        return model.to_entity() if model else None
+        if model is None:
+            return None
+        if include_runs:
+            latest = await self.session.scalar(
+                select(AgentRunModel)
+                .where(AgentRunModel.conversation_id == conversation_id)
+                .order_by(AgentRunModel.created_at.desc(), AgentRunModel.id.desc())
+                .limit(1)
+            )
+            # Seeded into __dict__ rather than assigned, so SQLAlchemy does not
+            # treat this as a mutation of the relationship and try to flush it.
+            model.__dict__["agent_runs"] = [latest] if latest is not None else []
+        return model.to_entity()
 
     async def list_conversations(
         self,
@@ -707,36 +733,6 @@ class ConversationRepository:
             )
         return await self._list_conversations(stmt, cursor=cursor, limit=limit)
 
-    async def list_children(
-        self,
-        *,
-        parent_id: UUID,
-        user_id: UUID,
-        limit: int = 50,
-        include_runs: bool = True,
-    ) -> list[ConversationEntity]:
-        """List child (sub-agent) conversations of a parent, newest first.
-
-        Inverse of list_conversations (which hides children via parent_id IS NULL);
-        reuses the ix_agent_conv_parent index. Scoped to the owning user.
-        """
-        stmt = (
-            select(ConversationModel)
-            .where(
-                ConversationModel.parent_id == parent_id,
-                ConversationModel.user_id == user_id,
-            )
-            .order_by(
-                ConversationModel.created_at.desc(),
-                ConversationModel.id.desc(),
-            )
-            .limit(limit)
-        )
-        if include_runs:
-            stmt = stmt.options(selectinload(ConversationModel.agent_runs))
-        result = await self.session.execute(stmt)
-        return [row.to_entity() for row in result.scalars()]
-
     async def _list_conversations(
         self,
         stmt,
@@ -754,6 +750,55 @@ class ConversationRepository:
             rows = rows[:limit]
         next_cursor = rows[-1].id if has_more and rows else None
         return [row.to_entity() for row in rows], next_cursor
+
+
+    async def lock_conversation(self, conversation_id: UUID) -> None:
+        await self.session.execute(
+            select(ConversationModel.id)
+            .where(ConversationModel.id == conversation_id)
+            .with_for_update()
+        )
+
+    async def list_children(
+        self,
+        *,
+        parent_id: UUID,
+        user_id: UUID,
+        limit: int = 50,
+        include_runs: bool = True,
+    ) -> list[ConversationEntity]:
+        """List child (sub-agent) conversations of a parent, newest first.
+
+        Inverse of list_conversations (which hides children via parent_id IS NULL);
+        reuses the ix_agent_conv_parent index. Scoped to the owning user.
+
+        ``include_runs`` attaches each child's latest run only. The caller reads
+        ``agent_runs[-1].status`` and nothing else, so eager-loading the full
+        collection meant every run of every child to answer one question per
+        child.
+        """
+        stmt = (
+            select(ConversationModel)
+            .where(
+                ConversationModel.parent_id == parent_id,
+                ConversationModel.user_id == user_id,
+            )
+            .order_by(
+                ConversationModel.created_at.desc(),
+                ConversationModel.id.desc(),
+            )
+            .limit(limit)
+        )
+        result = await self.session.execute(stmt)
+        models = list(result.scalars())
+        if include_runs and models:
+            latest_by_conversation = await self._latest_runs_for(
+                [model.id for model in models]
+            )
+            for model in models:
+                latest = latest_by_conversation.get(model.id)
+                model.__dict__["agent_runs"] = [latest] if latest is not None else []
+        return [model.to_entity() for model in models]
 
     async def create_agent_run(
         self,
@@ -782,115 +827,6 @@ class ConversationRepository:
         )
         await self.session.flush()
         return model.to_entity()
-
-    async def get_active_agent_run_for_update(
-        self,
-        conversation_id: UUID,
-    ) -> AgentRunEntity | None:
-        result = await self.session.execute(
-            select(AgentRunModel)
-            .where(
-                AgentRunModel.conversation_id == conversation_id,
-                AgentRunModel.status.in_(_ACTIVE_AGENT_RUN_STATUS_VALUES),
-            )
-            .order_by(AgentRunModel.created_at.desc(), AgentRunModel.id.desc())
-            .limit(1)
-            .with_for_update()
-        )
-        model = result.scalar_one_or_none()
-        return model.to_entity() if model else None
-
-    async def get_active_agent_run(
-        self,
-        conversation_id: UUID,
-    ) -> AgentRunEntity | None:
-        result = await self.session.execute(
-            select(AgentRunModel)
-            .where(
-                AgentRunModel.conversation_id == conversation_id,
-                AgentRunModel.status.in_(_ACTIVE_AGENT_RUN_STATUS_VALUES),
-            )
-            .order_by(AgentRunModel.created_at.desc(), AgentRunModel.id.desc())
-            .limit(1)
-        )
-        model = result.scalar_one_or_none()
-        return model.to_entity() if model else None
-
-    async def list_stale_active_runs(
-        self,
-        *,
-        cutoff_seconds: int,
-        limit: int = 200,
-    ) -> list[StaleAgentRunRef]:
-        """List identities of active runs older than the post-timeout cutoff.
-
-        Only IDs are selected: reconciliation does not execute the run, and stale
-        legacy runtime JSON must not block a safe terminal status transition.
-        """
-        cutoff = datetime.now(timezone.utc) - timedelta(seconds=cutoff_seconds)
-        result = await self.session.execute(
-            select(AgentRunModel.id, AgentRunModel.conversation_id)
-            .where(
-                AgentRunModel.status.in_(_ACTIVE_AGENT_RUN_STATUS_VALUES),
-                AgentRunModel.started_at < cutoff,
-            )
-            .order_by(AgentRunModel.started_at.asc())
-            .limit(limit)
-        )
-        return [StaleAgentRunRef(*row) for row in result.all()]
-
-    async def lock_conversation(self, conversation_id: UUID) -> None:
-        await self.session.execute(
-            select(ConversationModel.id)
-            .where(ConversationModel.id == conversation_id)
-            .with_for_update()
-        )
-
-    async def list_agent_runs_with_messages(
-        self,
-        conversation_id: UUID,
-    ) -> list[AgentRunEntity]:
-        result = await self.session.execute(
-            select(AgentRunModel)
-            .where(AgentRunModel.conversation_id == conversation_id)
-            .options(selectinload(AgentRunModel.messages))
-            .order_by(AgentRunModel.created_at.asc(), AgentRunModel.id.asc())
-        )
-        return [model.to_entity() for model in result.scalars()]
-
-    async def list_agent_runs_with_messages_by_run_id(
-        self,
-        agent_run_id: UUID,
-    ) -> list[AgentRunEntity]:
-        conversation_id_result = await self.session.execute(
-            select(AgentRunModel.conversation_id).where(
-                AgentRunModel.id == agent_run_id
-            )
-        )
-        conversation_id = conversation_id_result.scalar_one_or_none()
-        if conversation_id is None:
-            return []
-        return await self.list_agent_runs_with_messages(conversation_id)
-
-    async def get_agent_run(self, agent_run_id: UUID) -> AgentRunEntity | None:
-        result = await self.session.execute(
-            select(AgentRunModel).where(AgentRunModel.id == agent_run_id)
-        )
-        model = result.scalar_one_or_none()
-        return model.to_entity() if model else None
-
-    async def get_latest_agent_run_for_conversation(
-        self,
-        conversation_id: UUID,
-    ) -> AgentRunEntity | None:
-        result = await self.session.execute(
-            select(AgentRunModel)
-            .where(AgentRunModel.conversation_id == conversation_id)
-            .order_by(AgentRunModel.created_at.desc(), AgentRunModel.id.desc())
-            .limit(1)
-        )
-        model = result.scalar_one_or_none()
-        return model.to_entity() if model else None
 
     async def append_message(
         self,

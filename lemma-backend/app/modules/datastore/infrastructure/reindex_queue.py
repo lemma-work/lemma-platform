@@ -35,6 +35,7 @@ class RedisDatastoreReindexQueue(DatastoreReindexQueuePort):
         *,
         file_id: UUID,
         pod_id: UUID,
+        need_pod_count: bool,
     ) -> tuple[bool, int]:
         """Whether the file is still PENDING, and how much else the pod has active.
 
@@ -45,6 +46,12 @@ class RedisDatastoreReindexQueue(DatastoreReindexQueuePort):
         ``file_id`` is excluded from the active count: its own row is already
         PENDING by the time this runs, so counting it would mean a pod at limit 4
         admits only 3 — and at a limit of 1, nothing at all.
+
+        ``need_pod_count`` skips the count when the caller is going to ignore it.
+        The dispatch cron bypasses admission for every file it offers — the
+        fairness decision was already made by the ranked query — so counting
+        there was a per-file aggregate computed only to be discarded, once a
+        minute, for as long as the backlog lasted.
         """
         active_statuses = (FileStatus.PENDING.value, FileStatus.PROCESSING.value)
         async with async_session_maker() as session:
@@ -59,6 +66,8 @@ class RedisDatastoreReindexQueue(DatastoreReindexQueuePort):
             if status != FileStatus.PENDING.value:
                 # Not eligible either way; skip the count entirely.
                 return False, 0
+            if not need_pod_count:
+                return True, 0
             active = int(
                 await session.scalar(
                     select(func.count())
@@ -97,14 +106,17 @@ class RedisDatastoreReindexQueue(DatastoreReindexQueuePort):
         dispatcher itself passes ``bypass_admission`` — it has already done the
         fairness accounting and must not be re-gated by it.
         """
+        limit = datastore_settings.datastore_per_pod_max_inflight
+        gate_applies = not bypass_admission and limit > 0
         is_pending, pod_active = await self._read_admission_state(
-            file_id=file_id, pod_id=pod_id
+            file_id=file_id,
+            pod_id=pod_id,
+            need_pod_count=gate_applies,
         )
         if not is_pending:
             return False
 
-        limit = datastore_settings.datastore_per_pod_max_inflight
-        if not bypass_admission and limit > 0 and pod_active >= limit:
+        if gate_applies and pod_active >= limit:
             logger.debug(
                 "datastore.reindex_queue.pod_admission_deferred_to_dispatcher.observed",
                 pod_id=str(pod_id),

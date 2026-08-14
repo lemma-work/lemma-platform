@@ -102,6 +102,12 @@ def get_engine():
             json_serializer=lambda obj: json.dumps(obj, default=json_serial),
             pool_pre_ping=True,
             connect_args=connect_args,
+            # Names this pool in the connection metrics. Without it the
+            # instrumentation labels them with the DSN -- host and database
+            # included -- which is not something the export boundary will let
+            # through, so the label was dropped and every pool's readings
+            # collapsed into one series.
+            pool_logging_name="primary",
             **engine_kwargs,
         )
         if settings.environment != "testing":

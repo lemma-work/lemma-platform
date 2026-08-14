@@ -305,7 +305,12 @@ class RequestObserverMiddleware:
                 attributes = {
                     "http.request.method": str(scope.get("method", "UNKNOWN")),
                     "http.route": route,
-                    "http.response.status_class": f"{status_code // 100}xx",
+                    # The exact code, not the class. The FastAPI instrumentation's
+                    # own histogram records exact codes but no route, and this
+                    # counter records the route -- matching the vocabularies is
+                    # what lets a dashboard join them into per-route error rate.
+                    # Cardinality is bounded by the codes we actually return.
+                    "http.response.status_code": status_code,
                 }
                 http_request_count.add(1, attributes)
                 http_request_duration.record(duration_ms, attributes)

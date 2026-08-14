@@ -55,6 +55,10 @@ RESOURCE_ATTRIBUTE_KEYS = frozenset(
         "service.name",
         "service.namespace",
         "service.version",
+        # Which process emitted this. Without it every replica exports an
+        # identical resource, so a backend that keys series off the resource
+        # sees N writers claiming one series and rejects the batch.
+        "service.instance.id",
         "deployment.environment",
         "telemetry.sdk.language",
         "telemetry.sdk.name",
@@ -94,6 +98,11 @@ GENERAL_SPAN_ATTRIBUTE_KEYS = frozenset(
         "lemma.correlation_id",
         "lemma.event_id",
         "lemma.job_id",
+        # Spans only, deliberately: this is what turns "the app is slow" into
+        # "it is slow for this tenant". It is absent from the metric allowlist
+        # below on purpose -- as a label it multiplies every series by the
+        # customer count.
+        "lemma.organization_id",
         "lemma.pod_id",
         "lemma.conversation_id",
         "lemma.agent_run_id",
@@ -137,10 +146,24 @@ METRIC_ATTRIBUTE_KEYS = frozenset(
         "http.status_code",
         "network.protocol.name",
         "network.protocol.version",
+        # Which third party a client call went to. Without it every outbound
+        # dependency -- model providers, sandboxes, mail -- aggregates into one
+        # undifferentiated series and "which one is slow" has no answer. The
+        # host is bounded by the set of services we call; the URL, path and
+        # query that would not be bounded are still absent.
+        "server.address",
         "db.system",
         "db.system.name",
         "db.operation",
         "db.operation.name",
+        # Connection-pool identity and slot state. Both are required together:
+        # the pool metric emits one point per (pool, state) per export, so
+        # stripping them collapsed every point onto a single label-less series
+        # and made the export look like a duplicate write. ``pool.name`` is
+        # only safe because the engines set an explicit ``pool_logging_name``
+        # -- the instrumentation's fallback is the DSN, host and all.
+        "pool.name",
+        "state",
         "rpc.system",
         "rpc.service",
         "rpc.method",
@@ -163,6 +186,9 @@ METRIC_ATTRIBUTE_KEYS = frozenset(
         "method",
         "route",
         "task_name",
+        # Which worker queue a depth reading belongs to. Bounded by the Lane
+        # enum.
+        "lane",
         "execution_mode",
         "runtime_profile",
         "cold",

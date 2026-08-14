@@ -5,8 +5,10 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 import hashlib
 import logging
+import os
 from pathlib import Path
 import re
+import socket
 import time
 import traceback
 from typing import Any
@@ -213,7 +215,32 @@ def _build_resource(service_name: str) -> Resource:
     from app.core.log.log import release_sha_for_resource
 
     attributes["service.version"] = release_sha_for_resource()
+    # Which replica this is. Every process otherwise exports a byte-identical
+    # resource, and a Prometheus-backed collector derives its target labels
+    # from exactly these attributes -- so N replicas become N writers to one
+    # series, which the backend rejects as duplicate samples rather than
+    # merging. It also makes "one pod is unhealthy" expressible at all.
+    instance_id = _resolve_instance_id()
+    if instance_id:
+        attributes["service.instance.id"] = instance_id
     return Resource.create(attributes)
+
+
+def _resolve_instance_id() -> str | None:
+    """A stable per-process identity, without asking the deployment for one.
+
+    ``LEMMA_RUNTIME_INSTANCE_ID`` is set by the Desktop supervisor and is empty
+    everywhere else, so falling back to the hostname is what makes this work in
+    a container without a manifest change: under Kubernetes that is the pod
+    name, unique per replica and stable for the pod's life. The outbox
+    dispatcher already derives its lease owner the same way.
+    """
+    settings = _get_settings()
+    for candidate in (settings.lemma_runtime_instance_id, socket.gethostname()):
+        value = (candidate or "").strip()
+        if value and re.fullmatch(r"[A-Za-z0-9_.:-]{1,128}", value):
+            return value
+    return None
 
 
 def _build_sampler(
@@ -611,6 +638,27 @@ def _instrument_libraries() -> None:
     global _libraries_instrumented
     if _libraries_instrumented:
         return
+
+    # The aiohttp and httpx instrumentations default to the superseded
+    # conventions, which emit ``http.client.duration`` in milliseconds keyed by
+    # ``net.peer.name`` -- and ``net.peer.name`` is what the export boundary was
+    # dropping, so outbound calls collapsed into one undifferentiated series.
+    # pyqwest, reached transitively through e2b and connectrpc, already emits
+    # the stable conventions, so the process was describing the same calls under
+    # two names and two schemas.
+    #
+    # ``http/dup`` rather than ``http``, deliberately. This variable is
+    # process-global and the ASGI/FastAPI *server* instrumentation reads it
+    # too, so ``http`` would also rename ``http.server.duration`` (ms) to
+    # ``http.server.request.duration`` (s) -- a silent break of every dashboard
+    # on inbound latency, which is not a change this was meant to make. ``dup``
+    # emits both vocabularies: the old series keep working, the new ones appear
+    # with ``server.address``, and whoever owns the dashboards migrates on their
+    # own schedule. Flipping to ``http`` and dropping the duplicates is a
+    # deliberate follow-up, not a side effect of wanting a host label.
+    #
+    # ``setdefault`` so a deployment can pin either behaviour itself.
+    os.environ.setdefault("OTEL_SEMCONV_STABILITY_OPT_IN", "http/dup")
 
     from opentelemetry.instrumentation.aiohttp_client import (
         AioHttpClientInstrumentor,

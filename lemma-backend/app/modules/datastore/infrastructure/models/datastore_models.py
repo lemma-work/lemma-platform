@@ -13,6 +13,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
@@ -74,9 +75,9 @@ class DatastoreTable(UUIDAuditBase):
 class DatastoreFile(UUIDAuditBase):
     __tablename__ = "datastore_files"
 
-    pod_id: Mapped[UUID] = mapped_column(
-        ForeignKey("pods.id", ondelete="CASCADE"), index=True
-    )
+    # No index=True: pod_id already leads three composites below, so a
+    # single-column index on it was write cost with nothing to serve.
+    pod_id: Mapped[UUID] = mapped_column(ForeignKey("pods.id", ondelete="CASCADE"))
     owner_user_id: Mapped[UUID] = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE"), index=True
     )
@@ -106,7 +107,21 @@ class DatastoreFile(UUIDAuditBase):
     content_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     __table_args__ = (
-        Index("ix_datastore_file_status", "pod_id", "status"),
+        # Leads with status because the dispatch and recovery sweeps filter it
+        # with no pod_id, and led by pod_id this index could not serve them --
+        # 39,945 sequential scans reading 325 million rows from a 16,050-row
+        # table, in under two days of production.
+        #
+        # The predicate is what keeps it nearly free: folders are created
+        # NOT_REQUIRED and non-indexable types never reach PENDING, so only
+        # documents actually in flight are in here. At rest that was zero rows.
+        Index(
+            "ix_datastore_file_status",
+            "status",
+            "pod_id",
+            "created_at",
+            postgresql_where=text("kind = 'FILE' AND search_enabled"),
+        ),
         Index(
             "ix_datastore_file_pod_path",
             "pod_id",

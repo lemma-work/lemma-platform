@@ -15,11 +15,30 @@ from uuid import UUID
 
 from sqlalchemy import and_, func, or_, select, update
 
-from app.modules.datastore.domain.file_entities import (
-    DatastoreFileEntity,
-    FileStatus,
-)
+from app.modules.datastore.domain.file_entities import FileStatus
+from app.modules.datastore.domain.file_projections import DispatchableFileRef
 from app.modules.datastore.infrastructure.models import DatastoreFile
+
+#: Columns the scheduling sweeps read. Kept as one tuple so the three queries
+#: below cannot drift apart from each other or from ``DispatchableFileRef``.
+_DISPATCH_COLUMNS = (
+    DatastoreFile.id,
+    DatastoreFile.pod_id,
+    DatastoreFile.status,
+    DatastoreFile.file_metadata,
+)
+
+
+def _to_refs(rows) -> list[DispatchableFileRef]:
+    return [
+        DispatchableFileRef(
+            id=row.id,
+            pod_id=row.pod_id,
+            status=FileStatus(row.status),
+            metadata=row.file_metadata,
+        )
+        for row in rows
+    ]
 
 
 class DatastoreFileRecoveryQueriesMixin:
@@ -28,6 +47,10 @@ class DatastoreFileRecoveryQueriesMixin:
     A mixin rather than a separate collaborator because callers (the recovery
     and dispatch services) hold a single repository object and these queries
     share its session.
+
+    Every query here is bounded and projected. These run on crons — one of them
+    every minute — against a table nothing prunes, so an unbounded result set is
+    not a slow query, it is a worker that dies once the backlog is large enough.
     """
 
     async def count_active_for_pod(self, pod_id: UUID) -> int:
@@ -57,7 +80,7 @@ class DatastoreFileRecoveryQueriesMixin:
         *,
         per_pod_limit: int,
         global_limit: int,
-    ) -> Sequence[DatastoreFileEntity]:
+    ) -> Sequence[DispatchableFileRef]:
         """PENDING files to dispatch next, fairly spread across pods.
 
         Ingestion is a shared resource. Plain FIFO lets one pod that uploads a
@@ -76,7 +99,8 @@ class DatastoreFileRecoveryQueriesMixin:
 
         ranked = (
             select(
-                DatastoreFile.id.label("id"),
+                *_DISPATCH_COLUMNS,
+                DatastoreFile.created_at.label("created_at"),
                 func.row_number()
                 .over(
                     partition_by=DatastoreFile.pod_id,
@@ -91,18 +115,23 @@ class DatastoreFileRecoveryQueriesMixin:
             )
             .subquery()
         )
-        eligible = (
-            select(ranked.c.id)
-            .where(ranked.c.rank <= per_pod_limit)
-            .limit(global_limit)
-            .subquery()
-        )
+        # Rank first, then age. Without the ordering the global cap took an
+        # arbitrary ``global_limit`` rows from the ranked set, so whichever pods
+        # the plan happened to emit first won — which is the opposite of what
+        # the window is for. Ordering by rank means every pod's first file is
+        # served before any pod's second.
         result = await self.session.execute(
-            select(DatastoreFile)
-            .join(eligible, DatastoreFile.id == eligible.c.id)
-            .order_by(DatastoreFile.created_at.asc())
+            select(
+                ranked.c.id,
+                ranked.c.pod_id,
+                ranked.c.status,
+                ranked.c.file_metadata,
+            )
+            .where(ranked.c.rank <= per_pod_limit)
+            .order_by(ranked.c.rank.asc(), ranked.c.created_at.asc())
+            .limit(global_limit)
         )
-        return [instance.to_entity() for instance in result.scalars().all()]
+        return _to_refs(result.all())
 
     async def list_stale_recovery_candidates(
         self,
@@ -111,7 +140,8 @@ class DatastoreFileRecoveryQueriesMixin:
         processing_cutoff: datetime,
         failed_cutoff: datetime | None = None,
         max_attempts: int = 3,
-    ) -> Sequence[DatastoreFileEntity]:
+        limit: int = 500,
+    ) -> Sequence[DispatchableFileRef]:
         # The attempt cap applies to EVERY re-drive branch, not just FAILED.
         # A worker that is OOM-killed / SIGKILLed mid-extraction never runs its
         # mark_failed handler, so the row is stranded in PROCESSING with an
@@ -139,14 +169,22 @@ class DatastoreFileRecoveryQueriesMixin:
                     DatastoreFile.processing_attempts < max_attempts,
                 )
             )
+        # Bounded and oldest-first. Unbounded, one stranded ingestion batch is
+        # loaded into a single worker in one result set -- the sweep meant to
+        # clear a backlog becomes the thing that dies from it. Anything past the
+        # limit is simply picked up on the next tick; the row is the durable
+        # backlog, not this list.
         result = await self.session.execute(
-            select(DatastoreFile).where(
+            select(*_DISPATCH_COLUMNS)
+            .where(
                 DatastoreFile.kind == "FILE",
                 DatastoreFile.search_enabled == True,  # noqa: E712
                 or_(*branches),
             )
+            .order_by(DatastoreFile.updated_at.asc(), DatastoreFile.id.asc())
+            .limit(limit)
         )
-        return [instance.to_entity() for instance in result.scalars().all()]
+        return _to_refs(result.all())
 
     async def list_exhausted_recovery_candidates(
         self,
@@ -154,7 +192,8 @@ class DatastoreFileRecoveryQueriesMixin:
         processing_cutoff: datetime,
         failed_cutoff: datetime | None = None,
         max_attempts: int = 3,
-    ) -> Sequence[DatastoreFileEntity]:
+        limit: int = 500,
+    ) -> Sequence[DispatchableFileRef]:
         """Stale PROCESSING/FAILED files that have hit the attempt cap.
 
         These are the counterpart to ``list_stale_recovery_candidates``: instead
@@ -179,13 +218,16 @@ class DatastoreFileRecoveryQueriesMixin:
                 )
             )
         result = await self.session.execute(
-            select(DatastoreFile).where(
+            select(*_DISPATCH_COLUMNS)
+            .where(
                 DatastoreFile.kind == "FILE",
                 DatastoreFile.search_enabled == True,  # noqa: E712
                 or_(*branches),
             )
+            .order_by(DatastoreFile.updated_at.asc(), DatastoreFile.id.asc())
+            .limit(limit)
         )
-        return [instance.to_entity() for instance in result.scalars().all()]
+        return _to_refs(result.all())
 
     async def bulk_update_status(
         self,
@@ -193,11 +235,22 @@ class DatastoreFileRecoveryQueriesMixin:
         file_ids: Sequence[UUID],
         status: FileStatus,
     ) -> int:
+        """Reset a batch of stranded files, without clobbering a finished one.
+
+        The candidate list was read in an earlier statement, so a worker that
+        finishes between that SELECT and this UPDATE has already written
+        COMPLETED. Without the guard the sweep would drag that row back to
+        PENDING and re-extract a document that was done — the single-row
+        ``mark_failed_permanent`` below already fences exactly this way.
+        """
         if not file_ids:
             return 0
         result = await self.session.execute(
             update(DatastoreFile)
-            .where(DatastoreFile.id.in_(list(file_ids)))
+            .where(
+                DatastoreFile.id.in_(list(file_ids)),
+                DatastoreFile.status != FileStatus.COMPLETED.value,
+            )
             .values(status=status.value)
         )
         return result.rowcount or 0
@@ -208,12 +261,21 @@ class DatastoreFileRecoveryQueriesMixin:
         file_ids: Sequence[UUID],
         error: str,
     ) -> int:
-        """Transition files to the terminal FAILED_PERMANENT state with a reason."""
+        """Transition files to the terminal FAILED_PERMANENT state with a reason.
+
+        COMPLETED is excluded for the same reason as ``bulk_update_status``: the
+        candidates were selected in an earlier statement, and stamping a file
+        that finished in the meantime as permanently failed is worse than
+        missing it -- the next sweep will not see it either way.
+        """
         if not file_ids:
             return 0
         result = await self.session.execute(
             update(DatastoreFile)
-            .where(DatastoreFile.id.in_(list(file_ids)))
+            .where(
+                DatastoreFile.id.in_(list(file_ids)),
+                DatastoreFile.status != FileStatus.COMPLETED.value,
+            )
             .values(
                 status=FileStatus.FAILED_PERMANENT.value,
                 last_processing_error=error,
