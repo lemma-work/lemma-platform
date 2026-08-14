@@ -116,3 +116,30 @@ def test_install_is_idempotent_and_patches_every_lookup_site():
 
     jwks_guard.reset_jwks_guard_for_test()
     assert jwks.get_latest_keys is original
+
+
+def test_a_transport_failure_is_not_cached_as_a_bad_kid(monkeypatch):
+    """A blip must not answer 401 to a valid token for the whole TTL.
+
+    The upstream raises a bare Exception when it fetched and the kid was
+    genuinely absent, and a requests error when it could not fetch at all.
+    Caching the second would turn an unreachable core into an outage for every
+    key it had not already seen.
+    """
+    from requests import ConnectionError as RequestsConnectionError
+
+    attempts: list[str | None] = []
+
+    def _flaky(config, kid=None):
+        attempts.append(kid)
+        raise RequestsConnectionError("core unreachable")
+
+    jwks_guard.install_jwks_guard()
+    monkeypatch.setattr(jwks_guard, "_original_get_latest_keys", _flaky)
+
+    for _ in range(3):
+        with pytest.raises(RequestsConnectionError):
+            jwks_guard._guarded_get_latest_keys(object(), "valid-kid")
+
+    assert len(attempts) == 3, "a transport failure was cached as a bad kid"
+    assert jwks_guard._unknown_kids == {}

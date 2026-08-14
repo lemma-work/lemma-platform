@@ -45,6 +45,13 @@ from app.core.log.log import get_logger
 
 logger = get_logger(__name__)
 
+try:  # pragma: no cover - requests ships with supertokens
+    from requests import RequestException as _RequestException
+
+    _TRANSPORT_ERRORS: tuple[type[BaseException], ...] = (_RequestException, OSError)
+except ImportError:  # pragma: no cover
+    _TRANSPORT_ERRORS = (OSError,)
+
 # kid -> monotonic deadline after which we will try the network again.
 _unknown_kids: dict[str, float] = {}
 
@@ -73,15 +80,26 @@ def _guarded_get_latest_keys(config: Any, kid: str | None = None) -> Any:
                 raise UnknownJwksKeyError("No matching JWKS found")
             del _unknown_kids[kid]
 
-    # try/finally rather than `except Exception`: the upstream raises a bare
-    # Exception on "no matching key", so there is no narrower type to name, and
-    # we do not want to swallow or reclassify it -- only to notice.
-    found = False
+    # Only a "we fetched and this kid is not in the set" failure is cached.
+    # A transport failure must NOT be: the key may be perfectly valid and the
+    # core merely unreachable for a moment, and caching that would answer 401
+    # to a legitimate token for the whole TTL — turning a blip into an outage.
+    # requests raises RequestException (HTTPError included) for the transport
+    # case; the upstream raises a bare Exception for the not-found case.
+    # Two flags and no broad catch: the only handler names the transport
+    # errors, and "raised something else" is inferred in `finally` from having
+    # neither succeeded nor failed in transport. Catching Exception here would
+    # mean re-raising it untouched anyway, so the handler would earn nothing.
+    succeeded = False
+    transport_failure = False
     try:
         keys = _original_get_latest_keys(config, kid)
-        found = True
+        succeeded = True
+    except _TRANSPORT_ERRORS:
+        transport_failure = True
+        raise
     finally:
-        if not found and kid is not None and ttl > 0:
+        if not succeeded and not transport_failure and kid is not None and ttl > 0:
             # Bound the map: the sender chooses the ids, and an unbounded dict
             # would just move the damage from the loop to memory. Past the cap
             # we stop remembering rather than stop serving -- the fetch is what
