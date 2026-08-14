@@ -41,6 +41,8 @@ _UNINTERESTING = (
     "sqlalchemy/",
     "app/core/observability/connection_scope.py",
     "contextlib.py",
+    "asyncio/",
+    "greenlet",
 )
 
 
@@ -54,18 +56,53 @@ def format_hold_stack(frames: list[traceback.FrameSummary]) -> str:
     return "".join(traceback.format_list((interesting or frames)[-12:])).rstrip()
 
 
+def holder_frames() -> list[traceback.FrameSummary]:
+    """The application frames of whoever is holding the connection.
+
+    SQLAlchemy's async layer runs these listeners inside a greenlet it spawns,
+    so ``traceback.extract_stack()`` sees the greenlet's own stack — a few
+    frames of SQLAlchemy internals and nothing of the caller. The caller's
+    frames are on the *parent* greenlet, which is reachable, and walking it
+    gives the real chain: handler, service, adapter, and the line that took the
+    connection.
+
+    Falls back to the await chain, which is what is available when there is no
+    greenlet (a suspended task), and finally to the plain stack.
+    """
+    frames = _parent_greenlet_frames()
+    if frames:
+        return frames
+    return current_await_stack() or traceback.extract_stack()
+
+
+def _parent_greenlet_frames() -> list[traceback.FrameSummary]:
+    try:
+        import greenlet
+    except ImportError:  # pragma: no cover - greenlet ships with SQLAlchemy
+        return []
+    frames: list[traceback.FrameSummary] = []
+    current = getattr(greenlet.getcurrent(), "parent", None)
+    while current is not None:
+        frame = getattr(current, "gr_frame", None)
+        while frame is not None:
+            frames.append(
+                traceback.FrameSummary(
+                    frame.f_code.co_filename, frame.f_lineno, frame.f_code.co_name
+                )
+            )
+            frame = frame.f_back
+        current = getattr(current, "parent", None)
+    # Walked innermost-first; the formatter wants innermost last.
+    frames.reverse()
+    return frames
+
+
 def current_await_stack() -> list[traceback.FrameSummary]:
     """The await chain of the task holding the connection, outermost first.
 
-    ``traceback.extract_stack()`` is no use here. SQLAlchemy's async adapter
-    runs these listeners inside a greenlet, so the Python stack at that point is
-    the greenlet's — a few frames of SQLAlchemy internals and nothing of the
-    application. Verified against a real engine: the trimmed result contained no
-    caller frames at all.
-
-    The awaiting task is still reachable, though, and walking its coroutine
-    chain through ``cr_await`` gives the frames that actually matter: the
-    handler, the service, and the line currently suspended.
+    Only useful while the task is SUSPENDED: ``cr_await`` is the link a
+    coroutine holds to the thing it is awaiting, and a running task has none —
+    verified, and the reason this alone returned a single frame.
     """
     try:
         task = asyncio.current_task()
@@ -211,7 +248,7 @@ class ConnectionScopeMonitor:
             # stack walk per checkout, because that is the line a developer has
             # to change. In production the check-in stack names the same block
             # and costs nothing until something is actually wrong.
-            hold.opened_at_stack = format_hold_stack(current_await_stack())
+            hold.opened_at_stack = format_hold_stack(holder_frames())
         connection_record.info["lemma_connection_hold"] = hold
 
     def _on_statement_start(
@@ -280,7 +317,7 @@ class ConnectionScopeMonitor:
     # --------------------------------------------------------------- report
 
     def _report(self, hold: _Hold, *, held: float) -> None:
-        stack = hold.opened_at_stack or format_hold_stack(current_await_stack())
+        stack = hold.opened_at_stack or format_hold_stack(holder_frames())
         self.reports += 1
         if self._strict:
             self.violations.append(
