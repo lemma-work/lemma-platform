@@ -292,7 +292,8 @@ class AgentSurfaceIngressService(SurfaceConfigurationMixin, SurfaceProgressMixin
                 or "@" in (parsed.message_text or "")
             )
         ):
-            parsed = await self._telegram_text_mention_enrich(parsed, surfaces[0])
+            async with connection_released(self.uow.session):  # Telegram API
+                parsed = await self._telegram_text_mention_enrich(parsed, surfaces[0])
 
         candidates = [
             surface for surface in surfaces if surface.allows_inbound_event(parsed)
