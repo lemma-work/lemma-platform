@@ -572,8 +572,7 @@ async def test_webhook_event_trigger_runs_full_real_workflow(full_stack, db_sess
         )
 
         monkeypatch.setattr(
-            "app.modules.schedule.infrastructure.adapters."
-            "composio_webhook_verifier.ComposioWebhookVerifier.verify",
+            "app.composition.schedule_connectors.ComposioWebhookVerifier.verify",
             lambda self, payload_text, headers: {
                 "version": "V3",
                 "payload": {

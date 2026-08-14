@@ -71,6 +71,7 @@ async def get_current_context(
     )
     request.state.ctx = ctx
     set_current_context(ctx)
+    await _release_after_authorization(uow)
     return ctx
 
 
@@ -110,6 +111,7 @@ async def get_org_context(
             raise HTTPException(status_code=403, detail="Delegated organization mismatch")
         request.state.ctx = ctx
         set_current_context(ctx)
+        await _release_after_authorization(uow)
         return ctx
     ctx = await AuthorizationDataService(uow.session).build_user_context(
         user_id=user.id,
@@ -118,6 +120,7 @@ async def get_org_context(
     )
     request.state.ctx = ctx
     set_current_context(ctx)
+    await _release_after_authorization(uow)
     return ctx
 
 
@@ -180,8 +183,26 @@ async def get_pod_context(
     )
     request.state.ctx = ctx
     set_current_context(ctx)
+    await _release_after_authorization(uow)
     return ctx
 
+
+
+async def _release_after_authorization(uow) -> None:
+    """Give the pooled connection back once the context is built.
+
+    These are FastAPI yield-dependencies, so without this the connection they
+    check out to read the pod, the org and the role snapshot stays checked out
+    until the response body is finished — through the handler, through whatever
+    the handler awaits, and through serialization.
+
+    Measured on a real-sandbox e2e run: 59 holds attributed to
+    ``build_user_context``, the worst 2.78 seconds of a connection checked out
+    with the database asked nothing. The reads are done by this point and the
+    handler opens its own transaction the moment it queries, so there is
+    nothing to keep.
+    """
+    await uow.commit()
 
 CurrentContextDep = Annotated[Context, Depends(get_current_context)]
 OrgContextDep = Annotated[Context, Depends(get_org_context)]
