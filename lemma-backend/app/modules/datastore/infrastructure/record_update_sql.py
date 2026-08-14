@@ -90,9 +90,7 @@ def bulk_insert_statement(ctx: TableContext, ordered_keys: list[str]) -> str:
 
 def bulk_conflict_clause(ctx: TableContext, ordered_keys: list[str]) -> str:
     update_columns = [
-        key
-        for key in ordered_keys
-        if key not in {ctx.primary_key_column, "created_at"}
+        key for key in ordered_keys if key not in {ctx.primary_key_column, "created_at"}
     ]
     set_clauses = [f'"{key}" = EXCLUDED."{key}"' for key in update_columns]
     set_clauses.append('"updated_at" = CURRENT_TIMESTAMP')
@@ -217,3 +215,33 @@ def extract_previous_image(
     if not isinstance(raw, dict):
         return None
     return {column: raw.get(column) for column in changed_columns}
+
+
+def order_bulk_keys(primary_key: str, all_keys: set[str]) -> list[str]:
+    """Column order for a bulk write: primary key first, then alphabetical.
+
+    Stable ordering is what lets the generated SQL be reused across calls with
+    the same column set.
+    """
+    ordered = [primary_key] if primary_key in all_keys else []
+    ordered.extend(sorted(key for key in all_keys if key != primary_key))
+    return ordered
+
+
+def build_bulk_statements(
+    ctx,
+    ordered_keys: list[str],
+    prepared_records: list[dict],
+    conflict_sql: str,
+) -> list[tuple[str, dict]]:
+    """One (sql, params) pair per chunk, for the RETURNING form of a bulk write.
+
+    Built by the caller *before* it opens its transaction: none of this needs a
+    connection, and doing it between the executes inside one meant a bulk write
+    held a connection -- with the write's row locks -- while it assembled
+    strings. Measured at eleven holds on a real-LLM e2e run, worst 784ms.
+    """
+    return [
+        bulk_returning_statement(ctx, ordered_keys, chunk, conflict_sql)
+        for chunk in chunk_for_parameter_limit(prepared_records, len(ordered_keys))
+    ]

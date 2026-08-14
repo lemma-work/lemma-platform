@@ -30,8 +30,8 @@ from app.modules.datastore.infrastructure.record_update_sql import (
     build_update_statement,
     bulk_conflict_clause,
     bulk_insert_statement,
-    bulk_returning_statement,
-    chunk_for_parameter_limit,
+    build_bulk_statements,
+    order_bulk_keys,
     split_previous_image,
 )
 from app.modules.datastore.infrastructure.rls_context import verify_rls_context
@@ -132,33 +132,13 @@ class DatastoreRecordRepository(DatastoreRecordRepositoryPort):
             prepared_records.append(values)
             all_keys.update(values.keys())
 
-        ordered_keys: list[str] = []
-        pk = ctx.primary_key_column
-        if pk in all_keys:
-            ordered_keys.append(pk)
-        ordered_keys.extend(sorted(key for key in all_keys if key != pk))
-
-        conflict_sql = (
-            bulk_conflict_clause(ctx, ordered_keys)
-            if upsert
-            else ""
+        ordered_keys = order_bulk_keys(ctx.primary_key_column, all_keys)
+        conflict_sql = bulk_conflict_clause(ctx, ordered_keys) if upsert else ""
+        statements = (
+            build_bulk_statements(ctx, ordered_keys, prepared_records, conflict_sql)
+            if event_factory is not None
+            else []
         )
-
-        # Build every chunk's SQL and parameters *before* opening the
-        # transaction. This used to happen between the executes inside it, so a
-        # bulk write spent its string-building time holding a connection with an
-        # open write transaction -- row locks and all. Measured on a real-LLM
-        # e2e run: eleven holds on this line, the worst with a 784ms stretch
-        # where the database was asked nothing. None of this work needs a
-        # connection.
-        statements: list[tuple[str, Any]] = []
-        if event_factory is not None:
-            statements = [
-                bulk_returning_statement(ctx, ordered_keys, chunk, conflict_sql)
-                for chunk in chunk_for_parameter_limit(
-                    prepared_records, len(ordered_keys)
-                )
-            ]
 
         try:
             async with self.schema_manager.session_factory() as session:
@@ -166,8 +146,7 @@ class DatastoreRecordRepository(DatastoreRecordRepositoryPort):
                     await self.schema_manager.set_rls_context(session, user_id)
 
                 if event_factory is None:
-                    # No subscriber, so nothing needs the written rows back and
-                    # executemany stays the cheapest way to land them.
+                    # No subscriber: executemany is cheapest, nothing needs the rows.
                     await session.execute(
                         text(bulk_insert_statement(ctx, ordered_keys) + conflict_sql),
                         [

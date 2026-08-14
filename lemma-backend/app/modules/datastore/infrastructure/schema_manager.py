@@ -574,16 +574,13 @@ class SchemaManager:
         *,
         is_pod_admin: bool = False,
     ) -> None:
-        """Sets the RLS context for the current session.
+        """Set the RLS context for the current session, in one round trip.
 
-        One round trip, not two. This runs before every RLS-guarded read and
-        write in the datastore, so a second statement here is a second network
-        round trip on the hottest path there is -- and it was paid with the
-        connection already checked out.
-
-        Both settings stay transaction-local (``set_config(..., true)`` is the
-        function form of ``SET LOCAL``), which is what keeps a transaction-mode
-        pooler usable: nothing leaks onto the connection for the next borrower.
+        This runs before every RLS-guarded read and write, so a second statement
+        here is a second round trip on the hottest path there is. Both settings
+        stay transaction-local (``set_config(..., true)`` is the function form
+        of ``SET LOCAL``), so nothing leaks to the next borrower of the
+        connection and a transaction-mode pooler stays usable.
         """
         await session.execute(
             text(

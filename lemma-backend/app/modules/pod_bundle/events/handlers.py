@@ -19,14 +19,12 @@ always safe.
 from __future__ import annotations
 
 import tempfile
-from pathlib import Path
 from uuid import UUID
 
 from streaq import StreaqRetry
 
 from app.core.authorization.scope import context_scope, uow_scope
 from app.core.authorization.service import AuthorizationDataService
-from app.core.concurrency.offload import run_blocking
 from app.core.domain.errors import DomainError
 from app.core.infrastructure.jobs.streaq_runtime import (
     Lane,
@@ -48,6 +46,9 @@ from app.modules.pod_bundle.domain.state import (
     ImportState,
     ImportStatus,
     PublishStatus,
+)
+from app.modules.pod_bundle.infrastructure.archive_offload import (
+    extract_bundle_offloaded,
 )
 from app.modules.pod_bundle.infrastructure.exporter import BundleExporter
 from app.modules.pod_bundle.infrastructure import github_fetcher
@@ -365,20 +366,8 @@ async def _plan_from_staging(worker_ctx, store, staging, state: ImportState) -> 
     await _raise_if_cancelled(store, import_id)
 
     with tempfile.TemporaryDirectory(prefix="lemma-pod-import-") as tmp:
-        from lemma_pod_bundle import extract_bundle
-
         try:
-            # Offloaded: this inflates and writes every member of the archive to
-            # disk, bounded only by ``pod_bundle_max_uncompressed_bytes``. Run
-            # inline it stops the worker's event loop for the whole extraction,
-            # which also stalls the cancellation checks around it.
-            bundle_root = await run_blocking(
-                extract_bundle,
-                archive,
-                Path(tmp),
-                max_uncompressed_bytes=pod_bundle_settings.pod_bundle_max_uncompressed_bytes,
-                limiter="cpu_bound",
-            )
+            bundle_root = await extract_bundle_offloaded(archive, tmp)
         except ValueError as exc:
             raise BundleInvalidError(str(exc)) from exc
         publish_manifest.prepare_published_bundle(bundle_root)
@@ -600,17 +589,8 @@ async def apply_pod_import(context: dict[str, str | None]) -> None:
         function_runner = None
 
         with tempfile.TemporaryDirectory(prefix="lemma-pod-apply-") as tmp:
-            from lemma_pod_bundle import extract_bundle
-
             try:
-                # Offloaded for the same reason as the staging path above.
-                bundle_root = await run_blocking(
-                    extract_bundle,
-                    archive,
-                    Path(tmp),
-                    max_uncompressed_bytes=pod_bundle_settings.pod_bundle_max_uncompressed_bytes,
-                    limiter="cpu_bound",
-                )
+                bundle_root = await extract_bundle_offloaded(archive, tmp)
             except ValueError as exc:
                 raise BundleInvalidError(str(exc)) from exc
             publish_manifest.prepare_published_bundle(bundle_root)
