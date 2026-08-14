@@ -373,17 +373,23 @@ def test_baseline_matches_the_tree():
     A stale baseline either hides a regression or fails the build for something
     already fixed, and both teach people to ignore it.
     """
-    import json
+    from collections import Counter
 
     checker = _load_checker()
     violations = checker.collect(checker.source_files())
-    baseline = set(
-        json.loads(checker.DEFAULT_BASELINE.read_text(encoding="utf-8"))["violations"]
-    )
-    current = {violation.key() for violation in violations}
-    assert current - baseline == set(), "new session-scope violations; see the gate"
-    assert baseline - current == set(), (
-        "baseline lists violations that no longer exist; run --update-baseline"
+    # Counted, matching the gate. Reading this as a `set` compared keys only,
+    # so a function that grew a second identical violation -- the hole the
+    # counted baseline was introduced to close -- would have slipped past the
+    # test that exists to keep the baseline honest.
+    baseline = checker._load_baseline(checker.DEFAULT_BASELINE)
+    current = Counter(violation.key() for violation in violations)
+
+    grew = {k: (current[k], baseline.get(k, 0)) for k in current if current[k] > baseline.get(k, 0)}
+    shrank = {k: (current.get(k, 0), v) for k, v in baseline.items() if current.get(k, 0) < v}
+
+    assert not grew, f"new session-scope violations; see the gate: {grew}"
+    assert not shrank, (
+        f"baseline lists violations that no longer exist, run --update-baseline: {shrank}"
     )
 
 

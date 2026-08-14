@@ -8,6 +8,7 @@ import json
 import time
 from datetime import datetime, timezone
 from typing import Literal
+from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel, EmailStr, ValidationError
@@ -109,7 +110,19 @@ def verify_resend_webhook_signature(
 
 
 async def _deactivate_email_for_hard_bounce(email_address: str) -> None:
+    """Deactivate the bounced account, then tear its sessions down.
+
+    Two phases. The write closes before the side effects run, because those are
+    a Redis round trip and a SuperTokens call over HTTP -- and this is a webhook
+    path, so the rate belongs to whoever is sending bounces.
+
+    ``user_id`` is read before the commit on purpose: with ``expire_on_commit``
+    the instance is expired afterwards, so touching ``user.id`` outside the
+    block would issue a fresh SELECT to answer something we already knew.
+    """
     email = normalize_identity_email(email_address)
+    deactivated_user_id: UUID | None = None
+
     async with async_session_maker() as db_session:
         user = await db_session.scalar(
             select(User).where(func.lower(User.email) == email)
@@ -118,9 +131,14 @@ async def _deactivate_email_for_hard_bounce(email_address: str) -> None:
             user.is_active = False
             user.deactivated_at = user.deactivated_at or datetime.now(timezone.utc)
             user.deactivation_reason = "HARD_BOUNCE"
+            deactivated_user_id = user.id
             await db_session.commit()
-            await get_user_cache().invalidate(user.id)
-            await revoke_all_sessions_for_user(str(user.id))
+
+    if deactivated_user_id is None:
+        return
+
+    await get_user_cache().invalidate(deactivated_user_id)
+    await revoke_all_sessions_for_user(str(deactivated_user_id))
 
 
 @router.post("", include_in_schema=False, status_code=204)
