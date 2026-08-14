@@ -96,6 +96,28 @@ Three design points worth knowing before changing it:
 - **`handle_error` is load-bearing.** `after_cursor_execute` does not fire when
   a statement raises (verified), so without it the failed statement's interval
   never closes and every later gap hides behind it.
+- **The stack field must not be called `stack`.** It is reserved — structlog's
+  renderers pop it and handle it themselves, so the value is dropped with no
+  error. The event catalog does not catch this: it checks that emitted fields
+  are *expected*, so listing `stack` in the EventSpec made catalog and emitter
+  agree about a field that never arrived. Both detectors shipped that way and
+  reported a dozen 1000ms+ stalls with no culprit in them. It is `stack_frames`.
+
+### Reading a hold report
+
+A hold is a connection whose statements are far apart. That is the symptom of
+two different diseases, and the report alone does not separate them:
+
+1. The code holding it did slow non-DB work between statements — the bug this
+   document is about.
+2. **The event loop was stalled by something else**, so every in-flight
+   connection's next statement was late. The holder is a victim.
+
+Check the loop-stall count for the same run before attributing a hold. A
+function like `record_repository.list_records` — `SET LOCAL`, a count, a select,
+no `await` on anything else — cannot produce a 681 ms gap between its own
+statements by itself; something else stopped the loop. Fixing the holder in
+that case changes nothing.
 
 It works under `NullPool` — the testing default — because checkout and check-in
 fire there exactly as on a real pool. That is what makes
