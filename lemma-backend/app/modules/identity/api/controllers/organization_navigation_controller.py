@@ -65,7 +65,11 @@ async def get_navigation(request: Request, uow: UoWDep) -> NavigationResponse:
                 role=organization.role,
                 pods=[
                     NavigationPodResponse(
-                        id=pod.id, name=pod.name, icon_url=pod.icon_url
+                        id=pod.id,
+                        name=pod.name,
+                        description=pod.description,
+                        icon_url=pod.icon_url,
+                        updated_at=pod.updated_at,
                     )
                     for pod in organization.pods
                 ],

@@ -144,11 +144,22 @@ class OrganizationMessageResponse(BaseSchema):
 
 
 class NavigationPodResponse(BaseSchema):
-    """A pod as a navigation entry — enough to draw and to link to."""
+    """A pod as a listing entry — enough to draw it, label it, and link to it.
+
+    The line this payload holds is scalars yes, collections no. A pod's own
+    columns cost nothing to return: they ride along in the query that found the
+    pod, so the response grows with the number of pods and not with what is
+    inside them. Apps, agents and roles are the other side of that line, and
+    live on ``/organizations/{org_id}/home``.
+    """
 
     id: UUID
     name: str
+    description: str | None = None
     icon_url: str | None = None
+    #: When the pod record last changed — not when work last ran in it. The home
+    #: screen sorts and labels on it, which is the only reason it is here.
+    updated_at: datetime
 
 
 class NavigationOrganizationResponse(BaseSchema):
@@ -162,11 +173,13 @@ class NavigationOrganizationResponse(BaseSchema):
 
 
 class NavigationResponse(BaseSchema):
-    """Everything a sidebar needs, for every organization, in one response.
+    """Everything a sidebar and a pod list need, for every organization, at once.
 
-    Deliberately shallow: apps, agents and roles per pod are the detail endpoint's
-    job, because carrying them here would make the payload grow with the content
-    of every organization a person happens to belong to.
+    Shallow in the sense that matters: it carries each pod's own columns, and
+    nothing that would require looking inside a pod. Apps, agents and roles are
+    the detail endpoint's job, because carrying them here would make the payload
+    grow with the content of every organization a person happens to belong to,
+    which is precisely the cost this endpoint exists to remove.
     """
 
     items: list[NavigationOrganizationResponse]
