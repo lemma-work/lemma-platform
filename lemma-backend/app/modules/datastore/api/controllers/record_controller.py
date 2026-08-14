@@ -57,6 +57,17 @@ async def _get_table_context(
 ) -> TableContext:
     table = await table_service.get_table(pod_id, table_name, ctx)
     schema_name = table_service.schema_manager.get_schema_name(pod_id)
+    # Every caller of this helper goes on to work against the DATASTORE engine,
+    # not this one — so the application connection is finished here. It used to
+    # be held anyway, because the request-scoped unit of work lives until the
+    # response is written: measured at 2291ms held for 64ms of querying on a
+    # bulk record create, in an open transaction, once per request across nine
+    # endpoints.
+    #
+    # Nothing is lost by committing: the reads are done, and a caller that
+    # writes to the application database afterwards simply opens its own
+    # transaction when it does.
+    await table_service.table_repository.uow.commit()
     # Authorization flows through the ambient context (set by PodContextDep),
     # not through TableContext.
     return TableContext.from_table_entity(
