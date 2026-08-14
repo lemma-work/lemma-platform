@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from functools import lru_cache
 from typing import Any
 
 from composio import Composio
 
+from app.core.concurrency.offload import run_blocking
 from app.core.crypto import get_secret_cipher
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.log.log import get_logger
@@ -54,7 +56,6 @@ from app.modules.schedule.domain.interfaces import (
     WebhookVerifier,
 )
 from app.modules.schedule.domain.schedule import ScheduleEntity, ScheduleType
-from app.core.concurrency.offload import run_blocking
 
 logger = get_logger(__name__)
 
@@ -248,20 +249,42 @@ class ExternalScheduleWriterAdapter(ExternalScheduleWriter):
             await manager.delete_schedule(account, str(provider_id))
 
 
+@lru_cache(maxsize=1)
+def _webhook_verification_client() -> Composio:
+    """The SDK client used to verify inbound webhooks, built once.
+
+    Construction is not free -- it reads config, builds an httpx client and
+    imports the SDK's lazy namespaces -- and was measured at 76ms cold / 4ms
+    warm at the neighbouring call site in ``composio_auth_provider``. Doing it
+    per delivery put that on the event loop at a rate the sender picks.
+
+    Cached as an object singleton, which is the sanctioned exception to
+    "caching goes through Redis": this is a client handle, not data.
+    """
+    return Composio(
+        api_key=connector_settings.composio_api_key or "webhook-verification"
+    )
+
+
 class ComposioWebhookVerifier(WebhookVerifier):
-    def verify(self, payload: str, headers: dict[str, Any]) -> dict[str, Any]:
+    async def verify(self, payload: str, headers: dict[str, Any]) -> dict[str, Any]:
         secret = connector_settings.composio_webhook_secret
         if not secret:
             raise ScheduleInfrastructureError(
                 "Connector webhook verification is not configured"
             )
-        composio = Composio(
-            api_key=connector_settings.composio_api_key or "webhook-verification"
-        )
-        return composio.triggers.verify_webhook(
-            id=headers.get("webhook-id", ""),
-            payload=payload,
-            signature=headers.get("webhook-signature", ""),
-            timestamp=headers.get("webhook-timestamp", ""),
-            secret=secret,
-        )
+
+        def _verify() -> dict[str, Any]:
+            return _webhook_verification_client().triggers.verify_webhook(
+                id=headers.get("webhook-id", ""),
+                payload=payload,
+                signature=headers.get("webhook-signature", ""),
+                timestamp=headers.get("webhook-timestamp", ""),
+                secret=secret,
+            )
+
+        # `external_http` rather than `cpu_bound`: this is the blocking-network-SDK
+        # class, and it shares its limiter with every other Composio call so a
+        # burst of webhooks cannot starve the CPU pool that chunking and zipping
+        # depend on.
+        return await run_blocking(_verify, limiter="external_http")
