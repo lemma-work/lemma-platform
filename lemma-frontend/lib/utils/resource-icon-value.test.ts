@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import { isResourceIconGlyph, parseResourceIcon } from './resource-icon-value';
+import {
+    formatIdentityIcon,
+    identityVariantSeed,
+    isResourceIconGlyph,
+    parseResourceIcon,
+} from './resource-icon-value';
 
 describe('parseResourceIcon', () => {
     it('reads nothing out of an absent icon', () => {
@@ -59,5 +64,35 @@ describe('isResourceIconGlyph', () => {
         expect(isResourceIconGlyph('https://example.com/a.png')).toBe(false);
         expect(isResourceIconGlyph('')).toBe(false);
         expect(isResourceIconGlyph(null)).toBe(false);
+    });
+});
+
+describe('generated identity variants', () => {
+    it('round-trips a chosen variant', () => {
+        expect(parseResourceIcon(formatIdentityIcon(7))).toEqual({ kind: 'identity', variant: 7 });
+    });
+
+    it('treats an absent value as the resource default, not a variant', () => {
+        expect(parseResourceIcon(null)).toBeNull();
+        expect(parseResourceIcon('')).toBeNull();
+    });
+
+    it('shifts the seed only for non-zero variants', () => {
+        expect(identityVariantSeed('agent-1', 0)).toBe('agent-1');
+        expect(identityVariantSeed('agent-1', 3)).toBe('agent-1#3');
+        expect(identityVariantSeed('agent-1', 3)).not.toBe(identityVariantSeed('agent-1', 4));
+    });
+
+    it('falls back to the default rather than rendering a broken image', () => {
+        // A malformed sentinel must never reach the <img> below it — that was
+        // the exact failure mode the glyph branch was written to prevent.
+        for (const bad of ['lemma-identity:', 'lemma-identity:abc', 'lemma-identity:-1', 'lemma-identity:1000', 'lemma-identity:1.5']) {
+            expect(parseResourceIcon(bad)).toBeNull();
+        }
+    });
+
+    it('does not mistake a real url or emoji for a variant', () => {
+        expect(parseResourceIcon('https://cdn.example.com/a.png')?.kind).toBe('url');
+        expect(parseResourceIcon('🦊')?.kind).toBe('glyph');
     });
 });

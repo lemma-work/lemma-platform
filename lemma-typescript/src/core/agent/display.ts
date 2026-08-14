@@ -261,6 +261,30 @@ function toolMessageOutput(message: AssistantRenderableMessage): Record<string, 
   return objectPayload(message.tool_result ?? metadata?.result);
 }
 
+/**
+ * Showing a resource is not working on one.
+ *
+ * `display_resource` puts a table or a page under the answer, and the agent
+ * usually calls it in the very message that introduces it — "You have 5 drafts
+ * waiting", plus the card. Counting that as work ended the answer one message
+ * early: the card was hoisted out of the rollup and drawn, while the sentence
+ * that introduced it stayed folded, so the answer opened at whatever came next.
+ */
+function isPresentationToolName(toolName: string): boolean {
+  return normalizeAgentToolName(toolName).toLowerCase().replace(/[.\-:]/g, "_") === "display_resource";
+}
+
+/** Tool activity that is actually work — the thing a "Worked for …" rollup is about. */
+function messageHasWorkActivity(message: AssistantRenderableMessage): boolean {
+  const ignorable = (toolName: string) => isFinalResultToolName(toolName) || isPresentationToolName(toolName);
+  const rawToolName = toolMessageKind(message) === "tool_call" ? toolMessageName(message) : null;
+  return (!!rawToolName && !ignorable(rawToolName))
+    || dedupToolInvocations(message).some((invocation) => !ignorable(invocation.toolName))
+    || (message.parts || []).some((part) => (
+      part.type === "tool" && !ignorable(part.toolInvocation.toolName)
+    ));
+}
+
 function messageHasToolActivity(message: AssistantRenderableMessage): boolean {
   const rawToolName = toolMessageKind(message) === "tool_call" ? toolMessageName(message) : null;
   return (!!rawToolName && !isFinalResultToolName(rawToolName))
@@ -760,7 +784,31 @@ export function collectCompletedRunTraceGroups(
         break;
       }
     }
-    const foldEnd = answerIndex === -1 ? blockEnd : answerIndex - 1;
+
+    // An answer is often told over several messages — a paragraph, then the
+    // caveat, then the question. Taking only the last one left the transcript
+    // opening mid-thought, with the messages that set it up hidden inside the
+    // rollup: the reader saw "One honest flag: …" and never the finding it was
+    // flagging.
+    //
+    // So the answer extends back over every message that closes the run and did
+    // no work of its own. Narration with another tool call after it stays trace
+    // — it was working-out, and the work that followed proves it.
+    let answerStart = answerIndex;
+    for (let i = answerIndex - 1; i >= blockStart; i -= 1) {
+      // Work ends the answer: whatever came before it was leading up to the
+      // work, not reporting on it.
+      if (messageHasWorkActivity(rows[i].message)) break;
+      // Anything else that did no work — a thought, a resource being shown —
+      // is stepped over rather than treated as a wall. Stopping at them is what
+      // severed a two-part answer: the reply's substance sat above a
+      // `display_resource` card and a thought, so the transcript folded the
+      // findings and opened at the caveat that followed them.
+      if (!isRunClosingMessage(rows[i].message)) continue;
+      answerStart = i;
+    }
+
+    const foldEnd = answerIndex === -1 ? blockEnd : answerStart - 1;
 
     // Everything before the answer is this run's working-out, whether or not the
     // run folds.

@@ -1,0 +1,341 @@
+/**
+ * Seeded resource identity — the palette the generator draws from, and the
+ * motion that separates a working agent from a stopped one.
+ *
+ * The tones are the five `design.md` sanctions for identity and nothing else:
+ * violet, green, amber, rust, terracotta. They are declared here rather than
+ * reused from `--state-*` on purpose — a status colour and an identity colour
+ * answer different questions, and an agent that happens to be drawn in green
+ * must not start reading as "succeeded". The pips below *do* pull from
+ * `--state-*`, because that is exactly what they mean.
+ *
+ * Every value is a token so a body can be filled with `var(--identity-tone-N)`
+ * and re-colour itself on appearance change without re-rendering — the thing a
+ * PNG mascot could never do.
+ */
+:root {
+    --identity-tone-0: #5a3fd4;
+    --identity-soft-0: #e6e0ff;
+    --identity-tone-1: #11743c;
+    --identity-soft-1: #d9f5e3;
+    --identity-tone-2: #8a6400;
+    --identity-soft-2: #f7edd4;
+    --identity-tone-3: #c22f15;
+    --identity-soft-3: #ffe1da;
+    --identity-tone-4: #d97757;
+    --identity-soft-4: #f2ebe6;
+
+    --identity-sclera: #fdfcf8;
+    --identity-pupil: #2b2924;
+    --identity-pip-ring: #fdfcf8;
+    /* Darkens whatever tone sits under it — a shared edge, a rim — so one value
+       serves all five tones in both appearances. */
+    --identity-shade: #000000;
+}
+
+/**
+ * The same press run on darker stock. The jewels lift to the values `design.md`
+ * already publishes for dark state colours, and the soft grounds become tints
+ * *of* the dark surface rather than pastels on it — a `#e6e0ff` tile on
+ * `#131311` is a hole punched in the page.
+ */
+.dark {
+    --identity-tone-0: #8b7af5;
+    --identity-soft-0: #2a2740;
+    --identity-tone-1: #5fdc95;
+    --identity-soft-1: #1d2f24;
+    --identity-tone-2: #e5b33c;
+    --identity-soft-2: #312a1a;
+    --identity-tone-3: #f08a72;
+    --identity-soft-3: #33221e;
+    --identity-tone-4: #e8927a;
+    --identity-soft-4: #32241f;
+
+    --identity-sclera: #f5f3ed;
+    --identity-pupil: #131311;
+    --identity-pip-ring: #1b1b19;
+    --identity-shade: #000000;
+}
+
+/**
+ * The seeded tone is applied as a class so the artwork itself can be written in
+ * `currentColor` — no inline fills, and one place to change when a tone moves.
+ *
+ * `hue` carries the custom properties only; `tone` additionally sets `color`,
+ * which is what makes `currentColor` work inside the SVGs. The split exists so
+ * a *container* — an app card, say — can adopt a resource's hue for its own
+ * trim without that hue inheriting down onto its title and body text.
+ */
+.lm-identity-hue-0,
+.lm-identity-tone-0 {
+    --lm-identity-tone: var(--identity-tone-0);
+    --lm-identity-soft: var(--identity-soft-0);
+}
+.lm-identity-hue-1,
+.lm-identity-tone-1 {
+    --lm-identity-tone: var(--identity-tone-1);
+    --lm-identity-soft: var(--identity-soft-1);
+}
+.lm-identity-hue-2,
+.lm-identity-tone-2 {
+    --lm-identity-tone: var(--identity-tone-2);
+    --lm-identity-soft: var(--identity-soft-2);
+}
+.lm-identity-hue-3,
+.lm-identity-tone-3 {
+    --lm-identity-tone: var(--identity-tone-3);
+    --lm-identity-soft: var(--identity-soft-3);
+}
+.lm-identity-hue-4,
+.lm-identity-tone-4 {
+    --lm-identity-tone: var(--identity-tone-4);
+    --lm-identity-soft: var(--identity-soft-4);
+}
+
+.lm-identity-tone-0,
+.lm-identity-tone-1,
+.lm-identity-tone-2,
+.lm-identity-tone-3,
+.lm-identity-tone-4 {
+    color: var(--lm-identity-tone);
+}
+
+.lm-identity {
+    display: block;
+    flex: none;
+}
+
+.lm-identity-mark {
+    position: relative;
+    display: inline-grid;
+    place-items: center;
+    overflow: hidden;
+    background: var(--lm-identity-soft);
+}
+
+.lm-identity-ground {
+    position: absolute;
+    inset: 0;
+    opacity: 0.6;
+}
+
+.lm-identity-glyph {
+    position: relative;
+}
+
+/**
+ * A team is the content of its tile, not a ground behind a glyph, so it does
+ * not take the ground's knock-back — three figures at 60% opacity read as a
+ * watermark rather than as the people they stand for.
+ */
+.lm-identity-team {
+    opacity: 1;
+}
+
+/** Identity is the body; only `asleep` dims, and it dims the whole creature. */
+.lm-identity-being[data-state='asleep'] {
+    opacity: 0.4;
+}
+
+/**
+ * Motion.
+ *
+ * Two rules keep this from becoming the thing that makes a list unusable.
+ * First, only states that are actually *happening* animate — an idle agent is
+ * still, so a roster at rest is still. Second, eye-level motion needs
+ * `data-anim="rich"`, which the component sets only above 32px, because a
+ * pupil drifting inside a 16px sidebar row is a shimmer rather than a glance.
+ * Body-level breathing is exempt: a running agent should read as running even
+ * in the sidebar, and one slow scale is cheap enough to survive a long list.
+ */
+.lm-identity-body,
+.lm-identity-eyes,
+.lm-identity-pupils {
+    transform-box: fill-box;
+    transform-origin: center;
+}
+
+.lm-identity-body {
+    transform-origin: 50% 62%;
+}
+
+@keyframes lm-identity-breathe {
+    0%,
+    100% {
+        transform: scale(1, 1);
+    }
+    50% {
+        transform: scale(1.035, 0.94);
+    }
+}
+
+@keyframes lm-identity-tilt {
+    0%,
+    100% {
+        transform: rotate(-1.8deg);
+    }
+    50% {
+        transform: rotate(1.8deg);
+    }
+}
+
+@keyframes lm-identity-bob {
+    0%,
+    100% {
+        transform: translateY(0);
+    }
+    50% {
+        transform: translateY(-2.5px);
+    }
+}
+
+@keyframes lm-identity-scan {
+    0%,
+    100% {
+        transform: translate(-1.1px, 0);
+    }
+    50% {
+        transform: translate(1.1px, 0.4px);
+    }
+}
+
+@keyframes lm-identity-think {
+    0%,
+    18% {
+        transform: translate(-1.4px, -1.2px);
+    }
+    38%,
+    56% {
+        transform: translate(1.5px, -1.1px);
+    }
+    76%,
+    100% {
+        transform: translate(-1.4px, -1.2px);
+    }
+}
+
+/**
+ * A blink, not a wink held shut.
+ *
+ * `steps(1, end)` holds each segment at its *start* value, so the closing
+ * keyframe has to be followed by an explicit reopening one before 100% —
+ * otherwise the last segment inherits the closed value and carries it to the
+ * end of the cycle, leaving the eyes shut for a beat long enough to look like a
+ * rendering fault rather than a blink.
+ */
+@keyframes lm-identity-blink {
+    0%,
+    96% {
+        transform: scaleY(1);
+    }
+    97%,
+    98% {
+        transform: scaleY(0.08);
+    }
+    99%,
+    100% {
+        transform: scaleY(1);
+    }
+}
+
+.lm-identity-being[data-state='running'] .lm-identity-body {
+    animation: lm-identity-breathe 2.6s ease-in-out infinite;
+}
+
+.lm-identity-being[data-state='running'][data-anim='rich'] .lm-identity-pupils {
+    animation: lm-identity-scan 3.4s ease-in-out infinite;
+}
+
+.lm-identity-being[data-state='thinking'][data-anim='rich'] .lm-identity-body {
+    animation: lm-identity-tilt 4.6s ease-in-out infinite;
+}
+
+.lm-identity-being[data-state='thinking'][data-anim='rich'] .lm-identity-pupils {
+    animation: lm-identity-think 3.2s ease-in-out infinite;
+}
+
+.lm-identity-being[data-state='waiting'] .lm-identity-body {
+    animation: lm-identity-bob 2.2s ease-in-out infinite;
+}
+
+.lm-identity-being[data-state='waiting'][data-anim='rich'] .lm-identity-eyes {
+    animation: lm-identity-blink 4.4s steps(1, end) infinite;
+}
+
+/**
+ * An idle agent is still, and comes alive when you reach for it.
+ *
+ * Idle used to blink ambiently, which is wrong twice over: in a picker grid
+ * eighteen faces blinking is noise rather than life, and a list of resting
+ * agents should not be moving at all when nothing is happening to them. Motion
+ * that carries information — running, thinking, waiting on you — stays ambient,
+ * because that is the whole reason it exists. Everything else waits for hover.
+ *
+ * Hovering the control *around* an avatar counts, so a whole picker tile or
+ * list row is the target rather than the artwork's own few pixels.
+ */
+.lm-identity-being[data-anim='rich']:hover .lm-identity-eyes,
+button:hover .lm-identity-being[data-anim='rich'] .lm-identity-eyes,
+a:hover .lm-identity-being[data-anim='rich'] .lm-identity-eyes,
+label:hover .lm-identity-being[data-anim='rich'] .lm-identity-eyes {
+    animation: lm-identity-blink 2.2s steps(1, end) infinite;
+    animation-delay: 0s;
+}
+
+.lm-identity-being[data-state='idle'][data-anim='rich']:hover .lm-identity-body,
+button:hover .lm-identity-being[data-state='idle'][data-anim='rich'] .lm-identity-body,
+a:hover .lm-identity-being[data-state='idle'][data-anim='rich'] .lm-identity-body,
+label:hover .lm-identity-being[data-state='idle'][data-anim='rich'] .lm-identity-body {
+    animation: lm-identity-breathe 2.4s ease-in-out infinite;
+    animation-delay: 0s;
+}
+
+/**
+ * Seeded phase offsets. Every animation above would otherwise start the moment
+ * its avatar mounts, so a roster would breathe and blink in perfect unison —
+ * the single most artificial thing a set of these can do. The delays are
+ * negative so a newly-mounted avatar starts partway into its cycle instead of
+ * standing still waiting for its turn.
+ */
+.lm-identity-phase-1 .lm-identity-body,
+.lm-identity-phase-1 .lm-identity-eyes,
+.lm-identity-phase-1 .lm-identity-pupils {
+    animation-delay: -0.94s;
+}
+.lm-identity-phase-2 .lm-identity-body,
+.lm-identity-phase-2 .lm-identity-eyes,
+.lm-identity-phase-2 .lm-identity-pupils {
+    animation-delay: -1.88s;
+}
+.lm-identity-phase-3 .lm-identity-body,
+.lm-identity-phase-3 .lm-identity-eyes,
+.lm-identity-phase-3 .lm-identity-pupils {
+    animation-delay: -2.81s;
+}
+.lm-identity-phase-4 .lm-identity-body,
+.lm-identity-phase-4 .lm-identity-eyes,
+.lm-identity-phase-4 .lm-identity-pupils {
+    animation-delay: -3.75s;
+}
+.lm-identity-phase-5 .lm-identity-body,
+.lm-identity-phase-5 .lm-identity-eyes,
+.lm-identity-phase-5 .lm-identity-pupils {
+    animation-delay: -4.69s;
+}
+.lm-identity-phase-6 .lm-identity-body,
+.lm-identity-phase-6 .lm-identity-eyes,
+.lm-identity-phase-6 .lm-identity-pupils {
+    animation-delay: -5.63s;
+}
+.lm-identity-phase-7 .lm-identity-body,
+.lm-identity-phase-7 .lm-identity-eyes,
+.lm-identity-phase-7 .lm-identity-pupils {
+    animation-delay: -6.56s;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .lm-identity-being *,
+    .lm-identity-being {
+        animation: none !important;
+    }
+}

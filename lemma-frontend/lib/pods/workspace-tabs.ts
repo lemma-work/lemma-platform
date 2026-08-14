@@ -144,20 +144,44 @@ export function upsertWorkspaceTab(tabs: PodWorkspaceTab[], tab: PodWorkspaceTab
 }
 
 export function closeWorkspaceTab(tabs: PodWorkspaceTab[], tabId: string) {
-    if (tabId === HOME_WORKSPACE_TAB.id || tabId.startsWith('app:')) return tabs;
+    // Home is the only tab that cannot be closed. App tabs used to be
+    // uncloseable too, which only made sense while they were pinned for you
+    // rather than opened by you.
+    if (tabId === HOME_WORKSPACE_TAB.id) return tabs;
     const next = tabs.filter((tab) => tab.id !== tabId);
     return next.length === tabs.length ? tabs : next;
 }
 
-export function syncPinnedAppTabs(tabs: PodWorkspaceTab[], pages: AppPageRef[]) {
-    const pinnedApps = pages.map(appWorkspaceTab);
-    const workingTabs = tabs.filter((tab) => (
-        tab.kind !== 'home'
-        && tab.kind !== 'app'
-        && !(tab.kind === 'route' && tab.resourceId === 'apps' && tab.href.includes('/app/view'))
-    ));
-    const next: PodWorkspaceTab[] = [HOME_WORKSPACE_TAB, ...pinnedApps, ...workingTabs];
+/**
+ * Keep the open app tabs honest. Do not open any.
+ *
+ * Every app in the pod used to be pinned here the moment its pages loaded, and
+ * `closeWorkspaceTab` refused to close them — so the strip was a second,
+ * permanent copy of the apps index that grew with the pod and could not be
+ * dismissed. Four apps cost four tabs before you had opened anything.
+ *
+ * Tabs hold what someone opened. Opening an app still adds its tab, from the
+ * active-tab effect in `use-pod-workspace-tabs`; all this does is drop tabs
+ * whose app has since been deleted and refresh the titles of the rest.
+ */
+export function syncAppWorkspaceTabs(tabs: PodWorkspaceTab[], pages: AppPageRef[]) {
+    const bySlug = new Map(pages.map((page) => [page.slug, page]));
+    const kept: PodWorkspaceTab[] = [];
 
+    for (const tab of tabs) {
+        if (tab.kind === 'home') continue;
+        // A leftover route tab aimed at the app viewer duplicates the app tab.
+        if (tab.kind === 'route' && tab.resourceId === 'apps' && tab.href.includes('/app/view')) continue;
+        if (tab.kind === 'app') {
+            const page = bySlug.get(tab.resourceId);
+            if (!page) continue;
+            kept.push(appWorkspaceTab(page));
+            continue;
+        }
+        kept.push(tab);
+    }
+
+    const next: PodWorkspaceTab[] = [HOME_WORKSPACE_TAB, ...kept];
     if (next.length !== tabs.length) return next;
     return next.every((tab, index) => tabsEqual(tab, tabs[index])) ? tabs : next;
 }

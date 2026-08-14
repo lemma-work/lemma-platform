@@ -60,6 +60,7 @@ const allowedInlineSvgFiles = new Set([
   'components/landing/landing-animations.tsx',
   'components/lemma/assistant/assistant-parts.tsx',
   'components/shared/resource-icon-uploader.tsx',
+  'components/shared/resource-identity.tsx',
 ]);
 
 if (help) {

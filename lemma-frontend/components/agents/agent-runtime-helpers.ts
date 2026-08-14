@@ -7,6 +7,7 @@ import type {
     AvailableModelInfo,
     RuntimeModelCatalogEntry,
 } from 'lemma-sdk';
+import { humanizeName } from '@/lib/utils/display-name';
 
 // There is no longer a HarnessKind per coding tool — Codex, Claude Code and the
 // rest are all HarnessKind.HARNESS, dispatched through a paired machine's Agent
@@ -215,6 +216,17 @@ export function shortModelName(modelName: string): string {
     const markerMatch = normalized.match(/\/(?:models|routers)\/([^/]+)$/);
     if (markerMatch?.[1]) return markerMatch[1];
     return normalized.split('/').filter(Boolean).at(-1) || normalized;
+}
+
+/**
+ * The model name as a person reads it: the short name, humanised.
+ *
+ * Kept separate from `shortModelName` on purpose — that one is also fed to
+ * `modelPathHint`, which does string surgery against the raw value, and to the
+ * picker's search haystack. Humanising in there would break both.
+ */
+export function humanizeModelName(modelName: string): string {
+    return humanizeName(shortModelName(modelName));
 }
 
 export function modelPathHint(modelName: string): string | null {

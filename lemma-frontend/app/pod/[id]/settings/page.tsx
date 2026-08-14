@@ -301,6 +301,9 @@ function PodIconPanel({
                             iconUrl={iconUrl}
                             alt={`${podName || 'Pod'} icon`}
                             label={podName || 'Pod'}
+                            identityKind="team"
+                            identitySeed={podId}
+                            identitySize={44}
                             className="h-11 w-11 shrink-0 rounded-lg bg-transparent"
                             fallback={<PodMark name={podName} size="lg" />}
                         />

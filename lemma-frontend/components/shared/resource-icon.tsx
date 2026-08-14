@@ -2,7 +2,10 @@
 
 import { ReactNode, useMemo, useState } from 'react';
 import { cn } from '@/lib/utils';
-import { parseResourceIcon } from '@/lib/utils/resource-icon-value';
+import { identityVariantSeed, parseResourceIcon } from '@/lib/utils/resource-icon-value';
+import { ResourceIdentity } from '@/components/shared/resource-identity';
+import type { LemmaIcon } from '@/components/ui/icons';
+import type { IdentityState } from '@/lib/identity/seeded-identity';
 
 interface ResourceIconProps {
     iconUrl?: string | null;
@@ -11,6 +14,17 @@ interface ResourceIconProps {
     fallback?: ReactNode;
     className?: string;
     imageClassName?: string;
+    /**
+     * Turns on the generated identity for resources that have no picture and no
+     * emoji — which, before this, meant a grey glyph or two initials shared by
+     * everything of the same type. Callers pass a stable seed (an id where one
+     * exists) and the size they have styled the box to.
+     */
+    identitySeed?: string;
+    identityKind?: 'being' | 'mark' | 'team';
+    identityState?: IdentityState;
+    identityGlyph?: LemmaIcon;
+    identitySize?: number;
 }
 
 function getInitials(label?: string): string {
@@ -20,7 +34,19 @@ function getInitials(label?: string): string {
     return words.map((word) => word.charAt(0).toUpperCase()).join('');
 }
 
-export function ResourceIcon({ iconUrl, alt, label, fallback, className, imageClassName }: ResourceIconProps) {
+export function ResourceIcon({
+    iconUrl,
+    alt,
+    label,
+    fallback,
+    className,
+    imageClassName,
+    identitySeed,
+    identityKind = 'being',
+    identityState,
+    identityGlyph,
+    identitySize = 40,
+}: ResourceIconProps) {
     const [imageFailed, setImageFailed] = useState(false);
     const initials = useMemo(() => getInitials(label), [label]);
     // A resource's icon field holds either a picture or a typed glyph; which
@@ -30,12 +56,22 @@ export function ResourceIcon({ iconUrl, alt, label, fallback, className, imageCl
     const icon = useMemo(() => parseResourceIcon(iconUrl), [iconUrl]);
     const shouldShowImage = icon?.kind === 'url' && !imageFailed;
     const glyph = icon?.kind === 'glyph' ? icon.glyph : null;
+    // The generated identity is a *last* resort, never an override: a picture
+    // someone uploaded and an emoji someone typed are both explicit choices and
+    // both outrank it. What it replaces is the nothing that used to be here.
+    const shouldShowIdentity = !shouldShowImage && !glyph && Boolean(identitySeed);
+    // A stored variant shifts which face is drawn, but it is still drawn from
+    // this resource's own seed — so renaming nothing and picking nothing both
+    // keep giving the same answer.
+    const identityVariant = icon?.kind === 'identity' ? icon.variant : 0;
 
     return (
         <div
             className={cn(
                 'relative flex items-center justify-center overflow-hidden rounded-lg border border-transparent text-[var(--text-secondary)]',
-                shouldShowImage ? 'bg-transparent' : 'bg-[color:color-mix(in_srgb,var(--surface-2)_52%,transparent)]',
+                shouldShowImage || shouldShowIdentity
+                    ? 'bg-transparent'
+                    : 'bg-[color:color-mix(in_srgb,var(--surface-2)_52%,transparent)]',
                 className
             )}
         >
@@ -57,6 +93,15 @@ export function ResourceIcon({ iconUrl, alt, label, fallback, className, imageCl
                         {glyph}
                     </span>
                 </span>
+            ) : shouldShowIdentity && identitySeed ? (
+                <ResourceIdentity
+                    seed={identityVariantSeed(identitySeed, identityVariant)}
+                    label={alt}
+                    kind={identityKind}
+                    state={identityState}
+                    glyph={identityGlyph}
+                    size={identitySize}
+                />
             ) : fallback ? (
                 fallback
             ) : (

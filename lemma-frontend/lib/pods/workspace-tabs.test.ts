@@ -13,7 +13,7 @@ import {
     promoteNewConversationTab,
     routeWorkspaceTab,
     serializeWorkspaceTabs,
-    syncPinnedAppTabs,
+    syncAppWorkspaceTabs,
     upsertWorkspaceTab,
     type PodWorkspaceTab,
 } from './workspace-tabs';
@@ -135,14 +135,27 @@ describe('pod workspace tabs', () => {
             { slug: 'quote-desk', title: 'Quote Desk', icon: 'Q', order: 1, path: '' },
         ];
 
-        expect(syncPinnedAppTabs(
+        // Tabs hold what someone opened, so syncing must not open anything:
+        // `pages` here has two apps and neither becomes a tab. The stale app tab
+        // is dropped because its app is gone, and the duplicate route goes too.
+        expect(syncAppWorkspaceTabs(
             [HOME_WORKSPACE_TAB, staleApp, conversation, staleAppRoute],
             pages,
         )).toEqual([
             HOME_WORKSPACE_TAB,
-            appWorkspaceTab(pages[0]),
-            appWorkspaceTab(pages[1]),
             conversation,
+        ]);
+    });
+
+    it('keeps an open app tab and refreshes its title', () => {
+        const pages = [
+            { slug: 'quote-desk', title: 'Quote Desk Renamed', icon: 'Q', order: 0, path: '' },
+        ];
+        const open = appWorkspaceTab({ slug: 'quote-desk', title: 'Quote Desk' });
+
+        expect(syncAppWorkspaceTabs([HOME_WORKSPACE_TAB, open], pages)).toEqual([
+            HOME_WORKSPACE_TAB,
+            appWorkspaceTab(pages[0]),
         ]);
     });
 
@@ -186,13 +199,11 @@ describe('pod workspace tabs', () => {
         expect(getWorkspaceTabAfterClose(tabs, first.id)).toBe(second);
         expect(getWorkspaceTabAfterClose(tabs, second.id)).toBe(first);
         expect(closeWorkspaceTab(tabs, HOME_WORKSPACE_TAB.id)).toBe(tabs);
+        // An app tab closes like any other now that it is opened rather than pinned.
         expect(closeWorkspaceTab([HOME_WORKSPACE_TAB, appWorkspaceTab({
             slug: 'quote-desk',
             title: 'Quote Desk',
-        })], 'app:quote-desk')).toEqual([
-            HOME_WORKSPACE_TAB,
-            appWorkspaceTab({ slug: 'quote-desk', title: 'Quote Desk' }),
-        ]);
+        })], 'app:quote-desk')).toEqual([HOME_WORKSPACE_TAB]);
     });
 
     it('uses routes as the active-tab source of truth', () => {

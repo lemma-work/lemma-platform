@@ -176,6 +176,10 @@ export function FunctionEditor({
                                 alt=""
                                 label={title || functionData.name}
                                 className="h-full w-full rounded-xl"
+                                identitySeed={functionData.id || functionData.name}
+                                identityKind="mark"
+                                identityGlyph={FunctionSquare}
+                                identitySize={32}
                                 fallback={<FunctionSquare className="h-4 w-4 text-[var(--text-secondary)]" />}
                             />
                         </button>

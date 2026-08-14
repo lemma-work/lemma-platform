@@ -515,6 +515,9 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
                                         iconUrl={podIconUrl}
                                         alt={`${podName || 'Current pod'} icon`}
                                         label={podName || 'Current pod'}
+                                        identityKind="team"
+                                        identitySeed={podId}
+                                        identitySize={24}
                                         className="h-6 w-6 shrink-0 rounded-md border-[color:color-mix(in_srgb,var(--border-subtle)_58%,transparent)] bg-transparent text-[var(--text-tertiary)]"
                                         fallback={<PodMark name={podName} />}
                                     />
@@ -1205,6 +1208,9 @@ function PodSwitcherMenuItem({
                         iconUrl={pod.icon_url}
                         alt=""
                         label={label}
+                        identityKind="team"
+                        identitySeed={pod.id}
+                        identitySize={24}
                         className="h-6 w-6 shrink-0 rounded-md border-[color:color-mix(in_srgb,var(--border-subtle)_58%,transparent)] bg-transparent text-[var(--text-tertiary)]"
                         fallback={<PodMark name={pod.name} />}
                     />
