@@ -135,6 +135,27 @@ async def connection_released(session: Any) -> AsyncIterator[None]:
     If ``safe_to_release`` refuses, the block still runs; the caller keeps its
     connection and the old behaviour. That is deliberate: ending a caller's
     transaction underneath it is worse than holding a connection.
+
+    **Only wrap work that touches no database.** The release happens once, on
+    entry. If the call inside queries first and does its slow work afterwards,
+    the connection is re-acquired for that query and then held across the slow
+    part exactly as before -- while the gate goes quiet, because it stops
+    counting awaits inside this block. That is a false clean: the report
+    disappears and the hold does not.
+
+    Concretely, this is right::
+
+        async with connection_released(uow.session):
+            await EventPublisher.publish(event.stream_name(), event)   # no DB
+
+    and this is not, however tempting it looks::
+
+        async with connection_released(uow.session):
+            await editor.update_profile(...)   # loads the row, THEN calls out
+
+    For the second shape the fix belongs inside the callee -- split it so the
+    read finishes, the connection goes back, and the write opens its own scope.
+    Wrapping the call site only hides it.
     """
     commit = getattr(session, "commit", None)
     if callable(commit) and safe_to_release(session):
