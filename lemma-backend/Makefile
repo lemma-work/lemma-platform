@@ -60,7 +60,7 @@ FUNCTION_BENCH_ENV = \
 	FUNCTION_BENCH_TERMINAL_TIMEOUT_SECONDS=$(FUNCTION_BENCH_TERMINAL_TIMEOUT_SECONDS)
 FUNCTION_BENCH_TEST = app/modules/function/tests/perf/test_function_execution_benchmark.py
 
-.PHONY: help test test-unit test-e2e test-e2e-real test-e2e-fast test-e2e-runtime test-module coverage coverage-unit coverage-e2e coverage-backend-unit coverage-backend-e2e-shard coverage-backend-report coverage-backend-gate test-collect lint lint-async lint-session-scope typecheck-critical architecture migrate docker-build docker-build-cloud docker-build-arm64 docker-build-amd64 benchmark-functions-docker benchmark-functions-e2b teams-manifest-zip load-test-build load-test-up load-test-migrate load-test-setup load-test-run load-test-sse load-test-journey load-test-datastore-up load-test-datastore-setup load-test-datastore-files load-test-datastore-stats load-test-datastore-down load-test-monitor load-test-down load-test
+.PHONY: help test test-unit test-e2e test-e2e-real test-e2e-fast test-e2e-runtime test-module coverage coverage-unit coverage-e2e coverage-backend-unit coverage-backend-e2e-shard coverage-backend-report coverage-backend-gate test-collect lint lint-async lint-session-scope lint-io-hygiene typecheck-critical architecture migrate docker-build docker-build-cloud docker-build-arm64 docker-build-amd64 benchmark-functions-docker benchmark-functions-e2b teams-manifest-zip load-test-build load-test-up load-test-migrate load-test-setup load-test-run load-test-sse load-test-journey load-test-datastore-up load-test-datastore-setup load-test-datastore-files load-test-datastore-stats load-test-datastore-down load-test-monitor load-test-down load-test
 
 help:
 	@echo "Lemma backend:"
@@ -78,6 +78,7 @@ help:
 	@echo "  make lint              # run ruff checks"
 	@echo "  make lint-async        # blocking-call gate for async code"
 	@echo "  make lint-session-scope # DB connection held across non-DB work"
+	@echo "  make lint-io-hygiene   # unbounded thread offloads / untimed aiohttp"
 	@echo "  make typecheck-critical # strict reliability/domain type gate"
 	@echo "  make architecture      # dependency/complexity/exception ratchet"
 	@echo "  make migrate           # apply database migrations"
@@ -263,6 +264,14 @@ lint-async:
 # and anything new fails the build.
 lint-session-scope:
 	uv run python scripts/check_session_scope.py
+
+# I/O hygiene gate (enforced in CI). Blocking work must go through
+# run_blocking's named limiters rather than asyncio's unbounded default
+# executor, and every aiohttp session must carry a timeout — aiohttp's default
+# is five minutes, long enough to pin a pooled connection with it.
+# Ratcheted against io-hygiene-baseline.json.
+lint-io-hygiene:
+	uv run python scripts/check_io_hygiene.py
 
 migrate:
 	uv run alembic upgrade head

@@ -161,6 +161,13 @@ jobs:
         run: make lint
       - name: Async-safety lint
         run: make lint-async
+      # The pool is sized on the promise that a connection is never held across
+      # non-database work, and worker concurrency is sized on the promise that
+      # blocking work is bounded. These two gates are what keep both true.
+      - name: DB connection scope
+        run: make lint-session-scope
+      - name: I/O hygiene (bounded offloads, timed HTTP sessions)
+        run: make lint-io-hygiene
       - name: Critical domain type safety
         run: make typecheck-critical
       - name: Architecture, complexity, and broad-catch ratchet

@@ -60,51 +60,110 @@ handler — same cost, different fix.
 It is a precision-first tool, and the limits are deliberate:
 
 - Calls are resolved **by name**, with no type inference. Propagation of "this
-  leaves the process" is therefore restricted to function names with exactly
-  one definition in the tree. A service method named `send`, `execute` or
-  `create_surface` — defined on several classes — is not followed. An earlier
-  revision without this restriction produced 555 findings, most of them
-  nonsense (it decided `conn.execute` was an HTTP call).
+  leaves the process" follows a name only when every definition sharing it is
+  slow — `execute` is 21 definitions and mostly queries, so it stays unusable,
+  while `refresh_credentials` is 4 definitions that are all thread offloads. An
+  earlier revision propagated through any name and produced 555 findings, most
+  of them nonsense (it decided `conn.execute` was an HTTP call).
 - It does not model conditionals, so a slow call on a branch that never
   executes still counts.
 
 So a clean run means *no new violations of the shapes it can see*, not a proof.
-It is a ratchet, not a verifier.
+It is a ratchet, not a verifier — which is why there is also a runtime detector.
 
-## Known debt
+## The runtime detector
 
-An audit of the agent and agent-surfaces HTTP paths (2026-08-14) found these,
-all of which predate this document and none of which are fixed here. They are
-recorded in the baseline. Every one is a connection held across outbound
-platform I/O under FastAPI's request-scoped UoW:
+`app/core/observability/connection_scope.py` measures the same property from
+the other end, where there is nothing to infer. A connection is checked out for
+some wall-clock span; some of that span executes statements; the longest
+contiguous stretch with no statement running is time the connection was held
+while the database sat idle. That stretch *is* the bug, directly observed,
+whatever code shape produced it.
 
-| Path | Held across | Worst case |
-| --- | --- | --- |
-| `GET /pods/{id}/surfaces` (and single-surface routes) | Slack/Telegram/WhatsApp/MS Graph identity lookup, once per surface, sequential | 6s × surfaces |
-| `POST`/`PATCH /pods/{id}/surfaces` | Telegram webhook registration with retry backoff, scheduler and Composio calls — inside an **open transaction**, after the row is written | tens of seconds |
-| `POST /pods/{id}/surfaces/{name}/send` | Platform message send | up to 60s |
-| `GET /pods/{id}/surfaces/{name}/channels` | Paginated Slack `conversations.list` | up to 60s |
-| `POST /pods/{id}/notifications` | Delivery HTTP, per candidate channel until one succeeds | tens of seconds |
-| Slack modal fast lane in `POST /surfaces/webhooks/{platform}` | 1–3 Slack Web API calls, holding **two** connections (nested session) | up to 60s each |
-| `POST /organizations/{id}/agent-runtime-profiles` | DNS resolution + `GET {base_url}/models` against a caller-supplied host | 10–15s |
-| `POST /pods/{id}/conversations/{id}/stop` | Scheduler HTTP call with **no client timeout** | unbounded |
-| `persist_managed_bot` | Telegram `setWebhook` with retries, inside an open transaction holding row locks | tens of seconds |
+It is the sibling of `stall_sampler.py`, which answers the same question for
+the event loop, and is built the same way — one small class, one structured
+event (`runtime.connection_scope.degraded`), a cooldown, and a `reports`
+counter so a test can assert rather than sleep and hope.
 
-The fix is the same shape in every case, and
-`managed_bot_configurator.py` already demonstrates it: load what you need in a
-short session, close it, do the outbound work, reopen a short session to persist
-the result.
+Three design points worth knowing before changing it:
 
-Two structural items behind them:
+- **The trigger is one contiguous gap, not summed idle time.** A session
+  issuing a hundred quick queries with ordinary Python between them accumulates
+  a second of summed idle and is doing nothing wrong. One contiguous gap is
+  exactly one `await`, which is the sentence the detector exists to say.
+- **Time spent querying is never counted.** A slow query is
+  `db_statement_timeout_seconds`' problem, not this one's.
+- **`handle_error` is load-bearing.** `after_cursor_execute` does not fire when
+  a statement raises (verified), so without it the failed statement's interval
+  never closes and every later gap hides behind it.
 
-- `get_uow` (`app/core/api/dependencies.py`) is a FastAPI yield-dependency, so
-  every handler using `UoWDep` — directly or through a service dependency —
-  holds a connection for the entire request including the response body. Fine
-  for a handler whose duration *is* its query time; the trap is that nothing
-  stops a slow call being added later. The handlers that stream already avoid it
-  by taking `get_uow_factory` instead.
-- `SchedulerAPIClient` (`app/modules/schedule/scheduler/api_client.py`) creates
-  an `aiohttp.ClientSession()` with no timeout.
+It works under `NullPool` — the testing default — because checkout and check-in
+fire there exactly as on a real pool. That is what makes
+`strict_connection_scope` (in `app/modules/test_support/connection_scope.py`)
+possible without any engine juggling. In production it warns; in a test that
+names the fixture, it fails with the stack of the code that took the
+connection.
+
+## The audit
+
+Every module was audited (2026-08-14) against both defect classes — a
+connection held across non-database work, and work that blocks the event loop.
+**~103 findings: 35 CRITICAL, 31 HIGH, 12 MEDIUM, 16 LOW.** Both gates were
+green at the time, in every slice.
+
+They were green because the static gate had six structural blind spots, all now
+closed. Worth recording, because each was invisible until something looked:
+
+| Blind spot | What it cost |
+| --- | --- |
+| `SessionUnitOfWorkFactory(...)()` not recognised as a session open | 20+ sites in `app/composition`, several holding an open write transaction across an HTTP download |
+| `ctx.uow()` not recognised | the entire streaq worker surface |
+| Session-yielding context managers (`pod_services`, `uow_scope`, …) not recognised | 71 session-holding blocks treated as ordinary code |
+| Propagation required exactly one definition of a callee name | everything reached through an interface |
+| Third-party SDK calls invisible — no definition in `app/` for a name lookup to find | every SuperTokens / aiohttp / Redis call |
+| `dependencies=[...]` in a route decorator never read | the pod_bundle SSE routes |
+
+Session-yielding context managers are now **discovered rather than listed**, so
+the next such helper is covered the day it is written.
+
+### Structural findings
+
+- **190 of 271 route handlers (70%) hold a connection for the whole request**
+  via `Depends(get_uow)`, directly or through a service dependency. Most are
+  harmless — a handler that only queries holds it about as long as it needs.
+  The problem is that holding is the **default**, so a slow call added later
+  costs a connection with nothing at the call site to say so. That is exactly
+  how the surface-route findings happened. The fix is targeted rather than a
+  global flip; the gate is what stops new ones appearing.
+- **53% of thread offloads bypass the named limiters** (28 `asyncio.to_thread`
+  + 9 bare `anyio` against 33 `run_blocking`), so `OFFLOAD_*_LIMIT` governs
+  under half the traffic it names. `asyncio.to_thread` uses asyncio's *default
+  executor* — a different pool from anyio's, shared with every `getaddrinfo`
+  the process makes, and untouched by the headroom `configure_thread_pool()`
+  raises at startup. Enforced now by `make lint-io-hygiene`.
+- **11 `aiohttp.ClientSession()` built with no timeout.** aiohttp's default is
+  **five minutes** (httpx's is five seconds). Where the caller holds a DB
+  session, it parks a pooled connection for that long. Also enforced by
+  `make lint-io-hygiene`.
+
+### The worst individual finding
+
+`app/core/security.py` — `verify_auth` is a global dependency on every request,
+and SuperTokens' `get_session` reaches a **synchronous `requests.get`** on the
+event loop, under a threading mutex, with no negative cache for an unknown
+`kid`. `kid` is read from the token *before* signature verification, so an
+unauthenticated client can force one blocking round trip per request with a
+forged JWT.
+
+### Fix pattern
+
+The same shape in nearly every case, and
+`app/modules/connectors/application/connector_operation_use_cases.py` is the
+reference implementation: resolve DB state in a short scope, close it, do the
+outbound work with no connection held, reopen a short scope to persist. Other
+in-tree references: `managed_bot_configurator.py`,
+`whatsapp_mobile_verification.py`, and `schedule/handlers/schedule_consumer.py`
+(whose docstring states the rule, and whose datastore sibling violated it).
 
 ## Pooler compatibility
 

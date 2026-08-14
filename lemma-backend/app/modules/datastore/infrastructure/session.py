@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy.pool import NullPool
 
 from app.core.config import settings
+from app.core.observability.connection_scope import attach_connection_scope_monitor
 
 _engine = None
 _session_maker = None
@@ -60,6 +61,9 @@ def get_datastore_engine():
             connect_args=connect_args,
             **engine_kwargs,
         )
+        # The datastore pool has no telemetry of its own; one line gives the
+        # monitor both engines.
+        attach_connection_scope_monitor(_engine)
     return _engine
 
 

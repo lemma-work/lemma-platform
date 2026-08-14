@@ -118,6 +118,30 @@ class Settings(BaseSettings):
             "connector queries set their own, tighter, per-statement limits."
         ),
     )
+    # --- Connection-scope monitor (app.core.observability.connection_scope) ---
+    db_connection_idle_hold_seconds: float = Field(
+        default=1.0,
+        description=(
+            "How long a pooled connection may be checked out WITHOUT a statement "
+            "running before the monitor reports it. That difference — held time "
+            "minus querying time — is the runtime measurement of the same "
+            "property ``make lint-session-scope`` checks statically, and unlike "
+            "the static gate it cannot be fooled by a call shape it has no "
+            "pattern for. Set to 0 to disable. Env: "
+            "``DB_CONNECTION_IDLE_HOLD_SECONDS``."
+        ),
+    )
+    db_connection_scope_strict: bool = Field(
+        default=False,
+        description=(
+            "Fail instead of warn when a connection is held across non-database "
+            "work. Tests turn this on so a regression is a red build rather than "
+            "a log line nobody reads; production leaves it off and takes the "
+            "bounded warning. Also captures a stack at every checkout, which is "
+            "why it is not free enough to leave on in production. Env: "
+            "``DB_CONNECTION_SCOPE_STRICT``."
+        ),
+    )
     worker_concurrency: int = Field(
         default=50,
         description=(

@@ -7,6 +7,7 @@ from sqlalchemy.pool import NullPool
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 from app.core.config import settings
 from app.core.log.log import get_logger
+from app.core.observability.connection_scope import attach_connection_scope_monitor
 from app.core.observability.dependency_incident import DependencyIncident
 
 logger = get_logger(__name__)
@@ -105,6 +106,11 @@ def get_engine():
         )
         if settings.environment != "testing":
             event.listen(engine.sync_engine.pool, "checkout", _log_pool_utilization)
+        # Unconditional, unlike the pool-utilization listener above: the scope
+        # monitor works under NullPool too (checkout/checkin still fire), which
+        # is what lets the ordinary test suite catch a held connection without
+        # needing a real pool.
+        attach_connection_scope_monitor(engine)
     return engine
 
 
