@@ -42,7 +42,6 @@ import { useAvailableSurfaces } from '@/lib/hooks/use-pod-surfaces';
 import { usePod } from '@/lib/hooks/use-pods';
 import { buildAgentEmailPreview } from '@/lib/surfaces/agent-email';
 import { managedEmailDomain } from '@/lib/surfaces/catalog';
-import { AGENT_MASCOTS } from '@/lib/data/agent-mascots';
 import { cn } from '@/lib/utils';
 import { formatAgentName } from '@/lib/utils/agents';
 import { Agent, AccessMode, ToolSet } from '@/lib/types';
