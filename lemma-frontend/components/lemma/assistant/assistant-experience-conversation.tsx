@@ -136,7 +136,6 @@ export function AssistantDisplayRow({
 
 export interface AssistantExperienceConversationProps {
   messagesContainerRef: RefObject<HTMLDivElement | null>;
-  bottomAnchorRef: RefObject<HTMLDivElement | null>;
   onScroll: () => void;
   contentWidthClassName?: string;
   activeConversationId: string | null;
@@ -168,7 +167,6 @@ export interface AssistantExperienceConversationProps {
 
 export function AssistantExperienceConversation({
   messagesContainerRef,
-  bottomAnchorRef,
   onScroll,
   contentWidthClassName,
   activeConversationId,
@@ -344,7 +342,6 @@ export function AssistantExperienceConversation({
       {(hasMessages || isConversationBusy || showAssistantErrorInTranscript) ? (
         <div aria-hidden="true" className="h-2" />
       ) : null}
-      <div ref={bottomAnchorRef} aria-hidden="true" className="h-px" />
       </div>
     </AssistantMessageViewport>
   );
