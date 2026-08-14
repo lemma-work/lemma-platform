@@ -254,6 +254,61 @@ lands in a particular place, which is arithmetic), and the PNG one asserts wall
 clock with a wide margin, because the cost *is* the wall clock. Each was checked
 against the unfixed code — the PNG walk reproduces the audit's 73 ms exactly.
 
+## What authorization costs
+
+Authorization runs on essentially every API request and every agent tool call,
+so its cost is multiplied by the busiest number in the system. Measured against
+real Postgres and Redis by
+`app/modules/pod/tests/e2e/test_authorization_cost_e2e.py`, on a pod created
+through the API so the principal has genuine membership:
+
+| Regime | median | p95 | DB queries |
+| --- | --- | --- | --- |
+| cold — snapshot miss, derives from DB | 14.96 ms | 21.07 ms | several |
+| warm — Redis snapshot hit, new `Context` | 1.51 ms | 2.82 ms | **0** |
+| ↳ of which `build_user_context` | 1.38 ms | | |
+| repeat — decision cache, same request | 0.0003 ms | 0.0005 ms | 0 |
+
+Warm is the regime almost every request is in, and nearly all of its 1.5 ms is
+`build_user_context`: one Redis GET plus deserializing the snapshot into
+frozensets. The decision itself is ~0.12 ms of in-memory set logic.
+
+The zero-query result is the point, and it is asserted rather than observed.
+The pod-scoped snapshot key omits the organization (see `_snapshot_suffix`)
+precisely so the lookup needs no row read to build the key; keyed the other way,
+every pod request paid a `Pod` read *at a 100% cache hit rate*.
+
+That file also carries the counterweight test: a pod the principal has no
+membership in must still be denied. Every other assertion there rewards making
+authorization skip work, and a cache key loose enough to serve one pod's
+snapshot for another would improve all of them while breaking the system.
+
+Two adjacent hazards worth knowing:
+
+- **An unknown permission id denies silently.** `"pod:read"` (colon) is not
+  `pod.read` (dot); the first simply returns `False` with no error. Fails
+  closed, which is safe, but invisible. Use the `Permissions` constants.
+- **Cold is ~10× warm**, which is what justifies the snapshot cache existing.
+  It is paid once per principal per `authorization_role_cache_ttl_seconds`.
+
+## Known debt
+
+**APScheduler drives a synchronous psycopg job store on the event loop.**
+`scheduler_service.py` builds `SQLAlchemyJobStore(url=build_sync_jobstore_url(...))`
+— a separate sync engine, not the app's asyncpg pool — under an
+`AsyncIOScheduler`. Every `add_job` / `remove_job` / `get_jobs` blocks the loop
+for a synchronous round trip, as does APScheduler's own periodic wakeup.
+
+Not fixed here, deliberately. Our six call sites are sync methods
+(`def remove_job`, `def get_job`, `def get_jobs`), so offloading them means an
+async signature change rippling through every caller — and it would still leave
+the scheduler's internal wakeup on the loop, since that is APScheduler's code,
+not ours. The complete fix is a `BackgroundScheduler` on its own thread with
+job callbacks marshalled back via `run_coroutine_threadsafe`, which is a real
+architectural change to scheduling and wants its own PR and its own e2e
+coverage. The exposure is bounded: a local Postgres round trip, not the
+74 ms-class CPU stalls this document's audit was chasing.
+
 ## Pooler compatibility
 
 Nothing here requires a middle-tier pooler, but two invariants keep one usable
