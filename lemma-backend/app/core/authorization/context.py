@@ -291,6 +291,15 @@ class Context:
     _decision_cache: dict[tuple[str, ResourceType | None, UUID | None], AuthorizationDecision] = field(
         default_factory=dict
     )
+    #: permission_id -> session-approval answer, for this request only.
+    #:
+    #: The lookup is a Redis GET, and it runs while FastAPI holds the request's
+    #: pooled connection. The decision cache above keys on the resource too, so
+    #: a workload touching several resources under one permission repeats the
+    #: same approval lookup once per resource — each one a network round trip
+    #: with a database connection checked out and idle behind it. The answer
+    #: cannot change within a request, so ask once.
+    _session_approval_cache: dict[str, bool] = field(default_factory=dict)
 
     @property
     def is_authenticated(self) -> bool:

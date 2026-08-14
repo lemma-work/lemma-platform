@@ -32,6 +32,8 @@ from app.core.authorization.delegation import (
     WorkloadPrincipalType,
 )
 from app.core.authorization.session_approvals import has_session_approval
+
+
 from app.core.domain.errors import DomainError
 from app.core.authorization.grants import (
     delete_grantee_grants,
@@ -73,6 +75,30 @@ from app.modules.pod.domain.visibility import (
 from app.modules.pod.infrastructure.models.pod_models import Pod, PodMember
 from app.modules.schedule.infrastructure.models.schedule import Schedule
 from app.modules.workflow.infrastructure.models import WorkflowModel
+
+
+async def _session_approval(
+    ctx: "Context",
+    *,
+    session_id: str | None,
+    workload_actor_id: str | None,
+    permission_id: str,
+) -> bool:
+    """``has_session_approval``, asked at most once per permission per request.
+
+    The lookup is a Redis round trip made while the request's pooled database
+    connection is checked out, and the answer cannot change mid-request.
+    """
+    cached = ctx._session_approval_cache.get(permission_id)  # noqa: SLF001
+    if cached is not None:
+        return cached
+    approved = await has_session_approval(
+        session_id=session_id,
+        workload_actor_id=workload_actor_id,
+        permission_id=permission_id,
+    )
+    ctx._session_approval_cache[permission_id] = approved  # noqa: SLF001
+    return approved
 
 
 SYSTEM_ORG_ROLES = {"ORG_MEMBER", "ORG_EDITOR", "ORG_OWNER"}
@@ -1144,7 +1170,8 @@ class Authorizer:
             or permission_id not in DESTRUCTIVE_ACTIONS
         ):
             return None
-        if await has_session_approval(
+        if await _session_approval(
+            ctx,
             session_id=ctx.delegation_session_id,
             workload_actor_id=ctx.actor_id,
             permission_id=permission_id,
@@ -1239,7 +1266,8 @@ class Authorizer:
             # by the time an ungranted destructive action reaches here it must
             # carry an approval — but check generically so any approved action
             # is honored.)
-            if await has_session_approval(
+            if await _session_approval(
+                ctx,
                 session_id=ctx.delegation_session_id,
                 workload_actor_id=ctx.actor_id,
                 permission_id=permission_id,

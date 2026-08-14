@@ -23,6 +23,7 @@ statement. No stack is captured unless a violation is being reported.
 
 from __future__ import annotations
 
+import asyncio
 import time
 import traceback
 from dataclasses import dataclass
@@ -51,6 +52,44 @@ def format_hold_stack(frames: list[traceback.FrameSummary]) -> str:
     """The application frames around a held connection, innermost last."""
     interesting = [frame for frame in frames if _is_interesting(frame)]
     return "".join(traceback.format_list((interesting or frames)[-12:])).rstrip()
+
+
+def current_await_stack() -> list[traceback.FrameSummary]:
+    """The await chain of the task holding the connection, outermost first.
+
+    ``traceback.extract_stack()`` is no use here. SQLAlchemy's async adapter
+    runs these listeners inside a greenlet, so the Python stack at that point is
+    the greenlet's — a few frames of SQLAlchemy internals and nothing of the
+    application. Verified against a real engine: the trimmed result contained no
+    caller frames at all.
+
+    The awaiting task is still reachable, though, and walking its coroutine
+    chain through ``cr_await`` gives the frames that actually matter: the
+    handler, the service, and the line currently suspended.
+    """
+    try:
+        task = asyncio.current_task()
+    except RuntimeError:  # pragma: no cover - no running loop
+        return []
+    if task is None:
+        return []
+
+    frames: list[traceback.FrameSummary] = []
+    awaitable: object | None = task.get_coro()
+    seen = 0
+    while awaitable is not None and seen < 60:
+        seen += 1
+        frame = getattr(awaitable, "cr_frame", None) or getattr(awaitable, "gi_frame", None)
+        if frame is not None:
+            frames.append(
+                traceback.FrameSummary(
+                    frame.f_code.co_filename, frame.f_lineno, frame.f_code.co_name
+                )
+            )
+        awaitable = getattr(awaitable, "cr_await", None) or getattr(
+            awaitable, "gi_yieldfrom", None
+        )
+    return frames
 
 
 @dataclass
@@ -149,9 +188,9 @@ class ConnectionScopeMonitor:
         if self._strict:
             # Only in tests: naming where the connection was TAKEN is worth a
             # stack walk per checkout, because that is the line a developer has
-            # to change. In production the checkin stack is close enough and
-            # costs nothing until something is actually wrong.
-            hold.opened_at_stack = format_hold_stack(traceback.extract_stack())
+            # to change. In production the check-in stack names the same block
+            # and costs nothing until something is actually wrong.
+            hold.opened_at_stack = format_hold_stack(current_await_stack())
         connection_record.info["lemma_connection_hold"] = hold
 
     def _on_statement_start(
@@ -220,7 +259,7 @@ class ConnectionScopeMonitor:
     # --------------------------------------------------------------- report
 
     def _report(self, hold: _Hold, *, held: float) -> None:
-        stack = hold.opened_at_stack or format_hold_stack(traceback.extract_stack())
+        stack = hold.opened_at_stack or format_hold_stack(current_await_stack())
         self.reports += 1
         if self._strict:
             self.violations.append(
