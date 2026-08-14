@@ -337,6 +337,7 @@ def require_resource_action(
             name_param=name_param,
         )
         await ctx.require(permission_id, resource)
+        await _release_after_authorization(uow)
 
     return Depends(_dependency)
 
@@ -362,6 +363,7 @@ def require_resource_admin_or_creator(
             name_param=name_param,
         )
         if await ctx.can(permission_id, resource):
+            await _release_after_authorization(uow)
             return
         # The creator shortcut lets a human who created a resource delete it
         # without the role permission. A delegated workload must NOT get it for
@@ -382,8 +384,10 @@ def require_resource_admin_or_creator(
                 resource_id=resource.resource_id,
             )
             if creator_user_id == ctx.user_id:
+                await _release_after_authorization(uow)
                 return
         await ctx.require(permission_id, resource)
+        await _release_after_authorization(uow)
 
     return Depends(_dependency)
 

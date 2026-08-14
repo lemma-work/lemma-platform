@@ -423,4 +423,30 @@ class Context:
             return cached
         decision = await self.authorizer.authorize(self, permission_id, resource)
         self._decision_cache[key] = decision
+        await self._release_connection_after_check()
         return decision
+
+    async def _release_connection_after_check(self) -> None:
+        """Give the pooled connection back once a decision is reached.
+
+        Authorization runs on every request and reads from the application
+        database — the pod row, the resource row, the role snapshot. Under a
+        FastAPI yield-dependency the session it reads through stays checked out
+        until the response is written, so the cost is not the queries (they are
+        milliseconds) but the connection held for everything that comes after.
+
+        Doing it here rather than at each call site is the point: `require` and
+        `can` are called from route dependencies, from services, and from
+        agent tools, and every one of them was leaving the connection held.
+
+        Guarded. Authorization itself is read-only, so normally nothing is
+        pending and this simply returns the connection. A caller that has
+        already written keeps the old behaviour rather than having its work
+        committed on its behalf.
+        """
+        session = getattr(self.authorizer, "session", None)
+        if session is None:
+            return
+        if session.new or session.dirty or session.deleted:
+            return
+        await session.commit()

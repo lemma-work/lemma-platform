@@ -54,7 +54,21 @@ def _get_role_cache() -> RedisJsonCache | None:
 def _snapshot_suffix(
     user_id: UUID, organization_id: UUID | None, pod_id: UUID | None
 ) -> str:
-    return f"{user_id}:{organization_id or '-'}:{pod_id or '-'}"
+    """The cache key. Pod-scoped snapshots deliberately omit the organization.
+
+    A pod belongs to exactly one organization, so the pod alone identifies the
+    scope — and leaving the org out of the key is what lets the lookup happen
+    BEFORE the pod row is read. Keyed the other way, every pod request paid a
+    database read to learn the organization it needed to build the key, even on
+    a 100% cache hit. The snapshot carries ``organization_id`` in its payload,
+    so nothing is lost by not asking first.
+
+    Invalidation is unaffected: it deletes by the ``{user_id}:`` prefix, which
+    is still the first segment.
+    """
+    if pod_id is not None:
+        return f"{user_id}:-:{pod_id}"
+    return f"{user_id}:{organization_id or '-'}:-"
 
 
 def _principal_to_json(p: PrincipalRef) -> dict:

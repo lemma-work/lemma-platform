@@ -431,16 +431,22 @@ class AuthorizationDataService:
                 request_id=request_id,
             )
 
-        if pod_id is not None:
-            pod = await self.session.get(Pod, pod_id)
-            if pod is not None:
-                organization_id = pod.organization_id
-
+        # Ask the cache FIRST. The pod-scoped key does not include the
+        # organization (see ``_snapshot_suffix``), so a hit needs no database
+        # read at all — the snapshot carries the organization in its payload.
+        # This used to read the Pod row first, purely to build the key, and paid
+        # for it on every pod request no matter how warm the cache was.
         cached = await get_role_snapshot(
             user_id=user_id,
             organization_id=organization_id,
             pod_id=pod_id,
         )
+        if cached is None and pod_id is not None:
+            # Miss: the snapshot has to be derived, and that needs the org.
+            pod = await self.session.get(Pod, pod_id)
+            if pod is not None:
+                organization_id = pod.organization_id
+
         if cached is not None:
             return Context(
                 actor_type=ActorType.USER,
@@ -1563,6 +1569,14 @@ class Authorizer:
     async def _hydrate_datastore_file(self, resource: ResourceRef) -> ResourceRef:
         """Hydrate a FOLDER/DOCUMENT ref, including its path so folder grants
         can cascade to descendants."""
+        # A path-only check carries the POD id in resource_id — the caller uses
+        # `resource_id or pod_id` because a ResourceRef wants one, and the path
+        # is what the grant cascade actually matches on. Querying for a file row
+        # whose id equals a pod id can only ever return nothing, so skip it:
+        # this ran on every datastore path check.
+        if resource.resource_id is None or resource.resource_id == resource.pod_id:
+            return resource
+
         stmt = select(
             DatastoreFile.pod_id,
             DatastoreFile.owner_user_id,
