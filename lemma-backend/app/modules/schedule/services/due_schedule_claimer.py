@@ -56,6 +56,10 @@ class ClaimedFire:
     user_id: UUID | None
     fire_at: datetime
     is_one_shot: bool
+    # Read from the schedule row, not carried by a job. The job store never held
+    # this either -- `SchedulerAPIClient` copied it out of `config["payload"]`
+    # on the way in, which is one more way the store held nothing authoritative.
+    payload: dict
 
 
 def next_cursor_for(config: dict, *, after: datetime) -> datetime | None:
@@ -137,6 +141,7 @@ async def claim_due_schedules(
                 user_id=row.user_id,
                 fire_at=fire_at.astimezone(timezone.utc),
                 is_one_shot=is_one_shot,
+                payload=dict((row.config or {}).get("payload") or {}),
             )
         )
 

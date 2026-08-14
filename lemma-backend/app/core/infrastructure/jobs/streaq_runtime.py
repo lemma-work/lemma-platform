@@ -545,6 +545,19 @@ async def worker_lifespan() -> AsyncGenerator[AppWorkerContext]:
         name="backlog-gauges",
     )
 
+    # Fires due schedules and timers. Runs on every worker replica: the poll
+    # claims with FOR UPDATE SKIP LOCKED, so replicas share the work rather than
+    # duplicating it, and there is no leader to lose.
+    from app.modules.schedule.services.schedule_poller import run_schedule_poller
+
+    schedule_poller_task = create_background_task(
+        run_schedule_poller(
+            context.uow_factory,
+            interval_seconds=settings.schedule_poll_interval_seconds,
+        ),
+        name="schedule-poller",
+    )
+
     started = False
     global _primary_lane_context
     try:
@@ -581,6 +594,7 @@ async def worker_lifespan() -> AsyncGenerator[AppWorkerContext]:
             heartbeat_task,
             stream_snapshot_task,
             backlog_gauge_task,
+            schedule_poller_task,
         ):
             if background_task is not None and not background_task.done():
                 background_task.cancel()

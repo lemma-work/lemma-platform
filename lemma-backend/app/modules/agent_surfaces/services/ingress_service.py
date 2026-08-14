@@ -912,10 +912,7 @@ class AgentSurfaceIngressService(SurfaceConfigurationMixin, SurfaceProgressMixin
         if not clean_message:
             return False
         message_metadata = await self._egress_metadata_with_agent_name(target, metadata)
-        # Released for the platform call itself, not just before it. The old
-        # helper committed unconditionally and left the boundary invisible to
-        # the gate; this both bounds the release and applies `safe_to_release`,
-        # so a caller mid-write no longer has its transaction ended for it.
+        # No connection held for the platform call; see `connection_released`.
         async with connection_released(getattr(self.uow, "session", None)):
             await target.adapter.send_message(
                 credentials=target.credentials,
@@ -963,10 +960,7 @@ class AgentSurfaceIngressService(SurfaceConfigurationMixin, SurfaceProgressMixin
         ):
             return True
         message_metadata = await self._egress_metadata_with_agent_name(target, metadata)
-        # Released for the platform call itself, not just before it. The old
-        # helper committed unconditionally and left the boundary invisible to
-        # the gate; this both bounds the release and applies `safe_to_release`,
-        # so a caller mid-write no longer has its transaction ended for it.
+        # No connection held for the platform call; see `connection_released`.
         async with connection_released(getattr(self.uow, "session", None)):
             await target.adapter.send_display_resource(
                 credentials=target.credentials,
@@ -1041,10 +1035,7 @@ class AgentSurfaceIngressService(SurfaceConfigurationMixin, SurfaceProgressMixin
             tool_call_id=str(pending.get("tool_call_id") or tool_call_id or ""),
         )
         metadata = await self._egress_metadata_with_agent_name(target, None)
-        # Released for the platform call itself, not just before it. The old
-        # helper committed unconditionally and left the boundary invisible to
-        # the gate; this both bounds the release and applies `safe_to_release`,
-        # so a caller mid-write no longer has its transaction ended for it.
+        # No connection held for the platform call; see `connection_released`.
         async with connection_released(getattr(self.uow, "session", None)):
             try:
                 if await target.adapter.send_questions(
@@ -1134,10 +1125,7 @@ class AgentSurfaceIngressService(SurfaceConfigurationMixin, SurfaceProgressMixin
             allow_session=allow_session,
         )
         metadata = await self._egress_metadata_with_agent_name(target, None)
-        # Released for the platform call itself, not just before it. The old
-        # helper committed unconditionally and left the boundary invisible to
-        # the gate; this both bounds the release and applies `safe_to_release`,
-        # so a caller mid-write no longer has its transaction ended for it.
+        # No connection held for the platform call; see `connection_released`.
         async with connection_released(getattr(self.uow, "session", None)):
             try:
                 if await target.adapter.send_approval(
@@ -1216,10 +1204,7 @@ class AgentSurfaceIngressService(SurfaceConfigurationMixin, SurfaceProgressMixin
             return False
 
         mime = entity.mime_type or "audio/ogg"
-        # Released for the platform call itself, not just before it. The old
-        # helper committed unconditionally and left the boundary invisible to
-        # the gate; this both bounds the release and applies `safe_to_release`,
-        # so a caller mid-write no longer has its transaction ended for it.
+        # No connection held for the platform call; see `connection_released`.
         async with connection_released(getattr(self.uow, "session", None)):
             try:
                 if await target.adapter.send_voice_note(
@@ -1294,10 +1279,7 @@ class AgentSurfaceIngressService(SurfaceConfigurationMixin, SurfaceProgressMixin
                 conversation_id=conversation_id,
             )
             return False
-        # Released for the platform call itself, not just before it. The old
-        # helper committed unconditionally and left the boundary invisible to
-        # the gate; this both bounds the release and applies `safe_to_release`,
-        # so a caller mid-write no longer has its transaction ended for it.
+        # No connection held for the platform call; see `connection_released`.
         async with connection_released(getattr(self.uow, "session", None)):
             return await target.adapter.send_file_attachment(
                 credentials=target.credentials,
@@ -1552,10 +1534,7 @@ class AgentSurfaceIngressService(SurfaceConfigurationMixin, SurfaceProgressMixin
         indicator_metadata = await self._egress_metadata_with_agent_name(
             target, metadata
         )
-        # Released for the platform call itself, not just before it. The old
-        # helper committed unconditionally and left the boundary invisible to
-        # the gate; this both bounds the release and applies `safe_to_release`,
-        # so a caller mid-write no longer has its transaction ended for it.
+        # No connection held for the platform call; see `connection_released`.
         async with connection_released(getattr(self.uow, "session", None)):
             await target.adapter.add_processing_indicator(
                 credentials=target.credentials,

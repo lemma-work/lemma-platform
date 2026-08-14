@@ -52,10 +52,7 @@ class SurfaceProgressMixin:
             # message carries the agent's name, so the stream must too or the
             # thread reads as two different speakers.
             metadata = await self._egress_metadata_with_agent_name(target, None)
-            # Released for the platform call itself, not just before it. The old
-            # helper committed unconditionally and left the boundary invisible to
-            # the gate; this both bounds the release and applies `safe_to_release`,
-            # so a caller mid-write no longer has its transaction ended for it.
+            # No connection held for the platform call; see `connection_released`.
             async with connection_released(getattr(self.uow, "session", None)):
                 return await target.adapter.stream_progress(
                     credentials=target.credentials,
@@ -88,10 +85,7 @@ class SurfaceProgressMixin:
             return StreamAppendResult(handle=progress_handle, appended=False)
         try:
             metadata = await self._egress_metadata_with_agent_name(target, None)
-            # Released for the platform call itself, not just before it. The old
-            # helper committed unconditionally and left the boundary invisible to
-            # the gate; this both bounds the release and applies `safe_to_release`,
-            # so a caller mid-write no longer has its transaction ended for it.
+            # No connection held for the platform call; see `connection_released`.
             async with connection_released(getattr(self.uow, "session", None)):
                 return await target.adapter.append_stream_text(
                     credentials=target.credentials,
@@ -133,10 +127,7 @@ class SurfaceProgressMixin:
         if not clean_message and not already_streamed:
             return False
         message_metadata = await self._egress_metadata_with_agent_name(target, metadata)
-        # Released for the platform call itself, not just before it. The old
-        # helper committed unconditionally and left the boundary invisible to
-        # the gate; this both bounds the release and applies `safe_to_release`,
-        # so a caller mid-write no longer has its transaction ended for it.
+        # No connection held for the platform call; see `connection_released`.
         async with connection_released(getattr(self.uow, "session", None)):
             try:
                 return await target.adapter.finish_progress(
@@ -165,10 +156,7 @@ class SurfaceProgressMixin:
         target = await self._resolve_egress_target(conversation_id)
         if target is None:
             return
-        # Released for the platform call itself, not just before it. The old
-        # helper committed unconditionally and left the boundary invisible to
-        # the gate; this both bounds the release and applies `safe_to_release`,
-        # so a caller mid-write no longer has its transaction ended for it.
+        # No connection held for the platform call; see `connection_released`.
         async with connection_released(getattr(self.uow, "session", None)):
             try:
                 await target.adapter.end_progress(
