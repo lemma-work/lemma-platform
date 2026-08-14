@@ -66,24 +66,6 @@ class RecordService:
         if self.authz is None:
             return
         await self.authz.require_record_write(user_id=user_id, ctx=ctx)
-        await self._release_application_connection()
-
-    async def _release_application_connection(self) -> None:
-        """Give the application connection back before touching the datastore.
-
-        Authorization reads the pod, the resource and the role snapshot from the
-        APPLICATION database; everything after it here runs against the
-        DATASTORE engine, a different pool. The request-scoped session would
-        otherwise keep the application connection until the response was
-        written — measured at 4.1 seconds held on a bulk record write, with the
-        database asked nothing for all of it.
-
-        The controller already releases once after resolving the table; this is
-        the second acquisition, taken by the authorization check itself.
-        """
-        session = getattr(self.authorization_service, "session", None)
-        if session is not None:
-            await session.commit()
 
     async def _should_enforce_user_scope(
         self,

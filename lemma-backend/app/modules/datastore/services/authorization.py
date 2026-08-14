@@ -24,6 +24,30 @@ class DatastoreAuthorization:
     def __init__(self, authorization_service: object):
         self.authorization_service = authorization_service
 
+
+    async def _release_application_connection(self) -> None:
+        """Give the application connection back once the check is done.
+
+        Every datastore authorization check reads the pod, the resource and the
+        role snapshot from the APPLICATION database, and what follows it runs
+        against the DATASTORE engine — a different pool. The request-scoped
+        session would otherwise hold the application connection until the
+        response was written: measured at 4.1 seconds on a bulk record write
+        with the database asked nothing for the whole of it.
+
+        Guarded rather than unconditional. The checks themselves are read-only,
+        so normally there is nothing pending and committing simply returns the
+        connection. If a caller HAS written something first, committing here
+        would make its work durable earlier than it asked for — so in that case
+        we leave the session alone and keep the old behaviour.
+        """
+        session = getattr(self.authorization_service, "session", None)
+        if session is None:
+            return
+        if session.new or session.dirty or session.deleted:
+            return
+        await session.commit()
+
     @staticmethod
     def _context(ctx: Context | None = None) -> Context:
         auth_ctx = ctx or get_current_context()
@@ -46,6 +70,7 @@ class DatastoreAuthorization:
         await self._context().require(
             Permissions.DATASTORE_TABLE_CREATE, ResourceRef.pod(pod_id)
         )
+        await self._release_application_connection()
 
     async def require_datastore_read(
         self,
@@ -60,6 +85,7 @@ class DatastoreAuthorization:
         await self._context().require(
             Permissions.DATASTORE_TABLE_READ, ResourceRef.pod(pod_id)
         )
+        await self._release_application_connection()
 
     async def require_table_read(
         self,
@@ -128,6 +154,7 @@ class DatastoreAuthorization:
             Permissions.DATASTORE_RECORD_READ,
             ResourceRef.table(ctx.pod_id, ctx.table_id),
         )
+        await self._release_application_connection()
 
     async def require_record_write(
         self,
@@ -145,6 +172,7 @@ class DatastoreAuthorization:
             Permissions.DATASTORE_RECORD_WRITE,
             ResourceRef.table(ctx.pod_id, ctx.table_id),
         )
+        await self._release_application_connection()
 
     async def can_admin_table(
         self,
@@ -363,6 +391,7 @@ class DatastoreAuthorization:
         await self._context().require(
             fallback_action, ResourceRef.table(pod_id, table_id)
         )
+        await self._release_application_connection()
 
     async def _require_document_action(
         self,
