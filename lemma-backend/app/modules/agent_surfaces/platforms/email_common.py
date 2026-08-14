@@ -127,11 +127,18 @@ def plain_text_from_html(value: str | None) -> str:
     # spends on the event loop is the sender's to choose. Past the cap the tail
     # is dropped rather than parsed: an agent reading a message does not need
     # the last megabyte of a thread that has been replied to two hundred times.
-    if len(html_value) > _MAX_HTML_CHARS:
+    truncated = len(html_value) > _MAX_HTML_CHARS
+    if truncated:
         html_value = html_value[:_MAX_HTML_CHARS]
     parser = _HTMLTextExtractor()
     parser.feed(html_value)
-    return parser.text()
+    text = parser.text()
+    if truncated:
+        # Say so. An agent reading a silently-cut body has no way to tell the
+        # message ended from the message being clipped, and will answer as if
+        # it read the whole thing.
+        text = f"{text}\n\n[message truncated: exceeded {_MAX_HTML_CHARS} characters]"
+    return text
 
 
 # Where a mail client starts quoting the message being replied to. Deliberately

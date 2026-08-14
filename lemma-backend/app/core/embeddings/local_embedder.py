@@ -63,7 +63,9 @@ class FastEmbedLocalEmbedder(Embedder):
         vectors: List[List[float]] = []
         for start in range(0, len(pending), slice_size):
             chunk = pending[start : start + slice_size]
-            vectors.extend(await run_blocking(self._encode_batch, chunk))
+            vectors.extend(
+                await run_blocking(self._encode_batch, chunk, limiter="inference")
+            )
         return vectors
 
     def _threading_kwargs(self) -> dict[str, int]:

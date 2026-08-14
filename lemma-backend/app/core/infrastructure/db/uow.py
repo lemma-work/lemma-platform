@@ -42,6 +42,12 @@ class SqlAlchemyUnitOfWork(IUnitOfWork):
         # convenience for deferring work, never a requirement for committing.
         info = getattr(session, "info", None)
         if isinstance(info, dict):
+            # Last writer wins: two units of work wrapping one session
+            # sequentially will each claim it, and only the newest is
+            # reachable. That is what the readers want (the active UoW), and
+            # the reference is only ever used to ask whether events are
+            # pending -- but it is a cycle and a shared slot, so nothing more
+            # should be hung off it.
             info["lemma_uow"] = self
 
     def after_commit(self, callback: Callable[[], Awaitable[None]]) -> None:

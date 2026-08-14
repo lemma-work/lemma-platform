@@ -483,8 +483,11 @@ class LemmaLocalSandboxProvider(LemmaLocalOpsMixin):
 
         try:
             # The bridge is a blocking subprocess, so it is run off the event
-            # loop; leaving it inline would stall every other request.
-            process = await run_blocking(invoke, limiter="external_http")
+            # loop; leaving it inline would stall every other request. Its own
+            # limiter rather than ``external_http``: this call is bounded by the
+            # request deadline, not an HTTP timeout, so a burst of long sandbox
+            # operations would otherwise hold every slot the connector SDKs use.
+            process = await run_blocking(invoke, limiter="local_bridge")
         except subprocess.TimeoutExpired as exc:
             raise asyncio.TimeoutError from exc
 

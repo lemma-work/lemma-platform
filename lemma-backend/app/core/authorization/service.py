@@ -87,7 +87,14 @@ async def _session_approval(
     """``has_session_approval``, asked at most once per permission per request.
 
     The lookup is a Redis round trip made while the request's pooled database
-    connection is checked out, and the answer cannot change mid-request.
+    connection is checked out, so repeating it per check is the expensive part.
+
+    Caching it means an approval granted *during* a request is not seen by that
+    request. That is correct for an ordinary request, which is short; for a
+    long-lived streamed one it means the approval takes effect on the next call
+    rather than mid-stream. Acceptable because approvals are awaited through the
+    approval flow rather than polled here -- but it is a staleness window, not
+    an invariant.
     """
     cached = ctx._session_approval_cache.get(permission_id)  # noqa: SLF001
     if cached is not None:

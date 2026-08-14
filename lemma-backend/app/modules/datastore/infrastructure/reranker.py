@@ -70,7 +70,7 @@ class LocalCrossEncoderReranker:
             # first use — hundreds of megabytes of weights and a torch import —
             # and doing that here left the whole of it on the event loop for
             # the first search after a boot. Only the predict call was offloaded.
-            scores = await run_blocking(self._score_pairs, pairs)
+            scores = await run_blocking(self._score_pairs, pairs, limiter="inference")
             order = sorted(
                 range(len(results)),
                 key=lambda index: float(scores[index]),

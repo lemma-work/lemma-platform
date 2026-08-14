@@ -187,7 +187,6 @@ async def get_pod_context(
     return ctx
 
 
-
 async def _release_after_authorization(uow) -> None:
     """Give the pooled connection back once the context is built.
 

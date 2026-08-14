@@ -212,6 +212,27 @@ class Settings(BaseSettings):
             "``OFFLOAD_EXTERNAL_HTTP_LIMIT``."
         ),
     )
+    offload_inference_limit: int = Field(
+        default=2,
+        description=(
+            "Max concurrent local model offloads (embedding, reranking). Small "
+            "and separate on purpose: the ONNX sessions behind these serialize "
+            "on their own mutex and size their own thread pools, so extra "
+            "callers queue rather than compute. Sharing ``cpu_bound`` let a "
+            "burst of ingestion park all of its slots on that mutex and starve "
+            "the chunking and zip offloads. Env: ``OFFLOAD_INFERENCE_LIMIT``."
+        ),
+    )
+    offload_local_bridge_limit: int = Field(
+        default=8,
+        description=(
+            "Max concurrent local sandbox-bridge subprocess offloads. Separate "
+            "from ``external_http`` because a bridge call is bounded by the "
+            "request deadline rather than an HTTP timeout, so a burst of "
+            "long-running sandbox operations could otherwise hold every slot "
+            "the connector SDKs share. Env: ``OFFLOAD_LOCAL_BRIDGE_LIMIT``."
+        ),
+    )
     offload_crypto_limit: int = Field(
         default=8,
         description=(
