@@ -40,7 +40,7 @@ import {
   useOrganizationNameAvailability,
   useSuggestedOrganizations,
 } from "@/lib/hooks/use-organizations";
-import { useAccessiblePods } from "@/lib/hooks/use-pods";
+import { useAccessiblePods, type AccessiblePod } from "@/lib/hooks/use-pods";
 import { useProfile, useUpdateProfile } from "@/lib/hooks/use-user";
 import {
   useCreateAgentRuntime,
@@ -97,6 +97,9 @@ import {
 import { LocalIntelligenceStep, LocalSharingStep } from "./local-setup-steps";
 import { isLocalDeployment } from "@/lib/config";
 import { readLocalAiStatus } from "@/lib/desktop/local-capabilities";
+
+/** What onboarding needs of a pod, whether it created it or restored it. */
+type OnboardingBasePod = { id: string; name: string; organization_id: string };
 
 const AnomalousOrb = dynamic(
   () => import("@/components/ui/anomalous-orb").then((module) => module.AnomalousOrb),
@@ -253,7 +256,9 @@ function SetupAssistant({
     full_name?: string | null;
   } | null;
   organizations: Organization[];
-  accessiblePods: Pod[];
+  // The navigation listing, not a full pod record: this only ever reads `id`
+  // and `organization_id` to restore a draft's base pod.
+  accessiblePods: AccessiblePod[];
   initialDraft: OnboardingDraft | null;
   initialOrganization: Organization | null;
   initialAudience: Audience | null;
@@ -295,11 +300,14 @@ function SetupAssistant({
   const [step, setStep] = useState<SetupStep>(normalizedInitialStep);
   const [createdOrganization, setCreatedOrganization] =
     useState<Organization | null>(null);
-  const [basePod, setBasePod] = useState<Pod | null>(() =>
-    findDraftBasePod(null, accessiblePods, initialDraft),
+  // Either a pod just created here (a full record) or one restored from the
+  // navigation listing, and onboarding only ever reads its id and name — so the
+  // state says that rather than claiming a full pod it does not always hold.
+  const [basePod, setBasePod] = useState<OnboardingBasePod | null>(() =>
+    findDraftBasePod<OnboardingBasePod>(null, accessiblePods, initialDraft),
   );
   const identitySubmissionRef = useRef(false);
-  const createPodPromiseRef = useRef<Promise<Pod | null> | null>(null);
+  const createPodPromiseRef = useRef<Promise<OnboardingBasePod | null> | null>(null);
   const [isCreatingPod, setIsCreatingPod] = useState(false);
   const [isConnectingAi, setIsConnectingAi] = useState(false);
   const [connectedProfileId, setConnectedProfileId] = useState<string | null>(
@@ -578,7 +586,7 @@ function SetupAssistant({
     // agent" and landing in one called "Personal Pod" throws away the only
     // thing the user has said so far.
     nameOverride?: string,
-  ): Promise<Pod | null> => {
+  ): Promise<OnboardingBasePod | null> => {
     const restoredCandidate = findDraftBasePod(
       basePod,
       accessiblePods,

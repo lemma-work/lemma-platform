@@ -8735,8 +8735,19 @@
         "type": "object"
       },
       "NavigationPodResponse": {
-        "description": "A pod as a navigation entry \u2014 enough to draw and to link to.",
+        "description": "A pod as a listing entry \u2014 enough to draw it, label it, and link to it.\n\nThe line this payload holds is scalars yes, collections no. A pod's own\ncolumns cost nothing to return: they ride along in the query that found the\npod, so the response grows with the number of pods and not with what is\ninside them. Apps, agents and roles are the other side of that line, and\nlive on ``/organizations/{org_id}/home``.",
         "properties": {
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
           "icon_url": {
             "anyOf": [
               {
@@ -8756,17 +8767,23 @@
           "name": {
             "title": "Name",
             "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
           }
         },
         "required": [
           "id",
-          "name"
+          "name",
+          "updated_at"
         ],
         "title": "NavigationPodResponse",
         "type": "object"
       },
       "NavigationResponse": {
-        "description": "Everything a sidebar needs, for every organization, in one response.\n\nDeliberately shallow: apps, agents and roles per pod are the detail endpoint's\njob, because carrying them here would make the payload grow with the content\nof every organization a person happens to belong to.",
+        "description": "Everything a sidebar and a pod list need, for every organization, at once.\n\nShallow in the sense that matters: it carries each pod's own columns, and\nnothing that would require looking inside a pod. Apps, agents and roles are\nthe detail endpoint's job, because carrying them here would make the payload\ngrow with the content of every organization a person happens to belong to,\nwhich is precisely the cost this endpoint exists to remove.",
         "properties": {
           "items": {
             "items": {

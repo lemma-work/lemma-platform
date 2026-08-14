@@ -23,6 +23,22 @@ export class OrganizationsNamespace {
     return this.client.request(() => OrganizationsService.orgGet(orgId));
   }
 
+  /**
+   * Every organization you belong to, each with the pods you can see in it.
+   *
+   * One request instead of listing organizations and then a pod list per
+   * organization. Names and ids only — use {@link home} for one organization's
+   * apps, agents and roles.
+   */
+  navigation() {
+    return this.client.request(() => OrganizationsService.orgNavigation());
+  }
+
+  /** One organization's pods, with their apps, agents and your roles. */
+  home(orgId: string) {
+    return this.client.request(() => OrganizationsService.orgHome(orgId));
+  }
+
   create(payload: OrganizationCreateRequest) {
     return this.client.request(() => OrganizationsService.orgCreate(payload));
   }
