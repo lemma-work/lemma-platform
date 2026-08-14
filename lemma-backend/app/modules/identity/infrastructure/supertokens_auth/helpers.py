@@ -2,7 +2,13 @@ from uuid import UUID
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from sqlalchemy import select
-from supertokens_python.asyncio import get_user
+# Aliased, not bare. `get_user` is also the name of our own
+# `UserService.get_user` (a Redis GET plus a repository read), and importing
+# it bare put the name into the session-scope checker's global set of
+# third-party calls -- which then reported six `/users/me` and token-verify
+# holds as `remote SDK`. A gate that names the wrong cause is worse than a
+# gate that says nothing, because the fix it points at does not exist.
+from supertokens_python.asyncio import get_user as supertokens_get_user
 from supertokens_python.recipe.session.asyncio import (
     create_new_session,
     create_new_session_without_request_response,
@@ -53,7 +59,7 @@ async def get_user_token(
 ) -> str:
     # we use the email password recipe here, but you can use the recipe you use
     await _assert_local_user_can_authenticate(user_id)
-    user = await get_user(str(user_id))
+    user = await supertokens_get_user(str(user_id))
 
     if user is None:
         raise ValueError(f"User {user_id} not found")
@@ -82,7 +88,7 @@ async def get_user_token_with_expiry(
     """
 
     await _assert_local_user_can_authenticate(user_id)
-    user = await get_user(str(user_id))
+    user = await supertokens_get_user(str(user_id))
     if user is None:
         raise ValueError(f"User {user_id} not found")
 
@@ -110,7 +116,7 @@ async def create_cli_session_tokens(
     session_data: dict | None = None,
 ) -> dict:
     await _assert_local_user_can_authenticate(user_id)
-    user = await get_user(str(user_id))
+    user = await supertokens_get_user(str(user_id))
 
     if user is None:
         raise ValueError(f"User {user_id} not found")
@@ -136,7 +142,7 @@ async def create_cli_session_tokens(
 async def create_desktop_browser_session(request, user_id: UUID) -> str:
     """Create a cookie session on the current webview exchange response."""
     await _assert_local_user_can_authenticate(user_id)
-    user = await get_user(str(user_id))
+    user = await supertokens_get_user(str(user_id))
 
     if user is None or not user.login_methods:
         raise ValueError(f"User {user_id} not found")
@@ -154,7 +160,7 @@ async def create_desktop_browser_session(request, user_id: UUID) -> str:
 async def create_browser_session(request, user_id: UUID, *, client: str) -> str:
     """Create a normal cookie session for a verified non-SuperTokens login flow."""
     await _assert_local_user_can_authenticate(user_id)
-    user = await get_user(str(user_id))
+    user = await supertokens_get_user(str(user_id))
     if user is None or not user.login_methods:
         raise ValueError(f"User {user_id} not found")
 
