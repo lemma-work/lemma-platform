@@ -17,9 +17,7 @@ from uuid import uuid4
 
 import pytest
 
-from app.modules.schedule.services.due_timer_claimer import (
-    claim_due_workflow_waits,
-)
+from app.modules.workflow.services.due_wait_claimer import claim_due_workflow_waits
 from app.modules.workflow.infrastructure.models import (
     WorkflowModel,
     WorkflowRunModel,

@@ -22,6 +22,7 @@ what, which means the answer to "what happens when a replica dies mid-poll" is
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable, Sequence
 from datetime import datetime, timezone
 
 from app.core.authorization.scope import uow_scope
@@ -31,10 +32,7 @@ from app.modules.schedule.services.due_schedule_claimer import (
     backfill_missing_cursors,
     claim_due_schedules,
 )
-from app.modules.schedule.services.due_timer_claimer import (
-    claim_due_snooze_waits,
-    claim_due_workflow_waits,
-)
+from app.core.domain.timers import ClaimedTimer
 
 logger = get_logger(__name__)
 
@@ -46,9 +44,16 @@ DEFAULT_POLL_INTERVAL_SECONDS = 5.0
 ERROR_BACKOFF_SECONDS = 30.0
 
 
+#: Claims due one-shot timers from one module's tables. Injected rather than
+#: imported: workflow and agent own their wait tables and already depend on
+#: schedule, so reaching into their models from here would make a cycle.
+TimerClaimer = Callable[..., Awaitable[list[ClaimedTimer]]]
+
+
 async def poll_due_schedules_once(
     uow_factory,
     *,
+    timer_claimers: Sequence[TimerClaimer] = (),
     now: datetime | None = None,
     limit: int = DEFAULT_CLAIM_LIMIT,
 ) -> int:
@@ -62,10 +67,9 @@ async def poll_due_schedules_once(
         # and one that is already due is claimed below without waiting for one.
         await backfill_missing_cursors(uow.session, now=moment, limit=limit)
         claimed = await claim_due_schedules(uow.session, now=moment, limit=limit)
-        timers = [
-            *await claim_due_workflow_waits(uow.session, now=moment, limit=limit),
-            *await claim_due_snooze_waits(uow.session, now=moment, limit=limit),
-        ]
+        timers: list[ClaimedTimer] = []
+        for claim_timers in timer_claimers:
+            timers.extend(await claim_timers(uow.session, now=moment, limit=limit))
 
     if not claimed and not timers:
         return 0
@@ -119,6 +123,7 @@ async def poll_due_schedules_once(
 async def run_schedule_poller(
     uow_factory,
     *,
+    timer_claimers: Sequence[TimerClaimer] = (),
     interval_seconds: float = DEFAULT_POLL_INTERVAL_SECONDS,
     service_name: str = "lemma-worker",
 ) -> None:
@@ -130,7 +135,9 @@ async def run_schedule_poller(
     )
     while True:
         try:
-            await poll_due_schedules_once(uow_factory)
+            await poll_due_schedules_once(
+                uow_factory, timer_claimers=timer_claimers
+            )
             await asyncio.sleep(interval_seconds)
         except asyncio.CancelledError:
             logger.info("schedule.poller.stopped", service=service_name)
