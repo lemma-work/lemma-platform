@@ -190,9 +190,11 @@ run `uv run python scripts/generate_route_inventory.py`.
 | GET | `/organizations` | `org.list` | List My Organizations |
 | GET | `/organizations/invitations` | `org.invitation.list_mine` | List My Invitations |
 | GET | `/organizations/invitations/{invitation_id}` | `org.invitation.get` | Get Organization Invitation |
+| GET | `/organizations/navigation` | `org.navigation` | List Organizations And Their Pods |
 | GET | `/organizations/slug-availability` | `org.slug_availability` | Check Organization Slug Availability |
 | GET | `/organizations/suggested` | `org.suggested` | Get Suggested Organizations |
 | GET | `/organizations/{org_id}` | `org.get` | Get Organization |
+| GET | `/organizations/{org_id}/home` | `org.home` | Get Organization Home |
 | GET | `/organizations/{org_id}/invitations` | `org.invitation.list` | List Organization Invitations |
 | GET | `/organizations/{org_id}/members` | `org.member.list` | List Organization Members |
 | GET | `/users/me` | `user.current.get` | Get Current User |

@@ -209,6 +209,16 @@ class Settings(BaseSettings):
             "``LOOP_LAG_WARN_SECONDS``."
         ),
     )
+    loop_stall_sample_seconds: float = Field(
+        default=1.0,
+        description=(
+            "How long the loop may go unscheduled before the stall sampler "
+            "captures the stack of whatever is blocking it. Higher than the "
+            "warn threshold on purpose: a brief lag is worth a number, a "
+            "second-long stall is worth a name. Env: "
+            "``LOOP_STALL_SAMPLE_SECONDS``."
+        ),
+    )
     loop_lag_unhealthy_seconds: float = Field(
         default=5.0,
         description=(
@@ -407,6 +417,28 @@ class Settings(BaseSettings):
         description=(
             "TTL in seconds for cached authorization role snapshots. "
             "Set to 0 to disable the in-process cache."
+        ),
+    )
+    organization_home_cache_ttl_seconds: int = Field(
+        default=30,
+        description=(
+            "TTL in seconds for the cached organization landing page (pods with "
+            "their apps, agents and the caller's roles). Short because it is a "
+            "read-heavy view of slow-moving content; the roles it carries are "
+            "for display, and every permission check inside a pod resolves them "
+            "live. Set to 0 to always rebuild from the database."
+        ),
+    )
+    auth_state_cache_ttl_seconds: int = Field(
+        default=30,
+        description=(
+            "TTL in seconds for the cached account standing (active/verified/"
+            "deleted) that every authenticated request checks. Deliberately far "
+            "shorter than the role snapshot TTL: this decides whether a "
+            "deactivated or unverified account can call the API at all, so the "
+            "window where a stale answer is served is kept small even though "
+            "deactivation also invalidates the entry outright. Set to 0 to "
+            "disable and read the standing from the database on every request."
         ),
     )
     session_approval_ttl_seconds: int = Field(

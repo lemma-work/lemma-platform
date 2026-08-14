@@ -13,6 +13,21 @@ from app.modules.function.domain.entities import (
 from app.modules.function.domain.types import JsonObject
 
 
+class FunctionResourcePermissionRequest(BaseModel):
+    resource_type: ResourceType
+    resource_name: str
+    permission_ids: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _require_resource_name(cls, data: object) -> object:
+        return ensure_grant_uses_resource_name(data)
+
+
+class FunctionPermissionsReplaceRequest(BaseModel):
+    grants: list[FunctionResourcePermissionRequest] = Field(default_factory=list)
+
+
 class CreateFunctionRequest(BaseModel):
     """Request to create a function.
 
@@ -36,6 +51,16 @@ class CreateFunctionRequest(BaseModel):
     )
     type: FunctionType = FunctionType.API
     visibility: ResourceVisibility = ResourceVisibility.POD
+    permissions: FunctionPermissionsReplaceRequest | None = Field(
+        default=None,
+        description=(
+            "Optional resource grants to REPLACE on this function, in the same "
+            "request. Equivalent to calling the permissions-replace endpoint "
+            "right after this call — grants are keyed by resource_name. Omit "
+            "the key to leave existing grants alone; an empty grant list "
+            "revokes them."
+        ),
+    )
 
 
 class UpdateFunctionRequest(BaseModel):
@@ -56,6 +81,16 @@ class UpdateFunctionRequest(BaseModel):
     )
     type: FunctionType | None = None
     visibility: ResourceVisibility | None = None
+    permissions: FunctionPermissionsReplaceRequest | None = Field(
+        default=None,
+        description=(
+            "Optional resource grants to REPLACE on this function, in the same "
+            "request. Equivalent to calling the permissions-replace endpoint "
+            "right after this call — grants are keyed by resource_name. Omit "
+            "the key to leave existing grants alone; an empty grant list "
+            "revokes them."
+        ),
+    )
 
 
 class ExecuteFunctionRequest(BaseModel):
@@ -64,21 +99,6 @@ class ExecuteFunctionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     input_data: JsonObject = Field(default_factory=dict)
-
-
-class FunctionResourcePermissionRequest(BaseModel):
-    resource_type: ResourceType
-    resource_name: str
-    permission_ids: list[str] = Field(default_factory=list)
-
-    @model_validator(mode="before")
-    @classmethod
-    def _require_resource_name(cls, data: object) -> object:
-        return ensure_grant_uses_resource_name(data)
-
-
-class FunctionPermissionsReplaceRequest(BaseModel):
-    grants: list[FunctionResourcePermissionRequest] = Field(default_factory=list)
 
 
 class FunctionResourcePermissionResponse(BaseModel):

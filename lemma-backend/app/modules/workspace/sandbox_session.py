@@ -19,6 +19,7 @@ from sandbox_runtime.protocol import (
     WorkloadKind,
 )
 from sandbox_runtime.protocol import PythonExecutionState
+from app.core.errors.describe import describe_exception
 from app.core.log.log import get_logger
 from app.modules.workspace.config import workspace_settings
 from app.modules.workspace.contracts import PythonExecutionResult, ShellCommandResult
@@ -201,13 +202,13 @@ class SandboxWorkspaceSession:
             )
         except SandboxError as exc:
             return _sandbox_command_failure(
-                error=f"{type(exc).__name__}: {exc}",
+                error=f"{describe_exception(exc)}",
                 retryable=isinstance(exc, SandboxUnavailable),
                 process_id=str(operation_id),
             )
         except (httpx.HTTPError, OSError) as exc:
             return _sandbox_command_failure(
-                error=f"the sandbox runtime transport failed: {type(exc).__name__}: {exc}",
+                error=f"the sandbox runtime transport failed: {describe_exception(exc)}",
                 retryable=True,
                 process_id=str(operation_id),
             )
@@ -253,7 +254,7 @@ class SandboxWorkspaceSession:
                 return _sandbox_command_failure(
                     error=(
                         "The sandbox accepted the input, but subsequent process "
-                        f"status collection failed ({type(exc).__name__}: {exc}). "
+                        f"status collection failed ({describe_exception(exc)}). "
                         "Poll again without resending the input."
                     ),
                     retryable=False,
@@ -270,7 +271,7 @@ class SandboxWorkspaceSession:
                 return _sandbox_command_failure(
                     error=(
                         "the sandbox runtime process status polling failed: "
-                        f"{type(exc).__name__}: {exc}"
+                        f"{describe_exception(exc)}"
                     ),
                     retryable=True,
                     process_id=process_id,
@@ -289,7 +290,7 @@ class SandboxWorkspaceSession:
                     else "the sandbox runtime process input outcome is unknown: "
                 )
                 + (
-                    f"{type(exc).__name__}: {exc}"
+                    f"{describe_exception(exc)}"
                 ),
                 retryable=False,
                 process_id=process_id,
