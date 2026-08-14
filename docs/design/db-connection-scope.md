@@ -127,6 +127,21 @@ and writes what it saw, grouped by site. Early results:
 | pod e2e | 97 | 1 |
 | datastore + apps e2e | 98 | 4 (3 sites) |
 | datastore records e2e, run alone | 17 | 0 |
+| real sandbox + real LLM, before the fixes | 80 | 95 (7 sites) |
+| real sandbox + real LLM, after | 80 | 86 (9 sites) |
+
+The two real-execution rows are the ones that mattered, because they are the
+only runs where the slow calls are real. They drove two fixes and measured
+them:
+
+| Site | Before | After |
+| --- | --- | --- |
+| `build_user_context` | 59 holds, worst 2784 ms | 6 holds, worst 309 ms |
+| `record_controller.bulk_create_records` | (hidden behind the above) | fixed: 2291 ms held for 64 ms of querying |
+
+A real-LLM agent run holds **no** connection across the model call — 6 passed
+with zero holds attributed to the agent path. `AgentRunnerService` was already
+correct, and now there is evidence rather than a reading of the code.
 
 That last row is the important one. The same file contributed a 546 ms hold in
 the combined run and none on its own, so those were **cold-start artifacts** —
