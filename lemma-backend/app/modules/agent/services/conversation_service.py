@@ -1255,20 +1255,20 @@ class ConversationService(PauseResumeMixin):
         # atomically before the worker can safely load them; normal CRUD methods
         # still rely on the request UoW.
         await self.uow.commit()
-        # Publish superseded-interaction returns only now that they're durably
-        # committed alongside the new run/message (same transaction as above).
-        for superseded_return in superseded_returns:
-            await publish_conversation_event(
-                conversation.id,
-                message_payload(
-                    superseded_return.agent_run_id,
-                    message_to_payload(superseded_return),
-                ),
-            )
-        await publish_conversation_event(
-            conversation.id,
-            input_added_payload(active_run.id, message_to_payload(saved_user_message)),
-        )
+        # After the commit, not inside it: this claimed to run "now that they're
+        # durably committed", but the commit is the caller's, so it held a
+        # connection across a Redis round trip with the row locked. Not the
+        # outbox -- these are live UI frames; the next fetch recovers a lost one.
+        frames = [
+            message_payload(item.agent_run_id, message_to_payload(item))
+            for item in superseded_returns
+        ] + [input_added_payload(active_run.id, message_to_payload(saved_user_message))]
+
+        async def _publish_frames() -> None:
+            for frame in frames:
+                await publish_conversation_event(conversation.id, frame)
+
+        self.uow.after_commit(_publish_frames)
         return AgentRunStartResult(
             conversation_id=conversation.id,
             agent_run_id=active_run.id,
