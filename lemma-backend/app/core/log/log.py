@@ -158,12 +158,13 @@ def _dependency_floor_applies(configured_level: int, name: str) -> bool:
 _UNTRUNCATED_FIELDS = {"error_traceback", "error_message", "stack_frames"}
 _MAX_ERROR_MESSAGE_CHARS = 4_000
 _MAX_ERROR_TRACEBACK_CHARS = 20_000
-# The runtime detectors' captured stacks are tracebacks by another name, and
-# they were being flattened and cut at 512 characters -- which kept the
-# outermost scaffolding frames and threw away the innermost ones, the only part
-# that names what blocked. Capped well below the traceback limit because a
-# stall report is a routine warning, not a one-off error.
-_MAX_STACK_FRAMES_CHARS = 8_000
+# ``stack_frames`` joins them: the runtime detectors' captured stacks are
+# tracebacks by another name, and were being flattened and cut at 512
+# characters -- which kept the outermost scaffolding frames and discarded the
+# innermost ones, the only part that names what blocked. It carries no cap here
+# because the bound belongs at the producer: `format_stall_stack` and
+# `format_hold_stack` clip from the front, and only they know that the tail is
+# the end worth keeping.
 
 # Only genuine credentials. This list used to also hide `body`, `message`,
 # `response`, `traceback`, `sql` and `url` — which meant that when something
