@@ -1,4 +1,4 @@
-# Function Execution
+# Sandbox function execution
 
 **Status:** Protocol v2 implemented for Docker and E2B; Kubernetes deferred
 
@@ -37,7 +37,7 @@ boundary.
 | Backend dispatcher | run start, runtime invocation and direct API completion |
 | Durable worker | asynchronous JOB dispatch until runtime acceptance |
 | Runtime gateway | authenticated artifact reads and JOB terminal reports |
-| the sandbox runtime | allocation, lifecycle, direct endpoint leases and provider reconciliation |
+| Sandbox runtime | allocation, lifecycle, direct endpoint leases and provider reconciliation |
 | Resident runtime | run deduplication, artifact cache and revision-worker pools |
 | Revision worker | one imported revision and isolated per-call SDK context |
 

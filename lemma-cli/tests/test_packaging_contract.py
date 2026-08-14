@@ -79,3 +79,21 @@ def test_the_build_vendors_both_sources() -> None:
     assert "_vendor_pod_bundle()" in setup_py
     for command in ("build_py", "sdist"):
         assert command in setup_py, f"{command} must vendor before it packages"
+
+
+def test_vendoring_runs_before_setup_is_called() -> None:
+    """``packages.find`` runs at configuration time, before any build command.
+
+    A copy made only from ``build_py`` lands after the package list is already
+    fixed, so ``lemma_pod_bundle`` exists on disk but ships in no wheel — and
+    because the copy survives in the tree, the next build in that same tree
+    quietly succeeds. Only a build from a fresh checkout shows it, which is
+    exactly the build users get from a git install.
+    """
+    setup_py = (_CLI_ROOT / "setup.py").read_text(encoding="utf-8")
+    vendor_at_import = setup_py.index("\n_vendor_all()\n")
+    setup_call = setup_py.index("\nsetup(")
+    assert vendor_at_import < setup_call, (
+        "setup.py must call _vendor_all() at module level before setup(), or "
+        "packages.find cannot discover the vendored package."
+    )

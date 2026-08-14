@@ -1,0 +1,15 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 🔒 Report a security vulnerability
+    url: https://github.com/lemma-work/lemma-platform/security/advisories/new
+    about: >-
+      Never open a public issue for a suspected vulnerability. Use GitHub's
+      private advisory flow — see SECURITY.md for what to include.
+  - name: 💬 Questions and help
+    url: https://github.com/lemma-work/lemma-platform/discussions
+    about: >-
+      Setup trouble, "how do I…", and design discussion belong in Discussions.
+      See SUPPORT.md.
+  - name: 📚 Documentation
+    url: https://lemma.work/docs
+    about: Product documentation and guides.

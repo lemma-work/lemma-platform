@@ -2,10 +2,10 @@
 
 import { ApiError } from 'lemma-sdk';
 import { useMemo } from 'react';
-import { useQuery, useMutation, useQueryClient, useQueries } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { getLemmaClient } from '../sdk/lemma-client';
-import { useOrganizations } from './use-organizations';
-import type { CreatePodData, UpdatePodData, Pod, PaginatedResponse, Organization } from '../types';
+import { navigationQueryKey, organizationHomeQueryKey } from './pod-query-keys';
+import type { CreatePodData, UpdatePodData, Pod, PaginatedResponse } from '../types';
 
 export const usePods = (orgId?: string, options?: { enabled?: boolean }) => {
     const enabled = options?.enabled ?? true;
@@ -18,45 +18,90 @@ export const usePods = (orgId?: string, options?: { enabled?: boolean }) => {
     });
 };
 
-export type AccessiblePod = Pod & {
-    organization?: Organization;
-    organization_name?: string;
+/**
+ * An organization as navigation knows it: enough to label and to link to.
+ *
+ * Narrower than the full organization record on purpose. `/organizations/navigation`
+ * answers for every organization at once, so it returns identity only — the
+ * fuller record is still one `organizations.get(id)` away for screens that
+ * need it.
+ */
+export type NavigationOrg = {
+    id: string;
+    name: string;
+    slug?: string | null;
+    role: string;
+};
+
+/** A pod as navigation knows it, plus which organization it came from. */
+export type AccessiblePod = {
+    id: string;
+    name: string;
+    description?: string | null;
+    icon_url?: string | null;
+    updated_at: string;
+    organization_id: string;
+    organization: NavigationOrg;
+    organization_name: string;
 };
 
 export type AccessiblePodGroup = {
-    organization: Organization;
+    organization: NavigationOrg;
     pods: AccessiblePod[];
 };
 
+/**
+ * Every pod the user can reach, across every organization, in one request.
+ *
+ * This used to fetch the organization list and then a pod list per
+ * organization, so a user in five organizations waited out six sequential
+ * round trips before the sidebar could draw. `/organizations/navigation`
+ * answers all of it at once and costs the backend two queries regardless of
+ * how many organizations there are.
+ *
+ * The payload is deliberately shallow — ids, names, icons. Anything richer
+ * (apps, agents, per-pod roles) belongs to `/organizations/{id}/home`, which
+ * `useOrganizationHome` fetches for the one organization actually on screen.
+ */
 export const useAccessiblePods = (options?: { enabled?: boolean }) => {
     const enabled = options?.enabled ?? true;
-    const organizationsQuery = useOrganizations({ enabled });
-    const organizations = useMemo(() => organizationsQuery.data?.items || [], [organizationsQuery.data?.items]);
 
-    const podQueries = useQueries({
-        queries: organizations.map((organization) => ({
-            queryKey: ['pods', organization.id],
-            queryFn: () =>
-                getLemmaClient().pods.listByOrganization(organization.id) as Promise<PaginatedResponse<Pod>>,
-            enabled: enabled && !!organization.id,
-        })),
+    const navigationQuery = useQuery({
+        queryKey: navigationQueryKey(),
+        queryFn: () => getLemmaClient().organizations.navigation(),
+        enabled,
     });
 
     const groups = useMemo<AccessiblePodGroup[]>(() => {
-        return organizations.map((organization, index) => {
-            const pods = (podQueries[index]?.data?.items || []).map((pod) => ({
-                ...pod,
+        return (navigationQuery.data?.items || []).map((entry) => {
+            const organization: NavigationOrg = {
+                id: entry.id,
+                name: entry.name,
+                slug: entry.slug,
+                role: entry.role,
+            };
+            return {
                 organization,
-                organization_name: organization.name,
-            }));
-
-            return { organization, pods };
+                pods: (entry.pods || []).map((pod) => ({
+                    id: pod.id,
+                    name: pod.name,
+                    description: pod.description,
+                    icon_url: pod.icon_url,
+                    updated_at: pod.updated_at,
+                    // Carried down from the grouping rather than returned per
+                    // pod: the endpoint already nests pods under their
+                    // organization, so repeating it on every pod would be
+                    // payload for nothing.
+                    organization_id: entry.id,
+                    organization,
+                    organization_name: entry.name,
+                })),
+            };
         });
-    }, [organizations, podQueries]);
+    }, [navigationQuery.data?.items]);
 
+    const organizations = useMemo(() => groups.map((group) => group.organization), [groups]);
     const pods = useMemo(() => groups.flatMap((group) => group.pods), [groups]);
-    const isLoadingPods = organizations.length > 0 && podQueries.some((query) => query.isLoading);
-    const podError = podQueries.find((query) => query.isError)?.error;
 
     return {
         data: {
@@ -65,10 +110,28 @@ export const useAccessiblePods = (options?: { enabled?: boolean }) => {
             organizations,
             hasMultipleOrganizations: organizations.length > 1,
         },
-        isLoading: organizationsQuery.isLoading || isLoadingPods,
-        isError: organizationsQuery.isError || podQueries.some((query) => query.isError),
-        error: organizationsQuery.error || podError,
+        isLoading: navigationQuery.isLoading,
+        isError: navigationQuery.isError,
+        error: navigationQuery.error,
     };
+};
+
+/**
+ * One organization's pods with their apps, agents and the caller's roles.
+ *
+ * The detail half of the split: fetched for the organization on screen rather
+ * than for every organization a person belongs to, because that payload grows
+ * with content and most of it would never be looked at. Cached server-side for
+ * thirty seconds, so revisiting a landing page is a cache read.
+ */
+export const useOrganizationHome = (orgId?: string, options?: { enabled?: boolean }) => {
+    const enabled = options?.enabled ?? true;
+
+    return useQuery({
+        queryKey: organizationHomeQueryKey(orgId),
+        queryFn: () => getLemmaClient().organizations.home(orgId!),
+        enabled: enabled && !!orgId,
+    });
 };
 
 export const usePod = (id: string | undefined) => {

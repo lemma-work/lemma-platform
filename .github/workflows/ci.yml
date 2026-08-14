@@ -256,6 +256,50 @@ jobs:
           pytest lemma-python/tests -m "not integration"
           pytest lemma-pod-bundle/tests
 
+  cli-packaging:
+    name: lemma-terminal wheel (clean checkout)
+    # What users install is a built artifact, and its two most important
+    # contents — the agent skills and lemma_pod_bundle — exist in it only
+    # because setup.py copies them in. No test that reads the source tree can
+    # see that fail, and a build in a tree that has built before cannot either:
+    # the copies from the previous build are still lying there. Only a build
+    # from a clean checkout tells the truth, which is what a fresh `actions/
+    # checkout` gives us, and what `uv tool install` from git gives a user.
+    timeout-minutes: 15
+    needs: changes
+    if: needs.changes.outputs.python_sdk == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+      - name: Build sdist + wheel the way the release does
+        working-directory: lemma-cli
+        run: |
+          python -m pip install --upgrade pip build
+          python -m build
+      - name: Distributions carry what PyPI cannot supply
+        run: python scripts/check_cli_wheel.py lemma-cli/dist
+      - name: Install the wheel where no checkout exists and import it
+        # The failure mode this catches is a user's, not a builder's: the wheel
+        # resolves and installs happily and then raises ModuleNotFoundError on
+        # first use. --no-deps keeps this a packaging check rather than a
+        # resolution one (the lemma-sdk pin names the release being cut, which
+        # is not on PyPI until minutes after the wheel is), and /tmp keeps the
+        # repository off sys.path so an import can only come from the wheel.
+        run: |
+          python -m venv /tmp/wheel-check
+          /tmp/wheel-check/bin/pip install --no-deps lemma-cli/dist/*.whl
+          cd /tmp && /tmp/wheel-check/bin/python -c "
+          import pathlib, lemma_pod_bundle
+          from lemma_pod_bundle import layout
+          skills = pathlib.Path(lemma_pod_bundle.__file__).parent.parent / 'lemma_cli' / 'skills'
+          found = sorted(p.parent.name for p in skills.glob('*/SKILL.md'))
+          assert found, f'no skills installed under {skills}'
+          print(f'imported lemma_pod_bundle, {len(found)} skills present: {found}')
+          "
+
   typescript-sdk:
     name: TypeScript SDK checks
     timeout-minutes: 30

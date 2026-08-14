@@ -3,7 +3,7 @@
 This directory describes the 14 open-source runtime modules registered in
 `app/core/registry/installed.py`. A module document explains the behavior that
 exists today; it is not a product roadmap. Review findings and proposed work
-live separately in [issues.md](issues.md).
+live in the pull request that introduces them.
 
 ## How modules are assembled
 
@@ -76,7 +76,8 @@ flowchart TB
 
 The arrows show runtime use, not desired ownership. Several current imports
 cross infrastructure and service boundaries; that design debt is tracked in
-[issues.md](issues.md#arch-001--module-boundaries-contain-multiple-import-cycles).
+the architecture baseline in `lemma-backend/architecture-baseline.json`, which
+`make architecture` forbids from growing.
 
 ## Shared invariants
 

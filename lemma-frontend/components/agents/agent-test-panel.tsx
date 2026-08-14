@@ -201,6 +201,10 @@ export function AgentTestPanel({
         podId,
         agentName: agent?.name || agentName,
         enabled: Boolean(agent),
+        // The history here is this agent's runs, not the pod's conversations —
+        // a run list that answers "what has anything in this pod done lately"
+        // is the wrong question on an agent's own page.
+        historyScope: 'agent',
     });
     const conversationMessages = useConversationMessages({
         client,
@@ -224,7 +228,7 @@ export function AgentTestPanel({
     );
     // The controller's messages already carry `metadata`, `tool_name`, and
     // `tool_call_id` straight from the API, so there is no raw copy to fetch and
-    // patch on top of them. See docs/design/conversation-messages.md.
+    // patch on top of them.
     const controllerView = controller as unknown as AssistantControllerView;
     const conversationOutputText = conversationMessages.finalOutputText || conversationMessages.outputText;
     const assistantText = conversationOutputText || latestAssistantText(controller.messages);

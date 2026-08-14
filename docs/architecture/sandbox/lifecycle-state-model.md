@@ -1,8 +1,8 @@
-# The sandbox runtime Lifecycle State Model
+# Sandbox lifecycle state model
 
 **Status:** Implemented
 
-**Parent:** [the sandbox runtime](README.md)
+**Parent:** [Sandbox fabric](README.md)
 
 ## Decision
 
@@ -155,11 +155,11 @@ old directory.
 - The E2B workspace timeout is refreshed on every runtime operation. E2B's
   `timeout` is a continuous-runtime ceiling rather than an idle timer, so without
   a refresh the provider stops a busy workspace mid-session. Refreshing makes the
-  provider's pause an inactivity backstop consistent with the sandbox runtime idle release.
+  provider's pause an inactivity backstop consistent with the sandbox runtime's idle release.
 - E2B workspace storage is sandbox-native. It is co-located with that allocation;
   a replacement must not pretend the files were independently preserved. This is
   why a workspace profile change tolerates drift rather than replacing the
-  allocation — see [the sandbox runtime](README.md) §6.
+  allocation — see [Sandbox fabric](README.md) §6.
 - A workspace pause is filesystem-only. Files persist; running processes and
   interpreter state do not, and callers must not treat them as recoverable.
 - Permanent deletion and recoverable compute release are separate operations.

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass, field
+from datetime import datetime
 from uuid import UUID
 
 from sqlalchemy import select
@@ -32,9 +33,10 @@ class VisiblePod:
     name: str
     description: str | None
     icon_url: str | None
+    updated_at: datetime
     #: The caller's pod-member row, absent when they see the pod as org owner
     #: without having joined it. That distinction is why `roles` can be empty.
-    pod_member_id: UUID | None
+    pod_member_id: UUID | None = None
     roles: list[str] = field(default_factory=list)
 
 
@@ -76,6 +78,7 @@ async def list_visible_pods(
                 Pod.name,
                 Pod.description,
                 Pod.icon_url,
+                Pod.updated_at,
                 PodMember.id,
             )
             .select_from(Pod)
@@ -100,9 +103,18 @@ async def list_visible_pods(
             name=name,
             description=description,
             icon_url=icon_url,
+            updated_at=updated_at,
             pod_member_id=pod_member_id,
         )
-        for pod_id, organization_id, name, description, icon_url, pod_member_id in rows
+        for (
+            pod_id,
+            organization_id,
+            name,
+            description,
+            icon_url,
+            updated_at,
+            pod_member_id,
+        ) in rows
     ]
     await _attach_roles(session=session, pods=pods)
     return pods
