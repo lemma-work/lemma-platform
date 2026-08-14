@@ -106,6 +106,21 @@ def test_webhook_headers_are_redacted_before_event_serialization():
     assert headers["x-provider"] == "safe"
 
 
+
+def _released_uow():
+    """A unit of work whose connection can be handed back.
+
+    The webhook routes now take `uow` purely so they can wrap their Redis
+    publishes in `connection_released` — the session is opened by their sibling
+    dependencies, and this is the only handle on it. `safe_to_release` inspects
+    the session, so the fake needs one that looks idle.
+    """
+    return SimpleNamespace(
+        session=SimpleNamespace(new=(), dirty=(), deleted=(), info={}),
+        commit=AsyncMock(),
+    )
+
+
 @pytest.mark.asyncio
 async def test_platform_webhook_verifies_and_publishes_versioned_event():
     body = json.dumps({"update_id": 99, "message": {"text": "hello"}}).encode()
@@ -120,8 +135,10 @@ async def test_platform_webhook_verifies_and_publishes_versioned_event():
         new=AsyncMock(),
     ) as publish:
         result = await handle_platform_webhook(
-            "telegram", _request(body), security, SimpleNamespace()
-        )
+            "telegram", _request(body), security,
+    uow=_released_uow(),
+    service=SimpleNamespace(),
+)
 
     assert result == {"message": "Webhook received"}
     security.assert_platform_request_allowed.assert_called_once_with("telegram")
@@ -159,8 +176,10 @@ async def test_signed_reserved_whatsapp_message_publishes_only_identity_event(
         new=AsyncMock(),
     ) as publish:
         result = await handle_platform_webhook(
-            "whatsapp", _request(body), security, SimpleNamespace()
-        )
+            "whatsapp", _request(body), security,
+    uow=_released_uow(),
+    service=SimpleNamespace(),
+)
 
     assert result == {"message": "Verification message received"}
     security.verify_platform_request.assert_awaited_once()
@@ -195,7 +214,8 @@ async def test_reserved_whatsapp_text_routes_normally_when_verification_is_disab
             "whatsapp",
             _request(_reserved_whatsapp_message()),
             security,
-            SimpleNamespace(),
+            uow=_released_uow(),
+            service=SimpleNamespace(),
         )
 
     assert result == {"message": "Webhook received"}
@@ -225,7 +245,11 @@ async def test_resend_webhook_resolves_surface_before_publishing():
         new=AsyncMock(),
     ) as publish:
         result = await handle_platform_webhook(
-            "resend", _request(body), security, service
+            "resend",
+            _request(body),
+            security,
+            uow=_released_uow(),
+            service=service,
         )
 
     assert result == {"message": "Webhook received"}
@@ -251,7 +275,11 @@ async def test_surface_webhook_verifies_binding_and_publishes_surface_id():
         new=AsyncMock(),
     ) as publish:
         result = await handle_surface_webhook(
-            surface.id, _request(body), security, service
+            surface.id,
+            _request(body),
+            security,
+            uow=_released_uow(),
+            service=service,
         )
 
     assert result == {"message": "Webhook received"}

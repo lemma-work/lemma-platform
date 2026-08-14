@@ -14,6 +14,8 @@ from app.core.api.callback_page import (
 )
 from app.modules.agent_surfaces.config import surface_settings
 from app.core.infrastructure.events.inbox import stable_event_id
+from app.core.api.dependencies import UoWDep
+from app.core.infrastructure.db.transaction_locks import connection_released
 from app.core.infrastructure.events.publisher import EventPublisher
 from app.core.redaction import redact_value
 from app.core.api.dependencies import get_uow_factory
@@ -202,10 +204,24 @@ async def handle_platform_webhook(
     platform: str,
     request: Request,
     security_service: SurfaceWebhookSecurityServiceDep,
+    uow: UoWDep,
     service: AgentSurfaceService = Depends(get_surface_service),
     uow_factory: UnitOfWorkFactory = Depends(get_uow_factory),
 ):
-    """Handle platform-level webhook callbacks."""
+    """Handle platform-level webhook callbacks.
+
+    Takes ``uow`` only to hand its connection back before the Redis publishes
+    below. The session is opened by this route's other dependencies (the surface
+    service and the webhook security service, which both resolve the same cached
+    unit of work), so asking for it here costs nothing extra and is the only way
+    to reach it. `connection_released` commits when `safe_to_release` allows and
+    is a no-op otherwise, so a transaction with pending writes is left alone.
+
+    The proper fix is factory mode for the credential resolver, which reads the
+    per-workspace Slack signing secret -- see the task for why that is not a
+    drive-by change. This removes the hold without touching signature
+    verification.
+    """
     headers = dict(request.headers)
     raw_body = await request.body()
     payload = _decode_webhook_payload(raw_body, headers)
@@ -242,7 +258,8 @@ async def handle_platform_webhook(
             surface_id=surface.id,
             source_event_id=source_event_id,
         )
-        await EventPublisher.publish(event.stream_name(), event)
+        async with connection_released(uow.session):
+            await EventPublisher.publish(event.stream_name(), event)
         return {"message": "Webhook received"}
 
     # Slack sends url_verification before any signing secret is configured — respond immediately.
@@ -278,9 +295,10 @@ async def handle_platform_webhook(
                     destination_phone_number_id=destination_id,
                     whatsapp_message_id=message_id,
                 )
-                await EventPublisher.publish(
-                    identity_event.stream_name(), identity_event
-                )
+                async with connection_released(uow.session):
+                    await EventPublisher.publish(
+                        identity_event.stream_name(), identity_event
+                    )
                 return {"message": "Verification message received"}
 
     # Opening a Slack modal is the one thing that cannot go through the queue:
@@ -313,7 +331,8 @@ async def handle_platform_webhook(
         source_event_id=source_event_id,
         receiver_surface_ids=receiver_surface_ids,
     )
-    await EventPublisher.publish(event.stream_name(), event)
+    async with connection_released(uow.session):
+        await EventPublisher.publish(event.stream_name(), event)
 
     # A Slack modal submission is the one webhook whose *body* is protocol, not
     # acknowledgement: Slack parses it as a response_action and shows the user
@@ -334,9 +353,14 @@ async def handle_surface_webhook(
     surface_id: UUID,
     request: Request,
     security_service: SurfaceWebhookSecurityServiceDep,
+    uow: UoWDep,
     service: AgentSurfaceService = Depends(get_surface_service),
 ):
-    """Handle webhooks addressed to one concrete surface."""
+    """Handle webhooks addressed to one concrete surface.
+
+    ``uow`` is here for the same reason as on `handle_platform_webhook`: to hand
+    the connection its sibling dependencies opened back before the Redis publish.
+    """
     headers = dict(request.headers)
     raw_body = await request.body()
     payload = _decode_webhook_payload(raw_body, headers)
@@ -361,7 +385,8 @@ async def handle_surface_webhook(
         surface_id=surface.id,
         source_event_id=source_event_id,
     )
-    await EventPublisher.publish(event.stream_name(), event)
+    async with connection_released(uow.session):
+        await EventPublisher.publish(event.stream_name(), event)
 
     return {"message": "Webhook received"}
 
