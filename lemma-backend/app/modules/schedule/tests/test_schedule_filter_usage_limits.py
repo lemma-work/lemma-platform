@@ -4,6 +4,11 @@
 ``Model.count_tokens`` before the request. The base method raises
 ``NotImplementedError`` and OpenAI-compatible models do not override it, so
 asking for it there fails every LLM-filtered datastore schedule.
+
+The decision itself now lives in ``runtime_model_factory.usage_limits_for``,
+shared with conversation titles and bundle README polish, which asked for the
+same pre-count without any guard at all. What is asserted here is that the
+schedule filter still routes through it and still enforces the same caps.
 """
 
 from __future__ import annotations
@@ -14,7 +19,6 @@ from pydantic_ai.models.openai import OpenAIChatModel
 
 from app.composition.schedule_filter import (
     FILTER_USAGE_LIMITS,
-    FILTER_USAGE_LIMITS_WITHOUT_PRECOUNT,
     filter_usage_limits_for,
 )
 
@@ -53,9 +57,7 @@ class _NonCountingModel(Model):
 
 
 def test_model_without_token_counting_skips_the_precount() -> None:
-    limits = filter_usage_limits_for(_NonCountingModel())
-    assert limits is FILTER_USAGE_LIMITS_WITHOUT_PRECOUNT
-    assert limits.count_tokens_before_request is False
+    assert filter_usage_limits_for(_NonCountingModel()).count_tokens_before_request is False
 
 
 def test_model_with_token_counting_keeps_the_precount() -> None:
@@ -64,17 +66,16 @@ def test_model_with_token_counting_keeps_the_precount() -> None:
     assert limits.count_tokens_before_request is True
 
 
-def test_both_limit_sets_enforce_the_same_caps() -> None:
-    """Dropping the pre-count must not quietly widen the budget."""
+def test_dropping_the_precount_does_not_widen_the_budget() -> None:
+    without = filter_usage_limits_for(_NonCountingModel())
+
     for field in (
         "request_limit",
         "input_tokens_limit",
         "output_tokens_limit",
         "total_tokens_limit",
     ):
-        assert getattr(FILTER_USAGE_LIMITS, field) == getattr(
-            FILTER_USAGE_LIMITS_WITHOUT_PRECOUNT, field
-        ), field
+        assert getattr(without, field) == getattr(FILTER_USAGE_LIMITS, field), field
 
 
 def test_real_provider_classes_are_classified_correctly() -> None:

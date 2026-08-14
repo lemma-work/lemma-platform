@@ -266,6 +266,28 @@ class FunctionRepository(FunctionRepositoryPort):
         return deleted_id is not None
 
 
+def _expired_run_error(run, *, now: datetime) -> str:
+    """Why a swept run failed, in the terms its reader can act on.
+
+    The budget is stated because it is not visible anywhere else: it comes from
+    a deployment-wide setting chosen by function type, so a reader looking at a
+    failed run has no way to know whether it was given two minutes or ten.
+    """
+
+    started = getattr(run, "started_at", None)
+    deadline = getattr(run, "deadline_at", None)
+    if started is None or deadline is None:
+        return "Function execution deadline exceeded; the runtime never reported a result"
+    budget = round((deadline - started).total_seconds())
+    ran_for = round((now - started).total_seconds())
+    return (
+        f"Function execution deadline exceeded: no result after {ran_for}s "
+        f"against a {budget}s budget. The run was ended by the platform sweep, "
+        "so either the function is still working or the runtime never reported "
+        "back."
+    )
+
+
 class FunctionRunRepository(FunctionRunRepositoryPort):
     def __init__(
         self,
@@ -328,7 +350,14 @@ class FunctionRunRepository(FunctionRunRepositoryPort):
         limit: int = 100,
         job_callback_grace_seconds: int = 0,
     ) -> int:
-        """Terminalize runs whose one allowed execution window has elapsed."""
+        """Terminalize runs whose one allowed execution window has elapsed.
+
+        Note the sweep is deliberately late for job-backed runs: the deadline
+        plus ``job_callback_grace_seconds``, and then only at the next tick of
+        the once-a-minute cron. A run can therefore be marked failed a minute or
+        two after its deadline, which is the grace window doing its job and not
+        a stuck sweep.
+        """
 
         statement = (
             select(FunctionRunModel)
@@ -359,7 +388,15 @@ class FunctionRunRepository(FunctionRunRepositoryPort):
         runs = list((await self.session.scalars(statement)).all())
         for run in runs:
             run.status = FunctionRunStatus.FAILED
-            run.error = "Function execution deadline exceeded"
+            # Says which of the two timeouts this was, and what the budget
+            # actually was. The dispatcher reports its own inline timeout as
+            # "Function execution timed out (deadline exceeded)"; this one is
+            # the sweeper finding a run whose result never came back at all.
+            # The two read identically in a run list and have opposite
+            # remedies — make the function faster, versus find out why the
+            # runtime never reported — so 41 failures in one afternoon said
+            # "timed out" and left the reader to guess which kind.
+            run.error = _expired_run_error(run, now=now)
             run.completed_at = now
             self.uow.collect_events(
                 [

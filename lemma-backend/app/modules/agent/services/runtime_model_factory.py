@@ -11,10 +11,13 @@ harness now has to recover from, so this is the other half of that fix.
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import replace
 
 import httpx
 from openai import AsyncOpenAI
+from pydantic_ai import UsageLimits
 from pydantic_ai.models import Model
+from pydantic_ai.models.wrapper import WrapperModel
 from pydantic_ai.models.anthropic import AnthropicModel
 from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.anthropic import AnthropicProvider
@@ -253,6 +256,50 @@ def require_pydantic_ai_model_from_runtime_profile(
             f"Runtime profile {profile_id or '<missing>'!r} cannot build a Pydantic AI model"
         )
     return model
+
+
+def supports_token_precount(model: Model) -> bool:
+    """Whether this model can be asked for a token count before the request.
+
+    ``UsageLimits(count_tokens_before_request=True)`` makes pydantic-ai call
+    ``Model.count_tokens`` first. Only some providers implement it; the base
+    method raises ``NotImplementedError``, and an OpenAI-compatible chat model —
+    which is what the system runtime resolves to — does not override it. Asking
+    for the pre-count there does not degrade to counting afterwards, it raises
+    and takes the whole call with it.
+
+    The wrapper unwrapping is the load-bearing part. ``WrapperModel`` (and so
+    ``InstrumentedModel``, which is applied whenever instrumentation is on, which
+    is always in this deployment) *does* override ``count_tokens``, purely to
+    delegate. A naive ``type(model).count_tokens is not Model.count_tokens``
+    therefore answers "yes, it counts" for every instrumented model and the
+    pre-count blows up anyway — the exact shape of the failures this replaced.
+    """
+
+    concrete = model
+    while isinstance(concrete, WrapperModel):
+        concrete = concrete.wrapped
+    # `getattr` rather than attribute access because a model here is whatever
+    # the profile resolved to, including stand-ins that satisfy only the parts
+    # of the protocol their caller uses. Something with no `count_tokens` at all
+    # certainly cannot pre-count, and answering that is far better than raising
+    # inside a helper whose whole job is to keep a call from raising.
+    counter = getattr(type(concrete), "count_tokens", None)
+    return counter is not None and counter is not Model.count_tokens
+
+
+def usage_limits_for(model: Model, limits: UsageLimits) -> UsageLimits:
+    """The same caps, pre-counted only when this model can actually do it.
+
+    When it cannot, the caps are enforced against the usage the provider
+    reports, so an oversized payload is refused after the call rather than
+    before it. That is a weaker guarantee than the caller asked for, and a much
+    better one than a helper that raises.
+    """
+
+    if limits.count_tokens_before_request and not supports_token_precount(model):
+        return replace(limits, count_tokens_before_request=False)
+    return limits
 
 
 async def default_system_pydantic_ai_model() -> Model:
