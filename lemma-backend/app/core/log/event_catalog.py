@@ -546,6 +546,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'schedule.poller.started': EventSpec('info', frozenset({'interval_ms', 'service'})),
     'schedule.poller.stopped': EventSpec('info', frozenset({'service'})),
     'schedule.poller.dispatch_failed.degraded': EventSpec('warning', frozenset({'schedule_id'})),
+    'schedule.poller.timer_dispatch_failed.degraded': EventSpec('warning', frozenset({'timer_id'})),
     'schedule.poller.tick_failed.degraded': EventSpec('warning', frozenset()),
     'schedule.scheduler_service.apscheduler_shutdown.observed': EventSpec('debug', frozenset()),
     'schedule.scheduler_service.pause_job.diagnostic': EventSpec('debug', frozenset({'job_id'})),

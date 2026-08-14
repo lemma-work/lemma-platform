@@ -31,6 +31,10 @@ from app.modules.schedule.services.due_schedule_claimer import (
     backfill_missing_cursors,
     claim_due_schedules,
 )
+from app.modules.schedule.services.due_timer_claimer import (
+    claim_due_snooze_waits,
+    claim_due_workflow_waits,
+)
 
 logger = get_logger(__name__)
 
@@ -58,12 +62,37 @@ async def poll_due_schedules_once(
         # and one that is already due is claimed below without waiting for one.
         await backfill_missing_cursors(uow.session, now=moment, limit=limit)
         claimed = await claim_due_schedules(uow.session, now=moment, limit=limit)
+        timers = [
+            *await claim_due_workflow_waits(uow.session, now=moment, limit=limit),
+            *await claim_due_snooze_waits(uow.session, now=moment, limit=limit),
+        ]
 
-    if not claimed:
+    if not claimed and not timers:
         return 0
 
     emitter = get_event_emitter()
     dispatched = 0
+    for timer in timers:
+        try:
+            # Timers ride the same event as schedules: `_dispatch_wake` branches
+            # on the payload keys, so rebuilding the payload the old adapters
+            # sent means the wake path downstream is untouched.
+            await emitter.emit_scheduled_job_event(
+                schedule_id=timer.timer_id,
+                user_id=timer.user_id,
+                payload=timer.payload,
+                scheduled_at=timer.fire_at,
+            )
+            dispatched += 1
+        except Exception:
+            # Unlike a schedule, this one IS retried: the lease expires and
+            # another replica picks it up, because a timer that never fires is
+            # a workflow stuck forever rather than one missed occurrence.
+            logger.warning(
+                "schedule.poller.timer_dispatch_failed.degraded",
+                timer_id=str(timer.timer_id),
+                exc_info=True,
+            )
     for fire in claimed:
         try:
             await emitter.emit_scheduled_job_event(

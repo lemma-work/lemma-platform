@@ -244,6 +244,11 @@ class WorkflowRunWaitModel(UUIDAuditBase):
     scheduled_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # Held while a fire is in flight. A timer has no next occurrence to advance,
+    # so the lease is what stops two replicas dispatching the same wake.
+    fire_lease_until: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     payload: Mapped[dict] = mapped_column(JSONB, default=dict)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
