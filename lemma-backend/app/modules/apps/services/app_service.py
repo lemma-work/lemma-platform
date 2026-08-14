@@ -464,7 +464,15 @@ class AppService:
         from app.modules.apps.services.archive_validation import inspect_app_archive
 
         if source_archive_bytes is not None:
-            inspect_app_archive(source_archive_bytes, label="Source archive")
+            # Offloaded: opens the zip and walks its whole member list. The
+            # controller path already offloads this (``app_use_cases.upload_bundle``);
+            # this back-compat entry point was calling it inline.
+            await run_blocking(
+                inspect_app_archive,
+                source_archive_bytes,
+                label="Source archive",
+                limiter="cpu_bound",
+            )
         plan = await self.resolve_upload_bundle(
             pod_id,
             name,

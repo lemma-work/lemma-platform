@@ -891,14 +891,23 @@ async def fixed_test_org(authenticated_client: "AsyncClient"):
 
 @pytest.fixture
 def sample_pod_entity():
-    from app.modules.pod.domain.pod_entities import PodEntity, PodStatus, PodType
+    """An unsaved ``PodEntity``.
+
+    Kept in sync with the entity by hand: it drifted to constructing ``slug``,
+    ``status`` and ``type`` -- and importing ``PodStatus``/``PodType``, which no
+    longer exist -- so every test requesting it failed at collection with an
+    ImportError rather than an assertion. Nothing referenced it at the time, so
+    the breakage was invisible.
+
+    Note this is a detached entity, never persisted. A test that needs a pod the
+    authorization layer will recognise has to create one through the API so the
+    membership and role rows exist.
+    """
+    from app.modules.pod.domain.pod_entities import PodEntity
 
     return PodEntity(
         name=f"Test Pod {uuid4().hex[:8]}",
-        slug=f"test-pod-{uuid4().hex[:8]}",
         description="A test pod",
-        status=PodStatus.ACTIVE,
-        type=PodType.AUTOMATION,
         user_id=uuid4(),
         organization_id=uuid4(),
     )
