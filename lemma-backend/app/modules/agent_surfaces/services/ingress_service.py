@@ -10,6 +10,7 @@ from uuid import UUID
 
 from pydantic import TypeAdapter
 
+from app.core.infrastructure.db.transaction_locks import connection_released
 from app.core.authorization.current import reset_current_context, set_current_context
 from app.core.authorization.factory import create_authorization_data_service
 from sqlalchemy.exc import SQLAlchemyError
@@ -911,14 +912,18 @@ class AgentSurfaceIngressService(SurfaceConfigurationMixin, SurfaceProgressMixin
         if not clean_message:
             return False
         message_metadata = await self._egress_metadata_with_agent_name(target, metadata)
-        await self._release_connection_before_platform_call()
-        await target.adapter.send_message(
-            credentials=target.credentials,
-            event=target.event,
-            message=clean_message,
-            metadata=message_metadata,
-        )
-        return True
+        # Released for the platform call itself, not just before it. The old
+        # helper committed unconditionally and left the boundary invisible to
+        # the gate; this both bounds the release and applies `safe_to_release`,
+        # so a caller mid-write no longer has its transaction ended for it.
+        async with connection_released(getattr(self.uow, "session", None)):
+            await target.adapter.send_message(
+                credentials=target.credentials,
+                event=target.event,
+                message=clean_message,
+                metadata=message_metadata,
+            )
+            return True
 
     async def send_display_resource_for_conversation(
         self,
@@ -958,14 +963,18 @@ class AgentSurfaceIngressService(SurfaceConfigurationMixin, SurfaceProgressMixin
         ):
             return True
         message_metadata = await self._egress_metadata_with_agent_name(target, metadata)
-        await self._release_connection_before_platform_call()
-        await target.adapter.send_display_resource(
-            credentials=target.credentials,
-            event=target.event,
-            render_plan=render_plan,
-            metadata=message_metadata,
-        )
-        return True
+        # Released for the platform call itself, not just before it. The old
+        # helper committed unconditionally and left the boundary invisible to
+        # the gate; this both bounds the release and applies `safe_to_release`,
+        # so a caller mid-write no longer has its transaction ended for it.
+        async with connection_released(getattr(self.uow, "session", None)):
+            await target.adapter.send_display_resource(
+                credentials=target.credentials,
+                event=target.event,
+                render_plan=render_plan,
+                metadata=message_metadata,
+            )
+            return True
 
     async def send_questions_for_conversation(
         self,
@@ -1032,39 +1041,43 @@ class AgentSurfaceIngressService(SurfaceConfigurationMixin, SurfaceProgressMixin
             tool_call_id=str(pending.get("tool_call_id") or tool_call_id or ""),
         )
         metadata = await self._egress_metadata_with_agent_name(target, None)
-        await self._release_connection_before_platform_call()
-        try:
-            if await target.adapter.send_questions(
-                credentials=target.credentials,
-                event=target.event,
-                question_plan=plan,
-                metadata=metadata,
-            ):
-                return True
-        except Exception:
-            logger.debug(
-                'agent_surfaces.ingress_service.surface_ask_user_native_render.diagnostic',
-                conversation_id=conversation_id,
-            )
-        # Fallback: a well-formatted text message; the user replies in chat and the
-        # typed-reply path in start_agent_chat resumes the run with their answer.
-        # This is the guaranteed "never swallowed" path — if it ALSO fails, the
-        # question reaches nobody and the run is stuck WAITING, so surface it
-        # loudly and report failure to the caller (the observer logs it too).
-        try:
-            await target.adapter.send_message(
-                credentials=target.credentials,
-                event=target.event,
-                message=render_questions_as_text(plan),
-                metadata=metadata,
-            )
-        except Exception:
-            logger.debug(
-                'agent_surfaces.ingress_service.surface_ask_user_text_fallback.diagnostic',
-                conversation_id=conversation_id,
-            )
-            return False
-        return True
+        # Released for the platform call itself, not just before it. The old
+        # helper committed unconditionally and left the boundary invisible to
+        # the gate; this both bounds the release and applies `safe_to_release`,
+        # so a caller mid-write no longer has its transaction ended for it.
+        async with connection_released(getattr(self.uow, "session", None)):
+            try:
+                if await target.adapter.send_questions(
+                    credentials=target.credentials,
+                    event=target.event,
+                    question_plan=plan,
+                    metadata=metadata,
+                ):
+                    return True
+            except Exception:
+                logger.debug(
+                    'agent_surfaces.ingress_service.surface_ask_user_native_render.diagnostic',
+                    conversation_id=conversation_id,
+                )
+            # Fallback: a well-formatted text message; the user replies in chat and the
+            # typed-reply path in start_agent_chat resumes the run with their answer.
+            # This is the guaranteed "never swallowed" path — if it ALSO fails, the
+            # question reaches nobody and the run is stuck WAITING, so surface it
+            # loudly and report failure to the caller (the observer logs it too).
+            try:
+                await target.adapter.send_message(
+                    credentials=target.credentials,
+                    event=target.event,
+                    message=render_questions_as_text(plan),
+                    metadata=metadata,
+                )
+            except Exception:
+                logger.debug(
+                    'agent_surfaces.ingress_service.surface_ask_user_text_fallback.diagnostic',
+                    conversation_id=conversation_id,
+                )
+                return False
+            return True
 
     async def send_approval_prompt_for_conversation(
         self,
@@ -1121,37 +1134,41 @@ class AgentSurfaceIngressService(SurfaceConfigurationMixin, SurfaceProgressMixin
             allow_session=allow_session,
         )
         metadata = await self._egress_metadata_with_agent_name(target, None)
-        await self._release_connection_before_platform_call()
-        try:
-            if await target.adapter.send_approval(
-                credentials=target.credentials,
-                event=target.event,
-                approval_plan=plan,
-                metadata=metadata,
-            ):
-                return True
-        except Exception:
-            logger.debug(
-                'agent_surfaces.ingress_service.surface_request_approval_native_render.diagnostic',
-                conversation_id=conversation_id,
-            )
-        # Fallback: a text prompt; the user replies "approve"/"deny" and the
-        # typed-reply path resumes the run with their decision. If this ALSO
-        # fails the approval reached nobody and the run is stuck — surface it.
-        try:
-            await target.adapter.send_message(
-                credentials=target.credentials,
-                event=target.event,
-                message=plan.to_plain_text(),
-                metadata=metadata,
-            )
-        except Exception:
-            logger.debug(
-                'agent_surfaces.ingress_service.surface_request_approval_text_fallback.diagnostic',
-                conversation_id=conversation_id,
-            )
-            return False
-        return True
+        # Released for the platform call itself, not just before it. The old
+        # helper committed unconditionally and left the boundary invisible to
+        # the gate; this both bounds the release and applies `safe_to_release`,
+        # so a caller mid-write no longer has its transaction ended for it.
+        async with connection_released(getattr(self.uow, "session", None)):
+            try:
+                if await target.adapter.send_approval(
+                    credentials=target.credentials,
+                    event=target.event,
+                    approval_plan=plan,
+                    metadata=metadata,
+                ):
+                    return True
+            except Exception:
+                logger.debug(
+                    'agent_surfaces.ingress_service.surface_request_approval_native_render.diagnostic',
+                    conversation_id=conversation_id,
+                )
+            # Fallback: a text prompt; the user replies "approve"/"deny" and the
+            # typed-reply path resumes the run with their decision. If this ALSO
+            # fails the approval reached nobody and the run is stuck — surface it.
+            try:
+                await target.adapter.send_message(
+                    credentials=target.credentials,
+                    event=target.event,
+                    message=plan.to_plain_text(),
+                    metadata=metadata,
+                )
+            except Exception:
+                logger.debug(
+                    'agent_surfaces.ingress_service.surface_request_approval_text_fallback.diagnostic',
+                    conversation_id=conversation_id,
+                )
+                return False
+            return True
 
     async def send_voice_note_for_conversation(
         self,
@@ -1199,34 +1216,38 @@ class AgentSurfaceIngressService(SurfaceConfigurationMixin, SurfaceProgressMixin
             return False
 
         mime = entity.mime_type or "audio/ogg"
-        await self._release_connection_before_platform_call()
-        try:
-            if await target.adapter.send_voice_note(
-                credentials=target.credentials,
-                event=target.event,
-                file_name=entity.name,
-                audio_bytes=content,
-                mime=mime,
+        # Released for the platform call itself, not just before it. The old
+        # helper committed unconditionally and left the boundary invisible to
+        # the gate; this both bounds the release and applies `safe_to_release`,
+        # so a caller mid-write no longer has its transaction ended for it.
+        async with connection_released(getattr(self.uow, "session", None)):
+            try:
+                if await target.adapter.send_voice_note(
+                    credentials=target.credentials,
+                    event=target.event,
+                    file_name=entity.name,
+                    audio_bytes=content,
+                    mime=mime,
+                    caption=caption,
+                ):
+                    return True
+            except Exception:
+                logger.debug(
+                    'agent_surfaces.ingress_service.surface_voice_note_send_conversation.diagnostic',
+                    conversation_id=conversation_id,
+                )
+            # Fallback: native file attachment (audio player), then a link card.
+            if await self._try_send_file_attachment(
+                target=target,
+                conversation_id=conversation_id,
+                path=path,
                 caption=caption,
             ):
                 return True
-        except Exception:
-            logger.debug(
-                'agent_surfaces.ingress_service.surface_voice_note_send_conversation.diagnostic',
+            return await self.send_display_resource_for_conversation(
                 conversation_id=conversation_id,
+                request=DisplayResourceRequest(type=DisplayResourceType.FILE, path=path),
             )
-        # Fallback: native file attachment (audio player), then a link card.
-        if await self._try_send_file_attachment(
-            target=target,
-            conversation_id=conversation_id,
-            path=path,
-            caption=caption,
-        ):
-            return True
-        return await self.send_display_resource_for_conversation(
-            conversation_id=conversation_id,
-            request=DisplayResourceRequest(type=DisplayResourceType.FILE, path=path),
-        )
 
     async def _try_send_file_attachment(
         self,
@@ -1273,15 +1294,19 @@ class AgentSurfaceIngressService(SurfaceConfigurationMixin, SurfaceProgressMixin
                 conversation_id=conversation_id,
             )
             return False
-        await self._release_connection_before_platform_call()
-        return await target.adapter.send_file_attachment(
-            credentials=target.credentials,
-            event=target.event,
-            file_name=entity.name,
-            file_bytes=content,
-            mime_type=entity.mime_type or "application/octet-stream",
-            caption=caption,
-        )
+        # Released for the platform call itself, not just before it. The old
+        # helper committed unconditionally and left the boundary invisible to
+        # the gate; this both bounds the release and applies `safe_to_release`,
+        # so a caller mid-write no longer has its transaction ended for it.
+        async with connection_released(getattr(self.uow, "session", None)):
+            return await target.adapter.send_file_attachment(
+                credentials=target.credentials,
+                event=target.event,
+                file_name=entity.name,
+                file_bytes=content,
+                mime_type=entity.mime_type or "application/octet-stream",
+                caption=caption,
+            )
 
     async def try_handle_interaction(
         self,
@@ -1527,13 +1552,17 @@ class AgentSurfaceIngressService(SurfaceConfigurationMixin, SurfaceProgressMixin
         indicator_metadata = await self._egress_metadata_with_agent_name(
             target, metadata
         )
-        await self._release_connection_before_platform_call()
-        await target.adapter.add_processing_indicator(
-            credentials=target.credentials,
-            event=target.event,
-            metadata=indicator_metadata,
-        )
-        return True
+        # Released for the platform call itself, not just before it. The old
+        # helper committed unconditionally and left the boundary invisible to
+        # the gate; this both bounds the release and applies `safe_to_release`,
+        # so a caller mid-write no longer has its transaction ended for it.
+        async with connection_released(getattr(self.uow, "session", None)):
+            await target.adapter.add_processing_indicator(
+                credentials=target.credentials,
+                event=target.event,
+                metadata=indicator_metadata,
+            )
+            return True
 
     async def _match_surface_for_user(
         self,

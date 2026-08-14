@@ -113,11 +113,13 @@ async def connection_released(session: Any) -> AsyncIterator[None]:
     """Hand the pooled connection back for the duration of the block.
 
     The problem this solves is that "I released the connection first" was only
-    ever true in a comment. ``_release_after_authorization`` and
-    ``_release_connection_before_platform_call`` both commit before their slow
-    call and are correct -- and the static gate flags them anyway, because it is
-    lexical and cannot see a commit inside a callee. Ten baselined violations
-    are sites that were already right.
+    ever true in a comment. ``_release_after_authorization`` commits before its
+    slow call and is correct -- and the static gate flags it anyway, because it
+    is lexical and cannot see a commit inside a callee. Ten baselined violations
+    were sites that were already right in substance.
+
+    It also fixes what those helpers got wrong: they committed unconditionally,
+    so a caller that had written something had its transaction ended for it.
 
     Making the release a block fixes both halves at once. At runtime it commits
     when ``safe_to_release`` allows (see that function for the four reasons it
