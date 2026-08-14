@@ -26,6 +26,7 @@ streaq runtime: started in the lifespan, cancelled on shutdown.
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 import os
 from pathlib import Path
 import tempfile
@@ -41,9 +42,22 @@ from app.core.observability.stall_sampler import (
 
 logger = get_logger(__name__)
 
-# Most-recent measured event-loop lag (seconds). Module-global so /health/live
-# and metrics can read it without holding a reference to the task.
-_last_lag_seconds: float = 0.0
+@dataclass
+class _LagGauge:
+    """Most-recent measured event-loop lag, in seconds.
+
+    An object rather than a bare module global because the watchdog coroutine
+    is the only writer and ``/health/live`` and the metrics reader are the only
+    readers — none of which hold a reference to the task. A global would need a
+    ``global`` declaration in a coroutine that writes it and never reads it,
+    which reads as a dead store to anyone (and to any analyser) looking at that
+    function alone.
+    """
+
+    seconds: float = 0.0
+
+
+_lag = _LagGauge()
 
 # Degraded-state machine for loop-lag telemetry. Module-global so the watchdog
 # task and tests can reset/inspect it without holding a reference to the task.
@@ -61,18 +75,18 @@ _INCIDENT_COOLDOWN_SECONDS = 300.0
 
 
 def get_loop_lag_seconds() -> float:
-    return _last_lag_seconds
+    return _lag.seconds
 
 
 def is_loop_healthy() -> bool:
     """False when measured lag exceeds the unhealthy threshold (for /health/live)."""
-    return _last_lag_seconds < settings.loop_lag_unhealthy_seconds
+    return _lag.seconds < settings.loop_lag_unhealthy_seconds
 
 
 def reset_loop_watchdog_state() -> None:
     """Reset the degraded-state machine (for tests and process restart)."""
     global _degraded, _degraded_since, _max_lag_seconds, _warning_streak
-    global _healthy_since, _breach_count, _last_incident_at, _last_lag_seconds
+    global _healthy_since, _breach_count, _last_incident_at
     _degraded = False
     _degraded_since = 0.0
     _max_lag_seconds = 0.0
@@ -80,7 +94,7 @@ def reset_loop_watchdog_state() -> None:
     _healthy_since = None
     _breach_count = 0
     _last_incident_at = -1e9
-    _last_lag_seconds = 0.0
+    _lag.seconds = 0.0
 
 
 def _evaluate_lag(
@@ -187,7 +201,6 @@ async def loop_lag_watchdog(
     is already gone by the time there is a number to report. The sampler watches
     from a thread and captures the culprit's stack during the stall.
     """
-    global _last_lag_seconds
     interval = max(0.05, settings.loop_lag_watchdog_interval_seconds)
     warn = settings.loop_lag_warn_seconds
     sampler = start_loop_stall_sampler(
@@ -200,7 +213,7 @@ async def loop_lag_watchdog(
             await asyncio.sleep(interval)
             lag = time.perf_counter() - scheduled_at - interval
             lag = max(0.0, lag)
-            _last_lag_seconds = lag
+            _lag.seconds = lag
             sampler.note_loop_alive()
 
             if heartbeat_path:

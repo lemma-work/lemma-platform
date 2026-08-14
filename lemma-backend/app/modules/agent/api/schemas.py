@@ -258,6 +258,16 @@ class UpdateAgentRequest(BaseModel):
     output_schema: JsonObject | None = None
     visibility: ResourceVisibility | None = None
     metadata: JsonObject | None = None
+    permissions: AgentPermissionsReplaceRequest | None = Field(
+        default=None,
+        description=(
+            "Optional resource grants to REPLACE on this agent, in the same "
+            "request. Equivalent to calling the permissions-replace endpoint "
+            "right after update — grants are keyed by resource_name. Omit the "
+            "key to leave existing grants alone; an empty grant list revokes "
+            "them."
+        ),
+    )
 
 
 class AgentMessageResponse(BaseModel):

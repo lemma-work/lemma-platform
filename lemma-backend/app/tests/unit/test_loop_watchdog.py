@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 
 import pytest
 
@@ -14,7 +13,7 @@ async def test_watchdog_writes_heartbeat_and_measures_low_lag(tmp_path, monkeypa
     heartbeat = tmp_path / "worker_heartbeat"
     monkeypatch.setattr(settings, "worker_heartbeat_path", str(heartbeat))
     monkeypatch.setattr(settings, "loop_lag_watchdog_interval_seconds", 0.05)
-    monkeypatch.setattr(loop_watchdog, "_last_lag_seconds", 0.0)
+    monkeypatch.setattr(loop_watchdog._lag, "seconds", 0.0)
 
     task = asyncio.create_task(
         loop_watchdog.loop_lag_watchdog(
@@ -40,9 +39,9 @@ async def test_watchdog_writes_heartbeat_and_measures_low_lag(tmp_path, monkeypa
 
 def test_is_loop_healthy_reflects_unhealthy_threshold(monkeypatch):
     monkeypatch.setattr(settings, "loop_lag_unhealthy_seconds", 1.0)
-    monkeypatch.setattr(loop_watchdog, "_last_lag_seconds", 0.2)
+    monkeypatch.setattr(loop_watchdog._lag, "seconds", 0.2)
     assert loop_watchdog.is_loop_healthy() is True
-    monkeypatch.setattr(loop_watchdog, "_last_lag_seconds", 5.0)
+    monkeypatch.setattr(loop_watchdog._lag, "seconds", 5.0)
     assert loop_watchdog.is_loop_healthy() is False
 
 
@@ -192,8 +191,8 @@ async def test_the_watchdog_installs_the_stall_sampler(monkeypatch):
         assert sampler._thread is not None and sampler._thread.is_alive()  # noqa: SLF001
     finally:
         task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await task
+        outcome = await asyncio.gather(task, return_exceptions=True)
+        assert isinstance(outcome[0], asyncio.CancelledError), outcome[0]
 
     # Shutdown must take the thread with it: a daemon thread per restarted
     # watchdog is a leak that only shows up under test reruns and reloads.

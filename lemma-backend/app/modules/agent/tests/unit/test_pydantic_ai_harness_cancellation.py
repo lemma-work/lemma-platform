@@ -184,5 +184,10 @@ async def test_our_own_cancellation_is_not_reported_as_a_driver_failure(
     await asyncio.wait_for(started.wait(), timeout=5)
     consuming.cancel()
 
-    with pytest.raises(asyncio.CancelledError):
-        await consuming
+    outcome = await asyncio.gather(consuming, return_exceptions=True)
+
+    # Asserted on the outcome rather than with `pytest.raises` so the failure
+    # names what actually came back: the interesting way for this to break is
+    # `HarnessDriverCancelled`, which would say the worker is healthy and the
+    # agent broke when the truth is the reverse.
+    assert isinstance(outcome[0], asyncio.CancelledError), outcome[0]
