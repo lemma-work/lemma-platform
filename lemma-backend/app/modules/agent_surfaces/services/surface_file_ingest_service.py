@@ -15,6 +15,7 @@ and is skipped — never blocking the agent run.
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -133,6 +134,7 @@ class SurfaceFileIngestService:
                     file_service=file_service,
                     ctx=auth_ctx,
                     attachments=attachments,
+                    release=uow.commit,
                 )
                 if saved:
                     await uow.commit()
@@ -151,9 +153,16 @@ class SurfaceFileIngestService:
         file_service: Any,
         ctx: Any,
         attachments: list[dict[str, Any]],
+        release: Callable[[], Awaitable[None]] | None = None,
     ) -> list[IngestedAttachment]:
         """Core ingest loop — pure of DB/session setup so it is unit-testable
-        with a fake adapter and file service."""
+        with a fake adapter and file service.
+
+        ``release`` is how it stays that way while still not holding a pooled
+        connection across the downloads: production passes ``uow.commit``, a
+        unit test passes nothing. The loop knows it must let go before fetching
+        bytes; it does not need to know what it is letting go of.
+        """
         directory = f"/me/{str(platform).lower()}"
         saved: list[IngestedAttachment] = []
         for attachment in attachments:
@@ -167,6 +176,7 @@ class SurfaceFileIngestService:
                 ctx=ctx,
                 directory=directory,
                 attachment=attachment,
+                release=release,
             )
             if result is not None:
                 saved.append(result)
@@ -184,6 +194,7 @@ class SurfaceFileIngestService:
         ctx: Any,
         directory: str,
         attachment: dict[str, Any],
+        release: Callable[[], Awaitable[None]] | None = None,
     ) -> IngestedAttachment | None:
         declared_size = attachment.get("size")
         if (
@@ -191,6 +202,13 @@ class SurfaceFileIngestService:
             and declared_size > INBOUND_ATTACHMENT_BYTE_CAP
         ):
             return None
+
+        # Let the connection go before fetching bytes. An attachment is capped
+        # at 50 MB over a 60s-timeout HTTP call, once per attachment, and the
+        # transaction wrapping this loop has already written rows — so holding
+        # it here pins a connection and its row locks for the whole download.
+        if release is not None:
+            await release()
 
         try:
             downloaded = await adapter.download_attachment(
