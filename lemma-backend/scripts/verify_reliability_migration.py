@@ -269,11 +269,18 @@ def main() -> int:
             "SCHEDULE_RUN",
             "00000000-0000-0000-0000-000000000073",
         )
+        # This runs at head, so it asserts the schema as it finally stands.
+        # 0003 created ix_schedule_runs_retryable_recovery for the recovery
+        # sweep; 0018 replaced it with ix_schedule_runs_recoverable because the
+        # original predicate covered RECEIVED/PROCESSING/FAILED while the query
+        # asks about PROCESSING/FAILED/DISPATCHED, so Postgres could never use
+        # it. The property under test is unchanged -- the recovery sweep has a
+        # supporting index -- only the name is.
         cursor.execute(
             """
             SELECT
                 to_regclass('uq_schedule_runs_target') IS NOT NULL,
-                to_regclass('ix_schedule_runs_retryable_recovery') IS NOT NULL,
+                to_regclass('ix_schedule_runs_recoverable') IS NOT NULL,
                 is_nullable
             FROM information_schema.columns
             WHERE table_name = 'schedule_runs'
