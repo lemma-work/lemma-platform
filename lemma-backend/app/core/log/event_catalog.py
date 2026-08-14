@@ -532,8 +532,6 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'schedule.due_claimer.cursors_backfilled': EventSpec('info', frozenset({'retired_count', 'scheduled_count'})),
     'schedule.poller.started': EventSpec('info', frozenset({'interval_ms', 'service'})),
     'schedule.poller.stopped': EventSpec('info', frozenset({'service'})),
-    'schedule.poller.dispatch_failed.degraded': EventSpec('warning', frozenset({'schedule_id'})),
-    'schedule.poller.timer_dispatch_failed.degraded': EventSpec('warning', frozenset({'timer_id'})),
     'schedule.poller.tick_failed.degraded': EventSpec('warning', frozenset()),
     'schedule.target_outcome.unmapped': EventSpec('error', frozenset({'target_kind', 'target_status'})),
     'schedule.time_job.removed': EventSpec('debug', frozenset({'schedule_id'})),

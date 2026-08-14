@@ -13,7 +13,6 @@ from opentelemetry.trace import SpanKind
 
 from app.modules.schedule.domain.schedule import ScheduleType
 from app.modules.schedule.domain.events.schedule import ScheduleFired
-from app.core.infrastructure.events.publisher import EventPublisher
 from app.core.log.log import get_logger
 from app.core.request_context import bind_job_context, event_lineage
 
@@ -25,40 +24,46 @@ schedule_duration = meter.create_histogram("lemma.scheduler.job.duration", unit=
 
 
 class SchedulerEventEmitter:
-    """Emits events to FastStream when scheduled jobs fire."""
+    """Builds and stages the event a fired schedule produces.
 
-    def __init__(self):
-        self._started = False
+    There is no lifecycle here on purpose. This used to carry a ``_started``
+    flag with ``start``/``stop`` methods documented as owning a broker
+    connection; they owned nothing, and only the scheduler sidecar ever called
+    them. When the sidecar went, the flag could only produce a false failure --
+    and it immediately did, refusing every fire in the worker with "emitter is
+    not started" while the claim that produced it had already committed. A gate
+    that verifies nothing and can only fail wrongly is worse than no gate.
+    """
 
-    async def start(self):
-        """Start the broker connection."""
-        if not self._started:
-            self._started = True
-
-    async def stop(self):
-        """Stop the broker connection."""
-        if self._started:
-            self._started = False
-
-    async def emit_scheduled_job_event(
+    async def stage_scheduled_job_event(
         self,
+        uow,
         schedule_id: UUID,
         user_id: UUID | None = None,
         payload: Dict[str, Any] | None = None,
         *,
         scheduled_at: datetime,
     ):
-        """Emit an event when a scheduled job fires.
+        """Stage a fire onto the caller's transaction.
+
+        The caller passes the unit of work that claimed the schedule, so the
+        claim and the event it produces commit together. That is what makes a
+        fire exactly-once: publishing separately left a window where the cursor
+        had moved but the event did not exist, and the occurrence was gone --
+        no retry, because the row no longer looked due.
+
+        Staging is an INSERT into the outbox, not a Redis round trip, so keeping
+        it inside the transaction costs one statement rather than a fan-out. The
+        outbox dispatcher does the actual delivery, with the lease, retry and
+        dead-letter behaviour it already has.
 
         Args:
+            uow: the unit of work that claimed this occurrence
             schedule_id: The schedule ID that was scheduled
-            user_id: Owner of the resulting run; absent only on workflow wait
-                timers persisted before ownership existed
+            user_id: Owner of the resulting run; absent on timers, which resolve
+                their owner from the run row
             payload: Optional payload data
         """
-        if not self._started:
-            raise RuntimeError("Scheduler event emitter is not started")
-
         scheduled_at = scheduled_at.astimezone(timezone.utc)
         source_event_id = f"cron:{schedule_id}:{scheduled_at.isoformat()}"
         event = ScheduleFired(
@@ -95,7 +100,11 @@ class SchedulerEventEmitter:
                         consumer="scheduler.emitter",
                     ),
                 ):
-                    await EventPublisher.publish(event.stream_name(), event)
+                    # Onto the caller's transaction rather than a fresh one of
+                    # our own. `EventPublisher.publish` opens its own UoW, which
+                    # is right for a caller that has none -- but here it would
+                    # split the claim and its event across two commits.
+                    uow.collect_events([event])
                     span.set_attribute("lemma.outcome", outcome)
                     logger.debug(
                         "schedule.event.staged",

@@ -1,14 +1,22 @@
 """The loop that fires due schedules, on every replica.
 
-Two phases, and the split is the point:
+One transaction per tick, and that is the point. It takes the due rows with
+``FOR UPDATE SKIP LOCKED``, advances their cursors, and stages the fire events
+onto the same unit of work. Committing makes all of it real together.
 
-1. **Claim** — one short transaction that takes the due rows with
-   ``FOR UPDATE SKIP LOCKED`` and advances their cursors. Ends immediately.
-2. **Dispatch** — emit a fire event per claim, holding no pooled connection.
+The obvious-looking alternative -- claim and commit, then publish -- is what
+this originally did, and it is wrong in a way that only shows up in production:
+between the two commits the cursor has moved but the event does not exist, so
+the occurrence is silently gone. Nothing retries it, because the row no longer
+looks due. We watched exactly that happen: a stale start-up gate rejected every
+dispatch while the claims had already committed, and the fires were lost rather
+than delayed.
 
-Doing it the other way round is the bug this whole effort exists to remove: a
-fan-out of Redis publishes with a connection checked out and the database asked
-nothing. Here the connection is back in the pool before the first event is sent.
+Staging costs one INSERT, not a Redis round trip -- `EventPublisher` writes to
+the transactional outbox, and the outbox dispatcher delivers with the lease,
+retry and dead-letter behaviour it already has. So keeping it inside the
+transaction does not reintroduce the hold this effort exists to remove; there
+was never a fan-out here to hold a connection across.
 
 Cadence is a plain sleep rather than a cron, because cron is minute-granular and
 these timers are not. A `WAIT_UNTIL` for ninety seconds should fire at ninety
@@ -61,6 +69,7 @@ async def poll_due_schedules_once(
     from app.modules.schedule.scheduler.events import get_event_emitter
 
     moment = now or datetime.now(timezone.utc)
+    emitter = get_event_emitter()
 
     async with uow_scope(uow_factory) as uow:
         # Same transaction: a row backfilled here is claimable on the next tick,
@@ -71,53 +80,27 @@ async def poll_due_schedules_once(
         for claim_timers in timer_claimers:
             timers.extend(await claim_timers(uow.session, now=moment, limit=limit))
 
-    if not claimed and not timers:
-        return 0
-
-    emitter = get_event_emitter()
-    dispatched = 0
-    for timer in timers:
-        try:
-            # Timers ride the same event as schedules: `_dispatch_wake` branches
-            # on the payload keys, so rebuilding the payload the old adapters
-            # sent means the wake path downstream is untouched.
-            await emitter.emit_scheduled_job_event(
+        # Timers ride the same event as schedules: `_dispatch_wake` branches on
+        # the payload keys, so rebuilding the payload the old adapters sent
+        # leaves the wake path downstream untouched.
+        for timer in timers:
+            await emitter.stage_scheduled_job_event(
+                uow,
                 schedule_id=timer.timer_id,
                 user_id=timer.user_id,
                 payload=timer.payload,
                 scheduled_at=timer.fire_at,
             )
-            dispatched += 1
-        except Exception:
-            # Unlike a schedule, this one IS retried: the lease expires and
-            # another replica picks it up, because a timer that never fires is
-            # a workflow stuck forever rather than one missed occurrence.
-            logger.warning(
-                "schedule.poller.timer_dispatch_failed.degraded",
-                timer_id=str(timer.timer_id),
-                exc_info=True,
-            )
-    for fire in claimed:
-        try:
-            await emitter.emit_scheduled_job_event(
+        for fire in claimed:
+            await emitter.stage_scheduled_job_event(
+                uow,
                 schedule_id=fire.schedule_id,
                 user_id=fire.user_id,
                 payload=fire.payload,
                 scheduled_at=fire.fire_at,
             )
-            dispatched += 1
-        except Exception:
-            # The claim is already committed, so this occurrence will not be
-            # retried by the poller. That is deliberate: the alternative is
-            # holding the claim open across the dispatch, which reintroduces
-            # the hold and risks firing twice on a retry. Recovery belongs to
-            # the schedule-run recovery sweep, which reads the ledger.
-            logger.warning(
-                "schedule.poller.dispatch_failed.degraded",
-                schedule_id=str(fire.schedule_id),
-                exc_info=True,
-            )
-    return dispatched
+
+    return len(timers) + len(claimed)
 
 
 async def run_schedule_poller(

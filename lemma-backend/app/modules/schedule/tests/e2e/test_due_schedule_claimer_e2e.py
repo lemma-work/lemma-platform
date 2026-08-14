@@ -16,6 +16,7 @@ from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 import pytest
+from sqlalchemy import select
 
 from app.modules.schedule.domain.schedule import ScheduleType
 from app.modules.schedule.infrastructure.models.schedule import Schedule
@@ -349,3 +350,73 @@ async def test_a_deactivated_schedule_is_never_claimed(
         "an overdue-but-deactivated schedule was claimed; deactivation is no "
         "longer sufficient to stop a schedule firing"
     )
+
+
+async def test_a_failed_stage_leaves_the_schedule_due_instead_of_losing_it(
+    db_manager, db_session, pod_and_user
+) -> None:
+    """The claim and the fire event commit together, or neither does.
+
+    This is the bug that cost a full e2e cycle to find, and the reason it is
+    worth a test: the poller used to claim in one transaction and publish in
+    another. Between those two commits the cursor had moved but no event
+    existed, so the occurrence was gone -- and nothing retried it, because the
+    row no longer looked due. A stale start-up gate rejected every publish while
+    the claims committed anyway, and the fires were lost rather than delayed.
+
+    So: make staging fail, and assert the schedule is still exactly as claimable
+    as it was. Against real Postgres, because transaction atomicity is the
+    property and an in-memory fake would assert nothing.
+    """
+    from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
+    from app.core.infrastructure.events.models import DomainEventOutbox
+    from app.modules.schedule.scheduler import events as scheduler_events
+    from app.modules.schedule.services import schedule_poller
+
+    uow_factory = SessionUnitOfWorkFactory(db_manager.session_factory)
+
+    pod_id, user_id = pod_and_user
+    now = datetime.now(timezone.utc)
+    due = now - timedelta(seconds=1)
+    schedule_id = await _insert_schedule(
+        db_session, cron="*/5 * * * *", due_at=due, pod_id=pod_id, user_id=user_id,
+    )
+
+    class _FailingEmitter:
+        async def stage_scheduled_job_event(self, uow, **kwargs):
+            raise RuntimeError("staging is broken")
+
+    # Patched on the source module, not on `schedule_poller`: the poller
+    # imports `get_event_emitter` inside the function body, so the name is
+    # resolved from `scheduler_events` at call time and a patch on the importer
+    # would silently do nothing (it did, and the test passed vacuously).
+    original = scheduler_events.get_event_emitter
+    scheduler_events.get_event_emitter = lambda: _FailingEmitter()
+    try:
+        with pytest.raises(RuntimeError, match="staging is broken"):
+            await schedule_poller.poll_due_schedules_once(uow_factory, now=now)
+    finally:
+        scheduler_events.get_event_emitter = original
+
+    await db_session.rollback()
+    row = await db_session.get(Schedule, schedule_id)
+    await db_session.refresh(row)
+    assert row.next_fire_at == due, (
+        "the cursor advanced even though no event was staged; this occurrence "
+        "is now lost -- it will never fire and nothing will retry it"
+    )
+
+    staged = (
+        await db_session.scalars(
+            select(DomainEventOutbox).where(
+                DomainEventOutbox.event_type == "schedule.fired"
+            )
+        )
+    ).all()
+    assert not staged, "an event was staged despite the transaction failing"
+
+    # And the proof it is still live: a normal poll fires it.
+    async with db_manager.session_factory() as session:
+        claimed = await claim_due_schedules(session, now=now)
+        await session.commit()
+    assert schedule_id in [c.schedule_id for c in claimed]
