@@ -22,10 +22,8 @@ from app.modules.identity.infrastructure.mobile_number_claims import (
 )
 from app.modules.identity.infrastructure.models.user_models import User
 from app.modules.identity.infrastructure.supertokens_auth.helpers import (
-    create_cli_session_tokens,
     create_browser_session,
     create_desktop_browser_session,
-    refresh_cli_session_tokens,
 )
 from app.modules.identity.services.auth_abuse import (
     RateLimitExceeded,
@@ -80,20 +78,6 @@ class VerifyTokenResponse(BaseModel):
 class CliAuthInfoResponse(BaseModel):
     api_url: str
     auth_frontend_url: str
-
-
-class CliSessionResponse(BaseModel):
-    access_token: str
-    refresh_token: str
-    access_token_expires_at: int
-    session_handle: str
-    user_id: UUID
-    email: EmailStr
-    token_type: str = "Bearer"
-
-
-class CliRefreshRequest(BaseModel):
-    refresh_token: str
 
 
 class DesktopAuthRequestCreate(BaseModel):
@@ -535,61 +519,4 @@ async def create_desktop_auth_session(
     return DesktopAuthSessionResponse(
         user_id=user_id,
         session_handle=session_handle,
-    )
-
-
-@router.post(
-    "/cli/session-tokens",
-    include_in_schema=False,
-    operation_id="auth.cli.session_tokens",
-    summary="Mint a CLI session from the current browser session",
-    description="Create a dedicated Lemma CLI session for the current authenticated user and return access and refresh tokens.",
-    response_model=CliSessionResponse,
-)
-async def cli_session_tokens(
-    request: Request,
-    user_service: UserServiceDep,
-) -> CliSessionResponse:
-    user: UserEntity = request.state.user
-    user_data = await user_service.get_user(user.id)
-    session_payload = await create_cli_session_tokens(
-        user.id,
-        access_token_payload={"client": "lemma-cli"},
-        session_data={"client": "lemma-cli"},
-    )
-    return CliSessionResponse(
-        **session_payload,
-        email=user_data.email,
-    )
-
-
-@router.post(
-    "/cli/refresh",
-    include_in_schema=False,
-    operation_id="auth.cli.refresh",
-    summary="Refresh a CLI session",
-    description="Refresh a CLI access token using a previously issued refresh token.",
-    response_model=CliSessionResponse,
-)
-async def cli_refresh_session(
-    body: CliRefreshRequest,
-    user_service: UserServiceDep,
-) -> CliSessionResponse:
-    try:
-        session_payload = await refresh_cli_session_tokens(body.refresh_token)
-        user_id = UUID(str(session_payload["user_id"]))
-        user_data = await user_service.get_user(user_id)
-    except Exception as exc:
-        raise HTTPException(
-            status_code=401,
-            detail={
-                "code": "INVALID_REFRESH_TOKEN",
-                "message": "Unable to refresh CLI session.",
-                "details": {"error_type": type(exc).__name__},
-            },
-        ) from exc
-
-    return CliSessionResponse(
-        **session_payload,
-        email=user_data.email,
     )

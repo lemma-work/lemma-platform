@@ -12,6 +12,7 @@ would pass against an implementation with no locking at all.
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
@@ -23,6 +24,26 @@ from app.modules.schedule.infrastructure.models.schedule import Schedule
 from app.modules.schedule.services.due_schedule_claimer import claim_due_schedules
 
 pytestmark = [pytest.mark.e2e]
+
+#: How far ahead of real time the claiming tests operate.
+#:
+#: The worker's schedule poller is session-scoped and runs continuously against
+#: the same database, claiming anything due at *real* now. A test that inserts a
+#: row due one second ago and then races to claim it is racing the poller, and
+#: it only passed so far because `--dist loadscope` happened to run this file
+#: before anything that starts a worker. That is test order as a load-bearing
+#: assumption, which is the thing this branch keeps finding and removing.
+#:
+#: So these rows are due six hours from now, and the tests pass their own `now`
+#: six hours forward. The real poller sees nothing due; the explicit `now=`
+#: sees everything. Deterministic whether or not a worker is running.
+_CLOCK_SKEW = timedelta(hours=6)
+
+
+def _test_now() -> datetime:
+    """Now, on the tests' own clock. See `_CLOCK_SKEW`."""
+    return datetime.now(timezone.utc) + _CLOCK_SKEW
+
 
 
 async def _insert_schedule(session, *, cron: str | None, due_at: datetime, pod_id, user_id):
@@ -75,7 +96,7 @@ async def test_two_concurrent_claimers_never_take_the_same_occurrence(
     only arrangement in which `SKIP LOCKED` is the thing under test.
     """
     pod_id, user_id = pod_and_user
-    now = datetime.now(timezone.utc)
+    now = _test_now()
     schedule_id = await _insert_schedule(
         db_session, cron="*/5 * * * *", due_at=now - timedelta(seconds=1),
         pod_id=pod_id, user_id=user_id,
@@ -124,7 +145,7 @@ async def test_the_cursor_advances_so_the_same_occurrence_is_not_reclaimed(
     the claim is only durable because the cursor moved with it.
     """
     pod_id, user_id = pod_and_user
-    now = datetime.now(timezone.utc)
+    now = _test_now()
     schedule_id = await _insert_schedule(
         db_session, cron="*/5 * * * *", due_at=now - timedelta(seconds=1),
         pod_id=pod_id, user_id=user_id,
@@ -146,7 +167,7 @@ async def test_a_one_shot_is_retired_by_the_claim_that_fires_it(
 ) -> None:
     """One occurrence means one, even if two replicas poll simultaneously."""
     pod_id, user_id = pod_and_user
-    now = datetime.now(timezone.utc)
+    now = _test_now()
     due = now - timedelta(seconds=1)
     schedule_id = await _insert_schedule(
         db_session, cron=None, due_at=due, pod_id=pod_id, user_id=user_id,
@@ -181,13 +202,13 @@ async def test_the_claimed_fire_time_is_the_occurrence_not_the_poll_time(
     double-fire collapse into one run.
     """
     pod_id, user_id = pod_and_user
-    due = datetime.now(timezone.utc) - timedelta(minutes=7)
+    due = _test_now() - timedelta(minutes=7)
     schedule_id = await _insert_schedule(
         db_session, cron="*/5 * * * *", due_at=due, pod_id=pod_id, user_id=user_id,
     )
 
     async with db_manager.session_factory() as session:
-        claimed = await claim_due_schedules(session, now=datetime.now(timezone.utc))
+        claimed = await claim_due_schedules(session, now=_test_now())
         await session.commit()
 
     mine = [c for c in claimed if c.schedule_id == schedule_id]
@@ -202,7 +223,7 @@ async def test_a_schedule_that_is_not_due_is_left_alone(
     db_manager, db_session, pod_and_user
 ) -> None:
     pod_id, user_id = pod_and_user
-    now = datetime.now(timezone.utc)
+    now = _test_now()
     schedule_id = await _insert_schedule(
         db_session, cron="*/5 * * * *", due_at=now + timedelta(minutes=10),
         pod_id=pod_id, user_id=user_id,
@@ -213,6 +234,13 @@ async def test_a_schedule_that_is_not_due_is_left_alone(
         await session.commit()
 
     assert schedule_id not in [c.schedule_id for c in claimed]
+
+
+# The backfill tests below deliberately stay on real time. Backfilling is
+# idempotent and convergent -- a cron row gets a future cursor, an unusable one
+# is retired, a missed one-shot is retired -- so it does not matter whether this
+# test or the worker's poller got there first. Their assertions are written to
+# hold either way, which is a stronger property than "no poller was running".
 
 
 async def _insert_without_cursor(session, *, config: dict, pod_id, user_id):
@@ -332,7 +360,7 @@ async def test_a_deactivated_schedule_is_never_claimed(
     deactivated row that is overdue and still carries a cursor is not claimed.
     """
     pod_id, user_id = pod_and_user
-    now = datetime.now(timezone.utc)
+    now = _test_now()
     schedule_id = await _insert_schedule(
         db_session, cron="*/5 * * * *", due_at=now - timedelta(minutes=1),
         pod_id=pod_id, user_id=user_id,
@@ -376,7 +404,7 @@ async def test_a_failed_stage_leaves_the_schedule_due_instead_of_losing_it(
     uow_factory = SessionUnitOfWorkFactory(db_manager.session_factory)
 
     pod_id, user_id = pod_and_user
-    now = datetime.now(timezone.utc)
+    now = _test_now()
     due = now - timedelta(seconds=1)
     schedule_id = await _insert_schedule(
         db_session, cron="*/5 * * * *", due_at=due, pod_id=pod_id, user_id=user_id,
@@ -406,13 +434,20 @@ async def test_a_failed_stage_leaves_the_schedule_due_instead_of_losing_it(
         "is now lost -- it will never fire and nothing will retry it"
     )
 
-    staged = (
-        await db_session.scalars(
-            select(DomainEventOutbox).where(
-                DomainEventOutbox.event_type == "schedule.fired"
+    # Scoped to this schedule. A bare "no schedule.fired rows exist" assertion
+    # would be testing the whole database, and any other test -- or the worker's
+    # own poller -- staging a legitimate fire would fail it for the wrong reason.
+    staged = [
+        row
+        for row in (
+            await db_session.scalars(
+                select(DomainEventOutbox).where(
+                    DomainEventOutbox.event_type == "schedule.fired"
+                )
             )
-        )
-    ).all()
+        ).all()
+        if str(schedule_id) in json.dumps(row.payload)
+    ]
     assert not staged, "an event was staged despite the transaction failing"
 
     # And the proof it is still live: a normal poll fires it.

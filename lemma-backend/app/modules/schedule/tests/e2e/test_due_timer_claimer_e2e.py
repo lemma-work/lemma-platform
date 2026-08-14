@@ -26,6 +26,19 @@ from app.modules.workflow.infrastructure.models import (
 
 pytestmark = [pytest.mark.e2e]
 
+#: How far ahead of real time these tests operate. See the same constant in
+#: `test_due_schedule_claimer_e2e` -- the worker's poller is session-scoped and
+#: claims anything due at real now, so a timer due one second ago is a race the
+#: test only wins by running before any worker starts. Six hours ahead, with the
+#: tests passing their own `now`, removes the race entirely.
+_CLOCK_SKEW = timedelta(hours=6)
+
+
+def _test_now() -> datetime:
+    """Now, on the tests' own clock. See `_CLOCK_SKEW`."""
+    return datetime.now(timezone.utc) + _CLOCK_SKEW
+
+
 
 @pytest.fixture
 async def workflow_run(authenticated_client, fixed_test_org, fixed_test_user, db_session):
@@ -82,7 +95,7 @@ async def _insert_wait(session, workflow_run, *, due_at, lease_until=None):
 
 
 async def test_a_due_timer_is_claimed_and_leased(db_manager, db_session, workflow_run) -> None:
-    now = datetime.now(timezone.utc)
+    now = _test_now()
     wait_id, external_ref = await _insert_wait(
         db_session, workflow_run, due_at=now - timedelta(seconds=5)
     )
@@ -106,7 +119,7 @@ async def test_a_live_lease_hides_the_timer_from_other_replicas(
     db_manager, db_session, workflow_run
 ) -> None:
     """Without this, every replica dispatches the same wake on every tick."""
-    now = datetime.now(timezone.utc)
+    now = _test_now()
     _, external_ref = await _insert_wait(
         db_session,
         workflow_run,
@@ -130,7 +143,7 @@ async def test_an_expired_lease_lets_the_timer_be_retried(
     recovers this wake -- the workflow simply waits forever. So an expired lease
     must return the timer to the pool rather than leave it claimed.
     """
-    now = datetime.now(timezone.utc)
+    now = _test_now()
     _, external_ref = await _insert_wait(
         db_session,
         workflow_run,
@@ -146,7 +159,7 @@ async def test_an_expired_lease_lets_the_timer_be_retried(
 
 
 async def test_a_timer_that_is_not_due_is_left_alone(db_manager, db_session, workflow_run) -> None:
-    now = datetime.now(timezone.utc)
+    now = _test_now()
     _, external_ref = await _insert_wait(
         db_session, workflow_run, due_at=now + timedelta(minutes=5)
     )
@@ -162,12 +175,12 @@ async def test_the_fire_time_is_the_due_instant_not_the_poll_time(
     db_manager, db_session, workflow_run
 ) -> None:
     """Same reason as schedules: the dedup key is built from it."""
-    due = datetime.now(timezone.utc) - timedelta(minutes=3)
+    due = _test_now() - timedelta(minutes=3)
     _, external_ref = await _insert_wait(db_session, workflow_run, due_at=due)
 
     async with db_manager.session_factory() as session:
         claimed = await claim_due_workflow_waits(
-            session, now=datetime.now(timezone.utc)
+            session, now=_test_now()
         )
         await session.commit()
 

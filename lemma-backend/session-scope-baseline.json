@@ -25,8 +25,6 @@
     "app/modules/agent_surfaces/events/handlers.py::_process_surface_webhook::non-db-await::platform adapter: handler.try_handle_lifecycle": 1,
     "app/modules/agent_surfaces/events/handlers.py::_process_surface_webhook::non-db-await::via _prepare_platform_webhook_ingress: handler.prepare_ingress": 1,
     "app/modules/agent_surfaces/services/surface_file_ingest_service.py::SurfaceFileIngestService.ingest_attachments::non-db-await::via _ingest_one: self._ingest_all": 1,
-    "app/modules/identity/api/controllers/auth_controller.py::cli_refresh_session::non-db-await/request-scoped::via refresh_session_without_request_response: refresh_cli_session_tokens": 1,
-    "app/modules/identity/api/controllers/auth_controller.py::cli_session_tokens::non-db-await/request-scoped::via create_new_session_without_request_response: create_cli_session_tokens": 1,
     "app/modules/identity/api/controllers/email_bounce_controller.py::_deactivate_email_for_hard_bounce::non-db-await::remote SDK: revoke_all_sessions_for_user": 1,
     "app/modules/pod/api/controllers/pod_member_controller.py::remove_member::non-db-await/request-scoped::via revoke_member_authorization: pod_member_service.remove_member_from_pod": 1,
     "app/modules/pod_bundle/api/controllers/import_controller.py::stream_import_events::nested-session/request-scoped::pod_context_scope": 1,
