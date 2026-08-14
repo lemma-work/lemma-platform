@@ -77,6 +77,7 @@ import {
 } from "./assistant-experience-helpers";
 // Self-contained hooks extracted from this file.
 import { useControllableDraft } from "./use-assistant-experience";
+import { useTranscriptScroll } from "./use-transcript-scroll";
 // Presentational subtree views extracted from AssistantExperienceView's render.
 import { AssistantExperienceSidebar } from "./assistant-experience-sidebar";
 import { AssistantExperienceHeader } from "./assistant-experience-header";
@@ -170,24 +171,19 @@ export function AssistantExperienceView({
   const [draft, setDraft] = useControllableDraft(controlledDraft, onDraftChange);
   const [isPlanHidden, setIsPlanHidden] = useState(false);
   const [isUpdatingModel, setIsUpdatingModel] = useState(false);
-  const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const [runStatusNow, setRunStatusNow] = useState(() => Date.now());
   const [draftSelectionStart, setDraftSelectionStart] = useState(0);
-  const messagesContainerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const draftRestoredRef = useRef(false);
-  const bottomAnchorRef = useRef<HTMLDivElement>(null);
-  const isPinnedToBottomRef = useRef(true);
-  const loadingOlderFromScrollRef = useRef(false);
   const autoLoadedOlderConversationRef = useRef<string | null>(null);
   const autoLoadedOlderPageCountRef = useRef(0);
-  const showScrollToBottomRef = useRef(showScrollToBottom);
-  const setScrollToBottomVisible = useCallback((next: boolean) => {
-    if (showScrollToBottomRef.current === next) return;
-    showScrollToBottomRef.current = next;
-    setShowScrollToBottom(next);
-  }, []);
+  const transcriptScroll = useTranscriptScroll({
+    activeConversationId: controller.activeConversationId,
+    onReachTop: () => loadOlderIfPossibleRef.current?.(),
+  });
+  const { scrollToBottom } = transcriptScroll;
+  const loadOlderIfPossibleRef = useRef<(() => void) | null>(null);
   const isRunActive = controller.isActiveConversationRunning;
   const isConversationBusy = controller.isLoading || isRunActive;
   const resolvedChromeStyle = chromeStyle ?? assistantChromeStyleFromAppearance(appearance);
@@ -270,88 +266,6 @@ export function AssistantExperienceView({
     textarea.style.overflowY = textarea.scrollHeight > maxHeight ? "auto" : "hidden";
   }, [density, draft]);
 
-  const scrollToLatest = useCallback((behavior: ScrollBehavior = "auto") => {
-    const anchor = bottomAnchorRef.current;
-    if (anchor) {
-      anchor.scrollIntoView({
-        block: "end",
-        behavior,
-      });
-      isPinnedToBottomRef.current = true;
-      setScrollToBottomVisible(false);
-      return;
-    }
-
-    const el = messagesContainerRef.current;
-    if (!el) return;
-    el.scrollTo({
-      top: el.scrollHeight,
-      behavior,
-    });
-    isPinnedToBottomRef.current = true;
-    setScrollToBottomVisible(false);
-  }, [setScrollToBottomVisible]);
-
-  const loadOlderWithScrollAnchor = useCallback(async (): Promise<boolean> => {
-    if (loadingOlderFromScrollRef.current) return false;
-
-    const el = messagesContainerRef.current;
-    const previousScrollTop = el?.scrollTop ?? 0;
-    const previousScrollHeight = el?.scrollHeight ?? 0;
-    loadingOlderFromScrollRef.current = true;
-
-    try {
-      const didLoad = await loadOlderMessages();
-      if (didLoad && el) {
-        requestAnimationFrame(() => {
-          const nextEl = messagesContainerRef.current;
-          if (!nextEl) return;
-          nextEl.scrollTop = previousScrollTop + (nextEl.scrollHeight - previousScrollHeight);
-        });
-      }
-      return didLoad;
-    } finally {
-      loadingOlderFromScrollRef.current = false;
-    }
-  }, [loadOlderMessages]);
-
-  const updatePinnedState = useCallback(() => {
-    const el = messagesContainerRef.current;
-    if (!el) return;
-    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-    const isPinned = distanceFromBottom <= 112;
-    isPinnedToBottomRef.current = isPinned;
-    setScrollToBottomVisible(!isPinned);
-
-    if (el.scrollTop > 48) return;
-    if (!hasOlderMessages || isLoadingMessages || isLoadingOlderMessages || loadingOlderFromScrollRef.current) return;
-
-    void loadOlderWithScrollAnchor();
-  }, [hasOlderMessages, isLoadingMessages, isLoadingOlderMessages, loadOlderWithScrollAnchor, setScrollToBottomVisible]);
-
-  useEffect(() => {
-    const el = messagesContainerRef.current;
-    if (!el) return;
-
-    // Always instant. Following the bottom of a growing transcript is not an
-    // animation — it is the viewport staying where it already was. Switching to
-    // "smooth" once the run settled meant every turn ended with a slide the
-    // reader did not ask for, on top of the layout settling at the same moment.
-    // Smooth belongs to the explicit jump-to-latest control, and nowhere else.
-    if (isPinnedToBottomRef.current) {
-      scrollToLatest("auto");
-    }
-  }, [controllerMessages, isConversationBusy, scrollToLatest]);
-
-  useEffect(() => {
-    isPinnedToBottomRef.current = true;
-    setScrollToBottomVisible(false);
-    requestAnimationFrame(() => {
-      scrollToLatest("auto");
-      inputRef.current?.focus();
-    });
-  }, [activeConversationId, scrollToLatest, setScrollToBottomVisible]);
-
   useEffect(() => {
     resizeComposer();
   }, [draft, resizeComposer]);
@@ -363,6 +277,23 @@ export function AssistantExperienceView({
     [controllerMessages, displayMessageRows, isRunActive],
   );
 
+  const canLoadOlder = hasOlderMessages && !isLoadingMessages && !isLoadingOlderMessages;
+  const loadOlder = useCallback(() => {
+    if (!canLoadOlder) return;
+    void transcriptScroll.preserveAcross(loadOlderMessages);
+  }, [canLoadOlder, loadOlderMessages, transcriptScroll]);
+  useEffect(() => {
+    loadOlderIfPossibleRef.current = loadOlder;
+  }, [loadOlder]);
+
+  // Switching conversations puts the caret back in the composer, so a reader who
+  // changed threads can just start typing. The transcript's own jump to the
+  // newest message is the scroll hook's business.
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => inputRef.current?.focus());
+    return () => cancelAnimationFrame(frame);
+  }, [activeConversationId]);
+
   useEffect(() => {
     if (autoLoadedOlderConversationRef.current !== activeConversationId) {
       autoLoadedOlderConversationRef.current = activeConversationId;
@@ -370,20 +301,13 @@ export function AssistantExperienceView({
     }
 
     if (!activeConversationId) return;
-    if (!hasOlderMessages || isLoadingMessages || isLoadingOlderMessages || loadingOlderFromScrollRef.current) return;
+    if (!canLoadOlder) return;
     if (displayMessageRows.length === 0 || displayMessageRows.length >= SPARSE_HISTORY_ROW_TARGET) return;
     if (autoLoadedOlderPageCountRef.current >= SPARSE_HISTORY_AUTO_LOAD_LIMIT) return;
 
     autoLoadedOlderPageCountRef.current += 1;
-    void loadOlderWithScrollAnchor();
-  }, [
-    activeConversationId,
-    displayMessageRows.length,
-    hasOlderMessages,
-    isLoadingMessages,
-    isLoadingOlderMessages,
-    loadOlderWithScrollAnchor,
-  ]);
+    loadOlder();
+  }, [activeConversationId, canLoadOlder, displayMessageRows.length, loadOlder]);
 
   const detectedPlanSummary = useMemo(() => latestPlanSummary(controllerMessages), [controllerMessages]);
   const planSummary = detectedPlanSummary?.isComplete ? null : detectedPlanSummary;
@@ -424,16 +348,16 @@ export function AssistantExperienceView({
     if ((!draft.trim() && !hasPendingFileUploads) || isConversationBusy) return;
     const message = draft.trim();
     setDraft("");
-    scrollToLatest("smooth");
+    scrollToBottom("smooth");
     await sendMessage(message);
-  }, [draft, hasPendingFileUploads, isConversationBusy, scrollToLatest, sendMessage, setDraft]);
+  }, [draft, hasPendingFileUploads, isConversationBusy, scrollToBottom, sendMessage, setDraft]);
 
   const handleSuggestionSend = useCallback(async (suggestion: string) => {
     const message = suggestion.trim();
     if (!message || isConversationBusy) return;
-    scrollToLatest("smooth");
+    scrollToBottom("smooth");
     await sendMessage(message);
-  }, [isConversationBusy, scrollToLatest, sendMessage]);
+  }, [isConversationBusy, scrollToBottom, sendMessage]);
 
   const handleUploadSelection = useCallback(async (files: FileList | null) => {
     const selectedFiles = files ? Array.from(files) : [];
@@ -654,9 +578,8 @@ export function AssistantExperienceView({
           ) : null}
 
           <AssistantExperienceConversation
-            messagesContainerRef={messagesContainerRef}
-            bottomAnchorRef={bottomAnchorRef}
-            onScroll={updatePinnedState}
+            messagesContainerRef={transcriptScroll.containerRef}
+            onScroll={transcriptScroll.onScroll}
             contentWidthClassName={contentWidthClassName}
             activeConversationId={activeConversationId}
             showEmptyState={isConversationEmpty}
@@ -673,7 +596,7 @@ export function AssistantExperienceView({
             isLoadingMessages={isLoadingMessages}
             isLoadingOlderMessages={isLoadingOlderMessages}
             hasMessages={controller.messages.length > 0}
-            onLoadOlder={() => { void loadOlderWithScrollAnchor(); }}
+            onLoadOlder={loadOlder}
             displayMessageRows={displayMessageRows}
             completedRunTraceGroups={completedRunTraceGroups}
             renderDisplayRow={renderDisplayRow}
@@ -687,8 +610,8 @@ export function AssistantExperienceView({
             onRetryFailedMessage={controller.canRetryFailedMessage && controller.retryFailedMessage
               ? () => { void controller.retryFailedMessage?.(); }
               : undefined}
-            showScrollToBottom={showScrollToBottom}
-            onScrollToBottom={() => scrollToLatest("smooth")}
+            showScrollToBottom={!transcriptScroll.isFollowing}
+            onScrollToBottom={() => scrollToBottom("smooth")}
             isConversationBusy={isConversationBusy}
           />
         </div>
