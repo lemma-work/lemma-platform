@@ -25,6 +25,18 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
+/**
+ * Marks one message row. The reader's place is kept by remembering the row
+ * under their eyes, so this has to sit on the rows themselves: anchoring
+ * anything that wraps *all* of them cannot work, because a wrapper's top edge
+ * does not move when content inside it changes height, and the shift the
+ * restore is looking for is always zero.
+ *
+ * One row per mark, and never a mark inside a mark: the search below relies on
+ * these being a flat sequence in document order.
+ */
+export const TRANSCRIPT_ROW_ATTRIBUTE = "data-transcript-row";
+
 /** How close to the bottom still counts as the bottom. */
 const AT_BOTTOM_EPSILON = 40;
 /** Scroll offset under which the transcript asks for older messages. */
@@ -111,16 +123,29 @@ export function useTranscriptScroll({
   /** The topmost row still on screen — what the reader is looking at. */
   const captureAnchor = useCallback(() => {
     const el = containerRef.current;
-    const content = el?.firstElementChild;
-    if (!el || !content) return;
-    for (const row of Array.from(content.children)) {
-      const offset = offsetOf(el, row);
-      if (offset + row.getBoundingClientRect().height > 0) {
-        anchorRef.current = { node: row, offset };
-        return;
+    if (!el) return;
+    const rows = el.querySelectorAll(`[${TRANSCRIPT_ROW_ATTRIBUTE}]`);
+    const top = el.getBoundingClientRect().top;
+
+    // The rows are one column in document order, so "already scrolled past"
+    // only flips once on the way down: the topmost row still on screen is a
+    // dozen measurements away rather than one per row. Worth the search — this
+    // runs on every scroll event a reader generates, over a transcript that can
+    // be hundreds of rows long, and each measurement is a layout read.
+    let low = 0;
+    let high = rows.length - 1;
+    let anchor: { node: Element; offset: number } | null = null;
+    while (low <= high) {
+      const mid = (low + high) >> 1;
+      const box = rows[mid].getBoundingClientRect();
+      if (box.bottom > top) {
+        anchor = { node: rows[mid], offset: box.top - top };
+        high = mid - 1;
+      } else {
+        low = mid + 1;
       }
     }
-    anchorRef.current = null;
+    anchorRef.current = anchor;
   }, []);
 
   const onScroll = useCallback(() => {
@@ -174,6 +199,15 @@ export function useTranscriptScroll({
   // means the page moved under them, and their line is put back where it was —
   // Safari has no scroll anchoring, and this container turns Chrome's off with
   // `overflow-anchor: none`.
+  //
+  // The scroller itself is watched alongside its content, because the bottom
+  // also moves when the *window* changes height. The composer below this
+  // transcript grows and shrinks constantly — a second typed line, a plan
+  // summary, an approval card — and every pixel it takes comes out of this
+  // viewport. That shortens the distance to the bottom without changing the
+  // content or moving scrollTop, so neither a resize of the content nor a
+  // scroll event is emitted: following would silently stop at the bottom and
+  // leave the newest messages under the fold.
   useEffect(() => {
     const el = containerRef.current;
     const content = el?.firstElementChild;
@@ -185,14 +219,23 @@ export function useTranscriptScroll({
         return;
       }
       const anchor = anchorRef.current;
-      if (!anchor?.node.isConnected) return;
+      if (!anchor) return;
+      // The row they were on can be unmounted out from under them — a run
+      // folding its trace away takes its rows with it. Nothing can be restored
+      // to a row that no longer exists, so take a fresh one rather than leaving
+      // a dead anchor to fail every reflow from here on.
+      if (!anchor.node.isConnected) {
+        captureAnchor();
+        return;
+      }
       const shift = offsetOf(el, anchor.node) - anchor.offset;
       if (Math.abs(shift) < 1) return;
       write(el.scrollTop + shift);
     });
     observer.observe(content);
+    observer.observe(el);
     return () => observer.disconnect();
-  }, [write]);
+  }, [captureAnchor, write]);
 
   // A different conversation starts at its newest message.
   useEffect(() => {
@@ -206,21 +249,32 @@ export function useTranscriptScroll({
     return () => cancelAnimationFrame(frame);
   }, [activeConversationId, setFollowing, write]);
 
-  // Prepending older messages must not move the viewport. The height delta is
-  // added back so the row the reader was on stays under their eyes.
+  // Prepending older messages must not move the viewport. The row the reader
+  // was on is put back where it was, rather than adding back the height the
+  // load happened to bring: a run in flight adds its own height while the fetch
+  // is in the air, so the delta between "before" and "after" is not the older
+  // messages alone. Anchoring also keeps working when the prepended block
+  // settles late — an image or a widget that reports its size a few frames
+  // afterwards moves the same row again, and the resize observer above corrects
+  // it against this same anchor.
   const preserveAcross = useCallback(async (load: () => Promise<boolean>) => {
-    const el = containerRef.current;
-    const beforeTop = el?.scrollTop ?? 0;
-    const beforeHeight = el?.scrollHeight ?? 0;
-
+    captureAnchor();
     const didLoad = await load();
-    if (!didLoad || !el) return didLoad;
+    if (!didLoad) return didLoad;
 
     await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
-    const next = containerRef.current;
-    if (next) write(beforeTop + (next.scrollHeight - beforeHeight));
+    const el = containerRef.current;
+    if (!el) return didLoad;
+    if (followRef.current) {
+      write(el.scrollHeight);
+      return didLoad;
+    }
+    const anchor = anchorRef.current;
+    if (!anchor?.node.isConnected) return didLoad;
+    const shift = offsetOf(el, anchor.node) - anchor.offset;
+    if (Math.abs(shift) >= 1) write(el.scrollTop + shift);
     return didLoad;
-  }, [write]);
+  }, [captureAnchor, write]);
 
   return { containerRef, onScroll, isFollowing, scrollToBottom, preserveAcross };
 }
