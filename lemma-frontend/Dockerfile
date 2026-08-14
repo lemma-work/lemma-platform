@@ -15,21 +15,12 @@ WORKDIR /app
 COPY lemma-frontend/package.json lemma-frontend/package-lock.json ./
 RUN npm ci
 COPY lemma-frontend/ ./
-# Retried because `next/font/google` fetches from fonts.googleapis.com during
-# the build, so this step is only as reliable as that request. It has taken down
-# six of our last eight release runs -- here on the emulated arm64 build, and in
-# the host-pack script, always as "Error while requesting resource" and always
-# green on a re-run.
-#
-# The real fix is to stop reaching for the network mid-build: vendor the eight
-# families and use `next/font/local`. That is a typography change, not a
-# packaging one.
-RUN for attempt in 1 2 3; do \
-        npm run build && break; \
-        if [ "$attempt" = 3 ]; then echo "next build failed after 3 attempts" >&2; exit 1; fi; \
-        echo "next build failed (attempt $attempt/3); retrying in $((attempt * 5))s" >&2; \
-        sleep $((attempt * 5)); \
-    done
+# No retry. This used to loop three times because `next/font/google` fetched
+# from fonts.googleapis.com during the build, which took down six of our last
+# eight release runs. The fonts are vendored now (see app/layout.tsx), the build
+# makes no network request for them, and a failure here is a real failure worth
+# surfacing on the first attempt rather than three minutes later.
+RUN npm run build
 
 FROM node:24-alpine AS runner
 WORKDIR /app
