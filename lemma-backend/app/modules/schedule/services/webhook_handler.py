@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any, Dict, Optional
 from uuid import UUID
 
+from app.core.authorization.scope import uow_scope
 from app.modules.schedule.domain.interfaces import (
     ScheduleEventPublisher,
     ScheduleFilterTaskQueue,
@@ -15,7 +17,6 @@ from app.modules.schedule.infrastructure.adapters.schedule_event_publisher impor
     DurableScheduleEventPublisher,
 )
 from app.modules.schedule.domain.errors import ScheduleSourceEventIdRequiredError
-from app.modules.schedule.repositories.schedule_repository import ScheduleRepository
 from app.modules.schedule.services.webhook_event_mapper import WebhookEventMapper
 from app.modules.schedule.services.webhook_schedule_matcher import (
     WebhookScheduleMatcher,
@@ -30,16 +31,27 @@ class WebhookHandler:
 
     def __init__(
         self,
-        schedule_repository: ScheduleRepository | None = None,
-        schedule_matcher: WebhookScheduleMatcher | None = None,
+        matcher_factory: Callable[[Any], WebhookScheduleMatcher] | None = None,
+        uow_factory: Any = None,
         event_mapper: WebhookEventMapper | None = None,
         event_publisher: ScheduleEventPublisher | None = None,
         filter_task_queue: ScheduleFilterTaskQueue | None = None,
     ):
-        self.schedule_repository = schedule_repository
-        self.schedule_matcher = schedule_matcher
-        if self.schedule_repository is None or self.schedule_matcher is None:
-            raise ValueError("schedule_repository and schedule_matcher are required")
+        """Take a way to *open* a unit of work, not an open one.
+
+        This used to be handed a live ``uow`` by the route's dependency, so the
+        connection stayed checked out for the whole handler -- through the
+        Redis enqueue and the outbox write that follow the match. On a webhook
+        route the rate is chosen by whoever is sending, so that is the worst
+        place in the app to pin a connection from a fixed-size pool.
+
+        Now the match runs in its own short scope and the fan-out runs with
+        nothing held.
+        """
+        self.matcher_factory = matcher_factory
+        self.uow_factory = uow_factory
+        if self.matcher_factory is None or self.uow_factory is None:
+            raise ValueError("matcher_factory and uow_factory are required")
         self.event_mapper = event_mapper or WebhookEventMapper()
         self.event_publisher = event_publisher or DurableScheduleEventPublisher()
         self.filter_task_queue = filter_task_queue or StreaqScheduleFilterTaskQueue()
@@ -65,7 +77,10 @@ class WebhookHandler:
                 "schedule.webhook_handler.quarantined_webhook_without_stable_provider.degraded"
             )
             raise ScheduleSourceEventIdRequiredError()
-        schedules = await self.schedule_matcher.match(source, metadata)
+        # Phase one: the only database work there is. One indexed lookup, in a
+        # scope that ends before anything slow starts.
+        async with uow_scope(self.uow_factory) as uow:
+            schedules = await self.matcher_factory(uow).match(source, metadata)
 
         if not schedules:
             return []

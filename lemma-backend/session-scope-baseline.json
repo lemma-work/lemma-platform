@@ -31,8 +31,6 @@
     "app/modules/pod/api/controllers/pod_member_controller.py::remove_member::non-db-await/request-scoped::via revoke_member_authorization: pod_member_service.remove_member_from_pod",
     "app/modules/pod_bundle/api/controllers/import_controller.py::stream_import_events::nested-session/request-scoped::pod_context_scope",
     "app/modules/pod_bundle/api/controllers/import_controller.py::upload_bundle::non-db-await/request-scoped::thread offload: use_cases.stage_upload",
-    "app/modules/pod_bundle/api/controllers/publish_controller.py::stream_publish_events::nested-session/request-scoped::pod_context_scope",
-    "app/modules/schedule/api/controllers/webhook_controller.py::handle_webhook::non-db-await/request-scoped::event publish: EventPublisher.publish",
-    "app/modules/schedule/api/controllers/webhook_controller.py::handle_webhook::non-db-await/request-scoped::event publish: webhook_handler.handle_webhook"
+    "app/modules/pod_bundle/api/controllers/publish_controller.py::stream_publish_events::nested-session/request-scoped::pod_context_scope"
   ]
 }

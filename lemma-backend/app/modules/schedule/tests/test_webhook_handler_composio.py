@@ -8,6 +8,25 @@ from app.modules.schedule.services.webhook_schedule_matcher import WebhookSchedu
 from app.modules.schedule.domain.errors import ScheduleSourceEventIdRequiredError
 
 
+
+def _null_uow_factory():
+    """A unit of work that opens nothing.
+
+    The handler now opens its own short scope for the schedule lookup instead
+    of being handed a live one, which is the point of the change -- the Redis
+    enqueue and outbox write that follow must not run with a connection
+    checked out. These tests inject a mock matcher, so the scope has nothing to
+    do; it only has to be enterable.
+    """
+    from contextlib import asynccontextmanager
+
+    @asynccontextmanager
+    async def _scope():
+        yield None
+
+    return _scope()
+
+
 @pytest.mark.asyncio
 async def test_handle_webhook_composio_success(composio_gmail_event):
     schedule_repo = AsyncMock()
@@ -17,8 +36,8 @@ async def test_handle_webhook_composio_success(composio_gmail_event):
         schedule_repository=schedule_repo,
     )
     handler = WebhookHandler(
-        schedule_repository=schedule_repo,
-        schedule_matcher=matcher,
+        matcher_factory=lambda _uow: matcher,
+        uow_factory=_null_uow_factory,
         event_publisher=event_publisher,
     )
 
@@ -57,8 +76,8 @@ async def test_handle_webhook_composio_missing_provider_id():
         schedule_repository=schedule_repo,
     )
     handler = WebhookHandler(
-        schedule_repository=schedule_repo,
-        schedule_matcher=matcher,
+        matcher_factory=lambda _uow: matcher,
+        uow_factory=_null_uow_factory,
         event_publisher=AsyncMock(),
     )
 
@@ -78,8 +97,8 @@ async def test_handle_webhook_composio_v3_success():
         schedule_repository=schedule_repo,
     )
     handler = WebhookHandler(
-        schedule_repository=schedule_repo,
-        schedule_matcher=matcher,
+        matcher_factory=lambda _uow: matcher,
+        uow_factory=_null_uow_factory,
         event_publisher=event_publisher,
     )
 
