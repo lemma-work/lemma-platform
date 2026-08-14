@@ -1,8 +1,7 @@
 """Pod bundle module registration.
 
 Export, import, and GitHub sharing of pods as bundles — long-running work runs
-as streaq jobs with ephemeral Redis state (see
-``docs/design/pod-bundle-share-import.md``). No migrations: this module owns no
+as streaq jobs with ephemeral Redis state. No migrations: this module owns no
 tables.
 """
 

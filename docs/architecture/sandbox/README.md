@@ -58,7 +58,7 @@ with user workspaces. Provider-generated IDs remain private sandbox data.
 The current implementation couples four independently difficult concerns:
 
 1. provider lifecycle;
-2. a workload-specific HTTP runtime incorrectly used as the sandbox runtime's generic control
+2. a workload-specific HTTP runtime incorrectly used as the generic control
    plane;
 3. user workspace sessions and browser/application routing;
 4. function scheduling and execution.
@@ -141,7 +141,7 @@ explicit.
 - Treating ordinary Docker/runc as a production hostile-code boundary.
 - Hiding a reusable credential from arbitrary code executing in the same sandbox.
   Such a credential must never enter the sandbox.
-- Supporting the current experimental the sandbox runtime's API shape. The replacement is an
+- Supporting the current experimental sandbox-runtime API shape. The replacement is an
   atomic internal breaking change.
 - Supporting Daytona, Podman, or additional managed providers in the first
   implementation.
@@ -293,7 +293,7 @@ reference makes them unreachable.
 
 ### 6.3 Package and document tooling decision
 
-`uv` and `pnpm` are the only canonical package managers in maintained the sandbox runtime
+`uv` and `pnpm` are the only canonical package managers in maintained sandbox-runtime
 images and templates. Lock files are release inputs; builds use locked/frozen modes
 and never rewrite them. Workspace agents may use those two tools explicitly.
 Function sandboxes contain only the resolved environment and do not expose an
@@ -432,7 +432,7 @@ invariants, and the acceptance gates together.
 | Logical sandbox | Stable `(workload_kind, logical_id)` requested by a caller |
 | Physical allocation | One provider-created container, Pod, or E2B sandbox |
 | Workspace storage | Durable `/workspace` content owned by one logical workspace, independent of a replaceable allocation where the provider permits |
-| Allocation token | the sandbox runtime-generated unique identifier for one create attempt |
+| Allocation token | sandbox-runtime-generated unique identifier for one create attempt |
 | Allocation epoch | Monotonic logical incarnation used to fence sessions/processes |
 | Profile | Immutable workload image/template, capabilities, and policies |
 | Operation ID | Caller-generated identifier for one generic sandbox process start |

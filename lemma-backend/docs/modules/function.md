@@ -9,12 +9,12 @@ and process API.
 
 The canonical target design is:
 
-- [Function execution](../../../docs/design/sandbox/function-execution.md)
+- [Function execution](../../../docs/architecture/sandbox/function-execution.md)
 - [Function execution benchmark](../../../docs/operators/sandbox-function-benchmark.md)
-- [Sandbox design overview](../../../docs/design/sandbox/README.md)
-- [Sandbox protocol](../../../docs/design/sandbox/sandbox-protocol.md)
-- [Testing strategy](../../../docs/design/sandbox/testing-strategy.md)
-- [Verification and rollout](../../../docs/design/sandbox/verification-and-rollout.md)
+- [Sandbox design overview](../../../docs/architecture/sandbox/README.md)
+- [Sandbox protocol](../../../docs/architecture/sandbox/sandbox-protocol.md)
+- [Testing strategy](../../../docs/architecture/sandbox/testing-strategy.md)
+- [Verification and rollout](../../../docs/architecture/sandbox/verification-and-rollout.md)
 
 Do not duplicate function runtime, retry, queue, provider, credential, or artifact
 rules here. They belong in the canonical design set. There is no separate legacy

@@ -4,9 +4,8 @@ Lemma Desktop is a thin Tauri shell over the durable `lemma-locald` control
 plane. It supports hosted Lemma and a zero-toolchain local installation.
 
 For the user journey, see [Install and run Lemma locally](../docs/installation.md).
-For requirements and architecture, see the
-[product specification](../docs/design/local-desktop-product-spec.md) and
-[technical design](../docs/design/local-desktop-technical-design.md).
+For the process topology, lifecycle protocol, and port model, see the
+[Desktop architecture](../docs/architecture/desktop.md).
 
 ## Shipped topology
 
@@ -36,8 +35,7 @@ Because the stack outlives the shell, a relaunch is usually a reconcile rather
 than a start. Desktop records the serving workspace and its runtime generation,
 and a launch whose recorded workspace answers with that same generation opens it
 directly — no splash, no navigation — and reconciles with the daemon on a
-worker. Anything else falls back to the splash. See
-[app experience](../docs/design/local-desktop-app-experience.md).
+worker. Anything else falls back to the splash.
 
 ## Runtime packaging
 
