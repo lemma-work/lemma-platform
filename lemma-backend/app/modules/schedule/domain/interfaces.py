@@ -161,20 +161,6 @@ class ScheduleRepository(ABC):
         pass
 
 
-class SchedulerService(ABC):
-    """Interface for scheduler service."""
-
-    @abstractmethod
-    async def schedule_job(self, schedule: ScheduleEntity) -> None:
-        """Schedule a job for the schedule."""
-        pass
-
-    @abstractmethod
-    async def remove_job(self, schedule_id: UUID) -> None:
-        """Remove a scheduled job."""
-        pass
-
-
 class ExternalScheduleWriter(ABC):
     """Port for provisioning/deprovisioning external webhook providers."""
 

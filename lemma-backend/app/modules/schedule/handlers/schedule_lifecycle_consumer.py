@@ -17,7 +17,6 @@ from app.modules.schedule.domain.events.schedule import (
     ScheduleEvents,
 )
 from app.modules.schedule.domain.schedule import ScheduleType
-from app.modules.schedule.scheduler.api_client import SchedulerAPIClient
 
 router = RedisRouter()
 
@@ -40,7 +39,10 @@ async def on_schedule_deactivated(
         parsed = ScheduleDeactivated.model_validate(event)
         if parsed.schedule_type != ScheduleType.TIME:
             return
-        await SchedulerAPIClient().remove_job(parsed.schedule_id)
+        # Deactivation is the removal. The poller's due query filters on
+        # `is_active`, and this event fires because the row was just
+        # deactivated -- so by the time it arrives the schedule is already
+        # unclaimable. There is no separate job to delete any more.
         fs_logger.debug(
             "schedule.time_job.removed",
             schedule_id=str(parsed.schedule_id),

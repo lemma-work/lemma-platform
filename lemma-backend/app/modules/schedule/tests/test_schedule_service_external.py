@@ -28,7 +28,6 @@ async def test_only_explicit_reactivation_resets_failure_streak(
     service = ScheduleService(
         uow=AsyncMock(),
         schedule_repository=schedule_repo,
-        scheduler_service=AsyncMock(),
         external_schedule_writer=AsyncMock(),
     )
     schedule = ScheduleEntity(
@@ -61,13 +60,11 @@ async def test_only_explicit_reactivation_resets_failure_streak(
 async def test_create_external_schedule_success():
     uow = AsyncMock()
     schedule_repo = AsyncMock()
-    scheduler = AsyncMock()
     external_writer = AsyncMock()
 
     service = ScheduleService(
         uow=uow,
         schedule_repository=schedule_repo,
-        scheduler_service=scheduler,
         external_schedule_writer=external_writer,
     )
 
@@ -104,13 +101,11 @@ async def test_create_external_schedule_success():
 async def test_delete_external_schedule():
     uow = AsyncMock()
     schedule_repo = AsyncMock()
-    scheduler = AsyncMock()
     external_writer = AsyncMock()
 
     service = ScheduleService(
         uow=uow,
         schedule_repository=schedule_repo,
-        scheduler_service=scheduler,
         external_schedule_writer=external_writer,
     )
 
@@ -136,13 +131,11 @@ async def test_delete_external_schedule():
 async def test_create_schedule_no_provider_schedule_created():
     uow = AsyncMock()
     schedule_repo = AsyncMock()
-    scheduler = AsyncMock()
     external_writer = AsyncMock()
 
     service = ScheduleService(
         uow=uow,
         schedule_repository=schedule_repo,
-        scheduler_service=scheduler,
         external_schedule_writer=external_writer,
     )
 
@@ -169,13 +162,11 @@ async def test_create_schedule_no_provider_schedule_created():
 async def test_delete_external_schedule_failure_preserves_local_schedule():
     uow = AsyncMock()
     schedule_repo = AsyncMock()
-    scheduler = AsyncMock()
     external_writer = AsyncMock()
 
     service = ScheduleService(
         uow=uow,
         schedule_repository=schedule_repo,
-        scheduler_service=scheduler,
         external_schedule_writer=external_writer,
     )
 
@@ -204,7 +195,6 @@ async def test_workflow_webhook_schedule_derives_trigger_from_workflow_start():
     service = ScheduleService(
         uow=AsyncMock(),
         schedule_repository=AsyncMock(),
-        scheduler_service=AsyncMock(),
         external_schedule_writer=AsyncMock(),
     )
     workflow_id = uuid4()
@@ -245,7 +235,6 @@ async def test_workflow_webhook_schedule_rejects_trigger_mismatch():
     service = ScheduleService(
         uow=AsyncMock(),
         schedule_repository=AsyncMock(),
-        scheduler_service=AsyncMock(),
         external_schedule_writer=AsyncMock(),
     )
     workflow = ScheduleTarget(
@@ -289,7 +278,6 @@ async def test_delete_all_for_pod_tears_down_every_schedule():
     service = ScheduleService(
         uow=AsyncMock(),
         schedule_repository=schedule_repo,
-        scheduler_service=AsyncMock(),
         external_schedule_writer=AsyncMock(),
     )
 
@@ -312,7 +300,6 @@ async def test_delete_all_for_pod_force_deletes_on_teardown_failure():
     service = ScheduleService(
         uow=AsyncMock(),
         schedule_repository=schedule_repo,
-        scheduler_service=AsyncMock(),
         external_schedule_writer=AsyncMock(),
     )
 

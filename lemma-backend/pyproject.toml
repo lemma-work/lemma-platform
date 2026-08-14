@@ -41,7 +41,6 @@ dependencies = [
     "opentelemetry-instrumentation-httpx>=0.60b1",
     "opentelemetry-instrumentation-sqlalchemy>=0.60b1",
     "authlib>=1.6.6",
-    "apscheduler>=3.11.2",
     # Upper-bounded on purpose: the agent harness reaches into a few pydantic-ai
     # internals (see infrastructure/pydantic_ai_compat.py), so a major bump is a
     # deliberate migration rather than something `uv lock --upgrade` should do.

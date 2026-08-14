@@ -33,16 +33,6 @@ async def test_standalone_lifespan_starts_api_scheduler_and_worker(monkeypatch) 
 
     monkeypatch.setattr(standalone_app, "create_api_app", lambda: api_app)
 
-    class FakeScheduler:
-        _started = False
-
-        async def start(self) -> None:
-            self._started = True
-            events.append("scheduler-started")
-
-        async def shutdown(self) -> None:
-            self._started = False
-            events.append("scheduler-stopped")
 
     class FakeWorker:
         async def run_async(
@@ -56,7 +46,6 @@ async def test_standalone_lifespan_starts_api_scheduler_and_worker(monkeypatch) 
     # The scheduler + worker assembly lives in app.standalone now (shared with
     # the cloud standalone app), so patch it there. _prepare_embedded_worker
     # takes the worker as an argument now.
-    monkeypatch.setattr("app.standalone.get_scheduler_service", lambda: FakeScheduler())
     monkeypatch.setattr(
         "app.standalone._prepare_embedded_worker", lambda worker: FakeWorker()
     )
@@ -74,8 +63,6 @@ async def test_standalone_lifespan_starts_api_scheduler_and_worker(monkeypatch) 
     assert response.status_code == 404
     assert events == [
         "api-started",
-        "scheduler-started",
-        "scheduler-stopped",
         "api-stopped",
     ]
 
@@ -109,16 +96,6 @@ async def test_standalone_owns_mounted_app_lifespan(monkeypatch) -> None:
     async def ping() -> dict[str, str]:
         return {"status": "ok"}
 
-    class FakeScheduler:
-        _started = False
-
-        async def start(self) -> None:
-            self._started = True
-            events.append("scheduler-started")
-
-        async def shutdown(self) -> None:
-            self._started = False
-            events.append("scheduler-stopped")
 
     class FakeWorker:
         async def run_async(
@@ -129,7 +106,6 @@ async def test_standalone_owns_mounted_app_lifespan(monkeypatch) -> None:
             task_status.started()
             await sleep_forever()
 
-    monkeypatch.setattr("app.standalone.get_scheduler_service", lambda: FakeScheduler())
     monkeypatch.setattr(
         "app.standalone._prepare_embedded_worker", lambda worker: FakeWorker()
     )
@@ -152,8 +128,6 @@ async def test_standalone_owns_mounted_app_lifespan(monkeypatch) -> None:
     assert events == [
         "api-started",
         "embedded-started",
-        "scheduler-started",
-        "scheduler-stopped",
         "embedded-stopped",
         "api-stopped",
     ]

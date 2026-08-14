@@ -314,3 +314,38 @@ async def test_a_one_shot_whose_moment_has_passed_is_not_fired_late(
     row = await db_session.get(Schedule, schedule_id)
     await db_session.refresh(row)
     assert row.is_active is False
+
+
+async def test_a_deactivated_schedule_is_never_claimed(
+    db_manager, db_session, pod_and_user
+) -> None:
+    """Deactivation stops the firing, with nothing else to keep in step.
+
+    This used to need a second system: the failure-streak deactivation wrote
+    `is_active = False`, then an event handler asked the scheduler sidecar to
+    remove the job. Two systems, two chances to disagree -- a lost event left a
+    job firing against a schedule the database considered dead.
+
+    Now the claim query filters on `is_active`, so the UPDATE that deactivates
+    is the thing that stops it, in one transaction. This asserts that: a
+    deactivated row that is overdue and still carries a cursor is not claimed.
+    """
+    pod_id, user_id = pod_and_user
+    now = datetime.now(timezone.utc)
+    schedule_id = await _insert_schedule(
+        db_session, cron="*/5 * * * *", due_at=now - timedelta(minutes=1),
+        pod_id=pod_id, user_id=user_id,
+    )
+
+    row = await db_session.get(Schedule, schedule_id)
+    row.is_active = False
+    await db_session.commit()
+
+    async with db_manager.session_factory() as session:
+        claimed = await claim_due_schedules(session, now=now)
+        await session.commit()
+
+    assert schedule_id not in [c.schedule_id for c in claimed], (
+        "an overdue-but-deactivated schedule was claimed; deactivation is no "
+        "longer sufficient to stop a schedule firing"
+    )

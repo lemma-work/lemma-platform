@@ -62,7 +62,6 @@ _CONTRACT_METADATA_FIELDS = {
 
 _FOREIGN_LOGGER_PREFIXES = frozenset(
     {
-        "apscheduler",
         "asyncio",
         "azure",
         "com.supertokens",
@@ -107,8 +106,7 @@ _DEBUG_ONLY_NOISE_LOGGER_PREFIXES = (
     # narration with no diagnostic value: SuperTokens logs internal
     # getSession/middleware plumbing on every single request, the MCP SDK
     # logs handler registration on every connection, filelock logs every
-    # acquire/release pair, and APScheduler logs every empty polling tick.
-    "apscheduler",
+    # acquire/release pair.
     "com.supertokens",
     "filelock",
     "mcp",

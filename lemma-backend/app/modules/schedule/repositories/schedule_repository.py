@@ -34,6 +34,31 @@ from app.core.log.log import get_logger
 logger = get_logger(__name__)
 
 
+
+def cursor_for(entity_or_config, *, is_active: bool, schedule_type) -> datetime | None:
+    """The poller's cursor for a schedule row, or ``None`` if it is not armed.
+
+    Arming a schedule is writing this column -- there is no scheduler to tell.
+    It belongs with the row rather than behind a service because it is derived
+    state, and computing it in the same transaction is what stops a schedule
+    existing-but-unarmed for a poll interval.
+
+    ``None`` covers everything that must not be claimed: inactive rows,
+    non-TIME schedules (driven by their own triggers), unusable expressions, and
+    one-shots whose moment has passed. The poller's backfill retires those, in
+    one place rather than two.
+    """
+    from app.modules.schedule.services.due_schedule_claimer import next_cursor_for
+
+    if not is_active or schedule_type != ScheduleType.TIME:
+        return None
+    now = datetime.now(timezone.utc)
+    cursor = next_cursor_for(entity_or_config, after=now)
+    if cursor is None or cursor <= now:
+        return None
+    return cursor
+
+
 class ScheduleRepository(ScheduleRepositoryInterface):
     """Schedule repository implementation."""
 
@@ -65,6 +90,11 @@ class ScheduleRepository(ScheduleRepositoryInterface):
             visibility=entity.visibility,
             is_active=entity.is_active,
             is_internal=entity.is_internal,
+            next_fire_at=cursor_for(
+                entity.config,
+                is_active=entity.is_active,
+                schedule_type=entity.schedule_type,
+            ),
         )
         self.session.add(schedule)
         await self.session.flush()
@@ -195,6 +225,20 @@ class ScheduleRepository(ScheduleRepositoryInterface):
 
         if not update_data:
             return await self.get(schedule_id)
+
+        # Re-arm whenever what the cursor is derived from changes. Without this
+        # an edited cron keeps firing on its old expression until something else
+        # touches the row, and a reactivated schedule never becomes claimable at
+        # all -- the two bugs the old "tell the scheduler after you save" dance
+        # was there to prevent, now handled by the write itself.
+        if "config" in update_data or "is_active" in update_data:
+            existing_row = await self.session.get(Schedule, schedule_id)
+            if existing_row is not None:
+                update_data["next_fire_at"] = cursor_for(
+                    update_data.get("config", existing_row.config),
+                    is_active=update_data.get("is_active", existing_row.is_active),
+                    schedule_type=existing_row.schedule_type,
+                )
 
         if (
             "visibility" in update_data

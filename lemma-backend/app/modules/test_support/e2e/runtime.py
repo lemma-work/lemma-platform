@@ -21,8 +21,6 @@ import uvicorn
 
 from app.core.config import settings
 from app.modules.workspace.config import workspace_settings
-from app.modules.schedule.config import schedule_settings
-from app.modules.schedule.scheduler.internal_auth import ensure_internal_token
 from app.modules.agent.tests.e2e.system_lemma_helpers import (
     skip_unless_system_lemma,
     system_lemma_api_key,
@@ -644,76 +642,13 @@ async def configure_workspace_api_url(
 
 
 @pytest_asyncio.fixture(scope="function")
-async def scheduler_api_server(
-    e2e_settings,
-    db_manager,
-) -> AsyncGenerator[str, None]:
-    """Run a real scheduler API server for workflow/schedule e2e tests."""
-    _ = db_manager
-
-    from app.scheduler import app as scheduler_app
-
-    port = _available_port()
-    original_scheduler_url = schedule_settings.scheduler_api_url
-    original_scheduler_env = os.environ.get("SCHEDULER_API_URL")
-    schedule_settings.scheduler_api_url = f"http://127.0.0.1:{port}"
-    os.environ["SCHEDULER_API_URL"] = schedule_settings.scheduler_api_url
-    # The job API refuses to serve without a service token. Server and client
-    # share this process, so minting one here is what the single-process
-    # standalone assembly does too.
-    original_scheduler_token = schedule_settings.scheduler_internal_token
-    ensure_internal_token()
-
-    config = uvicorn.Config(
-        app=scheduler_app,
-        host="127.0.0.1",
-        port=port,
-        log_level="warning",
-        access_log=False,
-        lifespan="on",
-        ws="none",
-    )
-    server = uvicorn.Server(config)
-    server_task = asyncio.create_task(server.serve())
-
-    try:
-        for _ in range(100):
-            if server.started:
-                break
-            if server_task.done():
-                exc = server_task.exception()
-                raise RuntimeError(
-                    "Scheduler API server exited before startup"
-                ) from exc
-            await asyncio.sleep(0.1)
-        else:
-            raise RuntimeError("Timed out starting scheduler API server")
-        yield schedule_settings.scheduler_api_url
-    finally:
-        server.should_exit = True
-        try:
-            await asyncio.wait_for(server_task, timeout=10)
-        except asyncio.TimeoutError:
-            server_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await server_task
-        schedule_settings.scheduler_api_url = original_scheduler_url
-        schedule_settings.scheduler_internal_token = original_scheduler_token
-        if original_scheduler_env is None:
-            os.environ.pop("SCHEDULER_API_URL", None)
-        else:
-            os.environ["SCHEDULER_API_URL"] = original_scheduler_env
-
-
-@pytest_asyncio.fixture(scope="function")
 async def full_stack(
     configure_workspace_api_url,
-    scheduler_api_server,
 ) -> AsyncGenerator[dict[str, str], None]:
     """The complete stack for fully-real e2e tests.
 
     Combines the real backend + local Docker sandbox (``configure_workspace_api_url``)
-    and a real scheduler (``scheduler_api_server``) with the **production streaq
+    and the **production streaq
     worker subprocess** wired to the sandbox and the ``system:lemma`` agent
     runtime. The worker is a fresh subprocess per test (no shared in-process
     singletons), so triggered runs execute real functions in Docker and
@@ -752,7 +687,7 @@ async def full_stack(
     log_path = f"/tmp/lemma_full_stack_worker_{uuid.uuid4().hex}.log"
 
     # The worker subprocess inherits os.environ, which carries API_URL (from
-    # configure_workspace_api_url), SCHEDULER_API_URL (from scheduler_api_server),
+    # configure_workspace_api_url),
     # and any system:lemma provider env from .env/CI.
     worker_env = {
         **os.environ,

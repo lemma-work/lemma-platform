@@ -1,23 +1,17 @@
-"""Scheduler package for managing scheduled jobs with APScheduler."""
+"""Emitting a schedule fire.
 
-from app.modules.schedule.scheduler.scheduler_service import (
-    SchedulerService,
-    get_scheduler_service,
-)
+What is left after APScheduler: the event a fire produces, and the dedup key it
+carries. The scheduling itself -- deciding what is due, claiming it, and firing
+exactly once across replicas -- lives in ``schedule.services`` and is driven by
+the poller in the worker.
+"""
+
 from app.modules.schedule.scheduler.events import (
     SchedulerEventEmitter,
     get_event_emitter,
 )
-from app.modules.schedule.scheduler.api_client import (
-    SchedulerAPIClient,
-    get_scheduler_client,
-)
 
 __all__ = [
-    "SchedulerService",
-    "get_scheduler_service",
     "SchedulerEventEmitter",
     "get_event_emitter",
-    "SchedulerAPIClient",
-    "get_scheduler_client",
 ]

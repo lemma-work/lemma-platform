@@ -18,7 +18,6 @@ from app.modules.schedule.domain.interfaces import (
     DatastoreSchedulePolicy,
     ExternalScheduleWriter,
     ScheduleRepository,
-    SchedulerService,
     ScheduleTarget,
     ScheduleTargetResolver,
 )
@@ -33,7 +32,6 @@ from app.modules.schedule.domain.schedule import (
 from app.modules.schedule.repositories.schedule_repository import (
     ScheduleRepository as ScheduleRepositoryImpl,
 )
-from app.modules.schedule.scheduler.api_client import SchedulerAPIClient
 from app.modules.schedule.services.time_schedule_policy import (
     validate_time_schedule_config,
 )
@@ -54,7 +52,6 @@ class ScheduleService:
         self,
         uow: SqlAlchemyUnitOfWork,
         schedule_repository: Optional[ScheduleRepository] = None,
-        scheduler_service: Optional[SchedulerService] = None,
         external_schedule_writer: Optional[ExternalScheduleWriter] = None,
         target_resolver: ScheduleTargetResolver | None = None,
         datastore_policy: DatastoreSchedulePolicy | None = None,
@@ -64,7 +61,6 @@ class ScheduleService:
         self.schedule_repository = schedule_repository or ScheduleRepositoryImpl(
             uow=uow
         )
-        self.scheduler_service = scheduler_service or SchedulerAPIClient()
         if external_schedule_writer is None:
             from app.composition.schedule_connectors import (
                 ExternalScheduleWriterAdapter,
@@ -170,9 +166,6 @@ class ScheduleService:
                 raise ScheduleValidationError(
                     f"Failed to create external schedule: {exc}"
                 ) from exc
-
-        if created.schedule_type == ScheduleType.TIME:
-            await self.scheduler_service.schedule_job(created)
 
         return created
 
@@ -486,13 +479,6 @@ class ScheduleService:
             # next failure.
             await self.schedule_repository.reset_consecutive_failures(schedule_id)
 
-        if updated and updated.schedule_type == ScheduleType.TIME:
-            if "config" in update_data or "is_active" in update_data:
-                if updated.is_active:
-                    await self.scheduler_service.schedule_job(updated)
-                else:
-                    await self.scheduler_service.remove_job(updated.id)
-
         return updated
 
     async def delete_schedule(self, schedule_id: UUID) -> bool:
@@ -500,9 +486,6 @@ class ScheduleService:
         existing = await self.schedule_repository.get(schedule_id)
         if not existing:
             return False
-
-        if existing.schedule_type == ScheduleType.TIME:
-            await self.scheduler_service.remove_job(schedule_id)
 
         if (
             existing.schedule_type == ScheduleType.WEBHOOK

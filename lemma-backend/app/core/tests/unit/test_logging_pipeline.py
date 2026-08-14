@@ -575,7 +575,6 @@ def test_sqlalchemy_debug_remains_available_when_requested(
         "com.supertokens",
         "mcp.server.lowlevel.server",
         "filelock",
-        "apscheduler.scheduler",
         "urllib3.connectionpool",
     ),
 )
@@ -611,7 +610,6 @@ def test_debug_only_noise_is_suppressed_when_quiet_dependencies_requested(
         "com.supertokens",
         "mcp.server.lowlevel.server",
         "filelock",
-        "apscheduler.scheduler",
         "urllib3.connectionpool",
     ),
 )

@@ -17,7 +17,6 @@ async def test_all_resource_apis_allow_visibility_transitions_and_clear_grants(
     authenticated_client: AsyncClient,
     async_client: AsyncClient,
     fixed_test_org,
-    scheduler_api_server,
 ):
     ctx = await create_role_visibility_context(
         authenticated_client,
