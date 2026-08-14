@@ -69,6 +69,14 @@ export interface UseAssistantControllerOptions extends AssistantConversationScop
   autoLoad?: boolean;
   instructions?: string | null;
   autoLoadMessages?: boolean;
+  /**
+   * Which conversations the history holds. `'pod'` is every conversation in the
+   * pod, so a chat surface that switches agents keeps one continuous list.
+   * `'agent'` lists only what this agent ran — what a per-agent surface such as
+   * the test panel means by "history". Scoping happens on the server, so the
+   * page size counts this agent's runs rather than the pod's.
+   */
+  historyScope?: "pod" | "agent";
 }
 
 export interface SendAssistantControllerMessageOptions {
@@ -146,8 +154,6 @@ type AssistantApiConversationMessage = ConversationMessage & {
 };
 
 const CONVERSATIONS_PAGE_SIZE = 30;
-
-const EMPTY_HISTORY_SCOPE_KEY = JSON.stringify({ podId: null });
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
@@ -668,6 +674,7 @@ export function useAssistantController({
   autoLoad = true,
   instructions,
   autoLoadMessages = true,
+  historyScope = "pod",
 }: UseAssistantControllerOptions): UseAssistantControllerResult {
   const [localError, setLocalError] = useState<string | null>(null);
   const [conversations, setConversations] = useState<Conversation[]>([]);
@@ -726,9 +733,20 @@ export function useAssistantController({
     }),
     [scope.agentName, scope.assistantId, scope.assistantName, scope.organizationId, scope.podId],
   );
+  const historyPodId = scope.podId ?? client.podId ?? null;
+  // `undefined` means the agent is no part of the history request — and so no
+  // part of anything derived from it. Under pod scope a surface that switches
+  // agents must keep the list it already has rather than refetch the same one.
+  // Under agent scope `null` is the pod's default agent, which is what a
+  // controller with no agent name talks to.
+  const historyAgentName = historyScope === "agent" ? scope.agentName ?? null : undefined;
   const historyScopeKey = useMemo(
-    () => JSON.stringify({ podId: scope.podId ?? client.podId ?? null }),
-    [client.podId, scope.podId],
+    () => JSON.stringify(
+      typeof historyAgentName === "undefined"
+        ? { podId: historyPodId }
+        : { podId: historyPodId, agentName: historyAgentName },
+    ),
+    [historyAgentName, historyPodId],
   );
   const previousHistoryScopeKeyRef = useRef(historyScopeKey);
 
@@ -897,10 +915,13 @@ export function useAssistantController({
       : client;
     return scopedClient.conversations.list({
       pod_id: scope.podId ?? scopedClient.podId ?? undefined,
+      // Left off the request under pod scope: the parameter is what narrows the
+      // list, and `null` already means the pod's default agent, not "no filter".
+      ...(typeof historyAgentName === "undefined" ? {} : { agent_name: historyAgentName }),
       limit: input.limit,
       page_token: input.pageToken,
     });
-  }, [client, scope.podId]);
+  }, [client, historyAgentName, scope.podId]);
 
   const loadConversations = useCallback(async () => {
     setIsLoadingConversations(true);
@@ -1210,9 +1231,10 @@ export function useAssistantController({
   }, [clearRuntimeMessages, enabled, historyScopeKey, scopeKey, sessionCancel]);
 
   useEffect(() => {
-    if (!enabled || !autoLoad || historyScopeKey === EMPTY_HISTORY_SCOPE_KEY) return;
+    // No pod, nothing to list — the request would only fail on the missing id.
+    if (!enabled || !autoLoad || !historyPodId) return;
     void loadConversations();
-  }, [autoLoad, enabled, historyScopeKey, loadConversations]);
+  }, [autoLoad, enabled, historyPodId, historyScopeKey, loadConversations]);
 
   useEffect(() => {
     // Having no conversation open is not a reason to forget the ones already
