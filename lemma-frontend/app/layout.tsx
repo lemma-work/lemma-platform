@@ -2,7 +2,23 @@ import type { Metadata, Viewport } from "next";
 // Product and landing share one voice: Inter for everything, DM Mono for
 // machine values. See the typography note in styles/tokens.css. The rest are
 // landing-only display faces.
-import { Bricolage_Grotesque, DM_Mono, DM_Sans, Fraunces, IBM_Plex_Mono, Inter, Playwrite_TZ, Source_Serif_4 } from "next/font/google";
+//
+// Loaded from `next/font/local` over Fontsource packages rather than
+// `next/font/google`, because the Google loader fetches from
+// fonts.googleapis.com *during the build*. That made every build only as
+// reliable as Google's CDN, and it is not reliable: it took down six of our
+// last eight release runs. The failures are 404s on asset URLs that Google's
+// own CSS had listed moments earlier -- an edge serving one generation of the
+// stylesheet while the assets it names have already been rotated away -- so
+// they are per-edge, unreproducible, and immune to retries beyond luck.
+// Vercel's own guidance for CI is to self-host, and there is no Next option
+// that makes the fetch deterministic.
+//
+// Fontsource ships the same Google-hosted files as versioned npm packages, so
+// the bytes are pinned in package-lock.json and the build makes no network
+// request at all. `npm run build` now succeeds with fonts.googleapis.com
+// blocked, which is the property being bought.
+import localFont from "next/font/local";
 import Script from "next/script";
 import "./globals.css";
 import "./auth/auth-portal.css";
@@ -46,16 +62,35 @@ export const viewport: Viewport = {
 // Body *and* display face — product and landing share one voice. 600 exists
 // because landing reserves it for the fake product chrome in its mockups, and
 // dense real UI needs Inter's own semibold rather than a synthesized bold.
-const inter = Inter({
-  weight: ["300", "400", "500", "600"],
-  subsets: ["latin"],
+// Variable files carry the whole weight axis in one request, so the weights
+// each face declares below are the range the family actually supports rather
+// than the handful the design uses. `wght` is the pure weight axis: the `opsz`
+// and `full` variants Fontsource also ships add an optical-size axis that
+// would render differently from the static weights this replaced.
+// Subsetted and axis-trimmed by scripts/subset-inter.sh, and committed —
+// this is the one face preloaded on every route, so its bytes are on the
+// critical path for every visitor.
+//
+// Fontsource ships the file Google publishes; Google *serves* a tighter cut of
+// it. Taking the package file as-is put 47.1 KB on that path against the
+// 35.2 KB the Google loader used to fetch, which the bundle budget correctly
+// refused. The script re-cuts it to Google's own `latin` unicode-range and
+// narrows the weight axis to the 300-600 the design has always had, landing
+// under the previous figure. `weight` below must match that axis.
+const inter = localFont({
+  src: "./fonts/inter-latin-wght-normal.subset.woff2",
+  weight: "300 600",
+  display: "swap",
   variable: "--font-landing-sans",
 });
 
 // Mono face — code, tables and machine values in the assistant.
-const dmMono = DM_Mono({
-  weight: ["400", "500"],
-  subsets: ["latin"],
+const dmMono = localFont({
+  src: [
+    { path: "../node_modules/@fontsource/dm-mono/files/dm-mono-latin-400-normal.woff2", weight: "400", style: "normal" },
+    { path: "../node_modules/@fontsource/dm-mono/files/dm-mono-latin-500-normal.woff2", weight: "500", style: "normal" },
+  ],
+  display: "swap",
   variable: "--font-dm-mono",
 });
 
@@ -66,51 +101,66 @@ const dmMono = DM_Mono({
 // for continuous reading on screen and shares Inter's vertical proportions, so
 // a sans headline over serif body sits on one baseline rhythm instead of
 // looking like two fonts that met by accident.
-const sourceSerif = Source_Serif_4({
-  weight: ["400", "600"],
-  subsets: ["latin"],
-  style: ["normal", "italic"],
+const sourceSerif = localFont({
+  src: [
+    { path: "../node_modules/@fontsource-variable/source-serif-4/files/source-serif-4-latin-wght-normal.woff2", weight: "200 900", style: "normal" },
+    { path: "../node_modules/@fontsource-variable/source-serif-4/files/source-serif-4-latin-wght-italic.woff2", weight: "200 900", style: "italic" },
+  ],
+  display: "swap",
   variable: "--font-reading-serif",
   preload: false,
 });
 
 // Landing display serif.
-const fraunces = Fraunces({
-  weight: ["300", "400"],
-  subsets: ["latin"],
-  style: ["normal", "italic"],
+const fraunces = localFont({
+  src: [
+    { path: "../node_modules/@fontsource-variable/fraunces/files/fraunces-latin-wght-normal.woff2", weight: "100 900", style: "normal" },
+    { path: "../node_modules/@fontsource-variable/fraunces/files/fraunces-latin-wght-italic.woff2", weight: "100 900", style: "italic" },
+  ],
+  display: "swap",
   variable: "--font-landing-serif",
   preload: false,
 });
 
 // Landing mono.
-const ibmPlexMono = IBM_Plex_Mono({
-  weight: ["400", "500"],
-  subsets: ["latin"],
+const ibmPlexMono = localFont({
+  src: [
+    { path: "../node_modules/@fontsource/ibm-plex-mono/files/ibm-plex-mono-latin-400-normal.woff2", weight: "400", style: "normal" },
+    { path: "../node_modules/@fontsource/ibm-plex-mono/files/ibm-plex-mono-latin-500-normal.woff2", weight: "500", style: "normal" },
+  ],
+  display: "swap",
   variable: "--font-landing-mono",
   preload: false,
 });
 
-// The handwritten greeting, on one landing block. next/font gives this family
-// no `subsets` option and so never preloads it — there is no `preload` flag to
-// set here, and none is needed.
-const playwriteTz = Playwrite_TZ({
-  weight: ["300", "400"],
+// The handwritten greeting, on one landing block. Static rather than variable:
+// Playwrite has no variable build, which is also why the Google loader gave it
+// no `subsets` option and never preloaded it. `preload: false` says here what
+// the loader used to decide on its own.
+const playwriteTz = localFont({
+  src: [
+    { path: "../node_modules/@fontsource/playwrite-tz/files/playwrite-tz-latin-300-normal.woff2", weight: "300", style: "normal" },
+    { path: "../node_modules/@fontsource/playwrite-tz/files/playwrite-tz-latin-400-normal.woff2", weight: "400", style: "normal" },
+  ],
+  display: "swap",
   variable: "--font-greeting-hand",
+  preload: false,
 });
 
 // Long-form document and legal pages.
-const documentSans = DM_Sans({
-  weight: ["300", "400", "500", "600"],
-  subsets: ["latin"],
+const documentSans = localFont({
+  src: "../node_modules/@fontsource-variable/dm-sans/files/dm-sans-latin-wght-normal.woff2",
+  weight: "100 1000",
+  display: "swap",
   variable: "--font-document-sans",
   preload: false,
 });
 
-const bricolageGrotesque = Bricolage_Grotesque({
-  weight: ["400", "500", "700", "800"],
+const bricolageGrotesque = localFont({
+  src: "../node_modules/@fontsource-variable/bricolage-grotesque/files/bricolage-grotesque-latin-wght-normal.woff2",
+  weight: "200 800",
+  display: "swap",
   variable: "--font-bricolage-grotesque",
-  subsets: ["latin"],
   preload: false,
 });
 
