@@ -3,7 +3,39 @@
 Thanks for helping improve Lemma. Keep pull requests focused, explain user and
 operator impact, and add tests for behavioral changes.
 
-## Backend setup
+New to the codebase? [ARCHITECTURE.md](ARCHITECTURE.md) is the map — components,
+where state lives, and the invariants that hold everywhere. Questions that
+aren't a bug report belong in
+[Discussions](https://github.com/lemma-work/lemma-platform/discussions); see
+[SUPPORT.md](SUPPORT.md).
+
+## Get the stack running
+
+From a checkout, hot-reload from source:
+
+```bash
+make init        # create .env files with local defaults (idempotent)
+make dev         # infra + backend + frontend
+```
+
+`make help` lists everything else. The dev stack uses ports 3710 (frontend) and
+8710 (backend).
+
+## Find the right component
+
+Each component has its own setup and its own checks. Run the ones you touched.
+
+| You changed… | Read | Run before opening a PR |
+|---|---|---|
+| `lemma-backend/` | [backend README](lemma-backend/README.md), [development guidelines](lemma-backend/docs/development.md), [module guide](lemma-backend/docs/modules/README.md) | see below |
+| `lemma-frontend/` | [frontend README](lemma-frontend/README.md), [frontend contributing](lemma-frontend/CONTRIBUTING.md) | `npm run check && npm test` |
+| `lemma-cli/` | [CLI README](lemma-cli/README.md), [conventions](lemma-cli/CONVENTIONS.md) | `make test && make lint` |
+| `lemma-typescript/` | [SDK README](lemma-typescript/README.md) | `npm run build && npm test` |
+| `lemma-python/` | [SDK README](lemma-python/README.md) | `uv run pytest` |
+| `lemma-skills/` | [skills README](lemma-skills/README.md) | — |
+| `desktop/` | [maintainer guide](desktop/README.md), [architecture](docs/architecture/desktop.md) | `make desktop-test && make desktop-lint` |
+
+## Backend
 
 The backend requires Python 3.14, PostgreSQL, and Redis. From `lemma-backend`:
 
@@ -21,7 +53,7 @@ Use `make test-e2e-fast E2E_WORKERS=1` for the deterministic container-backed
 suite. Real providers, model calls, and Docker sandbox tests are protected and
 must never use personal or production credentials.
 
-## Backend architecture
+### Backend architecture rules
 
 - The canonical module documentation lives in `lemma-backend/docs/modules`.
 - Cross-module collaboration belongs in an explicit `contracts` package or a
@@ -29,11 +61,14 @@ must never use personal or production credentials.
   infrastructure, or persistence model from new code.
 - Persist state and its domain event in one database transaction through the
   unit of work. Consumers must be inbox-backed and idempotent.
+- Never hold a DB session across external I/O or a streaming body.
 - Classify errors at process boundaries. Preserve cancellation, redact secrets,
   and never return or log raw provider exceptions.
-- Add an Alembic upgrade and downgrade test for schema changes. Reliability
-  work for this release is intentionally consolidated in revision
-  `0003_backend_reliability`.
+- Add an Alembic upgrade and downgrade test for schema changes.
+
+`make architecture` enforces most of this as a no-growth ratchet against
+`architecture-baseline.json`: existing violations are tolerated, new ones are
+not.
 
 ## Configuration
 
@@ -50,11 +85,34 @@ Do not hand-edit OpenAPI client output. See the
 generation scripts, and commit the specification and resulting clients in the
 same change.
 
+## Documentation
+
+Documentation is part of the change, not a follow-up.
+
+- Docs describe **what exists today**. Plans, review findings, and migration
+  narratives belong in the pull request that does the work — not in `docs/`.
+- New reader-facing docs go in [`docs/`](docs/README.md) and get a row in its
+  index. Component-specific detail stays next to the code.
+- Relative links are checked; make sure yours resolve.
+- Don't paste coverage percentages or benchmark numbers into prose. They go
+  stale silently. Name the command that produces them instead.
+
 ## Pull requests
 
-A backend PR should include migration/API compatibility notes, exact test
-commands, security implications, and rollback guidance. Generated-client drift,
-architecture growth, new broad catches, insufficient coverage, and unresolved
-high/critical security findings are merge blockers.
+The [pull request template](.github/PULL_REQUEST_TEMPLATE.md) lists what a
+change needs. A backend PR should include migration/API compatibility notes,
+exact test commands, security implications, and rollback guidance.
 
-Report vulnerabilities privately according to [SECURITY.md](SECURITY.md).
+Merge blockers: generated-client drift, architecture baseline growth, new broad
+`except` clauses, coverage below the committed floor, and unresolved
+high/critical security findings.
+
+## Security
+
+Report vulnerabilities privately according to [SECURITY.md](SECURITY.md) —
+never in a public issue or pull request. Never commit real credentials, tokens,
+customer payloads, or production dumps.
+
+## Code of conduct
+
+Participation is governed by our [code of conduct](CODE_OF_CONDUCT.md).

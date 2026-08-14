@@ -69,5 +69,3 @@ a pod is consumed as a system event to tear down schedules and external jobs.
 
 Tests cover normalization, filters, adapters, CRUD, scheduler calls, event
 consumers, concurrent schedule-run deduplication, retry, and atomic deactivation.
-Operational status and remaining cross-module debt are tracked in
-[issues.md](issues.md).

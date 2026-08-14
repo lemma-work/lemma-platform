@@ -1,8 +1,8 @@
-# The sandbox runtime Provider Adapters
+# Sandbox provider adapters
 
 **Status:** Docker and E2B implemented and verified; Kubernetes deferred
 
-**Parent:** [the sandbox runtime](README.md)
+**Parent:** [Sandbox fabric](README.md)
 
 **Protocol:** [Sandbox protocol](sandbox-protocol.md)
 
@@ -10,7 +10,7 @@
 
 ## 1. Purpose
 
-This document maps the portable the sandbox runtime ports onto Docker, Kubernetes, and E2B.
+This document maps the portable sandbox-runtime ports onto Docker, Kubernetes, and E2B.
 Adapters are allowed to use different data-plane transports. They are not allowed to
 change public semantics, invent their own retry policy, persist secrets, or expose a
 provider ID to callers.
@@ -230,7 +230,7 @@ confirmed absent. Volume deletion never uses a broad name prefix.
 
 The backend owns the public `function_run_id` and run transition. The sandbox runtime owns
 only the function allocation and direct runtime lease; it does not create a
-generic the sandbox runtime process row for each function invocation.
+generic sandbox-runtime process row for each function invocation.
 
 ### 5.4 Files and port access
 
@@ -389,7 +389,7 @@ The documented create request supports secured access, lifecycle, outbound netwo
 and public-traffic controls; see the
 [E2B create-sandbox API](https://e2b.dev/docs/api-reference/sandboxes/create-sandbox).
 
-The workspace template exposes no the sandbox runtime control runtime. The function template
+The workspace template exposes no sandbox-runtime control runtime. The function template
 starts the private resident function runtime on port 8090 and proves it ready during
 the template build.
 
@@ -421,7 +421,7 @@ and delegated credentials expire before that bound. Provider timeout is a safety
 fallback, not a second lifecycle controller.
 
 Thus the paused sandbox contains the static clean template/runtime state plus
-workspace files, not live delegated credentials. Resume is an explicit the sandbox runtime
+workspace files, not live delegated credentials. Resume is an an explicit sandbox-runtime
 operation against the exact sandbox ID and produces a new allocation epoch before
 new data-plane work is accepted. Native file or command traffic cannot silently
 resume a sandbox behind the lifecycle controller. See
@@ -445,7 +445,7 @@ preserves its filesystem.
 
 Map ports directly:
 
-| the sandbox runtime port | E2B API |
+| Sandbox runtime port | E2B API |
 | --- | --- |
 | Foreground/background process | `sandbox.commands.run` |
 | Reconnect/inspect/list | command PID, `commands.connect`, `commands.list` |
@@ -540,7 +540,7 @@ and deduplicate delivery IDs. See
 [E2B lifecycle webhooks](https://e2b.dev/docs/sandbox/lifecycle-events-webhooks)
 and [listing sandboxes](https://e2b.dev/docs/sandbox/list).
 
-Provider project concurrency and create rate are the sandbox runtime admission inputs. E2B 429
+Provider project concurrency and create rate are sandbox-runtime admission inputs. E2B 429
 responses update one distributed provider-scope `blocked_until`; adapter-local retry
 loops are forbidden. See [E2B billing and limits](https://e2b.dev/docs/billing).
 

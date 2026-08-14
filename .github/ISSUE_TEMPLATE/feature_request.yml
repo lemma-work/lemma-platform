@@ -1,0 +1,63 @@
+name: Feature request
+description: Propose something Lemma should be able to do.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Open-ended "what if Lemma could…" conversations are usually better in
+        [Discussions](https://github.com/lemma-work/lemma-platform/discussions).
+        Use this form when you have a specific gap in mind.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: >-
+        What are you trying to do, and where does Lemma stop you? Describe the
+        situation rather than the solution — it often has more than one.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you would like to happen
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What you tried instead
+      description: >-
+        Workarounds you found, and why they are not enough. This is the most
+        useful part of the report.
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      options:
+        - Not sure
+        - Desktop app
+        - Backend / API
+        - Frontend / workspace UI
+        - CLI (lemma-terminal)
+        - Python SDK
+        - TypeScript SDK
+        - Agent skills
+        - Agent Host
+        - Sandboxes (workspace or function runs)
+        - Surfaces (Slack, Teams, Gmail, Outlook, Telegram, WhatsApp)
+        - Connectors
+        - Documentation
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: contribute
+    attributes:
+      label: Would you be willing to work on this?
+      options:
+        - label: I would be interested in opening a pull request for it.

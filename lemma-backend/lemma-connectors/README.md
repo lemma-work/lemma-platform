@@ -146,12 +146,8 @@ The package generation flow is:
 7. Generate resource-scoped operation modules into `resources/`.
 8. Validate imports, discovery, and focused tests.
 
-See [docs/package-architecture.md](./docs/package-architecture.md) and
-[docs/generation-workflow.md](./docs/generation-workflow.md) for the detailed
-design and generation expectations.
-
-For future provider work, there is also a repo-local reusable skill at
-[skills/connector-creator/SKILL.md](./skills/connector-creator/SKILL.md).
+For future provider work, there is a repo-local reusable skill at
+[skills/integration-creator/SKILL.md](./skills/integration-creator/SKILL.md).
 That skill is meant to be read on demand together with
-[skills/connector-creator/references/workflow.md](./skills/connector-creator/references/workflow.md)
+[skills/integration-creator/references/workflow.md](./skills/integration-creator/references/workflow.md)
 when generating a new connector package from an OpenAPI spec.

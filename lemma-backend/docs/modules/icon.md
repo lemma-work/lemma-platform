@@ -39,4 +39,4 @@ flowchart LR
 ## Tests and operations
 
 Tests cover upload limits and validation, public retrieval, traversal rejection,
-headers, and cleanup. See [issues.md](issues.md) for the resolved upload finding.
+headers, and cleanup.

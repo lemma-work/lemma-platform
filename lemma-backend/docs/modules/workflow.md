@@ -67,8 +67,8 @@ reconciles completion events that were missed.
 Workflow definition/run operations use pod permissions and resource grants.
 Human form assignment resolves pod members. Adapter ports invoke agent,
 function, and schedule modules. Scheduled start configuration imports schedule
-value types directly, while schedule also calls workflow services; this cycle is
-tracked in [issues.md](issues.md).
+value types directly, while schedule also calls workflow services. That cycle is
+in the architecture baseline and cannot grow; see `make architecture`.
 
 ## Tests and operations
 

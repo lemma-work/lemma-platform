@@ -3,7 +3,7 @@
 Imported for side effects by ``module.register_streaq`` at worker startup.
 Tasks land slice by slice: export, plan, apply, GitHub import, publish, sweep.
 
-Export job phases (see ``docs/design/pod-bundle-share-import.md``):
+Export job phases:
   (a) mark ``EXPORTING`` + publish status
   (b) one short UoW: build ctx, assemble the archive bytes via ``BundleExporter``
       (list+get reads inside the scope; progress writes bump Redis)

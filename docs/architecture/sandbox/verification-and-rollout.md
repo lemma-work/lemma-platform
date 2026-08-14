@@ -1,8 +1,8 @@
-# The sandbox runtime Verification and Rollout
+# Sandbox verification and rollout
 
 **Status:** Docker and E2B implementation verified; Kubernetes rollout deferred
 
-**Parent:** [the sandbox runtime](README.md)
+**Parent:** [Sandbox fabric](README.md)
 
 ## 1. Purpose
 
@@ -214,7 +214,7 @@ case IDs become mandatory for Kubernetes before that adapter is enabled.
 - Tests use the asynchronous Engine API path; the `docker` CLI may be absent.
 - Workspace volume survives container stop/start and container replacement.
 - Permanent delete removes exact container and volume.
-- Random loopback port mappings are reachable only through signed the sandbox runtime proxy.
+- Random loopback port mappings are reachable only through signed sandbox-runtime proxy.
 - Function container has no named volume or published port and is removed after idle.
 - Manager socket/credentials are absent inside both profile containers.
 - Run under documented CPU/memory/PID/output limits.
@@ -235,7 +235,7 @@ Disposable-cluster suite:
 - permanent delete removes exact Pod/PVC;
 - watches handle resource-version expiration without creating again;
 - `409 AlreadyExists` validates the exact allocation token;
-- workspace runtime is inaccessible without the sandbox runtime runtime credential;
+- workspace runtime is inaccessible without the sandbox runtime credential;
 - function Pod has no PVC, Service, Ingress, or service-account token;
 - function Pod deletion loses all cache and a later cold run still succeeds;
 - NetworkPolicy denies cross-sandbox and private/control destinations.
@@ -275,7 +275,7 @@ than a skipped pass.
 
 ## 6. Function execution tests
 
-Run the same full backend function suite through the sandbox runtime Docker and E2B profiles.
+Run the same full backend function suite through the Docker and E2B sandbox profiles.
 It becomes a Kubernetes gate only when that deferred adapter is enabled.
 
 ### 6.1 Revision and artifact
@@ -480,7 +480,7 @@ diagnostics, not database records.
 
 ## 10. Breaking migration
 
-The the sandbox runtime's API is deployed atomically with the generated client and all backend
+The sandbox runtime's API is deployed atomically with the generated client and all backend
 callers. There is no live compatibility facade for the experimental API.
 
 ### Phase 0: design and baselines
@@ -497,7 +497,7 @@ callers. There is no live compatibility facade for the experimental API.
 - Implement typed models and errors, SQLAlchemy 2.x repositories/unit of work, Alembic
   schema, lifecycle operations, operation wait/notification, distributed admission,
   and deterministic fault adapter.
-- Generate the breaking the sandbox runtime client.
+- Generate the breaking sandbox-runtime client.
 - Implement all hermetic domain/port tests before real providers.
 
 ### Phase 2: workspace runtime and Docker
@@ -535,7 +535,7 @@ callers. There is no live compatibility facade for the experimental API.
 ### Phase 6: atomic development cutover
 
 - Drain experimental sandbox sessions/jobs.
-- Delete and recreate the sandbox runtime-owned database/schema; no experimental rows are
+- Delete and recreate sandbox-runtime-owned database/schema; no experimental rows are
   transformed, copied, or adopted.
 - Remove experimental Docker containers/volumes and E2B sandboxes by exact managed
   metadata. Keep a machine-readable deletion ledger and verify every exact ID is
@@ -574,7 +574,7 @@ callers. There is no live compatibility facade for the experimental API.
   claim is uncertain.
 - Unclaimed queued runs may be drained and resubmitted only through an explicit
   migration transaction preserving run identity and deadline.
-- The initial database operation is a destructive the sandbox runtime-owned schema reset. Later
+- The initial database operation is a destructive sandbox-runtime-owned schema reset. Later
   changes use normal reviewed Alembic migrations.
 - Provider templates/images remain pinned and available for the full rollback and
   forensic-retention window.

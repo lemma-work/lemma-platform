@@ -1,15 +1,15 @@
-# The sandbox runtime Testing Strategy
+# Sandbox testing strategy
 
 **Status:** Implemented and verified for Docker and E2B; Kubernetes deferred
 
-**Parent:** [the sandbox runtime](README.md)
+**Parent:** [Sandbox fabric](README.md)
 
 **Acceptance and rollout:** [Verification and rollout](verification-and-rollout.md)
 
 ## 1. Purpose and release boundary
 
 The sandbox runtime is execution infrastructure, so a provider adapter is not accepted because
-its mocked methods pass. The initial the sandbox runtime release is accepted only when the
+its mocked methods pass. The initial sandbox-runtime release is accepted only when the
 same observable workspace and function journeys pass against real Docker and real
 E2B using the exact images/templates, generated client, backend dispatcher, runtime
 gateway, and database schema intended for deployment.
@@ -22,7 +22,7 @@ The initial mandatory provider matrix is:
 | E2B | Required | Required | Required | Required | Passed |
 | Kubernetes | Designed, not initially required | Designed, not initially required | Designed, not initially required | Designed, not initially required | Deferred until dedicated cluster program |
 
-A Docker-only pass cannot validate an E2B profile. An the sandbox runtime-only process test
+A Docker-only pass cannot validate an E2B profile. A sandbox-runtime-only process test
 cannot validate the backend function plane. An E2B workspace pass cannot stand in
 for an E2B function pass. All four required columns require evidence from the exact
 source and immutable profile builds under test.
@@ -38,7 +38,7 @@ protocol-v2 implementation branch:
 
 | Suite | Result | What it proves |
 | --- | ---: | --- |
-| the sandbox runtime hermetic unit/contract suite | 143 passed, 6 skipped | Typed SQLAlchemy state, API, adapters, workspace runtime, resident function runtime, streaming files, fault paths, and exact cleanup reconciliation |
+| Sandbox-runtime hermetic unit/contract suite | 143 passed, 6 skipped | Typed SQLAlchemy state, API, adapters, workspace runtime, resident function runtime, streaming files, fault paths, and exact cleanup reconciliation |
 | Real Docker adapter suite | 4 passed | Workspace lifecycle/volume, shell, PTY, Python, files, browser/port access, resident runtime health, exact destruction, and private-network manager topology |
 | Real E2B adapter suite | 2 passed | Immutable create, Node/pnpm/uv/LiteParse, shell/stdin, PTY/resize, native files, Code Interpreter state, headful browser, explicit pause/resume, resident runtime TLS port access, ten concurrent proxied runtime requests, and exact deletion |
 | Function backend and executor suites | 65 unit and 28 E2E passed | Direct API dispatch, durable JOB dispatch, canonical delegated-token authorization, token cache, revision artifacts, repository concurrency, schema prewarming, cancellation, exact-run invocation deduplication, and real Docker API/JOB execution |
@@ -113,11 +113,11 @@ Proposed structure:
 ```text
 lemma-backend/app/modules/workspace/tests/sandbox/
   contract/                backend workspace adapter/client behavior
-  full_stack/              tools, browser, files through real the sandbox runtime
+  full_stack/              tools, browser, files through the real sandbox runtime
 
 lemma-backend/app/modules/function/tests/sandbox/
   domain/                  direct API dispatch, JOB queue, sessions, runs
-  full_stack/              API and JOB through real the sandbox runtime/provider
+  full_stack/              API and JOB through the real sandbox runtime and provider
   chaos/                   callback loss, restarts, ambiguous execution
 ```
 
@@ -210,7 +210,7 @@ creation timestamp.
 - Run the runtime gateway, controlled egress gateway, and artifact fixture behind
   ephemeral publicly reachable TLS test endpoints because an E2B sandbox cannot
   call CI localhost. Endpoints are uniquely namespaced to the run, accept only
-  run-bound capabilities, expose no the sandbox runtime management API, and are removed
+  run-bound capabilities, expose no sandbox-runtime management API, and are removed
   after the suite.
 - Add unique `managed-by`, environment, run-scope, allocation-token, and case-ID
   metadata to every sandbox.
@@ -273,7 +273,7 @@ PostgreSQL-only concurrency cases prove:
 ### 5.2 Migration tests
 
 Alembic CI creates a database from empty and upgrades it to head, then separately
-restores the last shipped the sandbox runtime schema fixture and upgrades it to head. Both paths
+restores the last shipped sandbox-runtime schema fixture and upgrades it to head. Both paths
 run repository smoke tests and downgrade is not required. CI also verifies:
 
 - one linear head unless an explicitly reviewed merge revision exists;
@@ -462,7 +462,7 @@ Mandatory cases on Docker and E2B:
 | `CH-INVOKE-001` | Invocation accepted, HTTP response lost | Backend does not replay an ambiguous response; runtime deduplication still permits at most one execution if an explicit same-run retry is introduced |
 | `CH-CALLBACK-001` | Terminal callback duplicated | One terminal transition and one outbox event |
 | `CH-CALLBACK-002` | Terminal callback lost | Deadline reconciliation marks the same unfinished run failed without replay |
-| `CH-RESTART-001` | the sandbox runtime exits after allocation intent commit | Restart reconciles the same allocation token and never blindly creates |
+| `CH-RESTART-001` | The sandbox runtime exits after allocation intent commit | Restart reconciles the same allocation token and never blindly creates |
 | `CH-RESTART-002` | Backend worker exits after starting a run | A redelivery observes `RUNNING` and never creates a second execution attempt |
 | `CH-DEATH-001` | Sandbox dies during run | The same run fails at deadline; later client-created run receives a fresh allocation if required |
 | `CH-STATE-001` | Late callback after terminal state | Late callback changes no public/domain state |

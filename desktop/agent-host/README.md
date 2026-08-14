@@ -11,7 +11,7 @@ or install a per-user operating-system service.
 
 How Desktop supervises, controls, and reports it - including the privilege
 boundary for the workspace page - is in
-[Agent Host in the desktop app](../docs/design/agent-host-desktop.md).
+[Agent Host in the desktop app](../../docs/architecture/agent-host.md).
 
 ## Architecture
 
