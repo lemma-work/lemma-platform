@@ -1,7 +1,6 @@
 {
   "_comment": "Pre-existing places where a DB connection is held across non-database work. This file may shrink freely; growing it means a new connection is being held across an LLM call, an HTTP request or a thread offload. See scripts/check_session_scope.py.",
   "violations": [
-    "app/composition/agent_workflow_forms.py::submit_workflow_form::non-db-await::via _announce: engine.submit_form",
     "app/core/api/dependencies.py::get_uow::session-across-yield::get_uow",
     "app/modules/agent/api/controllers/conversation_controller.py::resolve_approval::non-db-await/request-scoped::via resolve_user_approval_internal: service.resolve_user_approval",
     "app/modules/agent/api/controllers/conversation_controller.py::send_message.start_run::non-db-await::event publish: service.add_user_message_and_start_run",
@@ -12,7 +11,6 @@
     "app/modules/agent/api/controllers/tool_controller.py::report_feedback::nested-session/request-scoped::uow",
     "app/modules/agent/api/controllers/widget_controller.py::serve_widget::non-db-await/request-scoped::via get_session: _resolve_widget_viewer",
     "app/modules/agent/events/handlers.py::reconcile_agent_approval_now::non-db-await::via _reconcile_approval_resume: service.resolve_user_approval_internal",
-    "app/modules/agent/services/snooze_reconcile_service.py::SnoozeReconcileService._reconcile_one::non-db-await::via append_pause_tool_return: SnoozeWakeService.wake",
     "app/modules/agent/services/subagent_service.py::SubAgentService.send::non-db-await::event publish: service.add_user_message_and_start_run",
     "app/modules/agent/services/subagent_service.py::SubAgentService.spawn::non-db-await::event publish: service.add_user_message_and_start_run",
     "app/modules/agent_surfaces/api/controllers/telegram_manager_controller.py::start_telegram_managed_bot_setup::non-db-await/request-scoped::via get_by_target: service.start_setup",
@@ -38,16 +36,8 @@
     "app/modules/agent_surfaces/services/surface_file_ingest_service.py::SurfaceFileIngestService.ingest_attachments::non-db-await::via _ingest_one: self._ingest_all",
     "app/modules/agent_surfaces/services/token_stream.py::TokenStreamMixin._flush_tokens::non-db-await::platform adapter: service.append_stream_text_for_conversation",
     "app/modules/agent_surfaces/services/token_stream.py::TokenStreamMixin._open_stream::non-db-await::platform adapter: service.append_stream_text_for_conversation",
-    "app/modules/apps/application/app_use_cases.py::AppUseCases.upload_bundle::non-db-await::thread offload: service.resolve_upload_bundle",
     "app/modules/datastore/events/handlers.py::dispatch_pending_datastore_files::non-db-await::sleep: dispatch_service.dispatch_pending_files",
     "app/modules/datastore/events/handlers.py::recover_stuck_processing_files::non-db-await::sleep: recovery_service.recover_stale_files",
-    "app/modules/function/api/controllers/function_controller.py::get_function::non-db-await/request-scoped::via _get_code: function_service.get_function_by_name",
-    "app/modules/function/api/controllers/function_controller.py::get_function_permissions::non-db-await/request-scoped::via _get_code: function_service.get_function_by_name",
-    "app/modules/function/api/controllers/function_controller.py::replace_function_permissions::non-db-await/request-scoped::via _get_code: function_service.get_function_by_name",
-    "app/modules/function/application/function_use_cases.py::FunctionUseCases.create_function::non-db-await::via _get_code: service.get_function_by_name",
-    "app/modules/function/application/function_use_cases.py::FunctionUseCases.update_function::non-db-await::via get_function_by_name: self._build.resolve_update",
-    "app/modules/function/application/function_use_cases.py::FunctionUseCases.upsert_function_for_import::non-db-await::via _get_code: service.get_function_by_name",
-    "app/modules/function/application/function_use_cases.py::FunctionUseCases.upsert_function_for_import::non-db-await::via get_function_by_name: service.resolve_update",
     "app/modules/identity/api/controllers/auth_controller.py::cli_refresh_session::non-db-await/request-scoped::via refresh_session_without_request_response: refresh_cli_session_tokens",
     "app/modules/identity/api/controllers/auth_controller.py::cli_session_tokens::non-db-await/request-scoped::via create_new_session_without_request_response: create_cli_session_tokens",
     "app/modules/identity/api/controllers/email_bounce_controller.py::_deactivate_email_for_hard_bounce::non-db-await::remote SDK: revoke_all_sessions_for_user",
@@ -55,16 +45,9 @@
     "app/modules/pod_bundle/api/controllers/import_controller.py::stream_import_events::nested-session/request-scoped::pod_context_scope",
     "app/modules/pod_bundle/api/controllers/import_controller.py::upload_bundle::non-db-await/request-scoped::thread offload: use_cases.stage_upload",
     "app/modules/pod_bundle/api/controllers/publish_controller.py::stream_publish_events::nested-session/request-scoped::pod_context_scope",
-    "app/modules/pod_bundle/infrastructure/app_builder.py::AppStepRunner._deploy::non-db-await::thread offload: service.resolve_upload_bundle",
     "app/modules/schedule/api/controllers/webhook_controller.py::handle_webhook::non-db-await/request-scoped::event publish: EventPublisher.publish",
     "app/modules/schedule/api/controllers/webhook_controller.py::handle_webhook::non-db-await/request-scoped::event publish: webhook_handler.handle_webhook",
-    "app/modules/workflow/api/workflow_controller.py::create_workflow_run::non-db-await/request-scoped::via _announce: engine.start_run",
     "app/modules/workflow/api/workflow_run_controller.py::cancel_workflow_run::nested-session/request-scoped::uow",
-    "app/modules/workflow/api/workflow_run_controller.py::submit_workflow_run_form::nested-session/request-scoped::uow",
-    "app/modules/workflow/api/workflow_run_controller.py::submit_workflow_run_form::non-db-await::via _announce: engine.submit_form",
-    "app/modules/workflow/events/handlers.py::check_and_start_flows_for_schedule::non-db-await::via _start_workflow_for_schedule: service.handle_schedule_fired",
-    "app/modules/workflow/events/handlers.py::reconcile_workflow_waits::non-db-await::via _apply_agent_status: service.reconcile_stale_waits",
-    "app/modules/workflow/events/handlers.py::resume_workflow_run_for_agent::non-db-await::via _apply_agent_status: service.resume_for_agent_conversation",
-    "app/modules/workflow/events/handlers.py::resume_workflow_run_for_function::non-db-await::via fail_internal: service.resume_for_function_run"
+    "app/modules/workflow/api/workflow_run_controller.py::submit_workflow_run_form::nested-session/request-scoped::uow"
   ]
 }

@@ -620,11 +620,19 @@ class ConversationService(PauseResumeMixin):
             decision=effective_decision,
             has_tool_return=existing_return is not None,
         ):
-            await queue_approval_reconciliation(
-                conversation_id=conversation.id,
-                approval_id=approval_id,
-                user_id=user_id,
-                pod_id=pod_id,
+            # Deferred to after the commit, for two reasons. The connection is
+            # the smaller one: enqueuing is a Redis round trip and this runs
+            # inside the caller's transaction. The larger one is ordering -- an
+            # enqueue that happens before the commit queues a job against state
+            # that a rollback would erase, and the worker would then reconcile
+            # an approval the database never accepted.
+            self.uow.after_commit(
+                lambda: queue_approval_reconciliation(
+                    conversation_id=conversation.id,
+                    approval_id=approval_id,
+                    user_id=user_id,
+                    pod_id=pod_id,
+                )
             )
             return ApprovalResolution(status="queued", decision=effective_decision)
 
