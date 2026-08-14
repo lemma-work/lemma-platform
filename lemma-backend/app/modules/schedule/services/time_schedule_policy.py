@@ -5,9 +5,8 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from apscheduler.triggers.cron import CronTrigger
-
 from app.modules.schedule.config import schedule_settings
+from app.modules.schedule.domain.cron import CronSchedule
 from app.modules.schedule.domain.errors import (
     ScheduleTooFrequentError,
     ScheduleValidationError,
@@ -23,19 +22,12 @@ def validate_cron_expression(
     cron_expression: str,
     *,
     minimum_interval_minutes: int | None = None,
-) -> CronTrigger:
+) -> CronSchedule:
     """Parse a five-field UTC cron and enforce the configured frequency floor."""
-    if len(cron_expression.split()) != 5:
-        raise ScheduleValidationError(
-            f"Invalid cron expression: {cron_expression}. Expected five fields."
-        )
-
     try:
-        trigger = CronTrigger.from_crontab(cron_expression, timezone=timezone.utc)
+        schedule = CronSchedule.parse(cron_expression)
     except (TypeError, ValueError) as exc:
-        raise ScheduleValidationError(
-            f"Invalid cron expression: {cron_expression}"
-        ) from exc
+        raise ScheduleValidationError(str(exc)) from exc
 
     minimum_minutes = (
         minimum_interval_minutes
@@ -44,29 +36,28 @@ def validate_cron_expression(
     )
     minimum_interval = timedelta(minutes=minimum_minutes)
     previous: datetime | None = None
-    cursor = _VALIDATION_START
 
-    for _ in range(_MAX_VALIDATION_OCCURRENCES):
-        next_fire = trigger.get_next_fire_time(previous, cursor)
-        if next_fire is None or next_fire >= _VALIDATION_END:
+    for next_fire in schedule.fire_times_from(
+        _VALIDATION_START, limit=_MAX_VALIDATION_OCCURRENCES
+    ):
+        if next_fire >= _VALIDATION_END:
             break
         if previous is not None and next_fire - previous < minimum_interval:
             raise ScheduleTooFrequentError(minimum_minutes)
         previous = next_fire
-        cursor = next_fire
 
     if previous is None:
         raise ScheduleValidationError(
             "Cron expression does not produce a valid execution time."
         )
-    return trigger
+    return schedule
 
 
 def validate_time_schedule_config(
     config: dict[str, Any],
     *,
     now: datetime | None = None,
-) -> datetime | CronTrigger:
+) -> datetime | CronSchedule:
     """Validate one and only one TIME trigger, returning its parsed value."""
     cron = config.get("cron")
     scheduled_at = config.get("scheduled_at")
