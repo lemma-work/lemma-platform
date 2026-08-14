@@ -67,6 +67,13 @@ class Schedule(UUIDAuditBase):
     # Internal schedules are created by flow execution (for waits/timeouts)
     is_internal: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
 
+    # The poller's cursor: the next instant this schedule is due. Claimed with
+    # FOR UPDATE SKIP LOCKED and advanced in the same transaction, so exactly
+    # one replica fires a given occurrence no matter how many are running.
+    next_fire_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
     # Fire telemetry — last attempt outcome, for debuggability
     last_fired_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True

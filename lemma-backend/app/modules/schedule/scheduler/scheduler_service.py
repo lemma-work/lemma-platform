@@ -12,6 +12,7 @@ from uuid import UUID
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
+from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.date import DateTrigger
 from apscheduler.events import EVENT_JOB_ERROR
 from pytz import utc
@@ -369,7 +370,12 @@ class SchedulerService:
             payload: Optional payload to include in the event
             replace_existing: Replace if job exists
         """
-        apscheduler_trigger = validate_cron_expression(cron_expression)
+        # Validation is the CronSchedule's job; APScheduler still needs its own
+        # trigger object to fire from. Temporary scaffolding: it goes when the
+        # poller replaces the scheduler, and it is the reason day-of-week keeps
+        # APScheduler's 0=Monday reading until then rather than changing twice.
+        validate_cron_expression(cron_expression)
+        apscheduler_trigger = CronTrigger.from_crontab(cron_expression, timezone=utc)
 
         # Use schedule_id as job_id
         job_id = str(schedule_id)

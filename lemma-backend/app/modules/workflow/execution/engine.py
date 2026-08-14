@@ -602,6 +602,9 @@ class WorkflowEngine:
             wait_type=request.wait_type,
             assigned_pod_member_id=request.assigned_pod_member_id,
             external_ref=request.external_ref,
+            # Kept in `payload` too: the reconcile sweep still reads it from
+            # there, and older rows have only that copy.
+            scheduled_at=request.scheduled_at,
             payload=payload,
         )
 
