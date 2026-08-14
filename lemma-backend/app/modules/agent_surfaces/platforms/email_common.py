@@ -104,6 +104,11 @@ def parse_email_identity(
     return fallback_identity
 
 
+# Generous against a long quoted thread and small enough that parsing stays
+# bounded work. Inbound bodies are typically well under a tenth of this.
+_MAX_HTML_CHARS = 1024 * 1024
+
+
 def reply_subject(subject: str | None) -> str:
     clean = str(subject or "").strip()
     if not clean:
@@ -117,6 +122,13 @@ def plain_text_from_html(value: str | None) -> str:
     html_value = str(value or "").strip()
     if not html_value:
         return ""
+    # `html.parser` is pure Python — roughly a megabyte a second — and the body
+    # arrives from whoever sent the mail, so without a bound the time this
+    # spends on the event loop is the sender's to choose. Past the cap the tail
+    # is dropped rather than parsed: an agent reading a message does not need
+    # the last megabyte of a thread that has been replied to two hundred times.
+    if len(html_value) > _MAX_HTML_CHARS:
+        html_value = html_value[:_MAX_HTML_CHARS]
     parser = _HTMLTextExtractor()
     parser.feed(html_value)
     return parser.text()
