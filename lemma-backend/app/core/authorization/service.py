@@ -256,7 +256,7 @@ class AuthorizationDataService:
             granted_by_user_id=created_by_user_id,
         )
         await self.session.flush()
-        await invalidate_role_snapshot_cache(
+        await self._invalidate_snapshots_after_commit(
             organization_id=organization_id, pod_id=pod_id
         )
         return await self._to_summary(role)
@@ -286,9 +286,42 @@ class AuthorizationDataService:
             )
         await self.session.delete(role)
         await self.session.flush()
-        await invalidate_role_snapshot_cache(
+        await self._invalidate_snapshots_after_commit(
             organization_id=organization_id, pod_id=pod_id
         )
+
+
+    async def _invalidate_snapshots_after_commit(
+        self,
+        *,
+        organization_id: UUID | None = None,
+        pod_id: UUID | None = None,
+        user_id: UUID | None = None,
+    ) -> None:
+        """Drop the affected snapshots once the mutation has actually committed.
+
+        Not inline: invalidating inside the transaction holds the connection
+        across a Redis round trip, and it is the wrong order besides — between
+        the invalidation and the commit a concurrent reader can repopulate the
+        cache from the state this mutation is about to replace.
+
+        Falls back to invalidating immediately when there is no unit of work to
+        defer to (a service constructed straight from a session), because a
+        stale snapshot is worse than an early one.
+        """
+        uow = self.session.info.get("lemma_uow")
+
+        async def _run() -> None:
+            await invalidate_role_snapshot_cache(
+                organization_id=organization_id, pod_id=pod_id, user_id=user_id
+            )
+
+        if uow is None:
+            # No unit of work to defer to (a service built straight from a
+            # session). A stale snapshot is worse than an early invalidation.
+            await _run()
+            return
+        uow.after_commit(_run)
 
     async def resolve_resource_id_by_name(
         self,
@@ -406,7 +439,7 @@ class AuthorizationDataService:
         snapshot_principal_id = await self._resolve_snapshot_principal_id(
             principal_type, principal_id
         )
-        await invalidate_role_snapshot_cache(
+        await self._invalidate_snapshots_after_commit(
             organization_id=organization_id,
             pod_id=pod_id,
             user_id=snapshot_principal_id,
@@ -987,7 +1020,7 @@ class AuthorizationDataService:
             principal_type="ORG_MEMBER",
             principal_id=targets.organization_member_id,
         )
-        await invalidate_role_snapshot_cache(user_id=targets.user_id)
+        await self._invalidate_snapshots_after_commit(user_id=targets.user_id)
 
 
 class Authorizer:

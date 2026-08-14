@@ -1,4 +1,4 @@
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from typing import TYPE_CHECKING
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -30,6 +30,27 @@ class SqlAlchemyUnitOfWork(IUnitOfWork):
         # a bus. Publication never occurs from inside the UoW.
         self._message_bus = message_bus
         self._pending_events: list["DomainEvent"] = []
+        self._after_commit: list[Callable[[], Awaitable[None]]] = []
+        # Back-reference so a service that only holds the session can still
+        # defer work to after the commit. Services are constructed from the
+        # session, not the unit of work, and threading one through every
+        # constructor to schedule a cache invalidation is a worse trade.
+        # Tolerant of a session double that has no `info` mapping: this is a
+        # convenience for deferring work, never a requirement for committing.
+        info = getattr(session, "info", None)
+        if isinstance(info, dict):
+            info["lemma_uow"] = self
+
+    def after_commit(self, callback: Callable[[], Awaitable[None]]) -> None:
+        """Run ``callback`` once the transaction has actually committed.
+
+        For work that must not happen inside the transaction — cache
+        invalidation above all. Doing it inline holds the connection across a
+        Redis round trip, and is the wrong order besides: a concurrent reader
+        can repopulate the cache from the pre-commit state between the
+        invalidation and the commit.
+        """
+        self._after_commit.append(callback)
 
     def set_message_bus(self, message_bus: MessageBus) -> None:
         """Backward-compatible no-op setter; dispatch is outbox-driven."""
@@ -54,6 +75,9 @@ class SqlAlchemyUnitOfWork(IUnitOfWork):
         await self._stage_pending_events()
         await self.session.commit()
         self._pending_events.clear()
+        callbacks, self._after_commit = self._after_commit, []
+        for callback in callbacks:
+            await callback()
 
     async def _stage_pending_events(self) -> None:
         if not self._pending_events:
