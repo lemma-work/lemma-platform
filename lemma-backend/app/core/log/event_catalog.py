@@ -542,6 +542,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'schedule.scheduler_service.added_cron_job_schedule_schedule.observed': EventSpec('debug', frozenset({'job_id', 'schedule_id'})),
     'schedule.scheduler_service.added_one_time_job_schedule.observed': EventSpec('debug', frozenset({'job_id', 'schedule_id'})),
     'schedule.due_claimer.claimed.observed': EventSpec('debug', frozenset({'claimed_count'})),
+    'schedule.due_claimer.cursors_backfilled': EventSpec('info', frozenset({'retired_count', 'scheduled_count'})),
     'schedule.poller.started': EventSpec('info', frozenset({'interval_ms', 'service'})),
     'schedule.poller.stopped': EventSpec('info', frozenset({'service'})),
     'schedule.poller.dispatch_failed.degraded': EventSpec('warning', frozenset({'schedule_id'})),

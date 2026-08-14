@@ -28,6 +28,7 @@ from app.core.authorization.scope import uow_scope
 from app.core.log.log import get_logger
 from app.modules.schedule.services.due_schedule_claimer import (
     DEFAULT_CLAIM_LIMIT,
+    backfill_missing_cursors,
     claim_due_schedules,
 )
 
@@ -53,6 +54,9 @@ async def poll_due_schedules_once(
     moment = now or datetime.now(timezone.utc)
 
     async with uow_scope(uow_factory) as uow:
+        # Same transaction: a row backfilled here is claimable on the next tick,
+        # and one that is already due is claimed below without waiting for one.
+        await backfill_missing_cursors(uow.session, now=moment, limit=limit)
         claimed = await claim_due_schedules(uow.session, now=moment, limit=limit)
 
     if not claimed:

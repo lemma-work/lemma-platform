@@ -212,3 +212,105 @@ async def test_a_schedule_that_is_not_due_is_left_alone(
         await session.commit()
 
     assert schedule_id not in [c.schedule_id for c in claimed]
+
+
+async def _insert_without_cursor(session, *, config: dict, pod_id, user_id):
+    schedule = Schedule(
+        id=uuid4(),
+        user_id=user_id,
+        pod_id=pod_id,
+        name=f"backfill-{uuid4().hex[:8]}",
+        schedule_type=ScheduleType.TIME,
+        config=config,
+        is_active=True,
+        next_fire_at=None,
+    )
+    session.add(schedule)
+    await session.commit()
+    return schedule.id
+
+
+async def test_a_schedule_with_no_cursor_gets_one(
+    db_manager, db_session, pod_and_user
+) -> None:
+    """Rows predating the column, and rows the API just wrote, both land here."""
+    from app.modules.schedule.services.due_schedule_claimer import (
+        backfill_missing_cursors,
+    )
+
+    pod_id, user_id = pod_and_user
+    now = datetime.now(timezone.utc)
+    schedule_id = await _insert_without_cursor(
+        db_session, config={"cron": "*/5 * * * *"}, pod_id=pod_id, user_id=user_id
+    )
+
+    async with db_manager.session_factory() as session:
+        await backfill_missing_cursors(session, now=now)
+        await session.commit()
+
+    await db_session.rollback()
+    row = await db_session.get(Schedule, schedule_id)
+    await db_session.refresh(row)
+    assert row.next_fire_at is not None
+    assert row.next_fire_at > now
+    assert row.is_active is True
+
+
+async def test_an_unusable_row_is_retired_rather_than_left_invisible(
+    db_manager, db_session, pod_and_user
+) -> None:
+    """A cursor-less active row is worse than an inactive one.
+
+    It reads as scheduled to anyone looking at the table while being invisible
+    to the poller forever, so the failure mode is a schedule that silently never
+    runs and nothing to show why.
+    """
+    from app.modules.schedule.services.due_schedule_claimer import (
+        backfill_missing_cursors,
+    )
+
+    pod_id, user_id = pod_and_user
+    schedule_id = await _insert_without_cursor(
+        db_session, config={"cron": "not a cron"}, pod_id=pod_id, user_id=user_id
+    )
+
+    async with db_manager.session_factory() as session:
+        await backfill_missing_cursors(session, now=datetime.now(timezone.utc))
+        await session.commit()
+
+    await db_session.rollback()
+    row = await db_session.get(Schedule, schedule_id)
+    await db_session.refresh(row)
+    assert row.is_active is False
+    assert row.next_fire_at is None
+
+
+async def test_a_one_shot_whose_moment_has_passed_is_not_fired_late(
+    db_manager, db_session, pod_and_user
+) -> None:
+    """Matching the behaviour the old reconcile pass had.
+
+    A one-shot missed while the fleet was down is dropped, not fired on the next
+    boot -- "send this at 09:00" is rarely still wanted at 14:00.
+    """
+    from app.modules.schedule.services.due_schedule_claimer import (
+        backfill_missing_cursors,
+    )
+
+    pod_id, user_id = pod_and_user
+    now = datetime.now(timezone.utc)
+    past = (now - timedelta(hours=5)).isoformat()
+    schedule_id = await _insert_without_cursor(
+        db_session, config={"scheduled_at": past}, pod_id=pod_id, user_id=user_id
+    )
+
+    async with db_manager.session_factory() as session:
+        await backfill_missing_cursors(session, now=now)
+        claimed = await claim_due_schedules(session, now=now)
+        await session.commit()
+
+    assert schedule_id not in [c.schedule_id for c in claimed]
+    await db_session.rollback()
+    row = await db_session.get(Schedule, schedule_id)
+    await db_session.refresh(row)
+    assert row.is_active is False

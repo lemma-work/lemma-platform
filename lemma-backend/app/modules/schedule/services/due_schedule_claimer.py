@@ -151,3 +151,66 @@ async def claim_due_schedules(
             claimed_count=len(claimed),
         )
     return claimed
+
+
+async def backfill_missing_cursors(
+    session,
+    *,
+    now: datetime,
+    limit: int = DEFAULT_CLAIM_LIMIT,
+) -> int:
+    """Give active TIME schedules a ``next_fire_at`` if they have none.
+
+    Rows arrive without a cursor two ways: they predate the column, or they were
+    just written by the API and nothing has computed their first fire yet.
+    Backfilling here rather than in a startup pass means there is no ordering
+    requirement between deploy and first poll, and no separate code path to
+    forget -- a row is either due, or scheduled, or unusable, and one tick moves
+    it to whichever it is.
+
+    Claimed the same way as a due fire, so replicas backfilling concurrently do
+    not fight: whoever takes the row lock computes the cursor.
+
+    A row whose config cannot produce a fire time is deactivated rather than
+    left cursor-less, which would leave it invisible forever while still
+    reading as active to anyone looking at the table.
+    """
+    statement = (
+        select(Schedule)
+        .where(
+            Schedule.schedule_type == ScheduleType.TIME,
+            Schedule.is_active.is_(True),
+            Schedule.next_fire_at.is_(None),
+        )
+        .limit(limit)
+        .with_for_update(skip_locked=True)
+    )
+    rows = list((await session.scalars(statement)).all())
+
+    scheduled = 0
+    retired = 0
+    for row in rows:
+        upcoming = next_cursor_for(row.config, after=now)
+        is_one_shot = not (row.config or {}).get("cron")
+        # A one-shot whose moment has already passed is dropped, not scheduled.
+        # Backfilling it with a past cursor would make it immediately due and
+        # fire it late -- "send this at 09:00" is rarely still wanted at 14:00,
+        # and the reconcile pass this replaces deactivated those rows too
+        # (SCHEDULE_ONE_TIME_MISSED). A cron whose next fire is somehow in the
+        # past is a different case and stays claimable: it is *recurring*, so
+        # running it late is the correct behaviour for a backlog.
+        missed_one_shot = is_one_shot and upcoming is not None and upcoming <= now
+        if upcoming is None or missed_one_shot:
+            row.is_active = False
+            retired += 1
+            continue
+        row.next_fire_at = upcoming
+        scheduled += 1
+
+    if scheduled or retired:
+        logger.info(
+            "schedule.due_claimer.cursors_backfilled",
+            scheduled_count=scheduled,
+            retired_count=retired,
+        )
+    return scheduled
