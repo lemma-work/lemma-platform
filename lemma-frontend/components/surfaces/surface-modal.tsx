@@ -1,18 +1,17 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import Image from 'next/image';
 import { useQueryClient } from '@tanstack/react-query';
 import {
     AlertTriangle,
     ArrowLeft,
-    MessageCircle,
     MoreHorizontal,
     Send,
     Trash2,
 } from '@/components/ui/icons';
 import { toast } from 'sonner';
 
+import { PlatformMark } from '@/components/surfaces/platform-mark';
 import { SurfaceConfigureStep, DEFAULT_AGENT_VALUE, type AvailableChannel, type ConfigureDraft } from '@/components/surfaces/surface-configure-step';
 import { SurfaceConnectStep, type CredentialValues } from '@/components/surfaces/surface-connect-step';
 import { SurfaceIdentityStep } from '@/components/surfaces/surface-identity-step';
@@ -557,15 +556,7 @@ export function SurfaceModal({
             <DialogContent className={cn('surface-modal', step === 'configure' && 'is-wide')}>
                 <DialogHeader className="surface-modal-header">
                     <div className="flex min-w-0 items-center gap-2.5">
-                        <span
-                            className="surface-platform-mark surface-platform-mark-logo shrink-0"
-                            data-platform={definition.platform.toLowerCase()}
-                        >
-                            {definition.logoSrc ? (
-                                <Image src={definition.logoSrc} alt="" width={16} height={16} className="surface-platform-logo" aria-hidden="true" />
-                            ) : null}
-                            <MessageCircle className="surface-platform-icon-fallback h-4 w-4" />
-                        </span>
+                        <PlatformMark platform={definition.platform} />
                         <DialogTitle className="min-w-0 truncate text-base font-medium">
                             {definition.label}
                         </DialogTitle>

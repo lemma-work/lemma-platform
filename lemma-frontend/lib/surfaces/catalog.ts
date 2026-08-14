@@ -19,7 +19,23 @@ export interface SurfaceSystemClaim {
 export type CatalogSurface = AvailableSurface & {
     system_claim?: SurfaceSystemClaim | null;
     managed_setup_available?: boolean;
+    email_domain?: string | null;
 };
+
+/**
+ * The domain this deployment mints agent addresses under, or null where it mints
+ * none.
+ *
+ * The rest of an agent's address comes from its own name and the pod's, which is
+ * why `buildAgentEmailPreview` can name it before the agent exists — this is the
+ * one piece that is deployment configuration, and its absence is the honest
+ * signal that there is no address to promise.
+ */
+export function managedEmailDomain(catalog: CatalogSurface[] | undefined): string | null {
+    const entry = findCatalogSurface(catalog, 'RESEND');
+    const domain = entry?.email_domain?.trim();
+    return domain || null;
+}
 
 export function findCatalogSurface(
     catalog: CatalogSurface[] | undefined,

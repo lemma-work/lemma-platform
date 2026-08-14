@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" role="img" aria-label="Email">
+  <!-- A mark for mail in general, not one vendor's mailbox. The places that
+       needed this were rendering Gmail's logo to mean "Gmail + Outlook", or to
+       mean an address Lemma runs itself — in both cases naming a mailbox that
+       isn't the one involved. Fixed colours, like every other brand mark in this
+       directory, so it sits on a light or dark card the same way. -->
+  <rect width="48" height="48" rx="11" fill="#4C6FD4"/>
+  <path d="M11 17.5A2.5 2.5 0 0 1 13.5 15h21a2.5 2.5 0 0 1 2.5 2.5v13a2.5 2.5 0 0 1-2.5 2.5h-21a2.5 2.5 0 0 1-2.5-2.5z" fill="#fff"/>
+  <path d="m11.8 17.2 10.7 8.1c.9.7 2.1.7 3 0l10.7-8.1" fill="none" stroke="#4C6FD4" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
