@@ -8,7 +8,6 @@
     "app/modules/agent/api/controllers/runtime_config_controller.py::create_runtime_profile::non-db-await/request-scoped::via _discover_openai_compatible_models: service.create_openai_compatible_profile",
     "app/modules/agent/api/controllers/runtime_config_controller.py::update_runtime_profile::non-db-await/request-scoped::via _update_provider: editor.update_anthropic_compatible_profile",
     "app/modules/agent/api/controllers/runtime_config_controller.py::update_runtime_profile::non-db-await/request-scoped::via _update_provider: editor.update_openai_compatible_profile",
-    "app/modules/agent/api/controllers/tool_controller.py::report_feedback::nested-session/request-scoped::uow",
     "app/modules/agent/api/controllers/widget_controller.py::serve_widget::non-db-await/request-scoped::via get_session: _resolve_widget_viewer",
     "app/modules/agent/events/handlers.py::reconcile_agent_approval_now::non-db-await::via _reconcile_approval_resume: service.resolve_user_approval_internal",
     "app/modules/agent/services/subagent_service.py::SubAgentService.send::non-db-await::event publish: service.add_user_message_and_start_run",
@@ -36,8 +35,6 @@
     "app/modules/agent_surfaces/services/surface_file_ingest_service.py::SurfaceFileIngestService.ingest_attachments::non-db-await::via _ingest_one: self._ingest_all",
     "app/modules/agent_surfaces/services/token_stream.py::TokenStreamMixin._flush_tokens::non-db-await::platform adapter: service.append_stream_text_for_conversation",
     "app/modules/agent_surfaces/services/token_stream.py::TokenStreamMixin._open_stream::non-db-await::platform adapter: service.append_stream_text_for_conversation",
-    "app/modules/datastore/events/handlers.py::dispatch_pending_datastore_files::non-db-await::sleep: dispatch_service.dispatch_pending_files",
-    "app/modules/datastore/events/handlers.py::recover_stuck_processing_files::non-db-await::sleep: recovery_service.recover_stale_files",
     "app/modules/identity/api/controllers/auth_controller.py::cli_refresh_session::non-db-await/request-scoped::via refresh_session_without_request_response: refresh_cli_session_tokens",
     "app/modules/identity/api/controllers/auth_controller.py::cli_session_tokens::non-db-await/request-scoped::via create_new_session_without_request_response: create_cli_session_tokens",
     "app/modules/identity/api/controllers/email_bounce_controller.py::_deactivate_email_for_hard_bounce::non-db-await::remote SDK: revoke_all_sessions_for_user",
@@ -46,8 +43,6 @@
     "app/modules/pod_bundle/api/controllers/import_controller.py::upload_bundle::non-db-await/request-scoped::thread offload: use_cases.stage_upload",
     "app/modules/pod_bundle/api/controllers/publish_controller.py::stream_publish_events::nested-session/request-scoped::pod_context_scope",
     "app/modules/schedule/api/controllers/webhook_controller.py::handle_webhook::non-db-await/request-scoped::event publish: EventPublisher.publish",
-    "app/modules/schedule/api/controllers/webhook_controller.py::handle_webhook::non-db-await/request-scoped::event publish: webhook_handler.handle_webhook",
-    "app/modules/workflow/api/workflow_run_controller.py::cancel_workflow_run::nested-session/request-scoped::uow",
-    "app/modules/workflow/api/workflow_run_controller.py::submit_workflow_run_form::nested-session/request-scoped::uow"
+    "app/modules/schedule/api/controllers/webhook_controller.py::handle_webhook::non-db-await/request-scoped::event publish: webhook_handler.handle_webhook"
   ]
 }

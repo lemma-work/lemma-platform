@@ -96,8 +96,13 @@ SESSION_OPENERS = re.compile(
         # ones that hold an open write transaction across an HTTP download.
         | SessionUnitOfWorkFactory
         # `async with ctx.uow() as uow:` is the standard form in streaq tasks,
-        # so omitting it left the entire worker surface unchecked.
-        | uow
+        # so omitting it left the entire worker surface unchecked. Deliberately
+        # NOT bare `uow`: `async with uow:` re-enters a unit of work that is
+        # already open, and `SqlAlchemyUnitOfWork.__aenter__` returns `self`, so
+        # it marks a transaction boundary on one session rather than opening a
+        # second one. Counting it as a nested session reported three handlers as
+        # holding two connections when they only ever hold one.
+        | uow(?=\s*\()
     )$
     |
     (^|\.)(engine|_engine)\.(begin|connect)$
@@ -458,6 +463,28 @@ def _dependency_names(node: ast.FunctionDef | ast.AsyncFunctionDef) -> set[str]:
     return names
 
 
+def _is_zero_sleep(call: ast.Call) -> bool:
+    """``await asyncio.sleep(0)`` is a yield to the loop, not a wait.
+
+    It is the idiom for "let other tasks run" -- batch loops use it so a large
+    backlog is spread out instead of dispatched as one burst. The connection is
+    held for one loop tick, which is not the thing this gate exists to catch,
+    and reporting it trains people to read the gate as noise.
+
+    Only a literal zero counts. `sleep(delay)` with a variable stays a
+    violation, because the checker cannot know what it holds.
+    """
+    if not SLEEP_CALLS.search(_dotted(call.func)):
+        return False
+    if len(call.args) != 1 or call.keywords:
+        return False
+    arg = call.args[0]
+    return isinstance(arg, ast.Constant) and arg.value == 0
+
+
+SLEEP_CALLS = re.compile(r"(^|\.)sleep$")
+
+
 def _awaited_calls(
     node: ast.FunctionDef | ast.AsyncFunctionDef,
 ) -> tuple[set[str], str | None]:
@@ -484,6 +511,12 @@ def _awaited_calls(
         ):
             continue
         if isinstance(current, ast.Await) and isinstance(current.value, ast.Call):
+            if _is_zero_sleep(current.value):
+                # A yield to the loop, not a wait -- and the index has to agree
+                # with the visitor about that, or the name stays slow for every
+                # caller while the site itself reports clean.
+                stack.extend(ast.iter_child_nodes(current))
+                continue
             callee = _dotted(current.value.func)
             awaited.add(callee.rsplit(".", 1)[-1])
             if direct is None:
@@ -651,7 +684,11 @@ class SessionScopeChecker(ast.NodeVisitor):
                 self.visit(item.optional_vars)
 
     def visit_Await(self, node: ast.Await) -> None:
-        if self._session_depth and isinstance(node.value, ast.Call):
+        if (
+            self._session_depth
+            and isinstance(node.value, ast.Call)
+            and not _is_zero_sleep(node.value)
+        ):
             callee = _dotted(node.value.func)
             label = self.index.why_slow(callee)
             if label is not None:
