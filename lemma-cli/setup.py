@@ -112,4 +112,16 @@ class _Sdist(_sdist):
         super().run()
 
 
+# Vendor before ``setup()``, not only from the build commands above.
+# ``[tool.setuptools.packages.find]`` is resolved while the distribution's
+# configuration is read — strictly before any command runs — so a directory that
+# only appears once ``build_py`` starts is never in the discovered package list,
+# and the wheel ships without it. That failure hides itself: the copy is left
+# behind in the source tree, so the *next* build in the same tree finds it at
+# configuration time and succeeds, which is why a working local wheel and a
+# broken one from a fresh clone came out of the same command. The commands keep
+# their own call so a build that reuses a long-lived tree still refreshes the
+# copies from source.
+_vendor_all()
+
 setup(cmdclass={"build_py": _BuildPy, "sdist": _Sdist})
