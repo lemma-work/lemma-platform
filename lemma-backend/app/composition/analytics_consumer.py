@@ -43,7 +43,7 @@ from app.core.infrastructure.events.stream_subscriber import (
     reliable_redis_stream_subscriber,
 )
 from app.core.log.log import get_logger
-from app.core.origin import Origin, OriginKind
+from app.core.origin import origin_from_payload
 from app.modules.agent.domain.events import (
     AGENT_EVENTS_STREAM,
     AgentRunCompletedEvent,
@@ -95,16 +95,10 @@ def provide_uow_factory() -> UnitOfWorkFactory:
     return SessionUnitOfWorkFactory(async_session_maker)
 
 
-def _origin_of(event: dict) -> Origin | None:
-    """Rebuild the origin the work arrived through, from the event itself."""
-    raw = event.get("origin")
-    if not raw:
-        return None
-    try:
-        kind = OriginKind(raw)
-    except ValueError:
-        return None
-    return Origin(kind, platform=event.get("origin_platform"))
+#: Rebuild the origin the work arrived through, from the event itself. Shared
+#: with the inbox, which binds the same value as a contextvar so handlers that
+#: raise their own events inherit it.
+_origin_of = origin_from_payload
 
 
 def _bucket(value: int | None, edges: tuple[int, ...]) -> str | None:

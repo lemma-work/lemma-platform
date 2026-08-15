@@ -60,6 +60,7 @@ from app.core.observability.telemetry import (
     instrument_database_engine,
     shutdown_telemetry,
 )
+from app.core.origin import origin_from_payload, origin_scope
 from app.core.request_context import bind_job_context, create_background_task
 
 if TYPE_CHECKING:
@@ -856,7 +857,7 @@ def _register_observability_middleware(
                         task_name=task.fn_name,
                         attempt=task.tries,
                         inherited=inherited,
-                    ):
+                    ), origin_scope(origin_from_payload(inherited)):
                         try:
                             result = await call_next(*args, **kwargs)
                             span.set_attribute("lemma.outcome", outcome)

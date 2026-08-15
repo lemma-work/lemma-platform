@@ -25,7 +25,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from enum import Enum
-from typing import Iterator
+from typing import Any, Iterator, Mapping
 import re
 
 
@@ -166,6 +166,26 @@ _PATH_ORIGINS: tuple[tuple[str, OriginKind], ...] = (
     ("/agent-runtime/pods", OriginKind.MCP_POD),
     ("/agent-runtime/conversations", OriginKind.MCP_CONVERSATION),
 )
+
+
+def origin_from_payload(payload: Mapping[str, Any]) -> Origin | None:
+    """Rebuild the origin the work arrived through, from a serialized event.
+
+    Deliberately tolerant: an origin this build does not recognise -- a value
+    written by a newer replica mid-deploy, or one removed since -- resolves to
+    ``None`` rather than raising. An unknown origin costs one dimension on one
+    event; an exception here would nack a domain event forever, since the
+    reclaim subscriber has no attempt cap.
+    """
+    raw = payload.get("origin")
+    if not raw:
+        return None
+    try:
+        kind = OriginKind(raw)
+    except ValueError:
+        return None
+    platform = payload.get("origin_platform")
+    return Origin(kind, platform=str(platform) if platform else None)
 
 
 def origin_for_path(path: str) -> Origin | None:
