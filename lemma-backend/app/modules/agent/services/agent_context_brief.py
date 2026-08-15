@@ -9,8 +9,9 @@ each with name, description, and (for tables) schema.
 Connection discipline: each DB read runs in its own short UoW that is released
 immediately, and storage I/O (the file walk) is isolated in its own UoW so it
 never extends a span. The whole rendered brief is cached per
-(agent, conversation, pod, user) for ``agent_context_brief_cache_ttl_seconds``,
-so repeated messages on a conversation skip the build (and the DB) entirely.
+(agent, pod, user, is_default) for ``agent_context_brief_cache_ttl_seconds``, so
+a user's repeated runs against the same agent skip the build (and the DB)
+entirely -- across conversations, not just within one.
 """
 
 from __future__ import annotations
@@ -41,13 +42,23 @@ _MAX_TABLES = 50
 _MAX_RESOURCES = 50
 _MAX_COLUMNS = 40
 
-# Redis-backed cache of rendered briefs, keyed by (agent, conversation, pod, user).
-# The brief is rebuilt on every message but only changes when pod inventory /
-# grants change, so a short TTL keeps the hot path off the DB. Redis (not an
-# in-process dict) so it is shared across the API, the worker, and replicas with
-# no per-process staleness. Redis being unavailable degrades to a cache miss and
-# never fails a run.
-_BriefKey = tuple[UUID, UUID, UUID, UUID]
+# Redis-backed cache of rendered briefs, keyed by
+# (agent, pod, user, is_default). Redis rather than an in-process dict so it is
+# shared across the API, the worker and replicas with no per-process staleness;
+# Redis being unavailable degrades to a miss and never fails a run.
+#
+# Deliberately NOT keyed by conversation. It used to be, and that made the cache
+# almost dead: 89.9% of production runs are the first run of their conversation
+# and therefore a guaranteed miss, and of the runs that were not, the median gap
+# to the previous one was 426.9s -- seven times the TTL. So the hot path paid a
+# full rebuild on ~90% of runs to protect against variation that does not exist.
+#
+# Nothing in the rendered brief is conversation-derived. The build reads the pod,
+# the user and either the pod inventory or the agent's grants; the only thing it
+# takes from the conversation is whether this is the pod default assistant, which
+# selects between those two branches -- so that boolean belongs in the key and
+# the conversation id does not.
+_BriefKey = tuple[UUID, UUID, UUID, bool]
 _brief_cache: RedisJsonCache | None = None
 
 
@@ -114,14 +125,18 @@ class AgentContextBriefBuilder:
         user_id: UUID,
         pod_id: UUID,
     ) -> str:
+        # The pod default assistant runs with the user's permissions and sees the
+        # whole pod; named agents see only what they're granted. This is the one
+        # thing the conversation contributes, so it is resolved into the key.
+        is_default = conversation.is_pod_assistant or agent.id == DEFAULT_POD_AGENT_ID
         with run_phase("context_brief") as span:
-            key: _BriefKey = (agent.id, conversation.id, pod_id, user_id)
+            key: _BriefKey = (agent.id, pod_id, user_id, is_default)
             cached = await _get_cached_brief(key)
             span.set_attribute("lemma.cache_hit", cached is not None)
             if cached is not None:
                 return cached
             return await self._build_uncached(
-                key, agent=agent, conversation=conversation, user_id=user_id, pod_id=pod_id
+                key, agent=agent, is_default=is_default, user_id=user_id, pod_id=pod_id
             )
 
     async def _build_uncached(
@@ -129,7 +144,7 @@ class AgentContextBriefBuilder:
         key: _BriefKey,
         *,
         agent: Agent,
-        conversation: Conversation,
+        is_default: bool,
         user_id: UUID,
         pod_id: UUID,
     ) -> str:
@@ -145,9 +160,6 @@ class AgentContextBriefBuilder:
             f"- User: {user_line}",
         ]
 
-        # The pod default assistant runs with the user's permissions and sees the
-        # whole pod; named agents see only what they're granted.
-        is_default = conversation.is_pod_assistant or agent.id == DEFAULT_POD_AGENT_ID
         if is_default:
             lines.extend(await self._pod_inventory(pod_id=pod_id, user_id=user_id))
         else:

@@ -193,6 +193,62 @@ async def test_brief_is_cached_second_call_opens_no_uow(stubbed, monkeypatch):
     assert factory.opened == opened_after_first  # cache hit: no new UoWs
 
 
+async def test_a_new_conversation_reuses_the_cached_brief(stubbed, monkeypatch):
+    """The reason the key dropped the conversation id.
+
+    89.9% of production runs are the first run of their conversation, so a
+    conversation-keyed brief missed on ~90% of runs and rebuilt from the
+    database on the hot path. Nothing in the brief is conversation-derived, so
+    the second conversation must be served the first one's brief.
+    """
+    monkeypatch.setattr(
+        brief_mod.agent_settings, "agent_context_brief_cache_ttl_seconds", 60
+    )
+    factory = RecordingUoWFactory()
+    builder = AgentContextBriefBuilder(factory)
+    agent = _named_agent()
+    uid, pid = uuid4(), uuid4()
+
+    first = await builder.build(
+        agent=agent, conversation=_conversation(False), user_id=uid, pod_id=pid
+    )
+    opened_after_first = factory.opened
+    second = await builder.build(
+        agent=agent, conversation=_conversation(False), user_id=uid, pod_id=pid
+    )
+
+    assert first == second
+    assert factory.opened == opened_after_first
+
+
+async def test_the_two_brief_shapes_never_share_a_cache_entry(stubbed, monkeypatch):
+    """The correctness guard on dropping the conversation id.
+
+    Whether the conversation is the pod default assistant selects between the
+    full pod inventory and the agent's own grants -- two different briefs from
+    the same agent, pod and user. That is the one thing the conversation
+    contributes, so it has to stay in the key.
+    """
+    monkeypatch.setattr(
+        brief_mod.agent_settings, "agent_context_brief_cache_ttl_seconds", 60
+    )
+    factory = RecordingUoWFactory()
+    builder = AgentContextBriefBuilder(factory)
+    agent = _named_agent()
+    uid, pid = uuid4(), uuid4()
+
+    granted = await builder.build(
+        agent=agent, conversation=_conversation(False), user_id=uid, pod_id=pid
+    )
+    opened_after_first = factory.opened
+    inventory = await builder.build(
+        agent=agent, conversation=_conversation(True), user_id=uid, pod_id=pid
+    )
+
+    assert factory.opened > opened_after_first  # rebuilt, not served the other
+    assert granted != inventory
+
+
 async def test_brief_cache_disabled_with_zero_ttl(stubbed, monkeypatch):
     monkeypatch.setattr(
         brief_mod.agent_settings, "agent_context_brief_cache_ttl_seconds", 0
