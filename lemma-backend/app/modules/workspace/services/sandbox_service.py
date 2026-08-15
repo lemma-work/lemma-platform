@@ -56,6 +56,10 @@ from app.modules.workspace.providers.base import (
     ProviderRejected,
 )
 from app.modules.workspace.providers.profiles import profile_for
+from app.modules.workspace.services.sandbox_reuse import (
+    ENSURE_REUSE_SECONDS,
+    SandboxReuseMixin,
+)
 from app.modules.workspace.services.sandbox_volumes import SandboxVolumeMixin
 
 logger = get_logger(__name__)
@@ -66,22 +70,15 @@ _ENSURE_TIMEOUT_SECONDS = 300.0
 # pulling an image and booting a sandbox, short enough that a provisioner that
 # died does not strand the sandbox.
 _CLAIM_TIMEOUT_SECONDS = 180.0
-# Spans one tool call's sequential operations. Not a warmth mechanism: that is
-# the idle release window, two orders of magnitude longer.
-_ENSURE_REUSE_SECONDS = 5.0
 
 
-class SandboxService(SandboxVolumeMixin):
+class SandboxService(SandboxReuseMixin, SandboxVolumeMixin):
     """Owns the sandbox state machine. One instance per unit-of-work factory."""
 
     # Keyed by (event loop, sandbox id). A herd of tool calls arriving together
     # must produce one provisioning attempt, not one per caller.
     _inflight: dict[tuple[int, UUID], asyncio.Task[SandboxHandle]] = {}
 
-    # A just-ensured sandbox, so sequential callers skip re-verifying it. The
-    # singleflight above only collapses concurrent ones, and a single shell tool
-    # call ensures three times: session, start_process, read_process_output.
-    _recent: dict[tuple[int, UUID], tuple[float, SandboxHandle]] = {}
 
     def __init__(self, *, provider, uow_factory) -> None:
         self._provider = provider
@@ -138,11 +135,42 @@ class SandboxService(SandboxVolumeMixin):
 
         running = False
         if instance is not None and instance.provider_id:
-            found = await self._provider.inspect(
+            # Two questions with very different costs, and only one of them is
+            # expensive. Which epoch and storage generation this sandbox is at
+            # comes from the row above and is always read, because the directory
+            # key and the workspace-recreated notice are derived from it and
+            # must never be stale. Whether the container is actually up is a
+            # provider round trip -- on E2B, a call to their fabric -- and the
+            # answer does not change from one tool call to the next.
+            #
+            # So only the second is remembered, keyed by the exact instance and
+            # epoch it was observed for, so a recreate cannot inherit it. The
+            # entry is dropped by `forget`, which the process operations already
+            # call when they discover the sandbox is gone.
+            verify_key = (
+                id(asyncio.get_running_loop()),
+                sandbox_id,
                 instance.provider_id,
-                deadline_at=datetime.now(timezone.utc) + timedelta(seconds=15),
+                sandbox.epoch,
             )
-            running = found is not None and found.running
+            verified_at = self._verified_running.get(verify_key)
+            if (
+                verified_at is not None
+                and (asyncio.get_running_loop().time() - verified_at)
+                < ENSURE_REUSE_SECONDS
+            ):
+                running = True
+            else:
+                self._verified_running.pop(verify_key, None)
+                with tracer.start_as_current_span("lemma.sandbox.inspect"):
+                    found = await self._provider.inspect(
+                        instance.provider_id,
+                        deadline_at=datetime.now(timezone.utc)
+                        + timedelta(seconds=15),
+                    )
+                running = found is not None and found.running
+                if running:
+                    self._remember_verified(verify_key)
 
         return SandboxInfo(
             sandbox_id=str(sandbox.id),
@@ -174,7 +202,7 @@ class SandboxService(SandboxVolumeMixin):
         cached = self._recent.get(key)
         if cached is not None:
             cached_at, handle = cached
-            if (asyncio.get_running_loop().time() - cached_at) < _ENSURE_REUSE_SECONDS:
+            if (asyncio.get_running_loop().time() - cached_at) < ENSURE_REUSE_SECONDS:
                 return handle
             self._recent.pop(key, None)
         task = self._inflight.get(key)
@@ -190,25 +218,9 @@ class SandboxService(SandboxVolumeMixin):
 
             task.add_done_callback(clear)
         handle = await asyncio.shield(task)
-        self._recent[key] = (asyncio.get_running_loop().time(), handle)
+        self._remember_handle(key, handle)
         return handle
 
-    def forget(self, sandbox_id: UUID) -> None:
-        """Drop a remembered handle so the next ensure goes to the provider.
-
-        ``ProviderGone`` is documented as definitive rather than retryable --
-        "the caller must re-ensure to get a current handle" -- and a remembered
-        handle would hand back the dead one instead, for as long as the window
-        lasts. A sandbox can die without passing through `release` or `destroy`:
-        the sweeper destroys through the provider directly, E2B times sandboxes
-        out server-side, and another replica's sweep is invisible here. So the
-        operation that discovers the sandbox is gone says so.
-        """
-        for key in [key for key in self._recent if key[1] == sandbox_id]:
-            self._recent.pop(key, None)
-
-    #: Kept as the private spelling used by release/destroy inside this class.
-    _forget_recent = forget
 
     async def _ensure_once(self, sandbox_id: UUID) -> SandboxHandle:
         """Provision, waiting out transient provider unavailability.
