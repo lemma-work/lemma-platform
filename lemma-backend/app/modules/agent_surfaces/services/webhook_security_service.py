@@ -118,7 +118,7 @@ class SurfaceWebhookSecurityService:
         self,
         *,
         uow_factory: Any = None,
-        resolver_factory: "Callable[[Any], SurfaceCredentialResolver] | None" = None,
+        resolver_factory: Callable[[Any], SurfaceCredentialResolver] | None = None,
     ):
         self._uow_factory = uow_factory
         self._resolver_factory = resolver_factory

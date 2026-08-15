@@ -62,6 +62,43 @@ class ClaimedFire:
     payload: dict
 
 
+# How far a single claim may walk forward to escape a backlog. A minute-cron
+# down for a day is 1440 occurrences; the cap keeps one row's catch-up bounded
+# and hands the rest to the next tick rather than holding the claim
+# transaction -- and its `FOR UPDATE` locks -- while it walks.
+_MAX_CATCHUP_STEPS = 2048
+
+
+def _coalesced_cursor(
+    config: dict, *, fire_at: datetime, now: datetime
+) -> datetime | None:
+    """Where the cursor lands after firing the occurrence claimed at ``fire_at``.
+
+    One step forward is right when a schedule is a tick late. It is wrong after
+    an outage: a minute-cron down for three hours has 180 due occurrences, and
+    stepping one per claim replays all 180 as separate late fires -- 180 emails,
+    180 agent runs -- trickled out over as many polls.
+
+    APScheduler did not do that. Nothing here ever set ``coalesce`` or
+    ``misfire_grace_time``, so its defaults applied: ``coalesce=True`` collapsed
+    a backlog into a single run, and ``misfire_grace_time=1`` dropped that run if
+    it was more than a second late. Replaying the backlog is therefore not
+    parity with the old behaviour -- it is strictly more firing than the system
+    has ever done.
+
+    So the backlog collapses into the one fire already claimed, and the cursor
+    resumes at the next occurrence that is genuinely in the future. Work is not
+    dropped -- the schedule does fire, once, and late, which is the part
+    APScheduler got wrong by dropping it entirely.
+    """
+    cursor = next_cursor_for(config, after=fire_at)
+    for _ in range(_MAX_CATCHUP_STEPS):
+        if cursor is None or cursor > now:
+            return cursor
+        cursor = next_cursor_for(config, after=cursor)
+    return cursor
+
+
 def next_cursor_for(config: dict, *, after: datetime) -> datetime | None:
     """When a schedule should next fire, or ``None`` if never again.
 
@@ -125,10 +162,10 @@ async def claim_due_schedules(
         fire_at = row.next_fire_at
         if fire_at is None:  # pragma: no cover - guarded by the WHERE clause
             continue
-        # Advance from the claimed instant, not from `now`. Advancing from `now`
-        # would silently skip every occurrence a backlog had fallen behind on,
-        # and a poller that quietly drops work is worse than one that runs late.
-        upcoming = next_cursor_for(row.config, after=fire_at)
+        # Advance from the claimed instant, not from `now`: the occurrence that
+        # was due is fired, late, rather than skipped. But advance *past* the
+        # backlog rather than one step into it -- see `_coalesced_cursor`.
+        upcoming = _coalesced_cursor(row.config, fire_at=fire_at, now=now)
         is_one_shot = not (row.config or {}).get("cron")
         if is_one_shot or upcoming is None:
             row.next_fire_at = None

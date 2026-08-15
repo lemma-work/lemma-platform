@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+import weakref
 import traceback
 from dataclasses import dataclass
 
@@ -389,7 +390,10 @@ class ConnectionScopeMonitor:
 
 _monitor: ConnectionScopeMonitor | None = None
 # Engines seen by ``attach``, so a monitor started later still covers them.
-_known_engines: list = []
+# Weak, and keyed by identity: a plain list kept every engine ever built alive
+# for the life of the process. One long test session builds hundreds, and each
+# one it pinned held its connection pool with it.
+_known_engines: "weakref.WeakSet" = weakref.WeakSet()
 
 
 def get_connection_scope_monitor() -> ConnectionScopeMonitor | None:
@@ -429,7 +433,7 @@ def attach_connection_scope_monitor(engine) -> None:
     are covered without either module knowing the monitor exists. The engine is
     remembered either way, because construction usually happens first.
     """
-    _known_engines.append(engine)
+    _known_engines.add(engine)
     if _monitor is not None:
         _monitor.attach(engine)
 

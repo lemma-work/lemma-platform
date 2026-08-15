@@ -71,6 +71,13 @@ def upgrade() -> None:
         "workflow_run_waits",
         sa.Column("scheduled_at", sa.DateTime(timezone=True), nullable=True),
     )
+    # The cast is deliberately unguarded beyond null/empty. There is exactly one
+    # writer of this key -- `WaitUntilExecutor`, which stores
+    # `datetime.now(timezone.utc).isoformat()` -- so every value is tz-aware
+    # ISO-8601 and castable. If one somehow is not, failing the migration is the
+    # behaviour to want: skipping the row would leave `scheduled_at` NULL, and a
+    # NULL cursor is a timer that never fires again. A loud abort names the bad
+    # value and can be fixed; a silent skip loses a wake.
     op.execute(
         """
         UPDATE workflow_run_waits

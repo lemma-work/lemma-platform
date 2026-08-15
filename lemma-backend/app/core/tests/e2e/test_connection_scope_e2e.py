@@ -142,8 +142,6 @@ async def test_two_monitors_in_a_row_both_detect(db_manager) -> None:
     nothing. That is exactly how it was found: a test that armed the monitor
     twice reported DID NOT RAISE on a hold that was plainly there.
     """
-    import asyncio
-
     from app.core.infrastructure.db.session import async_session_maker, get_engine
 
     for attempt in range(2):

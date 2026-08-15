@@ -556,6 +556,15 @@ def _is_console_handler(handler: logging.Handler) -> bool:
     which is what a console handler *is*. ``FileHandler`` subclasses
     ``StreamHandler``, so it has to be excluded first; a deliberately configured
     file sink is still preserved.
+
+    Read this with its caller: ``_reconcile_named_loggers`` applies it only to
+    ``_FOREIGN_LOGGER_PREFIXES`` and their children — a fixed list of dependency
+    namespaces (``httpx``, ``sqlalchemy``, ``com.supertokens`` …). It never runs
+    against the root logger or any application logger, so pytest's ``caplog``
+    and any in-memory sink attached where tests actually attach one are out of
+    reach. The predicate is broad; the set it is applied to is not, and the
+    breadth only matters for a handler someone deliberately attached to a
+    third-party namespace.
     """
     if getattr(handler, _CONSOLE_HANDLER_MARKER, False):
         return True
