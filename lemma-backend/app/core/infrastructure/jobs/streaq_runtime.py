@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 import json
 import logging
 import time
@@ -60,6 +61,7 @@ from app.core.observability.telemetry import (
     instrument_database_engine,
     shutdown_telemetry,
 )
+from app.core.origin import Origin, OriginKind, origin_from_payload, origin_scope
 from app.core.request_context import bind_job_context, create_background_task
 
 if TYPE_CHECKING:
@@ -461,13 +463,21 @@ async def worker_lifespan() -> AsyncGenerator[AppWorkerContext]:
     init_telemetry(service_name="lemma-worker")
     instrument_database_engine(get_engine())
     # Size the thread-offload pool before any task runs blocking work off-loop.
+    from app.core.analytics.bootstrap import start_analytics, stop_analytics
     from app.core.concurrency.offload import configure_thread_pool
+    from app.core.net.http_client import close_shared_http_client
     from app.core.observability.connection_scope import (
         start_connection_scope_monitor_from_settings,
     )
 
     configure_thread_pool()
     start_connection_scope_monitor_from_settings(service_name="lemma-worker")
+    # The analytics consumer runs *here*, in the worker -- not in the API. Without
+    # this the process-wide sink stays the import-time NullSink and every
+    # product-analytics event is discarded, key or no key. Installs a null sink
+    # unless ANALYTICS_WRITE_KEY is set, so a self-hosted or Desktop-local worker
+    # still reports nothing.
+    start_analytics()
 
     # There used to be a guardrail here requiring worker concurrency to fit
     # inside the DB pool, on the theory that a task holds a pooled connection
@@ -624,6 +634,14 @@ async def worker_lifespan() -> AsyncGenerator[AppWorkerContext]:
                 except BaseException:
                     pass
         await _safe_shutdown_step("broker.stop", broker.stop)
+        # After the broker, because the analytics consumer is what produces
+        # these events -- draining a buffer that has stopped growing is the only
+        # way the drain terminates. Before the HTTP client, which the sink posts
+        # through.
+        await _safe_shutdown_step("stop_analytics", stop_analytics)
+        await _safe_shutdown_step(
+            "close_shared_http_client", close_shared_http_client
+        )
         await _safe_shutdown_step("close_streaq_job_queue", close_streaq_job_queue)
         await _safe_shutdown_step("close_message_bus", close_message_bus)
         await _safe_shutdown_step("close_redis_json_caches", close_redis_json_caches)
@@ -855,7 +873,7 @@ def _register_observability_middleware(
                         task_name=task.fn_name,
                         attempt=task.tries,
                         inherited=inherited,
-                    ):
+                    ), origin_scope(origin_from_payload(inherited)):
                         try:
                             result = await call_next(*args, **kwargs)
                             span.set_attribute("lemma.outcome", outcome)
@@ -913,17 +931,42 @@ def _register_lane(name: str | None, lane: Lane) -> None:
         TASK_LANES[name] = lane
 
 
-def streaq_task(*args, lane: Lane = Lane.INTERACTIVE, **kwargs):
+def streaq_task(
+    *args,
+    lane: Lane = Lane.INTERACTIVE,
+    origin: OriginKind | None = None,
+    **kwargs,
+):
     """Register a task on ``lane``'s worker.
 
     A task is registered on exactly one lane's Worker, so it is consumed from
     exactly one queue and can never be picked up twice.
+
+    ``origin`` declares that this task *is* a way work arrives, overriding
+    whatever the enqueuing caller carried. An import kicked off from the web UI
+    is enqueued under ``WEB``, but everything it then creates arrived by
+    ``IMPORT`` -- and the loop metrics are only meaningful if that holds however
+    the import was driven. Declared here rather than as a `with` block inside
+    each task body, so the claim sits next to the registration and no
+    hundred-line body has to be reindented to make it.
     """
     kwargs.setdefault("max_tries", JOB_MAX_RETRIES)
     kwargs.setdefault("timeout", JOB_TIMEOUT_SECONDS)
     kwargs.setdefault("ttl", JOB_RESULT_TTL_SECONDS)
     _register_lane(kwargs.get("name"), lane)
-    return LANE_WORKERS[lane].task(*args, **kwargs)
+    register = LANE_WORKERS[lane].task(*args, **kwargs)
+    if origin is None:
+        return register
+
+    def decorate(fn):
+        @functools.wraps(fn)
+        async def with_origin(*call_args, **call_kwargs):
+            with origin_scope(Origin(origin)):
+                return await fn(*call_args, **call_kwargs)
+
+        return register(with_origin)
+
+    return decorate
 
 
 def streaq_cron(tab: str, *, lane: Lane = Lane.INTERACTIVE, **kwargs):

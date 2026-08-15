@@ -35,6 +35,7 @@ from datetime import datetime, timezone
 
 from app.core.authorization.scope import uow_scope
 from app.core.log.log import get_logger
+from app.core.origin import Origin, OriginKind, origin_scope
 from app.modules.schedule.services.due_schedule_claimer import (
     DEFAULT_CLAIM_LIMIT,
     backfill_missing_cursors,
@@ -71,34 +72,42 @@ async def poll_due_schedules_once(
     moment = now or datetime.now(timezone.utc)
     emitter = get_event_emitter()
 
-    async with uow_scope(uow_factory) as uow:
-        # Same transaction: a row backfilled here is claimable on the next tick,
-        # and one that is already due is claimed below without waiting for one.
-        await backfill_missing_cursors(uow.session, now=moment, limit=limit)
-        claimed = await claim_due_schedules(uow.session, now=moment, limit=limit)
-        timers: list[ClaimedTimer] = []
-        for claim_timers in timer_claimers:
-            timers.extend(await claim_timers(uow.session, now=moment, limit=limit))
+    # Where SCHEDULE origin is born. Nothing upstream can supply it: this runs on
+    # a timer in a background loop with no caller, and `create_background_task`
+    # gives that loop a fresh empty context anyway -- so the scope has to be here,
+    # around the staging below, not around the task that runs it.
+    with origin_scope(Origin(OriginKind.SCHEDULE)):
+        async with uow_scope(uow_factory) as uow:
+            # Same transaction: a row backfilled here is claimable on the next
+            # tick, and one that is already due is claimed below without waiting
+            # for one.
+            await backfill_missing_cursors(uow.session, now=moment, limit=limit)
+            claimed = await claim_due_schedules(uow.session, now=moment, limit=limit)
+            timers: list[ClaimedTimer] = []
+            for claim_timers in timer_claimers:
+                timers.extend(
+                    await claim_timers(uow.session, now=moment, limit=limit)
+                )
 
-        # Timers ride the same event as schedules: `_dispatch_wake` branches on
-        # the payload keys, so rebuilding the payload the old adapters sent
-        # leaves the wake path downstream untouched.
-        for timer in timers:
-            await emitter.stage_scheduled_job_event(
-                uow,
-                schedule_id=timer.timer_id,
-                user_id=timer.user_id,
-                payload=timer.payload,
-                scheduled_at=timer.fire_at,
-            )
-        for fire in claimed:
-            await emitter.stage_scheduled_job_event(
-                uow,
-                schedule_id=fire.schedule_id,
-                user_id=fire.user_id,
-                payload=fire.payload,
-                scheduled_at=fire.fire_at,
-            )
+            # Timers ride the same event as schedules: `_dispatch_wake` branches
+            # on the payload keys, so rebuilding the payload the old adapters
+            # sent leaves the wake path downstream untouched.
+            for timer in timers:
+                await emitter.stage_scheduled_job_event(
+                    uow,
+                    schedule_id=timer.timer_id,
+                    user_id=timer.user_id,
+                    payload=timer.payload,
+                    scheduled_at=timer.fire_at,
+                )
+            for fire in claimed:
+                await emitter.stage_scheduled_job_event(
+                    uow,
+                    schedule_id=fire.schedule_id,
+                    user_id=fire.user_id,
+                    payload=fire.payload,
+                    scheduled_at=fire.fire_at,
+                )
 
     return len(timers) + len(claimed)
 

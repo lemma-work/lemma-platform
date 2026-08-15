@@ -7,7 +7,10 @@ from uuid import UUID
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.schedule.config import schedule_settings
-from app.modules.schedule.domain.events.schedule import ScheduleDeactivated
+from app.modules.schedule.domain.events.schedule import (
+    ScheduleDeactivated,
+    ScheduleRunCompleted,
+)
 from app.modules.schedule.domain.schedule import (
     ScheduleEntity,
     ScheduleRunStatus,
@@ -56,6 +59,19 @@ class ScheduleRunOutcomeService:
             raise LookupError(
                 f"Schedule {schedule_run.schedule_id} disappeared during outcome update"
             )
+
+        # In the same transaction as the outcome it reports, and after the
+        # schedule is loaded so the pod is known without a second read.
+        self.uow.collect_events(
+            [
+                ScheduleRunCompleted(
+                    schedule_id=schedule.id,
+                    schedule_type=schedule.schedule_type,
+                    pod_id=schedule.pod_id,
+                    status=status.value,
+                )
+            ]
+        )
 
         await self._apply_breaker(schedule)
         return True

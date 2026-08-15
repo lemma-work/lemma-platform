@@ -21,6 +21,35 @@ class UserSignedUpEvent(DomainEvent):
         return IDENTITY_EVENTS_STREAM
 
 
+class OrganizationCreatedEvent(DomainEvent):
+    event_type: str = "identity.organization.created"
+    organization_id: UUID
+    created_by_user_id: UUID | None = None
+
+    @classmethod
+    def stream_name(cls) -> str:
+        return IDENTITY_EVENTS_STREAM
+
+
+class OrganizationMemberAddedEvent(DomainEvent):
+    """Somebody joined an organization, by any of the three routes.
+
+    Raised in the repository rather than at the call sites: membership is added
+    on org creation, by auto-join, and by accepting an invitation, and only the
+    repository sees all three. Projecting the invitation-accepted event instead
+    would undercount every organization that grew any other way.
+    """
+
+    event_type: str = "identity.organization.member_added"
+    organization_id: UUID
+    user_id: UUID
+    role: str
+
+    @classmethod
+    def stream_name(cls) -> str:
+        return IDENTITY_EVENTS_STREAM
+
+
 class OrganizationInvitationCreatedEvent(DomainEvent):
     event_type: str = "identity.organization.invitation.created"
     invitation_id: UUID

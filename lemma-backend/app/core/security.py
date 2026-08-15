@@ -22,6 +22,7 @@ from app.core.auth_state_cache import (
     get_account_standing,
     set_account_standing,
 )
+from app.composition.app_session import maybe_record_app_session
 from app.core.infrastructure.db.session import async_session_maker
 from app.modules.identity.infrastructure.models.user_models import User
 from sqlalchemy import select
@@ -235,6 +236,9 @@ async def verify_auth(connection: HTTPConnection):
 
             connection.state.user = AuthUserEntity(id=parsed_user_id)
             connection.state.session = session
+            # Cheap for every request that is not from a published app: the
+            # header check short-circuits before anything else runs.
+            await maybe_record_app_session(connection, session, parsed_user_id)
             connection.state.auth_claims = payload
             connection.state.delegation_claims = None
             if settings.authz_delegated_tokens_enabled:

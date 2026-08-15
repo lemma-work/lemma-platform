@@ -7,6 +7,9 @@ module's own -- `WORKSPACE_*`, plus `FUNCTION_*` for the function runtime and
 
 from typing import Literal, Optional
 
+from app.modules.workspace.providers.e2b_common import (
+    DEFAULT_METADATA_NAMESPACE,
+)
 from pydantic import AliasChoices, Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -167,6 +170,22 @@ class WorkspaceSettings(BaseSettings):
         default=None,
         validation_alias=AliasChoices("E2B_DOMAIN"),
         description="E2B API domain override",
+    )
+    e2b_metadata_namespace: str = Field(
+        default=DEFAULT_METADATA_NAMESPACE,
+        validation_alias=AliasChoices("E2B_METADATA_NAMESPACE"),
+        description=(
+            "Namespace for every metadata key the E2B provider writes and "
+            "queries. A provider is blind to sandboxes labelled by another "
+            "namespace, which is what makes it safe to point a test at an "
+            "account that also holds real workspaces.\n\n"
+            "This is a safety boundary, not a preference. The orphan sweep "
+            "destroys any provider object it can identify as ours but cannot "
+            "find a sandbox row for, and a test runs against a throwaway "
+            "database in which no production sandbox has a row -- so sharing "
+            "this value with production means a test sweep deletes live "
+            "workspaces. Override it for anything that is not production."
+        ),
     )
 
     # --- Lemma Desktop's native bridge into its VZ/WSL guest ---------------

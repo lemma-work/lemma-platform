@@ -52,6 +52,7 @@ from app.modules.agent.domain.prompts import (
     load_workspace_cli_prompt,
 )
 from app.modules.agent.domain.value_objects import AgentToolset
+from app.modules.agent.services.run_phase_spans import run_phase
 from app.modules.agent.tools.graceful_toolset import GracefulToolset
 from app.modules.agent.tools.registry import EXTRA_TOOLSET_OBJECTS
 from app.modules.agent.tools.skills.pydantic_adapter import skills_toolset
@@ -205,6 +206,32 @@ async def build_lemma_harness_tooling(
     protocol: RuntimeProfileProtocol = RuntimeProfileProtocol.OPENAI_COMPATIBLE,
 ) -> list[object]:
     """Return the full capability list for the in-process LEMMA harness."""
+    with run_phase("capabilities") as span:
+        capabilities = await _build_lemma_harness_tooling(
+            uow_factory=uow_factory,
+            agent=agent,
+            ctx=ctx,
+            full_toolsets=full_toolsets,
+            agent_run_id=agent_run_id,
+            model_name=model_name,
+            enable_prompt_caching=enable_prompt_caching,
+            protocol=protocol,
+        )
+        span.set_attribute("lemma.capabilities", len(capabilities))
+        return capabilities
+
+
+async def _build_lemma_harness_tooling(
+    *,
+    uow_factory: UnitOfWorkFactory,
+    agent: Agent,
+    ctx: AgentContext,
+    full_toolsets: list[object],
+    agent_run_id: object,
+    model_name: str,
+    enable_prompt_caching: bool,
+    protocol: RuntimeProfileProtocol,
+) -> list[object]:
     # agent/uow_factory/run-id reserved: tool selection (incl. todo) now happens in
     # RunToolAssembler, so full_toolsets already reflects the agent's toolsets.
     _ = (agent, uow_factory, agent_run_id, model_name)

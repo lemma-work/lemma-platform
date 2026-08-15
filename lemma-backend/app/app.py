@@ -19,6 +19,7 @@ from app.core.api.streaming_multipart import install_streaming_multipart_openapi
 from app.core.domain.errors import PayloadTooLargeError
 from app.core.config import settings
 from app.core.cors import get_allowed_cors_origin_regex, get_allowed_cors_origins
+from app.core.origin import origin_for_path, origin_scope, resolve_client_identity
 from app.core.infrastructure.events.message_bus import (
     close_message_bus,
     get_message_bus,
@@ -142,6 +143,7 @@ async def lifespan(app: FastAPI):
             await stack.enter_async_context(pod_mcp_app.lifespan(app))
 
         # Core startup
+        from app.core.analytics.bootstrap import start_analytics
         from app.core.concurrency.offload import configure_thread_pool, run_blocking
         from app.core.observability.connection_scope import (
             start_connection_scope_monitor_from_settings,
@@ -151,6 +153,9 @@ async def lifespan(app: FastAPI):
 
         configure_thread_pool()
         start_connection_scope_monitor_from_settings(service_name="lemma-api")
+        # Installs a null sink unless ANALYTICS_WRITE_KEY is set, so a
+        # self-hosted or Desktop-local process reports nothing.
+        start_analytics()
         embedded_worker = getattr(app.state, "embedded_worker", False)
         watchdog_task = (
             None
@@ -222,6 +227,11 @@ async def lifespan(app: FastAPI):
                         await lifecycle_task
                     except BaseException:
                         pass
+            # Before the shared HTTP client closes below: the sink delivers
+            # what it has buffered on the way out.
+            from app.core.analytics.bootstrap import stop_analytics
+
+            await stop_analytics()
             await close_streaq_job_queue()
             await close_message_bus()
             # Outbound connector plumbing: the shared HTTP pool and any engines
@@ -256,6 +266,9 @@ class RequestObserverMiddleware:
     """Bind HTTP correlation, emit bounded terminal signals, and record metrics."""
 
     HEADER = b"x-request-id"
+    # How the work arrived, per docs/design/product-analytics.md. Resolved once
+    # here so every downstream emit reads it from context rather than guessing.
+    CLIENT_HEADER = b"x-lemma-client"
     REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
     SLOW_SECONDS = 2.0
     QUIET_PATHS = frozenset(
@@ -312,9 +325,23 @@ class RequestObserverMiddleware:
                 message = {**message, "headers": raw_headers}
             await send(message)
 
+        client_header = next(
+            (v for k, v in headers if k.lower() == self.CLIENT_HEADER), None
+        )
+        # The mount point wins over the header where the route itself settles
+        # the question: an MCP caller sends no Lemma client header.
+        resolved_origin = origin_for_path(scope.get("path") or "") or (
+            resolve_client_identity(
+                client_header.decode("latin-1", "replace") if client_header else None
+            ).origin
+        )
+
         caught: Exception | None = None
         cancelled = False
-        with bind_request_context(request_id=request_id, correlation_id=correlation_id):
+        with (
+            bind_request_context(request_id=request_id, correlation_id=correlation_id),
+            origin_scope(resolved_origin),
+        ):
             try:
                 await self.app(scope, receive, send_with_request_id)
             except asyncio.CancelledError:
@@ -584,6 +611,7 @@ def create_app(modules=OSS_MODULES) -> FastAPI:
             "Content-Type",
             "Authorization",
             "X-Lemma-Client",
+            "X-Lemma-App",
             "x-altcha-payload",
         ]
         + get_all_cors_headers(),

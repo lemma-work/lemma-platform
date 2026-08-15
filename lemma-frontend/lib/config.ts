@@ -11,6 +11,8 @@ declare global {
       NEXT_PUBLIC_APPS_DOMAIN_SUFFIX?: string;
       NEXT_PUBLIC_SUPPORT_EMAIL?: string;
       NEXT_PUBLIC_LEMMA_DEPLOYMENT?: string;
+      NEXT_PUBLIC_ANALYTICS_KEY?: string;
+      NEXT_PUBLIC_ANALYTICS_HOST?: string;
     };
   }
 }
@@ -24,11 +26,18 @@ export interface RuntimeConfig {
   SUPPORT_EMAIL: string;
   /** `"local"` for a Lemma Desktop installation, `"hosted"` otherwise. */
   DEPLOYMENT: string;
+  /** Analytics ingestion key. Empty means this deployment reports nothing. */
+  ANALYTICS_KEY: string;
+  /** Analytics dashboard host, used only for links out of the SDK. */
+  ANALYTICS_HOST: string;
 }
 
 // Public contact address shown on legal pages and support links. Override per
 // deployment with NEXT_PUBLIC_SUPPORT_EMAIL.
 const DEFAULT_SUPPORT_EMAIL = "deepak@lemma.work";
+
+// EU by default, matching the backend's ANALYTICS_HOST.
+const DEFAULT_ANALYTICS_HOST = "https://eu.posthog.com";
 
 function getRuntimeConfig(): RuntimeConfig {
   // Server-side: use process.env directly (runtime env vars work in standalone mode)
@@ -42,6 +51,8 @@ function getRuntimeConfig(): RuntimeConfig {
       APPS_DOMAIN_SUFFIX: process.env.NEXT_PUBLIC_APPS_DOMAIN_SUFFIX || "",
       SUPPORT_EMAIL: process.env.NEXT_PUBLIC_SUPPORT_EMAIL || DEFAULT_SUPPORT_EMAIL,
       DEPLOYMENT: process.env.NEXT_PUBLIC_LEMMA_DEPLOYMENT || "hosted",
+      ANALYTICS_KEY: process.env.NEXT_PUBLIC_ANALYTICS_KEY || "",
+      ANALYTICS_HOST: process.env.NEXT_PUBLIC_ANALYTICS_HOST || DEFAULT_ANALYTICS_HOST,
     };
   }
 
@@ -61,6 +72,15 @@ function getRuntimeConfig(): RuntimeConfig {
     SUPPORT_EMAIL: runtimeEnv.NEXT_PUBLIC_SUPPORT_EMAIL || process.env.NEXT_PUBLIC_SUPPORT_EMAIL || DEFAULT_SUPPORT_EMAIL,
     DEPLOYMENT:
       runtimeEnv.NEXT_PUBLIC_LEMMA_DEPLOYMENT || process.env.NEXT_PUBLIC_LEMMA_DEPLOYMENT || "hosted",
+    // Read through window.__ENV like everything else here. `process.env` alone
+    // is inlined at build time, so a key supplied to a prebuilt image at run
+    // time would never arrive and analytics would silently never start.
+    ANALYTICS_KEY:
+      runtimeEnv.NEXT_PUBLIC_ANALYTICS_KEY || process.env.NEXT_PUBLIC_ANALYTICS_KEY || "",
+    ANALYTICS_HOST:
+      runtimeEnv.NEXT_PUBLIC_ANALYTICS_HOST
+      || process.env.NEXT_PUBLIC_ANALYTICS_HOST
+      || DEFAULT_ANALYTICS_HOST,
   };
 }
 

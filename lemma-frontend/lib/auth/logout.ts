@@ -2,6 +2,7 @@
 
 import { getLemmaClient } from '@/lib/sdk/lemma-client';
 import { clearLastOpenedPodId } from '@/lib/pods/last-opened-pod';
+import { resetAnalyticsIdentity } from '@/lib/analytics/client';
 
 export async function logoutToHome() {
     try {
@@ -17,6 +18,11 @@ export async function logoutToHome() {
     // Drop the "last opened pod" marker so the root route doesn't immediately
     // redirect a just-logged-out user back into their previous pod.
     clearLastOpenedPodId();
+
+    // Before the navigation, and on every sign-out path: without it the next
+    // person to use this browser inherits the previous one's analytics identity,
+    // and every event they fire is attributed to an account they do not have.
+    resetAnalyticsIdentity();
 
     // Full-document navigation (not router.push) so all in-memory auth/query
     // state is discarded and the landing page renders from a clean slate.

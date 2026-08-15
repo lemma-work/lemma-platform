@@ -12,6 +12,7 @@ from app.composition.agent_usage import (
     UsageService,
     build_usage_service,
 )
+from app.modules.agent.services.run_phase_spans import run_phase
 
 
 class RunUsageRecorder:
@@ -37,16 +38,17 @@ class RunUsageRecorder:
             return None
         if not isinstance(model_name, str):
             model_name = str(runtime_profile.get("provider_model_name") or "default")
-        async with self.uow_factory() as uow:
-            reservation = await self._service(uow).reserve_for_profile(
-                organization_id=organization_id,
-                user_id=user_id,
-                profile_id=profile_id,
-                profile_scope=profile_scope,
-                model_name=model_name,
-            )
-            await uow.commit()
-            return reservation
+        with run_phase("usage_reserve"):
+            async with self.uow_factory() as uow:
+                reservation = await self._service(uow).reserve_for_profile(
+                    organization_id=organization_id,
+                    user_id=user_id,
+                    profile_id=profile_id,
+                    profile_scope=profile_scope,
+                    model_name=model_name,
+                )
+                await uow.commit()
+                return reservation
 
     async def release(self, reservation: UsageReservation | None) -> None:
         if reservation is None:

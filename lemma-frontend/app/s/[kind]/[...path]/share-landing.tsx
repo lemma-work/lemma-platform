@@ -8,6 +8,7 @@ import { ArrowRight } from '@/components/ui/icons';
 
 import { Button } from '@/components/ui/button';
 import { StepLoader } from '@/components/brand/loader';
+import { captureEvent } from '@/lib/analytics/client';
 import { GuestResourceView } from '@/components/share/guest-resource-view';
 import { JoinPodPanel } from '@/components/share/join-pod-panel';
 import { useLemmaAuth } from '@/lib/hooks/use-lemma-auth';
@@ -87,6 +88,16 @@ export function ShareLanding({
         enabled: Boolean(isAuthenticated && target && hasPodAccess === false),
         retry: false,
     });
+
+    // The top of the loop. Recorded before the auth branch below, because the
+    // reader who is *not* signed in is exactly the one this funnel is about --
+    // waiting for authentication would only ever count people already inside.
+    useEffect(() => {
+        captureEvent('share_link.viewed', {
+            kind,
+            viewer_is_member: Boolean(hasPodAccess),
+        });
+    }, [kind, hasPodAccess]);
 
     useEffect(() => {
         if (isLoading || !isAuthenticated) return;

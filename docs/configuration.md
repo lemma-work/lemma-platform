@@ -230,9 +230,21 @@ E2B_WORKSPACE_TEMPLATE=lemma-workspace
 E2B_FUNCTION_TEMPLATE=lemma-function
 # Only for a self-hosted or non-default E2B deployment.
 E2B_DOMAIN=
+# Namespace for the metadata the provider writes and queries. Leave unset in
+# production; override it for anything sharing an E2B account with real
+# workspaces.
+E2B_METADATA_NAMESPACE=
 ```
 
-These four are the whole backend-side E2B surface. In particular:
+These five are the whole backend-side E2B surface. In particular:
+
+- **`E2B_METADATA_NAMESPACE` is a safety boundary.** A provider is blind to
+  sandboxes labelled with any other namespace, and the orphan sweep destroys
+  every object it *can* identify that has no sandbox row. A test runs against a
+  throwaway database in which no production workspace has a row, so a test
+  sharing this value with a live account would sweep that account's workspaces
+  away. E2E runs generate their own namespace and refuse to start in the
+  production one.
 
 - **`E2B_WORKSPACE_BUILD_ID` and `E2B_FUNCTION_BUILD_ID` are not backend
   settings.** `WorkspaceSettings` does not declare them and the backend never
