@@ -232,29 +232,9 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.14"
-      - uses: astral-sh/setup-uv@v5
-      - name: Check Python SDK lockfile
-        working-directory: lemma-python
-        run: uv lock --check
-      - name: Install SDK + CLI
-        run: |
-          python -m pip install --upgrade pip
-          pip install -e ./lemma-python
-          pip install -e ./lemma-pod-bundle
-          pip install -e ./lemma-cli
-          pip install pytest pytest-asyncio
-      - name: Test (CLI + Python SDK, offline only)
-        # Run each package's tests as a separate pytest invocation so each
-        # resolves its own pyproject.toml (markers, strict-markers, rootdir).
-        # A single combined run picks lemma-cli's config (strict-markers with
-        # only `unit`/`e2e`), which rejects lemma-python's `connector`/`integration`
-        # markers. Splitting also lets us exclude docker-only suites per package:
-        # lemma-cli e2e tests need postgres/redis/supertokens containers, and
-        # lemma-python integration tests need a live Lemma API + LEMMA_TOKEN.
-        run: |
-          pytest lemma-cli/tests -m "not e2e"
-          pytest lemma-python/tests -m "not integration"
-          pytest lemma-pod-bundle/tests
+      # Shared with release-lemma-python.yml and release-lemma-terminal.yml, so
+      # what a release verifies cannot drift from what a pull request does.
+      - uses: ./.github/actions/verify-python-sdk
 
   cli-packaging:
     name: lemma-terminal wheel (clean checkout)
@@ -279,26 +259,11 @@ jobs:
         run: |
           python -m pip install --upgrade pip build
           python -m build
-      - name: Distributions carry what PyPI cannot supply
-        run: python scripts/check_cli_wheel.py lemma-cli/dist
-      - name: Install the wheel where no checkout exists and import it
-        # The failure mode this catches is a user's, not a builder's: the wheel
-        # resolves and installs happily and then raises ModuleNotFoundError on
-        # first use. --no-deps keeps this a packaging check rather than a
-        # resolution one (the lemma-sdk pin names the release being cut, which
-        # is not on PyPI until minutes after the wheel is), and /tmp keeps the
-        # repository off sys.path so an import can only come from the wheel.
-        run: |
-          python -m venv /tmp/wheel-check
-          /tmp/wheel-check/bin/pip install --no-deps lemma-cli/dist/*.whl
-          cd /tmp && /tmp/wheel-check/bin/python -c "
-          import pathlib, lemma_pod_bundle
-          from lemma_pod_bundle import layout
-          skills = pathlib.Path(lemma_pod_bundle.__file__).parent.parent / 'lemma_cli' / 'skills'
-          found = sorted(p.parent.name for p in skills.glob('*/SKILL.md'))
-          assert found, f'no skills installed under {skills}'
-          print(f'imported lemma_pod_bundle, {len(found)} skills present: {found}')
-          "
+      # Shared with release-lemma-terminal.yml, which runs it on the exact
+      # distributions it is about to upload.
+      - uses: ./.github/actions/verify-cli-distributions
+        with:
+          dist-dir: lemma-cli/dist
 
   typescript-sdk:
     name: TypeScript SDK checks
@@ -306,32 +271,14 @@ jobs:
     needs: changes
     if: needs.changes.outputs.typescript == 'true'
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: lemma-typescript
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v5
         with:
           node-version-file: .nvmrc
-      - run: npm ci
-      - name: Typecheck (src)
-        run: npx tsc --noEmit -p tsconfig.json
-      - name: Typecheck (tests)
-        run: npx tsc --noEmit -p tsconfig.test.json
-      - name: SDK_VERSION matches package.json
-        run: |
-          PKG=$(node -p "require('./package.json').version")
-          SRC=$(grep -oE '"[0-9]+\.[0-9]+\.[0-9]+"' src/version.ts | head -1 | tr -d '"')
-          echo "package.json=$PKG version.ts=$SRC"
-          test "$PKG" = "$SRC" || { echo "::error::src/version.ts SDK_VERSION ($SRC) != package.json version ($PKG)"; exit 1; }
-      - name: Browser bundle is fresh
-        run: |
-          npm run build:bundle
-          git diff --exit-code public/lemma-client.js \
-            || { echo "::error::Committed public/lemma-client.js is stale — run 'npm run build:bundle' and commit"; exit 1; }
-      - name: Unit tests
-        run: npx vitest run
+      # Shared with release-lemma-typescript.yml, so what a release verifies
+      # cannot drift from what a pull request does.
+      - uses: ./.github/actions/verify-typescript-sdk
 
   codegen-drift:
     name: Codegen drift gate

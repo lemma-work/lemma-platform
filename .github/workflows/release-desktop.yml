@@ -135,8 +135,28 @@ jobs:
         with:
           node-version-file: .nvmrc
 
+      # The Agent Host's ACP integration tests spawn a scripted Python agent over
+      # stdio, and panic outright when there is no interpreter to spawn.
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      # The same gate CI's "Desktop workspace" job applies, applied here because
+      # CI's path filter skips that job whenever the release commit did not touch
+      # desktop/** -- a backend-only release commit is the common case -- and CI
+      # is green anyway, because "CI passed" treats a skipped suite as passing.
+      # rustfmt compiles nothing, so it runs before the cache is warm; clippy and
+      # the tests wait for the sidecars below, because tauri-build resolves the
+      # externalBin sidecars at build-script time.
+      - name: Check formatting
+        working-directory: desktop
+        run: cargo fmt --all --check
 
       - name: Cache cargo
         uses: actions/cache@v4
@@ -200,6 +220,14 @@ jobs:
 
       - name: Build native local sidecars
         run: desktop/scripts/build-sidecar.sh
+
+      - name: Lint
+        working-directory: desktop
+        run: cargo clippy --workspace --locked --all-targets -- -D warnings
+
+      - name: Test
+        working-directory: desktop
+        run: cargo test --workspace --locked
 
       - name: Sign virtualization helper with its entitlement
         shell: bash
