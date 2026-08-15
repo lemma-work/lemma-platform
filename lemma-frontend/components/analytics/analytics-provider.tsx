@@ -16,7 +16,10 @@ export function AnalyticsProvider() {
     const pathname = usePathname();
 
     useEffect(() => {
-        startAnalytics();
+        // Fire and forget: posthog-js is loaded dynamically so an unconfigured
+        // or Desktop-local build never downloads it, and nothing about rendering
+        // may wait on that chunk.
+        void startAnalytics();
     }, []);
 
     useEffect(() => {

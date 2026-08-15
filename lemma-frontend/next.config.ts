@@ -55,20 +55,35 @@ const nextConfig: NextConfig = {
       },
     ];
   },
+  // Required by the /ingest rewrites below: PostHog's ingestion endpoints rely
+  // on trailing slashes (`/batch/`, `/decide/`), and Next's default 307 to the
+  // slash-less form breaks them. Without this the proxy looks configured and
+  // silently delivers nothing.
+  skipTrailingSlashRedirect: true,
   async rewrites() {
     // Same-origin analytics ingestion. Ad blockers drop a meaningful share of
     // direct calls to an analytics vendor, and the share they drop skews toward
     // the technical users Lemma sells to, so the loss is not random noise.
-    // Local deployments never initialise the client, so this proxies nothing
-    // there (see lib/analytics/client.ts).
-    const analyticsHost =
+    //
+    // Both hosts are read at BUILD time, not run time: Next serialises rewrites
+    // into `routes-manifest.json` and the runtime server never re-evaluates this
+    // function. The Docker builder stage has no NEXT_PUBLIC_* set, so overriding
+    // these on a container does nothing — which is also why this rewrite is NOT
+    // gated on the analytics key. A build-time gate would evaluate to "no key"
+    // in every image, including Cloud's, and kill analytics with no error
+    // anywhere. Unconfigured deployments are already inert: with no key the
+    // client never initialises, so nothing ever requests /ingest and this
+    // proxies zero bytes.
+    const ingestHost =
       process.env.NEXT_PUBLIC_ANALYTICS_INGEST_HOST || "https://eu.i.posthog.com";
+    // Assets live on a *different* host from ingestion. Pointing /static at the
+    // ingest host — as this did — misroutes the remote-config bootstrap.
+    const assetsHost =
+      process.env.NEXT_PUBLIC_ANALYTICS_ASSETS_HOST || "https://eu-assets.i.posthog.com";
     return [
-      {
-        source: "/ingest/static/:path*",
-        destination: `${analyticsHost}/static/:path*`,
-      },
-      { source: "/ingest/:path*", destination: `${analyticsHost}/:path*` },
+      { source: "/ingest/static/:path*", destination: `${assetsHost}/static/:path*` },
+      { source: "/ingest/array/:path*", destination: `${assetsHost}/array/:path*` },
+      { source: "/ingest/:path*", destination: `${ingestHost}/:path*` },
     ];
   },
   serverExternalPackages: ["esbuild"],

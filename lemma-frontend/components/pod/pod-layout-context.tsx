@@ -11,6 +11,7 @@ import {
 } from 'react';
 import { usePathname } from 'next/navigation';
 import { useAIAssistant } from '@/components/ai/ai-assistant-context';
+import { podIdFromPathname } from '@/lib/pods/pod-id-from-pathname';
 
 /**
  * PodLayoutProvider is the single source of truth for the pod shell's three
@@ -76,10 +77,6 @@ interface PodLayoutContextValue {
 
 const PodLayoutContext = createContext<PodLayoutContextValue | null>(null);
 
-function podIdFromPathname(pathname: string): string | null {
-    const match = pathname.match(/^\/pod\/([^/]+)/);
-    return match?.[1] ? decodeURIComponent(match[1]) : null;
-}
 
 /**
  * Focus routes are full-task surfaces (resource editors and run inspectors) that
