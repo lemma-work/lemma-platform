@@ -384,3 +384,35 @@ async def test_transport_failure_returns_operation_identity_without_blind_replay
     assert result["completed"] is False
     assert UUID(result["process_id"])
     assert "transport failed" in result["error"].lower()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("yield_time_ms", [200, 500, 1000, 1500])
+async def test_a_short_yield_still_waits_long_enough_to_see_the_exit(
+    yield_time_ms: int,
+) -> None:
+    """A yield at or under the transport safety margin used to wait not at all.
+
+    The margin exists so the server is never asked to hold a response longer
+    than the client will wait for it, and it is charged against the deadline.
+    It was also being taken out of the caller's yield window, which put a
+    cliff at exactly one second: `min(window, MAX) - MARGIN` went to zero, the
+    collector took a single non-waiting poll and returned, and a command that
+    had finished in milliseconds still reported itself as running. The agent
+    then paid another round trip to learn otherwise, and the real-sandbox E2E
+    that asserts completion on a one-second yield failed or passed on a race.
+
+    `_CanonicalClient` reports RUNNING first and SUCCEEDED second, so seeing
+    the exit at all requires that the collector poll more than once.
+    """
+    client = _CanonicalClient()
+    session = _session(client)
+
+    result = await session.exec_command(
+        cmd="printf done", yield_time_ms=yield_time_ms
+    )
+
+    assert result["completed"] is True, result
+    assert result["exit_code"] == 0
+    assert result["process_id"] is None
+    assert client._reads > 1, "a short yield collapsed into one non-waiting poll"
