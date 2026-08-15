@@ -208,20 +208,21 @@ async def handle_platform_webhook(
     service: AgentSurfaceService = Depends(get_surface_service),
     uow_factory: UnitOfWorkFactory = Depends(get_uow_factory),
 ):
-    """Handle platform-level webhook callbacks.
-
-    Takes ``uow`` only to hand its connection back before the Redis publishes
-    below. The session is opened by this route's other dependencies (the surface
-    service and the webhook security service, which both resolve the same cached
-    unit of work), so asking for it here costs nothing extra and is the only way
-    to reach it. `connection_released` commits when `safe_to_release` allows and
-    is a no-op otherwise, so a transaction with pending writes is left alone.
-
-    The proper fix is factory mode for the credential resolver, which reads the
-    per-workspace Slack signing secret -- see the task for why that is not a
-    drive-by change. This removes the hold without touching signature
-    verification.
-    """
+    """Handle platform-level webhook callbacks."""
+    # `uow` is taken only to hand its connection back before the Redis publishes
+    # below. The session is opened by this route's other dependencies (the
+    # surface service and the webhook security service, which resolve the same
+    # cached unit of work), so asking for it here costs nothing extra and is the
+    # only way to reach it. `connection_released` commits when `safe_to_release`
+    # allows and is a no-op otherwise, so a transaction with pending writes is
+    # left alone.
+    #
+    # The proper fix is factory mode for the credential resolver, which reads
+    # the per-workspace Slack signing secret -- not a drive-by change. This
+    # removes the hold without touching signature verification.
+    #
+    # Deliberately a comment, not part of the docstring: the docstring becomes
+    # the endpoint's public OpenAPI description.
     headers = dict(request.headers)
     raw_body = await request.body()
     payload = _decode_webhook_payload(raw_body, headers)
@@ -356,11 +357,11 @@ async def handle_surface_webhook(
     uow: UoWDep,
     service: AgentSurfaceService = Depends(get_surface_service),
 ):
-    """Handle webhooks addressed to one concrete surface.
-
-    ``uow`` is here for the same reason as on `handle_platform_webhook`: to hand
-    the connection its sibling dependencies opened back before the Redis publish.
-    """
+    """Handle webhooks addressed to one concrete surface."""
+    # `uow` is here for the same reason as on `handle_platform_webhook`: to hand
+    # the connection its sibling dependencies opened back before the Redis
+    # publish. A comment rather than a docstring line -- the docstring is the
+    # endpoint's public OpenAPI description.
     headers = dict(request.headers)
     raw_body = await request.body()
     payload = _decode_webhook_payload(raw_body, headers)
