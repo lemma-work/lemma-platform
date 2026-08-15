@@ -34,6 +34,7 @@ from app.modules.agent.infrastructure import (  # noqa: F401
 
 # Trigger
 from app.modules.schedule.infrastructure import models as trigger_models  # noqa: F401
+from app.modules.analytics.infrastructure import models as analytics_models  # noqa: F401
 
 # Connectors
 from app.modules.connectors.infrastructure import models as connector_models  # noqa: F401

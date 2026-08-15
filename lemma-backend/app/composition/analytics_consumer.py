@@ -43,6 +43,7 @@ from app.core.infrastructure.events.stream_subscriber import (
     reliable_redis_stream_subscriber,
 )
 from app.core.log.log import get_logger
+from app.composition.pod_delivery import DeliveryVia, maybe_emit_pod_delivered
 from app.core.origin import OriginKind, origin_from_payload
 from app.modules.agent.domain.events import (
     AGENT_EVENTS_STREAM,
@@ -134,6 +135,7 @@ WIRED_EVENTS = frozenset(
         "schedule_run.completed",
         "surface.connected",
         "surface.message_answered",
+        "pod.delivered",
         "app.created",
         "app.published",
         "bundle.exported",
@@ -535,6 +537,17 @@ async def on_agent_run_completed(
             },
         )
 
+        pod_creator = await _pod_creator(uow_factory, conversation.pod_id)
+        await maybe_emit_pod_delivered(
+            uow_factory,
+            pod_id=conversation.pod_id,
+            organization_id=conversation.organization_id,
+            via=DeliveryVia.AGENT_RUN,
+            origin=origin,
+            recipient_user_id=conversation.user_id,
+            creator_user_id=pod_creator,
+        )
+
         # `surface.message_answered` is projected from here rather than from the
         # ingress service, which only *starts* the run and cannot know whether an
         # answer followed. Origin-pinned in the catalog, so it is pre-filtered
@@ -561,6 +574,15 @@ async def on_agent_run_completed(
                 "agent_id": conversation.agent_id,
             },
         )
+        await maybe_emit_pod_delivered(
+            uow_factory,
+            pod_id=conversation.pod_id,
+            organization_id=conversation.organization_id,
+            via=DeliveryVia.SURFACE_MESSAGE,
+            origin=origin,
+            recipient_user_id=conversation.user_id,
+            creator_user_id=pod_creator,
+        )
 
     await inbox.process("analytics.agent", event, record)
 
@@ -577,6 +599,7 @@ async def on_agent_run_completed(
 async def on_schedule_event(
     event: dict,
     fs_logger: Logger,
+    uow_factory: UnitOfWorkFactory = Depends(provide_uow_factory),
     inbox: EventInboxPort = Depends(provide_domain_event_inbox),
 ) -> None:
     event_type = event.get("event_type")
@@ -623,6 +646,22 @@ async def on_schedule_event(
                 "status": completed.status,
             },
         )
+        if (
+            completed.pod_id is not None
+            and completed.status.upper() in _DELIVERED_STATUSES
+        ):
+            # Branch (b): autonomous work delivers without a recipient test. A
+            # scheduled report nobody watches is the design's own example of a
+            # pod earning its keep.
+            await maybe_emit_pod_delivered(
+                uow_factory,
+                pod_id=completed.pod_id,
+                organization_id=None,
+                via=DeliveryVia.SCHEDULE_RUN,
+                origin=origin,
+                recipient_user_id=None,
+                creator_user_id=None,
+            )
 
     await inbox.process("analytics.schedule", event, record)
 
@@ -639,6 +678,7 @@ async def on_schedule_event(
 async def on_workflow_event(
     event: dict,
     fs_logger: Logger,
+    uow_factory: UnitOfWorkFactory = Depends(provide_uow_factory),
     inbox: EventInboxPort = Depends(provide_domain_event_inbox),
 ) -> None:
     event_type = event.get("event_type")
@@ -685,6 +725,16 @@ async def on_workflow_event(
                 ),
             },
         )
+        if terminal.status.value.upper() in _DELIVERED_STATUSES:
+            await maybe_emit_pod_delivered(
+                uow_factory,
+                pod_id=terminal.pod_id,
+                organization_id=None,
+                via=DeliveryVia.WORKFLOW_RUN,
+                origin=origin,
+                recipient_user_id=terminal.user_id,
+                creator_user_id=await _pod_creator(uow_factory, terminal.pod_id),
+            )
 
     await inbox.process("analytics.workflow", event, record)
 
@@ -852,6 +902,23 @@ async def on_connector_event(
         )
 
     await inbox.process("analytics.connector", event, record)
+
+
+#: Terminal statuses that count as an outcome. A failed or cancelled run is not
+#: a delivery, however it arrived.
+_DELIVERED_STATUSES = frozenset({"COMPLETED", "SUCCEEDED"})
+
+
+async def _pod_creator(uow_factory, pod_id: UUID | None) -> UUID | None:
+    """Who built the pod — the person an outcome has to reach *past* to count."""
+    if pod_id is None:
+        return None
+    from sqlalchemy import text
+
+    async with uow_factory() as uow:
+        return await uow.session.scalar(
+            text("SELECT user_id FROM pods WHERE id = :pod_id"), {"pod_id": pod_id}
+        )
 
 
 def _actor_or_system(actor_id: UUID | None) -> AnalyticsActor:
