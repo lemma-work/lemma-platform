@@ -27,6 +27,7 @@ from app.core.analytics.event_catalog import (
     ANALYTICS_CATALOG,
     GROUP_TYPES,
     SPINE_PROPERTIES,
+    PersonProfile,
     UnknownAnalyticEventError,
 )
 from app.core.analytics.sink import AnalyticsSink, CapturedEvent, NullSink
@@ -113,28 +114,32 @@ class AnalyticsActor:
         return cls(ActorType.ANONYMOUS, anonymous_id=anonymous_id)
 
 
-def _resolve_distinct_id(
-    actor: AnalyticsActor,
-    *,
-    pod_id: str | None,
-    organization_id: str | None,
-) -> str | None:
+#: One machine actor for all autonomous work, product-wide.
+#:
+#: The alternative -- a distinct id per pod -- reads as the honest answer and is
+#: not: an analytics store has no concept of a non-human distinct id, so every
+#: pod becomes a *person*. Person count then scales with the pod count, and the
+#: people-shaped metrics this plane exists to produce (DAU, retention, "how much
+#: of this is human?") are polluted by machines, permanently and irreversibly --
+#: PostHog's identified-stickiness is per distinct id.
+#:
+#: The pod is not lost by collapsing them. It rides on the event as ``pod_id``
+#: *and* as a group, and pod-level retention is computed on the group, which is
+#: what group analytics is for.
+AUTONOMOUS_DISTINCT_ID: str = "lemma:autonomous"
+
+
+def _resolve_distinct_id(actor: AnalyticsActor) -> str:
     """Whose timeline this event belongs on.
 
-    Autonomous work has no person, and inventing one would mint a fake user for
-    every schedule in the product. It goes on the pod's own timeline instead --
-    which is also the honest answer, since a pod that runs itself is the unit
-    doing the work.
+    Autonomous work has no person on it. Rather than invent one, it all lands on
+    a single constant machine actor -- see ``AUTONOMOUS_DISTINCT_ID``.
     """
     if actor.user_id:
         return actor.user_id
     if actor.anonymous_id:
         return actor.anonymous_id
-    if pod_id:
-        return f"pod:{pod_id}"
-    if organization_id:
-        return f"organization:{organization_id}"
-    return None
+    return AUTONOMOUS_DISTINCT_ID
 
 
 def _coerce(value: Any) -> str | int | float | bool | None:
@@ -195,10 +200,7 @@ def emit(
     org = str(organization_id) if organization_id else None
     pod = str(pod_id) if pod_id else None
 
-    distinct_id = _resolve_distinct_id(actor, pod_id=pod, organization_id=org)
-    if distinct_id is None:
-        _violation("no_distinct_id", event=name)
-        return
+    distinct_id = _resolve_distinct_id(actor)
 
     allowed = spec.properties
     payload: dict[str, str | int | float | bool] = {}
@@ -219,6 +221,11 @@ def emit(
         payload["on_behalf_of_user"] = actor.on_behalf_of_user
     if resolved_origin is not None:
         payload.update(resolved_origin.as_properties())
+    if spec.person_profile is PersonProfile.ANONYMOUS:
+        # Only in the anonymous case: sending the flag as True would put a
+        # property on every event to say nothing. An anonymous event carries no
+        # group, which the catalog guarantees.
+        payload["$process_person_profile"] = False
 
     groups: dict[str, str] = {}
     for group_type in spec.groups & GROUP_TYPES:

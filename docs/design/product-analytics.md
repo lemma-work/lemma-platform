@@ -109,6 +109,13 @@ A support desk pod scores near zero on inside reach and is thriving. An
 internal dashboard pod scores zero on outside reach and is thriving. One
 blended "engagement" metric calls both of them dying.
 
+**Outside reach is measured per organization, not per pod.** A connector
+account carries `organization_id` and `user_id` and no pod — there is no
+`pod_id` anywhere in `app/modules/connectors`. The catalog says so rather than
+declaring a `pod_id` that is always absent, which would read as a hole in the
+data instead of a property of the model. Per-pod outside reach needs connectors
+to know about pods first; until then the split above holds at the org level.
+
 ## 3. Origin: the missing enum
 
 The platform has no single name for how work entered. `Conversation` carries a
@@ -378,6 +385,17 @@ Two things must close before the first production event, both outside the code:
 - **`distinct_id`** is the SuperTokens user id. Never the email — an email in
   `distinct_id` puts PII in every event, every export, and every URL someone
   pastes into Slack.
+- **Autonomous work uses one constant machine actor**, `lemma:autonomous`, not
+  a per-pod id. An analytics store has no notion of a non-human distinct id, so
+  a `pod:{uuid}` would make every pod a *person*: person count would scale with
+  pod count and the people-shaped metrics below would count machines. The pod is
+  not lost — it rides on the event as a property and as a group, and pod
+  retention is computed on the group, which is what group analytics is for.
+- **Person profiles are on by default and off only where there is no group.**
+  An anonymous event loses its `$groups` in PostHog, so making autonomous events
+  anonymous to save money would silently delete pod-level retention — the exact
+  measurement this document is about. `share_link.viewed` is the only anonymous
+  event in the catalog, and a test fails if a grouped event is ever marked one.
 - **Group `organization`** — the account. The unit of retention and expansion.
 - **Group `pod`** — the product unit. The thing built, shared, imported,
   remixed. Pod-level retention matters more than user retention: a pod running

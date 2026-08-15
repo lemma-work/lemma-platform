@@ -24,9 +24,28 @@ and ``test_analytics_safety.py`` proves it with adversarial input.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import Enum
 from typing import Final, FrozenSet
 
 from app.core.origin import OriginKind
+
+
+class PersonProfile(str, Enum):
+    """Whether an event should create or update a person in the analytics store.
+
+    Identified events cost more and are the only ones that carry group
+    membership -- PostHog drops ``$groups`` on an anonymous event
+    (https://posthog.com/docs/product-analytics/group-analytics). That single
+    fact decides the policy: pod- and org-level retention is the measurement
+    this design exists for, so anything declaring a group has to stay
+    identified, whoever or whatever acted.
+
+    ``ANONYMOUS`` is therefore reserved for events with no group and no person
+    behind them, where a profile would be pure cost and pure noise.
+    """
+
+    IDENTIFIED = "identified"
+    ANONYMOUS = "anonymous"
 
 
 #: Attached to every event by the emitter, so catalog entries below list only
@@ -40,6 +59,9 @@ SPINE_PROPERTIES: Final[FrozenSet[str]] = frozenset(
         "origin",
         "origin_platform",
         "deployment",
+        # Reserved so no call site can flip person processing and silently take
+        # an event's group membership with it.
+        "$process_person_profile",
     }
 )
 
@@ -58,6 +80,12 @@ class AnalyticEvent:
     """Origins allowed to raise this event, or ``None`` for any. A narrow set
     is a claim worth making: ``surface.message_answered`` can only come from a
     surface, so an event bearing any other origin is a bug, not data."""
+
+    person_profile: PersonProfile = PersonProfile.IDENTIFIED
+    """Defaults to ``IDENTIFIED`` deliberately: the default for a *new* catalog
+    entry must be the one that cannot silently lose its groups. Setting this to
+    ``ANONYMOUS`` on an event that declares a group is a contract violation and
+    ``test_analytics_safety.py`` fails on it."""
 
 
 _ORG_ONLY: Final[FrozenSet[str]] = frozenset({"organization"})
@@ -149,24 +177,38 @@ ANALYTICS_CATALOG: Final[dict[str, AnalyticEvent]] = {
     ),
     # Outside reach: the only path by which a non-member reaches a pod. Never
     # sum these with the two above -- they measure different products.
+    # Org-scoped, not pod-scoped, because a connector account genuinely has no
+    # pod: `app/modules/connectors` carries `organization_id` and `user_id` and
+    # nothing else. Declaring a `pod_id` that is always absent would be worse
+    # than not declaring one -- it reads as a gap in the data rather than a
+    # property of the model. The consequence is that "outside reach *per pod*"
+    # is not computable today, and §2 of the design doc says so.
     "connector.connected": AnalyticEvent(
-        properties=frozenset({"pod_id", "connector_id", "provider"}),
+        properties=frozenset({"connector_id", "provider"}),
+        groups=_ORG_ONLY,
     ),
     "connector.operation_executed": AnalyticEvent(
-        properties=frozenset(
-            {"pod_id", "connector_id", "provider", "direction", "status"}
-        ),
+        properties=frozenset({"connector_id", "provider", "direction", "status"}),
+        groups=_ORG_ONLY,
     ),
     # -- The loop --------------------------------------------------------
     "bundle.exported": AnalyticEvent(
         properties=frozenset({"pod_id", "bundle_id", "resource_count_bucket"}),
     ),
+    # The only anonymous event in the catalog: no group, and the viewer is
+    # usually not a person we know -- often not a person at all, since a shared
+    # link is exactly what crawlers follow. Minting a profile for each would be
+    # cost and noise with nothing on the other side of it.
     "share_link.viewed": AnalyticEvent(
-        properties=frozenset({"bundle_id", "viewer_is_member"}),
+        properties=frozenset({"bundle_id", "kind", "viewer_is_member"}),
         groups=frozenset(),
+        person_profile=PersonProfile.ANONYMOUS,
     ),
+    # ``is_remix`` belongs at *start*, not only on completion: the abandonment
+    # between the two is the interesting number, and it is only countable if
+    # both ends carry the same dimension.
     "import.started": AnalyticEvent(
-        properties=frozenset({"bundle_id"}),
+        properties=frozenset({"bundle_id", "is_remix"}),
         groups=_ORG_ONLY,
     ),
     "import.completed": AnalyticEvent(

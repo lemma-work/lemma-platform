@@ -17,6 +17,7 @@ from app.core.analytics.event_catalog import (
     ANALYTICS_CATALOG,
     GROUP_TYPES,
     SPINE_PROPERTIES,
+    PersonProfile,
     UnknownAnalyticEventError,
 )
 from app.core.analytics.sink import MemorySink, NullSink
@@ -156,21 +157,88 @@ def test_call_site_cannot_forge_the_spine(sink: MemorySink) -> None:
     assert "on_behalf_of_user" not in event.properties
 
 
-def test_autonomous_work_lands_on_the_pod_not_a_fabricated_person(
+def test_autonomous_work_does_not_mint_a_person_per_pod(sink: MemorySink) -> None:
+    """Autonomous work lands on one machine actor, product-wide.
+
+    A distinct id per pod reads as the honest answer and is not: an analytics
+    store has no notion of a non-human distinct id, so every pod becomes a
+    *person*, person count scales with pod count, and DAU/retention -- the
+    people-shaped metrics this plane exists for -- are polluted by machines.
+
+    The pod is not lost. It stays on the event as a property and as a group, and
+    pod-level retention is computed on the group.
+    """
+    other_pod = "0192f1a0-0000-7000-8000-000000000009"
+    for pod in (POD, other_pod):
+        emit(
+            "schedule_run.completed",
+            actor=AnalyticsActor.autonomous(),
+            origin=Origin(OriginKind.SCHEDULE),
+            organization_id=ORG,
+            pod_id=pod,
+            properties={"pod_id": pod, "status": "succeeded"},
+        )
+
+    first, second = sink.events[-2], sink.events[-1]
+    assert first.distinct_id == second.distinct_id, "one machine actor, not one per pod"
+    assert POD not in first.distinct_id and other_pod not in second.distinct_id
+    assert first.properties["actor_type"] == ActorType.SYSTEM.value
+    # The dimension that actually carries the pod, and still distinguishes them.
+    assert first.groups == {"organization": ORG, "pod": POD}
+    assert second.groups == {"organization": ORG, "pod": other_pod}
+
+
+def test_an_event_with_a_group_is_never_sent_anonymously() -> None:
+    """PostHog drops ``$groups`` on an anonymous event, so an anonymous grouped
+    event would silently delete the pod- and org-level retention this whole
+    design is built on -- with events still arriving and nothing looking wrong.
+
+    See https://posthog.com/docs/product-analytics/group-analytics.
+    """
+    offenders = [
+        name
+        for name, spec in ANALYTICS_CATALOG.items()
+        if spec.groups and spec.person_profile is PersonProfile.ANONYMOUS
+    ]
+    assert not offenders, (
+        "these events declare a group and would lose it by being anonymous: "
+        f"{sorted(offenders)}"
+    )
+
+
+def test_anonymous_events_say_so_and_identified_ones_stay_quiet(
     sink: MemorySink,
 ) -> None:
     emit(
-        "schedule_run.completed",
-        actor=AnalyticsActor.autonomous(),
-        origin=Origin(OriginKind.SCHEDULE),
+        "share_link.viewed",
+        actor=AnalyticsActor.anonymous("anon-1"),
+        origin=Origin(OriginKind.WEB),
+        properties={"viewer_is_member": False},
+    )
+    assert sink.events[-1].properties["$process_person_profile"] is False
+
+    emit(
+        "pod.created",
+        actor=AnalyticsActor.user(USER),
+        origin=Origin(OriginKind.WEB),
         organization_id=ORG,
         pod_id=POD,
-        properties={"pod_id": POD, "status": "succeeded"},
+        properties={"pod_id": POD},
     )
-    event = sink.events[-1]
-    assert event.distinct_id == f"pod:{POD}"
-    assert event.properties["actor_type"] == ActorType.SYSTEM.value
-    assert event.groups == {"organization": ORG, "pod": POD}
+    assert "$process_person_profile" not in sink.events[-1].properties
+
+
+def test_a_call_site_cannot_flip_person_processing(sink: MemorySink) -> None:
+    """Otherwise any caller could take an event's groups away by hand."""
+    emit(
+        "pod.created",
+        actor=AnalyticsActor.user(USER),
+        origin=Origin(OriginKind.WEB),
+        organization_id=ORG,
+        pod_id=POD,
+        properties={"pod_id": POD, "$process_person_profile": False},
+    )
+    assert "$process_person_profile" not in sink.events[-1].properties
 
 
 def test_delegated_work_records_both_the_agent_and_the_human(sink: MemorySink) -> None:
