@@ -55,7 +55,31 @@ format_generated_python() {
 if [[ -n "${LEMMA_API_URL:-}" ]]; then
   OPENAPI_URL="${OPENAPI_URL:-${LEMMA_API_URL%/}/openapi.json}"
 fi
+if [[ -z "${OPENAPI_URL:-}" && -z "${OPENAPI_FILE:-}" ]]; then
+  OPENAPI_URL="https://api.lemma.work/openapi.json"
+  OPENAPI_USED_PROD_DEFAULT=1
+fi
 OPENAPI_URL="${OPENAPI_URL:-https://api.lemma.work/openapi.json}"
+
+if [[ "${OPENAPI_USED_PROD_DEFAULT:-0}" == "1" ]]; then
+  cat >&2 <<'WARN'
+
+  !! Regenerating from PRODUCTION (https://api.lemma.work/openapi.json).
+     This does NOT reflect route changes in your working tree, and production
+     can trail main -- so routes that exist on main may be DELETED from the
+     generated client. That has happened.
+
+     Working on backend routes? Generate from your own tree instead:
+
+       cd lemma-backend && uv run python scripts/dump_openapi_spec.py \
+         --output ../lemma-python/lemma_sdk/openapi_spec.json
+       OPENAPI_FILE=lemma-python/lemma_sdk/openapi_spec.json \
+         bash lemma-python/scripts/generate_openapi_client.sh
+
+     Releasing the SDK against deployed prod? Then this default is correct.
+
+WARN
+fi
 
 CURL_ARGS=()
 if [[ "${OPENAPI_INSECURE:-0}" == "1" || "${LEMMA_SSL_NO_VERIFY:-0}" == "1" ]]; then
