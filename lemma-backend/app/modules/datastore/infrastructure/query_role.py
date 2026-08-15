@@ -33,23 +33,46 @@ class QueryRoleGrants:
         return sanitize_identifier(datastore_settings.datastore_query_role)
 
     async def ensure_role(self) -> None:
-        """Idempotently create the read-only, RLS-subject query role.
+        """Idempotently establish the read-only, RLS-subject query role.
 
         The role is ``NOLOGIN`` (entered only via ``SET ROLE``) and granted to
         the connecting role so a non-superuser app role can switch into it.
+
+        Both statements are *probed before they are issued*, because PostgreSQL
+        checks the ``CREATEROLE`` privilege before it checks for a duplicate:
+        ``CREATE ROLE`` on an existing role raises ``insufficient_privilege``,
+        not ``duplicate_object``, so the exception guard below cannot catch it.
+        An app role that is merely a member of an already-provisioned query
+        role — the least privilege this mechanism can run on — would otherwise
+        fail here on every call, taking ``try_grant`` and the ``backfill_grants``
+        repair path down with it. Asking first costs two catalog lookups and
+        makes the no-op case a genuine no-op.
         """
         if self._role_ready:
             return
         role = self._role()
         async with self._engine.begin() as conn:
-            await conn.execute(
-                text(
-                    f'DO $$ BEGIN CREATE ROLE "{role}" '
-                    "NOLOGIN NOSUPERUSER NOBYPASSRLS; "
-                    "EXCEPTION WHEN duplicate_object THEN NULL; END $$"
-                )
+            exists = await conn.execute(
+                text("SELECT 1 FROM pg_roles WHERE rolname = :role"),
+                {"role": role},
             )
-            await conn.execute(text(f'GRANT "{role}" TO CURRENT_USER'))
+            if exists.scalar() is None:
+                # Still guarded: two API processes can reach this together.
+                await conn.execute(
+                    text(
+                        f'DO $$ BEGIN CREATE ROLE "{role}" '
+                        "NOLOGIN NOSUPERUSER NOBYPASSRLS; "
+                        "EXCEPTION WHEN duplicate_object THEN NULL; END $$"
+                    )
+                )
+            # 'MEMBER', not 'USAGE': ad-hoc queries reach the role through
+            # SET LOCAL ROLE, which inherited privileges alone do not permit.
+            member = await conn.execute(
+                text("SELECT pg_has_role(CURRENT_USER, :role, 'MEMBER')"),
+                {"role": role},
+            )
+            if not member.scalar():
+                await conn.execute(text(f'GRANT "{role}" TO CURRENT_USER'))
         self._role_ready = True
 
     async def try_grant(self, schema_name: str, table_name: str | None = None) -> None:
@@ -78,7 +101,7 @@ class QueryRoleGrants:
                     )
         except Exception:  # noqa: BLE001
             logger.warning(
-                'datastore.query_role.grant.degraded',
+                "datastore.query_role.grant.degraded",
                 schema_name=schema_name,
                 table_name=table_name,
                 exc_info=True,

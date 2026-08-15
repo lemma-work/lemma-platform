@@ -30,6 +30,19 @@ from app.modules.datastore.infrastructure.sql_identifiers import (
 KNOWN = {"price", "qty", "name", "discount"}
 
 
+class _CatalogResult:
+    """Answers the query role's catalog probes as a provisioned deployment.
+
+    ``ensure_role`` asks whether the role exists and whether the connecting
+    role is a member before it issues DDL. A bare ``AsyncMock`` answers with a
+    truthy coroutine, which happens to take the same branch but leaves the
+    fake unable to describe any other deployment.
+    """
+
+    def scalar(self) -> bool:
+        return True
+
+
 @pytest.mark.parametrize(
     "expr",
     [
@@ -143,7 +156,7 @@ def test_enum_check_clause_quotes_options_safely() -> None:
 
 @pytest.mark.asyncio
 async def test_schema_provisioning_takes_shared_bootstrap_lock_before_create() -> None:
-    connection = SimpleNamespace(execute=AsyncMock())
+    connection = SimpleNamespace(execute=AsyncMock(return_value=_CatalogResult()))
 
     @asynccontextmanager
     async def begin():
@@ -171,7 +184,7 @@ async def test_schema_provisioning_grants_usage_to_the_query_role() -> None:
     table, so a pod provisioned after the last API start answered every ad-hoc
     query with "permission denied for schema".
     """
-    connection = SimpleNamespace(execute=AsyncMock())
+    connection = SimpleNamespace(execute=AsyncMock(return_value=_CatalogResult()))
 
     @asynccontextmanager
     async def begin():
@@ -204,10 +217,17 @@ async def test_schema_provisioning_survives_a_failed_grant() -> None:
     """
     calls: list[str] = []
 
+    class _Missing:
+        def scalar(self) -> None:
+            return None
+
     async def execute(statement, *args):
         calls.append(str(statement))
         if "GRANT" in str(statement) or "CREATE ROLE" in str(statement):
             raise PermissionError("insufficient privilege")
+        # Neither the role nor the membership exists, and neither can be
+        # established: the deployment this test is named for.
+        return _Missing()
 
     connection = SimpleNamespace(execute=execute)
 
