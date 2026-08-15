@@ -9,6 +9,7 @@ from urllib.parse import urljoin
 from uuid import UUID
 
 import httpx
+from opentelemetry import trace
 
 
 from app.core.config import settings
@@ -56,6 +57,7 @@ from app.modules.function.infrastructure.repositories import FunctionRunReposito
 
 
 logger = get_logger(__name__)
+tracer = trace.get_tracer(__name__)
 
 # What a run keeps of its own output, and how much extra is redacted before
 # trimming so a credential cannot survive by straddling the cut. The margin is
@@ -106,10 +108,26 @@ class FunctionDispatcher:
         *,
         mode: FunctionDispatchMode,
     ) -> FunctionRunEntity:
-        dispatch = await self._resolve_dispatch(run_id, mode=mode)
-        if isinstance(dispatch, FunctionRunEntity):
-            return dispatch
+        # Spanned per phase because the gap between a run being created and
+        # reaching RUNNING was measurable (p50 ~0.7s warm and uncontended) but
+        # not attributable: this path had no instrumentation at all, so the only
+        # visible boundary was the whole worker task. Each phase below is one of
+        # the candidates, and the cache spans record hit or miss.
+        with tracer.start_as_current_span("lemma.function.dispatch") as span:
+            span.set_attribute("lemma.run_id", str(run_id))
+            span.set_attribute("lemma.dispatch_mode", mode.value)
+            with tracer.start_as_current_span("lemma.function.dispatch.resolve"):
+                dispatch = await self._resolve_dispatch(run_id, mode=mode)
+            if isinstance(dispatch, FunctionRunEntity):
+                return dispatch
+            span.set_attribute("lemma.pod_id", str(dispatch.pod_id))
+            return await self._execute_dispatch(run_id, dispatch)
 
+    async def _execute_dispatch(
+        self,
+        run_id: UUID,
+        dispatch: FunctionExecutionDispatch,
+    ) -> FunctionRunEntity:
         endpoint_task = create_inherited_task(self._runtime_endpoint(dispatch))
         token_task = create_inherited_task(self._function_session_token(dispatch))
         organization_task = create_inherited_task(
@@ -118,12 +136,17 @@ class FunctionDispatcher:
         endpoint: FunctionRuntimeEndpoint | None = None
         started: FunctionRunRuntimeContext | None = None
         try:
-            endpoint, function_token, organization_id = await asyncio.gather(
-                endpoint_task,
-                token_task,
-                organization_task,
-            )
-            started = await self._start_dispatch(dispatch)
+            # Concurrent, so the span around the gather measures the slowest of
+            # the three rather than their sum. Which one that is comes from the
+            # child spans each of them opens.
+            with tracer.start_as_current_span("lemma.function.dispatch.prepare"):
+                endpoint, function_token, organization_id = await asyncio.gather(
+                    endpoint_task,
+                    token_task,
+                    organization_task,
+                )
+            with tracer.start_as_current_span("lemma.function.dispatch.start"):
+                started = await self._start_dispatch(dispatch)
             if started is None:
                 return await self._load_run(run_id)
 

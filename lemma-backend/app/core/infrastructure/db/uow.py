@@ -10,6 +10,7 @@ from app.core.infrastructure.db.transaction_locks import (
 from app.core.domain.uow import IUnitOfWork
 from app.core.domain.message_bus import MessageBus
 from app.core.infrastructure.events.models import DomainEventOutbox
+from app.core.infrastructure.events.outbox_wake import notify_outbox_wake
 from app.core.log.log import get_logger
 
 if TYPE_CHECKING:
@@ -119,6 +120,9 @@ class SqlAlchemyUnitOfWork(IUnitOfWork):
             insert(DomainEventOutbox).on_conflict_do_nothing(index_elements=["id"]),
             rows,
         )
+        # In the same transaction as the insert, so the dispatcher can never be
+        # woken for rows a rollback erased, nor before they are visible.
+        await notify_outbox_wake(self.session)
         logger.debug(
             "infrastructure.uow.staged_domain_events_transactional_outbox.observed",
             event_count=len(rows),

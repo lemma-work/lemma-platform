@@ -87,7 +87,8 @@ async def test_uow_stages_event_before_database_commit() -> None:
     await uow.commit()
 
     assert session.committed is True
-    assert len(session.statements) == 1
+    # The insert, then the dispatcher wake -- both before the commit.
+    assert len(session.statements) == 2
     # Rows travel as executemany parameters, so the statement does not depend on
     # how many events were collected -- see the note at the insert.
     rows = session.parameters[0]
