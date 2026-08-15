@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
+from functools import partial
 from contextvars import ContextVar
-from typing import NamedTuple
 from uuid import UUID
 
 
@@ -36,6 +36,7 @@ from app.modules.agent.domain.ports import (
     AgentRepository,
     ConversationRepository,
 )
+from app.modules.agent.domain.approvals import ApprovalResolution
 from app.modules.agent.domain.value_objects import (
     AgentRunApprovalDecision,
     AgentRunStartResult,
@@ -93,19 +94,6 @@ _POD_ASSISTANT_AGENT_ID = DEFAULT_POD_AGENT_ID
 # Defined with the primitive that consumes it, so the list and the resume path
 # that depends on it cannot drift apart.
 _PAUSING_TOOL_NAMES = PAUSING_TOOL_NAMES
-
-
-class ApprovalResolution(NamedTuple):
-    """Approval status plus the authoritative (stored) decision.
-
-    ``status`` is ``"resolved"`` when this call recorded the decision,
-    ``"reconciled"`` when it only finished a prior half-done resume (the
-    self-heal path), or ``"queued"`` when the decision is durable and a worker
-    job owns the rest.
-    """
-
-    status: str
-    decision: AgentRunApprovalDecision
 
 
 # When set, starting a new agent run does NOT publish the AgentRunStartedEvent
@@ -767,6 +755,7 @@ class ConversationService(PauseResumeMixin):
             # host too, or its ACP agent sits blocked until the request times
             # out half an hour later.
             return "request_approval", await agent_host_permission_tool_return(
+                uow=self.uow,
                 request=host_permission,
                 agent_run_id=paused_agent_run_id,
                 decision=decision,
@@ -807,11 +796,19 @@ class ConversationService(PauseResumeMixin):
             # which is the only unlock for DESTRUCTIVE_ACTIONS besides an
             # explicit grant). The permission ids ride in the request_approval
             # args, copied by the agent from the denied tool result.
-            await record_session_approvals(
-                conversation_id=conversation.id,
-                agent_id=conversation.agent_id,
-                tool_args=tool_args,
-                user_id=user_id,
+            # Queued, not awaited: a Redis write inline holds a connection
+            # inside an open write transaction, and a rollback must not leave an
+            # approval standing. Lands before the tool runs because
+            # `execute_approved_tool_as_user` commits first -- see
+            # `test_a_session_approval_is_recorded_before_the_tool_runs`.
+            self.uow.after_commit(
+                partial(
+                    record_session_approvals,
+                    conversation_id=conversation.id,
+                    agent_id=conversation.agent_id,
+                    tool_args=tool_args,
+                    user_id=user_id,
+                )
             )
 
         executed = await self._execute_approved_tool_as_user(
