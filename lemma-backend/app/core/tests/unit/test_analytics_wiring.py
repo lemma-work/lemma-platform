@@ -8,6 +8,8 @@ edit rather than a silent drift.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from app.composition.analytics_consumer import WIRED_EVENTS
 from app.core.analytics.event_catalog import ANALYTICS_CATALOG
 
@@ -59,3 +61,34 @@ def test_the_gap_lists_do_not_claim_events_that_left_the_catalog() -> None:
 def test_wired_events_are_all_real_catalog_entries() -> None:
     unknown = WIRED_EVENTS - set(ANALYTICS_CATALOG)
     assert not unknown, f"consumer claims events absent from the catalog: {sorted(unknown)}"
+
+
+def test_the_worker_configures_the_sink_it_emits_through() -> None:
+    """The consumer runs in the worker, so the worker is what must call
+    ``start_analytics``.
+
+    This shipped wired to the API lifespan only, which meant the worker's sink
+    stayed the import-time ``NullSink`` and every event above was discarded in
+    any split deployment -- the sets in this file all passed while nothing
+    reached PostHog. A source-contract test because the worker lifespan has no
+    unit harness; the ordering assertion matters because the sink posts through
+    the shared HTTP client and must drain before it is closed.
+    """
+    source = (
+        Path(__file__).resolve().parents[3]
+        / "core"
+        / "infrastructure"
+        / "jobs"
+        / "streaq_runtime.py"
+    ).read_text()
+
+    assert "start_analytics()" in source, (
+        "the worker never configures the analytics sink, so the consumer emits "
+        "into a NullSink no matter what ANALYTICS_WRITE_KEY says"
+    )
+    stop = source.index('_safe_shutdown_step("stop_analytics"')
+    close_http = source.index('_safe_shutdown_step(\n            "close_shared_http_client"')
+    assert stop < close_http, (
+        "stop_analytics must drain before the shared HTTP client it posts through "
+        "is closed"
+    )

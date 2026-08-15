@@ -27,7 +27,10 @@ from app.modules.function.domain.entities import (
     FunctionRunStatus,
     FunctionStatus,
 )
-from app.modules.function.domain.events import FunctionRunFailedEvent
+from app.modules.function.domain.events import (
+    FunctionCreatedEvent,
+    FunctionRunFailedEvent,
+)
 from app.modules.function.domain.errors import (
     FunctionNotFoundError,
     FunctionRunNotFoundError,
@@ -58,6 +61,14 @@ class FunctionRepository(FunctionRepositoryPort):
         model = FunctionModel(**payload)
         self.session.add(model)
         await self.session.flush()
+        # `FunctionEntity` is a plain BaseModel with its own `id` field, so it
+        # cannot become an AggregateRoot without a field collision. Collect here
+        # instead: this is the single write path behind every creation route, and
+        # the row exists by this point, so an event that fires is an event that
+        # committed.
+        self.uow.collect_events(
+            [FunctionCreatedEvent(function_id=model.id, pod_id=model.pod_id)]
+        )
         return model.to_entity()
 
     def _to_entity_with_allowed_actions(

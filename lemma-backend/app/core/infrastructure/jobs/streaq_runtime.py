@@ -461,13 +461,21 @@ async def worker_lifespan() -> AsyncGenerator[AppWorkerContext]:
     init_telemetry(service_name="lemma-worker")
     instrument_database_engine(get_engine())
     # Size the thread-offload pool before any task runs blocking work off-loop.
+    from app.core.analytics.bootstrap import start_analytics, stop_analytics
     from app.core.concurrency.offload import configure_thread_pool
+    from app.core.net.http_client import close_shared_http_client
     from app.core.observability.connection_scope import (
         start_connection_scope_monitor_from_settings,
     )
 
     configure_thread_pool()
     start_connection_scope_monitor_from_settings(service_name="lemma-worker")
+    # The analytics consumer runs *here*, in the worker -- not in the API. Without
+    # this the process-wide sink stays the import-time NullSink and every
+    # product-analytics event is discarded, key or no key. Installs a null sink
+    # unless ANALYTICS_WRITE_KEY is set, so a self-hosted or Desktop-local worker
+    # still reports nothing.
+    start_analytics()
 
     # There used to be a guardrail here requiring worker concurrency to fit
     # inside the DB pool, on the theory that a task holds a pooled connection
@@ -609,6 +617,14 @@ async def worker_lifespan() -> AsyncGenerator[AppWorkerContext]:
                 except BaseException:
                     pass
         await _safe_shutdown_step("broker.stop", broker.stop)
+        # After the broker, because the analytics consumer is what produces
+        # these events -- draining a buffer that has stopped growing is the only
+        # way the drain terminates. Before the HTTP client, which the sink posts
+        # through.
+        await _safe_shutdown_step("stop_analytics", stop_analytics)
+        await _safe_shutdown_step(
+            "close_shared_http_client", close_shared_http_client
+        )
         await _safe_shutdown_step("close_streaq_job_queue", close_streaq_job_queue)
         await _safe_shutdown_step("close_message_bus", close_message_bus)
         await _safe_shutdown_step("close_redis_json_caches", close_redis_json_caches)

@@ -17,6 +17,8 @@ import asyncio
 from collections import deque
 from datetime import datetime, timezone
 
+import httpx
+
 from app.core.analytics.sink import CapturedEvent
 from app.core.log.log import get_logger
 from app.core.net.http_client import get_shared_http_client
@@ -31,6 +33,24 @@ DEFAULT_BUFFER_LIMIT = 10_000
 DEFAULT_BATCH_SIZE = 250
 DEFAULT_FLUSH_INTERVAL_SECONDS = 5.0
 
+#: Per-phase, so ``pool`` stays separable. A bare float would set all four
+#: phases, and the pool phase is the one that matters: the shared client
+#: (``app/core/net/http_client.py``) gives request-path callers a 5s pool
+#: budget, and analytics waiting longer than that would let a flush outrank a
+#: connector execution for the last free connection. 1s is deliberately *below*
+#: the shared budget -- under pool pressure analytics yields, the batch fails,
+#: and ``_post`` drops it. That is the correct priority ordering.
+_POST_TIMEOUT = httpx.Timeout(connect=5.0, read=10.0, write=10.0, pool=1.0)
+
+#: The final drain at shutdown is bounded, because an unreachable endpoint with
+#: a full buffer is 40 sequential posts and would hang teardown for minutes.
+#: The repo budgets 5s for a whole shutdown step, and analytics is one step of
+#: many, so this sits comfortably inside it.
+_FINAL_DRAIN_TIMEOUT_SECONDS = 2.0
+
+#: How long the flusher gets to notice ``_stopping`` and return on its own.
+_TASK_STOP_TIMEOUT_SECONDS = 5.0
+
 
 class PostHogSink:
     def __init__(
@@ -42,7 +62,9 @@ class PostHogSink:
         batch_size: int = DEFAULT_BATCH_SIZE,
         flush_interval_seconds: float = DEFAULT_FLUSH_INTERVAL_SECONDS,
     ) -> None:
-        self._write_key = write_key
+        #: Public so ``bootstrap.start_analytics`` can recognise an already-live
+        #: sink for the same key and decline to build a second one.
+        self.write_key = write_key
         self._endpoint = f"{host.rstrip('/')}/batch/"
         self._batch_size = batch_size
         self._flush_interval = flush_interval_seconds
@@ -86,7 +108,17 @@ class PostHogSink:
                 )
             except asyncio.TimeoutError:
                 pass
-            await self._drain_once()
+            try:
+                await self._drain_once()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001 - the flusher must outlive one bad drain
+                # Without this the task dies on the first escape and every
+                # later event is silently dropped for the life of the process,
+                # with one overflow log at shutdown to show for it.
+                logger.warning(
+                    "analytics.flush.failed", error_type=type(exc).__name__
+                )
 
     async def _drain_once(self) -> None:
         while self._buffer:
@@ -101,8 +133,8 @@ class PostHogSink:
             client = get_shared_http_client()
             response = await client.post(
                 self._endpoint,
-                json={"api_key": self._write_key, "batch": batch},
-                timeout=10.0,
+                json={"api_key": self.write_key, "batch": batch},
+                timeout=_POST_TIMEOUT,
             )
             if response.status_code >= 400:
                 # Dropped, not retried. A retry queue here would mean analytics
@@ -121,13 +153,37 @@ class PostHogSink:
             )
 
     async def aclose(self) -> None:
+        """Stop the flusher, deliver what is buffered, and give up on time.
+
+        Bounded at every step. An unreachable endpoint must cost a deployment a
+        couple of seconds at shutdown, never a hung pod. ``CancelledError`` is
+        deliberately not caught: it belongs to whoever is shutting us down, and
+        swallowing it would let teardown continue past its own cancellation.
+        """
+        if self._task is None and not self._buffer:
+            return
         self._stopping.set()
-        if self._task is not None:
+        task, self._task = self._task, None
+        if task is not None:
             try:
-                await asyncio.wait_for(self._task, timeout=5.0)
-            except (asyncio.TimeoutError, asyncio.CancelledError):
-                self._task.cancel()
-            self._task = None
-        await self._drain_once()
+                # On timeout ``wait_for`` cancels the task and awaits it, so the
+                # flusher is never still inside ``_post`` when the final drain
+                # below starts popping the same deque.
+                await asyncio.wait_for(task, timeout=_TASK_STOP_TIMEOUT_SECONDS)
+            except asyncio.TimeoutError:
+                pass
+            except Exception as exc:  # noqa: BLE001 - a dead flusher still owes us a drain
+                logger.warning(
+                    "analytics.flush.failed", error_type=type(exc).__name__
+                )
+        try:
+            await asyncio.wait_for(
+                self._drain_once(), timeout=_FINAL_DRAIN_TIMEOUT_SECONDS
+            )
+        except asyncio.TimeoutError:
+            logger.warning(
+                "analytics.shutdown.drain_timed_out", count=len(self._buffer)
+            )
         if self._dropped:
             logger.warning("analytics.buffer.overflowed", count=self._dropped)
+            self._dropped = 0

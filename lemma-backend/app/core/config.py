@@ -1274,7 +1274,7 @@ class Settings(BaseSettings):
             "``OTEL_TRACES_SAMPLER_ARG``."
         ),
     )
-    analytics_write_key: Optional[str] = Field(
+    analytics_write_key: Optional[SecretStr] = Field(
         default=None,
         description=(
             "PostHog project write key. Absent -- the default, and the case for "
