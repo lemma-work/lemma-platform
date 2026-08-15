@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+from uuid import uuid4
 import hashlib
 import os
 import re
@@ -20,6 +21,9 @@ import httpx
 import uvicorn
 
 from app.core.config import settings
+from app.modules.workspace.providers.e2b_common import (
+    DEFAULT_METADATA_NAMESPACE,
+)
 from app.modules.workspace.config import workspace_settings
 from app.modules.agent.tests.e2e.system_lemma_helpers import (
     skip_unless_system_lemma,
@@ -534,14 +538,31 @@ async def local_sandbox_server(
             pytest.fail(
                 "E2B workspace E2E configuration is missing: " + ", ".join(missing)
             )
+        # Never production's namespace. The orphan sweep destroys any provider
+        # object it can identify as ours that has no sandbox row -- and this run
+        # owns a throwaway database in which no real workspace has one, so
+        # sharing the namespace with a live account means the sweep deletes live
+        # workspaces. A per-run value makes those sandboxes invisible to it.
+        namespace = _e2b_environment("E2B_METADATA_NAMESPACE") or (
+            f"lemma-e2e-{uuid4().hex[:12]}"
+        )
+        if namespace == DEFAULT_METADATA_NAMESPACE:
+            pytest.fail(
+                "E2B E2E refuses to run in the production metadata namespace "
+                f"({DEFAULT_METADATA_NAMESPACE!r}): the orphan sweep would treat "
+                "every sandbox in this account as unowned and destroy it. Unset "
+                "E2B_METADATA_NAMESPACE to get a per-run namespace."
+            )
         overrides.update(
             {
                 "e2b_api_key": required["E2B_API_KEY"],
                 "e2b_workspace_template": required["E2B_WORKSPACE_TEMPLATE"],
                 "e2b_function_template": required["E2B_FUNCTION_TEMPLATE"],
+                "e2b_metadata_namespace": namespace,
             }
         )
         env_updates.update({k: v for k, v in required.items() if v})
+        env_updates["E2B_METADATA_NAMESPACE"] = namespace
 
     original_settings = {
         key: getattr(workspace_settings, key) for key in overrides
