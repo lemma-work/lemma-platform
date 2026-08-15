@@ -25,8 +25,6 @@ dependencies = [
     # suggested-prompts/thread-title methods it enables.
     "slack-sdk>=3.43.0",
     "redis>=6.4.0,<9",
-    "pytz>=2025.2",
-    "psycopg[binary,pool]>=3.3.2",
     "sqlglot>=25.0.0",
     "alembic>=1.18.1",
     "anyio>=4.12.0",
@@ -102,6 +100,15 @@ dev = [
     # The function runtime's worker subprocess imports the SDK a function is
     # written against; its tests spawn that worker for real.
     "lemma-sdk",
+    # Nothing the application serves uses psycopg -- the runtime talks to
+    # Postgres through asyncpg. It survives because two things genuinely need a
+    # *synchronous* connection, and both are development-time: the testcontainer
+    # readiness probe in `app/core/test_utils.py`, and
+    # `scripts/verify_reliability_migration.py`, which CI runs to exercise
+    # install -> downgrade -> repair -> re-upgrade against a scratch database.
+    # Declared as a runtime dependency it shipped its binary build to every
+    # production image for neither of those.
+    "psycopg[binary,pool]>=3.3.2",
     "basedpyright>=1.39.9",
     "diff-cover>=9.7.1",
     "kubernetes>=34.1.0",

@@ -174,11 +174,15 @@ async def lifespan(app: FastAPI):
         initialize_supertokens()
         # Build the OpenAPI document now rather than on whichever request first
         # asks for it. `custom_openapi` caches correctly, but the first call
-        # costs ~1s of pydantic model-graph construction on the event loop —
+        # costs ~3.35s of pydantic model-graph construction on the event loop —
         # the api's loop-stall sampler caught it in
         # `fastapi._compat.get_flat_models_from_fields`, and it blocks every
         # concurrent request when it lands. Off the loop because it is pure CPU.
-        await run_blocking(app.openapi, limiter="cpu_bound")
+        #
+        # Only where the document is actually served. In production it is not,
+        # so this whole cost leaves the cold start rather than moving within it.
+        if settings.api_docs_served():
+            await run_blocking(app.openapi, limiter="cpu_bound")
         # Learn which lane each task runs on before serving traffic. The
         # enqueue path resolves this lazily as a safety net, but the first
         # resolution imports every module's handlers — half a second that
@@ -496,6 +500,13 @@ def create_app(modules=OSS_MODULES) -> FastAPI:
         log_level=settings.log_level,
     )
     validate_release_identity(settings.environment)
+    # Production serves no API documentation. Building the document costs ~3.35s
+    # of a cold start (second only to the imports), nothing in production reads
+    # it -- both SDKs are generated at build time and the route inventory is a CI
+    # gate -- and the endpoints are unauthenticated, so serving them publishes
+    # the shape of every route to anyone who asks. `API_DOCS_ENABLED` overrides
+    # in either direction.
+    docs_served = settings.api_docs_served()
     app = FastAPI(
         title=settings.app_name,
         description="Authentication API with JWT, user management, and OAuth support",
@@ -505,6 +516,9 @@ def create_app(modules=OSS_MODULES) -> FastAPI:
         dependencies=[Depends(verify_auth)],
         redirect_slashes=False,
         separate_input_output_schemas=False,
+        openapi_url="/openapi.json" if docs_served else None,
+        docs_url="/docs" if docs_served else None,
+        redoc_url="/redoc" if docs_served else None,
     )
     app.state.lemma_modules = modules
 
@@ -735,14 +749,18 @@ def create_app(modules=OSS_MODULES) -> FastAPI:
         }
         return JSONResponse(payload, status_code=200 if healthy else 503)
 
-    @app.get("/scalar", include_in_schema=False)
-    async def scalar_html():
-        return get_scalar_api_reference(
-            # Your OpenAPI document
-            openapi_url=app.openapi_url,
-            # authentication={"preferredSecurityScheme": "HTTPBearer"},
-            persist_auth=True,
-        )
+    # Registered only alongside the document it renders. Left on with
+    # `openapi_url=None` it would serve a reference UI pointed at nothing.
+    if docs_served:
+
+        @app.get("/scalar", include_in_schema=False)
+        async def scalar_html():
+            return get_scalar_api_reference(
+                # Your OpenAPI document
+                openapi_url=app.openapi_url,
+                # authentication={"preferredSecurityScheme": "HTTPBearer"},
+                persist_auth=True,
+            )
 
     def custom_openapi():
         if app.openapi_schema:

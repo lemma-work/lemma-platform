@@ -799,6 +799,17 @@ class Settings(BaseSettings):
 
     # Application Settings
     app_name: str = Field(default="Lemma Backend", description="Application name")
+    api_docs_enabled: bool | None = Field(
+        default=None,
+        description=(
+            "Serve ``/openapi.json``, ``/docs`` and ``/scalar``. Unset means "
+            "'everywhere except production', which is almost always what you "
+            "want: building the document costs ~3.35s of a cold start, nothing "
+            "in production reads it (SDKs are generated at build time), and it "
+            "is unauthenticated. Set it explicitly to serve the docs from a "
+            "production deployment anyway. Env: ``API_DOCS_ENABLED``."
+        ),
+    )
     debug: bool = Field(default=True, description="Debug mode")
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = Field(
         default="INFO",
@@ -1461,6 +1472,22 @@ class Settings(BaseSettings):
 
     def is_local_mode(self) -> bool:
         return self.environment in {"local", "testing"}
+
+    def api_docs_served(self) -> bool:
+        """Whether this process serves ``/openapi.json``, ``/docs`` and ``/scalar``.
+
+        Off in production, on everywhere else, and overridable either way.
+
+        Two reasons, and the second is the one that matters. Building the
+        document costs 3.35s, measured in a production container — it is the
+        second largest item in a cold start after the imports themselves, and
+        nothing in production reads it: the SDKs are generated at build time and
+        the route inventory is a CI gate. And it is unauthenticated, so serving
+        it publishes the shape of every endpoint to anyone who asks.
+        """
+        if self.api_docs_enabled is not None:
+            return self.api_docs_enabled
+        return self.environment != "production"
 
     def effective_storage_backend(self) -> Literal["local", "gcs", "s3", "azure"]:
         if self.storage_backend != "auto":
