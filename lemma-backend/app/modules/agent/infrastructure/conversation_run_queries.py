@@ -145,31 +145,22 @@ class ConversationRunQueriesMixin:
             return []
         return await self.list_agent_runs_with_messages(conversation_id)
 
-    async def load_runtime_history_by_run_id(
+    async def load_runtime_history_digests_by_run_id(
         self,
         agent_run_id: UUID,
-        *,
-        full_run_count: int,
     ) -> list[AgentRunEntity]:
-        """Runs for the conversation, carrying only the messages history needs.
+        """Every run of the conversation, with sizes and timings but no messages.
 
-        The runtime prompt keeps every message of the most recent
-        ``full_run_count`` runs and elides each older run to its first and last
-        message. Loading the whole transcript to then discard most of it is what
-        made a long conversation slow to start: messages present at run time
-        measured p50 12, p90 271 and p99 13688, each row carrying its text and
-        its tool argument and result JSON.
+        The runtime prompt keeps recent runs whole and elides older ones, but
+        *which* runs are recent is decided only after the caller's trims have
+        run -- and the surface age window keeps a run whose newest message is
+        recent even when runs created after it are dropped, so it is a filter
+        rather than a truncation and the surviving list is not a suffix.
 
-        So the shape is loaded instead of filtered. Older runs come back with
-        two messages and a ``total_message_count`` saying how many there really
-        were, which is what the elision notice counts and what the surface
-        history budget measures.
-
-        Choosing the full runs from the untrimmed list is safe because every
-        trim the caller then applies -- the surface age window and the message
-        budget -- removes runs from the front and always keeps the last, so the
-        trimmed list is a suffix of this one and its most recent runs are a
-        subset of these.
+        Deciding what to load from position alone therefore drops messages from
+        a run the trim then keeps in full, without an elision notice, because
+        the shortened list never reaches the elision branch. So the caller gets
+        the shape first, decides, and asks for messages second.
         """
         conversation_id = (
             await self.session.execute(
@@ -193,27 +184,57 @@ class ConversationRunQueriesMixin:
         if not runs:
             return []
 
-        run_ids = [run.id for run in runs]
-        full_ids = set(run_ids[-full_run_count:]) if full_run_count > 0 else set()
-        elided_ids = [run_id for run_id in run_ids if run_id not in full_ids]
-
-        counts = dict(
+        digests = dict(
             (
-                await self.session.execute(
-                    select(MessageModel.agent_run_id, func.count())
-                    .where(MessageModel.agent_run_id.in_(run_ids))
-                    .group_by(MessageModel.agent_run_id)
-                )
-            ).all()
+                (row[0], (row[1], row[2]))
+                for row in (
+                    await self.session.execute(
+                        select(
+                            MessageModel.agent_run_id,
+                            func.count(),
+                            func.max(MessageModel.created_at),
+                        )
+                        .where(
+                            MessageModel.agent_run_id.in_([run.id for run in runs])
+                        )
+                        .group_by(MessageModel.agent_run_id)
+                    )
+                ).all()
+            )
         )
 
+        entities: list[AgentRunEntity] = []
+        for run in runs:
+            entity = run.to_entity()
+            count, newest = digests.get(run.id, (0, None))
+            entity.messages = []
+            entity.total_message_count = count
+            entity.newest_message_at = newest
+            entities.append(entity)
+        return entities
+
+    async def attach_runtime_history_messages(
+        self,
+        runs: list[AgentRunEntity],
+        *,
+        full_run_ids: set[UUID],
+    ) -> list[AgentRunEntity]:
+        """Fill in messages: whole for ``full_run_ids``, first and last for the rest.
+
+        Two ``DISTINCT ON`` reads serve the elided runs, both answered by the
+        (agent_run_id, sequence) index rather than by reading the runs.
+        """
+        if not runs:
+            return runs
+        elided_ids = [run.id for run in runs if run.id not in full_run_ids]
+
         messages: list[MessageModel] = []
-        if full_ids:
+        if full_run_ids:
             messages.extend(
                 (
                     await self.session.execute(
                         select(MessageModel)
-                        .where(MessageModel.agent_run_id.in_(full_ids))
+                        .where(MessageModel.agent_run_id.in_(full_run_ids))
                         .order_by(
                             MessageModel.agent_run_id, MessageModel.sequence.asc()
                         )
@@ -223,8 +244,6 @@ class ConversationRunQueriesMixin:
                 .all()
             )
         if elided_ids:
-            # First and last per run, both served by the
-            # (agent_run_id, sequence) index rather than by reading the run.
             for order in (MessageModel.sequence.asc(), MessageModel.sequence.desc()):
                 messages.extend(
                     (
@@ -248,18 +267,14 @@ class ConversationRunQueriesMixin:
             seen.add(message.id)
             by_run.setdefault(message.agent_run_id, []).append(message)
 
-        entities: list[AgentRunEntity] = []
         for run in runs:
-            entity = run.to_entity()
-            entity.messages = [
+            run.messages = [
                 model.to_entity()
                 for model in sorted(
                     by_run.get(run.id, []), key=lambda model: model.sequence
                 )
             ]
-            entity.total_message_count = counts.get(run.id, 0)
-            entities.append(entity)
-        return entities
+        return runs
 
     async def get_agent_run(self, agent_run_id: UUID) -> AgentRunEntity | None:
         result = await self.session.execute(

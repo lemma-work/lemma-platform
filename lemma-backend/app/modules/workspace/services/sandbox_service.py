@@ -193,10 +193,22 @@ class SandboxService(SandboxVolumeMixin):
         self._recent[key] = (asyncio.get_running_loop().time(), handle)
         return handle
 
-    def _forget_recent(self, sandbox_id: UUID) -> None:
-        """Drop a remembered handle, for the operations that invalidate one."""
+    def forget(self, sandbox_id: UUID) -> None:
+        """Drop a remembered handle so the next ensure goes to the provider.
+
+        ``ProviderGone`` is documented as definitive rather than retryable --
+        "the caller must re-ensure to get a current handle" -- and a remembered
+        handle would hand back the dead one instead, for as long as the window
+        lasts. A sandbox can die without passing through `release` or `destroy`:
+        the sweeper destroys through the provider directly, E2B times sandboxes
+        out server-side, and another replica's sweep is invisible here. So the
+        operation that discovers the sandbox is gone says so.
+        """
         for key in [key for key in self._recent if key[1] == sandbox_id]:
             self._recent.pop(key, None)
+
+    #: Kept as the private spelling used by release/destroy inside this class.
+    _forget_recent = forget
 
     async def _ensure_once(self, sandbox_id: UUID) -> SandboxHandle:
         """Provision, waiting out transient provider unavailability.

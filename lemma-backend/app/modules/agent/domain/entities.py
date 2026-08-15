@@ -188,6 +188,10 @@ class AgentRun(Entity):
     #: budget, the elision count -- must ask this rather than len(messages).
     #: None means nothing was elided and the two are the same.
     total_message_count: int | None = None
+    #: Newest message timestamp, carried when the messages themselves are not.
+    #: The surface age window asks a run how recently it was active, and it has
+    #: to be able to ask that before deciding which runs are worth loading.
+    newest_message_at: datetime | None = None
 
     @property
     def message_count(self) -> int:

@@ -21,6 +21,7 @@ from app.modules.agent.infrastructure.models import (
     MessageModel,
 )
 from app.modules.agent.infrastructure.repositories import ConversationRepository
+from app.modules.agent.services.runtime_history import runtime_full_run_ids
 
 pytestmark = [pytest.mark.e2e]
 
@@ -72,15 +73,29 @@ def _repo(db_session) -> ConversationRepository:
     return ConversationRepository(SqlAlchemyUnitOfWork(db_session))
 
 
+async def _load(db_session, agent_run_id):
+    """The two-phase load, as the runner performs it.
+
+    Digests first, then the trim decides which runs need every message, then the
+    messages are attached. Loading in one pass and choosing by position is the
+    defect this mirrors around -- see the unit equivalence tests.
+    """
+    repo = _repo(db_session)
+    runs = await repo.load_runtime_history_digests_by_run_id(agent_run_id)
+    if not runs:
+        return runs
+    return await repo.attach_runtime_history_messages(
+        runs, full_run_ids=runtime_full_run_ids(runs, None)
+    )
+
+
 async def test_older_runs_come_back_as_first_and_last_with_a_true_count(
     db_session, scenario
 ):
     await scenario.create_org_with_pod(name_prefix="History")
     run_ids = await _seed(db_session, scenario, runs=9, messages_per_run=7)
 
-    runs = await _repo(db_session).load_runtime_history_by_run_id(
-        run_ids[-1], full_run_count=_FULL_RUNS
-    )
+    runs = await _load(db_session, run_ids[-1])
 
     assert [run.id for run in runs] == run_ids  # chronological, all runs present
     for run in runs[-_FULL_RUNS:]:
@@ -98,14 +113,8 @@ async def test_the_load_does_not_grow_with_conversation_length(db_session, scena
     await scenario.create_org_with_pod(name_prefix="HistoryLen")
     short_ids = await _seed(db_session, scenario, runs=6, messages_per_run=4)
     long_ids = await _seed(db_session, scenario, runs=60, messages_per_run=40)
-    repo = _repo(db_session)
-
-    short = await repo.load_runtime_history_by_run_id(
-        short_ids[-1], full_run_count=_FULL_RUNS
-    )
-    long = await repo.load_runtime_history_by_run_id(
-        long_ids[-1], full_run_count=_FULL_RUNS
-    )
+    short = await _load(db_session, short_ids[-1])
+    long = await _load(db_session, long_ids[-1])
 
     # 60 runs x 40 messages is 2400 rows; the old loader returned every one.
     assert sum(len(run.messages) for run in long) == (_FULL_RUNS * 40) + (55 * 2)
@@ -117,9 +126,7 @@ async def test_runs_at_the_elision_boundary_survive_intact(db_session, scenario)
     await scenario.create_org_with_pod(name_prefix="HistoryEdge")
     run_ids = await _seed(db_session, scenario, runs=8, messages_per_run=1)
 
-    runs = await _repo(db_session).load_runtime_history_by_run_id(
-        run_ids[-1], full_run_count=_FULL_RUNS
-    )
+    runs = await _load(db_session, run_ids[-1])
 
     for run in runs:
         assert len(run.messages) == 1
@@ -130,16 +137,11 @@ async def test_a_run_with_no_messages_is_still_returned(db_session, scenario):
     await scenario.create_org_with_pod(name_prefix="HistoryEmpty")
     run_ids = await _seed(db_session, scenario, runs=7, messages_per_run=0)
 
-    runs = await _repo(db_session).load_runtime_history_by_run_id(
-        run_ids[-1], full_run_count=_FULL_RUNS
-    )
+    runs = await _load(db_session, run_ids[-1])
 
     assert len(runs) == 7
     assert all(run.messages == [] and run.message_count == 0 for run in runs)
 
 
 async def test_an_unknown_run_loads_nothing(db_session):
-    loaded = await _repo(db_session).load_runtime_history_by_run_id(
-        uuid4(), full_run_count=_FULL_RUNS
-    )
-    assert loaded == []
+    assert await _load(db_session, uuid4()) == []

@@ -75,8 +75,9 @@ from app.modules.agent.services.agent_context_brief import AgentContextBriefBuil
 from app.modules.agent.services.run_message_writer import RunMessageWriter
 from app.modules.agent.services.run_phase_spans import observe_first_output, record_history_size, run_phase
 from app.modules.agent.services.runtime_history import (
-    FULL_HISTORY_AGENT_RUN_COUNT,
+    FULL_HISTORY_AGENT_RUN_COUNT,  # noqa: F401 - re-exported for callers and tests
     apply_surface_history_window,
+    runtime_full_run_ids,
     select_runtime_history,
 )
 from app.modules.agent.services.run_observer_delivery import notify_run_failed
@@ -635,9 +636,7 @@ class AgentRunnerService:
         with run_phase("load_context") as span:
             async with self.uow_factory() as uow:
                 repo = ConversationRepository(uow)
-                runs = await repo.load_runtime_history_by_run_id(
-                    agent_run_id, full_run_count=FULL_HISTORY_AGENT_RUN_COUNT
-                )
+                runs = await repo.load_runtime_history_digests_by_run_id(agent_run_id)
                 agent_run = self._find_agent_run(runs, agent_run_id)
                 conversation = await repo.get_conversation(agent_run.conversation_id)
                 self._validate_conversation_access(
@@ -651,6 +650,14 @@ class AgentRunnerService:
                     user_id=user_id,
                     agent_name=agent_name,
                 )
+                # Which runs survive the trim decides which need every message,
+                # and the trim can keep an old-but-active run while dropping
+                # newer ones -- so it has to run before the messages are asked
+                # for, not after.
+                await repo.attach_runtime_history_messages(
+                    runs, full_run_ids=runtime_full_run_ids(runs, conversation)
+                )
+                agent_run = self._find_agent_run(runs, agent_run_id)
                 messages = self._select_runtime_history(runs, conversation)
                 record_history_size(span, runs=runs, sent=messages)
                 return conversation, agent, agent_run, messages

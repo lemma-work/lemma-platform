@@ -18,6 +18,7 @@ ratchet's size limit.
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from uuid import UUID
 
 from app.modules.agent.domain.entities import (
     AgentRun,
@@ -34,7 +35,20 @@ FULL_HISTORY_AGENT_RUN_COUNT = 5
 def _newest_message_time(run: AgentRun) -> datetime | None:
     """The newest message ``created_at`` in a run as an aware UTC datetime, or
     None when the run has no timestamped messages. Naive timestamps are treated
-    as UTC (matching the DM-reset window handling)."""
+    as UTC (matching the DM-reset window handling).
+
+    Prefers the run's own ``newest_message_at`` when it has one, because a run
+    loaded as a digest carries the timestamp without carrying the messages --
+    and a run reduced to its first and last message would otherwise answer from
+    the two it kept.
+    """
+    if run.newest_message_at is not None:
+        recorded = run.newest_message_at
+        return (
+            recorded.replace(tzinfo=timezone.utc)
+            if recorded.tzinfo is None
+            else recorded
+        )
     newest: datetime | None = None
     for message in run.messages:
         created = getattr(message, "created_at", None)
@@ -96,6 +110,22 @@ def apply_surface_history_window(
         trimmed = result or trimmed[-1:]
 
     return trimmed
+
+def runtime_full_run_ids(
+    runs: list[AgentRun], conversation: Conversation | None = None
+) -> set[UUID]:
+    """Which runs need every message, decided the same way the prompt decides.
+
+    Applies the caller's trims first and takes the most recent runs of what
+    survives, because the age window is a filter rather than a truncation: a run
+    created long ago whose newest message is recent outlives runs created after
+    it. Selecting by position on the untrimmed list picks a different set, and
+    the run it wrongly elides is then sent short with no notice, because a
+    shortened list never reaches the elision branch.
+    """
+    trimmed = apply_surface_history_window(runs, conversation)
+    return {run.id for run in trimmed[-FULL_HISTORY_AGENT_RUN_COUNT:]}
+
 
 def select_runtime_history(
     runs: list[AgentRun], conversation: Conversation | None = None

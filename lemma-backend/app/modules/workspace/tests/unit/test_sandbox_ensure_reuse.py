@@ -90,16 +90,48 @@ async def test_two_sandboxes_do_not_share_an_entry() -> None:
 
 
 @pytest.mark.asyncio
-async def test_releasing_a_sandbox_forgets_it() -> None:
-    """Release pauses the sandbox, so the handle must not survive it."""
+async def test_a_gone_sandbox_is_not_served_again_from_memory() -> None:
+    """`ProviderGone` is documented as "re-ensure to get a current handle".
+
+    A remembered handle would answer that re-ensure with the dead one. A
+    sandbox can die without passing through release or destroy -- the sweeper
+    destroys through the provider, E2B times sandboxes out server-side, another
+    replica's sweep is invisible here -- so whatever discovers it must say so,
+    or every call inside the window fails identically.
+    """
     service = _CountingService()
     sandbox_id = uuid4()
-    await service.ensure(sandbox_id)
+    first = await service.ensure(sandbox_id)
 
-    service._forget_recent(sandbox_id)
+    service.forget(sandbox_id)
+    second = await service.ensure(sandbox_id)
 
-    await service.ensure(sandbox_id)
     assert service.ensures == 2
+    assert first is not second
+
+
+@pytest.mark.asyncio
+async def test_release_and_destroy_forget_the_handle() -> None:
+    """Exercises the real methods, not the helper they call.
+
+    Both forget before touching anything else, which is what this asserts: the
+    unit of work is rigged to fail, so reaching the assertion at all proves the
+    entry was dropped first.
+    """
+    for operation in ("release", "destroy"):
+        service = _CountingService()
+        sandbox_id = uuid4()
+        await service.ensure(sandbox_id)
+        assert [key for key in service._recent if key[1] == sandbox_id], operation
+
+        def _explode():
+            raise RuntimeError("uow should not be reached before forgetting")
+
+        service._uow_factory = _explode
+        with pytest.raises(RuntimeError):
+            await getattr(service, operation)(sandbox_id)
+
+        assert not [key for key in service._recent if key[1] == sandbox_id], operation
 
 
 @pytest.mark.asyncio
