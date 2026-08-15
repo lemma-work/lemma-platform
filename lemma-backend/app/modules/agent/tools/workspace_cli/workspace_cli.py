@@ -14,6 +14,7 @@ from app.modules.agent.tools.file_access import (
     read_pod_file_bytes,
     read_workspace_file_bytes,
 )
+from app.modules.agent.services.run_phase_spans import run_phase
 from app.modules.agent.tools.tool_errors import approval_error_result
 from app.modules.agent.tools.workspace_cli.models import (
     ExecCommandRequest,
@@ -270,11 +271,12 @@ async def exec_command_internal(
         runtime = get_workspace_tool_runtime()
         runtime_context = workspace_runtime_context(ctx)
 
-        workspace_session = await _get_workspace_session(
-            ctx,
-            session_id=runtime_context.default_shell_session_id,
-            close_on_exit=False,
-        )
+        with run_phase("tool.workspace.session"):
+            workspace_session = await _get_workspace_session(
+                ctx,
+                session_id=runtime_context.default_shell_session_id,
+                close_on_exit=False,
+            )
         project_notice: str | None = None
         async with workspace_session:
             # A repo-backed conversation needs credentials for every command,
@@ -283,10 +285,11 @@ async def exec_command_internal(
             # when that is `ls`.
             if ctx.workspace_repo is not None or looks_like_git_command(request.cmd):
                 try:
-                    await ensure_github_credentials(ctx, workspace_session)
-                    project_notice = await ensure_project_checkout(
-                        ctx, workspace_session
-                    )
+                    with run_phase("tool.workspace.credentials"):
+                        await ensure_github_credentials(ctx, workspace_session)
+                        project_notice = await ensure_project_checkout(
+                            ctx, workspace_session
+                        )
                 except Exception:
                     # A broken credential bridge (DB/Redis hiccup, sandbox
                     # write failure) should not block the command itself --
@@ -310,16 +313,17 @@ async def exec_command_internal(
                     else _DEFAULT_EXEC_YIELD_TIME_MS
                 )
                 effective_timeout = _DEFAULT_EXEC_TIMEOUT_S
-            result = await workspace_session.exec_command(
-                cmd=request.cmd,
-                max_output_tokens=request.max_output_tokens,
-                tty=request.tty,
-                workdir=request.workdir,
-                yield_time_ms=effective_yield_time_ms,
-                timeout=effective_timeout,
-                cols=request.cols,
-                rows=request.rows,
-            )
+            with run_phase("tool.workspace.exec"):
+                result = await workspace_session.exec_command(
+                    cmd=request.cmd,
+                    max_output_tokens=request.max_output_tokens,
+                    tty=request.tty,
+                    workdir=request.workdir,
+                    yield_time_ms=effective_yield_time_ms,
+                    timeout=effective_timeout,
+                    cols=request.cols,
+                    rows=request.rows,
+                )
             completed = bool(result.get("completed", True))
             process_id = result.get("process_id")
             if process_id and workspace_session.session_id and not completed:

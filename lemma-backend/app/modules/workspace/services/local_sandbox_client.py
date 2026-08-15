@@ -37,6 +37,7 @@ from sandbox_runtime.protocol import (
 
 from app.core.config import settings
 from app.modules.workspace.config import workspace_settings
+from app.modules.workspace.providers.base import ProviderGone
 from app.modules.workspace.domain.sandbox import (
     SandboxHandle,
     SandboxKind,
@@ -156,6 +157,7 @@ class LocalSandboxClient(LocalSandboxFilesMixin):
     ) -> LocalProcessRef:
         del workload_kind
         handle, instance = await self._instance(logical_id)
+        del handle
         request = StartProcessRequest(
             operation_id=operation_id,
             shell_command=shell_command,
@@ -167,9 +169,16 @@ class LocalSandboxClient(LocalSandboxFilesMixin):
             deadline_at=deadline_at,
             initial_input=initial_input,
         )
-        provider_process_id = await self._provider.start_process(
-            instance, request, deadline_at=deadline_at
-        )
+        try:
+            provider_process_id = await self._provider.start_process(
+                instance, request, deadline_at=deadline_at
+            )
+        except ProviderGone:
+            # Definitive, and the caller's recovery is to re-ensure. Drop the
+            # remembered handle first or the re-ensure hands back this same
+            # dead one until the reuse window lapses.
+            self._service.forget(logical_id)
+            raise
         return LocalProcessRef(
             operation_id=operation_id,
             provider_process_id=provider_process_id,
@@ -190,13 +199,17 @@ class LocalSandboxClient(LocalSandboxFilesMixin):
     ) -> ProcessOutputSnapshot:
         del workload_kind
         _, instance = await self._instance(logical_id)
-        return await self._provider.read_process_output(
-            instance,
-            process_id=self._process_id(logical_id, operation_id),
-            after_sequence=after_sequence,
-            wait_seconds=wait_seconds,
-            deadline_at=deadline_at,
-        )
+        try:
+            return await self._provider.read_process_output(
+                instance,
+                process_id=self._process_id(logical_id, operation_id),
+                after_sequence=after_sequence,
+                wait_seconds=wait_seconds,
+                deadline_at=deadline_at,
+            )
+        except ProviderGone:
+            self._service.forget(logical_id)
+            raise
 
     async def send_process_input(
         self,
