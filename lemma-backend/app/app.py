@@ -576,6 +576,7 @@ def create_app(modules=OSS_MODULES) -> FastAPI:
             "Content-Type",
             "Authorization",
             "X-Lemma-Client",
+            "X-Lemma-App",
             "x-altcha-payload",
         ]
         + get_all_cors_headers(),

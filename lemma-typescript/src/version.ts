@@ -6,6 +6,11 @@ export const SDK_VERSION = "0.7.0";
  *  preflight, so the backend can log which client + version hit an endpoint. */
 export const CLIENT_HEADER_NAME = "X-Lemma-Client";
 
+/** Which published app is calling. Bounded to a UUID by the backend, which
+ *  ignores anything else -- it is a caller-supplied header, so it names a
+ *  dimension, never grants anything. */
+export const APP_HEADER_NAME = "X-Lemma-App";
+
 /** Clients the backend recognises as an origin of their own (`app/core/origin.py`).
  *  Anything else degrades to `SDK`, which is the honest answer for a caller that
  *  did not name itself — so this list is an allowlist, not a suggestion, and it

@@ -9135,7 +9135,7 @@ var LemmaClient = (() => {
     return {};
   }
   function resolveConfig(overrides = {}) {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m;
     const win = windowConfig();
     const apiUrl = (_c = (_b = (_a = overrides.apiUrl) != null ? _a : win.apiUrl) != null ? _b : fromEnv("API_URL")) != null ? _c : "https://api.lemma.work";
     const authUrl = (_f = (_e = (_d = overrides.authUrl) != null ? _d : win.authUrl) != null ? _e : fromEnv("AUTH_URL")) != null ? _f : "https://lemma.work/auth";
@@ -9147,7 +9147,8 @@ var LemmaClient = (() => {
       app: (_i = overrides.app) != null ? _i : win.app,
       timeoutMs: (_j = overrides.timeoutMs) != null ? _j : win.timeoutMs,
       maxRetries: (_k = overrides.maxRetries) != null ? _k : win.maxRetries,
-      client: (_l = overrides.client) != null ? _l : win.client
+      client: (_l = overrides.client) != null ? _l : win.client,
+      appId: (_m = overrides.appId) != null ? _m : win.appId
     };
   }
 
@@ -9838,6 +9839,7 @@ var LemmaClient = (() => {
   // src/version.ts
   var SDK_VERSION = "0.7.0";
   var CLIENT_HEADER_NAME = "X-Lemma-Client";
+  var APP_HEADER_NAME = "X-Lemma-App";
   var KNOWN_CLIENTS = [
     "lemma-sdk-ts",
     "lemma-web",
@@ -9948,10 +9950,12 @@ var LemmaClient = (() => {
       __publicField(this, "timeoutMs");
       __publicField(this, "maxRetries");
       __publicField(this, "clientHeader");
+      __publicField(this, "appId");
       var _a, _b;
       this.timeoutMs = (_a = options.timeoutMs) != null ? _a : DEFAULT_TIMEOUT_MS;
       this.maxRetries = (_b = options.maxRetries) != null ? _b : DEFAULT_MAX_RETRIES;
       this.clientHeader = clientHeaderValue(options.client);
+      this.appId = options.appId;
     }
     getBaseUrl() {
       return this.apiUrl;
@@ -10054,7 +10058,10 @@ var LemmaClient = (() => {
         signal: options.signal
       };
       const withAuth = this.auth.getRequestInit(initBase);
-      const withClient = shouldSendClientHeader(this.apiUrl, method) ? this.mergeHeaders(withAuth, { [CLIENT_HEADER_NAME]: this.clientHeader }) : withAuth;
+      const withClient = shouldSendClientHeader(this.apiUrl, method) ? this.mergeHeaders(withAuth, {
+        [CLIENT_HEADER_NAME]: this.clientHeader,
+        ...this.appId ? { [APP_HEADER_NAME]: this.appId } : {}
+      }) : withAuth;
       return this.mergeHeaders(withClient, options.headers);
     }
     async request(method, path, options = {}) {
@@ -16921,7 +16928,8 @@ var LemmaClient = (() => {
       this._http = new HttpClient(this._config.apiUrl, this.auth, {
         timeoutMs: this._config.timeoutMs,
         maxRetries: this._config.maxRetries,
-        client: this._config.client
+        client: this._config.client,
+        appId: this._config.appId
       });
       this._generated = new GeneratedClientAdapter(this._config.apiUrl, this.auth, {
         maxRetries: this._config.maxRetries,

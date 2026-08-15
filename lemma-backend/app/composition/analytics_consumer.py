@@ -136,6 +136,7 @@ WIRED_EVENTS = frozenset(
         "surface.connected",
         "surface.message_answered",
         "pod.delivered",
+        "app.session_started",
         "app.created",
         "app.published",
         "bundle.exported",

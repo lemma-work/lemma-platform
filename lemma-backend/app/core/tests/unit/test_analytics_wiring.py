@@ -23,7 +23,6 @@ CLIENT_EMITTED = frozenset({"share_link.viewed", "import.started"})
 #: Shrinking this set is the Phase 1 follow-up.
 KNOWN_GAPS = frozenset(
     {
-        "app.session_started",
     }
 )
 

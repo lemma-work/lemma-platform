@@ -98,6 +98,7 @@ export class LemmaClient {
       timeoutMs: this._config.timeoutMs,
       maxRetries: this._config.maxRetries,
       client: this._config.client,
+      appId: this._config.appId,
     });
     this._generated = new GeneratedClientAdapter(this._config.apiUrl, this.auth, {
       maxRetries: this._config.maxRetries,
