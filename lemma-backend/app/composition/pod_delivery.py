@@ -17,8 +17,18 @@ pod, owned and read by the person who built it, never activates -- and that is
 the design doc's own canonical example of a pod delivering value. A definition
 that scores it as churn is measuring chat, not the product.
 
-Fires once per pod, ever. Postgres holds that fact and Redis caches it; see
-``analytics/infrastructure/models.py`` for why not Redis alone.
+Fires once per pod, ever, and that fact lives in the pod's own ``config`` JSONB
+under an ``analytics`` key. A dedicated table would have been a schema migration,
+an ORM model and a whole module's infrastructure package to store one timestamp
+per pod -- and the pod row is already the thing the fact is about.
+
+Not Redis alone: a flush or a failover would re-fire activation for every
+established pod at once and corrupt the funnel irreversibly. Redis sits in front
+as a negative cache, which is safe because a miss only ever costs a read.
+
+The claim is a conditional ``UPDATE ... WHERE NOT (config->'analytics' ? 'delivered_at')``
+that returns a row only to the caller that won it, so two workers processing two
+outcomes for the same pod at the same instant still produce exactly one event.
 """
 
 from __future__ import annotations
@@ -27,13 +37,12 @@ from datetime import datetime, timezone
 from enum import StrEnum
 from uuid import UUID
 
-from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy import text
 
 from app.core.analytics import AnalyticsActor, emit
 from app.core.authorization.context import ActorType
 from app.core.log.log import get_logger
 from app.core.origin import Origin, OriginKind
-from app.modules.analytics.infrastructure.models import PodDeliveryMarker
 
 logger = get_logger(__name__)
 
@@ -107,29 +116,64 @@ async def maybe_emit_pod_delivered(
     except Exception:  # noqa: BLE001 - a cache that is down costs a read, not correctness
         logger.debug("analytics.pod_delivered.cache_unavailable")
 
+    already = False
+    resource_count: int | None = None
+    created_at = None
     async with uow_factory() as uow:
-        claimed = await uow.session.execute(
-            insert(PodDeliveryMarker)
-            .values(
-                pod_id=pod_id,
-                delivered_at=datetime.now(timezone.utc),
-                via=via.value,
-                seeded=False,
-            )
-            .on_conflict_do_nothing(index_elements=["pod_id"])
-            .returning(PodDeliveryMarker.pod_id)
+        claimed = await uow.session.scalar(
+            text(
+                """
+                UPDATE pods
+                SET config = jsonb_set(
+                    coalesce(config, '{}'::jsonb),
+                    '{analytics}',
+                    coalesce(config->'analytics', '{}'::jsonb)
+                        || jsonb_build_object('delivered_at', :now, 'via', :via),
+                    true
+                )
+                WHERE id = :pod_id
+                  AND NOT (coalesce(config->'analytics', '{}'::jsonb) ? 'delivered_at')
+                RETURNING id
+                """
+            ),
+            {
+                "pod_id": pod_id,
+                "now": datetime.now(timezone.utc).isoformat(),
+                "via": via.value,
+            },
         )
-        first = claimed.scalar_one_or_none() is not None
+        first = claimed is not None
         if first:
-            resource_count, created_at = await _pod_shape(uow, pod_id)
+            # Seed rather than announce, when the pod had already delivered
+            # before any of this existed. Dating those activations to the deploy
+            # would invent a platform-wide spike on a day nothing happened, and
+            # the alternative -- a backfill migration -- would still miss any pod
+            # dormant on the day it ran. Deciding it here, on first touch, is both
+            # simpler and more accurate.
+            already = await _delivered_before(uow, pod_id)
+            if already:
+                await uow.session.execute(
+                    text(
+                        """
+                        UPDATE pods
+                        SET config = jsonb_set(
+                            config, '{analytics,seeded}', 'true'::jsonb, true
+                        )
+                        WHERE id = :pod_id
+                        """
+                    ),
+                    {"pod_id": pod_id},
+                )
+            else:
+                resource_count, created_at = await _pod_shape(uow, pod_id)
         await uow.commit()
 
     try:
         await redis.set(key, "1")
-    except Exception:  # noqa: BLE001 - the marker row is the truth; this is a shortcut
+    except Exception:  # noqa: BLE001 - the pod row is the truth; this is a shortcut
         logger.debug("analytics.pod_delivered.cache_unavailable")
 
-    if not first:
+    if not first or already:
         return
 
     from app.composition.analytics_consumer import _bucket, _days_bucket, COUNT_EDGES
@@ -156,6 +200,39 @@ async def maybe_emit_pod_delivered(
     )
 
 
+#: Whether the pod had produced a completed outcome before the one being
+#: processed. Each source reaches the pod differently -- an agent run through its
+#: conversation, a schedule run through its schedule, only a workflow run
+#: directly -- which is why this is three subqueries rather than one.
+_PRIOR_DELIVERY_SQL = """
+SELECT EXISTS (
+    SELECT 1 FROM agent_runs r
+    JOIN agent_conversations c ON c.id = r.conversation_id
+    WHERE c.pod_id = :pod_id AND upper(r.status::text) IN ('COMPLETED', 'SUCCEEDED')
+    OFFSET 1
+) OR EXISTS (
+    SELECT 1 FROM workflow_flow_runs r
+    WHERE r.pod_id = :pod_id AND upper(r.status::text) IN ('COMPLETED', 'SUCCEEDED')
+    OFFSET 1
+) OR EXISTS (
+    SELECT 1 FROM schedule_runs r
+    JOIN schedules s ON s.id = r.schedule_id
+    WHERE s.pod_id = :pod_id AND upper(r.status::text) IN ('COMPLETED', 'SUCCEEDED')
+    OFFSET 1
+)
+"""
+
+
+async def _delivered_before(uow, pod_id: UUID) -> bool:
+    """Had this pod already delivered before the outcome being processed?
+
+    ``OFFSET 1`` is the whole trick: the current outcome is already committed and
+    visible by the time the consumer runs, so "more than one completed run
+    exists" means one existed before this one. Runs once per pod, ever.
+    """
+    return bool(await uow.session.scalar(text(_PRIOR_DELIVERY_SQL), {"pod_id": pod_id}))
+
+
 async def _pod_shape(uow, pod_id: UUID) -> tuple[int | None, datetime | None]:
     """How much had been built by the time the pod first delivered.
 
@@ -168,8 +245,6 @@ async def _pod_shape(uow, pod_id: UUID) -> tuple[int | None, datetime | None]:
     that must not import each other; a UNION ALL of counts is the honest way to
     ask a question that is genuinely about all of them at once.
     """
-    from sqlalchemy import text
-
     created_at = await uow.session.scalar(
         text("SELECT created_at FROM pods WHERE id = :pod_id"), {"pod_id": pod_id}
     )
