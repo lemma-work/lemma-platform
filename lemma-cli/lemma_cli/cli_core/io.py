@@ -484,7 +484,18 @@ def _render_field(
         max_columns = 9999 if ctx.full else 10
         if not ctx.full and len(value) > max_columns:
             ctx.note_fold()
-        summary = format_columns(value, primary_key=primary_key, max_columns=max_columns)
+        if not ctx.full and any(
+            isinstance(column, dict) and len(column.get("options") or []) > 3
+            for column in value
+        ):
+            ctx.note_fold()
+        summary = format_columns(
+            value,
+            primary_key=primary_key,
+            max_columns=max_columns,
+            show_options=True,
+            max_options=None if ctx.full else 3,
+        )
         return [f"{header} {summary}"] if summary else []
 
     if key in SCHEMA_KEYS or _looks_like_schema(value):
@@ -667,6 +678,8 @@ def format_columns(
     *,
     primary_key: str | None = None,
     max_columns: int = 10,
+    show_options: bool = False,
+    max_options: int | None = 3,
 ) -> str:
     """Compact table column definitions for pretty CLI output."""
     raw_columns = to_plain(columns)
@@ -684,7 +697,10 @@ def format_columns(
     ] or valid
 
     shown = visible[:max_columns]
-    parts = [_format_column(item) for item in shown]
+    parts = [
+        _format_column(item, show_options=show_options, max_options=max_options)
+        for item in shown
+    ]
     remaining = len(visible) - len(shown)
     if remaining > 0:
         parts.append(f"+{remaining}")
@@ -698,12 +714,34 @@ def _is_hidden_system_column(column: dict[str, Any], *, primary_key: str | None)
     return bool(column.get("system")) or name in SYSTEM_COLUMN_NAMES
 
 
-def _format_column(column: dict[str, Any]) -> str:
+def _format_column(
+    column: dict[str, Any],
+    *,
+    show_options: bool = False,
+    max_options: int | None = 3,
+) -> str:
     name = str(column.get("name") or "")
     raw_type = column.get("type") or column.get("type_") or column.get("data_type")
     if raw_type in (None, "", [], {}):
         return name
-    return f"{name}:{str(raw_type).lower()}"
+    rendered = f"{name}:{str(raw_type).lower()}"
+    if not show_options:
+        return rendered
+    # An ENUM's whole meaning is its options. Detail views say them; list views
+    # pass show_options=False so no table gets wider.
+    raw_options = column.get("options")
+    options = (
+        [str(option) for option in raw_options if option not in (None, "")]
+        if isinstance(raw_options, list)
+        else []
+    )
+    if not options:
+        return rendered
+    visible = options if max_options is None else options[:max_options]
+    body = "|".join(visible)
+    if len(options) > len(visible):
+        body += f"|+{len(options) - len(visible)}"
+    return f"{rendered}({body})"
 
 
 def _format_row_cell(row: dict[str, Any], key: str, ctx: _Ctx) -> str:
