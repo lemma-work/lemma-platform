@@ -16,12 +16,12 @@ from app.modules.datastore.infrastructure.session import (
     get_datastore_engine,
     get_datastore_session_maker,
 )
+from app.modules.datastore.infrastructure.query_role import QueryRoleGrants
 from app.modules.datastore.infrastructure.sql_identifiers import (
     map_datastore_db_error,
     quote_sql_literal,
     sanitize_identifier,
 )
-from app.modules.datastore.config import datastore_settings
 from app.core.log.log import get_logger
 
 logger = get_logger(__name__)
@@ -34,82 +34,13 @@ class SchemaManager:
         self._owns_engine = engine is not None
         self._engine = engine or get_datastore_engine()
         self.session_factory = session_factory or get_datastore_session_maker()
-        self._query_role_ready = False
-
-    def _query_role_identifier(self) -> str:
-        """Validated identifier for the RLS-subject role used by ad-hoc queries."""
-        return self._sanitize_identifier(datastore_settings.datastore_query_role)
+        self._query_role = QueryRoleGrants(self._engine)
 
     async def ensure_query_role(self) -> None:
-        """Idempotently create the read-only, RLS-subject query role.
-
-        Ad-hoc SQL (``query.execute``) runs under this role via ``SET LOCAL ROLE``
-        so row-level security is actually enforced — the application's own
-        connection is a superuser/BYPASSRLS role that would otherwise see every
-        row. The role is ``NOLOGIN`` (entered only via ``SET ROLE``) and granted
-        to the connecting role so a non-superuser app role can switch into it.
-        """
-        if self._query_role_ready:
-            return
-        role = self._query_role_identifier()
-        async with self._engine.begin() as conn:
-            await conn.execute(
-                text(
-                    f'DO $$ BEGIN CREATE ROLE "{role}" '
-                    "NOLOGIN NOSUPERUSER NOBYPASSRLS; "
-                    "EXCEPTION WHEN duplicate_object THEN NULL; END $$"
-                )
-            )
-            await conn.execute(text(f'GRANT "{role}" TO CURRENT_USER'))
-        self._query_role_ready = True
-
-    async def _grant_query_role_on_table(
-        self, conn, schema_name: str, table_name: str
-    ) -> None:
-        """Grant the query role read access to one table (and its schema)."""
-        role = self._query_role_identifier()
-        await conn.execute(text(f'GRANT USAGE ON SCHEMA "{schema_name}" TO "{role}"'))
-        await conn.execute(
-            text(f'GRANT SELECT ON "{schema_name}"."{table_name}" TO "{role}"')
-        )
-
-    async def _try_grant_query_role(self, schema_name: str, table_name: str) -> None:
-        """Best-effort grant of read access to the query role; never raises.
-
-        Runs in its own transaction so a failure (e.g. the app role lacks
-        CREATEROLE/GRANT) cannot roll back table creation. Missing grants surface
-        as fail-closed query errors, repairable via ``backfill_query_role_grants``.
-        """
-        try:
-            await self.ensure_query_role()
-            async with self._engine.begin() as conn:
-                await self._grant_query_role_on_table(conn, schema_name, table_name)
-        except Exception:  # noqa: BLE001
-            logger.debug(
-                'datastore.schema_manager.could_not_grant_query_role.diagnostic',
-                exc_info=True,
-            )
+        return await self._query_role.ensure_role()
 
     async def backfill_query_role_grants(self) -> None:
-        """Grant the query role read access across all existing pod schemas.
-
-        Idempotent; covers pods whose schemas/tables were created before the role
-        mechanism existed. Safe to run at every startup.
-        """
-        await self.ensure_query_role()
-        role = self._query_role_identifier()
-        async with self._engine.begin() as conn:
-            await conn.execute(
-                text(
-                    "DO $$ DECLARE s text; BEGIN "
-                    "FOR s IN SELECT nspname FROM pg_namespace "
-                    "WHERE nspname LIKE 'pod\\_%' LOOP "
-                    f"EXECUTE format('GRANT USAGE ON SCHEMA %I TO \"{role}\"', s); "
-                    "EXECUTE format("
-                    f"'GRANT SELECT ON ALL TABLES IN SCHEMA %I TO \"{role}\"', s); "
-                    "END LOOP; END $$"
-                )
-            )
+        return await self._query_role.backfill_grants()
 
     def _get_schema_name(self, pod_id: UUID) -> str:
         return f"pod_{str(pod_id).replace('-', '_')}"
@@ -227,6 +158,13 @@ class SchemaManager:
         async with self._engine.begin() as conn:
             await self._lock_schema_bootstrap(conn, schema_name)
             await conn.execute(text(f'CREATE SCHEMA IF NOT EXISTS "{schema_name}"'))
+
+        # The schema's own ACL belongs to the schema, not to whichever table
+        # happens to be created first. Without this a pod provisioned after the
+        # last API start has no USAGE at all, and every ad-hoc query against it
+        # fails with "permission denied for schema" until a table is created or
+        # the process restarts into `backfill_query_role_grants`.
+        await self._query_role.try_grant(schema_name)
 
     async def datastore_schema_exists(self, pod_id: UUID) -> bool:
         schema_name = self._get_schema_name(pod_id)
@@ -381,8 +319,10 @@ class SchemaManager:
         # Best-effort, outside the table-creation transaction: let ad-hoc queries
         # (run under the RLS-subject role) read this table. Never block table
         # creation on role/grant issues — queries fail closed and the startup
-        # backfill or a retry repairs missing grants.
-        await self._try_grant_query_role(schema_name, table_name)
+        # backfill or a retry repairs missing grants. The schema's USAGE is
+        # granted at schema creation; re-granting it here is idempotent and
+        # covers schemas that predate that.
+        await self._query_role.try_grant(schema_name, table_name)
 
     async def drop_table(self, pod_id: UUID, table_name: str) -> None:
         schema_name = self._get_schema_name(pod_id)

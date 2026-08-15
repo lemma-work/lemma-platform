@@ -18,7 +18,6 @@ import pytest
 import typer
 
 import lemma_sdk.openapi_client.models as sdk_models
-from lemma_sdk.openapi_client.models.create_agent_request import CreateAgentRequest
 from lemma_sdk.openapi_client.models.create_function_request import (
     CreateFunctionRequest,
 )

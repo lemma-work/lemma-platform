@@ -370,6 +370,18 @@ def describe_pod(
     def run(client, s):  # type: ignore[no-untyped-def]
         pod_id = resolve_pod_id(client, s, pod)
         pod_sdk = client.pod(pod_id)
+
+        def optional(name: str):  # type: ignore[no-untyped-def]
+            """List a resource whose endpoint an older server may not serve.
+
+            describe is a survey, not a wiring check: one unavailable resource
+            type should cost that section, not the whole command.
+            """
+            try:
+                return list_items(getattr(pod_sdk, name).list(limit=limit))
+            except Exception:  # noqa: BLE001 — a missing section, not a failure
+                return []
+
         return {
             "pod": client.pods.get(pod_id),
             "tables": list_items(pod_sdk.tables.list(limit=limit)),
@@ -377,6 +389,8 @@ def describe_pod(
             "agents": list_items(pod_sdk.agents.list(limit=limit)),
             "workflows": list_items(pod_sdk.workflows.list(limit=limit)),
             "schedules": list_items(pod_sdk.schedules.list(limit=limit)),
+            "apps": optional("apps"),
+            "surfaces": optional("surfaces"),
             "files": pod_sdk.files.tree("/"),
         }
 
@@ -587,9 +601,20 @@ def doctor_pod(
                 return False
             return bool((detail.get("agent_runtime") or {}).get("profile_id"))
 
+        # agent name -> functions it may execute. Collected from the grants
+        # check_grants already resolved, so the workflow check below costs
+        # nothing extra.
+        agent_executable_functions: dict[str, set[str]] = {}
+
         for item in agent_items:
             name = str(item.get("name"))
             grants = check_grants("agents", name, item.get("grants"))
+            agent_executable_functions[name] = {
+                str(g.get("resource_name"))
+                for g in grants
+                if g.get("resource_type") == "function"
+                and "function.execute" in (g.get("permission_ids") or [])
+            }
             if name and not agent_has_runtime(item, name):
                 warnings.append(f"agent '{name}' has no pinned runtime — relies on the backend default (system:lemma).")
             toolsets = {str(t).upper() for t in (item.get("toolsets") or []) if isinstance(t, str)}
@@ -617,8 +642,8 @@ def doctor_pod(
                     for kind, key in (("agent", "agent_name"), ("function", "function_name"))
                     if cfg.get(key)
                 ]
-            for entry in targets:
-                kind, _, target_name = str(entry).partition(":")
+            parsed = [str(entry).partition(":") for entry in targets]
+            for kind, _, target_name in parsed:
                 if kind == "agent" and target_name not in agents:
                     errors.append(
                         f"workflow '{wname}' targets missing agent '{target_name}'."
@@ -626,6 +651,27 @@ def doctor_pod(
                 if kind == "function" and target_name not in functions:
                     errors.append(
                         f"workflow '{wname}' targets missing function '{target_name}'."
+                    )
+
+            # An AGENT node runs its agent with that agent's full grant set — the
+            # workflow orchestrates, it does not narrow what an agent may do. So
+            # an agent that can execute a function the graph already runs at its
+            # own node may do that work a second time, and the run ends with two
+            # rows where the author expected one. Nothing catches that at
+            # runtime, which is what makes it worth saying here.
+            node_functions = {name for kind, _, name in parsed if kind == "function"}
+            node_agents = {name for kind, _, name in parsed if kind == "agent"}
+            for agent_name in sorted(node_agents):
+                for fname in sorted(
+                    agent_executable_functions.get(agent_name, set()) & node_functions
+                ):
+                    warnings.append(
+                        f"workflow '{wname}' runs function '{fname}' at one node and "
+                        f"agent '{agent_name}' at another, and '{agent_name}' also "
+                        f"holds `function.execute` on '{fname}'. If the agent calls "
+                        f"it, the run does that work twice — revoke the grant with "
+                        f"`lemma agents permissions remove {agent_name} "
+                        f"function:{fname}`, or give the node a narrower agent."
                     )
 
         for sched in schedules:
@@ -984,7 +1030,20 @@ def _render_table(title: str, rows: list[dict[str, Any]], columns: list[tuple[st
 
 
 def _workflow_node_count(workflow: dict[str, Any]) -> str:
+    # List responses carry a derived `node_count` and deliberately omit the
+    # graph, so reading `nodes` here left the column blank on every row.
+    count = workflow.get("node_count")
+    if isinstance(count, int):
+        return str(count)
     return _count(workflow.get("nodes"))
+
+
+def _surface_agent(surface: dict[str, Any]) -> str:
+    """A surface answers as its own agent, or as the pod's default."""
+    name = surface.get("agent_name")
+    if name:
+        return str(name)
+    return "(pod default)" if surface.get("uses_default_agent") else ""
 
 
 def _render_pod_description(
@@ -1049,6 +1108,21 @@ def _render_pod_description(
         "Schedules",
         schedules,
         [("ID", "id"), ("Type", "schedule_type"), ("Target", "target"), ("Active", "is_active")],
+    )
+    _render_table(
+        "Apps",
+        data.get("apps", []),
+        [("Name", "name"), ("Status", "status"), ("URL", "url")],
+    )
+    surfaces = [
+        {**item, "agent": _surface_agent(item)}
+        for item in data.get("surfaces", [])
+        if isinstance(item, dict)
+    ]
+    _render_table(
+        "Surfaces",
+        surfaces,
+        [("Name", "name"), ("Platform", "platform"), ("Agent", "agent"), ("Status", "status")],
     )
     _render_file_tree(
         data.get("files"),
