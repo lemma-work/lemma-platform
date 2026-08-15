@@ -9,7 +9,11 @@ import hashlib
 import time
 from uuid import UUID
 
+from opentelemetry import trace
+
 from app.core.request_context import create_inherited_task
+
+tracer = trace.get_tracer(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -88,6 +92,23 @@ class FunctionSessionTokenCache:
         minter: FunctionTokenMinter,
         min_validity_until: datetime | None = None,
     ) -> FunctionSessionToken:
+        # A miss mints through the identity provider -- a user lookup plus a
+        # session create, both over HTTP. Recorded because reasoning about this
+        # from the outside requires knowing the cached token's own expiry, which
+        # comes from the issuer and is not otherwise visible.
+        with tracer.start_as_current_span("lemma.function.session_token") as span:
+            return await self._get(
+                key, span=span, minter=minter, min_validity_until=min_validity_until
+            )
+
+    async def _get(
+        self,
+        key: FunctionSessionTokenKey,
+        *,
+        span: trace.Span,
+        minter: FunctionTokenMinter,
+        min_validity_until: datetime | None,
+    ) -> FunctionSessionToken:
         now = self._clock()
         required_until = min_validity_until or self._wall_clock()
         async with self._lock:
@@ -98,10 +119,23 @@ class FunctionSessionTokenCache:
                 and cached.token.expires_at > required_until
             ):
                 self._entries.move_to_end(key)
+                span.set_attribute("lemma.cache", "hit")
                 return cached.token
             if cached is not None:
+                # Distinguishes the two reasons a present entry is unusable: the
+                # local TTL lapsing, or the issuer's own expiry not covering the
+                # caller's window. They have different fixes.
+                span.set_attribute(
+                    "lemma.cache",
+                    "expired_ttl"
+                    if cached.cache_expires_at <= now
+                    else "expired_validity",
+                )
                 self._entries.pop(key, None)
+            else:
+                span.set_attribute("lemma.cache", "miss")
             task = self._inflight.get(key)
+            span.set_attribute("lemma.minting", task is None)
             if task is None:
                 task = create_inherited_task(self._mint(key, minter=minter))
                 self._inflight[key] = task

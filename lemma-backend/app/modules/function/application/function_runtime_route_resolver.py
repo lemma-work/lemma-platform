@@ -10,6 +10,7 @@ from urllib.parse import urlsplit
 from uuid import UUID
 
 import httpx
+from opentelemetry import trace
 
 from sandbox_runtime.protocol import (
     SandboxProfileRef,
@@ -36,6 +37,32 @@ from app.modules.function.domain.entities import (
     FunctionDispatchMode,
     FunctionExecutionDispatch,
 )
+
+
+tracer = trace.get_tracer(__name__)
+
+
+def endpoint_reuse_seconds() -> int:
+    """Reuse window, never allowed past the idle release that invalidates it.
+
+    A cached endpoint outliving the sandbox behind it is not a stale-cache
+    problem that costs a retry. Idle release *pauses* the sandbox -- that is how
+    E2B persists the filesystem -- and an invocation against a paused sandbox
+    fails at the transport layer, which `_invoke_runtime_with_recovery`
+    deliberately never replays: a transport error cannot be told apart from one
+    that already ran user code. So the run simply fails.
+
+    The two settings live in different objects and are set by different
+    deployments, and the shipped pair is 60 against a production-overridden 180
+    while the field's own documentation still reasons about the 900 default.
+    Halving is a margin, not a formula: the sweep runs on a cron, so release
+    happens somewhere after its window, never before it.
+    """
+    configured = settings.function_runtime_endpoint_reuse_seconds
+    idle_release = workspace_settings.idle_release_seconds
+    if idle_release <= 0:
+        return configured
+    return max(5, min(configured, idle_release // 2))
 
 
 SandboxClientFactory = Callable[[], LocalSandboxClient]
@@ -168,17 +195,27 @@ class FunctionRuntimeRouteResolver:
     ) -> FunctionRuntimeEndpoint:
         client = self._sandbox_client_factory()
         try:
-            await self._ensure_sandbox(
-                client,
-                pod_id,
-                admission_class=admission_class,
-                deadline_at=deadline_at,
-            )
-            lease = await client.lease_function_runtime(
-                pod_id,
-                required_valid_until=required_valid_until,
-                deadline_at=deadline_at,
-            )
+            # Split because these fail and cost differently. `ensure_sandbox`
+            # verifies readiness (a round trip to the sandbox, and a cold start
+            # if there is none); the lease is control-plane bookkeeping. Every
+            # endpoint-cache miss pays both, so which one dominates decides
+            # whether the answer is a longer reuse window or a faster probe.
+            with tracer.start_as_current_span(
+                "lemma.function.runtime_endpoint.ensure_sandbox"
+            ) as span:
+                span.set_attribute("lemma.admission_class", admission_class.value)
+                await self._ensure_sandbox(
+                    client,
+                    pod_id,
+                    admission_class=admission_class,
+                    deadline_at=deadline_at,
+                )
+            with tracer.start_as_current_span("lemma.function.runtime_endpoint.lease"):
+                lease = await client.lease_function_runtime(
+                    pod_id,
+                    required_valid_until=required_valid_until,
+                    deadline_at=deadline_at,
+                )
             return self._endpoint_from_lease(
                 lease,
                 pod_id=pod_id,
