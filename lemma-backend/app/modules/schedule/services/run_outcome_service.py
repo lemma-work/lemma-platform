@@ -60,6 +60,47 @@ class ScheduleRunOutcomeService:
         await self._apply_breaker(schedule)
         return True
 
+    async def record_pre_dispatch_failure(
+        self,
+        schedule: ScheduleEntity,
+        *,
+        source_event_id: str,
+        error_type: str,
+    ) -> bool:
+        """Record a fire that never reached a target, and count it on the breaker.
+
+        The ledger is written when a fire is *dispatched*, so a fire that failed
+        before that — the LLM filter could not run because the pod is out of
+        budget — left no row at all. The breaker counts rows, so nothing counted
+        it, and the schedule retried indefinitely with no ceiling and nothing to
+        show the owner. Thirty of those in a day came from one pod.
+
+        Dead-lettered rather than failed: ``consecutive_terminal_failures``
+        deliberately ignores FAILED, which is the retryable intermediate state,
+        and a fire whose budget has run out is not going to succeed by being
+        tried again inside the same window. Five of them trips the breaker,
+        deactivates the schedule, and emails the owner — which is the only part
+        of this the user ever sees.
+
+        Returns whether a new failure was recorded; a repeat of the same
+        ``source_event_id`` is a no-op, so a redelivery cannot inflate the streak.
+        """
+        run = await self.run_repository.claim(
+            schedule_id=schedule.id,
+            user_id=schedule.user_id,
+            source_event_id=source_event_id,
+            target_kind="WORKFLOW" if schedule.workflow_id is not None else "AGENT",
+            payload={},
+            metadata=None,
+            llm_output=None,
+        )
+        if run is None:
+            return False
+
+        await self.run_repository.dead_letter(run.id, error_type=error_type)
+        await self.recompute_breaker(schedule.id)
+        return True
+
     async def record_dispatch_dead_letter(self, schedule: ScheduleEntity) -> None:
         """Count a delivery failure in the transaction that first dead-lettered it."""
         locked = await self.schedule_repository.get_for_update(schedule.id)

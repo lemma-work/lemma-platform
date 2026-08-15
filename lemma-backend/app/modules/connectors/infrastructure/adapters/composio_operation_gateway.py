@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import os
+import asyncio
 from typing import Any, Callable
 
 from app.core.concurrency.offload import run_blocking
@@ -10,6 +10,7 @@ from app.modules.connectors.domain.errors import (
     OperationExecutionAccessDeniedError,
     OperationExecutionInfrastructureError,
     OperationExecutionNotFoundError,
+    OperationExecutionTimeoutError,
     OperationExecutionUnauthorizedError,
     OperationExecutionValidationError,
 )
@@ -36,21 +37,17 @@ class ComposioOperationGateway(AppOperationGatewayPort):
         self._composio_client_factory = composio_client_factory or self._default_client_factory
 
     def _default_client_factory(self) -> Any:
-        from composio import Composio
+        # Shared, not built here: this gateway is constructed per request and
+        # the SDK client costs 42-262ms to build. See
+        # `connectors.infrastructure.composio_client` for the flag's meaning.
+        from app.modules.connectors.infrastructure.composio_client import (
+            get_composio_client,
+        )
 
-        os.environ.setdefault("COMPOSIO_CACHE_DIR", "/tmp/composio")
-        # The flag governs BOTH directions, and the download half is unusable
-        # here: the SDK writes the payload to this container's local disk and
-        # substitutes the local path into the response, so the caller receives a
-        # path it cannot open for a file that accumulates on the box forever.
-        # We keep the upload half by passing signed URLs ourselves and own the
-        # download half by streaming Composio's {name, mimetype, s3url} envelope
-        # to the pod datastore.
-        return Composio(
-            api_key=connector_settings.composio_api_key,
-            dangerously_allow_auto_upload_download_files=(
+        return get_composio_client(
+            allow_managed_files=(
                 connector_settings.connector_composio_managed_files_enabled
-            ),
+            )
         )
 
     async def list_operations(self, connector_id: str) -> list[str]:
@@ -112,7 +109,29 @@ class ComposioOperationGateway(AppOperationGatewayPort):
             # Composio's SDK is synchronous HTTP; run it on the dedicated
             # external-HTTP limiter so a burst of connector calls can't drain the
             # shared thread pool and stall unrelated (CPU) offloads.
-            response = await run_blocking(_execute, limiter="external_http")
+            #
+            # A backstop, and only that. Callers arriving through
+            # `RoutingOperationGateway` are already wrapped in a `wait_for` at
+            # `connector_operation_timeout_seconds` (45s), and the kind
+            # dispatcher has its own Composio ceiling of 90s — both fire long
+            # before this does, so their behaviour is unchanged.
+            #
+            # What this covers is the caller that does not go through either:
+            # `agent_surfaces/platforms/composio_email.py` constructs this
+            # gateway and calls `execute_operation` directly, and that path was
+            # unbounded. An unresponsive provider there holds a thread from the
+            # bounded external-HTTP pool for as long as the socket stays open,
+            # and enough of them empties the pool for every other connector.
+            response = await asyncio.wait_for(
+                run_blocking(_execute, limiter="external_http"),
+                timeout=connector_settings.connector_composio_deadline_seconds,
+            )
+        except asyncio.TimeoutError as exc:
+            raise OperationExecutionTimeoutError(
+                f"Composio tool execution for '{operation_name}' exceeded "
+                f"{connector_settings.connector_composio_deadline_seconds:.0f}s.",
+                details={"provider": "composio", "operation": operation_name},
+            ) from exc
         except Exception as exc:
             # The SDK reports some failures by *raising* rather than returning a
             # failure envelope -- a deleted or revoked connected account comes

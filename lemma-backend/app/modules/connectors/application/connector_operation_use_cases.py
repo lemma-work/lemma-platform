@@ -26,7 +26,15 @@ import httpx
 from app.modules.connectors.domain.errors import (
     ConnectorDomainError,
     OperationExecutionAccessDeniedError,
+    OperationExecutionInfrastructureError,
+    OperationExecutionTimeoutError,
     OperationExecutionUnauthorizedError,
+)
+from app.modules.connectors.infrastructure.operation_breaker import (
+    breaker_scope,
+    guard as breaker_guard,
+    record_failure as breaker_record_failure,
+    record_success as breaker_record_success,
 )
 from app.modules.connectors.services.connector_operation_service import (
     ConnectorOperationService,
@@ -89,9 +97,22 @@ class ConnectorOperationUseCases:
         # checks out a connection across the (1-45s) external call. The scope only
         # supplies the service collaborator that owns the gateway + timeout +
         # error-mapping logic.
+        # A provider that is down makes every caller wait the full timeout to be
+        # told the same thing, and adds load to something already struggling.
+        # Only infrastructure and timeout failures feed the breaker; a rejected
+        # request or a stale credential is the caller's problem and must not
+        # disable the operation for everyone else.
+        scope_key = breaker_scope(resolved.connector_id, operation_name)
+        await breaker_guard(scope_key)
         try:
             async with uow_scope(self._uow_factory) as uow:
                 response = await self._build(uow).execute_resolved(resolved)
+        except (
+            OperationExecutionInfrastructureError,
+            OperationExecutionTimeoutError,
+        ):
+            await breaker_record_failure(scope_key)
+            raise
         except OperationExecutionUnauthorizedError:
             # The credential was rejected. Rather than refreshing before every
             # call on the chance this happens, refresh here, once, and retry
@@ -113,6 +134,7 @@ class ConnectorOperationUseCases:
             # would not help, so flag and surface it directly.
             await self._flag_account_reauth_required(resolved)
             raise
+        await breaker_record_success(scope_key)
 
         # Phase 3: if the result carries a file, decide what the caller actually
         # receives -- inline bytes for something small, a pod-datastore reference

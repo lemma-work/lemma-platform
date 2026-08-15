@@ -9,10 +9,10 @@ import aiohttp
 
 os.environ.setdefault("COMPOSIO_CACHE_DIR", "/tmp/composio")
 
-from composio import Composio
 from composio.types import auth_scheme as composio_auth_scheme
 
-from app.modules.connectors.config import connector_settings
+from app.modules.connectors.infrastructure.composio_client import get_composio_client
+
 from app.modules.connectors.domain.account import ComposioCredentials, OAuthCredentials
 from app.modules.connectors.domain.connector import AuthScheme, ConnectorEntity
 from app.modules.connectors.domain.errors import ConnectorValidationError
@@ -43,9 +43,9 @@ class ComposioAuthProvider(AuthProviderInterface):
         http_session_factory: HttpSessionFactory = aiohttp.ClientSession,
     ):
         self._connector_repository = connector_repository
-        self._composio_client_factory = composio_client_factory or (
-            lambda: Composio(api_key=connector_settings.composio_api_key)
-        )
+        # Shared: this provider is built per request, and the SDK client costs
+        # 42-262ms to construct.
+        self._composio_client_factory = composio_client_factory or get_composio_client
         self._http_session_factory = http_session_factory
 
     async def _get_google_token_expiration(

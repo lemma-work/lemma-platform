@@ -657,8 +657,15 @@ def _instrument_libraries() -> None:
     # own schedule. Flipping to ``http`` and dropping the duplicates is a
     # deliberate follow-up, not a side effect of wanting a host label.
     #
+    # ``http``, not ``http/dup``, as of this change. ``dup`` was the migration
+    # step: it emitted both vocabularies so the dashboards could move at their
+    # own pace. They have — every inbound-latency panel reads
+    # ``http.server.request.duration`` now — so the superseded
+    # ``http.server.duration`` (26 series, still being paid for) can stop. The
+    # old series going stale silently is the failure this avoids.
+    #
     # ``setdefault`` so a deployment can pin either behaviour itself.
-    os.environ.setdefault("OTEL_SEMCONV_STABILITY_OPT_IN", "http/dup")
+    os.environ.setdefault("OTEL_SEMCONV_STABILITY_OPT_IN", "http")
 
     from opentelemetry.instrumentation.aiohttp_client import (
         AioHttpClientInstrumentor,

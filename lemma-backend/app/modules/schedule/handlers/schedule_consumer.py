@@ -13,6 +13,8 @@ from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.core.infrastructure.jobs.streaq_runtime import streaq_task
 from app.modules.schedule.repositories.schedule_repository import ScheduleRepository
+from app.modules.schedule.services.run_outcome_service import ScheduleRunOutcomeService
+from app.modules.usage.contracts import UsageLimitExceededError
 from app.core.log.log import get_logger
 from app.composition.schedule_filter import create_schedule_processor
 
@@ -58,12 +60,38 @@ async def handle_llm_filter_task(
         return
 
     processor = create_schedule_processor()
-    await processor.process_event(
-        schedule=schedule,
-        payload=payload,
-        # Only webhook fires are deferred to this queue, and they carry no row
-        # owner, so the schedule owner is the authoritative owner here.
-        user_id=schedule.user_id,
-        metadata=metadata,
-        source_event_id=source_event_id,
-    )
+    try:
+        await processor.process_event(
+            schedule=schedule,
+            payload=payload,
+            # Only webhook fires are deferred to this queue, and they carry no row
+            # owner, so the schedule owner is the authoritative owner here.
+            user_id=schedule.user_id,
+            metadata=metadata,
+            source_event_id=source_event_id,
+        )
+    except UsageLimitExceededError:
+        # Policy lives here, at the task boundary, not in the processor. The
+        # processor raises every filter failure alike and is right to — a
+        # provider blip should still reach streaq and be retried. Only this one
+        # is different, and only because retrying it cannot help: the pod's
+        # budget will still be spent on the next attempt.
+        #
+        # Before this it escaped as an unhandled exception, so the job just
+        # failed. The ledger is written at dispatch, and this fire never got
+        # that far, so no row existed — and the breaker counts rows. Nothing
+        # bounded it and nothing told the owner. Recording the failure gives the
+        # breaker something to count: five of them deactivates the schedule and
+        # emails the owner, which is the ceiling this needed.
+        async with uow_factory() as uow:
+            recorded = await ScheduleRunOutcomeService(uow).record_pre_dispatch_failure(
+                schedule,
+                source_event_id=source_event_id,
+                error_type="ScheduleFilterQuotaExhausted",
+            )
+        logger.warning(
+            "schedule.filter.quota_exhausted.degraded",
+            schedule_id=schedule_id,
+            pod_id=str(schedule.pod_id) if schedule.pod_id else None,
+            counted=recorded,
+        )

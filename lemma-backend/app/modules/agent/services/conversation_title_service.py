@@ -60,7 +60,13 @@ _TITLE_USAGE_LIMITS = UsageLimits(
 _TITLE_SYSTEM_PROMPT = (
     "You generate a concise title for a chat conversation. "
     "Respond with a short, descriptive title of 3-6 words that captures the "
-    "user's intent. Return only the title text: no quotes, no surrounding "
+    "user's intent. "
+    # Without this the model picks a language of its own: an English prompt
+    # came back titled 查询items表行数 while another conversation in the same pod
+    # titled in English. The non-LLM fallback derives the title from the user's
+    # own message and never had the problem, so the two paths disagreed.
+    "Write the title in the same language as the user's message. "
+    "Return only the title text: no quotes, no surrounding "
     "punctuation, no trailing period, no prefix like 'Title:'."
 )
 

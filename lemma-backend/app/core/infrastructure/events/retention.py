@@ -15,12 +15,19 @@ from app.core.infrastructure.events.inbox import InboxStatus
 from app.core.infrastructure.events.models import DomainEventInbox, DomainEventOutbox
 
 
-async def _delete_batch(
+async def delete_batch(
     session: AsyncSession,
     model,
     *filters,
     batch_size: int,
 ) -> int:
+    """Delete one bounded batch, skipping rows another sweep holds.
+
+    Shared with the schedule-run pruner rather than reimplemented there: the
+    ``SKIP LOCKED`` claim and the id-ordered CTE are the parts that make a
+    pruner safe to run concurrently with the writers, and are worth having in
+    one place.
+    """
     claimed = (
         select(model.id)
         .where(*filters)
@@ -114,7 +121,7 @@ async def prune_event_delivery_records(
             # transaction open across the whole drain would pin a connection
             # and keep every deleted row's tuple alive for the duration.
             async with session_maker() as session, session.begin():
-                batch = await _delete_batch(
+                batch = await delete_batch(
                     session,
                     model,
                     *filters,

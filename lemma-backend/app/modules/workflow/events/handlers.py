@@ -386,10 +386,18 @@ async def recover_schedule_runs() -> None:
     worker_ctx: AppWorkerContext = streaq_worker.context
     async with worker_ctx.uow() as uow:
         result = await ScheduleRunRecoveryService(uow).recover()
+    # Still a warning, and deliberately so. This used to fire twelve times an
+    # hour and was read as routine maintenance, but that was the counting: rows
+    # the sweep inspected and correctly left alone were reported as
+    # `reconciled`, so a sweep doing nothing at all looked busy. Now the three
+    # counters below only move when the event-driven outcome path missed
+    # something, a dispatch was lost, or a run was abandoned -- each of which is
+    # the safety net catching a failure somewhere else, and worth a warning.
     if result.redelivered or result.reconciled or result.dead_lettered:
         logger.warning(
             "schedule.runs.recovered",
             redelivered=result.redelivered,
             reconciled=result.reconciled,
             dead_lettered=result.dead_lettered,
+            still_running=result.still_running,
         )

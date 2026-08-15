@@ -283,6 +283,34 @@ class Settings(BaseSettings):
             "Env: ``LOOP_LAG_UNHEALTHY_SECONDS``."
         ),
     )
+    # --- Resident memory sampler (app.core.observability.memory_sampler) ---
+    memory_sampler_interval_seconds: float = Field(
+        default=60.0,
+        description=(
+            "How often resident memory is sampled. Slow on purpose: this is "
+            "watching for a floor that climbs over hours, not for spikes. Env: "
+            "``MEMORY_SAMPLER_INTERVAL_SECONDS``."
+        ),
+    )
+    memory_growth_warn_mib: float = Field(
+        default=1024.0,
+        description=(
+            "Report the process as growing once its resident floor has risen "
+            "this far above the floor recorded after startup. Measured against "
+            "the floor rather than the current sample so that ordinary spikes "
+            "-- a large upload, a document conversion -- do not report. Env: "
+            "``MEMORY_GROWTH_WARN_MIB``."
+        ),
+    )
+    memory_sampler_tracemalloc_enabled: bool = Field(
+        default=False,
+        description=(
+            "Attach the top allocation sites to the growth report. Off by "
+            "default: tracemalloc roughly doubles allocation cost, so it is "
+            "something to switch on for a process already known to be growing. "
+            "Env: ``MEMORY_SAMPLER_TRACEMALLOC_ENABLED``."
+        ),
+    )
     worker_heartbeat_path: str = Field(
         default="/tmp/worker_heartbeat",
         description=(

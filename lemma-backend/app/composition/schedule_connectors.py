@@ -65,7 +65,13 @@ class ComposioScheduleManager:
 
     @staticmethod
     def _client() -> Composio:
-        return Composio(api_key=connector_settings.composio_api_key)
+        # Shared. This ran on every trigger create and delete, each one paying
+        # 42-262ms of SDK construction on the event loop.
+        from app.modules.connectors.infrastructure.composio_client import (
+            get_composio_client,
+        )
+
+        return get_composio_client()
 
     async def create_schedule(
         self,

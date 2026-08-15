@@ -9,7 +9,9 @@ def test_schedule_settings_own_scheduler_policy(monkeypatch):
         "scheduler_api_url",
         "schedule_max_consecutive_failures",
         "schedule_minimum_interval_minutes",
-        "scheduler_internal_token",
+        "schedule_run_retention_days",
+        "schedule_run_retention_batch_size",
+        "schedule_run_retention_budget_seconds",
     }
     assert (
         ScheduleSettings.model_fields["scheduler_api_url"].default
@@ -21,14 +23,23 @@ def test_schedule_settings_own_scheduler_policy(monkeypatch):
     assert (
         ScheduleSettings.model_fields["schedule_minimum_interval_minutes"].default == 15
     )
-    assert ScheduleSettings.model_fields["scheduler_internal_token"].default is None
 
     monkeypatch.setenv("SCHEDULER_API_URL", "http://scheduler:8001")
-    monkeypatch.setenv("SCHEDULER_INTERNAL_TOKEN", "canary")
     configured = ScheduleSettings()
     assert configured.scheduler_api_url == "http://scheduler:8001"
-    assert configured.scheduler_internal_token is not None
-    assert configured.scheduler_internal_token.get_secret_value() == "canary"
+
+
+def test_the_scheduler_sidecar_token_is_gone(monkeypatch):
+    """``SCHEDULER_INTERNAL_TOKEN`` belonged to a service that no longer exists.
+
+    Its only reader was ``schedule/scheduler/internal_auth.py``, which nothing
+    imported, and the ``app/scheduler.py`` its docstring referred to was deleted
+    with the APScheduler removal. Both environments still carried the secret.
+    Setting it must now be inert rather than quietly configuring nothing.
+    """
+    monkeypatch.setenv("SCHEDULER_INTERNAL_TOKEN", "canary")
+
+    assert "scheduler_internal_token" not in ScheduleSettings().model_dump()
 
 
 def test_schedule_minimum_interval_must_be_positive(monkeypatch):

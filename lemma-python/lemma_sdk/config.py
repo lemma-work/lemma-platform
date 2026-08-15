@@ -195,7 +195,17 @@ def normalize_server_config(
         for key, value in raw.items()
         if key not in {"servers", "active_server"}
     }
-    root["active_server"] = active
+    # The *stored* selection, not the effective one. `--server` and
+    # `LEMMA_SERVER` are per-invocation overrides, and writing either of them
+    # here put it into the structure every config save persists — so a command
+    # that saved for an unrelated reason (storing a token, switching pod) left
+    # the CLI permanently pointed somewhere the user had only visited once.
+    # That reached us as a release blocker after a QA run against production.
+    #
+    # Callers that want the effective server take it from the second return
+    # value, which still reflects the override.
+    stored = normalize_server_name(raw.get("active_server"))
+    root["active_server"] = stored if stored in servers else DEFAULT_SERVER_NAME
     root["servers"] = servers
     return root, active
 

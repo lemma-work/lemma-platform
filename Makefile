@@ -1263,6 +1263,8 @@ quality:
 	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-session-scope
 	@echo "→ I/O hygiene…"
 	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-io-hygiene
+	@echo "→ Import budget…"
+	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-import-budget
 	@echo "→ Critical domain types…"
 	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory typecheck-critical
 	@echo "→ Architecture ratchet + route inventory…"

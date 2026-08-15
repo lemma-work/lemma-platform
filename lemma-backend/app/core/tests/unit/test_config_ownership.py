@@ -25,7 +25,6 @@ def test_global_settings_exclude_module_owned_controls() -> None:
         "app_archive_max_compression_ratio",
         "scheduler_api_url",
         "schedule_max_consecutive_failures",
-        "scheduler_internal_token",
     }
 
     assert module_owned.isdisjoint(Settings.model_fields)

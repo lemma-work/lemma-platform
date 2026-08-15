@@ -142,23 +142,43 @@ async def lifespan(app: FastAPI):
             await stack.enter_async_context(pod_mcp_app.lifespan(app))
 
         # Core startup
-        from app.core.concurrency.offload import configure_thread_pool
+        from app.core.concurrency.offload import configure_thread_pool, run_blocking
         from app.core.observability.connection_scope import (
             start_connection_scope_monitor_from_settings,
         )
         from app.core.observability.loop_watchdog import loop_lag_watchdog
+        from app.core.observability.memory_sampler import memory_sampler
 
         configure_thread_pool()
         start_connection_scope_monitor_from_settings(service_name="lemma-api")
+        embedded_worker = getattr(app.state, "embedded_worker", False)
         watchdog_task = (
             None
-            if getattr(app.state, "embedded_worker", False)
+            if embedded_worker
             else create_background_task(
                 loop_lag_watchdog(service_name="lemma-api"),
                 name="api-loop-lag-watchdog",
             )
         )
+        # Skipped under an embedded worker for the same reason as the watchdog:
+        # the worker runtime starts its own, and two samplers in one process
+        # would report the same resident memory twice under two service names.
+        memory_task = (
+            None
+            if embedded_worker
+            else create_background_task(
+                memory_sampler(service_name="lemma-api"),
+                name="api-memory-sampler",
+            )
+        )
         initialize_supertokens()
+        # Build the OpenAPI document now rather than on whichever request first
+        # asks for it. `custom_openapi` caches correctly, but the first call
+        # costs ~1s of pydantic model-graph construction on the event loop —
+        # the api's loop-stall sampler caught it in
+        # `fastapi._compat.get_flat_models_from_fields`, and it blocks every
+        # concurrent request when it lands. Off the loop because it is pure CPU.
+        await run_blocking(app.openapi, limiter="cpu_bound")
         # Learn which lane each task runs on before serving traffic. The
         # enqueue path resolves this lazily as a safety net, but the first
         # resolution imports every module's handlers — half a second that
@@ -191,12 +211,13 @@ async def lifespan(app: FastAPI):
             # Core closers — explicit and last so they tear down after modules.
             if started:
                 logger.info("service.stopped")
-            if watchdog_task is not None and not watchdog_task.done():
-                watchdog_task.cancel()
-                try:
-                    await watchdog_task
-                except BaseException:
-                    pass
+            for lifecycle_task in (watchdog_task, memory_task):
+                if lifecycle_task is not None and not lifecycle_task.done():
+                    lifecycle_task.cancel()
+                    try:
+                        await lifecycle_task
+                    except BaseException:
+                        pass
             await close_streaq_job_queue()
             await close_message_bus()
             # Outbound connector plumbing: the shared HTTP pool and any engines

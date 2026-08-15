@@ -590,3 +590,137 @@ async def test_recovery_redelivers_abandoned_runs_and_reconciles_lost_outcome(
         assert dispatched.status == "DISPATCHED"
         assert dispatched.target_outcome == "COMPLETED"
         assert exhausted is not None and exhausted.status == "DEAD_LETTERED"
+
+
+async def test_recovery_advances_past_runs_whose_targets_are_still_alive(
+    authenticated_client,
+    fixed_test_org,
+    db_manager,
+):
+    """The sweep must not spend every tick on the same in-flight runs.
+
+    A run whose target is alive but unfinished needs no change, so the handler
+    wrote back the four values the row already held, SQLAlchemy computed no net
+    change, no UPDATE fired, and ``updated_at`` -- which the query ordered by --
+    never moved. The next tick selected the same rows. In production the cursor
+    sat on rows last touched 2026-08-12 11:50:01 for three days while reporting
+    ``reconciled=100`` on four hundred consecutive samples: not a full batch,
+    the same batch, with 1,386 eligible rows behind it never examined.
+
+    All 1,634 of those rows had live targets -- 1,375 workflows parked on human
+    form waits, the rest agents still running -- so the sweep's *decision* was
+    right every time. Only the bookkeeping was wrong.
+    """
+    pod_id = await _create_pod(authenticated_client, fixed_test_org["id"])
+    workflow = await _create_workflow(
+        authenticated_client,
+        pod_id,
+        start={"type": "SCHEDULED", "config": {"schedule_type": "CRON"}},
+        name_prefix="schedule-cursor-workflow",
+    )
+    schedule = await _create_schedule(
+        authenticated_client,
+        pod_id,
+        schedule_type="TIME",
+        workflow_name=workflow["name"],
+        config={"cron": "0 * * * *"},
+    )
+    schedule_id = UUID(schedule["id"])
+    user_id = UUID(schedule["user_id"])
+    stale = datetime.now(timezone.utc) - timedelta(minutes=30)
+
+    waiting_target_id = uuid4()
+    parked_id = uuid4()
+    behind_it_id = uuid4()
+    finished_target_id = uuid4()
+
+    async with db_manager.session_factory() as session, session.begin():
+        session.add_all(
+            [
+                # Alive and unfinished: a workflow waiting on a human form.
+                WorkflowRunModel(
+                    id=waiting_target_id,
+                    flow_id=UUID(workflow["id"]),
+                    pod_id=UUID(pod_id),
+                    user_id=user_id,
+                    start_type="SCHEDULED",
+                    schedule_event_id="still-waiting",
+                    start_payload={},
+                    status="WAITING",
+                    created_at=stale,
+                    updated_at=stale,
+                ),
+                WorkflowRunModel(
+                    id=finished_target_id,
+                    flow_id=UUID(workflow["id"]),
+                    pod_id=UUID(pod_id),
+                    user_id=user_id,
+                    start_type="SCHEDULED",
+                    schedule_event_id="finished-behind-the-wall",
+                    start_payload={},
+                    status="COMPLETED",
+                    completed_at=stale.replace(tzinfo=None),
+                    created_at=stale,
+                    updated_at=stale,
+                ),
+            ]
+        )
+        session.add_all(
+            [
+                # Sorts first (older) and can never be reconciled.
+                ScheduleRun(
+                    id=parked_id,
+                    schedule_id=schedule_id,
+                    user_id=user_id,
+                    source_event_id="parked-on-human-wait",
+                    status=ScheduleRunStatus.DISPATCHED.value,
+                    attempts=1,
+                    target_kind="WORKFLOW",
+                    target_run_id=str(waiting_target_id),
+                    payload={},
+                    fire_metadata={},
+                    llm_output={},
+                    created_at=stale,
+                    updated_at=stale,
+                ),
+                # Behind it, and the one with real work waiting to be done.
+                ScheduleRun(
+                    id=behind_it_id,
+                    schedule_id=schedule_id,
+                    user_id=user_id,
+                    source_event_id="lost-outcome-behind-the-wall",
+                    status=ScheduleRunStatus.DISPATCHED.value,
+                    attempts=1,
+                    target_kind="WORKFLOW",
+                    target_run_id=str(finished_target_id),
+                    payload={},
+                    fire_metadata={},
+                    llm_output={},
+                    created_at=stale,
+                    updated_at=stale,
+                ),
+            ]
+        )
+
+    factory = SessionUnitOfWorkFactory(db_manager.session_factory)
+
+    # One row at a time, so the parked run occupies the whole first batch. This
+    # is the 100-row wall in miniature.
+    async with factory() as uow:
+        first = await ScheduleRunRecoveryService(uow).recover(limit=1)
+    assert first.still_running == 1, "the parked run is in flight, not reconciled"
+    assert first.reconciled == 0, "nothing was reconciled, so nothing may claim it was"
+
+    async with factory() as uow:
+        second = await ScheduleRunRecoveryService(uow).recover(limit=1)
+
+    assert second.reconciled == 1, "the second tick must get past the parked run"
+
+    async with db_manager.session_factory() as session:
+        parked = await session.get(ScheduleRun, parked_id)
+        behind = await session.get(ScheduleRun, behind_it_id)
+        assert parked is not None
+        assert parked.last_inspected_at is not None, "an inspection must be recorded"
+        assert parked.target_outcome is None, "a live target has no outcome yet"
+        assert behind is not None
+        assert behind.target_outcome == "COMPLETED", "the lost outcome was recovered"

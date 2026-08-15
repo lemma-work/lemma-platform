@@ -523,6 +523,15 @@ async def worker_lifespan() -> AsyncGenerator[AppWorkerContext]:
         ),
         name="worker-loop-lag-watchdog",
     )
+    # Resident-memory floor. The worker is the longer-lived of the two processes
+    # and the one whose growth has nowhere to surface, having no HTTP endpoint
+    # to expose it.
+    from app.core.observability.memory_sampler import memory_sampler
+
+    memory_task = create_background_task(
+        memory_sampler(service_name="lemma-worker"),
+        name="worker-memory-sampler",
+    )
     # Low-rate structured heartbeat for remote absence detection of this
     # singleton background process. At 5 min this is <600 records/48h. The
     # worker has no HTTP server, so the heartbeat event + the watchdog's
@@ -597,6 +606,7 @@ async def worker_lifespan() -> AsyncGenerator[AppWorkerContext]:
         for background_task in (
             reconcile_task,
             watchdog_task,
+            memory_task,
             heartbeat_task,
             stream_snapshot_task,
             backlog_gauge_task,

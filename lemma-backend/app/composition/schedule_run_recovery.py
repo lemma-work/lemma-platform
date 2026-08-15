@@ -29,11 +29,32 @@ class ScheduleRunRecoveryResult:
     redelivered: int = 0
     reconciled: int = 0
     dead_lettered: int = 0
+    # Rows looked at and correctly left alone: a target still running, or a
+    # human form nobody has filled in yet. Counted separately because folding
+    # them into `reconciled` is what made a sweep that did nothing at all report
+    # `reconciled=100` on four hundred consecutive ticks.
+    still_running: int = 0
 
 
 class ScheduleRunRecoveryService:
     BATCH_SIZE = 100
     DISPATCH_RECONCILE_AFTER = timedelta(minutes=5)
+
+    # How long before a row already inspected is inspected again. The sweep runs
+    # every five minutes because a *lost* outcome event should be caught
+    # quickly; a target that was simply still running five minutes ago is not
+    # news, and in production 1,375 of these are workflows parked on a human
+    # form wait, some since July. Re-reading those every tick is the work this
+    # interval removes.
+    REINSPECT_AFTER = timedelta(hours=1)
+
+    # A fire whose moment has passed by more than this is dead-lettered instead
+    # of redelivered. Redelivery exists for a dispatch that was genuinely lost
+    # moments ago; replaying a schedule from a month back does not produce the
+    # run the user wanted, it produces a surprise -- 245 of them, in the
+    # backlog this was found in, each one able to start a real agent run and
+    # spend real quota.
+    MAX_REDELIVERY_AGE = timedelta(hours=6)
 
     def __init__(self, uow: SqlAlchemyUnitOfWork) -> None:
         self.uow = uow
@@ -43,6 +64,7 @@ class ScheduleRunRecoveryService:
         now = datetime.now(timezone.utc)
         retry_cutoff = now - ScheduleRunRepository.ABANDON_AFTER
         dispatch_cutoff = now - self.DISPATCH_RECONCILE_AFTER
+        reinspect_cutoff = now - self.REINSPECT_AFTER
         rows = (
             await self.session.execute(
                 select(ScheduleRun, Schedule)
@@ -50,6 +72,14 @@ class ScheduleRunRecoveryService:
                 .where(
                     Schedule.is_active.is_(True),
                     ScheduleRun.target_outcome.is_(None),
+                    # Rows already looked at recently are skipped rather than
+                    # re-read every tick. Without this the sweep spends its
+                    # whole batch on the same long-lived in-flight runs and
+                    # never reaches anything behind them.
+                    or_(
+                        ScheduleRun.last_inspected_at.is_(None),
+                        ScheduleRun.last_inspected_at < reinspect_cutoff,
+                    ),
                     or_(
                         (ScheduleRun.status == ScheduleRunStatus.PROCESSING.value)
                         & or_(
@@ -62,7 +92,16 @@ class ScheduleRunRecoveryService:
                         & (ScheduleRun.updated_at < dispatch_cutoff),
                     ),
                 )
-                .order_by(ScheduleRun.updated_at, ScheduleRun.id)
+                # NULLS FIRST is explicit because Postgres does the opposite by
+                # default: ASC sorts nulls *last*. Left implicit, a row the
+                # sweep had already stamped would sort ahead of one it had never
+                # looked at, so the batch it just finished would jump the queue
+                # the moment it became re-eligible, while never-inspected rows
+                # waited behind it. Never-inspected is exactly the case with the
+                # most to tell us.
+                .order_by(
+                    ScheduleRun.last_inspected_at.asc().nullsfirst(), ScheduleRun.id
+                )
                 .limit(max(1, min(limit, self.BATCH_SIZE)))
                 .with_for_update(skip_locked=True, of=ScheduleRun)
             )
@@ -71,11 +110,17 @@ class ScheduleRunRecoveryService:
         redelivered = 0
         reconciled = 0
         dead_lettered = 0
+        still_running = 0
         breaker_schedule_ids: set[UUID] = set()
 
         await self._warm_targets(run for run, _ in rows)
 
         for run, schedule in rows:
+            # Stamped for every row the sweep reaches, whatever it decides. This
+            # is what advances the cursor: the branches below may legitimately
+            # change nothing, and a row that records no change is a row the next
+            # tick selects again.
+            run.last_inspected_at = now
             target_exists, outcome, completed_at = await self._resolve_target(run)
             if outcome is not None:
                 run.status = ScheduleRunStatus.DISPATCHED.value
@@ -91,11 +136,22 @@ class ScheduleRunRecoveryService:
                 reconciled += 1
                 continue
             if target_exists:
+                # The target is alive and has not finished. Nothing to reconcile
+                # -- the ledger is already right -- so this is reported as what
+                # it is rather than counted as work.
                 run.status = ScheduleRunStatus.DISPATCHED.value
                 run.completed_at = None
                 run.error_type = None
                 run.error_code = None
-                reconciled += 1
+                still_running += 1
+                continue
+
+            if self._too_late_to_redeliver(run, now):
+                run.status = ScheduleRunStatus.DEAD_LETTERED.value
+                run.completed_at = now
+                run.error_type = "ScheduleRunStale"
+                breaker_schedule_ids.add(schedule.id)
+                dead_lettered += 1
                 continue
 
             if run.attempts >= ScheduleRunRepository.MAX_ATTEMPTS:
@@ -151,7 +207,24 @@ class ScheduleRunRecoveryService:
             redelivered=redelivered,
             reconciled=reconciled,
             dead_lettered=dead_lettered,
+            still_running=still_running,
         )
+
+    def _too_late_to_redeliver(self, run: ScheduleRun, now: datetime) -> bool:
+        """Whether this fire's moment has passed far enough to abandon it.
+
+        Redelivery answers "the dispatch was lost, send it again". It is the
+        wrong answer to "the target was deleted a month ago": the scheduled
+        moment is long gone, and re-firing produces a run nobody asked for that
+        spends real quota. Age is measured from the scheduled time where there
+        is one, and from row creation otherwise.
+        """
+        fired_at = run.source_occurred_at or run.created_at
+        if fired_at is None:
+            return False
+        if fired_at.tzinfo is None:
+            fired_at = fired_at.replace(tzinfo=timezone.utc)
+        return now - fired_at > self.MAX_REDELIVERY_AGE
 
     async def _warm_targets(self, runs) -> None:
         """Load every target this sweep will inspect, in two queries.

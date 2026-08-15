@@ -413,7 +413,55 @@ class _SafeExceptionFilter(logging.Filter):
         return True
 
 
+# A websocket client that stops answering pings is closed by the server, and the
+# resulting `ConnectionClosedError` surfaces through asyncio's default exception
+# handler -- which logs at ERROR. It is the ordinary end of a websocket: a
+# browser tab suspended, a laptop closed, a network dropped. Production logged
+# 129 of them a day, in bursts of ten as one client's subscriptions died
+# together, and they were indistinguishable from real faults in every error-rate
+# view.
+#
+# Not our code, so it cannot be fixed at the source: the record comes from
+# uvicorn's websocket layer via the `asyncio` logger, and that logger must stay
+# loud for everything else it says.
+_CLIENT_DISCONNECT_LOGGERS = ("asyncio", "uvicorn.error")
+_CLIENT_DISCONNECT_EXCEPTION = "ConnectionClosed"
+# Both markers must appear. `ConnectionClosed` alone is too broad -- it also
+# covers a socket that failed mid-write, which is worth seeing.
+_CLIENT_DISCONNECT_MARKERS = ("keepalive ping timeout", "no close frame received")
+
+
+class _ClientDisconnectFilter(logging.Filter):
+    """Drop the ERROR record a normal websocket disconnect produces.
+
+    Dropped rather than demoted: a demoted record still reaches the handler and
+    still prints, so the volume stays. It is kept when the process is running at
+    DEBUG, which is where someone actually chasing a disconnect would be.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if record.levelno < logging.WARNING:
+            return True
+        if not record.name.startswith(_CLIENT_DISCONNECT_LOGGERS):
+            return True
+        if _configured_log_level <= logging.DEBUG:
+            return True
+        try:
+            text = record.getMessage()
+        except Exception:  # pragma: no cover - a record that cannot render
+            return True
+        if record.exc_info and record.exc_info[0] is not None:
+            text = f"{text} {record.exc_info[0].__name__}"
+        if _CLIENT_DISCONNECT_EXCEPTION not in text:
+            return True
+        return not all(marker in text for marker in _CLIENT_DISCONNECT_MARKERS)
+
+
 def _install_safe_exception_filter(handler: logging.Handler) -> None:
+    # Disconnect filter first: `_SafeExceptionFilter` clears `exc_info` off the
+    # record, so anything downstream of it can no longer see the exception type.
+    if not any(isinstance(item, _ClientDisconnectFilter) for item in handler.filters):
+        handler.addFilter(_ClientDisconnectFilter())
     if not any(isinstance(item, _SafeExceptionFilter) for item in handler.filters):
         handler.addFilter(_SafeExceptionFilter())
 
@@ -696,6 +744,15 @@ def setup_logging(
             "release.sha": release_sha,
         }
     )
+
+    # Route `warnings.warn` through logging instead of letting it print to
+    # stderr. The container log parser reads bare stderr as ERROR, so a
+    # deprecation notice — something the process emits once, on purpose, at
+    # import — arrived in production as an error record, inflating error counts
+    # and tripping any naive error-rate alert. Through the logger it lands at
+    # WARNING on the `py.warnings` logger, with the same structure as everything
+    # else.
+    logging.captureWarnings(True)
 
     resolved_level = getattr(logging, log_level.upper(), logging.INFO)
     _configured_log_level = resolved_level

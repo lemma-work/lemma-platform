@@ -10,6 +10,9 @@ harness now has to recover from, so this is the other half of that fix.
 
 from __future__ import annotations
 
+import asyncio
+import itertools
+from collections import OrderedDict
 from collections.abc import Mapping
 from dataclasses import replace
 
@@ -36,7 +39,20 @@ from app.modules.agent.services.openai_schema_compat import (
 
 logger = get_logger(__name__)
 
-_provider_clients: dict[str, httpx.AsyncClient] = {}
+# Both caches below are bounded. They are keyed by tenant credential, so on a
+# multi-tenant deployment their key space grows with the customer list and
+# nothing ever removed an entry -- and each provider-client entry pins an
+# httpx.AsyncClient with its own connection pool. The cap is generous because
+# eviction costs a reconnect, not a correctness problem; it exists so the
+# ceiling is a number somebody chose.
+_MAX_PROVIDER_CLIENTS = 256
+
+_provider_clients: OrderedDict[str, httpx.AsyncClient] = OrderedDict()
+
+# Closing an evicted client is async, but the accessor that evicts is not, so
+# the close is handed to the loop. The set keeps a strong reference until it
+# finishes; without one the task can be collected mid-close.
+_closing_clients: set[asyncio.Task[None]] = set()
 
 
 # Opaque per-process labels standing in for credentials in cache keys. The
@@ -45,7 +61,13 @@ _provider_clients: dict[str, httpx.AsyncClient] = {}
 # and the cache only ever needs to know whether two credentials are the *same*,
 # never anything about them. A counter answers that exactly, and leaves nothing
 # to leak if a key ever reaches a log line or a traceback.
-_credential_labels: dict[str, str] = {}
+_credential_labels: OrderedDict[str, str] = OrderedDict()
+
+# Monotonic, deliberately not `len(_credential_labels)`. Once the map evicts,
+# its length repeats, so a length-derived label would eventually be handed to a
+# second, different credential -- and two tenants whose labels collide share a
+# client, and therefore an Authorization header. The counter never rewinds.
+_credential_sequence = itertools.count(1)
 
 
 def _credential_label(api_key: str | None) -> str:
@@ -53,9 +75,38 @@ def _credential_label(api_key: str | None) -> str:
         return "anonymous"
     label = _credential_labels.get(api_key)
     if label is None:
-        label = f"credential-{len(_credential_labels) + 1}"
+        label = f"credential-{next(_credential_sequence)}"
         _credential_labels[api_key] = label
+        _evict_oldest(_credential_labels, _MAX_PROVIDER_CLIENTS)
+    else:
+        _credential_labels.move_to_end(api_key)
     return label
+
+
+def _evict_oldest(cache: OrderedDict, limit: int) -> None:
+    while len(cache) > limit:
+        cache.popitem(last=False)
+
+
+def _close_later(client: httpx.AsyncClient) -> None:
+    """Close an evicted client on the loop, if there is one to close it on."""
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return  # no loop (import time, sync tests): nothing to schedule onto
+    task = loop.create_task(_aclose_quietly(client))
+    _closing_clients.add(task)
+    task.add_done_callback(_closing_clients.discard)
+
+
+async def _aclose_quietly(client: httpx.AsyncClient) -> None:
+    try:
+        await client.aclose()
+    except Exception:  # pragma: no cover - eviction is best-effort
+        logger.debug(
+            "agent.runtime_model_factory.provider_client_close_failed.diagnostic",
+            exc_info=True,
+        )
 
 
 def _client_cache_key(
@@ -126,6 +177,11 @@ def get_provider_http_client(
     if client is None or client.is_closed:
         client = _build_provider_client(headers)
         _provider_clients[key] = client
+        while len(_provider_clients) > _MAX_PROVIDER_CLIENTS:
+            _, evicted = _provider_clients.popitem(last=False)
+            _close_later(evicted)
+    else:
+        _provider_clients.move_to_end(key)
     return client
 
 

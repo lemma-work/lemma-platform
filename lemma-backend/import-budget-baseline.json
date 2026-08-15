@@ -1,0 +1,14 @@
+{
+  "_comment": "Modules loaded by each entrypoint before it can serve. This file may shrink freely; growing it past the tolerance means a new dependency tree arrived. See scripts/check_import_budget.py.",
+  "tolerance": 50,
+  "entrypoints": {
+    "app.app": {
+      "modules": 5427,
+      "rss_mib": null
+    },
+    "app.events": {
+      "modules": 6304,
+      "rss_mib": null
+    }
+  }
+}

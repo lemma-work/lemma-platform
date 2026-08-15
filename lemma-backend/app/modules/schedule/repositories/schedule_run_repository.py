@@ -15,6 +15,11 @@ from app.modules.schedule.domain.schedule import (
 )
 from app.modules.schedule.infrastructure.models.run import ScheduleRun
 
+# How far back the failure-streak count reads. Forty times the default breaker
+# threshold of five, which leaves room for the statuses the streak skips over
+# without letting the scan grow with the ledger.
+_BREAKER_SCAN_LIMIT = 200
+
 
 class ScheduleRunRepository:
     MAX_ATTEMPTS = 10
@@ -153,6 +158,35 @@ class ScheduleRunRepository:
         await self.session.flush()
         return status
 
+    async def dead_letter(self, run_id: UUID, *, error_type: str) -> bool:
+        """End a run terminally without spending its remaining attempts.
+
+        ``mark_failed`` decides between FAILED and DEAD_LETTERED from the attempt
+        count, because it serves a run that might still succeed on a retry. Some
+        failures are not like that: a fire whose pod is out of budget will fail
+        the same way for the rest of the window, so retrying it nine more times
+        only delays the moment the owner is told.
+
+        The distinction matters to the breaker, which counts DEAD_LETTERED and
+        deliberately ignores FAILED as an intermediate state — so a run that
+        stops here is one that counts.
+        """
+        model = await self.session.get(ScheduleRun, run_id, with_for_update=True)
+        if model is None:
+            raise LookupError(f"Schedule run {run_id} no longer exists")
+        if model.target_outcome is not None or model.status in {
+            ScheduleRunStatus.COMPLETED.value,
+            ScheduleRunStatus.TARGET_FAILED.value,
+            ScheduleRunStatus.CANCELLED.value,
+            ScheduleRunStatus.DEAD_LETTERED.value,
+        }:
+            return False
+        model.status = ScheduleRunStatus.DEAD_LETTERED.value
+        model.error_type = error_type
+        model.completed_at = datetime.now(timezone.utc)
+        await self.session.flush()
+        return True
+
     async def transition_target_outcome(
         self,
         *,
@@ -203,6 +237,20 @@ class ScheduleRunRepository:
         return model.to_entity()
 
     async def consecutive_terminal_failures(self, schedule_id: UUID) -> int:
+        """Length of the current failure streak, counted back from the newest run.
+
+        Bounded, because this runs on *every* run completion and the ledger is
+        append-only. Unbounded, it read every completed run the schedule had
+        ever had: measured in production at 5,946 rows and a sort, 48ms, for the
+        busiest schedule — work proportional to the schedule's whole history,
+        paid again on each new run, and growing by ~1,000 rows a day with no
+        retention behind it.
+
+        The window is safe because of what the caller does with the number: it
+        compares against a threshold of five. A streak longer than
+        ``_BREAKER_SCAN_LIMIT`` is far past any threshold anyone would set, and
+        the schedule is deactivated well before the count could be truncated.
+        """
         rows = (
             await self.session.execute(
                 select(ScheduleRun.status, ScheduleRun.target_outcome)
@@ -211,6 +259,7 @@ class ScheduleRunRepository:
                     ScheduleRun.completed_at.is_not(None),
                 )
                 .order_by(ScheduleRun.completed_at.desc(), ScheduleRun.id.desc())
+                .limit(_BREAKER_SCAN_LIMIT)
             )
         ).all()
         failures = 0

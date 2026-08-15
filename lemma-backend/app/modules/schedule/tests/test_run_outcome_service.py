@@ -171,3 +171,91 @@ async def test_startup_reconciliation_deactivates_backfilled_candidates_once(
     assert len(staged) == 1
     assert staged[0].schedule_id == first.id
     assert staged[0].user_id == first.user_id
+
+
+@pytest.mark.anyio
+async def test_a_fire_that_never_dispatched_still_counts_against_the_breaker():
+    """Quota exhaustion has to reach the breaker, or nothing ever stops it.
+
+    The ledger is written at dispatch. A fire whose LLM filter could not run —
+    the pod is out of agent-run budget — never gets that far, so no row existed,
+    and the breaker counts rows. Production showed one pod producing thirty of
+    these in a day with no ceiling and nothing told to the owner.
+    """
+    service, _ = _service()
+    schedule = _schedule()
+    run_id = uuid4()
+    service.run_repository.claim = AsyncMock(
+        return_value=SimpleNamespace(id=run_id, schedule_id=schedule.id)
+    )
+    service.run_repository.dead_letter = AsyncMock(return_value=True)
+    service.schedule_repository.get_for_update.return_value = schedule
+    service.run_repository.consecutive_terminal_failures.return_value = 1
+
+    recorded = await service.record_pre_dispatch_failure(
+        schedule,
+        source_event_id="webhook-42",
+        error_type="ScheduleFilterQuotaExhausted",
+    )
+
+    assert recorded is True
+    # DEAD_LETTERED, not FAILED: `consecutive_terminal_failures` deliberately
+    # ignores FAILED as a retryable intermediate state, so a failure recorded
+    # that way would never reach the threshold.
+    service.run_repository.dead_letter.assert_awaited_once_with(
+        run_id, error_type="ScheduleFilterQuotaExhausted"
+    )
+    service.schedule_repository.set_consecutive_failures.assert_awaited_once_with(
+        schedule.id, 1
+    )
+
+
+@pytest.mark.anyio
+async def test_the_fifth_quota_failure_deactivates_the_schedule(monkeypatch):
+    """The ceiling the whole mechanism exists for: five, then stop."""
+    monkeypatch.setattr(
+        "app.modules.schedule.services.run_outcome_service.schedule_settings.schedule_max_consecutive_failures",
+        5,
+    )
+    service, uow = _service()
+    schedule = _schedule()
+    service.run_repository.claim = AsyncMock(
+        return_value=SimpleNamespace(id=uuid4(), schedule_id=schedule.id)
+    )
+    service.run_repository.dead_letter = AsyncMock(return_value=True)
+    service.schedule_repository.get_for_update.return_value = schedule
+    service.run_repository.consecutive_terminal_failures.return_value = 5
+    service.schedule_repository.deactivate_if_active.return_value = True
+
+    await service.record_pre_dispatch_failure(
+        schedule, source_event_id="webhook-5", error_type="ScheduleFilterQuotaExhausted"
+    )
+
+    service.schedule_repository.deactivate_if_active.assert_awaited_once_with(
+        schedule.id
+    )
+    collected = uow.collect_events.call_args[0][0]
+    assert any(isinstance(event, ScheduleDeactivated) for event in collected), (
+        "the owner is emailed off ScheduleDeactivated; without it the schedule "
+        "stops silently"
+    )
+
+
+@pytest.mark.anyio
+async def test_a_repeated_source_event_does_not_inflate_the_streak():
+    """A redelivery of the same fire must not count twice.
+
+    `claim` returns None for an event already recorded, which is what keeps the
+    breaker counting distinct fires rather than delivery attempts.
+    """
+    service, _ = _service()
+    schedule = _schedule()
+    service.run_repository.claim = AsyncMock(return_value=None)
+    service.run_repository.dead_letter = AsyncMock()
+
+    recorded = await service.record_pre_dispatch_failure(
+        schedule, source_event_id="webhook-42", error_type="ScheduleFilterQuotaExhausted"
+    )
+
+    assert recorded is False
+    service.run_repository.dead_letter.assert_not_awaited()

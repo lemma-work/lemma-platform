@@ -336,13 +336,18 @@ def test_an_unusable_hostname_is_omitted_rather_than_exported(monkeypatch) -> No
 
 
 def test_http_clients_are_instrumented_under_stable_semconv(monkeypatch) -> None:
-    """All three HTTP clients must speak one vocabulary -- additively.
+    """All three HTTP clients must speak one vocabulary.
 
     pyqwest (via e2b and connectrpc) already emits the stable conventions, so
-    aiohttp and httpx have to reach them too. But this variable is
-    process-global and the ASGI server instrumentation reads it as well, so the
-    plain ``http`` value would silently rename the inbound latency histogram.
-    ``dup`` emits both, which is what keeps existing dashboards working.
+    aiohttp and httpx have to reach them too. This variable is process-global
+    and the ASGI server instrumentation reads it as well, so setting it renames
+    the inbound latency histogram too -- which is why this was ``http/dup``
+    while the dashboards were still on the old name.
+
+    They have moved: every inbound-latency panel reads
+    ``http.server.request.duration`` now, and the superseded
+    ``http.server.duration`` was still being emitted and paid for at 26 series.
+    ``dup`` was always the migration step, not the destination.
     """
     monkeypatch.delenv("OTEL_SEMCONV_STABILITY_OPT_IN", raising=False)
     monkeypatch.setattr(telemetry, "_libraries_instrumented", False)
@@ -365,7 +370,7 @@ def test_http_clients_are_instrumented_under_stable_semconv(monkeypatch) -> None
     telemetry._instrument_libraries()
 
     assert instrumented == ["aiohttp", "httpx"]
-    assert telemetry.os.environ["OTEL_SEMCONV_STABILITY_OPT_IN"] == "http/dup"
+    assert telemetry.os.environ["OTEL_SEMCONV_STABILITY_OPT_IN"] == "http"
 
 
 def test_a_deployment_can_still_pin_the_old_http_conventions(monkeypatch) -> None:
