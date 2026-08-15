@@ -22,6 +22,7 @@ import {
   collectDisplayResourceCardsByRow,
 } from "./assistant-message-group";
 import { ThinkingIndicator } from "./assistant-parts";
+import { TRANSCRIPT_ROW_ATTRIBUTE } from "./use-transcript-scroll";
 
 type CompletedRunTraceGroups = ReturnType<typeof collectCompletedRunTraceGroups>;
 type InlineStatus = { label?: string; shimmer?: boolean } | null | undefined;
@@ -102,7 +103,11 @@ export function AssistantDisplayRow({
   const isInsideRollup = completedRunTraceGroups.groupedIndexes.has(index);
 
   return (
-    <div key={row.id || index} className={cn((compactAfterAssistant || compactActiveRunTrace) && !isInsideRollup && "-mt-3")}>
+    <div
+      key={row.id || index}
+      {...{ [TRANSCRIPT_ROW_ATTRIBUTE]: "" }}
+      className={cn((compactAfterAssistant || compactActiveRunTrace) && !isInsideRollup && "-mt-3")}
+    >
       {index === inlineRunStatusRowIndex ? (
         <div className="mb-3">
           <RunTraceHeader
