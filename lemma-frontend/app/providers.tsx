@@ -6,6 +6,9 @@ import { useState, type ReactNode } from 'react';
 import { usePathname } from 'next/navigation';
 import { Toaster } from 'sonner';
 import { OrganizationProvider } from '@/components/dashboard/org-context';
+import { AnalyticsProvider } from '@/components/analytics/analytics-provider';
+import { AnalyticsIdentity } from '@/components/analytics/analytics-identity';
+import { ConsentBanner } from '@/components/analytics/consent-banner';
 
 export function Providers({ children }: { children: ReactNode }) {
     const [queryClient] = useState(
@@ -41,6 +44,10 @@ export function Providers({ children }: { children: ReactNode }) {
         children
     ) : (
         <OrganizationProvider>
+            {/* Inside the org provider, unlike <AnalyticsProvider /> below:
+                identity needs the active organization, and `useOrganization()`
+                throws outside this tree. */}
+            <AnalyticsIdentity />
             {children}
         </OrganizationProvider>
     );
@@ -53,6 +60,11 @@ export function Providers({ children }: { children: ReactNode }) {
             disableTransitionOnChange
         >
             <QueryClientProvider client={queryClient}>
+                {/* Outside the auth-route skip: the landing and auth pages are
+                    the top of the funnel, and dropping them there would lose
+                    exactly the steps this measures. */}
+                <AnalyticsProvider />
+                <ConsentBanner />
                 {appTree}
                 <Toaster
                     position="bottom-right"

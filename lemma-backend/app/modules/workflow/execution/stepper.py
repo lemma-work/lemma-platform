@@ -29,6 +29,7 @@ from app.modules.workflow.execution.outcome import (
 from app.modules.workflow.execution.step_context import StepContext
 from app.modules.workflow.domain.nodes import NodeType
 from app.core.log.log import get_logger
+from app.core.origin import Origin, OriginKind, origin_scope
 
 logger = get_logger(__name__)
 
@@ -61,7 +62,15 @@ class RunStepper:
         self._registry = registry or EXECUTOR_REGISTRY
 
     async def advance(self, run: WorkflowRunEntity, flow: WorkflowEntity) -> StepResult:
-        """Execute from run.current_node_id until WAITING/COMPLETED/FAILED."""
+        """Execute from run.current_node_id until WAITING/COMPLETED/FAILED.
+
+        Node execution runs under ``WORKFLOW`` origin, and deliberately *only*
+        node execution. A run started by a schedule arrived by ``SCHEDULE``, and
+        its terminal event has to keep saying so -- that attribution is the whole
+        point of `workflow_run.completed`. What arrives by ``WORKFLOW`` is the
+        work a node dispatches outward: the agent run or function run it starts,
+        which really did arrive because a workflow node asked for it.
+        """
         steps = 0
         while run.status == WorkflowRunStatus.RUNNING:
             if run.current_node_id is None:
@@ -92,7 +101,14 @@ class RunStepper:
                 node_type=node.type.value,
             )
             try:
-                outcome = await executor.execute(node, self._step_context(run, flow))
+                # Exactly one node's execution, not the run around it: see the
+                # docstring. An agent or function started from here carries
+                # WORKFLOW; the run's own terminal event keeps the origin the run
+                # arrived on.
+                with origin_scope(Origin(OriginKind.WORKFLOW)):
+                    outcome = await executor.execute(
+                        node, self._step_context(run, flow)
+                    )
             except WorkflowDomainError as exc:
                 run.fail(exc.message, node_id=node.id)
                 break

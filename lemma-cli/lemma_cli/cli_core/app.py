@@ -21,6 +21,12 @@ LAZY_GROUPS: dict[str, LazyEntry] = {
     "auth": (f"{_CMD}.system", "auth_app", "Authentication commands.", False),
     "config": (f"{_CMD}.system", "config_app", "CLI context and per-server defaults (pod/org).", False),
     "servers": (f"{_CMD}.system", "server_app", "Show and manage Lemma CLI servers.", False),
+    "telemetry": (
+        f"{_CMD}.system",
+        "telemetry_app",
+        "Anonymous CLI usage telemetry.",
+        False,
+    ),
     "runtime": (f"{_CMD}.runtime", "app", "Agent runtime profiles.", False),
     "org": (f"{_CMD}.organizations", "app", "Organization commands.", False),
     "orgs": (f"{_CMD}.organizations", "app", "Organization commands.", False),
@@ -158,18 +164,50 @@ def main() -> None:
     crash, and an agent should not have to spend its context reading httpx
     internals to learn that `make dev` isn't running.
     """
+    import os
     import sys
 
     from .errors import report_cli_error
 
+    # Say what we are on every request. The SDK cannot tell a CLI invocation
+    # apart from any other program using it, and "a person ran a command" is a
+    # different fact from "something called the API".
+    os.environ.setdefault("LEMMA_CLIENT", "lemma-cli")
+
+    command = _invoked_command(sys.argv[1:])
+    exit_status = "ok"
     try:
         app()
+    except SystemExit as exc:
+        exit_status = "ok" if not exc.code else "error"
+        raise
     except Exception as exc:  # noqa: BLE001 - re-raised unless we can do better
+        exit_status = "error"
         if not report_cli_error(exc):
             raise
         # sys.exit, not typer.Exit: we are outside click's runtime here, so a
         # typer.Exit would itself escape as an unhandled exception.
         sys.exit(1)
+    finally:
+        from .telemetry import record_command
+
+        record_command(command, exit_status=exit_status)
+
+
+def _invoked_command(argv: list[str]) -> str | None:
+    """The command group that was run, or nothing.
+
+    Matched against the registered groups rather than read off the command
+    line, so an unrecognised first token — which could be anything a user
+    typed, including a path or a typo carrying a name — never becomes a
+    telemetry dimension. Arguments and flag values are never looked at.
+    """
+    known = set(LAZY_GROUPS) | {"init", "chat", "version", "whoami"}
+    for token in argv:
+        if token.startswith("-"):
+            continue
+        return token if token in known else None
+    return None
 
 
 @app.command("init")

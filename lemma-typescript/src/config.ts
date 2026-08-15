@@ -1,3 +1,5 @@
+import type { KnownClient } from "./version";
+
 export interface LemmaAppConfig {
   name?: string;
   description?: string;
@@ -16,6 +18,15 @@ export interface LemmaConfig {
   timeoutMs?: number;
   /** Max automatic retries on 429/502/503/504 (default 2). */
   maxRetries?: number;
+  /** Which Lemma client this is, sent as `X-Lemma-Client` and resolved to an
+   *  origin by the backend. Leave unset in a third-party integration: an
+   *  unnamed caller is `SDK`, which is the truthful answer. The web app and
+   *  Desktop set it so a person in a browser is not counted as a script. */
+  client?: KnownClient;
+  /** Which app this page is, injected by the host at serve time. Sent as
+   *  `X-Lemma-App` so a published app's API calls are attributable to the app
+   *  rather than only to the pod. */
+  appId?: string;
 }
 
 declare global {
@@ -87,5 +98,7 @@ export function resolveConfig(overrides: Partial<LemmaConfig> = {}): LemmaConfig
     app: overrides.app ?? win.app,
     timeoutMs: overrides.timeoutMs ?? win.timeoutMs,
     maxRetries: overrides.maxRetries ?? win.maxRetries,
+    client: overrides.client ?? win.client,
+    appId: overrides.appId ?? win.appId,
   };
 }

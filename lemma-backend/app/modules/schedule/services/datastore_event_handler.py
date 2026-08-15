@@ -16,6 +16,7 @@ from app.modules.schedule.domain.value_objects import (
 from app.modules.schedule.repositories.schedule_repository import ScheduleRepository
 from app.modules.schedule.services.schedule_processor import ScheduleProcessor
 from app.core.log.log import get_logger
+from app.core.origin import Origin, OriginKind, origin_scope
 from collections.abc import Awaitable, Callable
 
 logger = get_logger(__name__)
@@ -83,13 +84,19 @@ class DatastoreEventHandler:
 
             # One bad schedule must not drop the event for the rest.
             try:
-                fired = await self.schedule_processor.process_event(
-                    schedule=schedule,
-                    payload=event.payload or {},
-                    user_id=event.owner_user_id or schedule.user_id,
-                    metadata=metadata,
-                    source_event_id=str(event.event_id),
-                )
+                # Deliberately *overrides* the inbound event's origin. The row
+                # may well have been written from the web, but that is how the
+                # write arrived -- this schedule's work arrived because a table
+                # changed, and DATA_TRIGGER is the honest answer for everything
+                # raised from here down.
+                with origin_scope(Origin(OriginKind.DATA_TRIGGER)):
+                    fired = await self.schedule_processor.process_event(
+                        schedule=schedule,
+                        payload=event.payload or {},
+                        user_id=event.owner_user_id or schedule.user_id,
+                        metadata=metadata,
+                        source_event_id=str(event.event_id),
+                    )
             except Exception as exc:
                 logger.debug(
                     'schedule.datastore_event_handler.fire_datastore_schedule_s_s.propagated',

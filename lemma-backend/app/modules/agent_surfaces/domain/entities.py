@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 
 from app.core.domain.aggregate import AggregateRoot
 from app.core.domain.entity import Entity
+from app.modules.agent_surfaces.domain.events import SurfaceConnectedEvent
 from app.modules.agent_surfaces.domain.errors import (
     AgentSurfaceValidationError,
 )
@@ -279,7 +280,7 @@ class AgentSurfaceEntity(AggregateRoot):
             else AgentSurfaceStatus.ACTIVE
         )
 
-        return cls(
+        entity = cls(
             pod_id=pod_id,
             name=resolved_name,
             agent_id=agent_id,
@@ -301,6 +302,17 @@ class AgentSurfaceEntity(AggregateRoot):
             webhook_secret=None,
             status=initial_status,
         )
+        # `SurfaceRepository.create` already drains this via `_collect_events`;
+        # the entity simply never recorded anything.
+        entity.add_event(
+            SurfaceConnectedEvent(
+                surface_id=entity.id,
+                pod_id=pod_id,
+                platform=resolved.value,
+                agent_id=agent_id,
+            )
+        )
+        return entity
 
     @staticmethod
     def _resolve_mode(
