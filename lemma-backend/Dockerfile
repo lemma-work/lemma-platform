@@ -78,6 +78,20 @@ COPY --from=builder --chown=appuser:appuser /app/lemma-skills /app/lemma-skills
 # Copy backend application code
 COPY --chown=appuser:appuser lemma-backend/ ./
 
+# The copy above is wholesale, so the image also received 616 test modules plus
+# the load-test harness, docs, manifests and sandbox image definitions. Nothing
+# in the container runs any of them -- CI runs the suite from a checkout, and the
+# compose files use `uvicorn app.app:app` and `python -m app.worker`. They cost
+# image size, they widen what an attacker who lands a shell can read, and until
+# this line they were also being byte-compiled below, which put the startup cost
+# of 616 files nobody imports onto the step meant to reduce startup cost.
+#
+# `migrations/` and `scripts/` stay: alembic runs inside the container, and the
+# operational scripts are meant to be reachable there.
+RUN rm -rf /app/load_tests /app/docs /app/sandbox-images /app/manifests \
+    && find /app/app /app/sandbox_runtime -type d -name tests -prune -exec rm -rf {} + \
+    && rm -rf /app/app/modules/test_support /app/app/core/test_utils.py /app/conftest.py
+
 # Precompile the application's own bytecode.
 #
 # `UV_COMPILE_BYTECODE=1` in the builder stage does this for dependencies, which

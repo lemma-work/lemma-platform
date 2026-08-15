@@ -96,6 +96,9 @@ services:
       # Postgres, so session-scoped LISTEN survives — on here so the load
       # profile exercises the path production would run.
       OUTBOX_LISTEN_ENABLED: "true"
+      # The harness drives the app directly; keep the document available so
+      # a profile run can be pointed at a schema when debugging.
+      API_DOCS_ENABLED: "true"
       AUTH_ABUSE_PROTECTION_ENABLED: "false"
       # A freshly signed-up user carries st-ev=false, and creating an org
       # requires a verified email — so the self-provisioning journey could
@@ -181,6 +184,9 @@ services:
       # Postgres, so session-scoped LISTEN survives — on here so the load
       # profile exercises the path production would run.
       OUTBOX_LISTEN_ENABLED: "true"
+      # The harness drives the app directly; keep the document available so
+      # a profile run can be pointed at a schema when debugging.
+      API_DOCS_ENABLED: "true"
       AUTH_ABUSE_PROTECTION_ENABLED: "false"
       # A freshly signed-up user carries st-ev=false, and creating an org
       # requires a verified email — so the self-provisioning journey could

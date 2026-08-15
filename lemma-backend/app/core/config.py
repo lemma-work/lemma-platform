@@ -799,15 +799,17 @@ class Settings(BaseSettings):
 
     # Application Settings
     app_name: str = Field(default="Lemma Backend", description="Application name")
-    api_docs_enabled: bool | None = Field(
-        default=None,
+    api_docs_enabled: bool = Field(
+        default=False,
         description=(
-            "Serve ``/openapi.json``, ``/docs`` and ``/scalar``. Unset means "
-            "'everywhere except production', which is almost always what you "
-            "want: building the document costs ~3.35s of a cold start, nothing "
-            "in production reads it (SDKs are generated at build time), and it "
-            "is unauthenticated. Set it explicitly to serve the docs from a "
-            "production deployment anyway. Env: ``API_DOCS_ENABLED``."
+            "Serve ``/openapi.json``, ``/docs``, ``/redoc`` and ``/scalar``. Off "
+            "by default and opted into per environment, rather than inferred: "
+            "an endpoint that publishes the shape of every route should be "
+            "switched on deliberately, not left on wherever nobody thought to "
+            "switch it off. Building the document also costs ~3.35s of a cold "
+            "start, and nothing in production reads it -- both SDKs are "
+            "generated at build time and the route inventory is a CI gate. The "
+            "dev stack sets it. Env: ``API_DOCS_ENABLED``."
         ),
     )
     debug: bool = Field(default=True, description="Debug mode")
@@ -1476,18 +1478,19 @@ class Settings(BaseSettings):
     def api_docs_served(self) -> bool:
         """Whether this process serves ``/openapi.json``, ``/docs`` and ``/scalar``.
 
-        Off in production, on everywhere else, and overridable either way.
+        Off unless something turned it on. Deliberately not inferred from the
+        environment: "production" is one value among four, and a deployment that
+        forgets to set it, or sets it to something unexpected, would start
+        publishing its API surface rather than failing closed.
 
-        Two reasons, and the second is the one that matters. Building the
-        document costs 3.35s, measured in a production container — it is the
-        second largest item in a cold start after the imports themselves, and
-        nothing in production reads it: the SDKs are generated at build time and
-        the route inventory is a CI gate. And it is unauthenticated, so serving
-        it publishes the shape of every endpoint to anyone who asks.
+        Two reasons it is off. It is unauthenticated, so serving it publishes
+        the shape of every endpoint to anyone who asks. And building the
+        document costs 3.35s, measured in a production container — the largest
+        item in a cold start after the imports themselves — for something
+        nothing in production reads: both SDKs are generated at build time and
+        the route inventory is a CI gate.
         """
-        if self.api_docs_enabled is not None:
-            return self.api_docs_enabled
-        return self.environment != "production"
+        return self.api_docs_enabled
 
     def effective_storage_backend(self) -> Literal["local", "gcs", "s3", "azure"]:
         if self.storage_backend != "auto":

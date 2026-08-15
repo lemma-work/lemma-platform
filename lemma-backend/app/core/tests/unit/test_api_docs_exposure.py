@@ -1,14 +1,16 @@
-"""Production serves no API documentation.
+"""API documentation is opt-in, everywhere.
 
-Two reasons, and the second is the one that matters. Building the OpenAPI
-document costs ~3.35s measured in a production container — the second largest
-item in a cold start after the imports — and nothing in production reads it:
-both SDKs are generated at build time and the route inventory is a CI gate.
-And `/openapi.json`, `/docs` and `/scalar` are unauthenticated, so serving them
-publishes the shape of every endpoint to anyone who asks.
+`/openapi.json`, `/docs`, `/redoc` and `/scalar` are unauthenticated, so serving
+them publishes the shape of every endpoint to anyone who asks. Building the
+document also costs 3.35s, measured in a production container — the largest item
+in a cold start after the imports themselves — for something nothing in
+production reads: both SDKs are generated at build time and the route inventory
+is a CI gate.
 
-The override exists in both directions, because "we need the docs on staging"
-and "we need them on this production deployment" are both real.
+Deliberately a flag rather than an inference from `environment`. "production" is
+one value among four, and a deployment that forgets to set it, or sets something
+unexpected, should fail closed rather than start publishing. The dev stack opts
+in explicitly (`make init` writes `API_DOCS_ENABLED=true`).
 """
 
 from __future__ import annotations
@@ -18,34 +20,26 @@ import pytest
 from app.core.config import Settings
 
 
-def _settings(**overrides) -> Settings:
-    return Settings.model_construct(**overrides)
+def test_documentation_is_off_unless_asked_for() -> None:
+    assert not Settings.model_construct(api_docs_enabled=False).api_docs_served()
 
 
-@pytest.mark.parametrize("environment", ["local", "development", "testing"])
-def test_docs_are_served_outside_production(environment: str) -> None:
-    assert _settings(environment=environment, api_docs_enabled=None).api_docs_served()
+def test_the_declared_default_is_off() -> None:
+    """The value that ships. A deployment that sets nothing serves nothing."""
+    assert Settings.model_fields["api_docs_enabled"].default is False
 
 
-def test_production_serves_no_docs_by_default() -> None:
-    assert not _settings(
-        environment="production", api_docs_enabled=None
-    ).api_docs_served()
+@pytest.mark.parametrize("environment", ["local", "development", "testing", "production"])
+def test_the_environment_does_not_decide(environment: str) -> None:
+    """Same answer in every environment — only the flag decides."""
+    off = Settings.model_construct(environment=environment, api_docs_enabled=False)
+    on = Settings.model_construct(environment=environment, api_docs_enabled=True)
+
+    assert not off.api_docs_served()
+    assert on.api_docs_served()
 
 
-def test_production_can_opt_back_in() -> None:
-    """A deployment that genuinely wants them should not have to patch code."""
-    assert _settings(environment="production", api_docs_enabled=True).api_docs_served()
-
-
-@pytest.mark.parametrize("environment", ["local", "development"])
-def test_they_can_be_turned_off_anywhere(environment: str) -> None:
-    assert not _settings(
-        environment=environment, api_docs_enabled=False
-    ).api_docs_served()
-
-
-def test_the_app_hides_every_documentation_route_in_production(monkeypatch) -> None:
+def test_the_app_registers_no_documentation_route_when_off(monkeypatch) -> None:
     """Not just `/openapi.json` — `/docs`, `/redoc` and `/scalar` too.
 
     `/scalar` is the one worth pinning: it is registered by hand rather than by
@@ -54,12 +48,7 @@ def test_the_app_hides_every_documentation_route_in_production(monkeypatch) -> N
     """
     from app.core import config as config_module
 
-    monkeypatch.setattr(config_module.settings, "environment", "production")
-    monkeypatch.setattr(config_module.settings, "api_docs_enabled", None)
-    # Production refuses to start without a release identity; that guard is not
-    # what this test is about. Set on the settings object, not the environment —
-    # settings are already instantiated by the time a test runs.
-    monkeypatch.setattr(config_module.settings, "release_sha", "a" * 40)
+    monkeypatch.setattr(config_module.settings, "api_docs_enabled", False)
 
     from app.app import create_app
 
@@ -74,11 +63,10 @@ def test_the_app_hides_every_documentation_route_in_production(monkeypatch) -> N
     assert "/livez" in paths
 
 
-def test_the_app_still_documents_itself_outside_production(monkeypatch) -> None:
+def test_the_app_serves_them_when_asked(monkeypatch) -> None:
     from app.core import config as config_module
 
-    monkeypatch.setattr(config_module.settings, "environment", "development")
-    monkeypatch.setattr(config_module.settings, "api_docs_enabled", None)
+    monkeypatch.setattr(config_module.settings, "api_docs_enabled", True)
 
     from app.app import create_app
 
@@ -87,3 +75,20 @@ def test_the_app_still_documents_itself_outside_production(monkeypatch) -> None:
 
     assert app.openapi_url == "/openapi.json"
     assert "/scalar" in paths
+
+
+def test_the_dev_stack_opts_in() -> None:
+    """`make dev` advertises /scalar; the generated .env has to deliver it.
+
+    Checked against the Makefile because the failure is silent: the banner would
+    still print the URL and the route would 404.
+    """
+    import pathlib
+
+    makefile = pathlib.Path(__file__).resolve().parents[4].parent / "Makefile"
+    text = makefile.read_text()
+
+    assert "append API_DOCS_ENABLED true;" in text
+    # Also in the required-key list, or an existing .env is judged complete and
+    # never receives the new key.
+    assert "for k in ENVIRONMENT DEBUG API_DOCS_ENABLED" in text
