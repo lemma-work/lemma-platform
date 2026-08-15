@@ -162,11 +162,32 @@ class ScheduleRunRecoveryService:
                 # The target is alive and has not finished. Nothing to reconcile
                 # -- the ledger is already right -- so this is reported as what
                 # it is rather than counted as work.
+                #
+                # And when the ledger is already right, nothing is written. The
+                # write bumps `updated_at`, the DISPATCHED arm selects on
+                # `updated_at < now - DISPATCH_RECONCILE_AFTER`, and that window
+                # is exactly the cron interval -- so an unconditional write here
+                # re-armed the row for the very next pass, forever. At BATCH_SIZE
+                # rows and a five-minute cron that is 28,800 updates a day, none
+                # of which could move a row out of the query that found it.
+                #
+                # The repair is still made when there is one: a row left FAILED
+                # or half-started while its target really runs. A row that needs
+                # nothing is simply re-read next cycle -- one indexed, capped
+                # read -- and resolves the moment its target reports an outcome.
+                needs_repair = (
+                    run.status != ScheduleRunStatus.DISPATCHED.value
+                    or run.completed_at is not None
+                    or run.error_type is not None
+                    or run.error_code is not None
+                )
+                still_running += 1
+                if not needs_repair:
+                    continue
                 run.status = ScheduleRunStatus.DISPATCHED.value
                 run.completed_at = None
                 run.error_type = None
                 run.error_code = None
-                still_running += 1
                 continue
 
             if self._too_late_to_redeliver(run, now):
