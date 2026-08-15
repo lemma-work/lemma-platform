@@ -78,6 +78,28 @@ COPY --from=builder --chown=appuser:appuser /app/lemma-skills /app/lemma-skills
 # Copy backend application code
 COPY --chown=appuser:appuser lemma-backend/ ./
 
+# Precompile the application's own bytecode.
+#
+# `UV_COMPILE_BYTECODE=1` in the builder stage does this for dependencies, which
+# is why site-packages ships .pyc — openai alone has 1,497 of them. The
+# application's own 1,157 modules were copied in as source and never compiled,
+# so every process start parsed and compiled all of them, and
+# `PYTHONDONTWRITEBYTECODE=1` below then threw the result away. Measured at 3.2s
+# per start inside a warm container, and the api's cold start spends 38.2s of
+# its 52s before it logs a line at all.
+#
+# That cost was paid by every replica, on every deploy, every restart and every
+# scale-up. `PYTHONDONTWRITEBYTECODE` only stops Python *writing* a cache; it
+# still reads one that is already there, so the flag can stay.
+#
+# `unchecked-hash` because the image is immutable: Python trusts the .pyc
+# without stat-ing its source, which saves a syscall per module and, more
+# importantly, cannot be invalidated by whatever mtime the COPY layer left
+# behind.
+RUN python -m compileall -q --invalidation-mode unchecked-hash \
+        /app/app /app/sandbox_runtime \
+    && chown -R appuser:appuser /app/app /app/sandbox_runtime
+
 # Browser SDK bundle served at /public/sdk/lemma-client.js for no-build apps.
 # settings.resolve_browser_sdk_path() looks here first in the container.
 COPY --chown=appuser:appuser lemma-typescript/public/lemma-client.js /app/browser-sdk/lemma-client.js
