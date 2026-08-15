@@ -58,7 +58,8 @@ export function ThisComputerCard({
     onHostIdChange?: (hostId: string | null) => void;
     onPaired?: () => void;
 }) {
-    const { isDesktop, status, error, refetch } = useAutoConnectThisComputer();
+    const { isDesktop, status, error, refetch, connectError, retryConnect } =
+        useAutoConnectThisComputer();
     const [busy, setBusy] = useState<string | null>(null);
 
     // This workspace's pairing, not whichever one happens to be first: a Mac
@@ -87,7 +88,7 @@ export function ThisComputerCard({
     // section falls back to the download card instead.
     if (!isDesktop) return null;
 
-    const state = describeThisComputer(status, error, workspaceUrl);
+    const state = describeThisComputer(status, error, workspaceUrl, connectError);
     const uptime = formatUptime(status?.uptime_seconds ?? null);
 
     const run = async (action: string, work: () => Promise<unknown>, success?: string) => {
@@ -123,14 +124,28 @@ export function ThisComputerCard({
                     <p className="mt-1 text-sm text-[var(--text-tertiary)]">{state.detail}</p>
                 </div>
 
-                {!status && error ? (
+                {/*
+                  * Two different failures, one button. The shell not answering
+                  * at all is a reason to ask it again; the connection failing is
+                  * a reason to clear the one-attempt guard so the effect runs
+                  * once more. Neither is a switch — nothing here turns this
+                  * computer on or off — they are both "that did not work, try
+                  * it again", which is the one thing a report still owes the
+                  * person reading it.
+                  */}
+                {(!status && error) || connectError ? (
                     <Button
                         type="button"
                         variant="secondary"
                         size="sm"
                         className="gap-1.5"
                         loading={busy === 'retry'}
-                        onClick={() => void run('retry', () => refetch())}
+                        onClick={() =>
+                            void run('retry', async () => {
+                                if (connectError) retryConnect();
+                                await refetch();
+                            })
+                        }
                     >
                         <RefreshCw className="size-3.5" />
                         Try again

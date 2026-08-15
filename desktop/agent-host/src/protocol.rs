@@ -10,7 +10,70 @@ use uuid::Uuid;
 
 use crate::{HOST_RELEASE, PROTOCOL_VERSION};
 
+/// How long Lemma holds a poll open before answering it empty.
+///
+/// Part of the wire contract rather than a local choice — it is
+/// `_LONG_POLL_SECONDS` in `agent_host_controller.py` — and worth stating
+/// because two things are built on it and neither reads as depending on it.
+///
+/// The HTTP timeout has to clear it or every poll fails. And the worker loop
+/// spends essentially all of its time inside one, so anything the host must do
+/// sooner than this needs to be able to interrupt a poll; it cannot wait for one
+/// to return. Assuming otherwise is how a two-second check for newly installed
+/// agents came to answer in up to twenty-five.
+pub const POLL_HOLD: std::time::Duration = std::time::Duration::from_secs(25);
+
 pub type JsonMap = BTreeMap<String, Value>;
+
+/// Give a wire enum the list of its own variants.
+///
+/// So that anything needing to walk one walks real data. The alternative that
+/// was here — scraping this file for `pub enum X {` and reading to the next `}`,
+/// then reimplementing serde's `rename_all` to guess the spelling — was two
+/// guesses at things the compiler and serde already know exactly, and both
+/// would have failed silently: the parser on the first variant to gain a brace,
+/// the spelling on the first `#[serde(rename)]`.
+///
+/// Unit variants only, which is what every enum on this wire is and what the
+/// backend's `str` enums can be.
+macro_rules! wire_enum {
+    (
+        $(#[$enum_meta:meta])*
+        pub enum $name:ident {
+            $($(#[$variant_meta:meta])* $variant:ident),* $(,)?
+        }
+    ) => {
+        $(#[$enum_meta])*
+        pub enum $name {
+            $($(#[$variant_meta])* $variant),*
+        }
+
+        impl $name {
+            /// Every variant, in declaration order.
+            #[must_use]
+            pub const fn all() -> &'static [Self] {
+                &[$(Self::$variant),*]
+            }
+
+            /// Every variant as it is spelled on the wire, straight from serde
+            /// rather than from a second implementation of the naming rule.
+            #[cfg(test)]
+            #[must_use]
+            pub fn wire_names() -> Vec<String> {
+                Self::all()
+                    .iter()
+                    .map(|variant| {
+                        serde_json::to_value(variant)
+                            .expect("a unit variant serializes")
+                            .as_str()
+                            .expect("a wire enum serializes to a string")
+                            .to_owned()
+                    })
+                    .collect()
+            }
+        }
+    };
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct HostHello {
@@ -46,20 +109,22 @@ pub struct RunCheckpoint {
     pub detail: JsonMap,
 }
 
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum RunState {
-    QueuedForHost,
-    Leased,
-    Accepted,
-    Dispatching,
-    Running,
-    Recovering,
-    WaitingInput,
-    Succeeded,
-    Failed,
-    Cancelled,
-    DispatchUnknown,
+wire_enum! {
+    #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+    #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+    pub enum RunState {
+        QueuedForHost,
+        Leased,
+        Accepted,
+        Dispatching,
+        Running,
+        Recovering,
+        WaitingInput,
+        Succeeded,
+        Failed,
+        Cancelled,
+        DispatchUnknown,
+    }
 }
 
 impl RunState {
@@ -98,16 +163,18 @@ pub struct CommandRejection {
     pub detail: Option<String>,
 }
 
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum RejectionCode {
-    Draining,
-    CommandExpired,
-    HarnessNotFound,
-    ConfigRevisionStale,
-    CapacityLost,
-    AdapterUnavailable,
-    InvalidCommand,
+wire_enum! {
+    #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+    #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+    pub enum RejectionCode {
+        Draining,
+        CommandExpired,
+        HarnessNotFound,
+        ConfigRevisionStale,
+        CapacityLost,
+        AdapterUnavailable,
+        InvalidCommand,
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -120,14 +187,16 @@ pub struct PollResponse {
     pub poll_after_ms: u64,
 }
 
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum HostStatus {
-    Online,
-    Offline,
-    Draining,
-    UpgradeRequired,
-    Revoked,
+wire_enum! {
+    #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+    #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+    pub enum HostStatus {
+        Online,
+        Offline,
+        Draining,
+        UpgradeRequired,
+        Revoked,
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -142,20 +211,22 @@ pub struct Command {
     pub payload: Value,
 }
 
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum CommandKind {
-    StartRun,
-    CancelRun,
-    /// Carries a human's answer to a parked native permission request.
-    ResolvePermission,
-    /// Carries a replacement Lemma MCP credential for a run still in flight.
-    ///
-    /// The one minted at dispatch is valid for an hour and nothing used to
-    /// renew it, so a long turn either had to be cut short at that expiry or
-    /// carry on with every Lemma tool call returning 401 — which the agent
-    /// experiences as its tools quietly vanishing mid-task.
-    RefreshCredential,
+wire_enum! {
+    #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+    #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+    pub enum CommandKind {
+        StartRun,
+        CancelRun,
+        /// Carries a human's answer to a parked native permission request.
+        ResolvePermission,
+        /// Carries a replacement Lemma MCP credential for a run still in flight.
+        ///
+        /// The one minted at dispatch is valid for an hour and nothing used to
+        /// renew it, so a long turn either had to be cut short at that expiry or
+        /// carry on with every Lemma tool call returning 401 — which the agent
+        /// experiences as its tools quietly vanishing mid-task.
+        RefreshCredential,
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -196,22 +267,24 @@ pub struct Event {
     pub payload: JsonMap,
 }
 
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum EventType {
-    RunState,
-    UserMessage,
-    AgentMessageChunk,
-    AgentMessageUpsert,
-    AgentThoughtChunk,
-    AgentThoughtUpsert,
-    PlanUpsert,
-    ToolCallUpsert,
-    ToolCallUpdate,
-    UsageUpdate,
-    ConfigUpdate,
-    PermissionRequest,
-    Terminal,
+wire_enum! {
+    #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+    #[serde(rename_all = "snake_case")]
+    pub enum EventType {
+        RunState,
+        UserMessage,
+        AgentMessageChunk,
+        AgentMessageUpsert,
+        AgentThoughtChunk,
+        AgentThoughtUpsert,
+        PlanUpsert,
+        ToolCallUpsert,
+        ToolCallUpdate,
+        UsageUpdate,
+        ConfigUpdate,
+        PermissionRequest,
+        Terminal,
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -293,16 +366,18 @@ impl HarnessSnapshot {
     }
 }
 
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum HarnessHealth {
-    Ready,
-    AuthRequired,
-    UnsupportedVersion,
-    ConfigInvalid,
-    ProbeFailed,
-    Installing,
-    Disabled,
+wire_enum! {
+    #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+    #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+    pub enum HarnessHealth {
+        Ready,
+        AuthRequired,
+        UnsupportedVersion,
+        ConfigInvalid,
+        ProbeFailed,
+        Installing,
+        Disabled,
+    }
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -333,45 +408,6 @@ pub struct ConfigOption {
 mod tests {
     use super::*;
 
-    /// Variant names as written in `protocol.rs`, for one enum.
-    ///
-    /// Parsed from the source rather than hand-listed, because a hand-listed
-    /// set is only ever as current as the last person who remembered it — which
-    /// is the failure this test exists to catch.
-    fn rust_variants(source: &str, name: &str) -> Vec<String> {
-        let header = format!("pub enum {name} {{");
-        let start = source
-            .find(&header)
-            .unwrap_or_else(|| panic!("{name} is declared in protocol.rs"))
-            + header.len();
-        let body = &source[start..];
-        let end = body.find('}').expect("the enum body is closed");
-        body[..end]
-            .lines()
-            .map(str::trim)
-            .filter(|line| {
-                !line.is_empty() && !line.starts_with("//") && !line.starts_with("#[")
-            })
-            .map(|line| line.trim_end_matches(',').trim().to_owned())
-            .filter(|line| !line.is_empty())
-            .collect()
-    }
-
-    fn screaming_snake(variant: &str) -> String {
-        let mut out = String::new();
-        for (index, character) in variant.char_indices() {
-            if character.is_uppercase() && index > 0 {
-                out.push('_');
-            }
-            out.push(character.to_ascii_uppercase());
-        }
-        out
-    }
-
-    fn snake(variant: &str) -> String {
-        screaming_snake(variant).to_lowercase()
-    }
-
     /// The committed client spec, which CI already holds to the backend.
     fn spec_enum(name: &str) -> Vec<String> {
         let path = concat!(
@@ -400,32 +436,28 @@ mod tests {
         // from the backend, so pinning to it pins to the backend transitively.
         // Compared as sets in both directions: an addition here that the backend
         // has never heard of is exactly as broken as the reverse.
-        let source = include_str!("protocol.rs");
-        for (rust_name, spec_name, screaming) in [
-            ("RunState", "AgentHostRunState", true),
-            ("HostStatus", "AgentHostStatus", true),
-            ("HarnessHealth", "AgentHostHarnessHealth", true),
-            ("RejectionCode", "AgentHostRejectionCode", true),
-            ("CommandKind", "AgentHostCommandKind", true),
-            ("EventType", "AgentHostEventType", false),
+        //
+        // The names come from `serde` rather than from parsing this file. The
+        // first version of this test scraped the source for `pub enum X {` and
+        // read to the next `}`, then reimplemented `rename_all` to guess the
+        // wire spelling. Both halves were guesses at things the compiler and
+        // serde already know exactly: the parser would have silently mis-read
+        // the first enum to gain a braced variant or a doc comment containing a
+        // brace, and the spelling would have diverged the first time a variant
+        // needed its own `#[serde(rename)]`.
+        for (ours, spec_name) in [
+            (RunState::wire_names(), "AgentHostRunState"),
+            (HostStatus::wire_names(), "AgentHostStatus"),
+            (HarnessHealth::wire_names(), "AgentHostHarnessHealth"),
+            (RejectionCode::wire_names(), "AgentHostRejectionCode"),
+            (CommandKind::wire_names(), "AgentHostCommandKind"),
+            (EventType::wire_names(), "AgentHostEventType"),
         ] {
-            let mut ours: Vec<String> = rust_variants(source, rust_name)
-                .iter()
-                .map(|variant| {
-                    if screaming {
-                        screaming_snake(variant)
-                    } else {
-                        snake(variant)
-                    }
-                })
-                .collect();
+            let mut ours = ours;
             let mut theirs = spec_enum(spec_name);
             ours.sort();
             theirs.sort();
-            assert_eq!(
-                ours, theirs,
-                "{rust_name} and {spec_name} have drifted apart"
-            );
+            assert_eq!(ours, theirs, "{spec_name} has drifted apart from this crate");
         }
     }
 

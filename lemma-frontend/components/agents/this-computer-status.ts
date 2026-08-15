@@ -62,6 +62,10 @@ export function describeThisComputer(
     status: ThisComputerStatus | null,
     error: string | null,
     workspaceUrl: string | null,
+    // Why connecting this computer failed, if it did. Distinct from `error`,
+    // which is the shell refusing to answer *about* the host: this one is the
+    // host answering fine and the connection itself not working.
+    connectError?: string | null,
 ): DescribedStatus {
     if (!status) {
         return error
@@ -89,6 +93,18 @@ export function describeThisComputer(
     // status.
     const target = selectWorkspaceTarget(status.targets, workspaceUrl);
     if (!target) {
+        // A connection that has already failed is not one in progress. Nothing
+        // retries on its own — one attempt per page, deliberately, so a machine
+        // that cannot pair does not mint pairing codes in a loop — so saying
+        // "Connecting" here was a claim that stayed on screen indefinitely and
+        // was never revisited. Say what happened and offer the retry.
+        if (connectError) {
+            return {
+                label: "Couldn't connect",
+                detail: connectError,
+                tone: 'warn',
+            };
+        }
         return {
             label: 'Connecting',
             detail: 'Setting this computer up to run Claude Code, Codex, and other local agents here.',

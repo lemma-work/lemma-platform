@@ -179,7 +179,7 @@ async fn main() -> anyhow::Result<()> {
             name,
             allow_insecure_http,
         } => {
-            let mut config = HostConfig::load_or_create(&paths)?;
+            let config = HostConfig::load_or_create(&paths)?;
             // Deliberately does not install adapters. Pairing is an HTTP call
             // with a single-use code and needs none of them, but it used to wait
             // for the whole cache to be built first -- which is why connecting
@@ -201,12 +201,14 @@ async fn main() -> anyhow::Result<()> {
             // server no longer knows. That stale target then failed
             // authentication forever, once per refresh, while the new one
             // worked - the logs filled with 401s that could never recover.
-            config
-                .targets
-                .retain(|item| item.base_url != target.base_url && item.host_id != target.host_id);
-            config.targets.push(target.clone());
-            config.validate()?;
-            config.save(&paths)?;
+            HostConfig::mutate(&paths, |config| {
+                config.targets.retain(|item| {
+                    item.base_url != target.base_url && item.host_id != target.host_id
+                });
+                config.targets.push(target.clone());
+                config.validate()?;
+                Ok(true)
+            })?;
             Journal::open(&paths.journal)?.register_target(target.target_id)?;
             println!(
                 "Connected {} as Agent Host {}.",
@@ -247,7 +249,7 @@ async fn main() -> anyhow::Result<()> {
             target,
             force_local,
         } => {
-            let mut config = HostConfig::load_or_create(&paths)?;
+            let config = HostConfig::load_or_create(&paths)?;
             let selected = select_one_target(&config, target.as_deref())?.clone();
             let client = lemma_agent_host::api::TargetClient::new(
                 selected.clone(),
@@ -261,10 +263,12 @@ async fn main() -> anyhow::Result<()> {
                     "Warning: remote revocation failed; removing local state because --force-local was supplied: {error}"
                 );
             }
-            config
-                .targets
-                .retain(|item| item.target_id != selected.target_id);
-            config.save(&paths)?;
+            HostConfig::mutate(&paths, |config| {
+                config
+                    .targets
+                    .retain(|item| item.target_id != selected.target_id);
+                Ok(true)
+            })?;
             Journal::open(&paths.journal)?.remove_target(selected.target_id)?;
             println!(
                 "Disconnected {} ({}) and removed its local credential.",
@@ -576,23 +580,25 @@ fn update_targets(
     selector: Option<&str>,
     mut update: impl FnMut(&mut TargetConfig),
 ) -> anyhow::Result<()> {
-    let mut config = HostConfig::load_or_create(paths)?;
-    if let Some(selector) = selector {
-        let selected_id = select_one_target(&config, Some(selector))?.target_id;
-        let target = config
-            .targets
-            .iter_mut()
-            .find(|target| target.target_id == selected_id)
-            .expect("selected target remains present");
-        update(target);
-    } else {
-        anyhow::ensure!(!config.targets.is_empty(), "no targets are configured");
-        for target in &mut config.targets {
+    HostConfig::mutate(paths, |config| {
+        if let Some(selector) = selector {
+            let selected_id = select_one_target(config, Some(selector))?.target_id;
+            let target = config
+                .targets
+                .iter_mut()
+                .find(|target| target.target_id == selected_id)
+                .expect("selected target remains present");
             update(target);
+        } else {
+            anyhow::ensure!(!config.targets.is_empty(), "no targets are configured");
+            for target in &mut config.targets {
+                update(target);
+            }
         }
-    }
-    config.validate()?;
-    config.save(paths)
+        config.validate()?;
+        Ok(true)
+    })?;
+    Ok(())
 }
 
 async fn show_logs(path: &std::path::Path, lines: usize, follow: bool) -> anyhow::Result<()> {

@@ -3117,9 +3117,10 @@ fn agent_host_refresh_impl(app: AppHandle) -> Result<(), String> {
     )
 }
 
-/// Whether this machine has an Agent Host worth supervising, read from the
-/// files locald itself uses, so the shell can decide before locald exists.
 /// Whether to bring locald up at launch so the sidecar is there to be reached.
+///
+/// Read from the files locald itself uses, so the shell can decide before locald
+/// exists.
 ///
 /// Purely derived: this machine is paired to something, so it has work waiting.
 /// It used to consult `supervisor.json`'s `{"enabled": bool}` first, which was
@@ -3162,7 +3163,6 @@ fn agent_host_open_log(window: Webview, app: AppHandle) -> Result<(), String> {
     reveal_path(&log)
 }
 
-/// Flip the Agent Host from the tray, without needing a window open.
 /// What the tray says about the Agent Host.
 ///
 /// Reachability, not liveness. A running host that is unpaired or cannot reach
@@ -3183,13 +3183,20 @@ fn agent_host_tray_label(
     paired: bool,
     connected: bool,
     unreachable: bool,
+    failed_to_start: bool,
 ) -> String {
     if !available {
         "Agent Host: not installed".into()
+    } else if !running && failed_to_start {
+        // The supervisor tried and could not. Saying "starting…" here is a
+        // promise the process is not keeping: it arms a backoff on every failed
+        // spawn, so a sidecar that cannot start says "starting…" for as long as
+        // the app is open and nothing ever contradicts it.
+        "Agent Host: not starting — see log".into()
     } else if !running {
         // Not "off". Nothing can switch this computer off any more, so the only
-        // way to be installed and not running is to be on the way up — and a
-        // tray that says "off" with no way to say "on" is a dead end.
+        // way to be installed, not running and not failing is to be on the way
+        // up — and a tray that says "off" with no way to say "on" is a dead end.
         "Agent Host: starting…".into()
     } else if !paired {
         "Agent Host: not paired".into()
@@ -3228,7 +3235,23 @@ fn refresh_agent_host_tray(app: &AppHandle, status: &Value) {
             })
     });
 
-    let state = agent_host_tray_label(available, running, paired, connected, unreachable);
+    // The supervisor records why the last spawn or exit failed and clears it on
+    // a success, so this is "it tried and could not", not "it failed once weeks
+    // ago". Only meaningful while it is not running; a running host's errors are
+    // about its workspaces, which the states below already cover.
+    let failed_to_start = status
+        .get("last_error")
+        .and_then(Value::as_str)
+        .is_some_and(|error| !error.trim().is_empty());
+
+    let state = agent_host_tray_label(
+        available,
+        running,
+        paired,
+        connected,
+        unreachable,
+        failed_to_start,
+    );
 
     // `running` used to be mirrored onto `Shell::ui` as well, because the tray's
     // toggle had to know which way to point. Nothing asks any more.
@@ -5306,39 +5329,13 @@ mod tests {
         );
     }
 
-    #[test]
-    fn the_balloon_never_fires_before_the_guest_has_run_anything() {
-        // This crashed a guest kernel and cost a whole first setup. The balloon
-        // read `active_sandboxes == 0` as idle, which during first setup means
-        // "nothing has started" — so sixty seconds in, with Postgres mid-initdb,
-        // it asked for 4.5 of 6 GiB back in one step and the guest took an Oops
-        // in `migrate_pages`. Every vsock connect then reset and migrations timed
-        // out after 300s, none of which mentioned memory.
-        //
-        // Read from the Swift source because the package has no test target and
-        // the policy is worth more than the convenience of leaving it unguarded.
-        let source = include_str!("../local-runtime/macos-vz/Sources/LemmaVZ/main.swift");
-
-        assert!(
-            source.contains("hasEverBeenBusy"),
-            "the balloon must be able to tell 'finished' from 'not started'"
-        );
-        assert!(
-            source.contains("guard hasEverBeenBusy else {"),
-            "no sandbox ever seen must short-circuit before any shrink is scheduled"
-        );
-        // And when it does shrink, it walks rather than jumps: reclaiming is page
-        // migration in the guest, and the cost is superlinear in the size of the
-        // ask.
-        assert!(
-            source.contains("stepBytes") && source.contains("func stepDown("),
-            "the shrink must step instead of setting the idle target directly"
-        );
-        assert!(
-            !source.contains("device.targetVirtualMachineMemorySize = min(self.idleTarget"),
-            "the one-shot jump to the idle target is what the guest could not survive"
-        );
-    }
+    // The memory balloon's policy used to be asserted here, by `include_str!`ing
+    // a Swift file from a package this crate does not build and grepping it. It
+    // now lives in `scripts/check-balloon-policy.sh`, wired into
+    // `make desktop-lint`: still a source check, because the package has no test
+    // target, but one that says so, explains each rule it enforces, and fails
+    // where someone changing Swift will see it rather than in an unrelated
+    // crate's unit tests.
 
     #[test]
     fn the_tray_lock_is_not_held_across_main_thread_round_trips() {
@@ -5753,40 +5750,69 @@ mod tests {
         // Each of these is a live process that cannot take work, and the old
         // process-only status called them all "running".
         assert_eq!(
-            agent_host_tray_label(true, true, false, false, false),
+            agent_host_tray_label(true, true, false, false, false, false),
             "Agent Host: not paired",
         );
         assert_eq!(
-            agent_host_tray_label(true, true, true, false, false),
+            agent_host_tray_label(true, true, true, false, false, false),
             "Agent Host: reconnecting…",
         );
         assert_eq!(
-            agent_host_tray_label(true, true, true, true, false),
+            agent_host_tray_label(true, true, true, true, false, false),
             "Agent Host: connected",
         );
         // Paired and not running is a stage, not a setting: the off switch is
         // gone, so this state is only ever on its way to "connected".
         assert_eq!(
-            agent_host_tray_label(true, false, true, false, false),
+            agent_host_tray_label(true, false, true, false, false, false),
             "Agent Host: starting…"
         );
         // A build without the sidecar has no host to report on at all.
         assert_eq!(
-            agent_host_tray_label(false, false, false, false, false),
+            agent_host_tray_label(false, false, false, false, false, false),
             "Agent Host: not installed",
         );
         // The state this distinction was added for: a workspace that answered
         // yesterday and is not there today. "Reconnecting" for a week is a
         // promise the retry loop cannot keep.
         assert_eq!(
-            agent_host_tray_label(true, true, true, false, true),
+            agent_host_tray_label(true, true, true, false, true, false),
             "Agent Host: workspace unreachable",
         );
         // Connected wins over a stale error on another target: one workspace
         // failing does not stop this computer taking work from the other.
         assert_eq!(
-            agent_host_tray_label(true, true, true, true, true),
+            agent_host_tray_label(true, true, true, true, true, false),
             "Agent Host: connected",
+        );
+    }
+
+    #[test]
+    fn a_sidecar_that_cannot_start_does_not_say_it_is_starting() {
+        // "starting…" replaced "off" because nothing can switch this computer
+        // off any more — but it is a promise about what happens next, and the
+        // supervisor arms a restart backoff on every failed spawn. A sidecar
+        // that cannot start at all said "starting…" for as long as the app was
+        // open, with nothing anywhere to contradict it. Same shape as an adapter
+        // stuck at "Setting up": a failure wearing the clothes of progress.
+        assert_eq!(
+            agent_host_tray_label(true, false, true, false, false, true),
+            "Agent Host: not starting — see log",
+        );
+        // A failure recorded against a host that is up is about its workspaces,
+        // not its startup, and the reachability states already say that better.
+        assert_eq!(
+            agent_host_tray_label(true, true, true, true, false, true),
+            "Agent Host: connected",
+        );
+        assert_eq!(
+            agent_host_tray_label(true, true, true, false, true, true),
+            "Agent Host: workspace unreachable",
+        );
+        // And a build with no sidecar has nothing to fail.
+        assert_eq!(
+            agent_host_tray_label(false, false, false, false, false, true),
+            "Agent Host: not installed",
         );
     }
 

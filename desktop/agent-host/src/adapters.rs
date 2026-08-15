@@ -39,6 +39,18 @@ pub struct AdapterManifest {
     /// re-verifies, and the host restarts often.
     #[serde(skip)]
     resolved: Arc<Mutex<HashMap<String, ResolvedAdapter>>>,
+    /// Why the last attempt to warm the cache failed, per adapter, shared
+    /// across clones.
+    ///
+    /// Warming moved off the pairing path and became a detached, best-effort
+    /// thread, which is right — a machine with no npm must still serve the
+    /// agents it already has. But it left nothing anywhere to distinguish "the
+    /// download has not landed yet" from "the download cannot land", and both
+    /// present as a missing cache directory. So a machine behind a proxy that
+    /// blocks the registry reported *Setting up · usually under a minute*, and
+    /// went on reporting it for as long as the app stayed open.
+    #[serde(skip)]
+    install_failures: Arc<Mutex<HashMap<String, String>>>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -63,6 +75,21 @@ pub struct AdapterSpec {
     /// on this machine and then run a different one.
     #[serde(default)]
     pub upstream_path_env: Option<String>,
+    /// Whether to install this adapter without its optional dependencies.
+    ///
+    /// True for both certified adapters, whose optional dependencies are
+    /// per-platform *vendored builds of the agents themselves* — a 259 MB
+    /// `codex` and a 245 MB `claude`. They reach the real agent through
+    /// `upstream_path_env` instead, so those copies were 548 MB fetched to run
+    /// code the host never invokes.
+    ///
+    /// Per adapter rather than always, because `--omit=optional` is not
+    /// generally safe: platform-specific native binaries are conventionally
+    /// declared as optional dependencies, and omitting those breaks the package
+    /// rather than slimming it. Every adapter that sets this has to be one
+    /// someone checked.
+    #[serde(default)]
+    pub omit_optional_dependencies: bool,
     pub minimum_upstream_version: Option<String>,
     pub distribution: String,
     pub artifact_integrity: Option<String>,
@@ -209,15 +236,17 @@ impl AdapterManifest {
 
     /// Ensure every npm-distributed adapter is present and verified.
     ///
-    /// One thread per adapter. Each one is an independent `npm install` against
-    /// the registry followed by a whole-tree SHA-256, and running them in
-    /// sequence made the wall-clock the *sum* of the slowest parts of both --
-    /// which is most of what "it takes minutes the first time" was.
+    /// One thread per adapter, because the expensive half of each is a
+    /// whole-tree SHA-256 and running those in sequence made the wall-clock
+    /// their sum -- which is most of what "it takes minutes the first time" was.
     ///
     /// The hashing is deliberately *not* cheapened. It is what stands between a
     /// tampered `node_modules` and a process that runs with the user's own
     /// credentials and file access, and the honest way to make it faster is to
     /// overlap it, not to check less of it.
+    ///
+    /// Each thread's outcome is recorded per adapter, so discovery can tell an
+    /// install that has not finished from one that cannot.
     pub fn install_cache(&self, cache_root: &Path, repair: bool) -> anyhow::Result<()> {
         std::fs::create_dir_all(cache_root)?;
         let pending: Vec<&AdapterSpec> = self
@@ -228,26 +257,64 @@ impl AdapterManifest {
         if pending.is_empty() {
             return Ok(());
         }
-        let results: Vec<anyhow::Result<()>> = std::thread::scope(|scope| {
+        // `npm install` itself is serialized across adapters: they share one
+        // `~/.npm/_cacache`, and two npm processes writing it concurrently is a
+        // known source of `EEXIST`/`ENOTEMPTY` on exactly the cold cache this
+        // runs against. The parallelism that mattered was the hashing, which
+        // touches only its own staging directory and still overlaps.
+        let registry = Mutex::new(());
+        let results: Vec<(String, anyhow::Result<()>)> = std::thread::scope(|scope| {
             let handles: Vec<_> = pending
                 .iter()
-                .map(|spec| scope.spawn(move || install_cached_adapter(spec, cache_root, repair)))
+                .map(|spec| {
+                    let registry = &registry;
+                    scope.spawn(move || {
+                        (
+                            spec.key.clone(),
+                            install_cached_adapter(spec, cache_root, repair, registry),
+                        )
+                    })
+                })
                 .collect();
             handles
                 .into_iter()
                 .map(|handle| {
-                    handle
-                        .join()
-                        .unwrap_or_else(|_| Err(anyhow::anyhow!("adapter install thread panicked")))
+                    handle.join().unwrap_or_else(|_| {
+                        (
+                            String::new(),
+                            Err(anyhow::anyhow!("adapter install thread panicked")),
+                        )
+                    })
                 })
                 .collect()
         });
-        // Report the first failure, but only after every thread has been joined,
-        // so an early return cannot leave one still writing into the cache.
-        for result in results {
-            result?;
+        // Recorded and reported only after every thread has been joined, so an
+        // early return cannot leave one still writing into the cache.
+        let mut first_failure = None;
+        {
+            let mut failures = self.install_failures.lock().expect("install failures");
+            for (key, result) in results {
+                match result {
+                    Ok(()) => {
+                        failures.remove(&key);
+                    }
+                    Err(error) => {
+                        failures.insert(key, error.to_string());
+                        first_failure.get_or_insert(error);
+                    }
+                }
+            }
         }
-        Ok(())
+        first_failure.map_or(Ok(()), Err)
+    }
+
+    /// Why warming this adapter last failed, if it did.
+    fn install_failure(&self, key: &str) -> Option<String> {
+        self.install_failures
+            .lock()
+            .expect("install failures")
+            .get(key)
+            .cloned()
     }
 
     /// A cheap answer to "have the agents on this machine changed?".
@@ -336,10 +403,31 @@ impl AdapterManifest {
         // A *missing* cache directory is the install still running; a cache that
         // exists and fails verification is a real integrity failure and keeps
         // reporting as one.
+        //
+        // Unless warming has already tried and failed, which is the case this
+        // state could not previously express. `install_cache` is detached and
+        // best-effort — a machine with no npm must still serve the agents it
+        // already has — so its failure used to be a log line and nothing else,
+        // and a missing cache looked identical whether the download was in
+        // flight or impossible. A user behind a proxy that blocks the registry
+        // was told "Setting up, usually under a minute" for as long as the app
+        // stayed open. Say what happened instead; it names a cause they can act
+        // on and `doctor --repair` is the retry.
         if adapter.distribution.starts_with("npm:")
             && let Some(cache_root) = self.cache_root.as_ref()
             && !cached_adapter_directory(cache_root, adapter).exists()
         {
+            if let Some(failure) = self.install_failure(&adapter.key) {
+                tracing::warn!(
+                    harness = %adapter.key,
+                    error = %failure,
+                    "adapter could not be installed"
+                );
+                return snapshot_unavailable(
+                    adapter,
+                    &format!("Lemma could not install this agent's adapter: {failure}"),
+                );
+            }
             tracing::info!(harness = %adapter.key, "adapter is still installing");
             return snapshot_installing(adapter);
         }
@@ -387,10 +475,14 @@ fn fingerprint_path(digest: &mut Sha256, path: Option<PathBuf>) {
 }
 
 /// Install and verify one npm adapter into the cache. Runs on its own thread.
+///
+/// `registry` serializes the `npm install` step only; the hashing either side of
+/// it overlaps with every other adapter's.
 fn install_cached_adapter(
     spec: &AdapterSpec,
     cache_root: &Path,
     repair: bool,
+    registry: &Mutex<()>,
 ) -> anyhow::Result<()> {
     let destination = cached_adapter_directory(cache_root, spec);
     let executable = cached_adapter_executable(cache_root, spec);
@@ -408,7 +500,14 @@ fn install_cached_adapter(
         std::fs::remove_dir_all(&staging)?;
     }
     let staged = (|| -> anyhow::Result<()> {
-        install_npm_adapter(spec, &staging)?;
+        {
+            let _one_npm_at_a_time = registry.lock().unwrap_or_else(|poisoned| {
+                // A panicking install has nothing to corrupt here: the guard
+                // protects a shared npm cache, not any state of ours.
+                poisoned.into_inner()
+            });
+            install_npm_adapter(spec, &staging)?;
+        }
         let staged_executable = platform_cached_executable(&staging, &spec.command);
         anyhow::ensure!(
             staged_executable.is_file(),
@@ -530,28 +629,26 @@ fn install_npm_adapter(spec: &AdapterSpec, staging: &Path) -> anyhow::Result<()>
     let npm = resolve_executable("npm")
         .ok_or_else(|| anyhow::anyhow!("npm is required to install ACP adapters"))?;
     std::fs::create_dir_all(staging)?;
-    let status = Command::new(npm)
-        .no_console_window()
-        .args([
-            "install",
-            "--ignore-scripts",
-            "--no-audit",
-            "--no-fund",
-            // The certified adapters reach their agent through
-            // `upstream_path_env`, which points at the copy already installed on
-            // this machine. Their optional dependencies are per-platform
-            // *vendored builds of those same agents* -- a 259 MB `codex` and a
-            // 245 MB `claude` -- and fetching them took the cache from 50 MB to
-            // 602 MB to run code the host never invokes.
-            //
-            // Lemma exists to drive the agent the user already has, holding the
-            // user's own credentials and configuration. Downloading a second
-            // copy contradicts that even when it works, and it is most of why a
-            // first run took minutes.
-            "--omit=optional",
-            "--package-lock=true",
-            "--prefix",
-        ])
+    let mut command = Command::new(npm);
+    command.no_console_window().args([
+        "install",
+        "--ignore-scripts",
+        "--no-audit",
+        "--no-fund",
+    ]);
+    // Lemma exists to drive the agent the user already has, holding the user's
+    // own credentials and configuration. Downloading a second copy contradicts
+    // that even when it works, and it was most of why a first run took minutes.
+    //
+    // Declared per adapter rather than passed unconditionally: see
+    // `omit_optional_dependencies`. Omitting optional dependencies is safe for
+    // an adapter whose optional dependencies are a whole vendored agent, and
+    // breaks one whose optional dependencies are its platform's native binary.
+    if spec.omit_optional_dependencies {
+        command.arg("--omit=optional");
+    }
+    let status = command
+        .args(["--package-lock=true", "--prefix"])
         .arg(staging)
         .arg(package)
         .stdin(Stdio::null())
@@ -963,6 +1060,22 @@ mod tests {
                     "npm adapter {} must name the variable that points at the agent",
                     adapter.key
                 );
+                // And the other half of the same decision: an adapter told where
+                // the agent is has no use for the vendored copy in its optional
+                // dependencies, which is 548 MB across the two certified ones.
+                assert!(
+                    adapter.omit_optional_dependencies,
+                    "npm adapter {} points at the real agent, so it must not also fetch a vendored one",
+                    adapter.key
+                );
+            } else {
+                // Native adapters install nothing, so the flag would describe an
+                // install that never happens.
+                assert!(
+                    !adapter.omit_optional_dependencies,
+                    "native adapter {} has no npm install to omit anything from",
+                    adapter.key
+                );
             }
         }
     }
@@ -1056,6 +1169,59 @@ mod tests {
             empty,
             manifest.installed_fingerprint(),
             "an adapter appearing in the cache must trigger a re-probe"
+        );
+    }
+
+    #[test]
+    fn an_install_that_cannot_succeed_stops_reporting_as_one_in_progress() {
+        // "Setting up · usually under a minute" was every missing cache
+        // directory, whether the download was in flight or impossible. Warming
+        // is detached and best-effort by design, so its failure was a log line
+        // and nothing the user could see -- and a machine behind a proxy that
+        // blocks the npm registry read as permanently one minute from ready.
+        let cache = tempfile::tempdir().unwrap();
+        let manifest = AdapterManifest::builtin()
+            .unwrap()
+            .with_cache_root(cache.path().to_path_buf());
+        let spec = manifest
+            .adapters
+            .iter()
+            .find(|adapter| adapter.distribution.starts_with("npm:"))
+            .expect("a certified npm adapter")
+            .clone();
+
+        // Nothing has been tried yet: not there is not the same as broken.
+        let waiting = manifest.snapshot_for(&spec);
+        assert_eq!(waiting.health, HarnessHealth::Installing);
+        assert!(waiting.stale_reason.is_none());
+
+        manifest
+            .install_failures
+            .lock()
+            .unwrap()
+            .insert(spec.key.clone(), "npm is required to install ACP adapters".into());
+
+        let failed = manifest.snapshot_for(&spec);
+        assert_eq!(
+            failed.health,
+            HarnessHealth::ProbeFailed,
+            "an install that already failed is not an install in progress"
+        );
+        assert!(
+            failed
+                .stale_reason
+                .as_deref()
+                .is_some_and(|reason| reason.contains("npm is required")),
+            "and it has to name the cause: {:?}",
+            failed.stale_reason
+        );
+
+        // A later success clears it, so `doctor --repair` is a real remedy
+        // rather than something that leaves the row saying it failed.
+        manifest.install_failures.lock().unwrap().remove(&spec.key);
+        assert_eq!(
+            manifest.snapshot_for(&spec).health,
+            HarnessHealth::Installing
         );
     }
 

@@ -637,7 +637,12 @@
     <button class="primary start" id="choose-cloud" type="button">Sign in</button>
     <p class="mode-note">
       Or <button class="linklike" id="choose-local" type="button">run Lemma on this Mac</button>
-      <span class="local-cost" id="local-choice-cost">· about 15 min</span>
+      <!-- Qualitative on purpose. A figure here is a promise made on the first
+           screen anyone sees, over a download whose length is somebody else's
+           network, and the review screen behind this link is where the cost is
+           actually laid out. "A number in prose goes stale silently" applies to
+           product copy as much as to docs. -->
+      <span class="local-cost" id="local-choice-cost">· downloads and installs services</span>
     </p>
   </section>
 
@@ -651,7 +656,7 @@
              local, so it belongs where that is being decided rather than on a
              screen that no longer asks the question. -->
         <li>A local workspace shares no data with a cloud one.</li>
-        <li>First setup takes about 15 minutes and uses additional disk space.</li>
+        <li>First setup downloads several gigabytes and can take a while on a slow connection.</li>
         <li>AI models and connected integrations may send data to their providers.</li>
       </ul>
       <p class="setup-error" id="local-setup-error" hidden></p>
