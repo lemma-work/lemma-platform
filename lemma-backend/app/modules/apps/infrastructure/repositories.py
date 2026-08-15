@@ -17,6 +17,7 @@ from app.core.domain.message_bus import MessageBus
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.apps.domain.entities import AppEntity, AppReleaseEntity
 from app.modules.apps.domain.errors import AppNotFoundError
+from app.modules.apps.domain.events import AppCreatedEvent
 from app.modules.apps.domain.ports import AppRepositoryPort
 from app.modules.apps.infrastructure.models import AppModel, AppReleaseModel
 
@@ -36,6 +37,16 @@ class AppRepository(AppRepositoryPort):
         model = AppModel(**entity.model_dump(exclude_unset=True, exclude={"allowed_actions"}))
         self.session.add(model)
         await self.session.flush()
+        # `AppEntity` is a plain BaseModel carrying its own `id`, so it cannot be
+        # promoted to an AggregateRoot without a field collision. Collected here,
+        # which is the single write path behind all three creation routes.
+        self.uow.collect_events(
+            [
+                AppCreatedEvent(
+                    app_id=model.id, pod_id=model.pod_id, user_id=model.user_id
+                )
+            ]
+        )
         return model.to_entity()
 
     def _to_entity_with_allowed_actions(

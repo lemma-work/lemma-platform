@@ -126,6 +126,7 @@ class AppStoragePhase:
                 content,
                 inputs.pod_id,
                 app=inputs.app,
+                app_id=getattr(inputs, "app_id", None),
                 branding=inputs.branding,
             )
         return AppAssetDocument(

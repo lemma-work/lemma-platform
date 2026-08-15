@@ -479,18 +479,7 @@ class WorkflowEngine:
     def _collect_terminal_event(self, run: WorkflowRunEntity) -> None:
         if run.status not in TERMINAL_STATUSES:
             return
-        if run.completed_at is None:
-            raise RuntimeError(f"Terminal workflow run {run.id} has no completed_at")
-        self.uow.collect_events(
-            [
-                WorkflowRunTerminalEvent(
-                    run_id=run.id,
-                    status=run.status,
-                    error=run.error,
-                    completed_at=run.completed_at,
-                )
-            ]
-        )
+        self.uow.collect_events([WorkflowRunTerminalEvent.from_run(run)])
 
     def _entry_node_id(self, flow: WorkflowEntity) -> str:
         if not flow.nodes:

@@ -15,6 +15,18 @@ class EventSpec:
 EVENT_CATALOG: dict[str, EventSpec] = {
     "logging.contract.violation": EventSpec("error"),
     'agent.agent_host.final_answer_read_failed.diagnostic': EventSpec('debug', frozenset()),
+    "analytics.contract.violation": EventSpec(
+        "warning", frozenset({"reason", "analytic_event", "origin"})
+    ),
+    "analytics.delivery.failed": EventSpec(
+        "warning", frozenset({"status", "count", "error_type"})
+    ),
+    "analytics.buffer.overflowed": EventSpec("warning", frozenset({"count"})),
+    "analytics.flush.failed": EventSpec("warning", frozenset({"error_type"})),
+    "analytics.pod_delivered.cache_unavailable": EventSpec("debug", frozenset()),
+    "analytics.app_session.cache_unavailable": EventSpec("debug", frozenset()),
+    "analytics.app_session.record_failed": EventSpec("debug", frozenset()),
+    "analytics.shutdown.drain_timed_out": EventSpec("warning", frozenset({"count"})),
     'agent.agent_runner_service.agent_run_cancelled_timeout_or.timeout': EventSpec('warning', frozenset({'agent_run_id'})),
     'agent.agent_runner_service.agent_run_finalization_cancelled_run.diagnostic': EventSpec('debug', frozenset({'agent_run_id'})),
     'agent.agent_runner_service.agent_run_finalization_run_s.failed': EventSpec('error', frozenset({'agent_run_id'})),

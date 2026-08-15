@@ -34,7 +34,9 @@ from app.core.infrastructure.jobs.streaq_runtime import (
     streaq_worker,
 )
 from app.core.log.log import get_logger
+from app.core.origin import OriginKind
 from app.modules.pod_bundle.config import pod_bundle_settings
+from app.modules.pod_bundle.events import analytics as bundle_analytics
 from app.modules.pod_bundle.domain.errors import (
     BundleInvalidError,
     BundleStagingMissingError,
@@ -259,6 +261,10 @@ async def export_pod_bundle(context: dict[str, str | None]) -> None:
             kind="pod-exports", job_id=export_id, ttl_seconds=ttl
         )
         state.expires_at = _now() + timedelta(seconds=ttl)
+        await bundle_analytics.record_bundle_exported(
+            worker_ctx, export_id=export_id, pod_id=pod_id, user_id=user_id,
+            resource_count=len(getattr(state, "manifest", None) or ()),
+        )
         state.completed_at = _now()
         # Retain the READY export state (and thus its archive) for the URL's TTL,
         # longer than the default import horizon, so a shared link stays valid.
@@ -306,7 +312,7 @@ async def _fail(store, state: ExportState, message: str) -> None:
         )
 
 
-@streaq_task(name="plan_pod_import", lane=Lane.BULK)
+@streaq_task(name="plan_pod_import", lane=Lane.BULK, origin=OriginKind.IMPORT)
 async def plan_pod_import(context: dict[str, str | None]) -> None:
     """Diff a staged bundle against the pod and produce a resumable plan.
 
@@ -399,7 +405,7 @@ async def _plan_from_staging(worker_ctx, store, staging, state: ImportState) -> 
     )
 
 
-@streaq_task(name="import_pod_github", lane=Lane.BULK)
+@streaq_task(name="import_pod_github", lane=Lane.BULK, origin=OriginKind.IMPORT)
 async def import_pod_github(context: dict[str, str | None]) -> None:
     """Fetch a GitHub zipball, using the selected connector account when set."""
     worker_ctx: AppWorkerContext = streaq_worker.context
@@ -475,7 +481,7 @@ async def import_pod_github(context: dict[str, str | None]) -> None:
     )
 
 
-@streaq_task(name="import_pod_url", lane=Lane.BULK)
+@streaq_task(name="import_pod_url", lane=Lane.BULK, origin=OriginKind.IMPORT)
 async def import_pod_url(context: dict[str, str | None]) -> None:
     """Copy a lemma-origin source object (an export or an uploaded bundle) into
     this import's own staging, then plan — one job per ``import_id``. The source
@@ -534,7 +540,7 @@ async def import_pod_url(context: dict[str, str | None]) -> None:
         raise
 
 
-@streaq_task(name="apply_pod_import", lane=Lane.BULK)
+@streaq_task(name="apply_pod_import", lane=Lane.BULK, origin=OriginKind.IMPORT)
 async def apply_pod_import(context: dict[str, str | None]) -> None:
     """Apply an approved plan step by step: each step runs in its own short UoW
     (commit) then a Redis checkpoint, so a crash resumes from the first pending
@@ -694,6 +700,11 @@ async def apply_pod_import(context: dict[str, str | None]) -> None:
         state.status = ImportStatus.COMPLETED
         state.completed_at = _now()
         await store.save_import(state)
+        await bundle_analytics.record_import_completed(
+            worker_ctx, import_id=import_id, pod_id=pod_id, user_id=user_id,
+            resource_count=len(getattr(state.plan, "steps", None) or ()),
+            is_remix=bool(getattr(state, "is_remix", False)),
+        )
         await publish_bundle_event(
             import_id, completed_payload(state.status.value, state.seq)
         )

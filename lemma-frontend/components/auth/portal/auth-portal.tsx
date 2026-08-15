@@ -22,6 +22,7 @@ import EmailVerification, {
   EmailVerificationClaim,
 } from "supertokens-auth-react/recipe/emailverification";
 
+import { resetAnalyticsIdentity } from "@/lib/analytics/client";
 import { authConfig, buildApiUrl, refreshSessionPath } from "@/components/auth/portal/auth/config";
 import {
   clearStoredRedirectUri,
@@ -618,6 +619,9 @@ function AuthLanding() {
               onClick={() => {
                 void Session.signOut().then(() => {
                   clearStoredRedirectUri();
+                  // This path does not go through `logoutToHome`, so it needs
+                  // its own reset or identity leaks across accounts here.
+                  resetAnalyticsIdentity();
                   setCurrentUser(null);
                   window.location.replace(getDefaultPostAuthRedirect());
                 });

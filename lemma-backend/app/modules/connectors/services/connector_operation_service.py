@@ -36,6 +36,7 @@ from app.modules.connectors.services.account_resolution_service import (
     AccountResolutionService,
 )
 from app.modules.connectors.services.connector_service import ConnectorService
+from app.modules.connectors.domain.analytics import operation_execution_recorded
 from app.modules.connectors.domain.execution_plan import ResolvedConnectorExecution
 
 __all__ = ["ConnectorOperationService", "ResolvedConnectorExecution"]
@@ -597,7 +598,7 @@ class ConnectorOperationService:
         connection: the gateway's connector-validation read is skipped because
         ``provider`` is supplied (the connector was validated in the resolve
         phase), and the concrete provider gateways are DB-free."""
-        with execution_failures_translated():
+        with operation_execution_recorded(resolved), execution_failures_translated():
             result = await self._dispatcher().execute(
                 execution_request(self._dispatcher(), resolved)
             )

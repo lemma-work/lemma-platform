@@ -24,6 +24,15 @@ MISSING = object()
 _RETRYABLE_STATUS = frozenset({429, 502, 503, 504})
 
 
+# Callers that are something more specific than "a program using the SDK" say
+# so through this variable, because the backend cannot tell them apart from the
+# request alone. The CLI sets it; anything unrecognised is ignored server-side
+# and read as a plain SDK call, which is the honest default -- an unknown caller
+# must never be counted as a person in a browser.
+_CLIENT_ENV_VAR = "LEMMA_CLIENT"
+_KNOWN_CLIENTS = frozenset({"lemma-cli", "lemma-desktop", "lemma-web", "lemma-app"})
+
+
 def _client_header() -> str:
     """Identify this SDK + version on every request so the backend can log which
     client hit an endpoint (read drift-free from installed package metadata)."""
@@ -36,6 +45,11 @@ def _client_header() -> str:
             ver = "unknown"
     except Exception:  # pragma: no cover - importlib always present on Python 3.14
         ver = "unknown"
+    import os
+
+    declared = (os.environ.get(_CLIENT_ENV_VAR) or "").strip()
+    if declared in _KNOWN_CLIENTS:
+        return f"{declared}/{ver}"
     return f"lemma-sdk-py/{ver}"
 
 
