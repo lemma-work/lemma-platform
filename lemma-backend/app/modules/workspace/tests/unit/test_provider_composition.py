@@ -25,7 +25,7 @@ def test_the_module_reads_its_own_env_var_names(monkeypatch) -> None:
     assert resolved.local_callback_url == "http://127.0.0.1:8710"
 
 
-def test_the_e2b_surface_is_exactly_four_settings() -> None:
+def test_the_e2b_surface_is_exactly_five_settings() -> None:
     """`E2B_*_BUILD_ID` is a CI repository variable, not a backend setting.
 
     The workflows pin the exact template build their runs exercise with it.
@@ -48,6 +48,9 @@ def test_the_e2b_surface_is_exactly_four_settings() -> None:
         "E2B_WORKSPACE_TEMPLATE",
         "E2B_FUNCTION_TEMPLATE",
         "E2B_DOMAIN",
+        # A safety boundary, not a preference: it is what keeps a test's orphan
+        # sweep from identifying -- and destroying -- a live account's sandboxes.
+        "E2B_METADATA_NAMESPACE",
     }
 
 

@@ -26,6 +26,7 @@ from sandbox_runtime.errors import SandboxUnavailable
 from app.modules.workspace.sandbox_session import (
     SandboxWorkspaceSession,
     canonical_workspace_cwd,
+    forget_python_sessions,
 )
 from app.modules.workspace.services.interfaces import ISandbox, IWorkspaceSession
 from app.modules.workspace.services.local_sandbox_client import LocalSandboxClient
@@ -85,8 +86,8 @@ class WorkspaceSandboxService:
     # Directories already created, by the same key. The singleflight above only
     # collapses concurrent callers, so every tool call re-ran the mkdir round
     # trip -- 833ms at p50, on a directory that had existed since the first
-    # command. The key carries the sandbox's allocation and epoch, so a
-    # recreated sandbox misses rather than inheriting a stale readiness.
+    # command. The key carries the storage generation, so a disk reset misses
+    # while a mere container recreate keeps what is still on the volume.
     _ready_directories: dict[tuple[int, UUID, str, int, str], float] = {}
     _stopping: dict[tuple[int, UUID], asyncio.Event] = {}
 
@@ -234,6 +235,7 @@ class WorkspaceSandboxService:
             if cache_key[: len(loop_key)] == loop_key
         ]:
             cls._ready_directories.pop(cache_key, None)
+        forget_python_sessions(user_id)
 
     async def stop_sandbox(self, user_id: UUID) -> None:
         key = (id(asyncio.get_running_loop()), user_id)
@@ -411,6 +413,9 @@ class WorkspaceSandboxService:
             owns_client=False,
             output_cursor_store=self.process_store,
             workspace_recreated=workspace_recreated,
+            # Identifies the container, so a recreate invalidates the remembered
+            # interpreter that died with the old one.
+            allocation_epoch=sandbox_info.allocation_epoch,
         )
 
     async def _ensure_workspace_directory(
@@ -511,9 +516,23 @@ class WorkspaceSandboxService:
         path: str,
         sandbox_info: SandboxInfo,
     ) -> tuple[int, UUID, str, int, str] | None:
+        """Identity for "this directory exists", which is the disk's, not the
+        container's.
+
+        ``/workspace`` is the mounted volume, so whether the directory is there
+        is a property of the storage rather than of whichever container is
+        currently attached to it. Keyed by the allocation epoch, a container
+        recreate invalidated a directory that had never gone away -- paying a
+        round trip to make a directory that was already present -- while a
+        storage generation moving underneath the same epoch, which is the case
+        where the files really are gone, did not invalidate anything.
+
+        Keyed by the storage generation both come out right: a recreate keeps
+        the entry, and a reset drops it.
+        """
         if (
             sandbox_info.allocation_id is None
-            or sandbox_info.allocation_epoch is None
+            or sandbox_info.storage_generation is None
         ):
             return None
         # The leading (loop id, user id) must stay a prefix of the ensure key:
@@ -522,7 +541,7 @@ class WorkspaceSandboxService:
             id(asyncio.get_running_loop()),
             user_id,
             sandbox_info.allocation_id,
-            sandbox_info.allocation_epoch,
+            sandbox_info.storage_generation,
             path,
         )
 

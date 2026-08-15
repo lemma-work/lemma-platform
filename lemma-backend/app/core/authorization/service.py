@@ -600,19 +600,29 @@ class AuthorizationDataService:
         request_id: str | None = None,
     ) -> Context:
         authorizer = Authorizer(self.session)
-        pod = await self.session.get(Pod, pod_id)
-        organization_id = pod.organization_id if pod is not None else None
         normalized_principal_type = principal_type.upper()
         actor_type = ActorType.AGENT if normalized_principal_type == "AGENT" else ActorType.FUNCTION
 
+        # Ask the cache FIRST, exactly as the user path does. The pod-scoped key
+        # omits the organization (see ``_snapshot_suffix``), so a hit needs no
+        # database read: the snapshot carries the organization in its payload.
+        # This read the Pod row first purely to build the key, and every agent
+        # tool call that touches a pod, datastore or connector paid for it no
+        # matter how warm the cache was.
+        #
         # The role snapshot cache is keyed by principal id; workload principals
         # (agent/function ids) share it with user ids without collision.
         async with connection_released(getattr(self, "session", None)):
             cached = await get_role_snapshot(
                 user_id=principal_id,
-                organization_id=organization_id,
+                organization_id=None,
                 pod_id=pod_id,
             )
+        organization_id: UUID | None = None
+        if cached is None:
+            # Miss: deriving the snapshot needs the organization.
+            pod = await self.session.get(Pod, pod_id)
+            organization_id = pod.organization_id if pod is not None else None
         if cached is not None:
             return Context(
                 actor_type=actor_type,
