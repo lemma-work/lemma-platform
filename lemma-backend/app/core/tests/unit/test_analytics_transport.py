@@ -196,3 +196,31 @@ async def test_close_is_idempotent() -> None:
     sink = PostHogSink(write_key="phc_test", host="https://example.invalid")
     await sink.aclose()
     await sink.aclose()
+
+
+# -- analytics must never fail a request ----------------------------------
+
+
+async def test_recording_an_app_session_cannot_fail_authentication() -> None:
+    """`verify_auth` wraps its body in a broad ``except Exception`` that becomes
+    a 401, so anything escaping the analytics call would refuse a valid session.
+
+    This shipped once: a connection object without ``.headers`` raised straight
+    through and turned six authentication paths into 401s. Analytics is never
+    worth failing a request over, and certainly not authentication.
+    """
+    from types import SimpleNamespace
+
+    from app.composition.app_session import maybe_record_app_session
+
+    class _Exploding:
+        @property
+        def headers(self):
+            raise RuntimeError("boom")
+
+    # No headers at all, headers that raise, and a session that is not one.
+    await maybe_record_app_session(SimpleNamespace(), object(), "user-1")
+    await maybe_record_app_session(_Exploding(), object(), "user-1")
+    await maybe_record_app_session(
+        SimpleNamespace(headers={"X-Lemma-App": "not-a-uuid"}), object(), "user-1"
+    )

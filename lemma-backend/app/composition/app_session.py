@@ -41,7 +41,10 @@ _KEY = "analytics:app-session:{app_id}:{handle}"
 
 
 def _app_id(connection) -> UUID | None:
-    raw = connection.headers.get(APP_HEADER)
+    headers = getattr(connection, "headers", None)
+    if headers is None:
+        return None
+    raw = headers.get(APP_HEADER)
     if not raw:
         return None
     try:
@@ -54,9 +57,22 @@ def _app_id(connection) -> UUID | None:
 async def maybe_record_app_session(connection, session, user_id: UUID | str) -> None:
     """Record this app session if it is the first request of one.
 
-    Called from the auth path, so it must be cheap for every request that is not
-    an app: the header check short-circuits before anything touches Redis.
+    Cannot raise, by construction. This is called from ``verify_auth``, whose
+    broad ``except Exception`` turns anything that escapes into a 401 -- so a
+    failure in here would not merely lose an analytics event, it would refuse a
+    valid session. Analytics is never worth failing a request over; it is
+    certainly not worth failing *authentication* over.
+
+    Cheap for every request that is not an app: the header check short-circuits
+    before anything touches Redis or the database.
     """
+    try:
+        await _record_app_session(connection, session, user_id)
+    except Exception:  # noqa: BLE001 - see above; nothing here may reach the caller
+        logger.debug("analytics.app_session.record_failed")
+
+
+async def _record_app_session(connection, session, user_id: UUID | str) -> None:
     app_id = _app_id(connection)
     if app_id is None:
         return

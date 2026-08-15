@@ -1,11 +1,16 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useSyncExternalStore } from 'react';
 import Link from 'next/link';
 
 import { Button } from '@/components/ui/button';
 import { applyAnalyticsPersistence } from '@/lib/analytics/client';
-import { readConsentDecision, recordConsentDecision } from '@/lib/analytics/consent';
+import {
+    consentServerSnapshot,
+    readConsentDecision,
+    recordConsentDecision,
+    subscribeToConsent,
+} from '@/lib/analytics/consent';
 import { config, isLocalDeployment } from '@/lib/config';
 
 /**
@@ -21,25 +26,22 @@ import { config, isLocalDeployment } from '@/lib/config';
  * not asking.
  */
 export function ConsentBanner() {
-    // `undefined` means "not decided yet on the client" — this must not render
-    // during SSR, where localStorage does not exist and every visitor would get
-    // a flash of the banner regardless of their earlier answer.
-    const [visible, setVisible] = useState<boolean | undefined>(undefined);
+    // Read through the store rather than an effect: the decision lives in
+    // localStorage, which does not exist during SSR, and the server snapshot
+    // keeps the banner hidden until hydration says otherwise — so nobody who has
+    // already answered sees it flash.
+    const decision = useSyncExternalStore(
+        subscribeToConsent,
+        readConsentDecision,
+        consentServerSnapshot,
+    );
 
-    useEffect(() => {
-        if (isLocalDeployment() || !config.ANALYTICS_KEY) {
-            setVisible(false);
-            return;
-        }
-        setVisible(readConsentDecision() === 'unanswered');
-    }, []);
+    const analyticsRuns = !isLocalDeployment() && Boolean(config.ANALYTICS_KEY);
+    if (!analyticsRuns || decision !== 'unanswered') return null;
 
-    if (!visible) return null;
-
-    const decide = (decision: 'granted' | 'denied') => {
-        recordConsentDecision(decision);
-        applyAnalyticsPersistence(decision === 'granted');
-        setVisible(false);
+    const decide = (choice: 'granted' | 'denied') => {
+        recordConsentDecision(choice);
+        applyAnalyticsPersistence(choice === 'granted');
     };
 
     return (
@@ -47,13 +49,13 @@ export function ConsentBanner() {
             role="dialog"
             aria-live="polite"
             aria-label="Analytics preferences"
-            className="fixed bottom-4 left-4 z-50 max-w-sm rounded-lg border border-border bg-background p-4 shadow-lg"
+            className="lemma-pop-card fixed bottom-4 left-4 z-[1200] max-w-sm p-4"
         >
-            <p className="text-sm text-foreground">
+            <p className="text-sm text-[var(--text-primary)]">
                 We measure how Lemma is used so we can make it better. Nothing you build —
                 records, files or agent conversations — is ever sent.
             </p>
-            <p className="mt-2 text-xs text-muted-foreground">
+            <p className="mt-2 text-xs text-[var(--text-secondary)]">
                 Accepting stores a small identifier on this device.{' '}
                 <Link href="/privacy" className="underline underline-offset-2">
                     How we handle data

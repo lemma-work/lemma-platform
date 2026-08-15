@@ -44,7 +44,9 @@ pub struct TelemetryState {
 /// Desktop does not send.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InstallEvent {
-    Launched { cold: bool },
+    Launched {
+        cold: bool,
+    },
     RuntimeInstallStarted,
     RuntimeInstallCompleted,
     /// `step` and `class` are bounded identifiers from the installer's own
@@ -54,9 +56,16 @@ pub enum InstallEvent {
         step: &'static str,
         class: &'static str,
     },
-    RuntimeReady { cached: bool, duration_ms: u64 },
-    ModeSelected { local: bool },
-    Quit { session_seconds: u64 },
+    RuntimeReady {
+        cached: bool,
+        duration_ms: u64,
+    },
+    ModeSelected {
+        local: bool,
+    },
+    Quit {
+        session_seconds: u64,
+    },
 }
 
 impl InstallEvent {
@@ -96,8 +105,14 @@ impl InstallEvent {
                 cached,
                 duration_ms,
             } => {
-                props.insert("source".into(), if cached { "cached" } else { "fresh" }.into());
-                props.insert("duration_bucket".into(), duration_bucket(duration_ms).into());
+                props.insert(
+                    "source".into(),
+                    if cached { "cached" } else { "fresh" }.into(),
+                );
+                props.insert(
+                    "duration_bucket".into(),
+                    duration_bucket(duration_ms).into(),
+                );
             }
             Self::ModeSelected { local } => {
                 props.insert("mode".into(), if local { "local" } else { "hosted" }.into());
@@ -204,7 +219,10 @@ pub fn is_enabled(root: &Path) -> bool {
     if disabled {
         return false;
     }
-    if std::env::var(KEY_ENV).map(|k| k.trim().is_empty()).unwrap_or(true) {
+    if std::env::var(KEY_ENV)
+        .map(|k| k.trim().is_empty())
+        .unwrap_or(true)
+    {
         return false;
     }
     load_state(root).enabled != Some(false)
@@ -229,7 +247,10 @@ pub fn record(root: &Path, event: InstallEvent) {
         }],
     });
     std::thread::spawn(move || {
-        let client = match reqwest::blocking::Client::builder().timeout(TIMEOUT).build() {
+        let client = match reqwest::blocking::Client::builder()
+            .timeout(TIMEOUT)
+            .build()
+        {
             Ok(client) => client,
             Err(_) => return,
         };

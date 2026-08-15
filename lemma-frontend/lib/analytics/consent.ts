@@ -45,4 +45,23 @@ export function recordConsentDecision(decision: Exclude<ConsentDecision, "unansw
         // Nothing to do: the decision holds for this session either way, and a
         // device that cannot remember it stays cookieless, which is the safe end.
     }
+    for (const listener of listeners) listener();
+}
+
+/** Subscribers for `useSyncExternalStore`.
+ *
+ *  The decision is a client-only value — it lives in localStorage, which does
+ *  not exist during SSR — so components read it through the store rather than
+ *  by setting state in an effect. Same shape as `lib/desktop/local-capabilities`. */
+const listeners = new Set<() => void>();
+
+export function subscribeToConsent(listener: () => void): () => void {
+    listeners.add(listener);
+    return () => listeners.delete(listener);
+}
+
+/** The server never has a decision, so it always renders as if unanswered — and
+ *  the banner is hidden until hydration tells it otherwise. */
+export function consentServerSnapshot(): ConsentDecision {
+    return "unanswered";
 }
