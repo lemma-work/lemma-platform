@@ -23,20 +23,10 @@ CLIENT_EMITTED = frozenset({"share_link.viewed", "import.started"})
 #: Shrinking this set is the Phase 1 follow-up.
 KNOWN_GAPS = frozenset(
     {
-        "organization.created",
-        "organization.member_joined",
         "pod.delivered",
-        "agent.created",
-        "workflow.created",
-        "schedule.created",
         "app.created",
         "app.published",
         "app.session_started",
-        "conversation.started",
-        "workflow_run.completed",
-        "schedule_run.completed",
-        "surface.connected",
-        "surface.message_answered",
         "connector.connected",
         "connector.operation_executed",
         "bundle.exported",

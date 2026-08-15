@@ -16,6 +16,7 @@ from app.core.authorization.sql_actions import (
     allowed_actions_contains,
     allowed_actions_expr,
 )
+from app.modules.schedule.domain.events.schedule import ScheduleCreated
 from app.modules.schedule.domain.interfaces import (
     ScheduleRepository as ScheduleRepositoryInterface,
 )
@@ -105,6 +106,21 @@ class ScheduleRepository(ScheduleRepositoryInterface):
         await self.session.flush()
         created = await self.get(schedule.id)
         assert created is not None
+        # `ScheduleCreated` has existed since the module was written and nothing
+        # ever published it. Raised here rather than in the service because this
+        # is the single write path, and the row exists by now -- so an event that
+        # fires is an event that committed.
+        self.uow.collect_events(
+            [
+                ScheduleCreated(
+                    schedule_id=created.id,
+                    schedule_type=created.schedule_type,
+                    user_id=created.user_id,
+                    pod_id=created.pod_id,
+                    config=created.config or {},
+                )
+            ]
+        )
         return created
 
     def _to_entity_with_allowed_actions(

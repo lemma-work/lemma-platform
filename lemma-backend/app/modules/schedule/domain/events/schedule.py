@@ -26,6 +26,10 @@ class ScheduleLifecycleEvent(ScheduleEvent):
     """A change to the schedule itself, always attributed to its owner."""
 
     user_id: UUID
+    #: Optional because a schedule is not required to belong to a pod, not
+    #: because it is unknown -- the owning pod is on the entity at every
+    #: lifecycle point.
+    pod_id: UUID | None = None
 
 
 class ScheduleCreated(ScheduleLifecycleEvent):
@@ -40,6 +44,19 @@ class ScheduleUpdated(ScheduleLifecycleEvent):
 
 class ScheduleDeleted(ScheduleLifecycleEvent):
     event_type: str = "schedule.deleted"
+
+
+class ScheduleRunCompleted(ScheduleEvent):
+    """One scheduled run reached a terminal outcome.
+
+    Not a lifecycle event: it says nothing about the schedule's definition, and
+    it carries no ``user_id`` because a scheduled run has no person on it -- the
+    whole point of a schedule is that it runs when nobody is there.
+    """
+
+    event_type: str = "schedule.run.completed"
+    pod_id: UUID | None = None
+    status: str
 
 
 class ScheduleDeactivated(ScheduleLifecycleEvent):

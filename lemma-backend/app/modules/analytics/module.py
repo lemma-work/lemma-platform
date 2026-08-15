@@ -21,5 +21,8 @@ module = LemmaModule(
         ("datastore.events", "analytics-datastore"),
         ("function.events", "analytics-function"),
         ("agent_events", "analytics-agent"),
+        ("schedule_events", "analytics-schedule"),
+        ("workflow_run_events", "analytics-workflow"),
+        ("surface_events", "analytics-surface"),
     ),
 )
