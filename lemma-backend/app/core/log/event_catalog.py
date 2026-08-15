@@ -315,6 +315,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'connector_catalog.toolkits.selected': EventSpec('debug', frozenset({'managed_by', 'toolkit_count'})),
     'connectors.account_identity.telegram_getme_while_resolving_account.diagnostic': EventSpec('debug', frozenset()),
     'connectors.breaker.opened.degraded': EventSpec('warning', frozenset({'cooldown_seconds', 'failures', 'scope'})),
+    'function.runtime.endpoint_acquired': EventSpec('info', frozenset({'cold', 'elapsed_ms', 'mode', 'pod_id'})),
     'connectors.breaker.unavailable.diagnostic': EventSpec('debug', frozenset({'scope'})),
     'connectors.composio_auth_provider.fetch_token_info_google_api.diagnostic': EventSpec('debug', frozenset({'status'})),
     'connectors.composio_auth_provider.fetching_google_token_expiration.diagnostic': EventSpec('debug', frozenset()),
