@@ -38,7 +38,6 @@ export function clientHeaderValue(client: KnownClient = DEFAULT_CLIENT): string 
   return `${named}/${SDK_VERSION}`;
 }
 
-export const CLIENT_HEADER_VALUE = clientHeaderValue();
 
 export function shouldSendClientHeader(apiUrl: string, method: string): boolean {
   const normalizedMethod = method.toUpperCase();

@@ -9852,7 +9852,6 @@ var LemmaClient = (() => {
     const named = KNOWN_CLIENTS.includes(client) ? client : DEFAULT_CLIENT;
     return `${named}/${SDK_VERSION}`;
   }
-  var CLIENT_HEADER_VALUE = clientHeaderValue();
   function shouldSendClientHeader(apiUrl, method) {
     const normalizedMethod = method.toUpperCase();
     if (normalizedMethod !== "GET" && normalizedMethod !== "HEAD") {

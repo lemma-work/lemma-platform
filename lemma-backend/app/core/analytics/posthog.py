@@ -107,6 +107,8 @@ class PostHogSink:
                     self._stopping.wait(), timeout=self._flush_interval
                 )
             except asyncio.TimeoutError:
+                # The normal path: no stop was requested, so the interval simply
+                # elapsed and it is time to flush.
                 pass
             try:
                 await self._drain_once()
@@ -171,6 +173,8 @@ class PostHogSink:
                 # below starts popping the same deque.
                 await asyncio.wait_for(task, timeout=_TASK_STOP_TIMEOUT_SECONDS)
             except asyncio.TimeoutError:
+                # `wait_for` has already cancelled the task and awaited it, so
+                # there is nothing left to do but proceed to the final drain.
                 pass
             except Exception as exc:  # noqa: BLE001 - a dead flusher still owes us a drain
                 logger.warning(

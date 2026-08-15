@@ -17,6 +17,7 @@
 //! compiled in, which is the case for every locally built binary.
 
 use std::fs;
+#[cfg(unix)]
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -189,6 +190,10 @@ pub fn install_id(root: &Path) -> String {
 }
 
 fn random_hex() -> String {
+    // `mut` only where something writes to it: the unix branch fills this from
+    // /dev/urandom, and on Windows nothing does, where `-D warnings` rejects an
+    // unused `mut`.
+    #[cfg_attr(not(unix), allow(unused_mut))]
     let mut bytes = [0u8; 16];
     #[cfg(unix)]
     {

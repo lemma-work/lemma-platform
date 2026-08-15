@@ -40,10 +40,8 @@ class DomainEvent(BaseModel):
     # construction, because the consumer runs in a worker long after the
     # request context is gone -- and a consumer guessing the origin from its
     # own surroundings is how an origin dimension turns quietly wrong.
-    origin: str | None = Field(default_factory=lambda: _current_origin_value())
-    origin_platform: str | None = Field(
-        default_factory=lambda: _current_origin_platform()
-    )
+    origin: str | None = Field(default_factory=_current_origin_value)
+    origin_platform: str | None = Field(default_factory=_current_origin_platform)
     traceparent: str | None = Field(
         default=None, exclude_if=lambda value: value is None
     )

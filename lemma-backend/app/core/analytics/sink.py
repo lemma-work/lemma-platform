@@ -41,11 +41,9 @@ class AnalyticsSink(Protocol):
         Analytics is never worth failing a request over, so a sink that cannot
         deliver drops instead of propagating. Transport happens elsewhere.
         """
-        ...
 
     async def aclose(self) -> None:
         """Deliver what is buffered and release resources."""
-        ...
 
 
 class NullSink:
