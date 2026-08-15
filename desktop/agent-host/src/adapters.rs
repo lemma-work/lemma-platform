@@ -1125,17 +1125,42 @@ mod tests {
         );
         assert_eq!(manifest.installed_fingerprint().len(), 64);
 
-        // And it has to distinguish machines, or nothing is ever detected. A
-        // manifest naming a command that cannot exist must not collide with the
-        // real one.
-        let mut absent = manifest.clone();
-        for adapter in &mut absent.adapters {
-            adapter.upstream_command = format!("lemma-absent-{}", adapter.key);
-        }
+        // And it has to distinguish machines, or nothing is ever detected.
+        //
+        // Demonstrated through the adapter cache, which this test owns, rather
+        // than by renaming `upstream_command` to something that cannot resolve.
+        // That version passed only on a machine with an agent installed: where
+        // none is, the real manifest and the renamed one both resolve every
+        // command to "absent" and fingerprint identically. It was green
+        // everywhere a developer ran it and red on every CI runner, which is the
+        // worst way round.
+        let cache = tempfile::tempdir().unwrap();
+        let manifest = manifest.with_cache_root(cache.path().to_path_buf());
+        let spec = manifest
+            .adapters
+            .iter()
+            .find(|adapter| adapter.distribution.starts_with("npm:"))
+            .expect("a certified npm adapter")
+            .clone();
+
+        let before = manifest.installed_fingerprint();
+        let executable = cached_adapter_executable(cache.path(), &spec);
+        std::fs::create_dir_all(executable.parent().unwrap()).unwrap();
+        std::fs::write(&executable, b"#!/bin/sh\n").unwrap();
+        let after = manifest.installed_fingerprint();
         assert_ne!(
-            manifest.installed_fingerprint(),
-            absent.installed_fingerprint(),
+            before, after,
             "a different set of installed agents must fingerprint differently"
+        );
+
+        // Size is folded in, so an agent replaced in place counts as a change
+        // even at the same path. Without it an upgrade would be invisible until
+        // the fifteen-minute sweep.
+        std::fs::write(&executable, b"#!/bin/sh\necho a bigger one\n").unwrap();
+        assert_ne!(
+            after,
+            manifest.installed_fingerprint(),
+            "an agent replaced in place must fingerprint differently"
         );
     }
 
