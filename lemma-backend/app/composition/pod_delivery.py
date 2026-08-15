@@ -63,6 +63,39 @@ AUTONOMOUS_ORIGINS = frozenset(
     {OriginKind.SCHEDULE, OriginKind.DATA_TRIGGER, OriginKind.CONNECTOR}
 )
 
+#: Claim activation for a pod, exactly once.
+#:
+#: The ``NOT (... ? 'delivered_at')`` guard is what makes it once-only: two
+#: workers processing two outcomes for the same pod at the same instant both run
+#: this, and only one gets a row back.
+#:
+#: The casts are load-bearing, not decoration. ``jsonb_build_object`` declares
+#: its arguments as ``"any"``, so PostgreSQL cannot infer a type for a bound
+#: parameter and asyncpg raises ``IndeterminateDatatypeError`` before the
+#: statement runs at all. Without them this never wrote the marker, so the guard
+#: never became false and every later outcome retried it forever.
+#:
+#: ``CAST(x AS text)`` rather than ``x::text``: SQLAlchemy's ``text()`` scans for
+#: ``:name`` and reads the second colon of ``::text`` as a bind parameter called
+#: ``text``, which turns the statement into a syntax error. The ``'{}'::jsonb``
+#: literals below are unaffected because no bind parameter precedes them.
+#:
+#: Kept as a module constant so the e2e test binds the same statement production
+#: does. A copy in the test would have passed while this failed.
+DELIVERY_CLAIM_SQL = """
+UPDATE pods
+SET config = jsonb_set(
+    coalesce(config, '{}'::jsonb),
+    '{analytics}',
+    coalesce(config->'analytics', '{}'::jsonb)
+        || jsonb_build_object('delivered_at', CAST(:now AS text), 'via', CAST(:via AS text)),
+    true
+)
+WHERE id = :pod_id
+  AND NOT (coalesce(config->'analytics', '{}'::jsonb) ? 'delivered_at')
+RETURNING id
+"""
+
 _CACHE_KEY = "analytics:pod-delivered:{pod_id}"
 
 
@@ -121,21 +154,7 @@ async def maybe_emit_pod_delivered(
     created_at = None
     async with uow_factory() as uow:
         claimed = await uow.session.scalar(
-            text(
-                """
-                UPDATE pods
-                SET config = jsonb_set(
-                    coalesce(config, '{}'::jsonb),
-                    '{analytics}',
-                    coalesce(config->'analytics', '{}'::jsonb)
-                        || jsonb_build_object('delivered_at', :now, 'via', :via),
-                    true
-                )
-                WHERE id = :pod_id
-                  AND NOT (coalesce(config->'analytics', '{}'::jsonb) ? 'delivered_at')
-                RETURNING id
-                """
-            ),
+            text(DELIVERY_CLAIM_SQL),
             {
                 "pod_id": pod_id,
                 "now": datetime.now(timezone.utc).isoformat(),
