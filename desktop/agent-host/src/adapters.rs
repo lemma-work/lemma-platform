@@ -630,12 +630,9 @@ fn install_npm_adapter(spec: &AdapterSpec, staging: &Path) -> anyhow::Result<()>
         .ok_or_else(|| anyhow::anyhow!("npm is required to install ACP adapters"))?;
     std::fs::create_dir_all(staging)?;
     let mut command = Command::new(npm);
-    command.no_console_window().args([
-        "install",
-        "--ignore-scripts",
-        "--no-audit",
-        "--no-fund",
-    ]);
+    command
+        .no_console_window()
+        .args(["install", "--ignore-scripts", "--no-audit", "--no-fund"]);
     // Lemma exists to drive the agent the user already has, holding the user's
     // own credentials and configuration. Downloading a second copy contradicts
     // that even when it works, and it was most of why a first run took minutes.
@@ -1195,11 +1192,10 @@ mod tests {
         assert_eq!(waiting.health, HarnessHealth::Installing);
         assert!(waiting.stale_reason.is_none());
 
-        manifest
-            .install_failures
-            .lock()
-            .unwrap()
-            .insert(spec.key.clone(), "npm is required to install ACP adapters".into());
+        manifest.install_failures.lock().unwrap().insert(
+            spec.key.clone(),
+            "npm is required to install ACP adapters".into(),
+        );
 
         let failed = manifest.snapshot_for(&spec);
         assert_eq!(

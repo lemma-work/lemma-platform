@@ -457,7 +457,10 @@ mod tests {
             let mut theirs = spec_enum(spec_name);
             ours.sort();
             theirs.sort();
-            assert_eq!(ours, theirs, "{spec_name} has drifted apart from this crate");
+            assert_eq!(
+                ours, theirs,
+                "{spec_name} has drifted apart from this crate"
+            );
         }
     }
 

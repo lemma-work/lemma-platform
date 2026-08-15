@@ -93,12 +93,7 @@ impl ApiError {
         };
         serde_json::from_str::<Value>(body)
             .ok()
-            .and_then(|body| {
-                body.get("detail")?
-                    .get("code")?
-                    .as_str()
-                    .map(str::to_owned)
-            })
+            .and_then(|body| body.get("detail")?.get("code")?.as_str().map(str::to_owned))
             .is_some_and(|code| code == "AGENT_HOST_REVOKED_OR_MISSING")
     }
 

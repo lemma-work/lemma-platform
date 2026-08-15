@@ -715,15 +715,20 @@ impl TargetWorker {
         let mut dropped = false;
         HostConfig::mutate(&self.paths, |config| {
             let before = config.targets.len();
-            config.targets.retain(|target| target.target_id != target_id);
+            config
+                .targets
+                .retain(|target| target.target_id != target_id);
             dropped = config.targets.len() != before;
             Ok(dropped)
         })?;
         if !dropped {
             return Ok(());
         }
-        self.journal
-            .update_target_state(self.target.target_id, "REVOKED", Some("revoked by Lemma"))?;
+        self.journal.update_target_state(
+            self.target.target_id,
+            "REVOKED",
+            Some("revoked by Lemma"),
+        )?;
         tracing::info!(
             target = %self.target.name,
             "dropped a revoked pairing; this computer will not poll it again"

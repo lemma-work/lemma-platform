@@ -327,7 +327,8 @@ mod tests {
                         config.targets.push(TargetConfig {
                             target_id: Uuid::new_v4(),
                             name: format!("target-{index}"),
-                            base_url: url::Url::parse(&format!("https://{index}.example/")).unwrap(),
+                            base_url: url::Url::parse(&format!("https://{index}.example/"))
+                                .unwrap(),
                             host_id: Uuid::new_v4(),
                             user_id: Uuid::new_v4(),
                             host_secret: "secret".into(),
@@ -386,7 +387,10 @@ mod tests {
             .filter_map(|entry| entry.ok().map(|entry| entry.file_name()))
             .filter(|name| name.to_string_lossy().ends_with(".tmp"))
             .collect();
-        assert!(leftovers.is_empty(), "temporaries left behind: {leftovers:?}");
+        assert!(
+            leftovers.is_empty(),
+            "temporaries left behind: {leftovers:?}"
+        );
     }
 
     #[test]
