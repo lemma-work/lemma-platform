@@ -45,6 +45,8 @@ async def enrich_or_drop(
     the provider's own API to recover.
     """
     try:
+        # Module-level, so there is no session to release here. The caller wraps
+        # this in `connection_released` — see its call site in ingress_service.
         enriched = await adapter.enrich_inbound_event(
             credentials=credentials,
             event=parsed,

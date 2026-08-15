@@ -239,6 +239,16 @@ class WorkflowRunWaitModel(UUIDAuditBase):
         index=True,
     )
     external_ref: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Promoted out of `payload`, where it was unindexable and so could only be
+    # found by reading every ACTIVE wait and parsing JSON in Python.
+    scheduled_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    # Held while a fire is in flight. A timer has no next occurrence to advance,
+    # so the lease is what stops two replicas dispatching the same wake.
+    fire_lease_until: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     payload: Mapped[dict] = mapped_column(JSONB, default=dict)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
@@ -259,6 +269,7 @@ class WorkflowRunWaitModel(UUIDAuditBase):
             status=WorkflowRunWaitStatus(self.status),
             assigned_pod_member_id=self.assigned_pod_member_id,
             external_ref=self.external_ref,
+            scheduled_at=self.scheduled_at,
             payload=self.payload or {},
             completed_at=self.completed_at,
             created_at=self.created_at,

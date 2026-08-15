@@ -124,8 +124,12 @@ async def dispatch_agent_host_permission(
 
     Returns whether the decision was *queued for* a live run. ``False`` means
     the run already ended — the host's own request timeout has taken over and
-    there is nothing left to answer — which the caller reports back to the agent
-    instead of pretending the action happened.
+    there is nothing left to answer.
+
+    Nothing reads that return value any more: the only caller now schedules this
+    through ``uow.after_commit``, so it runs once the transcript is durable and
+    there is no longer a message to vary. It is kept because it is the honest
+    result of the call, and the reconcile path may want it.
 
     ``True`` is deliberately weaker than "the host applied it". Delivery is a
     poll away and can still be missed if the machine never comes back, so the
@@ -215,58 +219,61 @@ async def record_session_approvals(
 
 async def agent_host_permission_tool_return(
     *,
+    uow: SqlAlchemyUnitOfWork,
     request: AgentHostPermissionRequest,
     agent_run_id: UUID,
     decision: AgentRunApprovalDecision,
     response: JsonObject,
 ) -> JsonObject:
-    """Send the decision to the host and describe the outcome to the agent.
+    """Describe the decision to the agent, and hand it to the host after commit.
 
     Shaped as a ``request_approval`` return like every other approval, so the
     conversation transcript reads the same however the pause arose.
 
-    ``executed`` stays False even for an approval, unlike the ordinary
-    request_approval path. It means "the wrapped tool ran", and on this path
-    Lemma runs nothing: it queues a decision for a machine that will collect it
-    on its next poll, and the ACP agent then proceeds, or does not, on its own.
-    Reporting True here would tell the agent an action completed at a moment
-    when the decision had not even been delivered.
+    The dispatch is deferred to ``after_commit`` and the message is written
+    optimistically. That is a deliberate trade, made knowingly: it used to await
+    the dispatch and branch on the result, which meant a Redis publish and a
+    second session ran inside the caller's open write transaction, holding a
+    pooled connection on a path a user is waiting on. Deferring costs the one
+    case where the host's run had already ended -- the agent now reads "queued"
+    rather than "the run ended before this reached it". Agent-host delivery is
+    asynchronous by nature and the wording never claimed delivery, so the
+    transcript stays truthful; the run-already-ended case is rare and is handled
+    anyway by `reconcile_agent_host_dispatch`, which cancels orphaned runs.
+
+    ``executed`` stays False, unlike the ordinary request_approval path. It means
+    "the wrapped tool ran", and on this path Lemma runs nothing: it queues a
+    decision for a machine that will collect it on its next poll, and the ACP
+    agent then proceeds, or does not, on its own. Reporting True would tell the
+    agent an action completed at a moment when the decision had not even been
+    handed over.
     """
     # Lazy: the tool models import the tool registry, which imports back here.
     from app.modules.agent.tools.user_interaction.models import RequestApprovalResponse
 
-    delivered = await dispatch_agent_host_permission(
-        request=request,
-        agent_run_id=agent_run_id,
-        decision=decision,
+    uow.after_commit(
+        lambda: dispatch_agent_host_permission(
+            request=request,
+            agent_run_id=agent_run_id,
+            decision=decision,
+        )
     )
+
     approved = decision != AgentRunApprovalDecision.DENY
-    if not delivered:
-        content = RequestApprovalResponse(
-            success=False,
-            error=(
-                "The local agent's run ended before this decision reached it, "
-                "so the action did not run."
-            ),
-            decision=decision,
-            executed=False,
-            response=response,
-        )
-    else:
-        content = RequestApprovalResponse(
-            success=True,
-            message=(
-                "Approved. The decision is queued for the local agent, which "
-                "will pick it up on its next poll and decide what to do; "
-                "Lemma has not run anything."
-                if approved
-                else "Denied. The decision is queued for the local agent, "
-                "which was told not to use the tool."
-            ),
-            decision=decision,
-            executed=False,
-            response=response,
-        )
+    content = RequestApprovalResponse(
+        success=True,
+        message=(
+            "Approved. The decision is queued for the local agent, which "
+            "will pick it up on its next poll and decide what to do; "
+            "Lemma has not run anything."
+            if approved
+            else "Denied. The decision is queued for the local agent, "
+            "which was told not to use the tool."
+        ),
+        decision=decision,
+        executed=False,
+        response=response,
+    )
     return content.model_dump(mode="json")
 
 

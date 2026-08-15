@@ -79,9 +79,7 @@ async def test_waiting_conversation_reports_snooze_when_a_wait_is_active(monkeyp
     adapter = AgentControlAdapter(Mock(session=Mock()))
     adapter.conversation_repo = Mock(
         get_conversation=AsyncMock(
-            return_value=SimpleNamespace(
-                status=ConversationStatus.WAITING, output=None
-            )
+            return_value=SimpleNamespace(status=ConversationStatus.WAITING, output=None)
         )
     )
     adapter.wait_repo = Mock(
@@ -103,9 +101,7 @@ async def test_waiting_conversation_still_reports_human_without_a_snooze():
     adapter = AgentControlAdapter(Mock(session=Mock()))
     adapter.conversation_repo = Mock(
         get_conversation=AsyncMock(
-            return_value=SimpleNamespace(
-                status=ConversationStatus.WAITING, output=None
-            )
+            return_value=SimpleNamespace(status=ConversationStatus.WAITING, output=None)
         )
     )
     adapter.wait_repo = Mock(find_active_for_conversation=AsyncMock(return_value=None))
@@ -114,3 +110,45 @@ async def test_waiting_conversation_still_reports_human_without_a_snooze():
 
     assert status["wait_reason"] == "HUMAN"
     assert status["wakes_at"] is None
+
+
+@pytest.mark.anyio
+async def test_a_failed_conversation_carries_the_reason_the_agent_recorded():
+    """Otherwise the workflow says an agent failed and nothing about why.
+
+    `last_run_error` is the agent's own account of the failure; dropping it
+    leaves "Agent conversation FAILED" as the only thing a run records, which
+    is exactly as much as knowing the status.
+    """
+    adapter = AgentControlAdapter(Mock(session=Mock()))
+    adapter.conversation_repo = Mock(
+        get_conversation=AsyncMock(
+            return_value=SimpleNamespace(
+                status=ConversationStatus.FAILED,
+                output=None,
+                last_run_error="model provider returned 401",
+            )
+        )
+    )
+
+    status = await adapter.get_conversation_status(uuid4())
+
+    assert status["status"] == "FAILED"
+    assert status["error"] == "Agent conversation FAILED: model provider returned 401"
+
+
+@pytest.mark.anyio
+async def test_a_failed_conversation_without_a_reason_reads_as_it_did():
+    """No reason recorded is common; do not append a dangling colon for it."""
+    adapter = AgentControlAdapter(Mock(session=Mock()))
+    adapter.conversation_repo = Mock(
+        get_conversation=AsyncMock(
+            return_value=SimpleNamespace(
+                status=ConversationStatus.FAILED, output=None, last_run_error=None
+            )
+        )
+    )
+
+    status = await adapter.get_conversation_status(uuid4())
+
+    assert status["error"] == "Agent conversation FAILED"

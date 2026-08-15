@@ -575,7 +575,6 @@ def test_sqlalchemy_debug_remains_available_when_requested(
         "com.supertokens",
         "mcp.server.lowlevel.server",
         "filelock",
-        "apscheduler.scheduler",
         "urllib3.connectionpool",
     ),
 )
@@ -611,7 +610,6 @@ def test_debug_only_noise_is_suppressed_when_quiet_dependencies_requested(
         "com.supertokens",
         "mcp.server.lowlevel.server",
         "filelock",
-        "apscheduler.scheduler",
         "urllib3.connectionpool",
     ),
 )
@@ -734,3 +732,77 @@ def test_a_credential_is_withheld_even_from_an_error() -> None:
     assert "password" not in record
     assert record["dropped_fields"] == "password"
     assert record["dsn"] == "postgres://h/db"
+
+
+def test_a_dependency_handler_holding_a_stale_stream_is_still_reconciled(
+    captured_stdout,
+) -> None:
+    """The handler does not have to hold the *current* stdout to be a console.
+
+    `supertokens_python` installs a StreamHandler at import time whose `emit`
+    rewrites `record.msg` into its own JSON envelope, in place. Logger handlers
+    run before propagation, so if that handler survives reconciliation our
+    formatter receives the mutated record and the `event` field becomes a blob
+    -- for the dependency that reports auth failures, of all of them.
+
+    It survived because the check asked whether `handler.stream` *was*
+    `sys.stdout`/`sys.stderr`, and a handler that captured the stream earlier
+    holds a different object once anything replaces it. This reproduces that
+    exactly: a handler on a stream nobody else references, mutating the record
+    the way the real SDK does.
+    """
+    import io
+
+    class _RewritingHandler(logging.StreamHandler):
+        def emit(self, record: logging.LogRecord) -> None:
+            record.msg = f'{{"sdkVer": "1.0", "message": "{record.msg}"}}'
+            super().emit(record)
+
+    dependency_logger = logging.getLogger("com.supertokens")
+    stale = _RewritingHandler(io.StringIO())
+    dependency_logger.addHandler(stale)
+    try:
+        setup_logging(
+            "production",
+            service_name="lemma-api",
+            json_logs=True,
+            log_level="INFO",
+        )
+        assert stale not in dependency_logger.handlers, (
+            "a library's console handler survived reconciliation because it "
+            "holds a stream object nobody else references"
+        )
+
+        dependency_logger.info("useful client lifecycle")
+        records = captured_stdout()
+        assert len(records) == 1
+        assert records[0]["event"] == "useful client lifecycle", (
+            "the dependency's handler rewrote the record before ours saw it"
+        )
+    finally:
+        dependency_logger.removeHandler(stale)
+
+
+def test_a_deliberate_file_sink_on_a_dependency_logger_is_preserved(
+    tmp_path,
+) -> None:
+    """Broadening the console check must not start eating file handlers.
+
+    `FileHandler` subclasses `StreamHandler`, so "any StreamHandler is a
+    console" would swallow a file sink someone configured on purpose. The
+    exclusion is ordered to prevent that, and this is what says so.
+    """
+    dependency_logger = logging.getLogger("com.supertokens")
+    file_handler = logging.FileHandler(tmp_path / "dependency.log")
+    dependency_logger.addHandler(file_handler)
+    try:
+        setup_logging(
+            "production",
+            service_name="lemma-api",
+            json_logs=True,
+            log_level="INFO",
+        )
+        assert file_handler in dependency_logger.handlers
+    finally:
+        dependency_logger.removeHandler(file_handler)
+        file_handler.close()

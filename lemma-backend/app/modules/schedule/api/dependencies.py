@@ -4,7 +4,8 @@ from typing import Annotated
 from uuid import UUID
 from fastapi import Depends, Request
 
-from app.core.api.dependencies import UoWDep
+from app.core.api.dependencies import UoWDep, get_uow_factory
+from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.schedule.repositories.schedule_repository import ScheduleRepository
 from app.modules.schedule.services.schedule_service import ScheduleService
 from app.modules.schedule.services.webhook_schedule_matcher import WebhookScheduleMatcher
@@ -16,16 +17,21 @@ def get_schedule_service(uow: UoWDep) -> ScheduleService:
     """Provide schedule service."""
     return ScheduleService(uow=uow)
 
-def get_webhook_handler(uow: UoWDep) -> WebhookHandler:
-    """Provide webhook handler."""
-    schedule_repository = ScheduleRepository(uow=uow)
-    matcher = WebhookScheduleMatcher(
-        schedule_repository=schedule_repository,
-    )
-    return WebhookHandler(
-        schedule_repository=schedule_repository,
-        schedule_matcher=matcher,
-    )
+def get_webhook_handler(
+    uow_factory: UnitOfWorkFactory = Depends(get_uow_factory),
+) -> WebhookHandler:
+    """Provide the webhook handler in factory mode.
+
+    Factory rather than a live ``UoWDep``: the handler holds a connection only
+    for its schedule lookup, and the Redis enqueue plus outbox write that follow
+    run with nothing checked out. On an inbound webhook the request rate belongs
+    to the sender, so this is where a held connection hurts most.
+    """
+
+    def _matcher(uow) -> WebhookScheduleMatcher:
+        return WebhookScheduleMatcher(schedule_repository=ScheduleRepository(uow=uow))
+
+    return WebhookHandler(matcher_factory=_matcher, uow_factory=uow_factory)
 
 
 def get_composio_webhook_verifier() -> WebhookVerifier:

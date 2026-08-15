@@ -161,20 +161,6 @@ class ScheduleRepository(ABC):
         pass
 
 
-class SchedulerService(ABC):
-    """Interface for scheduler service."""
-
-    @abstractmethod
-    async def schedule_job(self, schedule: ScheduleEntity) -> None:
-        """Schedule a job for the schedule."""
-        pass
-
-    @abstractmethod
-    async def remove_job(self, schedule_id: UUID) -> None:
-        """Remove a scheduled job."""
-        pass
-
-
 class ExternalScheduleWriter(ABC):
     """Port for provisioning/deprovisioning external webhook providers."""
 
@@ -222,9 +208,15 @@ class ScheduleFilterTaskQueue(ABC):
 
 
 class WebhookVerifier(ABC):
-    """Port for verifying provider webhook signatures and parsing payloads."""
+    """Port for verifying provider webhook signatures and parsing payloads.
+
+    Async because verification generally runs a provider SDK, and this sits on
+    an unauthenticated path whose rate an external sender chooses. A sync
+    implementation here blocks the event loop once per delivery, so the port
+    makes offloading the implementer's obligation rather than an option.
+    """
 
     @abstractmethod
-    def verify(self, payload: str, headers: Dict[str, Any]) -> Dict[str, Any]:
+    async def verify(self, payload: str, headers: Dict[str, Any]) -> Dict[str, Any]:
         """Verify a webhook and return the provider verification result."""
         pass

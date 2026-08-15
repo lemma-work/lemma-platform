@@ -14,6 +14,9 @@ def _routers():
         router as organization_navigation,
     )
     from app.modules.identity.api.controllers.auth_controller import router as auth
+    from app.modules.identity.api.controllers.cli_auth_controller import (
+        router as cli_auth,
+    )
     from app.modules.identity.api.controllers.email_bounce_controller import (
         router as email_bounce,
     )
@@ -21,7 +24,14 @@ def _routers():
     # Navigation first: its ``/navigation`` is a literal path that would
     # otherwise be captured by ``/{org_id}`` in the organization router, which
     # FastAPI matches in registration order.
-    return [user, organization_navigation, organization, auth, email_bounce]
+    return [
+        user,
+        organization_navigation,
+        organization,
+        auth,
+        cli_auth,
+        email_bounce,
+    ]
 
 
 def _event_routers():

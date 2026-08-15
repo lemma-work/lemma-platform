@@ -550,6 +550,11 @@ class AgentConversationWaitModel(UUIDAuditBase):
     external_ref: Mapped[str | None] = mapped_column(String, nullable=True)
     scheduled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     wake_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    # See the workflow wait model: a timer fires once, so a row lock is not a
+    # claim -- it is released at commit and the next tick reclaims the row.
+    fire_lease_until: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     # Nullable to match the migration: `create` always writes a dict, but a row
     # inserted by hand or by a future backfill must not need one.

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
+from app.core.infrastructure.db.transaction_locks import connection_released
 from app.core.log.log import get_logger
 from app.modules.agent.domain.entities import Conversation
 from app.modules.agent.domain.events import AgentRunStartedEvent
@@ -71,10 +72,15 @@ class PauseResumeMixin:
             ),
         )
         await self.uow.commit()
-        await publish_conversation_event(
-            conversation.id,
-            message_payload(paused_run_id, message_to_payload(saved_return)),
-        )
+        # The commit above already returned the connection, so this publish
+        # holds nothing -- but only a reader could tell, and the gate is
+        # lexical. Saying it in the structure makes it checkable, and makes a
+        # future edit that moves the publish above the commit fail loudly.
+        async with connection_released(getattr(self.uow, "session", None)):
+            await publish_conversation_event(
+                conversation.id,
+                message_payload(paused_run_id, message_to_payload(saved_return)),
+            )
         return True
 
     async def start_resume_run_if_ready(

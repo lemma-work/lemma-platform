@@ -10,6 +10,7 @@ from uuid import UUID
 
 from sqlalchemy.exc import IntegrityError
 
+from app.core.infrastructure.db.transaction_locks import connection_released
 from app.core.authorization.context import Context, ResourceRef, ResourceType
 from app.core.authorization.permissions import Permissions
 from app.core.authorization.service import AuthorizationDataService
@@ -518,11 +519,15 @@ class WorkflowEngine:
         # turn a successful advance into a raised exception. Clients still poll.
         try:
             wait = await self.wait_repo.get_active_for_run(run.id)
-            await publish_run_state(
-                run.id,
-                run_response_from_domain(run, wait).model_dump(mode="json"),
-                terminal=run.status in TERMINAL_STATUSES,
-            )
+            payload = run_response_from_domain(run, wait).model_dump(mode="json")
+            # The wait read above needs a connection; the Redis publish does
+            # not, and this runs after every node advance.
+            async with connection_released(getattr(self.wait_repo, "session", None)):
+                await publish_run_state(
+                    run.id,
+                    payload,
+                    terminal=run.status in TERMINAL_STATUSES,
+                )
         except Exception:
             logger.debug("workflow.run.announce_failed", exc_info=True)
 
@@ -597,6 +602,9 @@ class WorkflowEngine:
             wait_type=request.wait_type,
             assigned_pod_member_id=request.assigned_pod_member_id,
             external_ref=request.external_ref,
+            # Kept in `payload` too: the reconcile sweep still reads it from
+            # there, and older rows have only that copy.
+            scheduled_at=request.scheduled_at,
             payload=payload,
         )
 

@@ -23,6 +23,8 @@ helpers leave a marked session alone until its own commit clears the mark.
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import Any
 
 _MARKER = "lemma_holds_transaction_scoped_lock"
@@ -70,7 +72,10 @@ def safe_to_release(session: Any) -> bool:
 
     Read-only checks -- which is what authorization does -- satisfy all four.
     """
-    if session.new or session.dirty or session.deleted:
+    # Read defensively, matching `_has_uncommitted_writes` below: a real session
+    # always has these, a test double often does not, and refusing every release
+    # when an attribute is missing would silently disable the feature under test.
+    if any(getattr(session, attr, None) for attr in ("new", "dirty", "deleted")):
         return False
     if holds_transaction_scoped_lock(session):
         return False
@@ -101,3 +106,58 @@ def _has_uncommitted_writes(session: Any) -> bool:
     """
     transaction = getattr(session, "_transaction", None)
     return bool(getattr(transaction, "_dirty", False))
+
+
+@asynccontextmanager
+async def connection_released(session: Any) -> AsyncIterator[None]:
+    """Hand the pooled connection back for the duration of the block.
+
+    The problem this solves is that "I released the connection first" was only
+    ever true in a comment. ``_release_after_authorization`` commits before its
+    slow call and is correct -- and the static gate flags it anyway, because it
+    is lexical and cannot see a commit inside a callee. Ten baselined violations
+    were sites that were already right in substance.
+
+    It also fixes what those helpers got wrong: they committed unconditionally,
+    so a caller that had written something had its transaction ended for it.
+
+    Making the release a block fixes both halves at once. At runtime it commits
+    when ``safe_to_release`` allows (see that function for the four reasons it
+    refuses, every one of which has bitten us). Statically, the gate recognises
+    this context manager as *closing* the session scope, so an await inside the
+    block is not a violation -- and an await outside it still is.
+
+    Use it around the non-database work, not around the query::
+
+        async with connection_released(session):
+            await some_platform_api.send(payload)
+
+    If ``safe_to_release`` refuses, the block still runs; the caller keeps its
+    connection and the old behaviour. That is deliberate: ending a caller's
+    transaction underneath it is worse than holding a connection.
+
+    **Only wrap work that touches no database.** The release happens once, on
+    entry. If the call inside queries first and does its slow work afterwards,
+    the connection is re-acquired for that query and then held across the slow
+    part exactly as before -- while the gate goes quiet, because it stops
+    counting awaits inside this block. That is a false clean: the report
+    disappears and the hold does not.
+
+    Concretely, this is right::
+
+        async with connection_released(uow.session):
+            await EventPublisher.publish(event.stream_name(), event)   # no DB
+
+    and this is not, however tempting it looks::
+
+        async with connection_released(uow.session):
+            await editor.update_profile(...)   # loads the row, THEN calls out
+
+    For the second shape the fix belongs inside the callee -- split it so the
+    read finishes, the connection goes back, and the write opens its own scope.
+    Wrapping the call site only hides it.
+    """
+    commit = getattr(session, "commit", None)
+    if callable(commit) and safe_to_release(session):
+        await commit()
+    yield

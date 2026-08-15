@@ -137,3 +137,61 @@ def write_sweep_report() -> str | None:
     with open(path, "w", encoding="utf-8") as handle:
         handle.write("\n".join(lines))
     return path
+
+
+# --- Scoped guard -----------------------------------------------------------
+#
+# `strict_connection_scope` arms for the whole test, which is why no request-path
+# test uses it: e2e setup creates orgs, pods, agents and workflows through the
+# same API, and the harness holds sessions across blocking fixture work on
+# purpose. Arming across all of that reports the scaffolding, not the flow.
+#
+# So the guard is a block instead. Set the world up unguarded, then arm around
+# the one call under test:
+#
+#     async def test_the_import_holds_nothing(authenticated_client, scoped_connection_guard):
+#         pod = await _create_pod(authenticated_client, org["id"])   # not guarded
+#         async with scoped_connection_guard():
+#             response = await authenticated_client.post(f"/pods/{pod}/bundle:import", ...)
+#         assert response.status_code == 202
+#
+# What it protects is narrow and worth stating: between checkout and check-in,
+# the connection must not be idle while something slow happens -- an HTTP call,
+# an object-storage read, a Redis fan-out, a sleep. It says nothing about how
+# many queries ran or how long they took.
+
+
+@pytest.fixture
+def scoped_connection_guard():
+    """Arm the strict connection-scope monitor around one block of a test."""
+    from contextlib import asynccontextmanager
+
+    from app.core.infrastructure.db.session import get_engine
+
+    @asynccontextmanager
+    async def guard(*, idle_hold_seconds: float = STRICT_IDLE_HOLD_SECONDS):
+        monitor = connection_scope.start_connection_scope_monitor(
+            idle_hold_seconds=idle_hold_seconds, strict=True
+        )
+        monitor.attach(get_engine())
+        try:
+            from app.modules.datastore.infrastructure.session import (
+                get_datastore_engine,
+            )
+
+            monitor.attach(get_datastore_engine())
+        except Exception:  # pragma: no cover - datastore is optional
+            pass
+        try:
+            yield monitor
+        finally:
+            connection_scope.stop_connection_scope_monitor()
+        if monitor.violations:
+            report = "\n\n".join(hold.render() for hold in monitor.violations)
+            pytest.fail(
+                f"{len(monitor.violations)} pooled connection(s) held across "
+                f"non-database work inside the guarded block:\n\n{report}",
+                pytrace=False,
+            )
+
+    return guard

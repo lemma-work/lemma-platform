@@ -9,6 +9,7 @@ from zipfile import ZIP_DEFLATED, ZipFile
 
 import structlog
 
+from app.core.infrastructure.db.transaction_locks import connection_released
 from app.core.api.uploads import upload_source_sha256
 from app.core.authorization.context import (
     Context,
@@ -210,7 +211,9 @@ class AppService:
             app.name,
             user_id,
             source_archive_bytes=None,
-            dist_archive_bytes=self._single_index_html_zip(document),
+            dist_archive_bytes=await run_blocking(
+                self._single_index_html_zip, document
+            ),
             ctx=ctx,
         )
 
@@ -388,8 +391,13 @@ class AppService:
             # Validate the bundle up front (raises AppValidationError on a missing
             # root index.html), regardless of dedup — matches prior behavior and
             # ensures no storage write happens for an invalid bundle.
-            await run_blocking(load_app_dist_bundle, dist_archive_bytes)
-            version = await run_blocking(upload_source_sha256, dist_archive_bytes)
+            # Both are thread offloads over the whole archive. The method's own
+            # docstring calls this phase "DB only", which it was not.
+            async with connection_released(getattr(self.repository, "session", None)):
+                await run_blocking(load_app_dist_bundle, dist_archive_bytes)
+                version = await run_blocking(
+                    upload_source_sha256, dist_archive_bytes
+                )
             release_root = f"releases/{version}/dist/"
             existing = await self.repository.get_release_by_version(app.id, version)
             existing_release_id = existing.id if existing is not None else None

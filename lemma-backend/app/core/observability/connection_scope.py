@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+import weakref
 import traceback
 from dataclasses import dataclass
 
@@ -224,6 +225,14 @@ class ConnectionScopeMonitor:
         self._cooldown_seconds = cooldown_seconds
         self._last_report = -1e9
         self._attached: set[int] = set()
+        # Kept so `detach` can undo exactly what `attach` did. Without it the
+        # listeners outlive the monitor: `stop_connection_scope_monitor` only
+        # cleared the global, so every start/stop cycle left another set bound
+        # to a dead monitor. Harmless in production, where the monitor is
+        # started once -- but a test that arms the monitor more than once in a
+        # process silently stopped detecting anything, which is the worst
+        # possible failure for a detector.
+        self._attached_engines: list[object] = []
         # Incremented on every report so a test can assert on it directly.
         self.reports = 0
         # Populated only in strict mode: what a failing test prints.
@@ -237,6 +246,7 @@ class ConnectionScopeMonitor:
         if id(sync_engine) in self._attached:
             return
         self._attached.add(id(sync_engine))
+        self._attached_engines.append(sync_engine)
         event.listen(sync_engine.pool, "checkout", self._on_checkout)
         event.listen(sync_engine.pool, "checkin", self._on_checkin)
         event.listen(sync_engine, "before_cursor_execute", self._on_statement_start)
@@ -245,6 +255,29 @@ class ConnectionScopeMonitor:
         # this the failed statement's interval never closes and its duration is
         # counted as querying forever after -- hiding every later gap.
         event.listen(sync_engine, "handle_error", self._on_statement_error)
+
+    def detach(self) -> None:
+        """Remove every listener this monitor installed.
+
+        The mirror of `attach`, and the reason it has to exist: listeners are
+        bound to *this* monitor's methods, so leaving them attached after the
+        monitor is discarded keeps a dead object receiving pool events for the
+        life of the process. Two monitors then race over the same per-connection
+        state and the live one stops reporting -- a detector that has gone blind
+        while still looking green.
+        """
+        for sync_engine in self._attached_engines:
+            for target, name, handler in (
+                (sync_engine.pool, "checkout", self._on_checkout),
+                (sync_engine.pool, "checkin", self._on_checkin),
+                (sync_engine, "before_cursor_execute", self._on_statement_start),
+                (sync_engine, "after_cursor_execute", self._on_statement_end),
+                (sync_engine, "handle_error", self._on_statement_error),
+            ):
+                if event.contains(target, name, handler):
+                    event.remove(target, name, handler)
+        self._attached_engines.clear()
+        self._attached.clear()
 
     # ---------------------------------------------------------------- events
 
@@ -357,7 +390,10 @@ class ConnectionScopeMonitor:
 
 _monitor: ConnectionScopeMonitor | None = None
 # Engines seen by ``attach``, so a monitor started later still covers them.
-_known_engines: list = []
+# Weak, and keyed by identity: a plain list kept every engine ever built alive
+# for the life of the process. One long test session builds hundreds, and each
+# one it pinned held its connection pool with it.
+_known_engines: "weakref.WeakSet" = weakref.WeakSet()
 
 
 def get_connection_scope_monitor() -> ConnectionScopeMonitor | None:
@@ -385,6 +421,8 @@ def start_connection_scope_monitor(
 
 def stop_connection_scope_monitor() -> None:
     global _monitor
+    if _monitor is not None:
+        _monitor.detach()
     _monitor = None
 
 
@@ -395,7 +433,7 @@ def attach_connection_scope_monitor(engine) -> None:
     are covered without either module knowing the monitor exists. The engine is
     remembered either way, because construction usually happens first.
     """
-    _known_engines.append(engine)
+    _known_engines.add(engine)
     if _monitor is not None:
         _monitor.attach(engine)
 

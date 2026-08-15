@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import pytest
-import pytest_asyncio
 
 from app.modules.test_support.e2e import fixtures as e2e_fixtures
 from app.modules.test_support.e2e.runtime import (
@@ -12,7 +11,6 @@ from app.modules.test_support.e2e.runtime import (
     function_image,
     full_stack,
     local_sandbox_server,
-    scheduler_api_server,
     workspace_image,
 )
 
@@ -38,13 +36,6 @@ sample_pod_entity = e2e_fixtures.sample_pod_entity
 scenario = e2e_fixtures.scenario
 
 
-@pytest_asyncio.fixture(scope="function", autouse=True)
-async def _workflow_scheduler_api_server(scheduler_api_server):
-    """Preserve the workflow e2e autouse scheduler API setup."""
-
-    yield scheduler_api_server
-
-
 __all__ = [
     "async_client",
     "authenticated_client",
@@ -62,7 +53,6 @@ __all__ = [
     "redis_container",
     "sample_pod_entity",
     "scenario",
-    "scheduler_api_server",
     "supertokens_container",
     "test_app",
     "test_database_url",

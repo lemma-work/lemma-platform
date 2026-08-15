@@ -11,8 +11,9 @@ metadata: a list of turns, each a dict with optional ``text`` and ``tool_calls``
 (``[{"tool_name", "args", "tool_call_id"}]``). The agent loop really executes any
 tool calls and feeds results back, then asks the model again — so turn N of the
 script answers the Nth model request of the run. With no script, the model
-returns a single short final answer (or, for structured-output agents, calls the
-output tool with empty args), so "a run that completes" tests need zero setup.
+returns a single short final answer — or, for structured-output agents, calls
+the output tool with the smallest payload its schema accepts — so "a run that
+completes" tests need zero setup.
 
 Both a non-streaming ``function`` and a ``stream_function`` are provided because
 the harness drives the model through the streaming API.
@@ -211,18 +212,88 @@ def _resolve_turn(
 
     # Unscripted default.
     if not info.allow_text_output and info.output_tools:
-        # Structured-output agent: best-effort call the output tool so the run
-        # completes; tests needing specific output should script it.
+        # Structured-output agent: call the output tool with the smallest payload
+        # its schema accepts, so the run completes. Tests needing specific output
+        # should script it.
+        output_tool = info.output_tools[0]
         logger.debug("agent.mock_model.mock_llm_structured_output_required.diagnostic")
         return None, [
             {
-                "tool_name": info.output_tools[0].name,
-                "args": {},
+                "tool_name": output_tool.name,
+                "args": _minimal_valid_args(
+                    getattr(output_tool, "parameters_json_schema", None)
+                ),
                 "tool_call_id": "mock-output",
             }
         ]
     user_text = _last_user_text(messages)
     return (f"[mock] {user_text}" if user_text else "[mock] ok"), []
+
+
+# Called, not stored: a shared `[]` would be handed to every caller to mutate.
+_ZERO_BY_TYPE: dict[str, Any] = {
+    "array": list,
+    "string": str,
+    "integer": int,
+    "number": int,
+    "boolean": bool,
+}
+
+
+def _zero_value(schema: Any, depth: int = 0) -> Any:
+    """The simplest value of the type ``schema`` declares.
+
+    Only shape matters here: the mock is proving the pipeline runs, not
+    producing meaningful content. Unknown or unconstrained schemas fall back to
+    ``None``, which is what an absent field would have been anyway.
+    """
+    if not isinstance(schema, dict) or depth > 4:
+        return None
+    branches = next(
+        (
+            schema[key]
+            for key in ("anyOf", "oneOf", "allOf")
+            if isinstance(schema.get(key), list) and schema[key]
+        ),
+        None,
+    )
+    if branches is not None:
+        return _zero_value(branches[0], depth + 1)
+    enum = schema.get("enum")
+    if isinstance(enum, list) and enum:
+        return enum[0]
+    declared = schema.get("type")
+    if isinstance(declared, list):
+        declared = next((item for item in declared if item != "null"), None)
+    if declared == "object":
+        return _minimal_valid_args(schema, depth + 1)
+    factory = _ZERO_BY_TYPE.get(declared)
+    return factory() if factory is not None else None
+
+
+def _minimal_valid_args(schema: Any, depth: int = 0) -> dict[str, Any]:
+    """The smallest object satisfying ``schema``, for an unscripted output tool.
+
+    The mock used to send ``{}`` here and call it best-effort. It is not: an
+    output schema with a required field rejects ``{}``, pydantic-ai asks the
+    model to retry, and the mock -- having no script -- answers with the same
+    empty object every time. The run dies on the retry ceiling with "a tool
+    failed repeatedly", which reads like the agent is misconfigured and is
+    really just the mock being unable to satisfy a schema it was shown.
+
+    Every property is filled, not only the required ones. A JSON schema
+    converted to a pydantic model does not always keep "optional" optional, and
+    an extra zero-valued key costs a mock nothing.
+    """
+    if not isinstance(schema, dict) or depth > 4:
+        return {}
+    properties = schema.get("properties")
+    if not isinstance(properties, dict):
+        return {}
+    return {
+        str(name): _zero_value(subschema, depth)
+        for name, subschema in properties.items()
+    }
 
 
 def _raise_scripted_error(

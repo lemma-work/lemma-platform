@@ -5,6 +5,7 @@ from uuid import UUID
 from fastapi import APIRouter
 
 from app.core.api.dependencies import CurrentUser, UoWDep
+from app.core.infrastructure.db.transaction_locks import connection_released
 from app.core.authorization.dependencies import PodContextDep, require_action
 from app.core.authorization.permissions import Permissions
 from app.composition.surface_agent import AgentServiceDep
@@ -111,16 +112,21 @@ async def start_telegram_managed_bot_setup(
         app_name=request.config.telegram.app_name,
         ctx=ctx,
     )
-    setup = await service.start_setup(
-        user_id=user.id,
-        organization_id=organization_id,
-        pod_id=pod_id,
-        surface_name=surface_name,
-        agent_id=agent.id if agent else None,
-        surface_config=surface_config,
-        is_enabled=request.is_enabled,
-        pod_name=pod_name,
-    )
+    # Every read above is done, and `start_setup` is Redis only -- its store
+    # (`TelegramManagedBotSetupStore`) speaks to Redis and nothing else. So the
+    # pooled connection goes back before the setup allocation, which retries up
+    # to five times against Redis to find a free setup id.
+    async with connection_released(uow.session):
+        setup = await service.start_setup(
+            user_id=user.id,
+            organization_id=organization_id,
+            pod_id=pod_id,
+            surface_name=surface_name,
+            agent_id=agent.id if agent else None,
+            surface_config=surface_config,
+            is_enabled=request.is_enabled,
+            pod_name=pod_name,
+        )
     return _response(service, setup)
 
 

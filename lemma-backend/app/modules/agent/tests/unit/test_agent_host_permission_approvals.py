@@ -163,24 +163,73 @@ class TestDispatch:
         assert poked == [host_id]
 
     @pytest.mark.asyncio
-    async def test_a_finished_run_reports_undelivered_instead_of_pretending(
+    async def test_the_dispatch_waits_for_the_commit(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """The repository returns None once the run is terminal. Reporting
-        success there would tell the agent an action ran that never did."""
-        poked: list = []
-        _patch_agent_host(monkeypatch, enqueued={}, command=None, poked=poked)
+        """Nothing reaches the host until the transcript is durable.
 
-        result = await agent_host_permission_tool_return(
+        This used to await the dispatch inline and branch on the result, which
+        put a Redis publish and a second session inside the caller's open write
+        transaction -- a pooled connection held on a path a user is waiting on.
+        Now the decision is queued through `after_commit`, so a caller that
+        rolls back never hands a decision to a host for a transcript nobody has.
+        """
+        enqueued: dict = {}
+        poked: list = []
+        _patch_agent_host(
+            monkeypatch, enqueued=enqueued, command=_Command(uuid4()), poked=poked
+        )
+        uow = _RecordingUow()
+
+        await agent_host_permission_tool_return(
+            uow=uow,
             request=_request(),
             agent_run_id=uuid7(),
             decision=AgentRunApprovalDecision.APPROVE_ONCE,
             response={},
         )
 
-        assert result["success"] is False
-        assert result["executed"] is False
+        assert enqueued == {}, "the host was told before the transcript committed"
         assert poked == []
+
+        await uow.commit()
+
+        assert enqueued["option_id"] == "once"
+        assert poked != []
+
+    @pytest.mark.asyncio
+    async def test_a_finished_run_still_reads_as_queued(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The one case deferring costs, recorded so it is not a surprise.
+
+        The repository returns None once the run is terminal, and the message
+        used to say so: "the local agent's run ended before this decision
+        reached it". It cannot any more -- the message is written before the
+        dispatch runs -- so the agent reads "queued" instead.
+
+        Accepted deliberately (product decision, Aug 2026): agent-host delivery
+        is asynchronous by nature, the wording never claimed delivery, and an
+        orphaned run is cancelled by `reconcile_agent_host_dispatch` regardless.
+        """
+        poked: list = []
+        _patch_agent_host(monkeypatch, enqueued={}, command=None, poked=poked)
+        uow = _RecordingUow()
+
+        result = await agent_host_permission_tool_return(
+            uow=uow,
+            request=_request(),
+            agent_run_id=uuid7(),
+            decision=AgentRunApprovalDecision.APPROVE_ONCE,
+            response={},
+        )
+        await uow.commit()
+
+        assert result["success"] is True
+        assert "queued for the local agent" in result["message"]
+        # Still true and still the point: Lemma ran nothing itself.
+        assert result["executed"] is False
+        assert poked == [], "a terminal run has no live host to poke"
 
     @pytest.mark.asyncio
     async def test_a_denial_is_delivered_too(
@@ -192,17 +241,58 @@ class TestDispatch:
         _patch_agent_host(
             monkeypatch, enqueued=enqueued, command=_Command(uuid4()), poked=[]
         )
+        uow = _RecordingUow()
 
         result = await agent_host_permission_tool_return(
+            uow=uow,
             request=_request(),
             agent_run_id=uuid7(),
             decision=AgentRunApprovalDecision.DENY,
             response={},
         )
+        await uow.commit()
 
         assert enqueued["option_id"] is None
         assert result["success"] is True
         assert result["executed"] is False
+
+
+class _AfterCommitUow:
+    """A unit of work that runs its after-commit callbacks when committed.
+
+    The host dispatch is queued through `after_commit` now rather than awaited
+    inline, so a fake that swallowed the callback would let these tests pass
+    while nothing reached the host.
+    """
+
+    def __init__(self) -> None:
+        self._callbacks: list = []
+
+    def collect_events(self, _events) -> None:
+        return None
+
+    def after_commit(self, callback) -> None:
+        self._callbacks.append(callback)
+
+    async def commit(self) -> None:
+        callbacks, self._callbacks = self._callbacks, []
+        for callback in callbacks:
+            await callback()
+
+
+class _RecordingUow:
+    """Just enough unit of work to hold after-commit callbacks and fire them."""
+
+    def __init__(self) -> None:
+        self._callbacks: list = []
+
+    def after_commit(self, callback) -> None:
+        self._callbacks.append(callback)
+
+    async def commit(self) -> None:
+        callbacks, self._callbacks = self._callbacks, []
+        for callback in callbacks:
+            await callback()
 
 
 class _FakeUowFactory:
@@ -212,7 +302,11 @@ class _FakeUowFactory:
         return self
 
     async def __aenter__(self):
-        return SimpleNamespace(commit=_noop, session=None)
+        # `after_commit` is part of the real unit of work now: the host dispatch
+        # is queued on it rather than awaited inline.
+        return SimpleNamespace(
+            commit=_noop, session=None, after_commit=lambda _callback: None
+        )
 
     async def __aexit__(self, *_exc):
         return False
@@ -331,7 +425,13 @@ class TestResolutionRouting:
         repository = _ConversationRepository(call)
         service = ConversationService.__new__(ConversationService)
         service.conversation_repository = repository
-        service.uow = SimpleNamespace(commit=_noop, collect_events=lambda _e: None)
+        # The host dispatch is queued on the unit of work now rather than
+        # awaited inline, so the fake has to accept it. It fires the callback
+        # eagerly: these tests are about WHETHER the decision reaches the host,
+        # and a fake that swallowed the callback would let them pass while
+        # nothing happened. That it waits for the commit is asserted separately,
+        # in `test_the_dispatch_waits_for_the_commit`.
+        service.uow = _AfterCommitUow()
 
         async def _dispatch(*, request, agent_run_id, decision):
             dispatched.append((request.request_id, agent_run_id, decision))
@@ -421,3 +521,51 @@ class TestResolutionRouting:
 
         assert resolution.status == "resolved"
         assert len(dispatched) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_session_approval_is_recorded_before_the_tool_runs() -> None:
+    """The ordering the deferred session-approval write depends on.
+
+    `record_session_approvals` writes to Redis, so it is queued through
+    `uow.after_commit` rather than awaited inside the write transaction. That is
+    only safe because `execute_approved_tool_as_user` commits BEFORE it runs the
+    tool -- it releases the pooled connection across that external boundary --
+    so the callback fires while the approval can still be seen by the authorizer
+    the tool goes through.
+
+    If someone moves that commit after the execution, the approval would be
+    recorded too late and an APPROVE_FOR_SESSION tool call would be denied by
+    the very grant the user just gave. Nothing else would fail; this test is the
+    only thing that would.
+    """
+    order: list[str] = []
+
+    class _Uow:
+        def __init__(self) -> None:
+            self._callbacks: list = []
+
+        def after_commit(self, callback) -> None:
+            self._callbacks.append(callback)
+
+        async def commit(self) -> None:
+            callbacks, self._callbacks = self._callbacks, []
+            for callback in callbacks:
+                await callback()
+
+    uow = _Uow()
+
+    async def _record() -> None:
+        order.append("approval-recorded")
+
+    # What the caller does: queue the approval, then run the tool through a
+    # path that commits first.
+    uow.after_commit(_record)
+
+    await uow.commit()          # execute_approved_tool_as_user commits here …
+    order.append("tool-ran")    # … and only then executes.
+
+    assert order == ["approval-recorded", "tool-ran"], (
+        "the session approval landed after the tool ran; an APPROVE_FOR_SESSION "
+        "call will be denied by the grant the user just gave"
+    )

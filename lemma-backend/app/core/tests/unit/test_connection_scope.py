@@ -279,6 +279,16 @@ def test_module_singleton_lifecycle():
 
 
 def test_attach_is_a_no_op_without_a_monitor():
-    """Engines are constructed before anything decides to watch them."""
+    """Engines are constructed before anything decides to watch them.
+
+    The stand-in is a class instance rather than a bare ``object()`` because the
+    remembered engines are held weakly, and ``object()`` is the one common type
+    that cannot be weakly referenced. Every real caller passes a SQLAlchemy
+    engine, which can.
+    """
+
+    class _Engine:
+        pass
+
     connection_scope.stop_connection_scope_monitor()
-    connection_scope.attach_connection_scope_monitor(object())  # must not raise
+    connection_scope.attach_connection_scope_monitor(_Engine())  # must not raise

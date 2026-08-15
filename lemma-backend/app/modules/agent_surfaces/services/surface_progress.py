@@ -13,6 +13,7 @@ from uuid import UUID
 
 from sqlalchemy.exc import SQLAlchemyError
 
+from app.core.infrastructure.db.transaction_locks import connection_released
 from app.core.log.log import get_logger
 from app.modules.agent_surfaces.platforms.rendering import sanitize_user_visible_text
 from app.modules.agent_surfaces.domain.models import StreamAppendResult
@@ -22,29 +23,6 @@ logger = get_logger(__name__)
 
 class SurfaceProgressMixin:
     """The live-progress half of the ingress service."""
-
-    async def _release_connection_before_platform_call(self) -> None:
-        """Hand the pooled connection back before talking to a platform.
-
-        Everything in this family has the same shape: resolve the egress target
-        and its credentials from the database, then call the platform adapter.
-        The second half is a network call to Slack or Telegram taking anywhere
-        from tens of milliseconds to tens of seconds, and holding the
-        transaction across it pins a connection for all of it.
-
-        Streaming makes that continuous rather than occasional: a token flush
-        runs about every 0.8s for the whole of a run, and a typing indicator
-        every 4s for up to fifteen minutes. One streaming run would otherwise
-        keep a connection checked out from start to finish, and `db_pool_size`
-        is a hard ceiling with no overflow.
-
-        Committing here is safe because every caller has finished its reads and
-        the write that follows (a new progress handle) opens its own
-        transaction.
-        """
-        uow = getattr(self, "uow", None)
-        if uow is not None:
-            await uow.commit()
 
     async def send_progress_update_for_conversation(
         self,
@@ -74,14 +52,15 @@ class SurfaceProgressMixin:
             # message carries the agent's name, so the stream must too or the
             # thread reads as two different speakers.
             metadata = await self._egress_metadata_with_agent_name(target, None)
-            await self._release_connection_before_platform_call()
-            return await target.adapter.stream_progress(
-                credentials=target.credentials,
-                event=target.event,
-                progress_text=progress_text,
-                progress_handle=progress_handle,
-                metadata=metadata,
-            )
+            # No connection held for the platform call; see `connection_released`.
+            async with connection_released(getattr(self.uow, "session", None)):
+                return await target.adapter.stream_progress(
+                    credentials=target.credentials,
+                    event=target.event,
+                    progress_text=progress_text,
+                    progress_handle=progress_handle,
+                    metadata=metadata,
+                )
         except Exception:
             logger.debug(
                 'agent_surfaces.ingress_service.surface_progress_update_conversation_s.diagnostic',
@@ -106,14 +85,15 @@ class SurfaceProgressMixin:
             return StreamAppendResult(handle=progress_handle, appended=False)
         try:
             metadata = await self._egress_metadata_with_agent_name(target, None)
-            await self._release_connection_before_platform_call()
-            return await target.adapter.append_stream_text(
-                credentials=target.credentials,
-                event=target.event,
-                progress_handle=progress_handle,
-                text=text,
-                metadata=metadata,
-            )
+            # No connection held for the platform call; see `connection_released`.
+            async with connection_released(getattr(self.uow, "session", None)):
+                return await target.adapter.append_stream_text(
+                    credentials=target.credentials,
+                    event=target.event,
+                    progress_handle=progress_handle,
+                    text=text,
+                    metadata=metadata,
+                )
         except SQLAlchemyError:
             logger.debug(
                 'agent_surfaces.ingress_service.surface_stream_text_conversation_s.diagnostic',
@@ -147,21 +127,22 @@ class SurfaceProgressMixin:
         if not clean_message and not already_streamed:
             return False
         message_metadata = await self._egress_metadata_with_agent_name(target, metadata)
-        await self._release_connection_before_platform_call()
-        try:
-            return await target.adapter.finish_progress(
-                credentials=target.credentials,
-                event=target.event,
-                progress_handle=progress_handle,
-                message=clean_message,
-                metadata=message_metadata,
-            )
-        except SQLAlchemyError:
-            logger.debug(
-                'agent_surfaces.ingress_service.surface_progress_finish_conversation_s.diagnostic',
-                conversation_id=conversation_id,
-            )
-            return False
+        # No connection held for the platform call; see `connection_released`.
+        async with connection_released(getattr(self.uow, "session", None)):
+            try:
+                return await target.adapter.finish_progress(
+                    credentials=target.credentials,
+                    event=target.event,
+                    progress_handle=progress_handle,
+                    message=clean_message,
+                    metadata=message_metadata,
+                )
+            except SQLAlchemyError:
+                logger.debug(
+                    'agent_surfaces.ingress_service.surface_progress_finish_conversation_s.diagnostic',
+                    conversation_id=conversation_id,
+                )
+                return False
 
     async def clear_progress_for_conversation(
         self,
@@ -175,15 +156,16 @@ class SurfaceProgressMixin:
         target = await self._resolve_egress_target(conversation_id)
         if target is None:
             return
-        await self._release_connection_before_platform_call()
-        try:
-            await target.adapter.end_progress(
-                credentials=target.credentials,
-                event=target.event,
-                progress_handle=progress_handle,
-            )
-        except Exception:
-            logger.debug(
-                'agent_surfaces.ingress_service.surface_progress_clear_conversation_s.diagnostic',
-                conversation_id=conversation_id,
-            )
+        # No connection held for the platform call; see `connection_released`.
+        async with connection_released(getattr(self.uow, "session", None)):
+            try:
+                await target.adapter.end_progress(
+                    credentials=target.credentials,
+                    event=target.event,
+                    progress_handle=progress_handle,
+                )
+            except Exception:
+                logger.debug(
+                    'agent_surfaces.ingress_service.surface_progress_clear_conversation_s.diagnostic',
+                    conversation_id=conversation_id,
+                )

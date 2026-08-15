@@ -238,54 +238,45 @@ async def test_snooze_clamps_an_over_long_request(suspend_harness):
 
 
 @pytest.mark.asyncio
-async def test_snooze_wake_adapter_calls_the_scheduler_with_a_real_signature(monkeypatch):
+async def test_the_claimed_snooze_payload_still_matches_the_wake_contract():
     """The payload is the contract with ScheduleStartService.handle_schedule_fired.
 
-    This is the one place the real ``schedule_once_job`` signature is exercised.
-    It gained a required ``user_id`` when schedule-run ownership landed; a call
-    that drifts from it raises TypeError only at runtime, because the tool that
-    makes it raises AgentInputRequired rather than returning.
+    This used to check the adapter's outgoing call to the scheduler sidecar,
+    because that was where the payload was built. The producer moved -- the wait
+    row is the timer now, and `claim_due_snooze_waits` builds the payload from
+    its columns when the poller claims it -- but the consumer did not, and it is
+    still keyed on exactly these three fields. A drift here fails at runtime in
+    a place that raises `AgentInputRequired` rather than returning, so it is
+    asserted rather than assumed.
     """
-    from app.composition import agent_snooze_scheduler as sched
+    from app.modules.agent.services.due_snooze_claimer import claim_due_snooze_waits
 
-    calls: list[dict] = []
+    conversation_id, external_ref = uuid4(), uuid4()
+    now = datetime.now(timezone.utc)
+    fire_at = now - timedelta(seconds=1)
 
-    class _FakeClient:
-        async def schedule_once_job(
-            self,
-            schedule_id,
-            user_id,
-            run_date,
-            payload=None,
-            replace_existing=True,
-            logical_schedule=False,
-        ):
-            calls.append(
-                {
-                    "schedule_id": schedule_id,
-                    "user_id": user_id,
-                    "run_date": run_date,
-                    "payload": payload,
-                }
-            )
-
-    monkeypatch.setattr(sched, "SchedulerAPIClient", lambda: _FakeClient())
-
-    conversation_id, user_id = uuid4(), uuid4()
-    wake_at = datetime.now(timezone.utc) + timedelta(seconds=600)
-    timer_id = await sched.schedule_snooze_wake(
-        conversation_id=conversation_id, user_id=user_id, wake_at=wake_at
+    row = SimpleNamespace(
+        conversation_id=conversation_id,
+        external_ref=str(external_ref),
+        scheduled_at=fire_at,
+        fire_lease_until=None,
     )
 
-    (call,) = calls
-    assert call["schedule_id"] == timer_id
-    assert call["user_id"] == user_id
-    assert call["run_date"] == wake_at
+    class _Session:
+        async def scalars(self, _statement):
+            return SimpleNamespace(all=lambda: [row])
+
+    (claimed,) = await claim_due_snooze_waits(_Session(), now=now)
+
+    assert claimed.timer_id == external_ref
+    assert claimed.fire_at == fire_at
     # conversation_id selects the snooze branch; wait_ref resolves the fired
     # timer to exactly one ACTIVE wait.
-    assert call["payload"]["conversation_id"] == str(conversation_id)
-    assert call["payload"]["wait_ref"] == str(timer_id)
-    assert call["payload"]["source"] == "agent_snooze"
+    assert claimed.payload["conversation_id"] == str(conversation_id)
+    assert claimed.payload["wait_ref"] == str(external_ref)
+    assert claimed.payload["source"] == "agent_snooze"
+    # A claim without a lease would be taken again on the very next tick.
+    assert row.fire_lease_until is not None and row.fire_lease_until > now
 
 
 # -- the sweep: grace period, isolation, and the attempt cap --------------------

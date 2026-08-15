@@ -373,19 +373,240 @@ def test_baseline_matches_the_tree():
     A stale baseline either hides a regression or fails the build for something
     already fixed, and both teach people to ignore it.
     """
-    import json
+    from collections import Counter
 
     checker = _load_checker()
     violations = checker.collect(checker.source_files())
-    baseline = set(
-        json.loads(checker.DEFAULT_BASELINE.read_text(encoding="utf-8"))["violations"]
-    )
-    current = {violation.key() for violation in violations}
-    assert current - baseline == set(), "new session-scope violations; see the gate"
-    assert baseline - current == set(), (
-        "baseline lists violations that no longer exist; run --update-baseline"
+    # Counted, matching the gate. Reading this as a `set` compared keys only,
+    # so a function that grew a second identical violation -- the hole the
+    # counted baseline was introduced to close -- would have slipped past the
+    # test that exists to keep the baseline honest.
+    baseline = checker._load_baseline(checker.DEFAULT_BASELINE)
+    current = Counter(violation.key() for violation in violations)
+
+    grew = {
+        k: (current[k], baseline.get(k, 0))
+        for k in current
+        if current[k] > baseline.get(k, 0)
+    }
+    shrank = {
+        k: (current.get(k, 0), v) for k, v in baseline.items() if current.get(k, 0) < v
+    }
+
+    assert not grew, f"new session-scope violations; see the gate: {grew}"
+    assert not shrank, (
+        f"baseline lists violations that no longer exist, run --update-baseline: {shrank}"
     )
 
 
 if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(pytest.main([__file__]))
+
+
+# --- synchronous blocking work ------------------------------------------------
+#
+# The checker only ever visited `ast.Await`, so a *synchronous* blocking call
+# inside a session was invisible -- and that case is strictly worse than the
+# awaited one. An await at least lets other tasks run while the connection is
+# pinned; a sync call pins the connection *and* stops the loop for everyone.
+#
+# `ComposioWebhookVerifier.verify` ran the synchronous Composio SDK on the event
+# loop from an unauthenticated route, and no gate in this repo could see it.
+
+
+@pytest.mark.parametrize(
+    ("call", "label"),
+    [
+        ("time.sleep(2)", "blocking sleep"),
+        ("requests.post(url, json=body)", "blocking HTTP"),
+        ("subprocess.run(['ls'])", "subprocess"),
+        ("os.system('ls')", "subprocess"),
+    ],
+)
+def test_synchronous_blocking_work_inside_a_session_is_reported(
+    call: str, label: str
+) -> None:
+    violations = _run(
+        "async def handler(uow_factory):\n"
+        "    async with uow_factory() as uow:\n"
+        "        await uow.session.execute(query)\n"
+        f"        {call}\n"
+    )
+    assert [v.rule for v in violations] == ["sync-blocking-call"]
+    assert violations[0].detail.startswith(label)
+
+
+def test_the_same_call_outside_the_session_is_not_reported() -> None:
+    """The rule is about the hold, not about blocking in general.
+
+    Blocking the loop outside a session is a different problem with a different
+    gate (`check_io_hygiene`). Reporting it here would make this gate noisy
+    about something it is not measuring, and a noisy gate gets baselined.
+    """
+    violations = _run(
+        "async def handler(uow_factory):\n"
+        "    async with uow_factory() as uow:\n"
+        "        await uow.session.execute(query)\n"
+        "    time.sleep(2)\n"
+    )
+    assert violations == []
+
+
+def test_a_constructor_from_a_remote_module_is_not_a_blocking_call() -> None:
+    """Deliberately narrow: building a client is not doing I/O.
+
+    A general "un-awaited call to a remote name" rule would fire on every
+    `httpx.AsyncClient(...)`, and false positives are how a gate ends up
+    switched off. Only calls that unambiguously block are listed.
+    """
+    violations = _run(
+        "async def handler(uow_factory):\n"
+        "    async with uow_factory() as uow:\n"
+        "        client = httpx.AsyncClient(timeout=30)\n"
+        "        await uow.session.execute(query)\n"
+    )
+    assert [v.rule for v in violations] == []
+
+
+# --- how propagation decides a name is slow ------------------------------------
+
+
+def test_one_fast_definition_no_longer_silences_the_slow_ones() -> None:
+    """The rule used to be all-or-nothing, which was brittle in a bad direction.
+
+    Names are matched without a receiver type, so `_name_is_slow` is the
+    precision/recall dial for the whole propagation pass. Requiring *every*
+    definition of a name to be slow meant that adding one fast method sharing a
+    name with several slow ones turned the rule off for all of them -- silently,
+    from anywhere in the tree, for a name nobody was thinking about.
+
+    Here `fetch_remote` is slow in three definitions and fast in a fourth. It
+    must stay slow.
+    """
+    checker = _load_checker()
+    index = checker.DependencyIndex()
+    index.definitions["fetch_remote"] = [
+        {"reason": "outbound HTTP", "awaits": set()},
+        {"reason": "outbound HTTP", "awaits": set()},
+        {"reason": "outbound HTTP", "awaits": set()},
+        {"reason": None, "awaits": set()},
+    ]
+
+    assert index._name_is_slow("fetch_remote") is True
+    assert index.why_slow("helper.fetch_remote") == "outbound HTTP"
+
+
+def test_a_name_that_is_usually_fast_is_still_not_slow() -> None:
+    """The other direction, which is why `any` is not the answer.
+
+    `get` has 56 definitions in this tree and four are slow; `create` has 58 and
+    four. Marking either slow would report most of the codebase and the gate
+    would be switched off within a week.
+    """
+    checker = _load_checker()
+    index = checker.DependencyIndex()
+    index.definitions["get"] = [
+        {"reason": None, "awaits": set()} for _ in range(52)
+    ] + [{"reason": "outbound HTTP", "awaits": set()} for _ in range(4)]
+
+    assert index._name_is_slow("get") is False
+    assert index.why_slow("thing.get") is None
+
+
+def test_a_mixed_name_reports_a_reason_rather_than_crashing() -> None:
+    """`why_slow` sorted a set that could contain `None`.
+
+    Unreachable under the old all-or-nothing rule -- a mixed name never got
+    this far -- so it was a `TypeError` waiting for the first loosening, which
+    is precisely the change above. Found by measuring thresholds, not by
+    reading.
+    """
+    checker = _load_checker()
+    index = checker.DependencyIndex()
+    index.definitions["mixed"] = [
+        {"reason": "redis", "awaits": set()},
+        {"reason": "outbound HTTP", "awaits": set()},
+        {"reason": "outbound HTTP", "awaits": set()},
+        {"reason": None, "awaits": set()},
+    ]
+
+    assert index.why_slow("thing.mixed") == "outbound HTTP"
+
+
+_RELEASING_DEPENDENCY = """
+from fastapi import Depends
+
+async def get_uow():
+    async with create_uow_from_session_maker(async_session_maker) as uow:
+        yield uow
+
+UoWDep = Annotated[object, Depends(get_uow)]
+
+async def get_pod_context(uow: UoWDep) -> Context:
+    ctx = await resolve_pod_context(session=uow.session)
+    %(release)s
+    return ctx
+
+PodContextDep = Annotated[object, Depends(get_pod_context)]
+
+@router.get("/x")
+async def stream_events(ctx: PodContextDep, client):
+    await client.post("https://example.test/hook")
+"""
+
+
+def test_a_dependency_that_commits_first_does_not_make_a_route_request_scoped():
+    """`_release_after_authorization` gives the connection back before the route runs.
+
+    Without this the two pod_bundle SSE routes are reported for a hold that
+    ended in the dependency, and the only way to quiet them is a baseline entry
+    that reads like an unfixed bug.
+    """
+    source = _RELEASING_DEPENDENCY % {
+        "release": "await _release_after_authorization(uow)"
+    }
+
+    # `get_uow` itself still yields inside its session -- that is the provider
+    # this whole exemption is about, and it is reported either way.
+    assert _rules(source) == {"session-across-yield"}
+
+
+def test_the_same_dependency_without_the_release_still_counts():
+    """The exemption is the commit, not the shape of the dependency."""
+    source = _RELEASING_DEPENDENCY % {"release": "pass"}
+
+    assert "non-db-await/request-scoped" in _rules(source)
+
+
+def test_a_release_that_might_not_run_is_not_a_release():
+    """A commit inside `if` leaves the caller holding a connection on the other branch."""
+    source = _RELEASING_DEPENDENCY % {
+        "release": "if fresh:\n        await _release_after_authorization(uow)"
+    }
+
+    assert "non-db-await/request-scoped" in _rules(source)
+
+
+def test_a_yield_dependency_gets_no_exemption_for_committing():
+    """FastAPI resumes it after the response, so its session outlives the release."""
+    source = """
+from fastapi import Depends
+
+async def get_uow():
+    async with create_uow_from_session_maker(async_session_maker) as uow:
+        yield uow
+
+UoWDep = Annotated[object, Depends(get_uow)]
+
+async def get_pod_context(uow: UoWDep):
+    await _release_after_authorization(uow)
+    yield ctx
+
+PodContextDep = Annotated[object, Depends(get_pod_context)]
+
+@router.get("/x")
+async def stream_events(ctx: PodContextDep, client):
+    await client.post("https://example.test/hook")
+"""
+
+    assert "non-db-await/request-scoped" in _rules(source)

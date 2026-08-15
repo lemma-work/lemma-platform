@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Optional
 from uuid import UUID
 
+from app.core.infrastructure.db.transaction_locks import connection_released
 from app.core.helpers.identifiers import normalize_mobile_digits, normalize_telegram
 from app.modules.identity.domain.email import normalize_identity_email
 from app.modules.identity.domain.errors import UserConflictError, UserNotFoundError
@@ -52,15 +53,27 @@ class UserService:
         return updated
 
     async def get_user(self, user_id: UUID) -> UserEntity:
+        """Read a user, cache-first, without holding a connection over Redis.
+
+        This runs on `/users/me` and on token verification, so it is one of the
+        most-called reads in the system -- and the request-scoped unit of work
+        means the caller's pooled connection is checked out for the whole
+        request. Both cache round trips are wrapped so the connection is back in
+        the pool while Redis is being asked; only the repository read between
+        them needs it.
+        """
+        session = getattr(self.user_repository, "session", None)
         if self.user_cache is not None:
-            cached = await self.user_cache.get(user_id)
+            async with connection_released(session):
+                cached = await self.user_cache.get(user_id)
             if cached is not None:
                 return cached
         user = await self.user_repository.get(user_id)
         if not user:
             raise UserNotFoundError()
         if self.user_cache is not None:
-            await self.user_cache.set(user)
+            async with connection_released(session):
+                await self.user_cache.set(user)
         return user
 
     async def get_user_by_email(self, email: str) -> Optional[UserEntity]:

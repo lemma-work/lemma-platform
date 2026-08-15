@@ -55,6 +55,7 @@ import ast
 import json
 import re
 import sys
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -71,6 +72,15 @@ EXCLUDED_PARTS = ("tests", "test_support")
 # Matched against the dotted callee of an `async with` item. Covers the UoW
 # factories, the raw session makers (primary and datastore), and direct engine
 # checkouts.
+# The inverse of SESSION_OPENERS: a block that hands the pooled connection back
+# for its duration. Recognised structurally so "I released first" stops being a
+# claim in a comment and becomes something the gate can check -- and so the ten
+# baselined sites that were already correct stop being reported as wrong. The
+# runtime half is `app/core/infrastructure/db/transaction_locks.connection_released`,
+# which commits when `safe_to_release` allows.
+SESSION_RELEASERS = re.compile(r"(^|\.)connection_released$")
+
+
 SESSION_OPENERS = re.compile(
     r"""(?x)
     (^|\.)(
@@ -87,8 +97,13 @@ SESSION_OPENERS = re.compile(
         # ones that hold an open write transaction across an HTTP download.
         | SessionUnitOfWorkFactory
         # `async with ctx.uow() as uow:` is the standard form in streaq tasks,
-        # so omitting it left the entire worker surface unchecked.
-        | uow
+        # so omitting it left the entire worker surface unchecked. Deliberately
+        # NOT bare `uow`: `async with uow:` re-enters a unit of work that is
+        # already open, and `SqlAlchemyUnitOfWork.__aenter__` returns `self`, so
+        # it marks a transaction boundary on one session rather than opening a
+        # second one. Counting it as a nested session reported three handlers as
+        # holding two connections when they only ever hold one.
+        | uow(?=\s*\()
     )$
     |
     (^|\.)(engine|_engine)\.(begin|connect)$
@@ -138,11 +153,64 @@ NON_DB_AWAITS: tuple[tuple[str, str], ...] = (
 
 NON_DB_PATTERNS = tuple((re.compile(pattern), label) for pattern, label in NON_DB_AWAITS)
 
+# --- Synchronous work that blocks the whole event loop ------------------------
+#
+# Everything above is about an `await`. But the checker only ever visited
+# `ast.Await`, so a *synchronous* blocking call inside a session was invisible
+# to it -- and that is strictly worse than the async case: an await at least
+# lets other tasks run while the connection is pinned, whereas a sync call
+# pins the connection *and* stops the loop.
+#
+# This is not hypothetical. `ComposioWebhookVerifier.verify` ran the synchronous
+# Composio SDK on the event loop from an unauthenticated route, and no gate in
+# the repo could see it.
+#
+# Kept to calls that are unambiguously blocking. A general "un-awaited call to
+# a remote name" rule would fire on every `httpx.AsyncClient(...)` construction,
+# and a gate with false positives gets baselined into irrelevance.
+SYNC_BLOCKING_CALLS: tuple[tuple[str, str], ...] = (
+    (r"^time\.sleep$", "blocking sleep"),
+    (r"^(requests|urllib\.request)\.", "blocking HTTP"),
+    (r"^requests\.sessions\.Session\.", "blocking HTTP"),
+    (r"^subprocess\.(run|call|check_call|check_output|Popen)$", "subprocess"),
+    (r"^os\.system$", "subprocess"),
+    (r"^socket\.(create_connection|socket)$", "blocking socket"),
+    # Reading a whole file synchronously on the loop, holding a connection.
+    (r"^(pathlib\.)?Path\.(read_bytes|read_text|write_bytes|write_text)$", "blocking file I/O"),
+)
+
+SYNC_BLOCKING_PATTERNS = tuple(
+    (re.compile(pattern), label) for pattern, label in SYNC_BLOCKING_CALLS
+)
+
+
+def _sync_blocking_label(callee: str) -> str | None:
+    for pattern, label in SYNC_BLOCKING_PATTERNS:
+        if pattern.search(callee):
+            return label
+    return None
+
 # Receivers that make a call a query no matter what it is named. A repository
 # method called `enqueue_run` writes an admission row; `store.save_import`
 # writes a row. Without this the deny-list's verb matching would fire on the
 # data-access layer, which is the one place it must not.
-DB_RECEIVERS = re.compile(r"(repository|repositories|uow|session|dao|outbox|admission)")
+#
+# Anchored to whole dotted segments, and that is the whole point of the pattern
+# being this fiddly. It used to be a bare substring match, so *any* receiver
+# containing one of these words was unconditionally "a database call" --
+# `session_client.post`, `uow_llm.complete`, `outbox_webhook.send` all silenced
+# the gate completely, and nothing would ever have reported it. A segment now
+# has to *end* with one of these words (with an optional snake_case prefix, so
+# `schedule_repository`, `self.__uow` and `AgentHostDispatchRepository(uow)` all
+# still match), which is the thing that was actually meant. Case-insensitive
+# because the receiver is often a class rather than an attribute -- the four
+# `AgentHostDispatchRepository(...).enqueue_*` calls are precisely the
+# "repository method named enqueue_run writes an admission row" case this
+# exemption was written for.
+DB_RECEIVERS = re.compile(
+    r"(^|\.)[A-Za-z0-9_]*(repository|repositories|uow|session|dao|outbox|admission)(\.|$)",
+    re.IGNORECASE,
+)
 
 # Third-party modules that talk to something over a network. A call to a symbol
 # imported from one of these is non-database work by construction, and the
@@ -216,6 +284,10 @@ class DependencyIndex:
         self.returns_depends: dict[str, set[str]] = {}
         self.returns_calls: dict[str, set[str]] = {}
         self.alias_factories: dict[str, set[str]] = {}
+        # Dependencies that commit before returning -- see
+        # `_hands_the_connection_back`. Excluded from propagation only: their
+        # own bodies are still checked.
+        self.releasing: set[str] = set()
 
     def ingest(self, tree: ast.Module) -> None:
         for node in ast.walk(tree):
@@ -225,6 +297,8 @@ class DependencyIndex:
                 self._ingest_import(node)
             elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 self.params.setdefault(node.name, []).append(_dependency_names(node))
+                if _hands_the_connection_back(node):
+                    self.releasing.add(node.name)
                 if _yields_inside_session(node):
                     self.seeds.add(node.name)
                 if _is_context_manager(node):
@@ -291,13 +365,33 @@ class DependencyIndex:
                             changed = True
                             break
 
+    #: How much of a name's definitions must be slow before a call to that name
+    #: is treated as slow. Names are matched without a receiver type, so this is
+    #: the precision/recall dial for the whole propagation pass.
+    #:
+    #: It used to be `all`, which is brittle in one direction and useless in the
+    #: other. `get` has 56 definitions in this tree and 4 are slow; `create` has
+    #: 58 and 4. Treating either as slow (i.e. `any`) would flood the gate and
+    #: get it switched off. But requiring *every* definition meant one fast
+    #: method sharing a name with seven slow ones silenced all seven -- a future
+    #: edit anywhere in the tree could de-fang propagation for a name nobody was
+    #: thinking about.
+    #:
+    #: Measured across the tree: 1.0, 0.9 and 0.75 all report exactly the same
+    #: 33 violations today, so this is a robustness change rather than a
+    #: behaviour change -- adding one fast `download_attachment_bytes` to the
+    #: six slow ones no longer turns the rule off. 0.6 adds four more, which is
+    #: a judgement call for its own change with its own evidence.
+    SLOW_DEFINITION_RATIO = 0.75
+
     def _name_is_slow(self, name: str) -> bool:
         if name in self.remote_names:
             return True
         definitions = self.definitions.get(name)
         if not definitions:
             return False
-        return all(definition["reason"] is not None for definition in definitions)
+        slow = sum(1 for d in definitions if d["reason"] is not None)
+        return slow / len(definitions) >= self.SLOW_DEFINITION_RATIO
 
     def why_slow(self, callee: str) -> str | None:
         """Reason `callee` is non-database work, if it is."""
@@ -315,7 +409,13 @@ class DependencyIndex:
             return "remote SDK"
         if not self._name_is_slow(name):
             return None
-        reasons = {d["reason"] for d in self.definitions.get(name, [])}
+        # `None` is filtered before sorting. With the old all-or-nothing rule a
+        # mixed name could never reach here, so mixing `str` and `None` in this
+        # set was a latent `TypeError` waiting for the first loosening of
+        # `_name_is_slow` -- which is exactly the change above.
+        reasons = {
+            d["reason"] for d in self.definitions.get(name, []) if d["reason"]
+        }
         return sorted(reasons)[0] if reasons else None
 
     def _ingest_alias(self, node: ast.Assign) -> None:
@@ -381,7 +481,7 @@ class DependencyIndex:
         while changed:
             changed = False
             for name, definitions in sorted(self.params.items()):
-                if name in self.session_scoped:
+                if name in self.session_scoped or name in self.releasing:
                     continue
                 if all(
                     any(self._reaches_session(dep) for dep in dependencies)
@@ -449,12 +549,40 @@ def _dependency_names(node: ast.FunctionDef | ast.AsyncFunctionDef) -> set[str]:
     return names
 
 
+def _is_zero_sleep(call: ast.Call) -> bool:
+    """``await asyncio.sleep(0)`` is a yield to the loop, not a wait.
+
+    It is the idiom for "let other tasks run" -- batch loops use it so a large
+    backlog is spread out instead of dispatched as one burst. The connection is
+    held for one loop tick, which is not the thing this gate exists to catch,
+    and reporting it trains people to read the gate as noise.
+
+    Only a literal zero counts. `sleep(delay)` with a variable stays a
+    violation, because the checker cannot know what it holds.
+    """
+    if not SLEEP_CALLS.search(_dotted(call.func)):
+        return False
+    if len(call.args) != 1 or call.keywords:
+        return False
+    arg = call.args[0]
+    return isinstance(arg, ast.Constant) and arg.value == 0
+
+
+SLEEP_CALLS = re.compile(r"(^|\.)sleep$")
+
+
 def _awaited_calls(
     node: ast.FunctionDef | ast.AsyncFunctionDef,
 ) -> tuple[set[str], str | None]:
     """Bare names this function awaits, and why it is directly non-DB (if it is).
 
     Nested function definitions are skipped: their awaits belong to them.
+
+    Awaits inside a ``connection_released`` block are skipped too, and for the
+    same reason propagation exists at all: this index answers "does calling this
+    hold a connection across slow work", not "is this slow". A function that
+    hands the connection back before its slow call does not, and neither does
+    anything that calls it -- so it must not poison the name for every caller.
     """
     awaited: set[str] = set()
     direct: str | None = None
@@ -463,7 +591,18 @@ def _awaited_calls(
         current = stack.pop()
         if isinstance(current, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
+        if isinstance(current, ast.AsyncWith) and any(
+            SESSION_RELEASERS.search(_dotted(item.context_expr))
+            for item in current.items
+        ):
+            continue
         if isinstance(current, ast.Await) and isinstance(current.value, ast.Call):
+            if _is_zero_sleep(current.value):
+                # A yield to the loop, not a wait -- and the index has to agree
+                # with the visitor about that, or the name stays slow for every
+                # caller while the site itself reports clean.
+                stack.extend(ast.iter_child_nodes(current))
+                continue
             callee = _dotted(current.value.func)
             awaited.add(callee.rsplit(".", 1)[-1])
             if direct is None:
@@ -494,6 +633,53 @@ def _yields_inside_session(
                 for inner in ast.walk(stmt)
             ):
                 return True
+    return False
+
+
+def _hands_the_connection_back(
+    node: ast.FunctionDef | ast.AsyncFunctionDef,
+) -> bool:
+    """True for a dependency that commits before handing its value to the route.
+
+    A FastAPI dependency that reads the database and then commits has given the
+    pooled connection back. Its dependents run with nothing checked out, so it
+    must not mark them request-scoped -- otherwise the two pod_bundle SSE routes
+    are reported for a hold that `_release_after_authorization` already ended,
+    and the only way to silence it is a baseline entry that reads as a real bug.
+
+    Deliberately narrow, because the failure mode is a blind gate:
+
+    * The release must be a **top-level statement** of the function body. A
+      release inside `if`/`try` may not run, and a dependency that sometimes
+      keeps its connection keeps it as far as this checker is concerned.
+    * A `yield` anywhere disqualifies the function. Yield-dependencies resume
+      after the response, so FastAPI keeps them (and their session) alive for
+      the whole request no matter what they committed on the way in.
+
+    The route's own body is unaffected: `holds_session` reads the route's
+    dependency names, so a handler that takes `uow: UoWDep` itself is still
+    request-scoped.
+    """
+    for child in ast.walk(node):
+        if isinstance(child, (ast.Yield, ast.YieldFrom)):
+            return False
+    for statement in node.body:
+        call = None
+        if isinstance(statement, ast.Expr):
+            call = statement.value
+        if isinstance(call, ast.Await):
+            call = call.value
+        if isinstance(call, ast.Call) and _dotted(call.func).split(".")[-1] in (
+            "_release_after_authorization",
+            "release_after_authorization",
+        ):
+            return True
+        if isinstance(statement, ast.AsyncWith) and any(
+            isinstance(item.context_expr, ast.Call)
+            and _dotted(item.context_expr.func).split(".")[-1] == "connection_released"
+            for item in statement.items
+        ):
+            return True
     return False
 
 
@@ -603,6 +789,19 @@ class SessionScopeChecker(ast.NodeVisitor):
         self._scope.pop()
 
     def visit_AsyncWith(self, node: ast.AsyncWith) -> None:
+        if any(
+            SESSION_RELEASERS.search(_dotted(item.context_expr))
+            for item in node.items
+        ):
+            # The connection is given back for the body of this block, so work
+            # inside it holds nothing. Restored afterwards: the caller may go on
+            # to query again, and the next await is judged normally.
+            outer = self._session_depth
+            self._session_depth = 0
+            for child in node.body:
+                self.visit(child)
+            self._session_depth = outer
+            return
         if not _opens_session(node, self._openers):
             self.generic_visit(node)
             return
@@ -618,11 +817,27 @@ class SessionScopeChecker(ast.NodeVisitor):
                 self.visit(item.optional_vars)
 
     def visit_Await(self, node: ast.Await) -> None:
-        if self._session_depth and isinstance(node.value, ast.Call):
+        if (
+            self._session_depth
+            and isinstance(node.value, ast.Call)
+            and not _is_zero_sleep(node.value)
+        ):
             callee = _dotted(node.value.func)
             label = self.index.why_slow(callee)
             if label is not None:
                 self._record(node.lineno, "non-db-await", f"{label}: {callee}")
+        self.generic_visit(node)
+
+    def visit_Call(self, node: ast.Call) -> None:
+        # Synchronous blocking work inside a session. Worse than the awaited
+        # kind: the connection is pinned *and* the loop cannot make progress
+        # for anyone else while it happens.
+        if self._session_depth:
+            label = _sync_blocking_label(_dotted(node.func))
+            if label is not None:
+                self._record(
+                    node.lineno, "sync-blocking-call", f"{label}: {_dotted(node.func)}"
+                )
         self.generic_visit(node)
 
     def visit_AsyncFor(self, node: ast.AsyncFor) -> None:
@@ -691,6 +906,21 @@ def source_files() -> list[Path]:
     )
 
 
+
+def _load_baseline(path: Path) -> dict[str, int]:
+    """Read the baseline, accepting the older list form.
+
+    It used to be a list of keys, which could only express "this key is
+    allowed" -- not how many times. Reading a list as one-each keeps an
+    un-migrated checkout working and makes the first `--update-baseline`
+    write the counted form.
+    """
+    entries = json.loads(path.read_text(encoding="utf-8"))["violations"]
+    if isinstance(entries, dict):
+        return {key: int(count) for key, count in entries.items()}
+    return dict(Counter(entries))
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--baseline", type=Path, default=DEFAULT_BASELINE)
@@ -704,28 +934,51 @@ def main() -> int:
 
     violations = collect(source_files())
 
+    counts = Counter(v.key() for v in violations)
+
     if args.update_baseline:
         payload = {
             "_comment": (
                 "Pre-existing places where a DB connection is held across non-database "
                 "work. This file may shrink freely; growing it means a new connection "
                 "is being held across an LLM call, an HTTP request or a thread offload. "
+                "Entries are {key: count}: the key has no line number so that edits "
+                "above a violation do not churn the file, and the count is what stops "
+                "a baselined function having a free slot for a second one. "
                 "See scripts/check_session_scope.py."
             ),
-            "violations": sorted({v.key() for v in violations}),
+            "violations": dict(sorted(counts.items())),
         }
         args.baseline.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
-        print(f"✓ baseline written: {len(payload['violations'])} entries")
+        print(f"✓ baseline written: {sum(counts.values())} entries")
         return 0
 
-    baseline = set(json.loads(args.baseline.read_text(encoding="utf-8"))["violations"])
-    new = [v for v in violations if v.key() not in baseline]
-    fixed = baseline - {v.key() for v in violations}
+    baseline = _load_baseline(args.baseline)
+
+    # Report every violation whose key now occurs more often than the baseline
+    # allows. Keys carry no line number -- deliberately, so that unrelated edits
+    # above a violation do not churn the file -- which used to mean a second
+    # identical await in an already-baselined function was accepted in silence.
+    # Counting closes that without reintroducing the churn.
+    new: list[Violation] = []
+    seen: Counter[str] = Counter()
+    for violation in violations:
+        key = violation.key()
+        seen[key] += 1
+        if seen[key] > baseline.get(key, 0):
+            new.append(violation)
+
+    fixed = sum(
+        max(0, allowed - counts.get(key, 0)) for key, allowed in baseline.items()
+    )
 
     if fixed:
-        print(f"✓ {len(fixed)} baselined violation(s) gone — run --update-baseline")
+        print(f"✓ {fixed} baselined violation(s) gone — run --update-baseline")
     if not new:
-        print(f"✓ session scope: no new violations ({len(baseline)} baselined)")
+        print(
+            "✓ session scope: no new violations "
+            f"({sum(baseline.values())} baselined)"
+        )
         return 0
 
     print(f"✗ session scope: {len(new)} new violation(s)\n")

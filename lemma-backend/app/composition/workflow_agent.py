@@ -177,9 +177,18 @@ class AgentControlAdapter(AgentPort):
             ConversationStatus.FAILED,
             ConversationStatus.STOPPED,
         }:
+            # Carry the run's own error, not just the status. Without it the
+            # workflow records "Agent conversation FAILED" and the reason -- which
+            # the agent already wrote to `last_run_error` -- is lost, so the run
+            # says an agent failed and nothing about why.
+            reason = (conversation.last_run_error or "").strip()
             return {
                 "status": "FAILED",
-                "error": f"Agent conversation {conversation.status.value}",
+                "error": (
+                    f"Agent conversation {conversation.status.value}: {reason}"
+                    if reason
+                    else f"Agent conversation {conversation.status.value}"
+                ),
                 "output_data": output,
             }
         return {"status": "RUNNING"}

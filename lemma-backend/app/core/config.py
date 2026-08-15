@@ -212,6 +212,16 @@ class Settings(BaseSettings):
             "``OFFLOAD_EXTERNAL_HTTP_LIMIT``."
         ),
     )
+    schedule_poll_interval_seconds: float = Field(
+        default=5.0,
+        description=(
+            "How often each worker replica claims due schedules and timers. "
+            "This is the worst-case lateness for a timer when nothing is backed "
+            "up, so it is seconds rather than the minute a cron would give. "
+            "Every replica polls; the claim is what stops them duplicating "
+            "work. Env: ``SCHEDULE_POLL_INTERVAL_SECONDS``."
+        ),
+    )
     offload_inference_limit: int = Field(
         default=2,
         description=(

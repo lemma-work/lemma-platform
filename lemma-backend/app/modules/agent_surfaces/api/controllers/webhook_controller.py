@@ -17,6 +17,7 @@ from app.core.infrastructure.events.inbox import stable_event_id
 from app.core.infrastructure.events.publisher import EventPublisher
 from app.core.redaction import redact_value
 from app.core.api.dependencies import get_uow_factory
+from app.core.authorization.scope import uow_scope
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.agent_surfaces.api.dependencies import (
     SurfaceWebhookSecurityServiceDep,
@@ -124,6 +125,18 @@ def _decode_webhook_payload(raw_body: bytes, headers: dict[str, str]) -> dict:
         return {}
 
 
+async def _slack_candidates(uow_factory: UnitOfWorkFactory, payload: dict):
+    """Read the signing-secret candidates for a workspace and let the session go.
+
+    The scope closes before `verify_slack_request` runs, so the HMAC comparison
+    (and the request it authenticates) holds no pooled connection.
+    """
+    async with uow_scope(uow_factory) as uow:
+        return await slack_candidates_for_workspace(
+            service=get_surface_service(uow), team_id=slack_team_id(payload)
+        )
+
+
 async def _verify_inbound_request(
     *,
     platform: str,
@@ -131,7 +144,7 @@ async def _verify_inbound_request(
     raw_body: bytes,
     payload: dict,
     security_service,
-    service: AgentSurfaceService,
+    uow_factory: UnitOfWorkFactory,
 ) -> list[UUID] | None:
     """Check a shared-endpoint request is really from the platform.
 
@@ -150,9 +163,7 @@ async def _verify_inbound_request(
             headers=headers,
             raw_body=raw_body,
             api_app_id=slack_api_app_id(payload),
-            candidates=await slack_candidates_for_workspace(
-                service=service, team_id=slack_team_id(payload)
-            ),
+            candidates=await _slack_candidates(uow_factory, payload),
         )
         return list(verified.receiver_surface_ids) or None
     await security_service.verify_platform_request(
@@ -202,10 +213,15 @@ async def handle_platform_webhook(
     platform: str,
     request: Request,
     security_service: SurfaceWebhookSecurityServiceDep,
-    service: AgentSurfaceService = Depends(get_surface_service),
     uow_factory: UnitOfWorkFactory = Depends(get_uow_factory),
 ):
     """Handle platform-level webhook callbacks."""
+    # No request-scoped session on this route by design. It is an inbound
+    # webhook endpoint -- the request rate belongs to the sending platform --
+    # and it publishes to Redis up to three times. Every lookup below opens its
+    # own short scope, so nothing is held across a publish or a signature check.
+    # Deliberately a comment, not part of the docstring: the docstring becomes
+    # the endpoint's public OpenAPI description.
     headers = dict(request.headers)
     raw_body = await request.body()
     payload = _decode_webhook_payload(raw_body, headers)
@@ -224,13 +240,15 @@ async def handle_platform_webhook(
         # sender typed: under aliasing or forwarding the pod's address is in
         # ``received_for`` and matching on ``to`` alone loses the mail.
         surface = None
-        for address in recipients:
-            surface = await service.surface_repository.get_active_by_address(
-                platform="RESEND", address=address
-            )
-            if surface is not None:
-                normalized["to"] = address
-                break
+        async with uow_scope(uow_factory) as uow:
+            repository = get_surface_service(uow).surface_repository
+            for address in recipients:
+                surface = await repository.get_active_by_address(
+                    platform="RESEND", address=address
+                )
+                if surface is not None:
+                    normalized["to"] = address
+                    break
         if surface is None:
             return {"message": "Ignored: no surface for address"}
         source_event_id = _surface_source_event_id("resend", normalized, raw_body)
@@ -258,7 +276,7 @@ async def handle_platform_webhook(
         raw_body=raw_body,
         payload=payload,
         security_service=security_service,
-        service=service,
+        uow_factory=uow_factory,
     )
 
     # Verification commands are identity traffic, not agent messages. The
@@ -334,9 +352,11 @@ async def handle_surface_webhook(
     surface_id: UUID,
     request: Request,
     security_service: SurfaceWebhookSecurityServiceDep,
-    service: AgentSurfaceService = Depends(get_surface_service),
+    uow_factory: UnitOfWorkFactory = Depends(get_uow_factory),
 ):
     """Handle webhooks addressed to one concrete surface."""
+    # Same shape as `handle_platform_webhook`: no request-scoped session, one
+    # short scope for the surface lookup, nothing held across the publish.
     headers = dict(request.headers)
     raw_body = await request.body()
     payload = _decode_webhook_payload(raw_body, headers)
@@ -344,7 +364,8 @@ async def handle_surface_webhook(
     # get_surface raises AgentSurfaceNotFoundError (404) and verify_surface_request
     # raises SurfaceWebhookAuthenticationError — both DomainErrors, translated by
     # the global handler.
-    surface = await service.get_surface(surface_id)
+    async with uow_scope(uow_factory) as uow:
+        surface = await get_surface_service(uow).get_surface(surface_id)
     await security_service.verify_surface_request(
         surface=surface,
         headers=headers,

@@ -20,8 +20,12 @@ import time
 from urllib.parse import quote
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import Response
+
+from app.core.api.dependencies import get_uow_factory
+from app.core.authorization.scope import uow_scope
+from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from pydantic import BaseModel
 from supertokens_python.recipe.session.asyncio import get_session
 
@@ -120,12 +124,24 @@ async def serve_widget(
     conversation_id: UUID,
     tool_call_id: str,
     request: Request,
-    uow: UoWDep,
+    uow_factory: UnitOfWorkFactory = Depends(get_uow_factory),
     token: str | None = Query(default=None),
 ) -> Response:
-    artifact = await WidgetAssetService(uow).get_widget(
-        conversation_id, tool_call_id
-    )
+    # Two short scopes rather than one request-scoped session, because
+    # `_resolve_widget_viewer` sits between them and is a SuperTokens round trip
+    # over HTTP -- it used to run with a pooled connection checked out.
+    #
+    # The order is preserved exactly: lookup, then viewer, then authorization.
+    # Resolving the viewer first would be tidier and would need only one scope,
+    # but it turns a 404 into a 401 for an anonymous caller asking about a
+    # widget that does not exist. That is arguably the better behaviour -- the
+    # current order is an existence oracle for unauthenticated callers -- but it
+    # is a security-semantics change, and it does not belong inside a
+    # connection-scope fix.
+    async with uow_scope(uow_factory) as uow:
+        artifact = await WidgetAssetService(uow).get_widget(
+            conversation_id, tool_call_id
+        )
     if artifact is None:
         raise HTTPException(status_code=404, detail="Widget not found")
 
@@ -135,13 +151,16 @@ async def serve_widget(
     if viewer_id is None:
         raise HTTPException(status_code=401, detail="Authentication required")
 
-    ctx = await AuthorizationDataService(uow.session).build_user_context(
-        user_id=viewer_id, pod_id=artifact.pod_id
-    )
-    await ctx.require(Permissions.CONVERSATION_READ, ResourceRef.pod(artifact.pod_id))
-    await _require_conversation_owner(
-        uow, conversation_id, viewer_id=viewer_id, pod_id=artifact.pod_id
-    )
+    async with uow_scope(uow_factory) as uow:
+        ctx = await AuthorizationDataService(uow.session).build_user_context(
+            user_id=viewer_id, pod_id=artifact.pod_id
+        )
+        await ctx.require(
+            Permissions.CONVERSATION_READ, ResourceRef.pod(artifact.pod_id)
+        )
+        await _require_conversation_owner(
+            uow, conversation_id, viewer_id=viewer_id, pod_id=artifact.pod_id
+        )
 
     document = wrap_html_fragment(artifact.content, title=artifact.title, embed=True)
     return build_injected_html_response(document, artifact.pod_id)

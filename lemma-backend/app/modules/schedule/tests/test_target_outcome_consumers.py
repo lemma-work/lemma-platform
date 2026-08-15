@@ -160,42 +160,28 @@ async def test_agent_waiting_conversation_remains_dispatched(monkeypatch) -> Non
 
 
 @pytest.mark.asyncio
-async def test_deactivated_time_schedule_removes_scheduler_job(monkeypatch) -> None:
-    remove_job = AsyncMock()
-    monkeypatch.setattr(
-        schedule_lifecycle_consumer,
-        "SchedulerAPIClient",
-        lambda: SimpleNamespace(remove_job=remove_job),
-    )
-    schedule_id = uuid4()
-    event = ScheduleDeactivated(
-        schedule_id=schedule_id,
-        user_id=uuid4(),
-        schedule_type=ScheduleType.TIME,
-        consecutive_failures=5,
-    ).model_dump(mode="json")
+@pytest.mark.parametrize("schedule_type", [ScheduleType.TIME, ScheduleType.DATASTORE])
+async def test_deactivation_needs_no_job_teardown(schedule_type) -> None:
+    """Deactivation is self-enforcing now, and this asserts it stays that way.
 
-    await schedule_lifecycle_consumer.on_schedule_deactivated(
-        event,
-        _Logger(),
-        inbox=PassthroughEventInbox(),
-    )
+    These two used to assert the consumer called `remove_job` on the scheduler
+    sidecar for TIME schedules and skipped it for the rest. There is no sidecar
+    and no job: the row *is* the timer, and the claim query filters on
+    `is_active`, so the same UPDATE that deactivates a schedule is what stops it
+    firing -- atomically, in one transaction, with no second system to keep in
+    step.
 
-    remove_job.assert_awaited_once_with(schedule_id)
-
-
-@pytest.mark.asyncio
-async def test_non_time_deactivation_has_no_scheduler_job(monkeypatch) -> None:
-    remove_job = AsyncMock()
-    monkeypatch.setattr(
-        schedule_lifecycle_consumer,
-        "SchedulerAPIClient",
-        lambda: SimpleNamespace(remove_job=remove_job),
-    )
+    What is left to check here is that the consumer stays a no-op. If someone
+    reintroduces an out-of-band teardown call, it belongs in the deactivating
+    transaction rather than in an event handler that can arrive late or twice.
+    The property that a deactivated schedule is never claimed is asserted
+    against real Postgres in
+    `tests/e2e/test_due_schedule_claimer_e2e.py::test_a_deactivated_schedule_is_never_claimed`.
+    """
     event = ScheduleDeactivated(
         schedule_id=uuid4(),
         user_id=uuid4(),
-        schedule_type=ScheduleType.DATASTORE,
+        schedule_type=schedule_type,
         consecutive_failures=5,
     ).model_dump(mode="json")
 
@@ -204,8 +190,6 @@ async def test_non_time_deactivation_has_no_scheduler_job(monkeypatch) -> None:
         _Logger(),
         inbox=PassthroughEventInbox(),
     )
-
-    remove_job.assert_not_awaited()
 
 
 @pytest.mark.asyncio

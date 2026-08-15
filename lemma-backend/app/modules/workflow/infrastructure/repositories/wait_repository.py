@@ -34,6 +34,11 @@ class SqlAlchemyWorkflowRunWaitRepository(WorkflowRunWaitRepository):
             status=wait.status.value,
             assigned_pod_member_id=wait.assigned_pod_member_id,
             external_ref=wait.external_ref,
+            # Persisted rather than dropped. `WaitRequest.scheduled_at` has
+            # existed and been populated by the WAIT_UNTIL executor all along;
+            # this repository never wrote it, so the only durable copy was the
+            # one inside `payload`.
+            scheduled_at=wait.scheduled_at,
             payload=wait.payload,
             completed_at=wait.completed_at,
         )
