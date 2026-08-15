@@ -384,8 +384,14 @@ def test_baseline_matches_the_tree():
     baseline = checker._load_baseline(checker.DEFAULT_BASELINE)
     current = Counter(violation.key() for violation in violations)
 
-    grew = {k: (current[k], baseline.get(k, 0)) for k in current if current[k] > baseline.get(k, 0)}
-    shrank = {k: (current.get(k, 0), v) for k, v in baseline.items() if current.get(k, 0) < v}
+    grew = {
+        k: (current[k], baseline.get(k, 0))
+        for k in current
+        if current[k] > baseline.get(k, 0)
+    }
+    shrank = {
+        k: (current.get(k, 0), v) for k, v in baseline.items() if current.get(k, 0) < v
+    }
 
     assert not grew, f"new session-scope violations; see the gate: {grew}"
     assert not shrank, (
@@ -499,9 +505,9 @@ def test_a_name_that_is_usually_fast_is_still_not_slow() -> None:
     """
     checker = _load_checker()
     index = checker.DependencyIndex()
-    index.definitions["get"] = [{"reason": None, "awaits": set()} for _ in range(52)] + [
-        {"reason": "outbound HTTP", "awaits": set()} for _ in range(4)
-    ]
+    index.definitions["get"] = [
+        {"reason": None, "awaits": set()} for _ in range(52)
+    ] + [{"reason": "outbound HTTP", "awaits": set()} for _ in range(4)]
 
     assert index._name_is_slow("get") is False
     assert index.why_slow("thing.get") is None
@@ -525,3 +531,82 @@ def test_a_mixed_name_reports_a_reason_rather_than_crashing() -> None:
     ]
 
     assert index.why_slow("thing.mixed") == "outbound HTTP"
+
+
+_RELEASING_DEPENDENCY = """
+from fastapi import Depends
+
+async def get_uow():
+    async with create_uow_from_session_maker(async_session_maker) as uow:
+        yield uow
+
+UoWDep = Annotated[object, Depends(get_uow)]
+
+async def get_pod_context(uow: UoWDep) -> Context:
+    ctx = await resolve_pod_context(session=uow.session)
+    %(release)s
+    return ctx
+
+PodContextDep = Annotated[object, Depends(get_pod_context)]
+
+@router.get("/x")
+async def stream_events(ctx: PodContextDep, client):
+    await client.post("https://example.test/hook")
+"""
+
+
+def test_a_dependency_that_commits_first_does_not_make_a_route_request_scoped():
+    """`_release_after_authorization` gives the connection back before the route runs.
+
+    Without this the two pod_bundle SSE routes are reported for a hold that
+    ended in the dependency, and the only way to quiet them is a baseline entry
+    that reads like an unfixed bug.
+    """
+    source = _RELEASING_DEPENDENCY % {
+        "release": "await _release_after_authorization(uow)"
+    }
+
+    # `get_uow` itself still yields inside its session -- that is the provider
+    # this whole exemption is about, and it is reported either way.
+    assert _rules(source) == {"session-across-yield"}
+
+
+def test_the_same_dependency_without_the_release_still_counts():
+    """The exemption is the commit, not the shape of the dependency."""
+    source = _RELEASING_DEPENDENCY % {"release": "pass"}
+
+    assert "non-db-await/request-scoped" in _rules(source)
+
+
+def test_a_release_that_might_not_run_is_not_a_release():
+    """A commit inside `if` leaves the caller holding a connection on the other branch."""
+    source = _RELEASING_DEPENDENCY % {
+        "release": "if fresh:\n        await _release_after_authorization(uow)"
+    }
+
+    assert "non-db-await/request-scoped" in _rules(source)
+
+
+def test_a_yield_dependency_gets_no_exemption_for_committing():
+    """FastAPI resumes it after the response, so its session outlives the release."""
+    source = """
+from fastapi import Depends
+
+async def get_uow():
+    async with create_uow_from_session_maker(async_session_maker) as uow:
+        yield uow
+
+UoWDep = Annotated[object, Depends(get_uow)]
+
+async def get_pod_context(uow: UoWDep):
+    await _release_after_authorization(uow)
+    yield ctx
+
+PodContextDep = Annotated[object, Depends(get_pod_context)]
+
+@router.get("/x")
+async def stream_events(ctx: PodContextDep, client):
+    await client.post("https://example.test/hook")
+"""
+
+    assert "non-db-await/request-scoped" in _rules(source)

@@ -2,13 +2,6 @@
   "_comment": "Pre-existing places where a DB connection is held across non-database work. This file may shrink freely; growing it means a new connection is being held across an LLM call, an HTTP request or a thread offload. Entries are {key: count}: the key has no line number so that edits above a violation do not churn the file, and the count is what stops a baselined function having a free slot for a second one. See scripts/check_session_scope.py.",
   "violations": {
     "app/core/api/dependencies.py::get_uow::session-across-yield::get_uow": 1,
-    "app/modules/agent_surfaces/api/controllers/telegram_manager_controller.py::start_telegram_managed_bot_setup::non-db-await/request-scoped::via get_by_target: service.start_setup": 1,
-    "app/modules/agent_surfaces/api/controllers/webhook_controller.py::handle_platform_webhook::nested-session/request-scoped::uow_factory": 1,
-    "app/modules/agent_surfaces/api/controllers/webhook_controller.py::handle_platform_webhook::non-db-await/request-scoped::via verify_platform_request: _verify_inbound_request": 1,
-    "app/modules/agent_surfaces/api/controllers/webhook_controller.py::handle_surface_webhook::non-db-await/request-scoped::via verify_platform_request: security_service.verify_surface_request": 1,
-    "app/modules/agent_surfaces/services/surface_file_ingest_service.py::SurfaceFileIngestService.ingest_attachments::non-db-await::via _ingest_one: self._ingest_all": 1,
-    "app/modules/pod_bundle/api/controllers/import_controller.py::stream_import_events::nested-session/request-scoped::pod_context_scope": 1,
-    "app/modules/pod_bundle/api/controllers/import_controller.py::upload_bundle::non-db-await/request-scoped::thread offload: use_cases.stage_upload": 1,
-    "app/modules/pod_bundle/api/controllers/publish_controller.py::stream_publish_events::nested-session/request-scoped::pod_context_scope": 1
+    "app/modules/agent_surfaces/services/surface_file_ingest_service.py::SurfaceFileIngestService.ingest_attachments::non-db-await::via _ingest_one: self._ingest_all": 1
   }
 }

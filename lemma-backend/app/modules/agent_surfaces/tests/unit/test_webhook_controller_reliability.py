@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 from uuid import uuid4
@@ -106,19 +107,28 @@ def test_webhook_headers_are_redacted_before_event_serialization():
     assert headers["x-provider"] == "safe"
 
 
+class _CountingUowFactory:
+    """A factory that records how many scopes the route opened.
 
-def _released_uow():
-    """A unit of work whose connection can be handed back.
-
-    The webhook routes now take `uow` purely so they can wrap their Redis
-    publishes in `connection_released` — the session is opened by their sibling
-    dependencies, and this is the only handle on it. `safe_to_release` inspects
-    the session, so the fake needs one that looks idle.
+    The webhook routes take no request-scoped session: they open one short
+    scope per lookup and hold nothing across a signature check or a Redis
+    publish. `scopes` is what a test asserts on to keep that true — a route
+    that goes back to a route-lifetime session opens one scope and never
+    closes it before the publish, and `open_scopes` catches that.
     """
-    return SimpleNamespace(
-        session=SimpleNamespace(new=(), dirty=(), deleted=(), info={}),
-        commit=AsyncMock(),
-    )
+
+    def __init__(self) -> None:
+        self.scopes = 0
+        self.open_scopes = 0
+
+    @asynccontextmanager
+    async def __call__(self):
+        self.scopes += 1
+        self.open_scopes += 1
+        try:
+            yield SimpleNamespace(session=SimpleNamespace(info={}))
+        finally:
+            self.open_scopes -= 1
 
 
 @pytest.mark.asyncio
@@ -135,10 +145,8 @@ async def test_platform_webhook_verifies_and_publishes_versioned_event():
         new=AsyncMock(),
     ) as publish:
         result = await handle_platform_webhook(
-            "telegram", _request(body), security,
-    uow=_released_uow(),
-    service=SimpleNamespace(),
-)
+            "telegram", _request(body), security, uow_factory=_CountingUowFactory()
+        )
 
     assert result == {"message": "Webhook received"}
     security.assert_platform_request_allowed.assert_called_once_with("telegram")
@@ -176,10 +184,11 @@ async def test_signed_reserved_whatsapp_message_publishes_only_identity_event(
         new=AsyncMock(),
     ) as publish:
         result = await handle_platform_webhook(
-            "whatsapp", _request(body), security,
-    uow=_released_uow(),
-    service=SimpleNamespace(),
-)
+            "whatsapp",
+            _request(body),
+            security,
+            uow_factory=_CountingUowFactory(),
+        )
 
     assert result == {"message": "Verification message received"}
     security.verify_platform_request.assert_awaited_once()
@@ -214,8 +223,7 @@ async def test_reserved_whatsapp_text_routes_normally_when_verification_is_disab
             "whatsapp",
             _request(_reserved_whatsapp_message()),
             security,
-            uow=_released_uow(),
-            service=SimpleNamespace(),
+            uow_factory=_CountingUowFactory(),
         )
 
     assert result == {"message": "Webhook received"}
@@ -239,20 +247,27 @@ async def test_resend_webhook_resolves_surface_before_publishing():
         }
     ).encode()
 
-    with patch(
-        "app.modules.agent_surfaces.api.controllers.webhook_controller."
-        "EventPublisher.publish",
-        new=AsyncMock(),
-    ) as publish:
+    factory = _CountingUowFactory()
+    with (
+        patch(
+            "app.modules.agent_surfaces.api.controllers.webhook_controller."
+            "EventPublisher.publish",
+            new=AsyncMock(),
+        ) as publish,
+        patch(
+            "app.modules.agent_surfaces.api.controllers.webhook_controller."
+            "get_surface_service",
+            return_value=service,
+        ),
+    ):
         result = await handle_platform_webhook(
-            "resend",
-            _request(body),
-            security,
-            uow=_released_uow(),
-            service=service,
+            "resend", _request(body), security, uow_factory=factory
         )
 
     assert result == {"message": "Webhook received"}
+    # The address lookup opened and closed its own scope; the publish that
+    # follows holds nothing.
+    assert (factory.scopes, factory.open_scopes) == (1, 0)
     security.verify_resend_request.assert_awaited_once()
     repository.get_active_by_address.assert_awaited_once_with(
         platform="RESEND", address="pod@ops.asur.work"
@@ -269,20 +284,25 @@ async def test_surface_webhook_verifies_binding_and_publishes_surface_id():
     security = SimpleNamespace(verify_surface_request=AsyncMock())
     body = json.dumps({"id": "provider-event-1"}).encode()
 
-    with patch(
-        "app.modules.agent_surfaces.api.controllers.webhook_controller."
-        "EventPublisher.publish",
-        new=AsyncMock(),
-    ) as publish:
+    factory = _CountingUowFactory()
+    with (
+        patch(
+            "app.modules.agent_surfaces.api.controllers.webhook_controller."
+            "EventPublisher.publish",
+            new=AsyncMock(),
+        ) as publish,
+        patch(
+            "app.modules.agent_surfaces.api.controllers.webhook_controller."
+            "get_surface_service",
+            return_value=service,
+        ),
+    ):
         result = await handle_surface_webhook(
-            surface.id,
-            _request(body),
-            security,
-            uow=_released_uow(),
-            service=service,
+            surface.id, _request(body), security, uow_factory=factory
         )
 
     assert result == {"message": "Webhook received"}
+    assert (factory.scopes, factory.open_scopes) == (1, 0)
     service.get_surface.assert_awaited_once_with(surface.id)
     security.verify_surface_request.assert_awaited_once()
     event = publish.await_args.args[1]

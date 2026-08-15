@@ -5,6 +5,8 @@ import hashlib
 import hmac
 import json
 import time
+from collections.abc import Callable
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
@@ -13,6 +15,7 @@ import httpx
 import jwt
 from jwt.algorithms import RSAAlgorithm
 
+from app.core.authorization.scope import uow_scope
 from app.core.config import settings
 from app.core.domain.errors import DomainError
 from app.core.infrastructure.cache.redis_json_cache import RedisJsonCache
@@ -97,10 +100,37 @@ class SurfaceWebhookAuthenticationError(DomainError):
 
 
 class SurfaceWebhookSecurityService:
+    """Verify that an inbound webhook really came from the platform it claims.
+
+    Takes a way to *open* a unit of work rather than an open one. Signature
+    verification needs a per-workspace secret from the database, but the routes
+    that call it are inbound webhook endpoints -- the request rate belongs to
+    whoever is sending -- so holding a pooled connection for the whole request
+    to read one secret is the worst trade available. Each lookup opens its own
+    short scope instead.
+
+    ``resolver_factory`` is ``None`` in the tests that only exercise signature
+    arithmetic; those paths fall back to the deployment-wide secret exactly as
+    they did when the resolver itself was optional.
+    """
+
     def __init__(
-        self, *, credential_resolver: "SurfaceCredentialResolver | None" = None
+        self,
+        *,
+        uow_factory: Any = None,
+        resolver_factory: "Callable[[Any], SurfaceCredentialResolver] | None" = None,
     ):
-        self._credential_resolver = credential_resolver
+        self._uow_factory = uow_factory
+        self._resolver_factory = resolver_factory
+
+    @asynccontextmanager
+    async def _resolver(self):
+        """A credential resolver on its own short-lived session."""
+        if self._resolver_factory is None or self._uow_factory is None:
+            yield None
+            return
+        async with uow_scope(self._uow_factory) as uow:
+            yield self._resolver_factory(uow)
 
     def verification_enabled(self) -> bool:
         return bool(surface_settings.surface_webhook_security_enabled)
@@ -180,11 +210,10 @@ class SurfaceWebhookSecurityService:
             signing_secret = (
                 surface.webhook_secret or surface_settings.slack_signing_secret
             )
-            if self._credential_resolver is not None:
-                credentials = await self._credential_resolver.slack_webhook_credentials(
-                    surface
-                )
-                signing_secret = credentials.signing_secret
+            async with self._resolver() as resolver:
+                if resolver is not None:
+                    credentials = await resolver.slack_webhook_credentials(surface)
+                    signing_secret = credentials.signing_secret
             self._verify_slack_signature(
                 headers=headers,
                 raw_body=raw_body,
@@ -356,12 +385,11 @@ class SurfaceWebhookSecurityService:
         use the env-configured system credentials.
         """
         if surface is not None and surface.account_id is not None:
-            if self._credential_resolver is None:
-                return None, None
             try:
-                credentials = await self._credential_resolver.for_account(
-                    surface.account_id
-                )
+                async with self._resolver() as resolver:
+                    if resolver is None:
+                        return None, None
+                    credentials = await resolver.for_account(surface.account_id)
             except Exception:
                 logger.debug(
                     "agent_surfaces.webhook_security_service.could_not_resolve_whatsapp_credentials.diagnostic",

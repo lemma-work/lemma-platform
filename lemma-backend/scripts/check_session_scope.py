@@ -284,6 +284,10 @@ class DependencyIndex:
         self.returns_depends: dict[str, set[str]] = {}
         self.returns_calls: dict[str, set[str]] = {}
         self.alias_factories: dict[str, set[str]] = {}
+        # Dependencies that commit before returning -- see
+        # `_hands_the_connection_back`. Excluded from propagation only: their
+        # own bodies are still checked.
+        self.releasing: set[str] = set()
 
     def ingest(self, tree: ast.Module) -> None:
         for node in ast.walk(tree):
@@ -293,6 +297,8 @@ class DependencyIndex:
                 self._ingest_import(node)
             elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 self.params.setdefault(node.name, []).append(_dependency_names(node))
+                if _hands_the_connection_back(node):
+                    self.releasing.add(node.name)
                 if _yields_inside_session(node):
                     self.seeds.add(node.name)
                 if _is_context_manager(node):
@@ -475,7 +481,7 @@ class DependencyIndex:
         while changed:
             changed = False
             for name, definitions in sorted(self.params.items()):
-                if name in self.session_scoped:
+                if name in self.session_scoped or name in self.releasing:
                     continue
                 if all(
                     any(self._reaches_session(dep) for dep in dependencies)
@@ -627,6 +633,53 @@ def _yields_inside_session(
                 for inner in ast.walk(stmt)
             ):
                 return True
+    return False
+
+
+def _hands_the_connection_back(
+    node: ast.FunctionDef | ast.AsyncFunctionDef,
+) -> bool:
+    """True for a dependency that commits before handing its value to the route.
+
+    A FastAPI dependency that reads the database and then commits has given the
+    pooled connection back. Its dependents run with nothing checked out, so it
+    must not mark them request-scoped -- otherwise the two pod_bundle SSE routes
+    are reported for a hold that `_release_after_authorization` already ended,
+    and the only way to silence it is a baseline entry that reads as a real bug.
+
+    Deliberately narrow, because the failure mode is a blind gate:
+
+    * The release must be a **top-level statement** of the function body. A
+      release inside `if`/`try` may not run, and a dependency that sometimes
+      keeps its connection keeps it as far as this checker is concerned.
+    * A `yield` anywhere disqualifies the function. Yield-dependencies resume
+      after the response, so FastAPI keeps them (and their session) alive for
+      the whole request no matter what they committed on the way in.
+
+    The route's own body is unaffected: `holds_session` reads the route's
+    dependency names, so a handler that takes `uow: UoWDep` itself is still
+    request-scoped.
+    """
+    for child in ast.walk(node):
+        if isinstance(child, (ast.Yield, ast.YieldFrom)):
+            return False
+    for statement in node.body:
+        call = None
+        if isinstance(statement, ast.Expr):
+            call = statement.value
+        if isinstance(call, ast.Await):
+            call = call.value
+        if isinstance(call, ast.Call) and _dotted(call.func).split(".")[-1] in (
+            "_release_after_authorization",
+            "release_after_authorization",
+        ):
+            return True
+        if isinstance(statement, ast.AsyncWith) and any(
+            isinstance(item.context_expr, ast.Call)
+            and _dotted(item.context_expr.func).split(".")[-1] == "connection_released"
+            for item in statement.items
+        ):
+            return True
     return False
 
 
