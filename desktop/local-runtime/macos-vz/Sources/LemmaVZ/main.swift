@@ -175,11 +175,46 @@ private func configuration(
     return configuration
 }
 
+/// Hands idle guest memory back to macOS, without asking the guest to do it all
+/// at once and without mistaking "not started yet" for "finished".
+///
+/// This crashed a guest. `active_sandboxes == 0` was read as idle, which is true
+/// once the stack has run something and false during first setup, when there are
+/// no sandboxes because nothing has started. Sixty seconds into the very first
+/// boot — with Postgres mid-`initdb` and migrations running — it asked the guest
+/// to give back 4.5 of its 6 GiB in a single step. The kernel began mass page
+/// migration to comply and took an Oops in `migrate_pages`:
+///
+///     BUG: Bad rss-counter state mm:… type:MM_ANONPAGES val:9      (t+4.5s)
+///     Unable to handle kernel paging request at … kcompactd0       (t+65s)
+///
+/// Setup then failed with every vsock connect reset and migrations timing out
+/// after 300s, none of which named memory.
+///
+/// Two changes. The balloon stays out of the way until the guest has actually
+/// run a sandbox, so it can never fire during a first setup it cannot see. And
+/// it steps down instead of jumping, so the guest is never asked to migrate
+/// gigabytes in one go.
+///
+/// A correct kernel should not Oops however rudely it is ballooned. We can only
+/// stop provoking it.
 private final class MemoryController {
     private let device: VZVirtioTraditionalMemoryBalloonDevice?
     private let ceiling: UInt64
     private let idleTarget = UInt64(1_536 * 1_024 * 1_024)
+    /// The most memory to reclaim in one step, and how long to settle between
+    /// steps. Reclaiming is page migration in the guest, and the cost of it is
+    /// superlinear in how much is asked for at once.
+    private let stepBytes = UInt64(1_024 * 1_024 * 1_024)
+    private let stepSeconds = 20.0
+    private let idleSeconds = 60.0
     private var idleGeneration = 0
+    /// Whether this guest has ever had a sandbox running.
+    ///
+    /// Until it has, "no sandboxes" carries no information — it is equally the
+    /// state of a machine that finished its work and one that has not begun.
+    /// Only the first tells us the memory is spare.
+    private var hasEverBeenBusy = false
     private(set) var state = "active"
 
     init(virtualMachine: VZVirtualMachine, ceiling: UInt64) {
@@ -205,19 +240,47 @@ private final class MemoryController {
     func observe(activeSandboxes: Int) {
         dispatchPrecondition(condition: .onQueue(.main))
         if activeSandboxes > 0 {
+            hasEverBeenBusy = true
             requireCapacity()
+            return
+        }
+        guard device != nil else {
+            state = "unsupported"
+            return
+        }
+        guard hasEverBeenBusy else {
+            // First setup lives here: minutes of real work with no sandbox to
+            // show for it. Leaving the ceiling alone costs idle memory on a
+            // machine that has never run anything, and is what the crash bought.
+            state = "starting"
             return
         }
         idleGeneration += 1
         let generation = idleGeneration
-        DispatchQueue.main.asyncAfter(deadline: .now() + 60) { [weak self] in
-            guard let self, self.idleGeneration == generation else { return }
-            guard let device = self.device else {
-                self.state = "unsupported"
-                return
-            }
-            device.targetVirtualMachineMemorySize = min(self.idleTarget, self.ceiling)
-            self.state = "idle-requested"
+        DispatchQueue.main.asyncAfter(deadline: .now() + idleSeconds) { [weak self] in
+            self?.stepDown(generation: generation)
+        }
+    }
+
+    /// Walk the target down one step at a time, rescheduling until it lands.
+    ///
+    /// Any `requireCapacity` bumps the generation and abandons the walk, so work
+    /// arriving mid-shrink returns the ceiling immediately rather than finishing
+    /// a reclaim nobody wants any more.
+    private func stepDown(generation: Int) {
+        dispatchPrecondition(condition: .onQueue(.main))
+        guard idleGeneration == generation, let device else { return }
+        let floor = min(idleTarget, ceiling)
+        let current = device.targetVirtualMachineMemorySize
+        guard current > floor else {
+            state = "idle"
+            return
+        }
+        let next = current - min(stepBytes, current - floor)
+        device.targetVirtualMachineMemorySize = next
+        state = next > floor ? "idle-shrinking" : "idle-requested"
+        DispatchQueue.main.asyncAfter(deadline: .now() + stepSeconds) { [weak self] in
+            self?.stepDown(generation: generation)
         }
     }
 
