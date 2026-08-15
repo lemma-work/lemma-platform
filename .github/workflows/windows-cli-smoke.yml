@@ -9,17 +9,16 @@ name: Windows CLI smoke
 # supervised by Lemma Desktop now and has no CLI, so the Windows coverage that
 # matters for it is the desktop build check in ci.yml.
 #
+# CI's "Windows CLI smoke test" job covers the same install path on every pull
+# request and every push that touches the CLI, and it now runs this workflow's
+# `servers list` / `auth status` assertions too. So this no longer runs on push:
+# it was a second Windows runner per merge, checking a subset of what had
+# already passed.
+#
 # Triggers:
-#   * push to main           — post-merge gate (only when CLI files change)
-#   * PR labelled `windows-ci`— opt-in per-PR run (add the label to test a branch)
+#   * PR labelled `windows-ci`— opt-in run for a branch CI's path filter misses
 #   * manual workflow_dispatch
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'lemma-cli/**'
-      - 'lemma-skills/**'
-      - '.github/workflows/windows-cli-smoke.yml'
   pull_request:
     types: [labeled]
   workflow_dispatch:
@@ -34,10 +33,9 @@ concurrency:
 jobs:
   windows-cli-smoke:
     name: Windows CLI smoke
-    # Always on push/dispatch; on PRs only when the `windows-ci` label is present.
+    # Always on dispatch; on PRs only when the `windows-ci` label is present.
     if: >-
       github.event_name == 'workflow_dispatch' ||
-      github.event_name == 'push' ||
       (github.event_name == 'pull_request' &&
        github.event.action == 'labeled' &&
        github.event.label.name == 'windows-ci')

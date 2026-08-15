@@ -76,8 +76,9 @@ describe('describeThisComputer', () => {
         // The failure this came from: a Mac paired to its own local stack, then
         // opened against a hosted workspace. The local pairing is real and is
         // failing, but it is not this workspace's, so this workspace is simply
-        // not connected — and the card must offer to connect it rather than
-        // reporting someone else's dead URL and hiding the button.
+        // not connected yet — and reporting someone else's dead URL as this
+        // one's status is what sent people looking for a fault that was not
+        // theirs.
         const described = describeThisComputer(
             status({
                 targets: [
@@ -90,8 +91,56 @@ describe('describeThisComputer', () => {
             null,
             WORKSPACE,
         );
-        expect(described.label).toBe('Not connected');
-        expect(described.detail).toContain('Connect this computer');
+        expect(described.label).toBe('Connecting');
+    });
+
+    it('never reports this computer as off, because nothing can turn it off', () => {
+        // `running: false` used to mean "the user switched it off" and read as a
+        // dead end with a button to press. The switch is gone, so the only way
+        // to be paired and not running is to be on the way up.
+        const described = describeThisComputer(
+            status({ running: false, targets: [target()] }),
+            null,
+            WORKSPACE,
+        );
+        expect(described.label).toBe('Starting');
+        expect(described.detail).not.toContain('Turn it on');
+    });
+
+    it('says a connection failed rather than reporting it as still in progress', () => {
+        // Every state on this card is a report, which is right — but the only
+        // report available for "not paired here" was "Connecting", and nothing
+        // retries on its own. A machine whose pairing call failed described
+        // itself as mid-connection for as long as the page stayed open, and
+        // never said why. The error was caught and dropped on purpose, so there
+        // was nothing anywhere to find.
+        const described = describeThisComputer(
+            status({ targets: [] }),
+            null,
+            WORKSPACE,
+            'Pairing code was rejected',
+        );
+        expect(described.label).toBe("Couldn't connect");
+        expect(described.detail).toBe('Pairing code was rejected');
+        expect(described.tone).toBe('warn');
+    });
+
+    it('still reads as connecting while nothing has gone wrong', () => {
+        const described = describeThisComputer(status({ targets: [] }), null, WORKSPACE, null);
+        expect(described.label).toBe('Connecting');
+        expect(described.tone).toBe('muted');
+    });
+
+    it('does not let a stale connect failure outrank a pairing that worked', () => {
+        // A retry that succeeds leaves the machine paired. The card follows the
+        // target, not the last thing that went wrong.
+        const described = describeThisComputer(
+            status({ targets: [target({ connection_state: 'ONLINE' })] }),
+            null,
+            WORKSPACE,
+            'Pairing code was rejected',
+        );
+        expect(described.label).toBe('Connected');
     });
 });
 

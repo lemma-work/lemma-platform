@@ -16,21 +16,17 @@ const DETAILS_CACHE: Duration = Duration::from_secs(2);
 /// `connect` and `disconnect` reach the backend; `refresh` only bumps a
 /// generation counter locally but still opens the journal.
 const CLI_TIMEOUT: Duration = Duration::from_secs(45);
-/// `connect` is not a request, it is an installation.
-///
-/// Before it can report success it fetches and verifies the pinned adapter
-/// package for every certified agent — an npm download each, on a cache that is
-/// empty the first time anyone pairs. Judging that by the same deadline as
-/// `status` meant the very first pairing on a machine reported "Agent Host did
-/// not answer `connect` in time" while the install was still running normally.
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(600);
 /// `refresh` re-probes every installed agent, and a probe spawns the agent and
 /// opens an ACP session with its own 20s ceiling.
 const REFRESH_TIMEOUT: Duration = Duration::from_secs(180);
 
+/// `connect` had a ten-minute deadline of its own, because it was not a request
+/// but an installation: it fetched and verified a pinned adapter package for
+/// every certified agent before it could report success. It no longer installs
+/// anything — the cache is warmed when the app opens — so it is a pairing call
+/// with one network round trip in it, and it takes the ordinary deadline.
 fn cli_timeout(verb: &str) -> Duration {
     match verb {
-        "connect" => CONNECT_TIMEOUT,
         "refresh" => REFRESH_TIMEOUT,
         _ => CLI_TIMEOUT,
     }
@@ -52,7 +48,6 @@ pub struct AgentHostSupervisor {
     executable: Option<PathBuf>,
     data_dir: PathBuf,
     log_path: PathBuf,
-    preference_path: PathBuf,
     state: Mutex<SupervisorState>,
     details: Mutex<Option<(Instant, Value)>>,
 }
@@ -64,17 +59,22 @@ impl AgentHostSupervisor {
             .parent()
             .unwrap_or(locald_root)
             .join("agent-host");
-        let preference_path = shared_root.join("supervisor.json");
-        // Absent preference means the user has never chosen. Run for a paired
-        // machine, since it has work waiting; stay off for an unpaired one,
-        // where the sidecar would only idle.
-        let desired_running = read_preference(&preference_path)
-            .unwrap_or_else(|| host_is_paired(&shared_root.join("config.json")));
+        // Derived, never remembered. Run for a paired machine, since it has
+        // work waiting; stay off for an unpaired one, where the sidecar would
+        // only idle.
+        //
+        // This used to consult `supervisor.json`'s `{"enabled": bool}` first,
+        // which was the persisted half of the off switch. That switch is gone
+        // from every surface, so nothing writes the file — and a `false` left in
+        // it by an older build would hold a paired machine off across every
+        // future launch, with no UI left anywhere to set it back. It also made a
+        // full-stack stop, which calls `stop()`, indistinguishable from the user
+        // choosing "off": the Agent Host stayed down after the stack came back.
+        let desired_running = host_is_paired(&shared_root.join("config.json"));
         Self {
             executable,
             data_dir: shared_root.clone(),
             log_path: shared_root.join("agent-host.log"),
-            preference_path,
             state: Mutex::new(SupervisorState {
                 child: None,
                 desired_running,
@@ -98,7 +98,6 @@ impl AgentHostSupervisor {
     }
 
     pub fn start(&self) -> io::Result<()> {
-        self.write_preference(true);
         let mut state = self.state.lock().expect("Agent Host state lock poisoned");
         state.desired_running = true;
         if child_running(&mut state) {
@@ -107,23 +106,27 @@ impl AgentHostSupervisor {
         self.spawn_locked(&mut state)
     }
 
+    /// Stop the process and stop wanting it back, for this daemon's lifetime.
+    ///
+    /// Nothing is written down: the next daemon derives what it wants from
+    /// whether this machine is paired, so "stopped" never outlives the process
+    /// that decided it.
     pub fn stop(&self) -> io::Result<()> {
-        self.write_preference(false);
         self.halt(false)
     }
 
-    /// Stop the process without touching the user's preference.
+    /// Stop the process while still wanting it back.
     ///
-    /// The Agent Host runs while the app is open, so quitting has to stop it -
-    /// but quitting is not the user turning it off, and it must come back on
-    /// the next launch.
+    /// The Agent Host runs while the app is open, so quitting has to stop it —
+    /// but quitting is not a decision about the Agent Host, and it must come
+    /// back on the next launch.
     pub fn suspend(&self) -> io::Result<()> {
         self.halt(true)
     }
 
-    fn halt(&self, keep_preference: bool) -> io::Result<()> {
+    fn halt(&self, keep_desire: bool) -> io::Result<()> {
         let mut state = self.state.lock().expect("Agent Host state lock poisoned");
-        if !keep_preference {
+        if !keep_desire {
             state.desired_running = false;
         }
         if let Some(mut child) = state.child.take() {
@@ -330,17 +333,6 @@ impl AgentHostSupervisor {
         Ok(String::from_utf8_lossy(&output.stdout).into_owned())
     }
 
-    fn write_preference(&self, enabled: bool) {
-        // Shared with the CLI, which supervises the same host when the desktop
-        // app is not running, so both agree on what the user last chose.
-        if std::fs::create_dir_all(&self.data_dir).is_ok() {
-            let _ = std::fs::write(
-                &self.preference_path,
-                serde_json::to_vec_pretty(&json!({"enabled": enabled})).unwrap_or_default(),
-            );
-        }
-    }
-
     fn spawn_locked(&self, state: &mut SupervisorState) -> io::Result<()> {
         // Every failure arms the backoff, not just a failed `spawn`: an
         // unwritable data directory would otherwise be retried every tick.
@@ -392,14 +384,6 @@ impl AgentHostSupervisor {
         }
         command.spawn()
     }
-}
-
-fn read_preference(path: &Path) -> Option<bool> {
-    let raw = std::fs::read_to_string(path).ok()?;
-    serde_json::from_str::<Value>(&raw)
-        .ok()?
-        .get("enabled")?
-        .as_bool()
 }
 
 /// Whether the host holds an identity for at least one workspace.
@@ -724,7 +708,12 @@ mod tests {
     }
 
     #[test]
-    fn turning_it_off_survives_a_daemon_restart() {
+    fn stopping_never_outlives_the_daemon_that_stopped_it() {
+        // The inverse of what this used to assert. `stop()` wrote
+        // `supervisor.json` so an off switch could survive a restart; with no
+        // switch left anywhere, the only writers of "off" are shutdown paths —
+        // a full stack stop calls `stop()` too — and persisting it there left a
+        // paired machine dead with no UI able to revive it.
         let home = tempdir().unwrap();
         let locald_root = home.path().join("locald");
         write(
@@ -734,16 +723,15 @@ mod tests {
 
         let supervisor = AgentHostSupervisor::discover(&locald_root);
         supervisor.stop().unwrap();
+        // This daemon stops wanting it, so `reconcile` will not respawn it...
         assert!(!supervisor.desired_running());
-        // A paired host would otherwise default back on and undo the choice.
-        assert!(!AgentHostSupervisor::discover(&locald_root).desired_running());
-
-        supervisor.start().ok();
+        // ...and the next one derives the answer from the pairing instead.
         assert!(AgentHostSupervisor::discover(&locald_root).desired_running());
+        assert!(!home.path().join("agent-host/supervisor.json").exists());
     }
 
     #[test]
-    fn quitting_the_app_does_not_count_as_turning_it_off() {
+    fn quitting_the_app_does_not_stop_it_wanting_to_run() {
         let home = tempdir().unwrap();
         let locald_root = home.path().join("locald");
         write(

@@ -17,14 +17,16 @@ import { RuntimeProfileKind } from "lemma-sdk";
  * Code has a working agent and no operator provider, and used to be told
  * forever that they had to configure one.
  *
- * This is also where the Agent Host gets connected. Every authenticated local
- * page mounts it, so by the time anyone looks at Models or onboarding, this
- * computer has already paired itself and scanned.
+ * This is also where the Agent Host gets connected. Every authenticated page
+ * mounts it through `protected-route`, so by the time anyone looks at Models or
+ * onboarding, this computer has already paired itself and scanned.
  */
 export function LocalAiSetupBanner() {
     const local = isLocalDeployment();
-    // Runs before the early return: connecting this computer is not conditional
-    // on whether the banner has anything to say.
+    // Runs before the early return, and deliberately outside the `local` gate:
+    // connecting this computer is not conditional on whether the banner has
+    // anything to say, nor on the workspace being the one on this machine. A
+    // hosted workspace opened in the app has the same laptop to offer it.
     useAutoConnectThisComputer();
 
     const { currentOrg } = useOrganization();

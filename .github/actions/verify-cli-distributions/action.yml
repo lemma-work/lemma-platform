@@ -1,0 +1,48 @@
+name: Verify lemma-terminal distributions
+description: Assert a built sdist/wheel pair carries what PyPI cannot supply, and imports where no checkout exists.
+
+# What users install is a built artifact, and its two most important contents --
+# the agent skills and lemma_pod_bundle -- exist in it only because setup.py
+# copies them in. No test that reads the source tree can see that fail. CI runs
+# this on a clean-checkout build; the release workflow runs it on the exact
+# distributions it is about to upload.
+
+inputs:
+  dist-dir:
+    description: Directory holding the built sdist and wheel.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    # dist-dir is repository-relative, and the working directory is pinned to the
+    # workspace rather than inherited: release-lemma-terminal.yml builds from
+    # lemma-cli/.
+    - name: Distributions carry what PyPI cannot supply
+      working-directory: ${{ github.workspace }}
+      shell: bash
+      run: python scripts/check_cli_wheel.py "${{ inputs.dist-dir }}"
+
+    - name: Install the wheel where no checkout exists and import it
+      # The failure mode this catches is a user's, not a builder's: the wheel
+      # resolves and installs happily and then raises ModuleNotFoundError on
+      # first use. --no-deps keeps this a packaging check rather than a
+      # resolution one (the lemma-sdk pin names the release being cut, which
+      # is not on PyPI until minutes after the wheel is), and /tmp keeps the
+      # repository off sys.path so an import can only come from the wheel.
+      shell: bash
+      env:
+        DIST_DIR: ${{ inputs.dist-dir }}
+      run: |
+        set -euo pipefail
+        rm -rf /tmp/wheel-check
+        python -m venv /tmp/wheel-check
+        /tmp/wheel-check/bin/pip install --no-deps "${GITHUB_WORKSPACE}/${DIST_DIR}"/*.whl
+        cd /tmp && /tmp/wheel-check/bin/python -c "
+        import pathlib, lemma_pod_bundle
+        from lemma_pod_bundle import layout
+        skills = pathlib.Path(lemma_pod_bundle.__file__).parent.parent / 'lemma_cli' / 'skills'
+        found = sorted(p.parent.name for p in skills.glob('*/SKILL.md'))
+        assert found, f'no skills installed under {skills}'
+        print(f'imported lemma_pod_bundle, {len(found)} skills present: {found}')
+        "

@@ -40,6 +40,15 @@ jobs:
         with:
           python-version: "3.14"
 
+      # The run that publishes the artifact is the run that tests it. CI's path
+      # filter skips "Python SDK + CLI tests" whenever the release commit did not
+      # touch these packages -- a backend-only release commit is the common case
+      # -- and CI is green anyway, because "CI passed" treats a skipped suite as
+      # passing. So a CI run for this SHA proves nothing about this wheel.
+      # Before the version rewrite below: `uv lock --check` reads pyproject.toml.
+      - name: Verify Python SDK and CLI
+        uses: ./.github/actions/verify-python-sdk
+
       # Every Lemma-owned component must name the release version. Branches no
       # longer bump versions one by one — that forced a number nobody had
       # released to climb per-PR and conflict on every schema-touching branch —
