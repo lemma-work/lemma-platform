@@ -120,6 +120,7 @@ class MemoryFloorTracker:
         self._degraded = True
         self._degraded_since = clock
         self.reports += 1
+        total_tasks, parked_tasks = parked_task_counts()
         logger.warning(
             "runtime.memory.degraded",
             service=self._service_name,
@@ -127,6 +128,8 @@ class MemoryFloorTracker:
             baseline_mib=round(self._baseline / _BYTES_PER_MIB, 1),
             growth_mib=round(growth / _BYTES_PER_MIB, 1),
             threshold_mib=round(self._growth_warn_bytes / _BYTES_PER_MIB, 1),
+            total_tasks=total_tasks,
+            parked_mcp_tasks=parked_tasks,
             stack_frames=top_allocation_sites(),
         )
 
@@ -141,6 +144,35 @@ class MemoryFloorTracker:
         self._elevated_windows = 0
         self._peak_floor = 0
         self._degraded_since = 0.0
+
+
+def parked_task_counts() -> tuple[int, int]:
+    """(total tasks, tasks parked in a stateless MCP session).
+
+    A cheap, specific test for the one unbounded retention found in the api
+    process. ``mcp``'s streamable-HTTP manager starts a per-request session task
+    in a *process-lifetime* task group and then does::
+
+        await self._task_group.start(run_stateless_server)
+        await http_transport.handle_request(scope, receive, send)
+        await http_transport.terminate()
+
+    with no ``try``/``finally``. ``handle_request`` raising — and a client
+    disconnecting raises ``CancelledError``, which is a ``BaseException`` the
+    inner ``except Exception`` does not catch — skips ``terminate()``, and the
+    session task stays parked forever holding its streams. Checked against 1.28,
+    1.29 and 2.0: all three have it, so upgrading is not the answer.
+
+    Reported rather than fixed because the fix belongs upstream, and because
+    nobody has yet confirmed it actually fires in production. A count that
+    climbs with traffic settles that without attaching to a live process.
+    """
+    try:
+        tasks = asyncio.all_tasks()
+    except RuntimeError:  # pragma: no cover - no running loop
+        return 0, 0
+    parked = sum(1 for task in tasks if "run_stateless_server" in repr(task))
+    return len(tasks), parked
 
 
 def top_allocation_sites() -> str | None:

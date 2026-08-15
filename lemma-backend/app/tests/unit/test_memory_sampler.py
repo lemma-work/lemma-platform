@@ -109,3 +109,24 @@ def test_resident_bytes_reads_a_plausible_number() -> None:
 
     assert rss is not None
     assert rss > 8 * MIB, "a Python process with pytest loaded is bigger than this"
+
+
+# --- the MCP session-task probe ---------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_parked_task_counts_reports_the_running_loop() -> None:
+    """Cheap enough to run on every degraded report."""
+    from app.core.observability.memory_sampler import parked_task_counts
+
+    total, parked = parked_task_counts()
+
+    assert total >= 1, "the test's own task is running"
+    assert parked == 0, "nothing in a unit test parks an MCP session"
+
+
+def test_parked_task_counts_outside_a_loop_is_zero() -> None:
+    """The sampler starts before there is anything to count; it must not raise."""
+    from app.core.observability.memory_sampler import parked_task_counts
+
+    assert parked_task_counts() == (0, 0)

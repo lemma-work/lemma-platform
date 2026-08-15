@@ -23,6 +23,7 @@ from sandbox_runtime.errors import (
     SandboxUnavailable,
 )
 from app.core.request_context import create_inherited_task
+from app.modules.function.application.runtime_logs import terminal_logs
 from app.modules.function.application.function_session_token_cache import (
     FunctionSessionToken,
     FunctionSessionTokenCache,
@@ -63,8 +64,6 @@ tracer = trace.get_tracer(__name__)
 # What a run keeps of its own output, and how much extra is redacted before
 # trimming so a credential cannot survive by straddling the cut. The margin is
 # far larger than any single credential (a PEM private key block is a few KB).
-_LOG_LIMIT_BYTES = 4 * 1024 * 1024
-_REDACTION_MARGIN_BYTES = 64 * 1024
 
 
 RuntimeHttpClientFactory = Callable[[], httpx.AsyncClient]
@@ -507,32 +506,7 @@ class FunctionDispatcher:
     def _now() -> datetime:
         return datetime.now(timezone.utc)
 
-    @staticmethod
-    def _terminal_logs(request: RuntimeTerminalRequest) -> str | None:
-        """Redact what we are keeping, not what we are about to throw away.
-
-        This used to redact the whole of stdout+stderr — up to 8 MiB — with
-        thirteen regex passes, and then keep the first 4 MiB. Half the work was
-        spent on text nobody would ever see, on the event loop.
-
-        Cutting first is safe as long as the cut is not where a secret is: the
-        slice keeps a margin past the limit, redacts that, and only then trims
-        to size, so any credential straddling the final boundary is still
-        inside the window the patterns ran over.
-        """
-        sections: list[str] = []
-        if request.stdout:
-            sections.append(request.stdout)
-        if request.stderr:
-            sections.append(request.stderr)
-        if request.output_truncated:
-            sections.append("[function output truncated]")
-        if not sections:
-            return None
-        combined = "\n".join(sections)
-        return redact_text(combined[: _LOG_LIMIT_BYTES + _REDACTION_MARGIN_BYTES])[
-            :_LOG_LIMIT_BYTES
-        ]
+    _terminal_logs = staticmethod(terminal_logs)
 
     @staticmethod
     def _runtime_failure_message(request: RuntimeTerminalRequest) -> str:

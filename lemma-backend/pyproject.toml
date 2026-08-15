@@ -119,7 +119,12 @@ dev = [
     "pytest-cov>=7.1.0",
     "pytest-timeout>=2.4.0",
     "pytest-xdist>=3.6.1",
-    "ruff>=0.14.8",
+    # Upper-bounded deliberately. 0.16 turned on a large batch of rules by
+    # default -- 3,505 findings on this tree, almost all in generated
+    # connector clients and migrations. `make lint` runs the default set, so
+    # an unbounded bump does not tighten the gate, it drowns it. Adopting
+    # those rules is its own piece of work.
+    "ruff>=0.14.8,<0.16",
 ]
 
 [build-system]

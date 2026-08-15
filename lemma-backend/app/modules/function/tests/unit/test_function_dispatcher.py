@@ -386,9 +386,11 @@ def test_terminal_logs_redacts_a_secret_that_straddles_the_size_limit():
     from types import SimpleNamespace
 
     from app.core.redaction import REDACTED
-    from app.modules.function.application.function_dispatcher import (
-        _LOG_LIMIT_BYTES,
-        FunctionDispatcher,
+    # Both the dispatcher and the runtime gateway delegate here now; they
+    # each had a copy and only one of them got this fix.
+    from app.modules.function.application.runtime_logs import (
+        LOG_LIMIT_BYTES as _LOG_LIMIT_BYTES,
+        terminal_logs,
     )
 
     secret = "Authorization: Bearer sk-livetokenvalue1234567890abcdefghijklmnop"
@@ -400,7 +402,7 @@ def test_terminal_logs_redacts_a_secret_that_straddles_the_size_limit():
         output_truncated=False,
     )
 
-    logs = FunctionDispatcher._terminal_logs(request)
+    logs = terminal_logs(request)
 
     assert logs is not None
     # The property that matters: no part of the credential survives. The
