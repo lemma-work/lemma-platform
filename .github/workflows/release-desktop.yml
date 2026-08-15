@@ -166,7 +166,12 @@ jobs:
             ~/.cargo/git
             desktop/target
           key: desktop-cargo-${{ runner.os }}-${{ hashFiles('desktop/Cargo.lock') }}
-          restore-keys: desktop-cargo-${{ runner.os }}-
+          # Falls back to CI's cache from main. Releases are rare, so this key is
+          # cold most times it is read; CI's is warm from the last merge, and the
+          # lockfile hash still decides whether the restore is usable.
+          restore-keys: |
+            desktop-cargo-${{ runner.os }}-
+            desktop-ci-cargo-${{ runner.os }}-
 
       - name: Download and verify native runtime artifacts
         shell: bash

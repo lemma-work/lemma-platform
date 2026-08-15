@@ -44,9 +44,15 @@ jobs:
               - 'lemma-stack/**'
               - 'install.sh'
               - 'install.ps1'
+              # The composite actions these jobs are made of. Without these
+              # entries a change to what CI *checks* triggers nothing that runs
+              # it, and the release workflows that share them find out first.
+              - '.github/actions/verify-python-sdk/**'
+              - '.github/actions/verify-cli-distributions/**'
               - '.github/workflows/ci.yml'
             typescript:
               - 'lemma-typescript/**'
+              - '.github/actions/verify-typescript-sdk/**'
               - '.github/workflows/ci.yml'
             frontend:
               - 'lemma-frontend/**'
@@ -808,6 +814,9 @@ jobs:
       - backend-lint
       - backend-migration
       - python-sdk
+      # Was missing: a wheel that ships without its skills or lemma_pod_bundle
+      # failed this job and "CI passed" stayed green.
+      - cli-packaging
       - typescript-sdk
       - codegen-drift
       - frontend-check
