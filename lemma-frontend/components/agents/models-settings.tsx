@@ -28,7 +28,6 @@ import { Switch, SwitchThumb, SwitchTrack } from '@/components/ui/switch';
 import { DestructiveConfirmationDialog } from '@/components/shared/destructive-confirmation-dialog';
 import { DestructiveResourceActionItem, ResourceActionsMenu } from '@/components/shared/resource-actions-menu';
 import { SettingsList, SettingsPanel, SettingsRow, SettingsStack } from '@/components/settings/settings-kit';
-import { declineAutoConnect } from '@/lib/desktop/auto-connect';
 import { agentHostBridge, useIsDesktopShell } from '@/lib/desktop/agent-host-bridge';
 import {
     useAgentHostHarnesses,
@@ -612,7 +611,7 @@ function GetTheAppCard() {
                 </div>
                 <p className="mt-1 text-sm text-[var(--text-tertiary)]">
                     Claude Code, Codex and OpenCode already live on your machine. Install the Lemma app
-                    there, sign in, and connect it in one click.
+                    there and sign in — it connects itself.
                 </p>
             </div>
             <Button asChild variant="primary" size="sm" className="gap-1.5">
@@ -662,7 +661,7 @@ function ConnectComputerDialog({
                     {[
                         'Install the Lemma app on that computer.',
                         'Open it and sign in to this workspace.',
-                        'Models → Computers → Connect this computer.',
+                        'It appears here on its own, with the agents it found.',
                     ].map((step, index) => (
                         <li key={step} className="flex items-baseline gap-3">
                             <span className="min-w-5 font-mono text-xs text-[var(--text-tertiary)]">
@@ -716,22 +715,18 @@ function AgentHostCard({
         );
     }, [harnesses]);
     const revoke = useRevokeAgentHost();
-    const [confirmDisconnect, setConfirmDisconnect] = useState(false);
+    const [confirmRemove, setConfirmRemove] = useState(false);
     const activeRuns = host.capacity?.active_runs ?? 0;
     const maxRuns = host.capacity?.max_runs ?? null;
     const online = host.status === 'ONLINE';
 
-    const disconnect = async () => {
+    const remove = async () => {
         try {
-            // Revoking is the same decision as Disconnect on the card, and has
-            // to survive a navigation for the same reason: otherwise this
-            // computer silently pairs itself back on the next page.
-            if (isThisComputer) declineAutoConnect();
             await revoke.mutateAsync(host.id);
-            setConfirmDisconnect(false);
-            toast.success(`${host.display_name} disconnected`);
+            setConfirmRemove(false);
+            toast.success(`${host.display_name} removed`);
         } catch (error) {
-            toast.error(`Couldn't disconnect: ${error instanceof Error ? error.message : 'Unknown error'}`);
+            toast.error(`Couldn't remove: ${error instanceof Error ? error.message : 'Unknown error'}`);
         }
     };
 
@@ -763,32 +758,44 @@ function AgentHostCard({
                 >
                     <RefreshCw className={cn('size-4', harnesses.isFetching && 'lemma-spin')} />
                 </Button>
-                <Button
-                    type="button"
-                    variant="quiet"
-                    size="sm"
-                    onClick={() => setConfirmDisconnect(true)}
-                    loading={revoke.isPending}
-                    aria-label={`Disconnect ${host.display_name}`}
-                >
-                    <Trash2 className="size-4" />
-                </Button>
-                <DestructiveConfirmationDialog
-                    open={confirmDisconnect}
-                    onOpenChange={setConfirmDisconnect}
-                    title={`Disconnect ${host.display_name}?`}
-                    description="Its credential is revoked immediately and new runs stop."
-                    resourceName={host.display_name}
-                    confirmationText=""
-                    consequences={[
-                        'Coding agents added from this computer stop being available.',
-                        'Pair the computer again to bring them back.',
-                    ]}
-                    confirmLabel="Disconnect"
-                    pendingLabel="Disconnecting..."
-                    isPending={revoke.isPending}
-                    onConfirm={() => void disconnect()}
-                />
+                {/*
+                  * Only for a machine you are *not* at. Removing this computer
+                  * revokes a credential the app would mint again on the next
+                  * page, so the button could only ever be honest with a flag
+                  * remembering that you meant it — which is exactly the state
+                  * this lifecycle no longer keeps. Revoking a remote machine
+                  * sticks by construction: it is not there to re-pair itself.
+                  */}
+                {isThisComputer ? null : (
+                    <>
+                        <Button
+                            type="button"
+                            variant="quiet"
+                            size="sm"
+                            onClick={() => setConfirmRemove(true)}
+                            loading={revoke.isPending}
+                            aria-label={`Remove ${host.display_name}`}
+                        >
+                            <Trash2 className="size-4" />
+                        </Button>
+                        <DestructiveConfirmationDialog
+                            open={confirmRemove}
+                            onOpenChange={setConfirmRemove}
+                            title={`Remove ${host.display_name}?`}
+                            description="Its credential is revoked immediately and new runs stop."
+                            resourceName={host.display_name}
+                            confirmationText=""
+                            consequences={[
+                                'Coding agents added from this computer stop being available.',
+                                'Opening Lemma on that computer connects it again.',
+                            ]}
+                            confirmLabel="Remove"
+                            pendingLabel="Removing..."
+                            isPending={revoke.isPending}
+                            onConfirm={() => void remove()}
+                        />
+                    </>
+                )}
             </div>
             <div className="flex flex-col gap-2 border-t border-[var(--border-subtle)] p-3">
                 {/*
@@ -803,7 +810,7 @@ function AgentHostCard({
                     <p className="flex items-center gap-2 px-1 text-xs text-[var(--text-tertiary)]">
                         <RefreshCw className="size-3 lemma-spin" />
                         Looking for agents on this computer…
-                        {isThisComputer ? ' The first time takes a few minutes.' : null}
+                        {isThisComputer ? ' The first time takes a few seconds longer.' : null}
                     </p>
                 ) : null}
                 {(harnesses.data?.items ?? []).map((harness) => (
@@ -821,7 +828,7 @@ function AgentHostCard({
                     <p className="px-1 text-xs text-[var(--text-tertiary)]">
                         No agents published yet. {isThisComputer
                             ? 'Use "Recheck agents" above to look again now.'
-                            : 'That computer republishes what it finds every 15 minutes.'}
+                            : 'That computer publishes what it finds as soon as it changes.'}
                     </p>
                 ) : null}
             </div>

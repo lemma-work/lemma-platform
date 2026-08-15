@@ -107,13 +107,21 @@ export function discoveryLines(phase: DiscoveryPhase, foundCount: number): strin
     if (phase !== 'settled') {
         return [
             'Each agent is started once to see what it offers.',
-            'The first time can take a few minutes while adapters install.',
             'macOS may ask for file access — allow it.',
         ];
     }
     if (foundCount === 0) {
         return [
-            'Install Claude Code, Codex, Cursor or OpenCode and press Rescan.',
+            // Installing is noticed on its own now, within seconds — detection
+            // stopped meaning "spawn every agent" and became a handful of stat
+            // calls against the directories already being searched.
+            //
+            // Rescan still earns its place, because the fingerprint watches the
+            // binary and not the account: signing into an agent you already have
+            // changes nothing on disk, so that is the case a human still has to
+            // announce.
+            'Install Claude Code, Codex, Cursor or OpenCode — it appears here on its own.',
+            'Already installed one and signed in? Press Rescan.',
             'Or connect a model provider below — no agent needed.',
         ];
     }

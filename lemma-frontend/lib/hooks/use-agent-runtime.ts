@@ -42,7 +42,14 @@ export type AgentHostPairing = AgentHostPairingCreated;
 // pairing it, a computer stayed "Offline" indefinitely. Poll quickly
 // while anything is still settling, then back off once every machine is online.
 const SETTLING_REFETCH_MS = 2000;
-const SETTLED_REFETCH_MS = 20000;
+// The last stage of the thirty-second budget, and it used to spend two thirds of
+// it in a single poll. A settled list is exactly where a newly installed agent
+// arrives — the machine is online and quiet, nothing is "settling" — so twenty
+// seconds was the common case, not the cheap one.
+//
+// The host now notices a new agent within a couple of seconds rather than up to
+// fifteen minutes, which moved the bottleneck here.
+const SETTLED_REFETCH_MS = 5000;
 // "Not online" was read as "settling", so a machine that is offline for a
 // reason that will not resolve on its own — a workspace it can no longer reach,
 // a computer that is switched off — kept the whole Models page fetching twice a
@@ -50,7 +57,9 @@ const SETTLED_REFETCH_MS = 20000;
 // has a recent check-in behind it: a machine that has just paired has not been
 // seen at all yet, and one that is coming back was seen moments ago. Anything
 // quiet for longer than this is a state, not a transition.
-const ARRIVING_WINDOW_MS = 90_000;
+// Sized to the budget: a machine that has not checked in within it is in a
+// state, not a transition. 90s predates the budget and outlived three of it.
+const ARRIVING_WINDOW_MS = 30_000;
 const EMPTY_HARNESS_FAST_POLLS = HARNESS_DISCOVERY_WINDOW_MS / SETTLING_REFETCH_MS;
 
 export const isArriving = (host: AgentHost): boolean => {

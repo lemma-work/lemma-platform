@@ -1,20 +1,13 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import { Cpu, RefreshCw, TerminalSquare } from '@/components/ui/icons';
-import {
-    agentHostBridge,
-    useThisComputer,
-    type AgentHostTarget,
-} from '@/lib/desktop/agent-host-bridge';
-import { DestructiveConfirmationDialog } from '@/components/shared/destructive-confirmation-dialog';
+import { agentHostBridge, type AgentHostTarget } from '@/lib/desktop/agent-host-bridge';
+import { useAutoConnectThisComputer } from '@/lib/desktop/auto-connect';
 import { getLemmaApiBaseUrl } from '@/lib/sdk/lemma-client';
-import { useCreateAgentHostPairing } from '@/lib/hooks/use-agent-runtime';
-import { allowAutoConnect, declineAutoConnect } from '@/lib/desktop/auto-connect';
 import { cn } from '@/lib/utils';
 import { describeThisComputer, selectWorkspaceTarget, type Tone } from './this-computer-status';
 
@@ -44,6 +37,20 @@ function formatUptime(seconds: number | null): string | null {
     return hours > 0 ? `up ${hours}h ${minutes}m` : `up ${minutes}m`;
 }
 
+/**
+ * This machine's own row in Computers.
+ *
+ * It reports and it does not ask. Connecting is automatic
+ * (`useAutoConnectThisComputer`, called here so the canonical surface performs
+ * it too and not only the onboarding pages), there is no on/off switch, and
+ * there is no Disconnect — removing the computer you are sitting at was undone
+ * by the next page load unless a `localStorage` flag stopped it, and that flag
+ * was a sixth thing that could disagree with the other five. Removing a machine
+ * you are *not* at is `agent.host.revoke`, on its own card.
+ *
+ * What is left are the two things that are genuinely useful and are not
+ * lifecycle: look for agents again, and read the log.
+ */
 export function ThisComputerCard({
     onHostIdChange,
     onPaired,
@@ -51,18 +58,14 @@ export function ThisComputerCard({
     onHostIdChange?: (hostId: string | null) => void;
     onPaired?: () => void;
 }) {
-    const { isDesktop, status, error, refetch } = useThisComputer();
-    const createPairing = useCreateAgentHostPairing();
-    const [displayName, setDisplayName] = useState('This computer');
+    const { isDesktop, status, error, refetch } = useAutoConnectThisComputer();
     const [busy, setBusy] = useState<string | null>(null);
-    const [confirmDisconnect, setConfirmDisconnect] = useState(false);
 
     // This workspace's pairing, not whichever one happens to be first: a Mac
     // paired to its own local stack and then opened against a hosted workspace
     // has two, and only one of them is what this card is about.
     const workspaceUrl = getLemmaApiBaseUrl();
     const target: AgentHostTarget | null = selectWorkspaceTarget(status?.targets ?? [], workspaceUrl);
-    const pairedHere = Boolean(target);
     const hostId = target?.host_id ?? null;
     // Tell the paired-computer list which card is this machine, so it can label
     // that one instead of listing the same machine twice.
@@ -70,11 +73,22 @@ export function ThisComputerCard({
         onHostIdChange?.(hostId);
     }, [hostId, onHostIdChange]);
 
+    // The automatic connection is the only thing that pairs this machine now, so
+    // this is where "it just paired" is observed: the cloud list has to be
+    // refetched to pick up a computer that was not there when the page loaded.
+    const announced = useRef<string | null>(null);
+    useEffect(() => {
+        if (!hostId || announced.current === hostId) return;
+        announced.current = hostId;
+        onPaired?.();
+    }, [hostId, onPaired]);
+
     // Outside the desktop app there is no "this computer" to speak of; the
     // section falls back to the download card instead.
     if (!isDesktop) return null;
 
     const state = describeThisComputer(status, error, workspaceUrl);
+    const uptime = formatUptime(status?.uptime_seconds ?? null);
 
     const run = async (action: string, work: () => Promise<unknown>, success?: string) => {
         setBusy(action);
@@ -90,39 +104,6 @@ export function ThisComputerCard({
             setBusy(null);
         }
     };
-
-    // The whole point of doing this in the desktop app: the code is minted with
-    // the session already open on this page and handed straight to the bundled
-    // sidecar, so nobody copies a command into a terminal.
-    const connect = () =>
-        run(
-            'pair',
-            async () => {
-                const name = displayName.trim() || 'This computer';
-                const pairing = await createPairing.mutateAsync({ displayName: name });
-                await agentHostBridge.pair(getLemmaApiBaseUrl(), pairing.pairing_code, name);
-                // Connecting by hand overrides any earlier "no".
-                allowAutoConnect();
-                onPaired?.();
-            },
-            'This computer is connected',
-        );
-
-    const disconnect = () => {
-        void run(
-            'unpair',
-            async () => {
-                // Explicit, so it has to stick: without this the next page load
-                // pairs this computer straight back and Disconnect looks broken.
-                declineAutoConnect();
-                await agentHostBridge.unpair(target?.target_id ?? null);
-                onPaired?.();
-            },
-            'This computer is disconnected',
-        ).finally(() => setConfirmDisconnect(false));
-    };
-
-    const uptime = formatUptime(status?.uptime_seconds ?? null);
 
     return (
         <div className="rounded-md border border-[var(--border-subtle)] bg-[var(--surface-1)] p-4">
@@ -155,48 +136,9 @@ export function ThisComputerCard({
                         Try again
                     </Button>
                 ) : null}
-
-                {status?.available && pairedHere ? (
-                    <Button
-                        type="button"
-                        variant={status.running ? 'quiet' : 'primary'}
-                        size="sm"
-                        loading={busy === 'toggle'}
-                        onClick={() =>
-                            void run('toggle', () => {
-                                // Turning it off is a decision too.
-                                if (status.running) declineAutoConnect();
-                                else allowAutoConnect();
-                                return agentHostBridge.setEnabled(!status.running);
-                            })
-                        }
-                    >
-                        {status.running ? 'Turn off' : 'Turn on'}
-                    </Button>
-                ) : null}
             </div>
 
-            {status?.available && !pairedHere ? (
-                <div className="mt-3 flex flex-wrap items-end gap-2">
-                    <Input
-                        value={displayName}
-                        onChange={(event) => setDisplayName(event.target.value)}
-                        className="w-56"
-                        aria-label="Name for this computer"
-                    />
-                    <Button
-                        type="button"
-                        size="sm"
-                        loading={busy === 'pair'}
-                        loadingLabel="Connecting"
-                        onClick={() => void connect()}
-                    >
-                        Connect this computer
-                    </Button>
-                </div>
-            ) : null}
-
-            {pairedHere ? (
+            {status?.available ? (
                 <div className="mt-3 flex flex-wrap items-center gap-2">
                     <Button
                         type="button"
@@ -221,28 +163,6 @@ export function ThisComputerCard({
                         <TerminalSquare className="size-3.5" />
                         View log
                     </Button>
-                    <Button
-                        type="button"
-                        variant="quiet"
-                        size="sm"
-                        onClick={() => setConfirmDisconnect(true)}
-                        loading={busy === 'unpair'}
-                    >
-                        Disconnect
-                    </Button>
-                    <DestructiveConfirmationDialog
-                        open={confirmDisconnect}
-                        onOpenChange={setConfirmDisconnect}
-                        title="Disconnect this computer?"
-                        description="Its agents stop being available to this workspace."
-                        resourceName="This computer"
-                        confirmationText=""
-                        consequences={['Pair it again from this page to bring them back.']}
-                        confirmLabel="Disconnect"
-                        pendingLabel="Disconnecting..."
-                        isPending={busy === 'unpair'}
-                        onConfirm={disconnect}
-                    />
                 </div>
             ) : null}
 

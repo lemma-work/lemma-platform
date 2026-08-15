@@ -76,8 +76,9 @@ describe('describeThisComputer', () => {
         // The failure this came from: a Mac paired to its own local stack, then
         // opened against a hosted workspace. The local pairing is real and is
         // failing, but it is not this workspace's, so this workspace is simply
-        // not connected — and the card must offer to connect it rather than
-        // reporting someone else's dead URL and hiding the button.
+        // not connected yet — and reporting someone else's dead URL as this
+        // one's status is what sent people looking for a fault that was not
+        // theirs.
         const described = describeThisComputer(
             status({
                 targets: [
@@ -90,8 +91,20 @@ describe('describeThisComputer', () => {
             null,
             WORKSPACE,
         );
-        expect(described.label).toBe('Not connected');
-        expect(described.detail).toContain('Connect this computer');
+        expect(described.label).toBe('Connecting');
+    });
+
+    it('never reports this computer as off, because nothing can turn it off', () => {
+        // `running: false` used to mean "the user switched it off" and read as a
+        // dead end with a button to press. The switch is gone, so the only way
+        // to be paired and not running is to be on the way up.
+        const described = describeThisComputer(
+            status({ running: false, targets: [target()] }),
+            null,
+            WORKSPACE,
+        );
+        expect(described.label).toBe('Starting');
+        expect(described.detail).not.toContain('Turn it on');
     });
 });
 

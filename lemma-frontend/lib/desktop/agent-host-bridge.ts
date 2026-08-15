@@ -88,12 +88,18 @@ async function call(command: string, args?: Record<string, unknown>): Promise<un
     return invoke(command, args);
 }
 
+// No `setEnabled` and no `unpair`. Turning this computer off was a preference
+// that had to be remembered, reconciled against an automatic connection, and
+// reported as a state of its own; unpairing the machine you are sitting at was
+// undone by the next page load. Both are gone, so the bridge can only ask this
+// computer to be running and to look again — never to stop, and never to forget
+// a workspace. Removing a computer is `agent.host.revoke` on the backend, which
+// is the only "no" that has anywhere durable to live.
 export const agentHostBridge = {
     status: () => call('agent_host_status'),
-    setEnabled: (enabled: boolean) => call('agent_host_set_enabled', { enabled }),
+    start: () => call('agent_host_start'),
     pair: (url: string, pairingCode: string, name: string) =>
         call('agent_host_pair', { url, pairingCode, name }),
-    unpair: (targetId?: string | null) => call('agent_host_unpair', { targetId: targetId ?? null }),
     refresh: () => call('agent_host_refresh'),
     openLog: () => call('agent_host_open_log'),
 };

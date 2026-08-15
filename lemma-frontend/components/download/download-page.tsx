@@ -122,7 +122,7 @@ export function DownloadPage({ release }: { release: DesktopRelease }) {
                             {[
                                 'Install the app on the computer whose agents you want to use.',
                                 'Open it and sign in to the same workspace.',
-                                'Models → Paired computers → Connect this computer.',
+                                'Pick the agents you want under Models → Computers.',
                             ].map((step, index) => (
                                 <li key={step} className="flex items-baseline gap-4">
                                     <span className="min-w-6 font-mono text-xs text-[var(--text-tertiary)]">
