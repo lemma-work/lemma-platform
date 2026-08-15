@@ -428,6 +428,81 @@ def test_pods_describe_renders_table_column_summary(monkeypatch):
     assert "title:text" in result.stdout
     assert "status:enum" in result.stdout
     assert "Columns" in result.stdout
+    # This pod SDK has no apps/surfaces attributes at all — describe is a
+    # survey, so a resource it cannot list costs that section, not the command.
+    assert "Apps (0)" in result.stdout
+    assert "Surfaces (0)" in result.stdout
+
+
+def test_pods_describe_renders_apps_and_surfaces(monkeypatch):
+    """Both sections were absent from the renderer *and* from the fetch, so
+    `--output json` was missing them too."""
+
+    class FakeResource:
+        def __init__(self, payload):
+            self.payload = payload
+
+        def list(self, *, limit=50):
+            return self.payload
+
+    class FakeFiles:
+        def tree(self, path):
+            return {"tree": {"children": []}}
+
+    class FakePod:
+        tables = FakeResource({"items": []})
+        functions = FakeResource({"items": []})
+        agents = FakeResource({"items": []})
+        workflows = FakeResource(
+            {"items": [{"name": "ticket-intake", "node_count": 4}]}
+        )
+        schedules = FakeResource({"items": []})
+        apps = FakeResource(
+            {"items": [{"name": "inbox", "status": "READY", "url": "https://inbox.example"}]}
+        )
+        surfaces = FakeResource(
+            {
+                "items": [
+                    {
+                        "name": "support",
+                        "platform": "slack",
+                        "agent_name": "triage",
+                        "status": "ACTIVE",
+                    }
+                ]
+            }
+        )
+        files = FakeFiles()
+
+    pod_uuid = "11111111-1111-1111-1111-111111111111"
+
+    class FakePods:
+        def get(self, pod_id):
+            return {"id": pod_id, "name": "Ops"}
+
+    class FakeClient:
+        pods = FakePods()
+
+        def pod(self, pod_id):
+            return FakePod()
+
+    monkeypatch.setattr(
+        pods,
+        "run_with_client",
+        lambda ctx, fn: fn(
+            FakeClient(), SimpleNamespace(config={"_runtime": {"pod": pod_uuid}})
+        ),
+    )
+
+    result = runner.invoke(app, ["--pod", pod_uuid, "pods", "describe"])
+
+    assert result.exit_code == 0, result.stdout
+    assert "Apps (1)" in result.stdout
+    assert "inbox" in result.stdout
+    assert "Surfaces (1)" in result.stdout
+    assert "triage" in result.stdout
+    # `node_count` is what list responses carry; reading `nodes` left this blank.
+    assert "4" in result.stdout
 
 
 POD_UUID = "11111111-1111-1111-1111-111111111111"
@@ -2957,7 +3032,7 @@ def test_coerce_csv_value(raw, expected):
 
 
 def _doctor_client(*, tables, agents, agent_perms, surfaces=None, workflows=None,
-                   schedules=None, files_tree=None, file_meta=None):
+                   schedules=None, files_tree=None, file_meta=None, functions=None):
     # doctor resolves the pod via pod_client(), which returns client.pod(pod_id)
     # for a catalog-capable client — so resources use hierarchical method names
     # (matching the real SDK and the `describe` test).
@@ -2992,7 +3067,7 @@ def _doctor_client(*, tables, agents, agent_perms, surfaces=None, workflows=None
 
     class FakeFunctions:
         def list(self, *, limit=1000, include=None):
-            return {"items": []}
+            return {"items": [{"name": f, "grants": []} for f in (functions or [])]}
 
         def permissions(self, name):
             return {"grants": []}
@@ -3059,6 +3134,67 @@ def test_pods_doctor_healthy(monkeypatch):
     result = runner.invoke(app, ["--pod", "pod-1", "pods", "doctor"])
     assert result.exit_code == 0, result.stdout
     assert "healthy" in result.stdout
+
+
+def test_pods_doctor_flags_agent_that_can_redo_a_workflow_function(monkeypatch):
+    """The ticket-intake shape: a workflow files a ticket at a FUNCTION node and
+    then runs an agent that *also* holds execute on that function. The agent
+    calls it again and the run ends with two rows. Nothing catches this at
+    runtime, because the workflow cannot narrow what an agent may do."""
+    client = _doctor_client(
+        tables=["tickets"],
+        functions=["file_ticket"],
+        agents=[{"name": "draft", "agent_runtime": {"profile_id": "p1"}}],
+        agent_perms={
+            "draft": [
+                {
+                    "resource_type": "function",
+                    "resource_name": "file_ticket",
+                    "permission_ids": ["function.execute"],
+                }
+            ]
+        },
+        workflows=[
+            {
+                "name": "ticket-intake",
+                "node_targets": ["function:file_ticket", "agent:draft"],
+            }
+        ],
+    )
+    _patch_run(monkeypatch, pods, client)
+    result = runner.invoke(app, ["--pod", "pod-1", "pods", "doctor"])
+    assert result.exit_code == 0, result.stdout
+    assert "ticket-intake" in result.stdout
+    assert "does that work twice" in result.stdout
+
+
+def test_pods_doctor_quiet_when_agent_grant_is_outside_the_workflow(monkeypatch):
+    """Holding a function grant is not itself a finding — only overlapping with
+    a function the same workflow already runs at its own node is."""
+    client = _doctor_client(
+        tables=["tickets"],
+        functions=["file_ticket", "notify"],
+        agents=[{"name": "draft", "agent_runtime": {"profile_id": "p1"}}],
+        agent_perms={
+            "draft": [
+                {
+                    "resource_type": "function",
+                    "resource_name": "notify",
+                    "permission_ids": ["function.execute"],
+                }
+            ]
+        },
+        workflows=[
+            {
+                "name": "ticket-intake",
+                "node_targets": ["function:file_ticket", "agent:draft"],
+            }
+        ],
+    )
+    _patch_run(monkeypatch, pods, client)
+    result = runner.invoke(app, ["--pod", "pod-1", "pods", "doctor"])
+    assert result.exit_code == 0, result.stdout
+    assert "does that work twice" not in result.stdout
 
 
 def test_pods_doctor_flags_missing_table_grant(monkeypatch):

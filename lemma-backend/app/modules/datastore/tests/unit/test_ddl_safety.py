@@ -157,8 +157,69 @@ async def test_schema_provisioning_takes_shared_bootstrap_lock_before_create() -
 
     await manager.create_datastore_schema(pod_id)
 
-    assert connection.execute.await_count == 2
-    lock_call, create_call = connection.execute.await_args_list
+    lock_call, create_call = connection.execute.await_args_list[:2]
     assert "pg_advisory_xact_lock" in str(lock_call.args[0])
     assert lock_call.args[1] == {"schema_name": manager.get_schema_name(pod_id)}
     assert "CREATE SCHEMA IF NOT EXISTS" in str(create_call.args[0])
+
+
+@pytest.mark.asyncio
+async def test_schema_provisioning_grants_usage_to_the_query_role() -> None:
+    """A pod schema carries its own ACL from birth.
+
+    Without this the grant only arrived as a side effect of creating the first
+    table, so a pod provisioned after the last API start answered every ad-hoc
+    query with "permission denied for schema".
+    """
+    connection = SimpleNamespace(execute=AsyncMock())
+
+    @asynccontextmanager
+    async def begin():
+        yield connection
+
+    manager = SchemaManager(
+        engine=SimpleNamespace(begin=begin),
+        session_factory=object(),
+    )
+    pod_id = uuid4()
+
+    await manager.create_datastore_schema(pod_id)
+
+    statements = [str(call.args[0]) for call in connection.execute.await_args_list]
+    schema_name = manager.get_schema_name(pod_id)
+    assert any(
+        f'GRANT USAGE ON SCHEMA "{schema_name}"' in statement
+        for statement in statements
+    )
+    # Nothing to grant SELECT on yet — the schema has no tables.
+    assert not any("GRANT SELECT" in statement for statement in statements)
+
+
+@pytest.mark.asyncio
+async def test_schema_provisioning_survives_a_failed_grant() -> None:
+    """Grant failures must never block pod provisioning.
+
+    On a deployment whose app role cannot create or grant roles, the schema
+    still has to exist; queries fail closed and the startup backfill repairs.
+    """
+    calls: list[str] = []
+
+    async def execute(statement, *args):
+        calls.append(str(statement))
+        if "GRANT" in str(statement) or "CREATE ROLE" in str(statement):
+            raise PermissionError("insufficient privilege")
+
+    connection = SimpleNamespace(execute=execute)
+
+    @asynccontextmanager
+    async def begin():
+        yield connection
+
+    manager = SchemaManager(
+        engine=SimpleNamespace(begin=begin),
+        session_factory=object(),
+    )
+
+    await manager.create_datastore_schema(uuid4())
+
+    assert any("CREATE SCHEMA IF NOT EXISTS" in statement for statement in calls)
