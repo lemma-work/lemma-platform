@@ -1,0 +1,49 @@
+name: Verify Python SDK and CLI
+description: Lockfile, editable install, and the offline suites for lemma-python, lemma-cli, and lemma-pod-bundle.
+
+# The caller sets up Python; this owns everything after that. CI runs it as the
+# "Python SDK + CLI tests" job, and both PyPI release workflows run it against
+# the release commit -- CI's path filter skips that job on a backend-only
+# release commit, so a green CI run for the release SHA is not evidence these
+# tests ever executed for it.
+#
+# Run it before any release-time version rewrite: `uv lock --check` compares the
+# lockfile against the version in pyproject.toml.
+
+runs:
+  using: composite
+  steps:
+    - uses: astral-sh/setup-uv@v5
+
+    # Every path below is repository-relative, and the working directory is
+    # pinned to the workspace rather than inherited: release-lemma-python.yml
+    # runs its own steps from lemma-python/.
+    - name: Check Python SDK lockfile
+      working-directory: ${{ github.workspace }}/lemma-python
+      shell: bash
+      run: uv lock --check
+
+    - name: Install SDK + CLI
+      working-directory: ${{ github.workspace }}
+      shell: bash
+      run: |
+        python -m pip install --upgrade pip
+        pip install -e ./lemma-python
+        pip install -e ./lemma-pod-bundle
+        pip install -e ./lemma-cli
+        pip install pytest pytest-asyncio
+
+    - name: Test (CLI + Python SDK, offline only)
+      # Run each package's tests as a separate pytest invocation so each
+      # resolves its own pyproject.toml (markers, strict-markers, rootdir).
+      # A single combined run picks lemma-cli's config (strict-markers with
+      # only `unit`/`e2e`), which rejects lemma-python's `connector`/`integration`
+      # markers. Splitting also lets us exclude docker-only suites per package:
+      # lemma-cli e2e tests need postgres/redis/supertokens containers, and
+      # lemma-python integration tests need a live Lemma API + LEMMA_TOKEN.
+      working-directory: ${{ github.workspace }}
+      shell: bash
+      run: |
+        pytest lemma-cli/tests -m "not e2e"
+        pytest lemma-python/tests -m "not integration"
+        pytest lemma-pod-bundle/tests

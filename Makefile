@@ -927,6 +927,8 @@ desktop-lint: _desktop-ensure-sidecars
 	@echo "→ Desktop workspace clippy…"
 	@cd $(DESKTOP_DIR) && cargo clippy $(DESKTOP_CARGO_SCOPE) --locked --all-targets -- -D warnings
 	@echo "  ✓ clippy clean"
+	@echo "→ Memory balloon policy…"
+	@$(DESKTOP_DIR)/scripts/check-balloon-policy.sh
 
 # guestd's vsock listener is behind a Linux cfg that only a Linux build ever
 # compiles, so a green macOS run says nothing about the code that actually runs

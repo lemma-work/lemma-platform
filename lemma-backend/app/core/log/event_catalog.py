@@ -437,6 +437,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'identity.mobile_verification.whatsapp.succeeded': EventSpec('info', frozenset({'user_id'})),
     'infrastructure.admin.outbox_event_replay_requested.observed': EventSpec('debug', frozenset({'event_id'})),
     'infrastructure.channel_service.close_realtime_pub_sub_connection.diagnostic': EventSpec('debug', frozenset()),
+    'infrastructure.outbox_wake.listener_connected.observed': EventSpec('debug', frozenset({'label'})),
     'infrastructure.channel_service.realtime_pub_sub_subscribe_replacing.diagnostic': EventSpec('debug', frozenset({'error_type'})),
     'infrastructure.inbox.event_delivery_dead_lettered.failed': EventSpec('error', frozenset({'attempt', 'consumer', 'error_type', 'event_id', 'event_type'})),
     'infrastructure.inbox.terminal_event_validation.degraded': EventSpec('warning', frozenset({'consumer', 'event_id', 'event_type'})),

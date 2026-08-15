@@ -30,19 +30,22 @@ export const HARNESS_LOGOS: Partial<Record<string, string>> = {
 /**
  * How long a computer may plausibly still be finding its coding agents.
  *
- * Ninety seconds, borrowed from the window above, was far too short. The first
- * pairing on a machine does not probe agents, it *installs* them: the host
- * fetches and verifies a pinned adapter package per certified agent against an
- * empty npm cache, which is why its own connect timeout is ten minutes. A
- * re-probe afterwards spawns each agent and opens an ACP session with a
- * twenty-second ceiling of its own.
+ * This was ten minutes, and the reasoning behind it was sound at the time: the
+ * first pairing did not probe agents, it *installed* them — a pinned adapter
+ * package per certified agent, fetched against an empty npm cache, ahead of
+ * anything else. The list really was empty for minutes, and saying "No agents
+ * published yet" after two seconds was a lie the page told constantly.
  *
- * So the list is legitimately empty for minutes on a fresh machine, and the
- * page used to conclude "No agents published yet" within two seconds of the
- * first empty response and then poll only every twenty seconds — which is
- * exactly how Claude Code appeared to be missing until someone hit Recheck.
+ * Three things moved underneath it. Installing no longer happens on the pairing
+ * path at all; it is warmed when the app opens. The adapters no longer drag
+ * along vendored copies of the agents themselves, so the download is a
+ * twelfth of what it was. And an adapter that genuinely is still installing now
+ * reports itself as such instead of being indistinguishable from a missing one.
+ *
+ * So the honest window is the budget, not the worst case of a path that no
+ * longer exists. A minute is two full budgets of patience.
  */
-export const HARNESS_DISCOVERY_WINDOW_MS = 10 * 60_000;
+export const HARNESS_DISCOVERY_WINDOW_MS = 60_000;
 
 /**
  * Whether an empty harness list means "still looking" rather than "found none".
@@ -260,7 +263,15 @@ const AGENT_HOST_HARNESS_HEALTH: Record<string, { label: string; detail: string 
         label: 'Probe failed',
         detail: 'Agent Host could not start this agent. Check the Agent Host log on that computer.',
     },
-    INSTALLING: { label: 'Installing', detail: 'Agent Host is still installing the adapter.' },
+    // Covers the whole not-ready-yet window, because the row cannot see where in
+    // it we are. Fetching the adapter takes about three seconds; the rest is the
+    // probe, which starts the agent and opens a session with it and is most of
+    // the wait. Saying "installing" for the twenty-odd seconds after the install
+    // has finished was a lie the user could time.
+    INSTALLING: {
+        label: 'Setting up',
+        detail: 'Starting this agent to see what it offers. Usually under a minute.',
+    },
     DISABLED: { label: 'Disabled', detail: 'Turned off in the Agent Host configuration on that computer.' },
 };
 

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import { buildApiUrl } from "@/components/auth/portal/auth/config";
+import { isLocalDeployment } from "@/lib/config";
 
 /**
  * Whether this installation has a working AI provider.
@@ -158,8 +159,24 @@ function subscribeDesktopBridge() {
 }
 
 function readDesktopBridge(): boolean {
+  // Local-ness comes from the page, not from the shell's `mode`.
+  //
+  // `window.__LEMMA_DESKTOP__.mode` is baked into the main window's
+  // initialization script when the window is *built* — before the user has
+  // chosen anything. Choosing local writes the config and starts the stack but
+  // never recreates the webview, so the script keeps replaying the launch-time
+  // mode for the rest of the session. On a first run the workspace therefore
+  // loaded with `mode` still unset, this returned false, and the setup steps
+  // told someone sitting in the desktop app that they had to do it in the
+  // desktop app — with Continue disabled. A restart fixed it, which is exactly
+  // why it survived.
+  //
+  // `DEPLOYMENT` is rendered by the frontend the local stack itself serves, so
+  // it cannot be older than the decision that started that stack. The `__TAURI__`
+  // check still answers the other half: whether this page can reach the shell at
+  // all, which is false in a LAN or public-link browser.
   return (
-    window.__LEMMA_DESKTOP__?.mode === "local"
+    isLocalDeployment()
     && typeof window.__TAURI__?.core?.invoke === "function"
   );
 }

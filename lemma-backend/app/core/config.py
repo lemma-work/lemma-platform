@@ -1084,10 +1084,14 @@ class Settings(BaseSettings):
             "instead of paying a control-plane call per invocation. "
             "The sandbox runtime treats a lease as activity and keeps the sandbox alive "
             "for the horizon it grants, so this must stay well below "
-            "WORKSPACE_IDLE_RELEASE_SECONDS (default 900): otherwise a single "
-            "invocation keeps a pod's sandbox billing long after the last "
-            "function ran. Function execution is the activity that should keep "
-            "a sandbox warm - never the mere existence of a cached endpoint."
+            "WORKSPACE_IDLE_RELEASE_SECONDS: otherwise a single invocation "
+            "keeps a pod's sandbox billing long after the last function ran. "
+            "Function execution is the activity that should keep a sandbox "
+            "warm - never the mere existence of a cached endpoint. "
+            "Read the deployed idle release rather than the field default when "
+            "tuning this - production runs 180, not 900, so the usable ceiling "
+            "is far below this field's own maximum. The effective value is "
+            "clamped against it at construction; see endpoint_reuse_seconds."
         ),
     )
     function_runtime_endpoint_cache_max_entries: int = Field(

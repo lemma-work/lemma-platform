@@ -25,9 +25,18 @@ async def test_stage_domain_events_uses_one_bulk_insert() -> None:
 
     await stage_domain_events(session, events)
 
-    session.execute.assert_awaited_once()
-    rows = session.execute.await_args.args[1]
+    # One insert carrying every row -- the property under test. Staging also
+    # notifies the dispatcher in this transaction, so count the inserts rather
+    # than the statements: three events must not mean three inserts.
+    inserts = [
+        call
+        for call in session.execute.await_args_list
+        if len(call.args) > 1 and isinstance(call.args[1], list)
+    ]
+    assert len(inserts) == 1
+    rows = inserts[0].args[1]
     assert {row["id"] for row in rows} == {event.event_id for event in events}
+    assert sum("pg_notify" in str(call.args[0]) for call in session.execute.await_args_list) == 1
 
 
 @pytest.mark.asyncio

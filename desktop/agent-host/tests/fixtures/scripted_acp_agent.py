@@ -311,15 +311,30 @@ def run_mcp_refresh_turn(mcp_servers):
         )
         client.notify("notifications/initialized")
         client.request("tools/list")
-        # Tells the control plane the bridge is live, which is its cue to send
-        # the replacement credential.
+        # One call before the cue, so "the run started on the credential it was
+        # dispatched with" is a fact about ordering rather than a race.
+        #
+        # The cue used to come first, and the loop's sleep came *after* each
+        # call — so the first call went out with no delay behind it and the test
+        # was asserting that a whole refresh round trip (control plane, poll,
+        # journal, bridge re-read) loses a race against one local JSON-RPC
+        # request. It usually did. Anything that made the poll loop tighter
+        # tipped it, and the failure read as the bridge picking up a credential
+        # too early rather than as the test having assumed an ordering nothing
+        # enforced.
+        client.request(
+            "tools/call",
+            {"name": "lemma_echo", "arguments": {"text": "call-0"}},
+        )
+        # Tells the control plane the bridge is live — demonstrated by that call,
+        # not merely initialized — which is its cue to send the replacement.
         chunk("agent_message_chunk", "LEMMA_MCP_READY")
-        for index in range(12):
+        for index in range(1, 12):
+            time.sleep(0.25)
             client.request(
                 "tools/call",
                 {"name": "lemma_echo", "arguments": {"text": f"call-{index}"}},
             )
-            time.sleep(0.25)
         chunk("agent_message_chunk", "LEMMA_MCP_REFRESH_DONE")
     finally:
         client.close()
