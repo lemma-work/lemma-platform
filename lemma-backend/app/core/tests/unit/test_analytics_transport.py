@@ -186,10 +186,11 @@ async def test_cancellation_is_never_swallowed_by_the_error_handling() -> None:
     sink._drain_once = hang  # type: ignore[method-assign]
     sink.start()
     await asyncio.sleep(0.05)
-    assert sink._task is not None
-    sink._task.cancel()
+    task = sink._task
+    assert task is not None
+    task.cancel()
     with pytest.raises(asyncio.CancelledError):
-        await sink._task
+        await asyncio.wait_for(task, timeout=1)
 
 
 async def test_close_is_idempotent() -> None:
