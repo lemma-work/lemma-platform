@@ -34,6 +34,21 @@ from app.modules.workflow.services.run_resume_service import RunResumeService
 
 pytestmark = [pytest.mark.e2e, pytest.mark.workspace]
 
+# Why some tests here take `worker` and most do not.
+#
+# A FUNCTION node never runs inline: `dispatch_function_for_workflow` enqueues
+# the run and the executor suspends on its id, so the workflow only finishes
+# when the streaq worker executes it and its completion event resumes the run.
+# Most tests here drive that seam themselves (`_drive_function_completed`,
+# `_InlineResumeJobQueue`) and need no worker. The two that assert a run
+# completes *on its own* need the real one.
+#
+# The `worker` fixture is session-scoped, which is why this was invisible: run
+# the whole shard and some other module's test starts it first, and these pass
+# without declaring it. Run them alone -- or reorder the shard -- and the
+# function run sits PENDING until the deadline. Declaring it makes the
+# dependency real instead of a property of test ordering.
+
 
 async def _create_pod(client: AsyncClient, org_id: str, name: str) -> str:
     response = await client.post(
@@ -247,6 +262,7 @@ async def _wait_for_run(
     client: AsyncClient, pod_id: str, run_id: str, predicate, label: str
 ) -> dict:
     deadline = asyncio.get_running_loop().time() + 40
+    run: dict = {}
     while asyncio.get_running_loop().time() < deadline:
         run = await _get_run(client, pod_id, run_id)
         if run["status"] == "FAILED":
@@ -254,7 +270,15 @@ async def _wait_for_run(
         if predicate(run):
             return run
         await asyncio.sleep(0.25)
-    pytest.fail(f"Timed out waiting for {label}")
+    # The last observed run, not just the label. A bare "timed out" says the run
+    # did not finish and nothing about where it stopped, which is the one thing
+    # worth knowing -- a run stuck in PENDING is a dispatch problem, one stuck
+    # RUNNING on a node is that node's.
+    pytest.fail(
+        f"Timed out waiting for {label}. Last status={run.get('status')!r} "
+        f"node={run.get('current_node_id')!r} error={run.get('error')!r} "
+        f"run={run}"
+    )
 
 
 class _FakeLogger:
@@ -621,6 +645,7 @@ async def test_user_assigned_manual_workflow_runs_through_all_node_types(
     fixed_test_org,
     db_session,
     configure_workspace_api_url,
+    worker,
 ):
     _ = configure_workspace_api_url
     pod_id = await _create_pod(
@@ -870,6 +895,7 @@ async def test_scheduled_single_api_function_workflow_completes_inline(
     authenticated_client: AsyncClient,
     fixed_test_org,
     configure_workspace_api_url,
+    worker,
 ):
     _ = configure_workspace_api_url
     pod_id = await _create_pod(

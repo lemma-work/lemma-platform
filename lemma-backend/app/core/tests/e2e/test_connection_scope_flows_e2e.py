@@ -200,3 +200,36 @@ async def test_a_commit_actually_returns_the_connection_to_the_pool(
             await session.execute(text("SELECT 1"))
             await session.commit()
             await asyncio.sleep(0.3)
+
+
+async def test_a_decorator_dependency_hands_its_connection_back(
+    authenticated_client, fixed_test_org, scoped_connection_guard
+) -> None:
+    """The claim `check_session_scope.py` now makes statically, checked at runtime.
+
+    `POST /pods/{id}/bundle/uploads` takes no session in its signature: the only
+    one on the request comes from `dependencies=[PodEditorDep]`, which resolves
+    through `get_pod_context` and `_release_after_authorization`. Then it reads
+    the archive prefix on a worker thread (`run_blocking`).
+
+    The static checker cannot see that release -- it reads the route's
+    dependency list -- so it reported this and the two pod_bundle SSE streams
+    for a hold that ended before the route body started. It now recognises the
+    commit structurally, and this is what says that recognition is true rather
+    than convenient: if the release ever stops happening, the thread offload
+    lands inside a checked-out connection and the guard fires.
+    """
+    import io
+    import zipfile
+
+    pod_id = await _create_pod(authenticated_client, fixed_test_org["id"])
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("pod.json", "{}")
+
+    async with scoped_connection_guard():
+        response = await authenticated_client.post(
+            f"/pods/{pod_id}/bundle/uploads",
+            files={"data": ("bundle.zip", buffer.getvalue(), "application/zip")},
+        )
+    assert response.status_code == 201, response.text
