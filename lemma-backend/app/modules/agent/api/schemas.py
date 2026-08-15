@@ -304,7 +304,11 @@ class CreateAgentHostRuntimeProfileRequest(BaseModel):
     # From GET /me/runtime/agent-hosts/{id}/harnesses, which is what Lemma
     # Desktop lists under Models.
     harness_id: UUID
-    scope: RuntimeProfileScope = RuntimeProfileScope.ORGANIZATION
+    # Personal unless asked for. Unlike a provider profile, which carries an
+    # organization's own credential, this one points at a coding agent on one
+    # person's machine and dispatches runs there whoever selects the model.
+    # Omitting the field is not a decision to share a laptop with a workspace.
+    scope: RuntimeProfileScope = RuntimeProfileScope.PERSONAL
     name: str = Field(min_length=1, max_length=255)
     description: str | None = None
     default_model_name: str | None = Field(default=None, min_length=1)

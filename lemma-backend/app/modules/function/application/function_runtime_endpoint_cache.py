@@ -8,7 +8,11 @@ from datetime import datetime, timezone
 import time
 from uuid import UUID
 
+from opentelemetry import trace
+
 from app.core.request_context import create_inherited_task
+
+tracer = trace.get_tracer(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,6 +85,29 @@ class FunctionRuntimeEndpointCache:
     ) -> FunctionRuntimeEndpoint:
         self._validate_deadline(wait_until)
         self._validate_deadline(required_valid_until)
+        # A miss here costs two control-plane calls (ensure + lease), so whether
+        # this hits is the difference between a warm dispatch and a slow one.
+        # It was previously unobservable, which made the reuse window impossible
+        # to reason about from production data.
+        with tracer.start_as_current_span("lemma.function.runtime_endpoint") as span:
+            span.set_attribute("lemma.pod_id", str(key.pod_id))
+            return await self._get(
+                key,
+                span=span,
+                required_valid_until=required_valid_until,
+                wait_until=wait_until,
+                loader=loader,
+            )
+
+    async def _get(
+        self,
+        key: FunctionRuntimeEndpointKey,
+        *,
+        span: trace.Span,
+        required_valid_until: datetime,
+        wait_until: datetime | None,
+        loader: RuntimeEndpointLoader,
+    ) -> FunctionRuntimeEndpoint:
         for attempt in range(2):
             now = self._clock()
             async with self._lock:
@@ -90,9 +117,11 @@ class FunctionRuntimeEndpointCache:
                     required_valid_until=required_valid_until,
                 )
                 if cached is not None:
+                    span.set_attribute("lemma.cache", "hit")
                     return cached
                 task = self._inflight.get(key)
                 joined = task is not None
+                span.set_attribute("lemma.cache", "joined" if joined else "miss")
                 if task is None:
                     task = create_inherited_task(
                         self._load(key, loader=loader),

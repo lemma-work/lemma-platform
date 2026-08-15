@@ -277,7 +277,10 @@ class AgentRuntimeProfileService:
         user_id: UUID,
         harness_id: UUID,
         name: str,
-        scope: RuntimeProfileScope = RuntimeProfileScope.ORGANIZATION,
+        # See CreateAgentHostRuntimeProfileRequest: sharing one person's machine
+        # with a whole workspace is never the thing a caller meant by saying
+        # nothing.
+        scope: RuntimeProfileScope = RuntimeProfileScope.PERSONAL,
         description: str | None = None,
         default_model_name: str | None = None,
         config_selections: JsonObject | None = None,

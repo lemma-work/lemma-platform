@@ -175,10 +175,18 @@ describe('harness discovery', () => {
         expect(isDiscoveringHarnesses(host({ created_at: old }), 0)).toBe(false);
     });
 
-    it('covers the host\'s own connect timeout, which is what makes it slow', () => {
-        // agent-host's CONNECT_TIMEOUT is 600s; a window shorter than that
-        // would call discovery finished while the host was still working.
-        expect(HARNESS_DISCOVERY_WINDOW_MS).toBeGreaterThanOrEqual(600_000);
+    it('gives discovery the budget, not the worst case of a path that is gone', () => {
+        // This used to assert the window covered agent-host's 600s
+        // CONNECT_TIMEOUT, because pairing *was* the install: it fetched an
+        // adapter package per agent before it could report success, and calling
+        // discovery finished sooner would have been a lie.
+        //
+        // Pairing no longer installs anything, that timeout no longer exists,
+        // and the target is thirty seconds from an agent appearing on disk to
+        // showing as ready. The window is patience beyond the budget, so it is
+        // bounded by the budget rather than by a download.
+        expect(HARNESS_DISCOVERY_WINDOW_MS).toBeGreaterThanOrEqual(30_000);
+        expect(HARNESS_DISCOVERY_WINDOW_MS).toBeLessThanOrEqual(5 * 60_000);
     });
 
     it('never claims a revoked computer is still looking', () => {

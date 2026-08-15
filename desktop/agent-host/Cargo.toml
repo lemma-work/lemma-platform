@@ -47,6 +47,9 @@ assert_cmd = "2"
 axum = "0.8"
 predicates = "3"
 tempfile = { workspace = true }
+# Tests only. `start_paused` lets the scheduling tests assert what the loop does
+# across a 25-second held poll without taking 25 seconds to say it.
+tokio = { version = "1", features = ["test-util"] }
 tower = "0.5"
 
 [lints.rust]

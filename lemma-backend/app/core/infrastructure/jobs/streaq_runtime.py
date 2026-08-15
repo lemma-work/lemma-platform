@@ -582,7 +582,12 @@ async def worker_lifespan() -> AsyncGenerator[AppWorkerContext]:
         # after core startup and unwound before the core closers below.
         async with AsyncExitStack() as module_stack:
             await module_stack.enter_async_context(
-                outbox_dispatcher_lifespan(async_session_maker, get_message_bus())
+                outbox_dispatcher_lifespan(
+                    async_session_maker,
+                    get_message_bus(),
+                    database_url=settings.database_url,
+                    label="main",
+                )
             )
             await enter_worker_lifespans(module_stack, OSS_MODULES, context)
             # Emit only after every core and module lifespan has entered.
