@@ -54,9 +54,9 @@ from app.modules.workspace.providers.base import (
     ProviderInstance,
     ProviderNotReady,
     ProviderRejected,
-    ProviderStorageKind,
 )
 from app.modules.workspace.providers.profiles import profile_for
+from app.modules.workspace.services.sandbox_volumes import SandboxVolumeMixin
 
 logger = get_logger(__name__)
 tracer = trace.get_tracer(__name__)
@@ -66,14 +66,22 @@ _ENSURE_TIMEOUT_SECONDS = 300.0
 # pulling an image and booting a sandbox, short enough that a provisioner that
 # died does not strand the sandbox.
 _CLAIM_TIMEOUT_SECONDS = 180.0
+# Spans one tool call's sequential operations. Not a warmth mechanism: that is
+# the idle release window, two orders of magnitude longer.
+_ENSURE_REUSE_SECONDS = 5.0
 
 
-class SandboxService:
+class SandboxService(SandboxVolumeMixin):
     """Owns the sandbox state machine. One instance per unit-of-work factory."""
 
     # Keyed by (event loop, sandbox id). A herd of tool calls arriving together
     # must produce one provisioning attempt, not one per caller.
     _inflight: dict[tuple[int, UUID], asyncio.Task[SandboxHandle]] = {}
+
+    # A just-ensured sandbox, so sequential callers skip re-verifying it. The
+    # singleflight above only collapses concurrent ones, and a single shell tool
+    # call ensures three times: session, start_process, read_process_output.
+    _recent: dict[tuple[int, UUID], tuple[float, SandboxHandle]] = {}
 
     def __init__(self, *, provider, uow_factory) -> None:
         self._provider = provider
@@ -153,8 +161,22 @@ class SandboxService:
     # ------------------------------------------------------------------
 
     async def ensure(self, sandbox_id: UUID) -> SandboxHandle:
-        """Return a ready sandbox, provisioning it if necessary."""
+        """Return a ready sandbox, provisioning it if necessary.
+
+        One ensured moments ago is taken at its word. The window is far shorter
+        than anything that removes a sandbox -- idle release needs 180s of
+        disuse and runs on a five-minute cron, and being ensured is use -- and
+        `release`/`destroy` forget it themselves. The residual risk, a sandbox
+        dying externally mid-window, is one every caller already carries: it can
+        happen between any ensure and the call it guards.
+        """
         key = (id(asyncio.get_running_loop()), sandbox_id)
+        cached = self._recent.get(key)
+        if cached is not None:
+            cached_at, handle = cached
+            if (asyncio.get_running_loop().time() - cached_at) < _ENSURE_REUSE_SECONDS:
+                return handle
+            self._recent.pop(key, None)
         task = self._inflight.get(key)
         if task is None:
             task = create_inherited_task(
@@ -167,7 +189,14 @@ class SandboxService:
                     self._inflight.pop(key, None)
 
             task.add_done_callback(clear)
-        return await asyncio.shield(task)
+        handle = await asyncio.shield(task)
+        self._recent[key] = (asyncio.get_running_loop().time(), handle)
+        return handle
+
+    def _forget_recent(self, sandbox_id: UUID) -> None:
+        """Drop a remembered handle, for the operations that invalidate one."""
+        for key in [key for key in self._recent if key[1] == sandbox_id]:
+            self._recent.pop(key, None)
 
     async def _ensure_once(self, sandbox_id: UUID) -> SandboxHandle:
         """Provision, waiting out transient provider unavailability.
@@ -434,52 +463,6 @@ class SandboxService:
             storage_generation=storage_generation,
         )
 
-    async def _resolve_volume(
-        self, sandbox: Sandbox, *, deadline_at: datetime
-    ) -> tuple[str | None, int]:
-        """Adopt the sandbox's disk, or mint one and record that it is new.
-
-        A function sandbox has no durable disk at all: it runs an immutable
-        artifact refetched from the gateway, so a wiped function sandbox has
-        lost nothing and needs no volume.
-        """
-        if sandbox.kind is SandboxKind.FUNCTION:
-            return None, sandbox.storage_generation
-
-        if (
-            getattr(self._provider, "storage_kind", ProviderStorageKind.VOLUME)
-            is ProviderStorageKind.SANDBOX_NATIVE
-        ):
-            # The provider's sandbox *is* the disk, so there is no separate
-            # volume to manage and adoption happens inside create. The
-            # generation is settled afterwards, from whether it adopted.
-            return None, sandbox.storage_generation
-
-        adopted = await self._provider.find_volume(
-            sandbox_id=sandbox.id, deadline_at=deadline_at
-        )
-        if adopted is not None:
-            return adopted, sandbox.storage_generation
-
-        generation = sandbox.storage_generation
-        if sandbox.provider_volume_id is not None:
-            # We had a disk and it is not there any more. That is the one event
-            # an agent must be told about, or it reads an empty directory as
-            # "nothing was ever here".
-            async with self._uow_factory() as uow:
-                repository = SandboxRepository(uow)
-                generation = await repository.bump_storage_generation(sandbox.id)
-                await uow.commit()
-            logger.info(
-                "workspace.sandbox_service.workspace_storage_recreated",
-                sandbox_id=str(sandbox.id),
-            )
-
-        name = naming.volume_name(sandbox.id, generation)
-        created = await self._provider.ensure_volume(
-            sandbox_id=sandbox.id, name=name, deadline_at=deadline_at
-        )
-        return created, generation
 
     async def _start(
         self, sandbox: Sandbox, instance: ProviderInstance, *, deadline_at: datetime
@@ -499,6 +482,7 @@ class SandboxService:
 
     async def release(self, sandbox_id: UUID) -> None:
         """Stop compute, keep the disk. The next ensure resumes the sandbox."""
+        self._forget_recent(sandbox_id)
         deadline_at = datetime.now(timezone.utc) + timedelta(seconds=60)
         async with self._uow_factory() as uow:
             repository = SandboxRepository(uow)
@@ -524,6 +508,7 @@ class SandboxService:
             await uow.commit()
 
     async def destroy(self, sandbox_id: UUID, *, delete_storage: bool = False) -> None:
+        self._forget_recent(sandbox_id)
         deadline_at = datetime.now(timezone.utc) + timedelta(seconds=60)
         async with self._uow_factory() as uow:
             repository = SandboxRepository(uow)

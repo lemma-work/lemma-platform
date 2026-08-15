@@ -14,18 +14,33 @@ cancellation) are re-raised untouched so the framework still handles them. Argum
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from pydantic_ai.tools import RunContext
 from pydantic_ai.toolsets import ToolsetTool, WrapperToolset
 
 from app.core.log.log import get_logger
+from app.modules.agent.services.run_phase_spans import run_phase
 from app.modules.agent.tools.tool_errors import (
     format_tool_error,
     is_control_flow_exception,
 )
 
 logger = get_logger(__name__)
+
+_SPAN_NAME_SAFE = re.compile(r"[^a-z0-9_]+")
+
+
+def _tool_span_name(name: str) -> str:
+    """Span suffix for a tool, in the shape the span sanitizer preserves.
+
+    Only lowercase dotted/underscored names survive export with their own name,
+    so a tool called ``Fetch-Report`` has to arrive as ``fetch_report``. Without
+    this the whole per-tool breakdown collapses into one generic span.
+    """
+    safe = _SPAN_NAME_SAFE.sub("_", name.lower()).strip("_")
+    return f"tool.{safe or 'unnamed'}"
 
 
 class GracefulToolset(WrapperToolset[Any]):
@@ -39,7 +54,8 @@ class GracefulToolset(WrapperToolset[Any]):
         tool: ToolsetTool[Any],
     ) -> Any:
         try:
-            return await self.wrapped.call_tool(name, tool_args, ctx, tool)
+            with run_phase(_tool_span_name(name)):
+                return await self.wrapped.call_tool(name, tool_args, ctx, tool)
         except Exception as exc:  # noqa: BLE001 - intentional catch-all boundary
             if is_control_flow_exception(exc):
                 raise

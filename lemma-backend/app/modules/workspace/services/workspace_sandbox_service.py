@@ -12,6 +12,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 from uuid import UUID, uuid4
 
+from opentelemetry import trace
+
 from app.core.config import settings
 from app.core.request_context import create_inherited_task
 from sandbox_runtime.protocol import (
@@ -35,6 +37,13 @@ from app.modules.workspace.services.workspace_storage_generation_store import (
 _storage_generation_store: WorkspaceStorageGenerationStore | None = None
 _process_store: WorkspaceProcessStore | None = None
 _SANDBOX_MANAGER_HTTP_TIMEOUT_SECONDS = 300.0
+
+# Own tracer rather than the agent module's run_phase helper: a workspace
+# session is acquired again for every single shell tool call, and the split
+# between "ask the sandbox manager where the box is" and "mint the env vars" is
+# only visible from inside this module. Hard-coded ``app.`` name because the
+# span sanitizer keeps a span's own name only for scopes under ``app.``.
+_tracer = trace.get_tracer("app.modules.workspace.tool_phases")
 
 
 def get_workspace_storage_generation_store() -> WorkspaceStorageGenerationStore:
@@ -326,23 +335,25 @@ class WorkspaceSandboxService:
         env_vars: dict[str, str] | None = None,
     ) -> IWorkspaceSession:
         resolved_cwd = canonical_workspace_cwd(initial_cwd)
-        sandbox_info = await self._ensure_workspace_directory(
-            user_id,
-            resolved_cwd,
-        )
+        with _tracer.start_as_current_span("lemma.workspace.ensure_dir"):
+            sandbox_info = await self._ensure_workspace_directory(
+                user_id,
+                resolved_cwd,
+            )
 
         if env_vars is None:
-            env_vars = await self.get_env_vars(
-                user_id,
-                pod_id,
-                workspace_url=sandbox_info.endpoint,
-                organization_id=organization_id,
-                workload_type=workload_type,
-                workload_id=workload_id,
-                workload_name=workload_name,
-                scope=scope,
-                session_id=session_id,
-            )
+            with _tracer.start_as_current_span("lemma.workspace.env_vars"):
+                env_vars = await self.get_env_vars(
+                    user_id,
+                    pod_id,
+                    workspace_url=sandbox_info.endpoint,
+                    organization_id=organization_id,
+                    workload_type=workload_type,
+                    workload_id=workload_id,
+                    workload_name=workload_name,
+                    scope=scope,
+                    session_id=session_id,
+                )
 
         # Tell this session, once, if the disk it is about to use is not the one
         # it saw last. Without it an agent cannot distinguish a recreated
@@ -350,12 +361,13 @@ class WorkspaceSandboxService:
         workspace_recreated = False
         if session_id and sandbox_info.storage_generation is not None:
             try:
-                workspace_recreated = (
-                    await self.storage_generation_store.observe_storage_generation(
-                        session_id=session_id,
-                        generation=sandbox_info.storage_generation,
+                with _tracer.start_as_current_span("lemma.workspace.storage_generation"):
+                    workspace_recreated = (
+                        await self.storage_generation_store.observe_storage_generation(
+                            session_id=session_id,
+                            generation=sandbox_info.storage_generation,
+                        )
                     )
-                )
             except Exception:
                 # A missing notice is far better than a failed tool call.
                 workspace_recreated = False
