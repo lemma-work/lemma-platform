@@ -128,3 +128,56 @@ async def test_scripted_provider_errors_reach_the_real_harness_handler(
     if kind == "model_http":
         assert isinstance(captured.value, ModelHTTPError)
         assert captured.value.status_code == 429
+
+
+@pytest.mark.asyncio
+async def test_a_structured_output_agent_completes_without_a_script():
+    """The mock has to satisfy the schema it is shown, not send `{}` and hope.
+
+    It used to call the output tool with an empty object and call that
+    best-effort. It is not: a schema with a required field rejects `{}`,
+    pydantic-ai asks for a retry, and the mock -- having no script -- answers
+    with the same empty object every time until the run dies on the retry
+    ceiling. Two `provider`-marked workflow e2e tests failed exactly this way,
+    reported as "a tool failed repeatedly ... check the agent configuration",
+    which points at the agent and not at the mock.
+    """
+    from pydantic import BaseModel
+
+    class Output(BaseModel):
+        items: list[str]
+        title: str
+        count: int
+        ready: bool
+
+    agent = Agent(build_mock_model(_conversation()), output_type=Output)
+
+    result = await agent.run("summarise this")
+
+    assert result.output == Output(items=[], title="", count=0, ready=False)
+
+
+@pytest.mark.asyncio
+async def test_a_scripted_structured_output_still_wins():
+    """The zero-valued default is a fallback, not an override."""
+    from pydantic import BaseModel
+
+    class Output(BaseModel):
+        answer: str
+
+    conv = _conversation(
+        {
+            MOCK_SCRIPT_METADATA_KEY: [
+                {
+                    "tool_calls": [
+                        {"tool_name": "final_result", "args": {"answer": "Tokyo"}}
+                    ]
+                }
+            ]
+        }
+    )
+    agent = Agent(build_mock_model(conv), output_type=Output)
+
+    result = await agent.run("capital of Japan?")
+
+    assert result.output == Output(answer="Tokyo")
