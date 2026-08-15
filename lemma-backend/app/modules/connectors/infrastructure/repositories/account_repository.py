@@ -8,6 +8,7 @@ from sqlalchemy.orm import selectinload
 from app.core.domain.message_bus import MessageBus
 from app.core.infrastructure.db.repository import SqlAlchemyRepository
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.modules.connectors.domain.events import ConnectorConnectedEvent
 from app.modules.connectors.domain.account import AccountEntity
 from app.modules.connectors.domain.errors import (
     AccountAlreadyConnectedError,
@@ -109,6 +110,19 @@ class AccountRepository(
         except IntegrityError as exc:
             self._reraise_as_conflict_if_duplicate_identity(exc, entity.connector_id)
         await self.session.refresh(instance, attribute_names=["connector"])
+        # The single write path behind both connect routes -- the OAuth callback
+        # and the direct create. No `provider`: it lives on the auth config, not
+        # on the account, and a property that could only ever be empty is worse
+        # than one that is not declared.
+        self.uow.collect_events(
+            [
+                ConnectorConnectedEvent(
+                    connector_id=instance.connector_id,
+                    organization_id=instance.organization_id,
+                    user_id=instance.user_id,
+                )
+            ]
+        )
         return await self._to_entity(instance)
 
     async def update(self, entity: AccountEntity) -> AccountEntity:

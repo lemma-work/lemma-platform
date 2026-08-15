@@ -24,5 +24,8 @@ module = LemmaModule(
         ("schedule_events", "analytics-schedule"),
         ("workflow_run_events", "analytics-workflow"),
         ("surface_events", "analytics-surface"),
+        ("app_events", "analytics-app"),
+        ("pod_bundle_events", "analytics-pod-bundle"),
+        ("connector_events", "analytics-connector"),
     ),
 )

@@ -36,6 +36,7 @@ from app.core.infrastructure.jobs.streaq_runtime import (
 from app.core.log.log import get_logger
 from app.core.origin import OriginKind
 from app.modules.pod_bundle.config import pod_bundle_settings
+from app.modules.pod_bundle.events import analytics as bundle_analytics
 from app.modules.pod_bundle.domain.errors import (
     BundleInvalidError,
     BundleStagingMissingError,
@@ -260,6 +261,10 @@ async def export_pod_bundle(context: dict[str, str | None]) -> None:
             kind="pod-exports", job_id=export_id, ttl_seconds=ttl
         )
         state.expires_at = _now() + timedelta(seconds=ttl)
+        await bundle_analytics.record_bundle_exported(
+            worker_ctx, export_id=export_id, pod_id=pod_id, user_id=user_id,
+            resource_count=len(getattr(state, "manifest", None) or ()),
+        )
         state.completed_at = _now()
         # Retain the READY export state (and thus its archive) for the URL's TTL,
         # longer than the default import horizon, so a shared link stays valid.
@@ -695,6 +700,11 @@ async def apply_pod_import(context: dict[str, str | None]) -> None:
         state.status = ImportStatus.COMPLETED
         state.completed_at = _now()
         await store.save_import(state)
+        await bundle_analytics.record_import_completed(
+            worker_ctx, import_id=import_id, pod_id=pod_id, user_id=user_id,
+            resource_count=len(getattr(state.plan, "steps", None) or ()),
+            is_remix=bool(getattr(state, "is_remix", False)),
+        )
         await publish_bundle_event(
             import_id, completed_payload(state.status.value, state.seq)
         )

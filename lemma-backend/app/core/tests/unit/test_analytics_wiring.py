@@ -24,13 +24,7 @@ CLIENT_EMITTED = frozenset({"share_link.viewed", "import.started"})
 KNOWN_GAPS = frozenset(
     {
         "pod.delivered",
-        "app.created",
-        "app.published",
         "app.session_started",
-        "connector.connected",
-        "connector.operation_executed",
-        "bundle.exported",
-        "import.completed",
     }
 )
 

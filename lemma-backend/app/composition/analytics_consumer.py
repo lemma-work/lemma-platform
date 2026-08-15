@@ -60,6 +60,20 @@ from app.modules.function.domain.events import (
     FUNCTION_EVENTS_STREAM,
     FunctionCreatedEvent,
 )
+from app.modules.apps.domain.events import (
+    APP_EVENTS_STREAM,
+    AppCreatedEvent,
+    AppPublishedEvent,
+)
+from app.modules.connectors.domain.events import (
+    CONNECTOR_EVENTS_STREAM,
+    ConnectorConnectedEvent,
+)
+from app.modules.pod_bundle.domain.events import (
+    POD_BUNDLE_EVENTS_STREAM,
+    BundleExportedEvent,
+    BundleImportCompletedEvent,
+)
 from app.modules.agent_surfaces.domain.events import (
     SurfaceConnectedEvent,
     SurfaceEvents,
@@ -120,6 +134,12 @@ WIRED_EVENTS = frozenset(
         "schedule_run.completed",
         "surface.connected",
         "surface.message_answered",
+        "app.created",
+        "app.published",
+        "bundle.exported",
+        "import.completed",
+        "connector.connected",
+        "connector.operation_executed",
     }
 )
 
@@ -707,6 +727,131 @@ async def on_surface_event(
         )
 
     await inbox.process("analytics.surface", event, record)
+
+
+# -- apps, bundles, connectors ----------------------------------------------
+
+
+@reliable_redis_stream_subscriber(
+    router,
+    APP_EVENTS_STREAM,
+    group="analytics-app",
+    consumer="analytics-app-consumer",
+)
+async def on_app_event(
+    event: dict,
+    fs_logger: Logger,
+    inbox: EventInboxPort = Depends(provide_domain_event_inbox),
+) -> None:
+    event_type = event.get("event_type")
+    if event_type not in {
+        AppCreatedEvent.get_event_type(),
+        AppPublishedEvent.get_event_type(),
+    }:
+        return
+
+    async def record() -> None:
+        origin = _origin_of(event)
+        if event_type == AppCreatedEvent.get_event_type():
+            created = AppCreatedEvent.model_validate(event)
+            emit(
+                "app.created",
+                actor=_actor_or_system(created.user_id),
+                origin=origin,
+                pod_id=created.pod_id,
+                properties={"pod_id": created.pod_id, "app_id": created.app_id},
+            )
+            return
+        published = AppPublishedEvent.model_validate(event)
+        emit(
+            "app.published",
+            actor=_actor_or_system(published.user_id),
+            origin=origin,
+            pod_id=published.pod_id,
+            properties={"pod_id": published.pod_id, "app_id": published.app_id},
+        )
+
+    await inbox.process("analytics.app", event, record)
+
+
+@reliable_redis_stream_subscriber(
+    router,
+    POD_BUNDLE_EVENTS_STREAM,
+    group="analytics-pod-bundle",
+    consumer="analytics-pod-bundle-consumer",
+)
+async def on_pod_bundle_event(
+    event: dict,
+    fs_logger: Logger,
+    inbox: EventInboxPort = Depends(provide_domain_event_inbox),
+) -> None:
+    event_type = event.get("event_type")
+    if event_type not in {
+        BundleExportedEvent.get_event_type(),
+        BundleImportCompletedEvent.get_event_type(),
+    }:
+        return
+
+    async def record() -> None:
+        origin = _origin_of(event)
+        if event_type == BundleExportedEvent.get_event_type():
+            exported = BundleExportedEvent.model_validate(event)
+            emit(
+                "bundle.exported",
+                actor=_actor_or_system(exported.user_id),
+                origin=origin,
+                pod_id=exported.pod_id,
+                properties={
+                    "pod_id": exported.pod_id,
+                    "bundle_id": exported.bundle_id,
+                    "resource_count_bucket": _bucket(
+                        exported.resource_count, COUNT_EDGES
+                    ),
+                },
+            )
+            return
+        imported = BundleImportCompletedEvent.model_validate(event)
+        emit(
+            "import.completed",
+            actor=_actor_or_system(imported.user_id),
+            origin=origin,
+            pod_id=imported.pod_id,
+            properties={
+                "pod_id": imported.pod_id,
+                "bundle_id": imported.bundle_id,
+                "resource_count_bucket": _bucket(imported.resource_count, COUNT_EDGES),
+                "is_remix": imported.is_remix,
+            },
+        )
+
+    await inbox.process("analytics.pod_bundle", event, record)
+
+
+@reliable_redis_stream_subscriber(
+    router,
+    CONNECTOR_EVENTS_STREAM,
+    group="analytics-connector",
+    consumer="analytics-connector-consumer",
+)
+async def on_connector_event(
+    event: dict,
+    fs_logger: Logger,
+    inbox: EventInboxPort = Depends(provide_domain_event_inbox),
+) -> None:
+    if event.get("event_type") != ConnectorConnectedEvent.get_event_type():
+        return
+
+    async def record() -> None:
+        parsed = ConnectorConnectedEvent.model_validate(event)
+        emit(
+            "connector.connected",
+            actor=AnalyticsActor.user(parsed.user_id),
+            origin=_origin_of(event),
+            organization_id=parsed.organization_id,
+            properties={"connector_id": parsed.connector_id},
+        )
+
+    await inbox.process("analytics.connector", event, record)
 
 
 def _actor_or_system(actor_id: UUID | None) -> AnalyticsActor:

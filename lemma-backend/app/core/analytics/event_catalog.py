@@ -184,7 +184,7 @@ ANALYTICS_CATALOG: Final[dict[str, AnalyticEvent]] = {
     # property of the model. The consequence is that "outside reach *per pod*"
     # is not computable today, and §2 of the design doc says so.
     "connector.connected": AnalyticEvent(
-        properties=frozenset({"connector_id", "provider"}),
+        properties=frozenset({"connector_id"}),
         groups=_ORG_ONLY,
     ),
     "connector.operation_executed": AnalyticEvent(
