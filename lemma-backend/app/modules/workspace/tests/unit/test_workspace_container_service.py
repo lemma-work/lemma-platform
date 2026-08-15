@@ -10,6 +10,9 @@ import pytest
 
 from app.core.config import settings
 from app.modules.workspace.contracts import SandboxInfo
+from app.modules.workspace.services import (
+    workspace_sandbox_service as container_service,
+)
 from app.modules.workspace.services.workspace_sandbox_service import (
     WorkspaceSandboxService,
 )
@@ -266,11 +269,21 @@ async def test_get_session_coalesces_concurrent_directory_checks_but_revalidates
     monkeypatch.setattr(service, "get_env_vars", environment)
     monkeypatch.setattr(service, "_get_manager_client", lambda: manager_client)
 
+    monkeypatch.setattr(container_service, "_DIRECTORY_READY_SECONDS", 0.05)
+
     await asyncio.gather(
         service.get_session(user_id=user_id, pod_id=None, session_id="first"),
         service.get_session(user_id=user_id, pod_id=None, session_id="second"),
     )
+    # Inside the readiness window, a later call reuses the directory rather than
+    # re-running the mkdir round trip -- 833ms at p50 against a real sandbox, on
+    # a directory created by the first command of the run.
     await service.get_session(user_id=user_id, pod_id=None, session_id="third")
+    assert manager_client.directories == [(user_id, "/workspace")]
+
+    # It is a window, not a permanent answer: the check comes back afterwards.
+    await asyncio.sleep(0.08)
+    await service.get_session(user_id=user_id, pod_id=None, session_id="fourth")
 
     assert manager_client.directories == [
         (user_id, "/workspace"),

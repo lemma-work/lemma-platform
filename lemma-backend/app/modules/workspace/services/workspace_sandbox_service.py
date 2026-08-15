@@ -37,6 +37,10 @@ from app.modules.workspace.services.workspace_storage_generation_store import (
 _storage_generation_store: WorkspaceStorageGenerationStore | None = None
 _process_store: WorkspaceProcessStore | None = None
 _SANDBOX_MANAGER_HTTP_TIMEOUT_SECONDS = 300.0
+# How long a created workspace directory is believed without re-checking. Long
+# enough that a run's tool calls stop paying for it, short enough that an agent
+# which deleted its own working directory recovers on its own.
+_DIRECTORY_READY_SECONDS = 60.0
 
 # Own tracer rather than the agent module's run_phase helper: a workspace
 # session is acquired again for every single shell tool call, and the split
@@ -78,6 +82,12 @@ class WorkspaceSandboxService:
     _inflight_directories: dict[
         tuple[int, UUID, str, int, str], asyncio.Task[SandboxInfo]
     ] = {}
+    # Directories already created, by the same key. The singleflight above only
+    # collapses concurrent callers, so every tool call re-ran the mkdir round
+    # trip -- 833ms at p50, on a directory that had existed since the first
+    # command. The key carries the sandbox's allocation and epoch, so a
+    # recreated sandbox misses rather than inheriting a stale readiness.
+    _ready_directories: dict[tuple[int, UUID, str, int, str], tuple[float, SandboxInfo]] = {}
     _stopping: dict[tuple[int, UUID], asyncio.Event] = {}
 
     def __init__(
@@ -140,6 +150,7 @@ class WorkspaceSandboxService:
         if directory_tasks:
             await asyncio.gather(*directory_tasks, return_exceptions=True)
         cls._inflight_directories.clear()
+        cls._ready_directories.clear()
 
     async def _get_sandbox_info(self, user_id: UUID) -> SandboxInfo | None:
         return await self.sandbox.get_sandbox(user_id)
@@ -224,6 +235,14 @@ class WorkspaceSandboxService:
                 for cache_key, task in self._inflight_directories.items()
                 if cache_key[: len(key)] == key
             )
+            # A stopped sandbox's directories are not ready any more, whatever
+            # the epoch says: stopping is how a workspace is torn down.
+            for cache_key in [
+                cache_key
+                for cache_key in self._ready_directories
+                if cache_key[: len(key)] == key
+            ]:
+                self._ready_directories.pop(cache_key, None)
             for task in directory_tasks:
                 task.cancel()
             if directory_tasks:
@@ -402,6 +421,15 @@ class WorkspaceSandboxService:
                 deadline_at=deadline_at,
             )
 
+        ready = self._ready_directories.get(cache_key)
+        if ready is not None:
+            created_at, cached_info = ready
+            if (
+                asyncio.get_running_loop().time() - created_at
+            ) < _DIRECTORY_READY_SECONDS:
+                return cached_info
+            self._ready_directories.pop(cache_key, None)
+
         task = self._inflight_directories.get(cache_key)
         if task is None:
             task = create_inherited_task(
@@ -421,7 +449,12 @@ class WorkspaceSandboxService:
 
             task.add_done_callback(clear)
 
-        return await asyncio.shield(task)
+        info = await asyncio.shield(task)
+        self._ready_directories[cache_key] = (
+            asyncio.get_running_loop().time(),
+            info,
+        )
+        return info
 
     async def _create_workspace_directory_until_ready(
         self,
