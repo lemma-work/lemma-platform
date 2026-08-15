@@ -24,9 +24,17 @@ singletons, and this is shared state.
 
 Half-open falls out of the TTLs rather than needing its own state machine. When
 the breaker opens, the failure counter is left one short of the threshold with a
-lifetime longer than the cooldown. So the first call after the cooldown goes
-through as a probe, and if it fails the breaker re-opens immediately instead of
-waiting for another full run of failures.
+lifetime longer than the cooldown, so the *next* failure — whenever it comes —
+re-opens immediately instead of waiting for another full run.
+
+Being precise about what that is and is not: it is not a single-probe half-open.
+Nothing serialises the calls that arrive the moment the open key expires, so a
+busy operation lets a burst through at once rather than one. That is a
+deliberate trade, not an oversight — admitting one caller at a time needs a lock
+with an owner and a lease, which is a second thing that can fail, and the burst
+costs one round of timeouts before the first failure re-opens the breaker for
+everyone. What it buys is that a *recovered* provider comes back at full rate
+immediately instead of ramping one probe per cooldown.
 """
 
 from __future__ import annotations

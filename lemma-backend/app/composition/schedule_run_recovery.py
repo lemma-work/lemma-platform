@@ -11,6 +11,7 @@ from sqlalchemy.orm import load_only
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent.infrastructure.models import ConversationModel
+from app.modules.schedule.config import schedule_settings
 from app.modules.schedule.domain.events.schedule import ScheduleFired
 from app.modules.schedule.domain.schedule import ScheduleRunStatus, ScheduleType
 from app.modules.schedule.infrastructure.models.run import ScheduleRun
@@ -40,14 +41,6 @@ class ScheduleRunRecoveryService:
     BATCH_SIZE = 100
     DISPATCH_RECONCILE_AFTER = timedelta(minutes=5)
 
-    # How long before a row already inspected is inspected again. The sweep runs
-    # every five minutes because a *lost* outcome event should be caught
-    # quickly; a target that was simply still running five minutes ago is not
-    # news, and in production 1,375 of these are workflows parked on a human
-    # form wait, some since July. Re-reading those every tick is the work this
-    # interval removes.
-    REINSPECT_AFTER = timedelta(hours=1)
-
     # A fire whose moment has passed by more than this is dead-lettered instead
     # of redelivered. Redelivery exists for a dispatch that was genuinely lost
     # moments ago; replaying a schedule from a month back does not produce the
@@ -64,7 +57,9 @@ class ScheduleRunRecoveryService:
         now = datetime.now(timezone.utc)
         retry_cutoff = now - ScheduleRunRepository.ABANDON_AFTER
         dispatch_cutoff = now - self.DISPATCH_RECONCILE_AFTER
-        reinspect_cutoff = now - self.REINSPECT_AFTER
+        reinspect_cutoff = now - timedelta(
+            minutes=schedule_settings.schedule_run_reinspect_after_minutes
+        )
         rows = (
             await self.session.execute(
                 select(ScheduleRun, Schedule)
@@ -76,6 +71,21 @@ class ScheduleRunRecoveryService:
                     # re-read every tick. Without this the sweep spends its
                     # whole batch on the same long-lived in-flight runs and
                     # never reaches anything behind them.
+                    #
+                    # This does set the worst case on noticing a *lost* outcome
+                    # event, which is the sweep's whole reason for existing, so
+                    # it is worth being exact about the cost. A run is only
+                    # skipped once it has been inspected and found still
+                    # running, so the delay is one re-inspection interval, not
+                    # the run's whole life. And the interval is not the binding
+                    # constraint anyway: 100 rows per tick every 5 minutes over
+                    # the ~1,375 rows production parks on human form waits is a
+                    # ~69-minute round trip on its own. Before this filter
+                    # existed the sweep was slower still, because it spent those
+                    # ticks re-reading the same head of the queue. The ordering
+                    # below is what actually bounds the delay; this only stops a
+                    # small in-flight set from being re-read every 5 minutes for
+                    # no new information.
                     or_(
                         ScheduleRun.last_inspected_at.is_(None),
                         ScheduleRun.last_inspected_at < reinspect_cutoff,
@@ -120,6 +130,19 @@ class ScheduleRunRecoveryService:
             # is what advances the cursor: the branches below may legitimately
             # change nothing, and a row that records no change is a row the next
             # tick selects again.
+            #
+            # It costs a real write, and the write is the point. `updated_at`
+            # carries an `onupdate`, so stamping this bumps that too, and the
+            # ledger now takes roughly one UPDATE per inspected still-running
+            # row per re-inspection interval -- with the batch at 100 and the
+            # sweep at 5 minutes, at most 28,800 a day whatever the backlog
+            # does. Worth naming precisely, because "28,800 pointless updates a
+            # day" is what the audit that started this reported. That claim was
+            # wrong about the code as it stood -- the count was zero, and being
+            # zero was the bug -- but it is a fair description of the code after
+            # this change. The difference is that these updates are not
+            # pointless: each one is the cursor moving past a row, which is the
+            # only reason the sweep reaches the row behind it.
             run.last_inspected_at = now
             target_exists, outcome, completed_at = await self._resolve_target(run)
             if outcome is not None:
@@ -147,6 +170,18 @@ class ScheduleRunRecoveryService:
                 continue
 
             if self._too_late_to_redeliver(run, now):
+                # Counts on the breaker, which is worth stating because the
+                # obvious objection is that a deleted target is the user's doing
+                # and not the schedule's fault. The breaker does not ask whose
+                # fault it is; it asks whether this schedule is still capable of
+                # producing runs. A fire that reached no target and is now too
+                # old to replay produced nothing, and five of those in a row
+                # means the schedule has produced nothing five times running.
+                # Excluding them would leave exactly the shape this PR keeps
+                # finding elsewhere: a schedule that cannot possibly succeed,
+                # retrying on a timer, with nothing surfaced to the owner. The
+                # deactivation email is what turns it into something they can
+                # act on -- and reactivating is one click if they disagree.
                 run.status = ScheduleRunStatus.DEAD_LETTERED.value
                 run.completed_at = now
                 run.error_type = "ScheduleRunStale"

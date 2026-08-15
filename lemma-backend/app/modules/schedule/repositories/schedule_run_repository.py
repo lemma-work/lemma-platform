@@ -9,16 +9,18 @@ from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.modules.schedule.config import BREAKER_STREAK_SCAN_LIMIT
 from app.modules.schedule.domain.schedule import (
     ScheduleRunEntity,
     ScheduleRunStatus,
 )
 from app.modules.schedule.infrastructure.models.run import ScheduleRun
 
-# How far back the failure-streak count reads. Forty times the default breaker
-# threshold of five, which leaves room for the statuses the streak skips over
-# without letting the scan grow with the ledger.
-_BREAKER_SCAN_LIMIT = 200
+# Re-exported under the private name this module has always used. The definition
+# lives in config because ``schedule_max_consecutive_failures`` is validated
+# against it: a threshold past the scan depth is a breaker that can never trip,
+# and two copies of the number is how that becomes true silently.
+_BREAKER_SCAN_LIMIT = BREAKER_STREAK_SCAN_LIMIT
 
 
 class ScheduleRunRepository:
@@ -247,9 +249,20 @@ class ScheduleRunRepository:
         retention behind it.
 
         The window is safe because of what the caller does with the number: it
-        compares against a threshold of five. A streak longer than
-        ``_BREAKER_SCAN_LIMIT`` is far past any threshold anyone would set, and
-        the schedule is deactivated well before the count could be truncated.
+        compares against a threshold of five, and ``schedule_max_consecutive_
+        failures`` is validated at startup to be no deeper than the scan, so the
+        count can never be truncated below a threshold it would have reached.
+
+        **The streak has no time component, deliberately.** Five failures over
+        five months trip the breaker exactly as five over five minutes do, and
+        an old success arbitrarily far back still resets it. A decay window was
+        considered and rejected: the alternative is a schedule that fires
+        monthly, fails every single time for a year, and is never deactivated
+        because no window ever holds enough failures at once. "Consecutive" is
+        the property the owner is told about in the deactivation email, and it
+        is the one that is actually true of the schedule. The cost is that a
+        rarely-firing schedule takes a long wall-clock time to trip -- which is
+        the correct amount of patience for something that rarely fires.
         """
         rows = (
             await self.session.execute(

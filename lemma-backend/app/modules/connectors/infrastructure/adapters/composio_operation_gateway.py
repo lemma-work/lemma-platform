@@ -119,9 +119,24 @@ class ComposioOperationGateway(AppOperationGatewayPort):
             # What this covers is the caller that does not go through either:
             # `agent_surfaces/platforms/composio_email.py` constructs this
             # gateway and calls `execute_operation` directly, and that path was
-            # unbounded. An unresponsive provider there holds a thread from the
-            # bounded external-HTTP pool for as long as the socket stays open,
-            # and enough of them empties the pool for every other connector.
+            # unbounded — an unresponsive provider held the caller for as long
+            # as the socket stayed open, with nothing to end the wait.
+            #
+            # Be clear about what the timeout does and does not do, because it
+            # is easy to read more into it. It bounds the *caller*, and it
+            # returns the limiter slot: cancelling `run_blocking` releases the
+            # `CapacityLimiter` token immediately (measured: borrowed 2 -> 0 on
+            # cancel). It does not preempt the SDK call. The thread keeps
+            # running the synchronous request until the socket resolves, so the
+            # next call takes a fresh thread rather than that one — in the same
+            # measurement a limiter of 2 was serving 4 live OS threads. The
+            # limiter bounds concurrent *starts*, not live threads, and under
+            # sustained provider timeouts the two diverge.
+            #
+            # That is the breaker's job rather than this timeout's: a provider
+            # that is hanging trips it after a few failures and stops new calls
+            # being started at all, which is the only thing here that actually
+            # stops threads accumulating.
             response = await asyncio.wait_for(
                 run_blocking(_execute, limiter="external_http"),
                 timeout=connector_settings.connector_composio_deadline_seconds,

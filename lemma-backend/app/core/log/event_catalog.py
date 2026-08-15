@@ -523,6 +523,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'runtime.heartbeat.write_failed': EventSpec('debug', frozenset({'error_type', 'service'})),
     'runtime.loop_lag.degraded': EventSpec('warning', frozenset({'breach_count', 'lag_ms', 'service', 'threshold_ms', 'unhealthy'})),
     'runtime.loop_lag.recovered': EventSpec('info', frozenset({'breach_count', 'degraded_duration_ms', 'max_lag_ms', 'service'})),
+    'runtime.lifecycle_task.shutdown_failed.degraded': EventSpec('warning', frozenset({'task'})),
     'runtime.loop_stall.degraded': EventSpec('warning', frozenset({'service', 'stack_frames', 'stalled_ms', 'threshold_ms'})),
     'runtime.memory.degraded': EventSpec('warning', frozenset({'baseline_mib', 'growth_mib', 'parked_mcp_tasks', 'rss_mib', 'service', 'stack_frames', 'threshold_mib', 'total_tasks'})),
     'runtime.memory.recovered': EventSpec('info', frozenset({'degraded_duration_ms', 'peak_rss_mib', 'service'})),

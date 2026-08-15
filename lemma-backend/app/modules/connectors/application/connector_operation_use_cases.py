@@ -105,34 +105,21 @@ class ConnectorOperationUseCases:
         scope_key = breaker_scope(resolved.connector_id, operation_name)
         await breaker_guard(scope_key)
         try:
-            async with uow_scope(self._uow_factory) as uow:
-                response = await self._build(uow).execute_resolved(resolved)
+            response = await self._attempt_with_credential_refresh(
+                resolved, user_id=user_id, request=request
+            )
         except (
             OperationExecutionInfrastructureError,
             OperationExecutionTimeoutError,
         ):
+            # Wraps the credential retry as well as the first call. Wrapping only
+            # the first call left a hole: a 401 that refreshed and then timed out
+            # raised from inside the handler, past this clause, and the breaker
+            # never saw it -- so the failure mode most likely to be *systemic*
+            # (every account's credential rejected because the provider's token
+            # endpoint is down, each one then retrying into the same outage) was
+            # the one failure mode that could not trip it.
             await breaker_record_failure(scope_key)
-            raise
-        except OperationExecutionUnauthorizedError:
-            # The credential was rejected. Rather than refreshing before every
-            # call on the chance this happens, refresh here, once, and retry
-            # once. This also covers the case an expiry check never can: a
-            # credential revoked at the provider while still unexpired.
-            retried = await self._retry_with_refreshed_credentials(
-                resolved, user_id=user_id, request=request
-            )
-            if retried is not None:
-                response = retried
-            else:
-                # Still rejected after a refresh: the account is unusable until
-                # the user reconnects. Flagged in a fresh short scope, then the
-                # original error is re-raised unchanged.
-                await self._flag_account_reauth_required(resolved)
-                raise
-        except OperationExecutionAccessDeniedError:
-            # A scope/permission problem, not a stale credential -- refreshing
-            # would not help, so flag and surface it directly.
-            await self._flag_account_reauth_required(resolved)
             raise
         await breaker_record_success(scope_key)
 
@@ -191,6 +178,44 @@ class ConnectorOperationUseCases:
                 resolved=resolved,
             )
         return OperationExecutionResponse(result=captured)
+
+    async def _attempt_with_credential_refresh(
+        self,
+        resolved: ResolvedConnectorExecution,
+        *,
+        user_id: UUID,
+        request: Request,
+    ) -> OperationExecutionResponse:
+        """Run the operation, refreshing the credential once if it is rejected.
+
+        One unit so the caller has a single place to judge "did this attempt
+        fail because the provider is unwell", which is the question the breaker
+        asks. The credential handling underneath is bookkeeping about *this*
+        account and is nobody else's business.
+        """
+        try:
+            async with uow_scope(self._uow_factory) as uow:
+                return await self._build(uow).execute_resolved(resolved)
+        except OperationExecutionUnauthorizedError:
+            # The credential was rejected. Rather than refreshing before every
+            # call on the chance this happens, refresh here, once, and retry
+            # once. This also covers the case an expiry check never can: a
+            # credential revoked at the provider while still unexpired.
+            retried = await self._retry_with_refreshed_credentials(
+                resolved, user_id=user_id, request=request
+            )
+            if retried is not None:
+                return retried
+            # Still rejected after a refresh: the account is unusable until the
+            # user reconnects. Flagged in a fresh short scope, then the original
+            # error is re-raised unchanged.
+            await self._flag_account_reauth_required(resolved)
+            raise
+        except OperationExecutionAccessDeniedError:
+            # A scope/permission problem, not a stale credential -- refreshing
+            # would not help, so flag and surface it directly.
+            await self._flag_account_reauth_required(resolved)
+            raise
 
     async def _retry_with_refreshed_credentials(
         self,

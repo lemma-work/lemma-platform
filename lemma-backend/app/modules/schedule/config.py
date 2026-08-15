@@ -5,6 +5,14 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.core.settings_env import dotenv_path
 
+# How far back ``consecutive_terminal_failures`` reads when measuring a failure
+# streak. Forty times the default breaker threshold of five, which leaves room
+# for the statuses the streak skips over without letting the scan grow with the
+# ledger. ``schedule_max_consecutive_failures`` is bounded by it below: a
+# threshold deeper than the scan is a breaker that can never trip, and nothing
+# would have said so.
+BREAKER_STREAK_SCAN_LIMIT = 200
+
 
 class ScheduleSettings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -19,7 +27,31 @@ class ScheduleSettings(BaseSettings):
     )
     schedule_max_consecutive_failures: int = Field(
         default=5,
-        description="Deactivate a schedule after this many consecutive execution errors.",
+        le=BREAKER_STREAK_SCAN_LIMIT,
+        description=(
+            "Deactivate a schedule after this many consecutive execution errors. "
+            "Zero or less disables the breaker. Capped at "
+            "``BREAKER_STREAK_SCAN_LIMIT`` because the streak is counted from a "
+            "bounded scan of the newest runs: a threshold past that depth can "
+            "never be reached, so the breaker would silently stop existing. "
+            "Refusing to start beats discovering it from a schedule that "
+            "retried forever."
+        ),
+    )
+    schedule_run_reinspect_after_minutes: int = Field(
+        default=60,
+        ge=1,
+        description=(
+            "How long before the recovery sweep looks at an in-flight run it has "
+            "already inspected. Sets the worst-case delay on noticing a *lost* "
+            "outcome event, so it trades detection latency against wasted target "
+            "reads. Note the ceiling it competes with: the sweep reads 100 rows "
+            "every 5 minutes, so with the 1,375 rows production parks on human "
+            "form waits, a full round trip already takes ~69 minutes whatever "
+            "this is set to. Below that it stops the sweep hot-looping on a "
+            "small in-flight set; it cannot make detection faster than the "
+            "backlog allows. Env: ``SCHEDULE_RUN_REINSPECT_AFTER_MINUTES``."
+        ),
     )
     schedule_minimum_interval_minutes: int = Field(
         default=15,

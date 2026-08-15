@@ -44,28 +44,25 @@ _TRACEMALLOC_SITES = 12
 
 
 def resident_bytes() -> int | None:
-    """Resident set size, or None where it cannot be read.
+    """Current resident set size, or None where it cannot be read.
 
-    ``/proc`` first because it is exact and cheap on the only platform that runs
-    this in production. ``resource`` is the fallback for local development on
-    macOS, where ``ru_maxrss`` is in bytes and is a high-water mark rather than a
-    current reading — good enough to keep the sampler working, not good enough to
-    alert on, which is why the floor logic never runs there in practice.
+    ``/proc/self/statm`` only. There used to be a ``resource.getrusage``
+    fallback for macOS, and it was worse than nothing: ``ru_maxrss`` is a
+    high-water *mark*, so it never decreases. Feeding a monotonic number to
+    logic whose entire job is to tell a floor that climbs from a peak that comes
+    back means every reading looks like growth — the sampler would report
+    ``degraded`` on any long dev session and never recover. A detector that
+    cannot be wrong is not a detector.
+
+    So the sampler simply does not run without a real current reading, which in
+    practice means it runs on Linux, which is where production is.
     """
     try:
         with open("/proc/self/statm", "rb") as handle:
             fields = handle.read().split()
         return int(fields[1]) * 4096  # resident pages
     except (OSError, IndexError, ValueError):
-        pass
-    try:
-        import resource
-
-        usage = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-    except Exception:  # pragma: no cover - platform without resource
         return None
-    # Linux reports KiB here, macOS bytes. Only reached on the latter.
-    return int(usage)
 
 
 class MemoryFloorTracker:

@@ -46,7 +46,28 @@ LOCAL_HTTP_ACCESS_LOGS_ENABLED=false
 # The source commit this image was built from. Required in production —
 # startup refuses to continue without it. See "Release identity" below.
 LEMMA_RELEASE_SHA=4f2c1a9e8b7d3f5a1c0e6b2d8a4f7c3e9b1d5a02
+# Serve /docs, /redoc, /scalar and /openapi.json. Off unless set. See
+# "API documentation" below.
+API_DOCS_ENABLED=false
 ```
+
+### API documentation
+
+`API_DOCS_ENABLED` gates `/openapi.json`, `/docs`, `/redoc` and `/scalar`
+together. It defaults to **off**, and it is a flag rather than something
+inferred from `ENVIRONMENT`, so **every** deployment that wants the docs has to
+say so — staging and preview environments included, not just production. A
+deployment that sets nothing serves nothing and returns 404.
+
+That is the deliberate direction to fail in. The alternative is inferring from
+`ENVIRONMENT`, where a deployment that forgets to set it, or sets a value the
+check does not recognise, starts publishing the shape of every endpoint to
+anyone who asks. Nothing in production reads these: both SDKs are generated at
+build time and the route inventory is a CI gate. Generating the document also
+costs ~3.35s of a cold start, measured in a production container.
+
+`make init` writes `API_DOCS_ENABLED=true` into the generated `.env`, so a local
+checkout has them without doing anything.
 
 ### Release identity
 

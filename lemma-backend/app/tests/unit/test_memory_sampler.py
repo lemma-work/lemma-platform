@@ -10,6 +10,9 @@ every document conversion or miss the leak entirely.
 
 from __future__ import annotations
 
+import inspect
+
+import anyio
 import pytest
 
 from app.core.observability.memory_sampler import MemoryFloorTracker, resident_bytes
@@ -109,6 +112,38 @@ def test_resident_bytes_reads_a_plausible_number() -> None:
 
     assert rss is not None
     assert rss > 8 * MIB, "a Python process with pytest loaded is bigger than this"
+
+
+def test_it_declines_to_run_rather_than_read_a_high_water_mark() -> None:
+    """No source at all beats a monotonic one.
+
+    `resource.getrusage().ru_maxrss` is available everywhere and looks like a
+    drop-in fallback for `/proc`. It is not: it is a high-water *mark*, so it
+    never goes down. The whole job here is distinguishing a floor that climbs
+    from a peak that comes back, and on a monotonic input every reading is a new
+    floor — the sampler would report `degraded` on any long-running process and
+    never recover. A detector that cannot be wrong is not a detector, so the
+    only reading it accepts is a real current one.
+    """
+    import app.core.observability.memory_sampler as sampler
+
+    source = inspect.getsource(sampler)
+
+    assert "getrusage" not in source.split('"""')[-1], (
+        "ru_maxrss must not be read outside the docstring explaining why not"
+    )
+
+
+@pytest.mark.anyio
+async def test_the_sampler_exits_when_there_is_no_reading(monkeypatch) -> None:
+    """It stops, rather than looping forever on `None`."""
+    import app.core.observability.memory_sampler as sampler
+
+    monkeypatch.setattr(sampler, "resident_bytes", lambda: None)
+
+    # Returns instead of hanging; the timeout is the assertion.
+    with anyio.fail_after(5):
+        await sampler.memory_sampler(service_name="lemma-api")
 
 
 # --- the MCP session-task probe ---------------------------------------------

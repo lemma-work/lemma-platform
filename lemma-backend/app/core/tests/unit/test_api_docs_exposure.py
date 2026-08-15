@@ -1,11 +1,20 @@
 """API documentation is opt-in, everywhere.
 
-`/openapi.json`, `/docs`, `/redoc` and `/scalar` are unauthenticated, so serving
-them publishes the shape of every endpoint to anyone who asks. Building the
-document also costs 3.35s, measured in a production container — the largest item
-in a cold start after the imports themselves — for something nothing in
-production reads: both SDKs are generated at build time and the route inventory
-is a CI gate.
+`/openapi.json`, `/docs` and `/redoc` are unauthenticated, so serving them
+publishes the shape of every endpoint to anyone who asks. Building the document
+also costs 3.35s, measured in a production container — the largest item in a
+cold start after the imports themselves — for something nothing in production
+reads: both SDKs are generated at build time and the route inventory is a CI
+gate.
+
+**Not-serving is the only control these three have**, which is the reason this
+is a flag rather than an auth dependency. FastAPI adds them itself as plain
+Starlette `Route` objects, and app-level `dependencies=[Depends(verify_auth)]`
+only reaches `APIRoute`s — verified in
+`test_generated_doc_routes_cannot_carry_app_level_auth` below. `/scalar` is the
+exception precisely because it is registered by hand and therefore *does* carry
+the app-level dependency; that inconsistency is why the flag has to turn off all
+four rather than leaning on auth for some of them.
 
 Deliberately a flag rather than an inference from `environment`. "production" is
 one value among four, and a deployment that forgets to set it, or sets something
@@ -75,6 +84,42 @@ def test_the_app_serves_them_when_asked(monkeypatch) -> None:
 
     assert app.openapi_url == "/openapi.json"
     assert "/scalar" in paths
+
+
+def test_generated_doc_routes_cannot_carry_app_level_auth(monkeypatch) -> None:
+    """The structural fact the flag exists for.
+
+    An obvious review question is "why not just put auth on them instead of
+    turning them off". This is why: FastAPI registers `/openapi.json`, `/docs`
+    and `/redoc` itself, as plain Starlette `Route`s. App-level
+    `dependencies=[...]` is applied by `APIRouter` when it builds an `APIRoute`,
+    so those three never receive it — there is no `dependant` to put it on. Only
+    `/scalar`, which this app registers by hand, carries it.
+
+    Pinned rather than assumed because it is exactly the kind of thing a FastAPI
+    upgrade could quietly change, in either direction, and either direction
+    changes what "off" has to mean.
+    """
+    from fastapi.routing import APIRoute
+
+    from app.core import config as config_module
+
+    monkeypatch.setattr(config_module.settings, "api_docs_enabled", True)
+
+    from app.app import create_app
+
+    app = create_app()
+    assert len(app.router.dependencies) == 1, "app-level auth dependency is present"
+
+    by_path = {getattr(route, "path", None): route for route in app.routes}
+    for path in ("/openapi.json", "/docs", "/redoc"):
+        route = by_path[path]
+        assert not isinstance(route, APIRoute)
+        assert getattr(route, "dependant", None) is None
+
+    scalar = by_path["/scalar"]
+    assert isinstance(scalar, APIRoute)
+    assert len(scalar.dependant.dependencies) == 1
 
 
 def test_the_dev_stack_opts_in() -> None:

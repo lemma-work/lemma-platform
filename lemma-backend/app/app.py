@@ -225,8 +225,23 @@ async def lifespan(app: FastAPI):
                     lifecycle_task.cancel()
                     try:
                         await lifecycle_task
-                    except BaseException:
+                    except asyncio.CancelledError:
+                        # The expected path: we just cancelled it. Swallowed
+                        # rather than re-raised because this is a `finally` and
+                        # every closer below still has to run.
                         pass
+                    except BaseException:
+                        # Anything else is the sampler failing on its own way
+                        # out. Still swallowed, for the same reason -- a broken
+                        # diagnostic must not take the shutdown with it -- but
+                        # not silently: a bare `pass` here is how a sampler that
+                        # has been dying at every shutdown for months goes
+                        # unnoticed.
+                        logger.warning(
+                            "runtime.lifecycle_task.shutdown_failed.degraded",
+                            task=getattr(lifecycle_task.get_coro(), "__name__", "?"),
+                            exc_info=True,
+                        )
             # Before the shared HTTP client closes below: the sink delivers
             # what it has buffered on the way out.
             from app.core.analytics.bootstrap import stop_analytics
