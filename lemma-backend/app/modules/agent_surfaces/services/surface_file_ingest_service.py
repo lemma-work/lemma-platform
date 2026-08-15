@@ -43,6 +43,14 @@ logger = get_logger(__name__)
 
 _AUDIO_CONTENT_TYPES = {"voice", "audio"}
 
+# Given a callable that wants a file service, run it in whatever transaction is
+# appropriate and return what it produced. Production opens a fresh one per
+# file; unit tests hand a fake service straight through.
+StoreInTransaction = Callable[
+    [Callable[[Any], Awaitable["IngestedAttachment | None"]]],
+    Awaitable["IngestedAttachment | None"],
+]
+
 
 @dataclass(slots=True)
 class IngestedAttachment:
@@ -118,30 +126,51 @@ class SurfaceFileIngestService:
         if adapter is None:
             return []
 
+        # Three phases, and the middle one is the reason for the shape: an
+        # attachment is up to 50 MB over a 60s-timeout HTTP call, once per file.
+        # Building the context and storing the bytes are the only parts that
+        # need a connection, so those are the only parts that have one.
         async with SessionUnitOfWorkFactory(async_session_maker)() as uow:
             auth_ctx = await create_authorization_data_service(uow).build_user_context(
                 user_id=user_id,
                 pod_id=pod_id,
             )
-            token = set_current_context(auth_ctx)
-            try:
-                file_service = build_file_service(uow)
-                saved = await self._ingest_all(
-                    adapter=adapter,
-                    pod_id=pod_id,
-                    platform=platform_key,
-                    parsed=parsed,
-                    credentials=credentials,
-                    file_service=file_service,
-                    ctx=auth_ctx,
-                    attachments=attachments,
-                    release=uow.commit,
-                )
-                if saved:
-                    await uow.commit()
-            finally:
-                reset_current_context(token)
+        token = set_current_context(auth_ctx)
+        try:
+            saved = await self._ingest_all(
+                adapter=adapter,
+                pod_id=pod_id,
+                platform=platform_key,
+                parsed=parsed,
+                credentials=credentials,
+                ctx=auth_ctx,
+                attachments=attachments,
+                store=self._store_in_own_transaction,
+            )
+        finally:
+            reset_current_context(token)
         return saved
+
+    @staticmethod
+    async def _store_in_own_transaction(
+        persist_ingested_attachment: Callable[
+            [Any], Awaitable[IngestedAttachment | None]
+        ],
+    ) -> IngestedAttachment | None:
+        """Run one file's write in a transaction of its own.
+
+        One per attachment rather than one for the batch, because the batch
+        version could not commit until the last download finished -- so the
+        first file's row locks were held across every remaining transfer. There
+        is no atomicity lost: the previous code committed between attachments
+        too (that was how it let the connection go), so a partial batch was
+        always a possible outcome.
+        """
+        async with SessionUnitOfWorkFactory(async_session_maker)() as uow:
+            result = await persist_ingested_attachment(build_file_service(uow))
+            if result is not None:
+                await uow.commit()
+            return result
 
     async def _ingest_all(
         self,
@@ -151,18 +180,19 @@ class SurfaceFileIngestService:
         platform: str,
         parsed: ParsedInboundSurfaceEvent,
         credentials: dict[str, Any],
-        file_service: Any,
         ctx: Any,
         attachments: list[dict[str, Any]],
-        release: Callable[[], Awaitable[None]] | None = None,
+        store: StoreInTransaction,
     ) -> list[IngestedAttachment]:
         """Core ingest loop — pure of DB/session setup so it is unit-testable
         with a fake adapter and file service.
 
-        ``release`` is how it stays that way while still not holding a pooled
-        connection across the downloads: production passes ``uow.commit``, a
-        unit test passes nothing. The loop knows it must let go before fetching
-        bytes; it does not need to know what it is letting go of.
+        ``store`` is what keeps it that way while still holding no pooled
+        connection across a download: it is handed a callable that wants a file
+        service and returns the saved attachment, and decides for itself what
+        transaction to run it in. Production opens one per file; a unit test
+        passes a fake service straight through. The loop knows the write needs
+        a boundary; it does not need to know what the boundary is.
         """
         directory = f"/me/{str(platform).lower()}"
         saved: list[IngestedAttachment] = []
@@ -173,11 +203,10 @@ class SurfaceFileIngestService:
                 platform=platform,
                 parsed=parsed,
                 credentials=credentials,
-                file_service=file_service,
                 ctx=ctx,
                 directory=directory,
                 attachment=attachment,
-                release=release,
+                store=store,
             )
             if result is not None:
                 saved.append(result)
@@ -191,11 +220,10 @@ class SurfaceFileIngestService:
         platform: str,
         parsed: ParsedInboundSurfaceEvent,
         credentials: dict[str, Any],
-        file_service: Any,
         ctx: Any,
         directory: str,
         attachment: dict[str, Any],
-        release: Callable[[], Awaitable[None]] | None = None,
+        store: StoreInTransaction,
     ) -> IngestedAttachment | None:
         declared_size = attachment.get("size")
         if (
@@ -204,13 +232,10 @@ class SurfaceFileIngestService:
         ):
             return None
 
-        # Let the connection go before fetching bytes. An attachment is capped
-        # at 50 MB over a 60s-timeout HTTP call, once per attachment, and the
-        # transaction wrapping this loop has already written rows — so holding
-        # it here pins a connection and its row locks for the whole download.
-        if release is not None:
-            await release()
-
+        # The download runs with no session open at all. It used to run inside
+        # one that committed first to hand the connection back -- correct, but
+        # only legible as a comment, and invisible to the static gate because
+        # the release arrived as a callback.
         try:
             downloaded = await adapter.download_attachment(
                 credentials=credentials,
@@ -254,7 +279,9 @@ class SurfaceFileIngestService:
             )
             return None
 
-        try:
+        content_type = attachment.get("content_type")
+
+        async def _persist(file_service: Any) -> IngestedAttachment | None:
             entity = await file_service.create_file(
                 pod_id=pod_id,
                 name=_safe_file_name(name),
@@ -263,6 +290,21 @@ class SurfaceFileIngestService:
                 directory_path=directory,
                 search_enabled=True,
             )
+            result = IngestedAttachment(
+                path=entity.path,
+                name=entity.name,
+                mime=mime,
+                content_type=str(content_type) if content_type else None,
+            )
+            # Carry audio bytes for in-ingress transcription when small enough;
+            # larger audio is still saved (the agent can `listen` to it) but not
+            # transcribed.
+            if result.is_audio and len(content) <= INBOUND_VOICE_TRANSCRIBE_BYTE_CAP:
+                result.audio_bytes = content
+            return result
+
+        try:
+            return await store(_persist)
         except Exception:
             logger.warning(
                 "agent_surfaces.file_ingest.attachment_store_failed.degraded",
@@ -270,16 +312,3 @@ class SurfaceFileIngestService:
                 exc_info=True,
             )
             return None
-
-        content_type = attachment.get("content_type")
-        result = IngestedAttachment(
-            path=entity.path,
-            name=entity.name,
-            mime=mime,
-            content_type=str(content_type) if content_type else None,
-        )
-        # Carry audio bytes for in-ingress transcription when small enough; larger
-        # audio is still saved (the agent can `listen` to it) but not transcribed.
-        if result.is_audio and len(content) <= INBOUND_VOICE_TRANSCRIBE_BYTE_CAP:
-            result.audio_bytes = content
-        return result
