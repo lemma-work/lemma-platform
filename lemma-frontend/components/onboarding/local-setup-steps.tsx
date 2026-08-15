@@ -36,7 +36,9 @@ import {
     TerminalSquare,
 } from "@/components/ui/icons";
 import { HarnessProfileDialog, type HarnessDialogTarget } from "@/components/agents/harness-profile-dialog";
+import { selectWorkspaceTarget } from "@/components/agents/this-computer-status";
 import { useAutoConnectThisComputer } from "@/lib/desktop/auto-connect";
+import { getLemmaApiBaseUrl } from "@/lib/sdk/lemma-client";
 import {
     configureAiProvider,
     useDesktopBridge,
@@ -182,8 +184,11 @@ export function LocalIntelligenceStep({
     const hasBridge = useDesktopBridge();
     // Connects itself. Nobody is asked to press anything for a machine that is
     // already this workspace's own computer.
-    const status = useAutoConnectThisComputer();
-    const hostId = status?.targets[0]?.host_id ?? null;
+    const { status } = useAutoConnectThisComputer();
+    // This workspace's pairing, not the first one on the machine. `targets[0]`
+    // is whichever pairing happens to sort first, so a Mac already paired to
+    // another workspace showed that host's agents on this one's setup screen.
+    const hostId = selectWorkspaceTarget(status?.targets ?? [], getLemmaApiBaseUrl())?.host_id ?? null;
     const harnesses = useAgentHostHarnesses(hostId);
     // A host publishes nothing until it has found its first agent, so an
     // empty list right after pairing means "still probing", not "none

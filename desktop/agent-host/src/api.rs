@@ -3,15 +3,23 @@
 use reqwest::{Client, Method, StatusCode};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
+use serde_json::Value;
 use url::Url;
 use uuid::Uuid;
 
 use crate::config::TargetConfig;
 use crate::protocol::{
     CommandRejection, EventAck, EventBatch, HarnessPublishRequest, HarnessSnapshot, HostCapacity,
-    HostHello, PairingCompleteRequest, PairingCompleteResponse, PollRequest, PollResponse,
-    RunCheckpoint,
+    HostHello, POLL_HOLD, PairingCompleteRequest, PairingCompleteResponse, PollRequest,
+    PollResponse, RunCheckpoint,
 };
+
+/// How much longer than `POLL_HOLD` a request may take before it is a failure.
+///
+/// The poll is answered at the end of the hold, so the timeout has to clear it
+/// with room for the round trip and a slow network. Anything less turns every
+/// idle poll into a client-side timeout.
+const POLL_MARGIN: std::time::Duration = std::time::Duration::from_secs(10);
 
 #[derive(Clone, Debug, serde::Deserialize)]
 pub struct PublishedHarness {
@@ -57,6 +65,38 @@ impl ApiError {
         )
     }
 
+    /// Whether Lemma no longer knows this pairing.
+    ///
+    /// A revoked host is refused exactly like an unknown one — deliberately, so
+    /// a stolen credential learns nothing — and both answer 401 with
+    /// `AGENT_HOST_REVOKED_OR_MISSING`. `HostStatus::Revoked` exists in the
+    /// protocol for this and is never reachable on the poll path, because
+    /// authentication fails before a body is ever composed.
+    ///
+    /// Read the name literally: the backend raises this for `host is None` *or*
+    /// `revoked_at is not None`, and does not say which. Revoked never becomes
+    /// valid again; missing might — a host pointed at the wrong backend, a
+    /// database restored behind its writes, a workspace rebuilt — so this alone
+    /// is not grounds for dropping the pairing. `runtime.rs` waits for the
+    /// refusal to repeat before acting on it.
+    ///
+    /// The code is read out of the parsed body rather than searched for in the
+    /// raw text, so a message that merely quotes it cannot be mistaken for one.
+    #[must_use]
+    pub fn is_revoked_or_missing(&self) -> bool {
+        let Self::Status {
+            status: StatusCode::UNAUTHORIZED,
+            body,
+        } = self
+        else {
+            return false;
+        };
+        serde_json::from_str::<Value>(body)
+            .ok()
+            .and_then(|body| body.get("detail")?.get("code")?.as_str().map(str::to_owned))
+            .is_some_and(|code| code == "AGENT_HOST_REVOKED_OR_MISSING")
+    }
+
     /// Whether Lemma rejected this request on its own merits rather than
     /// because the host cannot reach or authenticate with the target.
     ///
@@ -89,7 +129,9 @@ impl TargetClient {
     pub fn new(target: TargetConfig, installation_id: impl Into<String>) -> anyhow::Result<Self> {
         let http = Client::builder()
             .connect_timeout(std::time::Duration::from_secs(10))
-            .timeout(std::time::Duration::from_secs(35))
+            // Derived, not chosen. This client's slowest request by far is the
+            // poll, which Lemma answers only at the end of the hold.
+            .timeout(POLL_HOLD + POLL_MARGIN)
             .user_agent(format!("lemma-agent-host/{}", crate::HOST_RELEASE))
             .build()?;
         Ok(Self {
@@ -275,6 +317,56 @@ async fn status_error(response: reqwest::Response) -> ApiError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_forgotten_pairing_is_distinguished_from_any_other_rejection() {
+        // Both are 401 and the backend makes them deliberately identical to a
+        // caller holding a bad secret. Only the code tells them apart.
+        let forgotten = ApiError::Status {
+            status: StatusCode::UNAUTHORIZED,
+            body: r#"{"detail":{"code":"AGENT_HOST_REVOKED_OR_MISSING","message":"Agent Host is unavailable"}}"#
+                .to_owned(),
+        };
+        assert!(forgotten.is_revoked_or_missing());
+        assert!(forgotten.is_unauthorized());
+
+        let malformed = ApiError::Status {
+            status: StatusCode::UNAUTHORIZED,
+            body: r#"{"detail":{"code":"INVALID_AGENT_HOST_CREDENTIAL"}}"#.to_owned(),
+        };
+        assert!(
+            !malformed.is_revoked_or_missing(),
+            "a malformed credential may become valid again and must keep retrying"
+        );
+        assert!(malformed.is_unauthorized());
+
+        // And a 403 carrying the same words is not one.
+        let forbidden = ApiError::Status {
+            status: StatusCode::FORBIDDEN,
+            body: r#"{"detail":{"code":"AGENT_HOST_REVOKED_OR_MISSING"}}"#.to_owned(),
+        };
+        assert!(!forbidden.is_revoked_or_missing());
+    }
+
+    #[test]
+    fn the_code_is_read_from_the_body_not_searched_for_in_it() {
+        // Dropping a pairing is destructive, so the trigger for it must be the
+        // backend saying so in the field that means it -- not the string turning
+        // up somewhere in a proxy's error page or quoted inside a message.
+        let quoted = ApiError::Status {
+            status: StatusCode::UNAUTHORIZED,
+            body: r#"{"detail":{"code":"INVALID_AGENT_HOST_CREDENTIAL",
+                     "message":"not AGENT_HOST_REVOKED_OR_MISSING"}}"#
+                .to_owned(),
+        };
+        assert!(!quoted.is_revoked_or_missing());
+
+        let unparseable = ApiError::Status {
+            status: StatusCode::UNAUTHORIZED,
+            body: "<html>AGENT_HOST_REVOKED_OR_MISSING</html>".to_owned(),
+        };
+        assert!(!unparseable.is_revoked_or_missing());
+    }
 
     #[test]
     fn endpoint_preserves_api_prefix() {
