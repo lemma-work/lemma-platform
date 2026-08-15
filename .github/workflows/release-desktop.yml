@@ -299,6 +299,16 @@ jobs:
       - name: Upload online DMG to release
         uses: softprops/action-gh-release@v2
         with:
+          # Name the tag rather than letting the action infer it. On
+          # `release: published` it reads the tag off the event payload, but on
+          # `workflow_dispatch` there is no release in the payload and it falls
+          # back to `github.ref` — `refs/heads/main` for a dispatch, which is
+          # not a tag, so the upload failed with "GitHub Releases requires a
+          # tag" *after* the DMG had been built, signed, notarized and
+          # verified. Dispatch is how a release is repaired when the publish
+          # event does not fire (a release created by GITHUB_TOKEN does not
+          # trigger workflows), so that path has to be able to attach.
+          tag_name: v${{ steps.version.outputs.version }}
           files: desktop/target/release/release-artifacts/Lemma_*_aarch64-*.dmg
 
       - name: Remove temporary signing keychain
@@ -311,6 +321,16 @@ jobs:
     # official release build for a tag that has no version in it.
     if: startsWith(github.event.release.tag_name || format('v{0}', inputs.version), 'v')
     runs-on: windows-latest
+    # Same posture as release-local-images.yml: this installer is built and kept
+    # for whoever is testing it and is never attached to a release, so a missing
+    # certificate must not fail the run. Signing happens when the secrets exist
+    # and is skipped, loudly, when they do not. `secrets` cannot be read from a
+    # step `if`, so availability resolves once here.
+    env:
+      WINDOWS_SIGNING_AVAILABLE: >-
+        ${{ secrets.WINDOWS_CERTIFICATE != ''
+        && secrets.WINDOWS_CERTIFICATE_PASSWORD != ''
+        && secrets.WINDOWS_TIMESTAMP_URL != '' }}
 
     steps:
       - name: Checkout
@@ -393,7 +413,18 @@ jobs:
         with:
           targets: x86_64-pc-windows-msvc
 
+      - name: Report unsigned Windows build
+        if: env.WINDOWS_SIGNING_AVAILABLE != 'true'
+        shell: bash
+        run: |
+          echo "::warning title=Windows Desktop build is unsigned::\
+          WINDOWS_CERTIFICATE, WINDOWS_CERTIFICATE_PASSWORD and \
+          WINDOWS_TIMESTAMP_URL are not all configured. This installer is \
+          built unsigned and is not attached to the release. macOS is \
+          unaffected."
+
       - name: Import Windows code-signing certificate
+        if: env.WINDOWS_SIGNING_AVAILABLE == 'true'
         id: windows-signing
         uses: ./.github/actions/setup-windows-signing
         with:
@@ -402,6 +433,7 @@ jobs:
           timestamp-url: ${{ secrets.WINDOWS_TIMESTAMP_URL }}
 
       - name: Configure Tauri Authenticode signing
+        if: env.WINDOWS_SIGNING_AVAILABLE == 'true'
         shell: python
         env:
           CERTIFICATE_THUMBPRINT: ${{ steps.windows-signing.outputs.thumbprint }}
@@ -483,6 +515,7 @@ jobs:
         run: desktop/scripts/build-sidecar.ps1
 
       - name: Sign native runtime bridge
+        if: env.WINDOWS_SIGNING_AVAILABLE == 'true'
         shell: pwsh
         env:
           CERTIFICATE_THUMBPRINT: ${{ steps.windows-signing.outputs.thumbprint }}
@@ -527,6 +560,7 @@ jobs:
             "target/release/release-artifacts/Lemma_${env:VERSION}_x64-online-setup.exe"
 
       - name: Verify Authenticode signatures
+        if: env.WINDOWS_SIGNING_AVAILABLE == 'true'
         shell: pwsh
         run: |
           $paths = @(
