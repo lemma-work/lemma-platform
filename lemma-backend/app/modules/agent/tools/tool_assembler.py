@@ -15,6 +15,7 @@ from app.modules.agent.tools.registry import (
     POD_DEFAULT_AGENT_TOOLSETS,
     resolve_agent_toolsets,
 )
+from app.modules.agent.services.run_phase_spans import run_phase
 
 
 class RunToolAssembler:
@@ -29,6 +30,22 @@ class RunToolAssembler:
         agent: Agent | None,
         conversation: Conversation | None,
         include_final_answer: bool = False,
+    ) -> list[object]:
+        with run_phase("tool_assembly") as span:
+            toolsets = await self._assemble(
+                agent=agent,
+                conversation=conversation,
+                include_final_answer=include_final_answer,
+            )
+            span.set_attribute("lemma.toolsets", len(toolsets))
+            return toolsets
+
+    async def _assemble(
+        self,
+        *,
+        agent: Agent | None,
+        conversation: Conversation | None,
+        include_final_answer: bool,
     ) -> list[object]:
         # The pod default assistant (no specific agent) gets the fixed default
         # toolset. User-created agents get their configured toolsets plus narrow

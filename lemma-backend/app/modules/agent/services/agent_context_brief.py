@@ -29,6 +29,7 @@ from app.modules.agent.infrastructure.context_brief_repository import (
     AgentContextBriefRepository,
 )
 from app.modules.agent.infrastructure.repositories import AgentRepository
+from app.modules.agent.services.run_phase_spans import run_phase
 from app.composition.agent_datastore import (
     build_file_service,
     build_table_service,
@@ -113,11 +114,25 @@ class AgentContextBriefBuilder:
         user_id: UUID,
         pod_id: UUID,
     ) -> str:
-        key: _BriefKey = (agent.id, conversation.id, pod_id, user_id)
-        cached = await _get_cached_brief(key)
-        if cached is not None:
-            return cached
+        with run_phase("context_brief") as span:
+            key: _BriefKey = (agent.id, conversation.id, pod_id, user_id)
+            cached = await _get_cached_brief(key)
+            span.set_attribute("lemma.cache_hit", cached is not None)
+            if cached is not None:
+                return cached
+            return await self._build_uncached(
+                key, agent=agent, conversation=conversation, user_id=user_id, pod_id=pod_id
+            )
 
+    async def _build_uncached(
+        self,
+        key: _BriefKey,
+        *,
+        agent: Agent,
+        conversation: Conversation,
+        user_id: UUID,
+        pod_id: UUID,
+    ) -> str:
         # uow 1: plain identity reads (no authorization context needed).
         async with self.uow_factory() as uow:
             repo = AgentContextBriefRepository(uow)

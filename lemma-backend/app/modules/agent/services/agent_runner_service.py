@@ -75,6 +75,7 @@ from app.modules.agent.services.realtime import (
 )
 from app.modules.agent.services.agent_context_brief import AgentContextBriefBuilder
 from app.modules.agent.services.run_message_writer import RunMessageWriter
+from app.modules.agent.services.run_phase_spans import observe_first_output, record_history_size, run_phase
 from app.modules.agent.services.run_observer_delivery import notify_run_failed
 from app.modules.agent.services.run_usage_recorder import RunUsageRecorder
 from app.composition.agent_usage import (
@@ -429,13 +430,15 @@ class AgentRunnerService:
                             source_id=str(agent_run_id),
                         )
                         with usage_execution_context(run_usage_context):
-                            async for event in harness.run(
-                                agent=harness_agent,
-                                conversation=conversation,
-                                messages=messages,
-                                ctx=ctx,
-                                options=options,
-                                agent_run_id=agent_run_id,
+                            async for event in observe_first_output(
+                                harness.run(
+                                    agent=harness_agent,
+                                    conversation=conversation,
+                                    messages=messages,
+                                    ctx=ctx,
+                                    options=options,
+                                    agent_run_id=agent_run_id,
+                                )
                             ):
                                 if terminal_event_seen:
                                     continue
@@ -572,18 +575,19 @@ class AgentRunnerService:
         user_id: UUID,
         organization_id: UUID | None,
     ) -> ResolvedAgentRuntime:
-        async with self.uow_factory() as uow:
-            service = AgentRuntimeProfileService(
-                AgentRuntimeProfileRepository(
-                    uow,
-                    encryption=get_secret_cipher(),
+        with run_phase("resolve_runtime"):
+            async with self.uow_factory() as uow:
+                service = AgentRuntimeProfileService(
+                    AgentRuntimeProfileRepository(
+                        uow,
+                        encryption=get_secret_cipher(),
+                    )
                 )
-            )
-            return await service.resolve(
-                runtime=agent_runtime,
-                organization_id=organization_id,
-                user_id=user_id,
-            )
+                return await service.resolve(
+                    runtime=agent_runtime,
+                    organization_id=organization_id,
+                    user_id=user_id,
+                )
 
     def _agent_with_resolved_runtime_metadata(
         self,
@@ -641,24 +645,26 @@ class AgentRunnerService:
         pod_id: UUID,
         agent_name: str | None,
     ) -> tuple[Conversation, Agent, AgentRun, list[Message]]:
-        async with self.uow_factory() as uow:
-            repo = ConversationRepository(uow)
-            runs = await repo.list_agent_runs_with_messages_by_run_id(agent_run_id)
-            agent_run = self._find_agent_run(runs, agent_run_id)
-            conversation = await repo.get_conversation(agent_run.conversation_id)
-            self._validate_conversation_access(
-                conversation,
-                user_id=user_id,
-                pod_id=pod_id,
-            )
-            agent = await self._resolve_agent(
-                uow=uow,
-                conversation=conversation,
-                user_id=user_id,
-                agent_name=agent_name,
-            )
-            messages = self._select_runtime_history(runs, conversation)
-            return conversation, agent, agent_run, messages
+        with run_phase("load_context") as span:
+            async with self.uow_factory() as uow:
+                repo = ConversationRepository(uow)
+                runs = await repo.list_agent_runs_with_messages_by_run_id(agent_run_id)
+                agent_run = self._find_agent_run(runs, agent_run_id)
+                conversation = await repo.get_conversation(agent_run.conversation_id)
+                self._validate_conversation_access(
+                    conversation,
+                    user_id=user_id,
+                    pod_id=pod_id,
+                )
+                agent = await self._resolve_agent(
+                    uow=uow,
+                    conversation=conversation,
+                    user_id=user_id,
+                    agent_name=agent_name,
+                )
+                messages = self._select_runtime_history(runs, conversation)
+                record_history_size(span, runs=runs, sent=messages)
+                return conversation, agent, agent_run, messages
 
     async def _handle_harness_event(
         self,
@@ -1124,6 +1130,7 @@ class AgentRunnerService:
         agent: Agent,
         user_id: UUID,
     ) -> dict[str, UUID]:
-        return await AgentCallableToolFactory(
-            self.uow_factory
-        ).resolve_configured_accounts(agent=agent, user_id=user_id)
+        with run_phase("configured_accounts"):
+            return await AgentCallableToolFactory(
+                self.uow_factory
+            ).resolve_configured_accounts(agent=agent, user_id=user_id)
