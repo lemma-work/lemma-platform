@@ -202,7 +202,10 @@ async def _datastore_outbox_dispatcher(context):
         return
     await ensure_datastore_event_outbox()
     async with outbox_dispatcher_lifespan(
-        get_datastore_session_maker(), get_message_bus()
+        get_datastore_session_maker(),
+        get_message_bus(),
+        database_url=datastore_url,
+        label="datastore",
     ):
         yield
 
