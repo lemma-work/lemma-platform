@@ -734,6 +734,47 @@ async def test_create_agent_host_profile_binds_harness_and_advertises_its_models
     assert profile.config.harness_snapshot_revision == "rev-1"
     assert profile.config.config_selections == {"reasoning": "high"}
     assert profile.metadata == {"source": "AGENT_HOST", "harness_key": "opencode"}
+    # Saying nothing about scope is not consent to share a laptop.
+    assert profile.scope is RuntimeProfileScope.PERSONAL
+
+
+@pytest.mark.asyncio
+async def test_an_unstated_harness_scope_never_shares_the_machine():
+    # A harness profile points at a coding agent on one person's computer,
+    # holding their credentials and seeing their files, and dispatch sends the
+    # run there whoever picked the model. ORGANIZATION used to be the default at
+    # every layer — the dialog, the request schema and this service — so a
+    # caller that omitted the field handed their machine to the workspace. The
+    # pairing click that used to sit in front of that is now automatic, which
+    # removed the last step anyone had to look at.
+    #
+    # Providers keep the organization default on purpose: an API key belongs to
+    # the organization that paid for it. The asymmetry is the point.
+    org_id = uuid4()
+    user_id = uuid4()
+    host_repo, harness_id = _ready_agent_host(
+        user_id=user_id, organization_id=org_id, config_options=[]
+    )
+    service = AgentRuntimeProfileService(
+        _ProfileRepository([]), host_repository=host_repo
+    )
+
+    profile = await service.create_agent_host_profile(
+        organization_id=org_id,
+        user_id=user_id,
+        harness_id=harness_id,
+        name="Claude Code",
+    )
+    assert profile.scope is RuntimeProfileScope.PERSONAL
+
+    shared = await service.create_agent_host_profile(
+        organization_id=org_id,
+        user_id=user_id,
+        harness_id=harness_id,
+        name="Claude Code for everyone",
+        scope=RuntimeProfileScope.ORGANIZATION,
+    )
+    assert shared.scope is RuntimeProfileScope.ORGANIZATION
 
 
 @pytest.mark.asyncio
@@ -1355,7 +1396,9 @@ async def test_a_pinned_model_the_provider_dropped_falls_back_instead_of_failing
     assert updated.default_model_name == "model-c"
 
 
-async def _harness_profile(*, organization_id, user_id, config_options):
+async def _harness_profile(
+    *, organization_id, user_id, config_options, scope=RuntimeProfileScope.PERSONAL
+):
     host_repository, harness_id = _ready_agent_host(
         user_id=user_id,
         organization_id=organization_id,
@@ -1370,6 +1413,7 @@ async def _harness_profile(*, organization_id, user_id, config_options):
         user_id=user_id,
         harness_id=harness_id,
         name="Codex",
+        scope=scope,
     )
     return service, repository, host_repository, harness_id, profile
 
@@ -1455,7 +1499,11 @@ async def test_an_org_admin_can_edit_a_shared_harness_profile_they_do_not_own():
         }
     ]
     service, _repo, _hosts, _harness_id, profile = await _harness_profile(
-        organization_id=organization_id, user_id=owner_id, config_options=options
+        organization_id=organization_id,
+        user_id=owner_id,
+        config_options=options,
+        # Explicit, because sharing is no longer what you get by not asking.
+        scope=RuntimeProfileScope.ORGANIZATION,
     )
 
     updated = await AgentRuntimeProfileEditor(service).update_agent_host_profile(

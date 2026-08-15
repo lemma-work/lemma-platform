@@ -4290,7 +4290,7 @@
           },
           "scope": {
             "$ref": "#/components/schemas/RuntimeProfileScope",
-            "default": "ORGANIZATION"
+            "default": "PERSONAL"
           },
           "source": {
             "const": "AGENT_HOST",
