@@ -15,37 +15,45 @@ from zipfile import ZIP_DEFLATED, ZipFile
 # lemma-pod-bundle package so the backend can consume the same format. The
 # names are re-bound here — including the underscore-private ones — so every
 # existing `lemma_cli.cli_app.pod_bundle.<name>` reference keeps working.
+#
+# The `X as X` spellings are the explicit re-export form: those names exist for
+# importers of this module and are not used in the body, so without it they read
+# as dead imports and `make lint` fails on the whole file.
 from lemma_pod_bundle.diff import (
-    TableDiff,
-    _is_system_table_column,
-    _normalize_column_for_diff,
+    TableDiff as TableDiff,
+    _is_system_table_column as _is_system_table_column,
+    _normalize_column_for_diff as _normalize_column_for_diff,
     _order_table_dirs_by_dependency,
-    _table_fk_dependencies,
+    _table_fk_dependencies as _table_fk_dependencies,
     diff_table_columns,
 )
-from lemma_pod_bundle.jsonc import _strip_trailing_commas, loads_jsonc, strip_jsonc
+from lemma_pod_bundle.jsonc import (
+    _strip_trailing_commas as _strip_trailing_commas,
+    loads_jsonc as loads_jsonc,
+    strip_jsonc as strip_jsonc,
+)
 from lemma_pod_bundle.layout import (
-    APP_MANIFEST_ALIAS,
+    APP_MANIFEST_ALIAS as APP_MANIFEST_ALIAS,
     EXPORTABLE_RESOURCE_DIRS,
     FILES_MANIFEST,
-    FORMAT_VERSION,
-    JSON_FILE_REF_KEY,
+    FORMAT_VERSION as FORMAT_VERSION,
+    JSON_FILE_REF_KEY as JSON_FILE_REF_KEY,
     POD_MEMBER_TOKEN,
     RAW_FILE_REF_KEY,
-    RESOURCE_DIR_ALIASES,
+    RESOURCE_DIR_ALIASES as RESOURCE_DIR_ALIASES,
     RESOURCE_DIRS,
-    SYSTEM_TABLE_COLUMNS,
+    SYSTEM_TABLE_COLUMNS as SYSTEM_TABLE_COLUMNS,
     TABLE_DATA_FILE,
     _TABLE_DATA_CANDIDATES,
     _bundle_folder_keys,
     _file_path_key,
-    _json_dump,
+    _json_dump as _json_dump,
     _looks_like_single_resource_dir,
-    _parse_function_headers,
+    _parse_function_headers as _parse_function_headers,
     _read_export_contents,
     _read_json,
     _record_export_contents,
-    _resolve_file_refs,
+    _resolve_file_refs as _resolve_file_refs,
     _resource_manifest_path,
     _sanitize_resource_name,
     _write_json,
@@ -62,7 +70,7 @@ from lemma_pod_bundle.normalize import (
     _normalize_app_payload,
     _normalize_function_payload,
     _normalize_pod_payload,
-    _normalize_resource_permissions_payload,
+    _normalize_resource_permissions_payload as _normalize_resource_permissions_payload,
     _normalize_schedule_payload,
     _normalize_surface_payload,
     _normalize_table_payload,
@@ -76,14 +84,14 @@ from lemma_pod_bundle.normalize import (
     _validate_function_payload,
 )
 from lemma_pod_bundle.portability import (
-    _ACCOUNT_REF_FIELDS,
-    _MEMBER_REF_FIELDS,
+    _ACCOUNT_REF_FIELDS as _ACCOUNT_REF_FIELDS,
+    _MEMBER_REF_FIELDS as _MEMBER_REF_FIELDS,
     _PLACEHOLDER_RE,
     _extract_portable_variables,
     _placeholder,
-    _slug_var_name,
+    _slug_var_name as _slug_var_name,
     _strip_unresolved_placeholders,
-    _tokenize_ref_fields,
+    _tokenize_ref_fields as _tokenize_ref_fields,
     GRANT_METADATA_KEYS,
     require_account_variable_metadata,
 )
