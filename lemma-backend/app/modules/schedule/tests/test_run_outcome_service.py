@@ -4,7 +4,10 @@ from uuid import uuid4
 
 import pytest
 
-from app.modules.schedule.domain.events.schedule import ScheduleDeactivated
+from app.modules.schedule.domain.events.schedule import (
+    ScheduleDeactivated,
+    ScheduleRunCompleted,
+)
 from app.modules.schedule.domain.schedule import (
     ScheduleEntity,
     ScheduleRunStatus,
@@ -125,7 +128,16 @@ async def test_success_and_cancellation_reset_the_failure_streak(status):
     service.schedule_repository.set_consecutive_failures.assert_awaited_once_with(
         schedule.id, 0
     )
-    uow.collect_events.assert_not_called()
+    # A healthy outcome must not trip the breaker. It does now record the run's
+    # completion, so this asserts the absence of the deactivation specifically
+    # rather than the absence of every event.
+    collected = [
+        event
+        for call in uow.collect_events.call_args_list
+        for event in call.args[0]
+    ]
+    assert not [e for e in collected if isinstance(e, ScheduleDeactivated)]
+    assert [e for e in collected if isinstance(e, ScheduleRunCompleted)]
 
 
 @pytest.mark.anyio

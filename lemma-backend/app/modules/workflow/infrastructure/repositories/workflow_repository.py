@@ -15,6 +15,7 @@ from app.core.authorization.sql_actions import (
 )
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.workflow.domain.workflow import WorkflowEntity, WorkflowSummaryEntity, WorkflowMode
+from app.modules.workflow.domain.events import WorkflowCreatedEvent
 from app.modules.workflow.domain.graph import WorkflowEdge
 from app.modules.workflow.domain.nodes import WORKFLOW_NODE_ADAPTER
 from app.modules.workflow.domain.ports import WorkflowRepository
@@ -23,6 +24,7 @@ from app.modules.workflow.infrastructure.models import WorkflowModel
 
 class SqlAlchemyWorkflowRepository(WorkflowRepository):
     def __init__(self, uow: SqlAlchemyUnitOfWork):
+        self.uow = uow
         self.session: AsyncSession = uow.session
 
     def _to_entity(
@@ -79,6 +81,16 @@ class SqlAlchemyWorkflowRepository(WorkflowRepository):
         self.session.add(model)
         await self.session.flush()
         flow.id = model.id
+        self.uow.collect_events(
+            [
+                WorkflowCreatedEvent(
+                    workflow_id=model.id,
+                    pod_id=model.pod_id,
+                    user_id=getattr(model, "user_id", None),
+                    node_count=len(flow.nodes or ()),
+                )
+            ]
+        )
         return self._to_entity(model)
 
     async def get(self, flow_id: UUID, ctx: Context | None = None) -> Optional[WorkflowEntity]:

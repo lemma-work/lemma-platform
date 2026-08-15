@@ -9135,7 +9135,7 @@ var LemmaClient = (() => {
     return {};
   }
   function resolveConfig(overrides = {}) {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m;
     const win = windowConfig();
     const apiUrl = (_c = (_b = (_a = overrides.apiUrl) != null ? _a : win.apiUrl) != null ? _b : fromEnv("API_URL")) != null ? _c : "https://api.lemma.work";
     const authUrl = (_f = (_e = (_d = overrides.authUrl) != null ? _d : win.authUrl) != null ? _e : fromEnv("AUTH_URL")) != null ? _f : "https://lemma.work/auth";
@@ -9146,7 +9146,9 @@ var LemmaClient = (() => {
       podId,
       app: (_i = overrides.app) != null ? _i : win.app,
       timeoutMs: (_j = overrides.timeoutMs) != null ? _j : win.timeoutMs,
-      maxRetries: (_k = overrides.maxRetries) != null ? _k : win.maxRetries
+      maxRetries: (_k = overrides.maxRetries) != null ? _k : win.maxRetries,
+      client: (_l = overrides.client) != null ? _l : win.client,
+      appId: (_m = overrides.appId) != null ? _m : win.appId
     };
   }
 
@@ -9837,7 +9839,19 @@ var LemmaClient = (() => {
   // src/version.ts
   var SDK_VERSION = "0.7.0";
   var CLIENT_HEADER_NAME = "X-Lemma-Client";
-  var CLIENT_HEADER_VALUE = `lemma-sdk-ts/${SDK_VERSION}`;
+  var APP_HEADER_NAME = "X-Lemma-App";
+  var KNOWN_CLIENTS = [
+    "lemma-sdk-ts",
+    "lemma-web",
+    "lemma-desktop",
+    "lemma-app",
+    "lemma-cli"
+  ];
+  var DEFAULT_CLIENT = "lemma-sdk-ts";
+  function clientHeaderValue(client = DEFAULT_CLIENT) {
+    const named = KNOWN_CLIENTS.includes(client) ? client : DEFAULT_CLIENT;
+    return `${named}/${SDK_VERSION}`;
+  }
   function shouldSendClientHeader(apiUrl, method) {
     const normalizedMethod = method.toUpperCase();
     if (normalizedMethod !== "GET" && normalizedMethod !== "HEAD") {
@@ -9934,9 +9948,13 @@ var LemmaClient = (() => {
       __publicField(this, "auth", auth);
       __publicField(this, "timeoutMs");
       __publicField(this, "maxRetries");
+      __publicField(this, "clientHeader");
+      __publicField(this, "appId");
       var _a, _b;
       this.timeoutMs = (_a = options.timeoutMs) != null ? _a : DEFAULT_TIMEOUT_MS;
       this.maxRetries = (_b = options.maxRetries) != null ? _b : DEFAULT_MAX_RETRIES;
+      this.clientHeader = clientHeaderValue(options.client);
+      this.appId = options.appId;
     }
     getBaseUrl() {
       return this.apiUrl;
@@ -10039,7 +10057,10 @@ var LemmaClient = (() => {
         signal: options.signal
       };
       const withAuth = this.auth.getRequestInit(initBase);
-      const withClient = shouldSendClientHeader(this.apiUrl, method) ? this.mergeHeaders(withAuth, { [CLIENT_HEADER_NAME]: CLIENT_HEADER_VALUE }) : withAuth;
+      const withClient = shouldSendClientHeader(this.apiUrl, method) ? this.mergeHeaders(withAuth, {
+        [CLIENT_HEADER_NAME]: this.clientHeader,
+        ...this.appId ? { [APP_HEADER_NAME]: this.appId } : {}
+      }) : withAuth;
       return this.mergeHeaders(withClient, options.headers);
     }
     async request(method, path, options = {}) {
@@ -10280,9 +10301,11 @@ var LemmaClient = (() => {
       __publicField(this, "auth", auth);
       __publicField(this, "maxRetries");
       __publicField(this, "timeoutMs");
+      __publicField(this, "clientHeader");
       var _a, _b;
       this.maxRetries = (_a = options.maxRetries) != null ? _a : DEFAULT_MAX_RETRIES2;
       this.timeoutMs = (_b = options.timeoutMs) != null ? _b : DEFAULT_TIMEOUT_MS2;
+      this.clientHeader = clientHeaderValue(options.client);
     }
     configure() {
       var _a;
@@ -10292,7 +10315,7 @@ var LemmaClient = (() => {
       OpenAPI.TOKEN = (_a = this.auth.getBearerToken()) != null ? _a : void 0;
       OpenAPI.HEADERS = async (options) => {
         if (shouldSendClientHeader(this.apiUrl, options.method)) {
-          return { [CLIENT_HEADER_NAME]: CLIENT_HEADER_VALUE };
+          return { [CLIENT_HEADER_NAME]: this.clientHeader };
         }
         return {};
       };
@@ -16903,11 +16926,14 @@ var LemmaClient = (() => {
       this.auth = (_a = internalOptions.authManager) != null ? _a : new AuthManager(this._config.apiUrl, this._config.authUrl);
       this._http = new HttpClient(this._config.apiUrl, this.auth, {
         timeoutMs: this._config.timeoutMs,
-        maxRetries: this._config.maxRetries
+        maxRetries: this._config.maxRetries,
+        client: this._config.client,
+        appId: this._config.appId
       });
       this._generated = new GeneratedClientAdapter(this._config.apiUrl, this.auth, {
         maxRetries: this._config.maxRetries,
-        timeoutMs: this._config.timeoutMs
+        timeoutMs: this._config.timeoutMs,
+        client: this._config.client
       });
       const podIdFn = () => {
         if (!this._currentPodId) {

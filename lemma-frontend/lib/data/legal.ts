@@ -90,6 +90,24 @@ export const privacyPolicy: LegalDocument = {
             ],
         },
         {
+            title: 'Product Analytics',
+            body: 'On Lemma Cloud we measure how the product is used so we can see what works and what does not. This is handled by PostHog, acting as our processor, on infrastructure hosted in the European Union.',
+            items: [
+                {
+                    text: 'What we send: which actions happened and how they arrived — a pod was created, an agent run finished, a workflow completed — along with the identifiers of the account, organization, and pod involved, and coarse buckets such as how long something took.',
+                },
+                {
+                    text: 'What we never send: your workspace content. Table records, files, prompts, agent conversations, and the names of anything you create are excluded at the point of collection, not filtered afterwards. Page addresses are reduced to their route pattern before they leave the browser, so identifiers in a URL are not transmitted.',
+                },
+                {
+                    text: 'Analytics is off entirely on self-hosted installations and on Lemma Desktop running locally, where no analytics key is configured and nothing is collected.',
+                },
+                {
+                    text: 'Until you accept analytics, nothing is stored on your device: measurement for that session is held in memory only and is gone when you close the tab.',
+                },
+            ],
+        },
+        {
             title: 'Retention and Security',
             body: 'We retain information for as long as needed to provide the service, comply with legal obligations, resolve disputes, and enforce our agreements. We use reasonable administrative, technical, and organizational measures to protect information, but no system can be guaranteed completely secure.',
         },
@@ -97,6 +115,7 @@ export const privacyPolicy: LegalDocument = {
             title: 'Your Choices',
             body: 'Depending on how you use Lemma, you may have the ability to access, update, export, or delete certain information through your workspace settings or by contacting us.',
             items: [
+                { text: 'You can decline product analytics when we ask, and declining is remembered — nothing is written to your device and no identifier persists between visits.' },
                 { text: 'You can opt out of non-essential marketing emails using the unsubscribe link in those messages.' },
                 { text: 'You can disconnect connectors or remove content you no longer want stored in a workspace, subject to your team permissions.' },
                 { text: 'Workspace administrators may have separate controls over retained data, member access, and connected services.' },

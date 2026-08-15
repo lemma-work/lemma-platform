@@ -53,6 +53,7 @@ def build_runtime_config(
     pod_id: UUID | str,
     *,
     app: dict[str, str] | None = None,
+    app_id: UUID | str | None = None,
 ) -> dict[str, object]:
     """Pod context handed to the browser SDK at serve time.
 
@@ -65,6 +66,14 @@ def build_runtime_config(
         "apiUrl": settings.api_url,
         "authUrl": settings.auth_frontend_url,
     }
+    if app_id:
+        # Two things at once: the app names itself so its API calls resolve to
+        # the APP origin rather than a generic SDK caller, and it says *which*
+        # app, which is what makes a per-app session countable. Both travel as
+        # request headers from the SDK; neither is readable from the server side
+        # of an asset request, which is unauthenticated by design.
+        config["appId"] = str(app_id)
+        config["client"] = "lemma-app"
     if app:
         config["app"] = {
             key: value
@@ -227,6 +236,7 @@ def inject_runtime_config(
     pod_id: UUID | str,
     *,
     app: dict[str, str] | None = None,
+    app_id: UUID | str | None = None,
     branding: dict[str, str] | None = None,
 ) -> bytes:
     """Insert host runtime data and presentation into an HTML entrypoint.
@@ -245,7 +255,9 @@ def inject_runtime_config(
 
     injection = ""
     if RUNTIME_CONFIG_SENTINEL not in text:
-        payload = json.dumps(build_runtime_config(pod_id, app=app)).replace(
+        payload = json.dumps(
+            build_runtime_config(pod_id, app=app, app_id=app_id)
+        ).replace(
             "<", "\\u003c"
         )
         injection += (

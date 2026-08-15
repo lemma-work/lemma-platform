@@ -25,7 +25,11 @@ from app.core.authorization.sql_actions import (
     allowed_actions_expr,
 )
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.modules.agent.domain.events import AgentDomainEvent
+from app.modules.agent.domain.events import (
+    AgentCreatedEvent,
+    AgentDomainEvent,
+    ConversationStartedEvent,
+)
 from app.modules.agent.domain.entities import (
     Agent as AgentEntity,
     AgentRun as AgentRunEntity,
@@ -355,6 +359,17 @@ class AgentRepository:
         )
         self.session.add(model)
         await self.session.flush()
+        # The single write path behind every creation route.
+        self.uow.collect_events(
+            [
+                AgentCreatedEvent(
+                    agent_id=model.id,
+                    pod_id=model.pod_id,
+                    user_id=model.user_id,
+                    tool_count=len(agent.toolsets or ()),
+                )
+            ]
+        )
         return model.to_entity()
 
     def _to_entity_with_allowed_actions(
@@ -566,6 +581,17 @@ class ConversationRepository(ConversationRunQueriesMixin):
         )
         self.session.add(model)
         await self.session.flush()
+        self.uow.collect_events(
+            [
+                ConversationStartedEvent(
+                    conversation_id=model.id,
+                    pod_id=model.pod_id,
+                    user_id=model.user_id,
+                    agent_id=model.agent_id,
+                    parent_id=model.parent_id,
+                )
+            ]
+        )
         return model.to_entity()
 
     async def create_conversation_once(

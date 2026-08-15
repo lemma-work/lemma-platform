@@ -23,6 +23,7 @@ from app.core.ports.widget_content import WidgetArtifact
 from app.core.widget_html_validation import lint_app_html
 from app.core.authorization.permissions import Permissions
 from app.core.helpers.slug import normalize_public_slug, normalize_resource_name
+from app.modules.apps.domain.events import AppPublishedEvent
 from app.modules.apps.domain.entities import (
     AppAssetDocument,
     AppEntity,
@@ -446,11 +447,24 @@ class AppService:
             release_id = release.id
         if written.source_path is not None:
             app.source_archive_path = written.source_path
+        newly_published = plan.version is not None and app.status is not AppStatus.READY
         if plan.version is not None:
             app.current_release_id = release_id
             app.status = AppStatus.READY
         app.user_id = user_id
-        return await self.repository.update(app)
+        updated = await self.repository.update(app)
+        if newly_published:
+            # The transition, not the state: a re-upload of an already-published
+            # app is a new release, and counting those would make this track
+            # deploy frequency rather than how many pods have shipped something.
+            self.repository.uow.collect_events(
+                [
+                    AppPublishedEvent(
+                        app_id=updated.id, pod_id=updated.pod_id, user_id=user_id
+                    )
+                ]
+            )
+        return updated
 
     async def cleanup_written_bundle(
         self, plan: _UploadPlan, written: _WrittenBundle

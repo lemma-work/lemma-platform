@@ -11,6 +11,7 @@ pub mod protocol;
 pub mod provider_probe;
 pub mod sharing;
 pub mod state;
+pub mod telemetry;
 
 pub const PROTOCOL_VERSION: u64 = 1;
 

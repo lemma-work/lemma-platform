@@ -17,6 +17,7 @@ from streaq.worker import Worker
 from app.core.config import settings
 from app.core.domain.job_queue import JobQueuePort
 from app.core.log.log import get_logger
+from app.core.origin import current_origin
 from app.core.request_context import current_observability_context
 
 logger = get_logger(__name__)
@@ -156,6 +157,16 @@ class SharedStreaqJobQueue(JobQueuePort):
             attributes={"lemma.task_name": job_name, "lemma.job_id": task.id},
         ):
             inherited = current_observability_context().as_transport()
+            # Origin travels on the sidecar, not in `ObservabilityContext`: that
+            # object's fields become log fields on every line, and `origin` is
+            # already spoken for in the logging catalog. A job enqueued by a
+            # schedule must still look like SCHEDULE work when it runs, minutes
+            # later, in a different process.
+            origin = current_origin()
+            if origin is not None:
+                inherited["origin"] = origin.kind.value
+                if origin.platform:
+                    inherited["origin_platform"] = origin.platform
             inject(inherited)
             if inherited:
                 try:
