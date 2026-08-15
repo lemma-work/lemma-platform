@@ -92,6 +92,10 @@ services:
       # The journey profile self-provisions a user per VU from one host IP,
       # which trips the 60/min/IP auth ceiling immediately and leaves the
       # run measuring nothing but 429s. Off for the harness only.
+      # Ships off by default (#364). Production has no pooler in front of
+      # Postgres, so session-scoped LISTEN survives — on here so the load
+      # profile exercises the path production would run.
+      OUTBOX_LISTEN_ENABLED: "true"
       AUTH_ABUSE_PROTECTION_ENABLED: "false"
       # A freshly signed-up user carries st-ev=false, and creating an org
       # requires a verified email — so the self-provisioning journey could
@@ -173,6 +177,10 @@ services:
       # The journey profile self-provisions a user per VU from one host IP,
       # which trips the 60/min/IP auth ceiling immediately and leaves the
       # run measuring nothing but 429s. Off for the harness only.
+      # Ships off by default (#364). Production has no pooler in front of
+      # Postgres, so session-scoped LISTEN survives — on here so the load
+      # profile exercises the path production would run.
+      OUTBOX_LISTEN_ENABLED: "true"
       AUTH_ABUSE_PROTECTION_ENABLED: "false"
       # A freshly signed-up user carries st-ev=false, and creating an org
       # requires a verified email — so the self-provisioning journey could
