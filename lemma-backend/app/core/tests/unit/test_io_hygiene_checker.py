@@ -36,8 +36,13 @@ def _load_checker():
 
 def _run(source: str, *, path: str = "sample.py") -> list:
     checker_module = _load_checker()
-    checker = checker_module.IoHygieneChecker(path)
-    checker.visit(ast.parse(source))
+    tree = ast.parse(source)
+    # Mirrors `collect()`: the alias pass runs first so the checker can tell
+    # `httpx.AsyncClient` from every other `AsyncClient` in the dependency tree.
+    aliases = checker_module._ImportAliases()
+    aliases.visit(tree)
+    checker = checker_module.IoHygieneChecker(path, aliases)
+    checker.visit(tree)
     return checker.violations
 
 
@@ -165,3 +170,101 @@ def test_an_old_list_baseline_still_loads() -> None:
 
     loaded = checker_module._load_baseline(path)
     assert loaded == {"a::b::c::d": 2, "e::f::g::h": 1}
+
+
+# --- process-lifetime construction ------------------------------------------
+
+
+# The shape that got away. A DI builder reached from an async request handler
+# built an object store in a plain `def`; the constructor resolves credentials
+# over the network, so the loop stopped for 350-500ms on every call. The other
+# rules read `async def` bodies and never saw it.
+_THE_ORIGINAL_BUG = """
+from obstore.store import GCSStore
+
+def _gcs_store(bucket):
+    return GCSStore(bucket=bucket, prefix=None)
+"""
+
+
+def test_the_original_bug_is_caught() -> None:
+    assert _rules(_THE_ORIGINAL_BUG) == ["process-lifetime-construction"]
+
+
+def test_the_owning_module_may_construct_it() -> None:
+    """`object_storage.py` memoizes with a keyed dict, which no decorator shows."""
+    assert _rules(_THE_ORIGINAL_BUG, path="app/core/object_storage.py") == []
+
+
+def test_a_memoized_factory_is_the_fix_not_the_offence() -> None:
+    source = """
+from functools import lru_cache
+from obstore.store import GCSStore
+
+@lru_cache(maxsize=1)
+def store():
+    return GCSStore(bucket="b")
+"""
+    assert _rules(source) == []
+
+
+def test_module_scope_construction_is_fine() -> None:
+    """Built once at import, which is what this rule is asking people to do."""
+    source = 'from obstore.store import GCSStore\n\nSTORE = GCSStore(bucket="b")\n'
+    assert _rules(source) == []
+
+
+def test_a_client_in_a_sync_constructor_is_caught() -> None:
+    source = """
+import httpx
+
+class Service:
+    def __init__(self, url):
+        self._client = httpx.AsyncClient(base_url=url)
+"""
+    assert _rules(source) == ["process-lifetime-construction"]
+
+
+def test_someone_elses_asyncclient_is_not_our_business() -> None:
+    """`AsyncClient` is exported by openai, composio and kubernetes too.
+
+    Matching the bare name would flag all of them. The rule resolves the name
+    through the importing module's own aliases so it stays specific.
+    """
+    source = """
+from openai import AsyncClient
+
+def build():
+    return AsyncClient(api_key="k")
+"""
+    assert _rules(source) == []
+
+
+def test_an_aliased_import_is_still_resolved() -> None:
+    source = """
+import httpx as hx
+
+def build():
+    return hx.AsyncClient()
+"""
+    assert _rules(source) == ["process-lifetime-construction"]
+
+
+def test_a_closure_is_judged_on_its_own_caching() -> None:
+    """A cached factory returning an uncached closure is still per-call.
+
+    This is exactly how the app storage factory was written: `_get_app_storage_
+    factory()` ran once, but the `build` it returned ran per request and built a
+    store every time.
+    """
+    source = """
+from functools import lru_cache
+from obstore.store import GCSStore
+
+@lru_cache(maxsize=1)
+def factory():
+    def build(app_id):
+        return GCSStore(bucket="b", prefix=f"apps/{app_id}")
+    return build
+"""
+    assert _rules(source) == ["process-lifetime-construction"]

@@ -272,3 +272,26 @@ class OperationExecutionInfrastructureError(OperationExecutionError):
             status_code=503,
             details=_safe_connector_details(details),
         )
+
+
+class OperationExecutionCircuitOpenError(OperationExecutionInfrastructureError):
+    """We did not call the provider, because it has been failing.
+
+    Descends from the infrastructure error so every caller that already handles
+    "provider unavailable" keeps working unchanged, but carries its own code:
+    reading a log, "the provider failed" and "we stopped asking" want different
+    responses, and only the second is worth retrying on a delay.
+
+    ``OperationExecutionError`` directly rather than ``super()``: the parent
+    fixes its own message and code, which is the whole thing this class exists
+    to override.
+    """
+
+    def __init__(self, message: str, details: object | None = None):
+        OperationExecutionError.__init__(
+            self,
+            message="Connector provider is temporarily disabled after repeated failures.",
+            code="OPERATION_EXECUTION_CIRCUIT_OPEN",
+            status_code=503,
+            details=_safe_connector_details(details),
+        )

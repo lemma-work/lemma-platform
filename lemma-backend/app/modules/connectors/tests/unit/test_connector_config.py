@@ -66,6 +66,33 @@ EXPECTED = [
         4096,
     ),
     ("connector_encryption_key", "CONNECTOR_ENCRYPTION_KEY", None, "sentinel"),
+    ("connector_breaker_enabled", "CONNECTOR_BREAKER_ENABLED", True, False),
+    (
+        "connector_breaker_failure_threshold",
+        "CONNECTOR_BREAKER_FAILURE_THRESHOLD",
+        5,
+        2,
+    ),
+    (
+        "connector_breaker_cooldown_seconds",
+        "CONNECTOR_BREAKER_COOLDOWN_SECONDS",
+        60,
+        10,
+    ),
+    (
+        "connector_breaker_failure_window_seconds",
+        "CONNECTOR_BREAKER_FAILURE_WINDOW_SECONDS",
+        120,
+        30,
+    ),
+    (
+        # Equal to the dispatcher's Composio per-kind ceiling on purpose, so the
+        # gateway backstop never pre-empts the routed path's tighter timeouts.
+        "connector_composio_deadline_seconds",
+        "CONNECTOR_COMPOSIO_DEADLINE_SECONDS",
+        90.0,
+        5.0,
+    ),
 ]
 
 

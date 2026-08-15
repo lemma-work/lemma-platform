@@ -65,6 +65,16 @@ class ScheduleRun(UUIDAuditBase):
     completed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # When the recovery sweep last looked at this row, as distinct from when the
+    # row last changed. They were the same field, and that is what broke the
+    # sweep: for a run whose target is alive but not yet finished there is
+    # nothing to write, so SQLAlchemy emitted no UPDATE, so ``updated_at`` never
+    # moved, so the ORDER BY handed back the same hundred rows on the next tick
+    # and every tick after it. In production the cursor sat on rows last touched
+    # 2026-08-12 11:50:01 for three days while reporting ``reconciled=100``.
+    last_inspected_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     __table_args__ = (
         UniqueConstraint(
@@ -75,6 +85,21 @@ class ScheduleRun(UUIDAuditBase):
             "schedule_id",
             text("created_at DESC"),
             text("id DESC"),
+        ),
+        # Serves the failure-streak count behind the circuit breaker, which
+        # orders by completed_at and therefore could not use the created_at
+        # index above for its ordering. Production planned it as a bitmap heap
+        # scan of 5,946 rows plus a sort, 48ms, on every run completion.
+        #
+        # Partial on completed_at IS NOT NULL because that is the query's own
+        # filter and because an in-flight run has no place in a streak: at rest
+        # this excludes the ~2% of the table that has not finished.
+        Index(
+            "ix_schedule_runs_schedule_completed",
+            "schedule_id",
+            text("completed_at DESC"),
+            text("id DESC"),
+            postgresql_where=text("completed_at IS NOT NULL"),
         ),
         Index(
             "uq_schedule_runs_target",
@@ -99,17 +124,31 @@ class ScheduleRun(UUIDAuditBase):
         # It was also declared only in the migration and not here, so databases
         # built by create_all -- every test database -- never had it at all.
         #
-        # The status set is what keeps this small: terminal runs are almost the
-        # whole table and none of them can match. Leading with (updated_at, id)
-        # answers the query's ORDER BY from the index instead of sorting.
+        # The predicate is `target_outcome IS NULL` and nothing else, because
+        # that alone is the selectivity: 1,672 of 81,334 production rows, 2%.
+        # Adding back the sweep's status set would exclude a further *five*
+        # rows -- and reintroduce precisely the coupling that made 0003 dead
+        # weight, where the query's status list drifts from the index's and
+        # Postgres silently stops using it. A predicate that costs 0.006% of the
+        # index size and can silently disable it is not worth having. Statuses
+        # are filtered from the rows this returns instead.
+        #
+        # Leads with (last_inspected_at, id) because that is what the sweep now
+        # orders by. It used to lead with updated_at, which the sweep could not
+        # advance -- a row it inspected and correctly left alone was written
+        # back unchanged, so no UPDATE fired and the cursor never moved off the
+        # oldest hundred rows.
+        #
+        # NULLS FIRST must be spelled out here as well as in the query. Postgres
+        # sorts nulls last under ASC, and an index can only answer an ORDER BY
+        # whose null placement it matches -- so leaving it off either side would
+        # leave the planner to fetch every matching row and sort them, which is
+        # the cost the LIMIT is supposed to avoid.
         Index(
             "ix_schedule_runs_recoverable",
-            "updated_at",
+            text("last_inspected_at ASC NULLS FIRST"),
             "id",
-            postgresql_where=text(
-                "target_outcome IS NULL "
-                "AND status IN ('PROCESSING', 'FAILED', 'DISPATCHED')"
-            ),
+            postgresql_where=text("target_outcome IS NULL"),
         ),
     )
 

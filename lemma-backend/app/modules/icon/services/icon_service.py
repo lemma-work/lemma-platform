@@ -8,11 +8,12 @@ from pathlib import Path
 from urllib.parse import urlparse
 from uuid import UUID, uuid4
 
-from obstore.store import GCSStore
+from obstore.store import ObjectStore
 from pydantic import BaseModel
 
 from app.core.config import settings
 from app.core.log.log import get_logger
+from app.core.object_storage import build_object_store, local_file_storage_path
 
 logger = get_logger(__name__)
 
@@ -53,12 +54,19 @@ class IconService:
     def __init__(self, public_base_url: str | None = None):
         self.public_base_url = (public_base_url or settings.api_url).rstrip("/")
         self._local_base: Path | None = None
-        self.store: GCSStore | None = None
+        self.store: ObjectStore | None = None
 
         if settings.effective_public_storage_backend() == "gcs":
             if not settings.public_bucket_name:
                 raise ValueError("GCS public storage requires PUBLIC_BUCKET_NAME")
-            self.store = GCSStore(bucket=settings.public_bucket_name)
+            # Through the shared factory rather than `GCSStore(...)` directly:
+            # the controller builds an IconService per request to pick up the
+            # request's base URL, and the store must not be rebuilt with it.
+            self.store = build_object_store(
+                local_prefix=local_file_storage_path("public-icons"),
+                bucket_name=settings.public_bucket_name,
+                force_backend="gcs",
+            )
             return
 
         root = Path(settings.local_file_storage_root)

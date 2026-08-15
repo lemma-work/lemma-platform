@@ -25,8 +25,6 @@ dependencies = [
     # suggested-prompts/thread-title methods it enables.
     "slack-sdk>=3.43.0",
     "redis>=6.4.0,<9",
-    "pytz>=2025.2",
-    "psycopg[binary,pool]>=3.3.2",
     "sqlglot>=25.0.0",
     "alembic>=1.18.1",
     "anyio>=4.12.0",
@@ -102,6 +100,15 @@ dev = [
     # The function runtime's worker subprocess imports the SDK a function is
     # written against; its tests spawn that worker for real.
     "lemma-sdk",
+    # Nothing the application serves uses psycopg -- the runtime talks to
+    # Postgres through asyncpg. It survives because two things genuinely need a
+    # *synchronous* connection, and both are development-time: the testcontainer
+    # readiness probe in `app/core/test_utils.py`, and
+    # `scripts/verify_reliability_migration.py`, which CI runs to exercise
+    # install -> downgrade -> repair -> re-upgrade against a scratch database.
+    # Declared as a runtime dependency it shipped its binary build to every
+    # production image for neither of those.
+    "psycopg[binary,pool]>=3.3.2",
     "basedpyright>=1.39.9",
     "diff-cover>=9.7.1",
     "kubernetes>=34.1.0",
@@ -112,7 +119,12 @@ dev = [
     "pytest-cov>=7.1.0",
     "pytest-timeout>=2.4.0",
     "pytest-xdist>=3.6.1",
-    "ruff>=0.14.8",
+    # Upper-bounded deliberately. 0.16 turned on a large batch of rules by
+    # default -- 3,505 findings on this tree, almost all in generated
+    # connector clients and migrations. `make lint` runs the default set, so
+    # an unbounded bump does not tighten the gate, it drowns it. Adopting
+    # those rules is its own piece of work.
+    "ruff>=0.14.8,<0.16",
 ]
 
 [build-system]

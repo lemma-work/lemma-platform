@@ -60,7 +60,7 @@ FUNCTION_BENCH_ENV = \
 	FUNCTION_BENCH_TERMINAL_TIMEOUT_SECONDS=$(FUNCTION_BENCH_TERMINAL_TIMEOUT_SECONDS)
 FUNCTION_BENCH_TEST = app/modules/function/tests/perf/test_function_execution_benchmark.py
 
-.PHONY: help test test-unit test-e2e test-e2e-real test-e2e-fast test-e2e-runtime test-module coverage coverage-unit coverage-e2e coverage-backend-unit coverage-backend-e2e-shard coverage-backend-report coverage-backend-gate test-collect lint lint-async lint-session-scope lint-io-hygiene test-connection-scope typecheck-critical architecture migrate docker-build docker-build-cloud docker-build-arm64 docker-build-amd64 benchmark-functions-docker benchmark-functions-e2b teams-manifest-zip load-test-build load-test-up load-test-migrate load-test-setup load-test-run load-test-sse load-test-journey load-test-datastore-up load-test-datastore-setup load-test-datastore-files load-test-datastore-stats load-test-datastore-down load-test-monitor load-test-down load-test
+.PHONY: help test test-unit test-e2e test-e2e-real test-e2e-fast test-e2e-runtime test-module coverage coverage-unit coverage-e2e coverage-backend-unit coverage-backend-e2e-shard coverage-backend-report coverage-backend-gate test-collect lint lint-async lint-session-scope lint-io-hygiene lint-import-budget test-connection-scope typecheck-critical architecture migrate docker-build docker-build-cloud docker-build-arm64 docker-build-amd64 benchmark-functions-docker benchmark-functions-e2b teams-manifest-zip load-test-build load-test-up load-test-migrate load-test-setup load-test-run load-test-sse load-test-journey load-test-datastore-up load-test-datastore-setup load-test-datastore-files load-test-datastore-stats load-test-datastore-down load-test-monitor load-test-profile load-test-down load-test
 
 help:
 	@echo "Lemma backend:"
@@ -104,6 +104,9 @@ help:
 	@echo "                         #   see docs/operators/datastore-ingestion-benchmark.md"
 	@echo "                         #   knobs: MAX_USERS=100 THINK_MS=500"
 	@echo "  make load-test-monitor # monitor DB connections (pg_stat_activity poller)"
+	@echo "  make load-test-profile # one run, correlated: k6 latency + memory floor +"
+	@echo "                         #   DB connections + loop-stall stacks, one directory"
+	@echo "                         #   PROFILE=journey|ws|sse|micro USERS=20"
 	@echo "  make load-test-down    # tear down containers and clean up"
 	@echo "  Override: MAX_SUBSCRIBERS=200 WRITER_VUS=4 make load-test"
 	@echo ""
@@ -274,6 +277,15 @@ lint-session-scope:
 lint-io-hygiene:
 	uv run python scripts/check_io_hygiene.py
 
+# Import-budget gate (enforced in CI). Importing the api loads ~5,400 modules
+# and ~323 MiB before it can serve a request, and the worker is larger still.
+# Most of that is structural — openai, mcp and fastmcp arrive through
+# pydantic_ai, which the agent runtime needs — so this does not ask anyone to
+# shrink it. It asks that growth be a decision rather than a side effect of a
+# new dependency. Ratcheted against import-budget-baseline.json.
+lint-import-budget:
+	uv run python scripts/check_import_budget.py
+
 # Runtime proof that the pool discipline holds, not just that the AST looks
 # right. Small and hermetic by design: this is the one connection/loop suite
 # that gates merges, so it has to stay inside a lint-job time budget. The full
@@ -420,6 +432,19 @@ load-test-journey:
 load-test-monitor:
 	@echo "Monitoring DB connections (Ctrl+C to stop)…"
 	uv run python load_tests/db_monitor.py --interval 5
+
+# One run, everything on the same clock. k6 gives latency, docker_stats gives the
+# memory floor, db_monitor gives connections, and the container logs give the
+# loop-stall and memory samplers — including the stack frame of whatever blocked
+# the loop. Previously these were four separate commands and a `--no-stream`
+# snapshot taken after the test, which cannot show a trend.
+#   PROFILE=journey|ws|sse|micro  USERS=20  make load-test-profile
+load-test-profile:
+	uv run python load_tests/profile_run.py \
+		--profile "$${PROFILE:-journey}" \
+		--users "$${USERS:-10}" \
+		--think-ms "$${THINK_MS:-1000}" \
+		--api-url "$(LEMMA_API_URL)"
 
 load-test-down:
 	docker compose -f $(LOAD_TEST_COMPOSE) down -v

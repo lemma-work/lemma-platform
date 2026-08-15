@@ -223,7 +223,24 @@ def _build_resource(service_name: str) -> Resource:
     instance_id = _resolve_instance_id()
     if instance_id:
         attributes["service.instance.id"] = instance_id
-    return Resource.create(attributes)
+    resource = Resource.create(attributes)
+    if instance_id:
+        return resource
+    # `Resource.create` backfills a random-UUID `service.instance.id` as of SDK
+    # 1.44. Deciding not to publish one has to mean not publishing one: a value
+    # that changes on every process start is a fresh metric series per restart,
+    # which on a Prometheus-backed collector grows the active series count with
+    # the deploy rate and never retires the old ones. Dropped rather than
+    # overwritten with a constant, because two replicas sharing an instance id
+    # is the duplicate-sample problem the attribute exists to avoid.
+    return Resource(
+        {
+            key: value
+            for key, value in resource.attributes.items()
+            if key != "service.instance.id"
+        },
+        schema_url=resource.schema_url,
+    )
 
 
 def _resolve_instance_id() -> str | None:
@@ -657,8 +674,15 @@ def _instrument_libraries() -> None:
     # own schedule. Flipping to ``http`` and dropping the duplicates is a
     # deliberate follow-up, not a side effect of wanting a host label.
     #
+    # ``http``, not ``http/dup``, as of this change. ``dup`` was the migration
+    # step: it emitted both vocabularies so the dashboards could move at their
+    # own pace. They have — every inbound-latency panel reads
+    # ``http.server.request.duration`` now — so the superseded
+    # ``http.server.duration`` (26 series, still being paid for) can stop. The
+    # old series going stale silently is the failure this avoids.
+    #
     # ``setdefault`` so a deployment can pin either behaviour itself.
-    os.environ.setdefault("OTEL_SEMCONV_STABILITY_OPT_IN", "http/dup")
+    os.environ.setdefault("OTEL_SEMCONV_STABILITY_OPT_IN", "http")
 
     from opentelemetry.instrumentation.aiohttp_client import (
         AioHttpClientInstrumentor,

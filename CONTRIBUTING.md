@@ -32,6 +32,15 @@ builds on the matching image. Change it in one place and everything follows.
 Python is 3.14 for the backend, managed by `uv`; Rust follows the toolchain the
 desktop workspace pins.
 
+One 3.14 feature is worth calling out because it reads as a bug to anyone (or
+anything) expecting older Python: [PEP 758][pep758] allows `except` to take an
+unparenthesized tuple, so `except TypeError, ValueError:` is a two-type handler,
+not the Python 2 `except E, name:` binding form. The codebase uses it. Review
+bots trained on older syntax flag it as an error; it is valid, and `ruff` and
+`mypy` on 3.14 both accept it.
+
+[pep758]: https://peps.python.org/pep-0758/
+
 ## Find the right component
 
 Each component has its own setup and its own checks. Run the ones you touched.

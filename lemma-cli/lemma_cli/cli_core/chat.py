@@ -198,7 +198,7 @@ class ChatRenderer:
     def handle(self, event: StreamEvent) -> None:
         event_type = event.type.lower()
         if event_type == "token":
-            self._token(str(event.data or ""))
+            self._token_event(event.data)
             return
         if event_type == "message":
             self._message(event.data)
@@ -260,6 +260,34 @@ class ChatRenderer:
         else:
             console.print(Text(str(value)))
         self.printed_tokens = True
+
+    def _token_event(self, data: Any) -> None:
+        """Render only the answer channel of a token stream.
+
+        Every delta the harness emits is tagged: ``text`` is the answer,
+        ``thinking`` is model reasoning, and ``tool`` is the literal serialized
+        call — ``{"tool_name": "pod_query", "args": {…}}`` — streamed so a UI can
+        show a tool running. The tag was never read here, so all three were
+        stringified into the answer, and a reply came back as::
+
+            I'll check the items table count.
+            {"tool_name":"pod_query","args":{"sql":"SELECT COUNT(*) …"}}1
+
+        `_message` below has always kinded its payloads correctly, and the
+        surfaces token stream filters the same way
+        (``agent_surfaces/services/token_stream.py``). This path was the one that
+        did not.
+
+        A bare string with no tag is passed through: not every runtime sends the
+        envelope, and dropping their output would trade a cosmetic bug for a
+        silent one.
+        """
+        if isinstance(data, dict) and "kind" in data:
+            if str(data.get("kind") or "") != "text":
+                return
+            self._token(str(data.get("data") or ""))
+            return
+        self._token(str(data or ""))
 
     def _token(self, token: str) -> None:
         if not token:

@@ -2,3 +2,4 @@
 .env.load_test
 journey_summary.json
 *.csv
+runs/

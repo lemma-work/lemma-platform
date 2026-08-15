@@ -89,6 +89,21 @@ services:
       # off for this throwaway stack only.
       AUTH_EMAIL_DELIVERABILITY_CHECKS_ENABLED: "false"
       AUTH_DISPOSABLE_EMAIL_DOMAINS_ENABLED: "false"
+      # The journey profile self-provisions a user per VU from one host IP,
+      # which trips the 60/min/IP auth ceiling immediately and leaves the
+      # run measuring nothing but 429s. Off for the harness only.
+      # Ships off by default (#364). Production has no pooler in front of
+      # Postgres, so session-scoped LISTEN survives — on here so the load
+      # profile exercises the path production would run.
+      OUTBOX_LISTEN_ENABLED: "true"
+      # The harness drives the app directly; keep the document available so
+      # a profile run can be pointed at a schema when debugging.
+      API_DOCS_ENABLED: "true"
+      AUTH_ABUSE_PROTECTION_ENABLED: "false"
+      # A freshly signed-up user carries st-ev=false, and creating an org
+      # requires a verified email — so the self-provisioning journey could
+      # never get past its first call. No mail server here to verify with.
+      AUTH_EMAIL_VERIFICATION_REQUIRED: "false"
       LOCAL_OBJECT_STORAGE_ROOT: /home/appuser/.local/object-storage
       LOCAL_FILE_STORAGE_ROOT: /home/appuser/.local/files
       REDIS_STREAM_POLLING_INTERVAL_MS: 200
@@ -162,6 +177,21 @@ services:
       # off for this throwaway stack only.
       AUTH_EMAIL_DELIVERABILITY_CHECKS_ENABLED: "false"
       AUTH_DISPOSABLE_EMAIL_DOMAINS_ENABLED: "false"
+      # The journey profile self-provisions a user per VU from one host IP,
+      # which trips the 60/min/IP auth ceiling immediately and leaves the
+      # run measuring nothing but 429s. Off for the harness only.
+      # Ships off by default (#364). Production has no pooler in front of
+      # Postgres, so session-scoped LISTEN survives — on here so the load
+      # profile exercises the path production would run.
+      OUTBOX_LISTEN_ENABLED: "true"
+      # The harness drives the app directly; keep the document available so
+      # a profile run can be pointed at a schema when debugging.
+      API_DOCS_ENABLED: "true"
+      AUTH_ABUSE_PROTECTION_ENABLED: "false"
+      # A freshly signed-up user carries st-ev=false, and creating an org
+      # requires a verified email — so the self-provisioning journey could
+      # never get past its first call. No mail server here to verify with.
+      AUTH_EMAIL_VERIFICATION_REQUIRED: "false"
       LOCAL_OBJECT_STORAGE_ROOT: /home/appuser/.local/object-storage
       LOCAL_FILE_STORAGE_ROOT: /home/appuser/.local/files
       REDIS_STREAM_POLLING_INTERVAL_MS: 200

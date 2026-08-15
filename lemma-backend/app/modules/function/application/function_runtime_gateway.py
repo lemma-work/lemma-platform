@@ -6,12 +6,14 @@ import hashlib
 from uuid import UUID
 
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
+from app.core.concurrency.offload import run_blocking
 from app.core.redaction import redact_text
 from app.modules.function.contracts.runtime import (
     RuntimeEventResponse,
     RuntimeFailure,
     RuntimeTerminalRequest,
 )
+from app.modules.function.application.runtime_logs import terminal_logs
 from app.modules.function.domain.entities import FunctionSessionPrincipal
 from app.modules.function.domain.ports import FunctionStorageFactoryPort
 from app.modules.function.infrastructure.execution_repository import (
@@ -90,7 +92,10 @@ class FunctionRuntimeGateway:
             )
         if context is None:
             raise RuntimeCredentialRejected
-        logs = self._logs(request)
+        # Off the loop, like the dispatcher's copy: this is up to 4 MiB of regex
+        # over a payload whose size the sandbox chose, arriving on the public
+        # callback endpoint.
+        logs = await run_blocking(self._logs, request, limiter="cpu_bound")
         error = (
             _runtime_failure_message(request.error)
             if request.error is not None
@@ -108,18 +113,7 @@ class FunctionRuntimeGateway:
             raise RuntimeStateRejected
         return RuntimeEventResponse(accepted=True, duplicate=duplicate)
 
-    @staticmethod
-    def _logs(request: RuntimeTerminalRequest) -> str | None:
-        sections: list[str] = []
-        if request.stdout:
-            sections.append(request.stdout)
-        if request.stderr:
-            sections.append(request.stderr)
-        if request.output_truncated:
-            sections.append("[function output truncated]")
-        if not sections:
-            return None
-        return redact_text("\n".join(sections))[: 4 * 1024 * 1024]
+    _logs = staticmethod(terminal_logs)
 
 
 def _runtime_failure_message(error: RuntimeFailure) -> str:

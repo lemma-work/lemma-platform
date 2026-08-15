@@ -72,10 +72,15 @@ def _event_routers():
     ]
 
 
+def _register_streaq() -> None:
+    import app.modules.schedule.events.tasks  # noqa: F401
+
+
 module = LemmaModule(
     name="schedule",
     routers=_routers,
     event_routers=_event_routers,
+    register_streaq=_register_streaq,
     worker_lifespans=(_reconcile_failure_breakers,),
     stream_groups=(
         ("schedule_events", "schedule-notifications"),

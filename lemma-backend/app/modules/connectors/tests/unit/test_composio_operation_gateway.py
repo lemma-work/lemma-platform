@@ -172,3 +172,65 @@ class TestRaisedSdkFailuresAreClassified:
         assert isinstance(
             self._classify(None, "unauthorized"), OperationExecutionUnauthorizedError
         )
+
+
+# --- the last-resort deadline ------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_a_hung_provider_call_is_eventually_abandoned(monkeypatch):
+    """The direct caller's path had no bound at all.
+
+    Requests arriving through `RoutingOperationGateway` are already wrapped in a
+    `wait_for` at `connector_operation_timeout_seconds`, so they were never the
+    problem. `agent_surfaces/platforms/composio_email.py` builds this gateway
+    and calls `execute_operation` on it directly — and a provider that accepts
+    the connection and then says nothing held a thread from the bounded
+    external-HTTP pool for as long as the socket stayed open. Enough of those
+    and no connector in the process can run.
+    """
+    import asyncio
+
+    from app.modules.connectors.config import connector_settings
+    from app.modules.connectors.domain.errors import OperationExecutionTimeoutError
+    from app.modules.connectors.infrastructure.adapters.composio_operation_gateway import (
+        ComposioOperationGateway,
+    )
+
+    monkeypatch.setattr(connector_settings, "connector_composio_deadline_seconds", 0.05)
+
+    async def never_returns(*_args, **_kwargs):
+        await asyncio.sleep(30)
+
+    monkeypatch.setattr(
+        "app.modules.connectors.infrastructure.adapters."
+        "composio_operation_gateway.run_blocking",
+        never_returns,
+    )
+
+    gateway = ComposioOperationGateway(composio_client_factory=lambda: object())
+
+    with pytest.raises(OperationExecutionTimeoutError):
+        await gateway.execute_operation(
+            connector_id="gmail",
+            operation_name="GMAIL_SEND_EMAIL",
+            payload={},
+            third_party_credentials={"connection_id": "conn-1"},
+        )
+
+
+def test_the_backstop_does_not_pre_empt_the_routed_timeouts():
+    """It must be the loosest bound in the stack, not a new tighter one.
+
+    The routed path applies `connector_operation_timeout_seconds` and the kind
+    dispatcher its own Composio ceiling. A backstop shorter than either would
+    silently change behaviour for every routed call.
+    """
+    from app.modules.connectors.config import connector_settings
+    from app.modules.connectors.services.execution.dispatcher import _TIMEOUT_BY_KIND
+    from app.modules.connectors.domain.connector import ConnectorKind
+
+    backstop = connector_settings.connector_composio_deadline_seconds
+
+    assert backstop >= connector_settings.connector_operation_timeout_seconds
+    assert backstop >= _TIMEOUT_BY_KIND[ConnectorKind.COMPOSIO.value]

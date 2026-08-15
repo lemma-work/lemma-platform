@@ -36,13 +36,12 @@ def _get_app_storage_factory():
     def build(app_id: UUID) -> AppFileManager:
         if settings.effective_storage_backend() == "local":
             return AppFileManager(app_id, root_path=root)
-        return AppFileManager(
-            app_id,
-            store=build_object_store(
-                local_prefix=root,
-                remote_prefix=f"apps/{app_id}",
-            ),
-        )
+        # No per-app `remote_prefix`: the store is shared across every app and
+        # `AppFileManager` puts the app id in the key. Passing the app id here
+        # made the store part of the app's identity, which is one cached store
+        # per tenant — and this is the path that serves an app's static assets,
+        # so it is the one that most needs the store to already exist.
+        return AppFileManager(app_id, store=build_object_store(local_prefix=root))
 
     return build
 
