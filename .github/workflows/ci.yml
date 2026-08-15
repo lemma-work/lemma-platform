@@ -88,6 +88,12 @@ jobs:
               - 'Makefile'
               - 'tests/**'
               - 'scripts/check_version_consistency.py'
+              # tests/ imports these two as modules, so they are covered by a
+              # job that took twenty seconds and did not run for them. Editing
+              # prepare_desktop_test_runtime.py started the ninety-minute
+              # desktop job and skipped the test that reads it.
+              - 'scripts/build_local_host_pack.py'
+              - 'scripts/prepare_desktop_test_runtime.py'
               # These tests assert on the env names the backend settings read,
               # so the drift they exist to catch lands in the settings module,
               # not only in the Makefile that writes it.
@@ -282,6 +288,8 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: lemma-typescript/package-lock.json
       # Shared with release-lemma-typescript.yml, so what a release verifies
       # cannot drift from what a pull request does.
       - uses: ./.github/actions/verify-typescript-sdk
@@ -300,8 +308,11 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version-file: .nvmrc
-      - name: Install uv
-        run: pip install uv
+          cache: npm
+          cache-dependency-path: lemma-typescript/package-lock.json
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
       - name: Regenerate Python client from committed spec
         working-directory: lemma-python
         run: OPENAPI_FILE=lemma_sdk/openapi_spec.json bash scripts/generate_openapi_client.sh
@@ -328,7 +339,10 @@ jobs:
     name: Frontend lint, design audit, test
     timeout-minutes: 30
     needs: changes
-    if: needs.changes.outputs.frontend == 'true'
+    # Also on an SDK change: the frontend typechecks against lemma-typescript,
+    # so an SDK signature change breaks `npm run check` here while only
+    # "Frontend build" was watching for it.
+    if: needs.changes.outputs.frontend == 'true' || needs.changes.outputs.typescript == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -452,8 +466,9 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.14"
-      - name: Install uv
-        run: pip install uv
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
       - name: Install lemma-cli from local checkout
         run: uv tool install --force ./lemma-cli
       - name: lemma --version
@@ -480,6 +495,24 @@ jobs:
           $env:PATH = "$lemmaBin;$env:PATH"
           lemma doctor 2>&1
           # doctor may exit 1 if no server; just verify it doesn't crash
+      # Absorbed from windows-cli-smoke.yml, which ran a second Windows runner
+      # on every push to main to assert these two and nothing else this job did
+      # not already cover.
+      - name: lemma servers list / auth status
+        run: |
+          $ErrorActionPreference = "Stop"
+          $lemmaBin = uv tool dir --bin
+          $env:PATH = "$lemmaBin;$env:PATH"
+          lemma servers list
+          if ($LASTEXITCODE -ne 0) { throw "lemma servers list exited $LASTEXITCODE" }
+          # auth status exits 1 when logged out — that is expected; it just must
+          # not crash with a Windows-incompatibility error.
+          lemma auth status
+          if ($LASTEXITCODE -notin 0, 1) { throw "lemma auth status exited $LASTEXITCODE" }
+          # `auth status` leaves $LASTEXITCODE at 1 when logged out, and pwsh
+          # hands the step whatever it holds at the end. Say so explicitly.
+          Write-Host "smoke commands ok"
+          exit 0
       - name: Validate install.ps1
         shell: pwsh
         run: |
