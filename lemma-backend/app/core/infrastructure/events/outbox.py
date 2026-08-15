@@ -7,7 +7,7 @@ import os
 import random
 import socket
 from collections.abc import AsyncIterator, Callable, Iterable
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, cast
@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.infrastructure.events.models import DomainEventOutbox
 from app.core.infrastructure.events.config import event_transport_settings
+from app.core.infrastructure.events.outbox_wake import outbox_wake_listener_lifespan
 from app.core.log.log import get_logger
 from app.core.observability.dependency_incident import DependencyIncident
 from app.core.observability.telemetry import record_exception_on_current_span
@@ -60,9 +61,15 @@ class OutboxDispatcher:
         poll_seconds: float = 0.5,
         max_idle_poll_seconds: float | None = None,
         owner: str | None = None,
+        wake: asyncio.Event | None = None,
     ) -> None:
         self._session_maker = session_maker
         self._message_bus = message_bus
+        # When attached, the idle wait becomes a race between this event and the
+        # fallback deadline instead of a backoff ladder. Never a delivery
+        # channel: everything still arrives via the claim query, so a wake that
+        # is never set costs latency and nothing else.
+        self._wake = wake
         self.batch_size = batch_size
         self.max_attempts = max_attempts
         self.lease_seconds = lease_seconds
@@ -120,15 +127,37 @@ class OutboxDispatcher:
                 continue
             self._dispatch_incident.record_success()
             if dispatched == 0:
-                await asyncio.sleep(
-                    min(
-                        self.max_idle_poll_seconds,
-                        idle_delay * random.uniform(0.9, 1.1),
-                    )
-                )
+                await self._idle_wait(idle_delay)
                 idle_delay = min(self.max_idle_poll_seconds, idle_delay * 2)
             else:
                 idle_delay = self.poll_seconds
+
+    async def _idle_wait(self, backoff_delay: float) -> None:
+        """Wait for work: on a wake if one is attached, otherwise on the clock.
+
+        The backoff ladder exists only to trade latency against idle query load.
+        A wake makes that trade unnecessary, so with a listener attached the
+        ladder is bypassed entirely for a single flat deadline -- which is both
+        lower latency and fewer idle queries than the ladder it replaces.
+        """
+        if self._wake is None:
+            await asyncio.sleep(
+                min(self.max_idle_poll_seconds, backoff_delay * random.uniform(0.9, 1.1))
+            )
+            return
+        try:
+            await asyncio.wait_for(
+                self._wake.wait(),
+                timeout=event_transport_settings.outbox_listen_fallback_poll_seconds,
+            )
+        except TimeoutError:
+            # Nothing notified us. Poll anyway -- this is the path that covers
+            # every notification lost while the listener was disconnected.
+            pass
+        # Cleared unconditionally, and before the claim rather than after: a
+        # notification that lands while we are dispatching must survive to
+        # trigger the next pass, and clearing after would swallow it.
+        self._wake.clear()
 
     async def _claim_batch(self) -> list[ClaimedEvent]:
         now = datetime.now(timezone.utc)
@@ -292,17 +321,34 @@ async def replay_outbox_event(
 
 @asynccontextmanager
 async def outbox_dispatcher_lifespan(
-    session_maker: Callable[[], AsyncSession], message_bus
+    session_maker: Callable[[], AsyncSession],
+    message_bus,
+    *,
+    database_url: str | None = None,
+    label: str = "outbox",
 ) -> AsyncIterator[OutboxDispatcher]:
-    dispatcher = OutboxDispatcher(session_maker, message_bus)
-    task = create_background_task(
-        dispatcher.run(), name="domain-event-outbox-dispatcher"
-    )
-    try:
-        yield dispatcher
-    finally:
-        task.cancel()
+    """Run the dispatcher, optionally woken by LISTEN/NOTIFY on ``database_url``.
+
+    Without a URL, or with the feature disabled, this is exactly the timer-driven
+    dispatcher it has always been. The listener is additive: it can only make the
+    dispatcher look sooner, never change what it finds.
+    """
+    async with AsyncExitStack() as stack:
+        wake: asyncio.Event | None = None
+        if database_url and event_transport_settings.outbox_listen_enabled:
+            listener = await stack.enter_async_context(
+                outbox_wake_listener_lifespan(database_url, label=label)
+            )
+            wake = listener.wake
+        dispatcher = OutboxDispatcher(session_maker, message_bus, wake=wake)
+        task = create_background_task(
+            dispatcher.run(), name=f"domain-event-outbox-dispatcher-{label}"
+        )
         try:
-            await task
-        except asyncio.CancelledError:
-            pass
+            yield dispatcher
+        finally:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass

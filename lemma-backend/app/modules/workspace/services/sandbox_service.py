@@ -25,6 +25,8 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
+from opentelemetry import trace
+
 from app.core.log.log import get_logger
 from app.core.request_context import create_inherited_task
 from sandbox_runtime.errors import (
@@ -57,6 +59,7 @@ from app.modules.workspace.providers.base import (
 from app.modules.workspace.providers.profiles import profile_for
 
 logger = get_logger(__name__)
+tracer = trace.get_tracer(__name__)
 
 _ENSURE_TIMEOUT_SECONDS = 300.0
 # How long another caller's in-flight create is believed. Long enough to cover
@@ -202,12 +205,28 @@ class SandboxService:
     async def _attempt_ensure(
         self, sandbox_id: UUID, *, deadline_at: datetime
     ) -> SandboxHandle:
+        with tracer.start_as_current_span("lemma.sandbox.ensure") as span:
+            span.set_attribute("lemma.sandbox_id", str(sandbox_id))
+            return await self._attempt_ensure_traced(
+                sandbox_id, span=span, deadline_at=deadline_at
+            )
+
+    async def _attempt_ensure_traced(
+        self, sandbox_id: UUID, *, span, deadline_at: datetime
+    ) -> SandboxHandle:
+        # Every outcome below costs something different -- adopting a running
+        # container, starting a stopped one (on E2B, resuming a paused sandbox,
+        # which is seconds), waiting out someone else's create, or provisioning
+        # from scratch. They were indistinguishable from outside, so the only
+        # observable number was their blend, and the blend moves with the idle
+        # release window rather than with anything in this file.
         async with self._uow_factory() as uow:
             repository = SandboxRepository(uow)
             sandbox = await repository.get(sandbox_id)
             if sandbox is None:
                 raise SandboxNotFound(f"sandbox {sandbox_id} does not exist")
             instance = await repository.current_instance(sandbox_id)
+        span.set_attribute("lemma.sandbox_kind", str(sandbox.kind))
 
         # A container that is already there is the common case, and answering
         # it costs one inspect rather than a provisioning round trip.
@@ -226,10 +245,22 @@ class SandboxService:
             and not self._profile_is_stale(sandbox)
         ):
             name = naming.container_name(sandbox_id, sandbox.kind, sandbox.epoch)
-            existing = await self._provider.inspect(name, deadline_at=deadline_at)
+            # A remote call on every ensure, including the warm path: the
+            # provider is asked whether the sandbox it already has is still
+            # there. On E2B this is an API round trip to their fabric, which is
+            # why a "warm" dispatch is hundreds of milliseconds and not tens.
+            with tracer.start_as_current_span("lemma.sandbox.inspect"):
+                existing = await self._provider.inspect(name, deadline_at=deadline_at)
             if existing is not None:
                 if not existing.running:
-                    await self._start(sandbox, existing, deadline_at=deadline_at)
+                    # E2B: resuming a paused sandbox. This is the single most
+                    # expensive branch and the one the idle release window
+                    # decides how often we take.
+                    span.set_attribute("lemma.ensure", "start")
+                    with tracer.start_as_current_span("lemma.sandbox.start"):
+                        await self._start(sandbox, existing, deadline_at=deadline_at)
+                else:
+                    span.set_attribute("lemma.ensure", "reuse")
                 await self._touch(sandbox_id)
                 return self._handle(sandbox, existing)
 
@@ -242,13 +273,16 @@ class SandboxService:
             # here. Waiting is bounded: a claim whose owner died must not block
             # the sandbox forever.
             if instance.state is SandboxInstanceState.CREATING:
+                span.set_attribute("lemma.ensure", "await_claim")
                 claimed = await self._await_claim(
                     sandbox, instance, name=name, deadline_at=deadline_at
                 )
                 if claimed is not None:
                     return claimed
 
-        return await self._provision(sandbox, deadline_at=deadline_at)
+        span.set_attribute("lemma.ensure", "provision")
+        with tracer.start_as_current_span("lemma.sandbox.provision"):
+            return await self._provision(sandbox, deadline_at=deadline_at)
 
     async def _await_claim(
         self,

@@ -35,6 +35,41 @@ class EventTransportSettings(BaseSettings):
             "The delay resets after any claimed batch."
         ),
     )
+    outbox_listen_enabled: bool = Field(
+        default=False,
+        description=(
+            "Wake the outbox dispatcher with PostgreSQL LISTEN/NOTIFY instead "
+            "of waiting out the idle backoff. The notification is only a hint: "
+            "the fallback poll still runs and still delivers everything, so "
+            "turning this off restores timer-driven behaviour exactly. "
+            "Requires a direct connection -- a transaction-mode pooler in "
+            "front of PostgreSQL silently swallows session-scoped LISTEN, "
+            "which degrades to fallback latency rather than breaking."
+        ),
+    )
+    outbox_listen_fallback_poll_seconds: float = Field(
+        default=30.0,
+        ge=0.5,
+        description=(
+            "Idle wait when a wake listener is attached. This is the worst-case "
+            "delivery latency if every notification is lost -- a dropped "
+            "listener, or a pooler that ate the LISTEN -- so it is a recovery "
+            "bound, not a performance number. Ignored while "
+            "outbox_listen_enabled is false."
+        ),
+    )
+    # Whole seconds: asyncpg's connect() types its timeout as an int.
+    outbox_listen_connect_timeout_seconds: int = Field(default=10, gt=0)
+    outbox_listen_health_interval_seconds: float = Field(
+        default=30.0,
+        gt=0,
+        description=(
+            "How often an idle listener proves its socket still works. A "
+            "silently dead TCP connection does not fire asyncpg's termination "
+            "callback, so without this the listener stays quiet forever and "
+            "the dispatcher never learns it is only being served by the poll."
+        ),
+    )
     redis_stream_polling_interval_ms: int = Field(default=500, gt=0)
     redis_stream_min_idle_time_ms: int = Field(default=60_000, gt=0)
     redis_stream_maxlen: int = Field(
