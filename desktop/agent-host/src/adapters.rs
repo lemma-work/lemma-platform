@@ -52,6 +52,17 @@ pub struct AdapterSpec {
     pub upstream_command: String,
     #[serde(default)]
     pub upstream_version_args: Vec<String>,
+    /// The environment variable this adapter reads to be told which upstream
+    /// agent binary to run.
+    ///
+    /// Without it an adapter picks its own, and the two certified ones pick
+    /// differently: `codex-acp` falls back to the bare name `codex` and so
+    /// resolves through `PATH`, while `claude-agent-acp` falls back to a copy
+    /// vendored inside its own `node_modules` and never consults `PATH` at all.
+    /// That second case is why Lemma could report the version of the Claude Code
+    /// on this machine and then run a different one.
+    #[serde(default)]
+    pub upstream_path_env: Option<String>,
     pub minimum_upstream_version: Option<String>,
     pub distribution: String,
     pub artifact_integrity: Option<String>,
@@ -196,54 +207,85 @@ impl AdapterManifest {
         })
     }
 
+    /// Ensure every npm-distributed adapter is present and verified.
+    ///
+    /// One thread per adapter. Each one is an independent `npm install` against
+    /// the registry followed by a whole-tree SHA-256, and running them in
+    /// sequence made the wall-clock the *sum* of the slowest parts of both --
+    /// which is most of what "it takes minutes the first time" was.
+    ///
+    /// The hashing is deliberately *not* cheapened. It is what stands between a
+    /// tampered `node_modules` and a process that runs with the user's own
+    /// credentials and file access, and the honest way to make it faster is to
+    /// overlap it, not to check less of it.
     pub fn install_cache(&self, cache_root: &Path, repair: bool) -> anyhow::Result<()> {
         std::fs::create_dir_all(cache_root)?;
-        for spec in &self.adapters {
-            if !spec.distribution.starts_with("npm:") {
-                continue;
-            }
-            let destination = cached_adapter_directory(cache_root, spec);
-            let executable = cached_adapter_executable(cache_root, spec);
-            if verify_cached_adapter(&executable).is_ok() {
-                continue;
-            }
-            if destination.exists() && !repair {
-                anyhow::bail!(
-                    "cached adapter {} failed integrity validation; run doctor --repair",
-                    spec.key
-                );
-            }
-            let staging = cache_root.join(format!(".{}.{}.tmp", spec.key, uuid::Uuid::new_v4()));
-            if staging.exists() {
-                std::fs::remove_dir_all(&staging)?;
-            }
-            let staged = (|| -> anyhow::Result<()> {
-                install_npm_adapter(spec, &staging)?;
-                let staged_executable = platform_cached_executable(&staging, &spec.command);
-                anyhow::ensure!(
-                    staged_executable.is_file(),
-                    "installed adapter {} did not provide executable {}",
-                    spec.key,
-                    spec.command
-                );
-                let digest = directory_sha256(&staging)?;
-                std::fs::write(staging.join(".lemma-cache.sha256"), &digest)?;
-                verify_cached_adapter(&staged_executable)
-            })();
-            if let Err(error) = staged {
-                let _ = std::fs::remove_dir_all(&staging);
-                return Err(error);
-            }
-            if let Some(parent) = destination.parent() {
-                std::fs::create_dir_all(parent)?;
-            }
-            activate_staged_cache(&staging, &destination)?;
-            verify_cached_adapter(&executable)?;
+        let pending: Vec<&AdapterSpec> = self
+            .adapters
+            .iter()
+            .filter(|spec| spec.distribution.starts_with("npm:"))
+            .collect();
+        if pending.is_empty() {
+            return Ok(());
+        }
+        let results: Vec<anyhow::Result<()>> = std::thread::scope(|scope| {
+            let handles: Vec<_> = pending
+                .iter()
+                .map(|spec| scope.spawn(move || install_cached_adapter(spec, cache_root, repair)))
+                .collect();
+            handles
+                .into_iter()
+                .map(|handle| {
+                    handle
+                        .join()
+                        .unwrap_or_else(|_| Err(anyhow::anyhow!("adapter install thread panicked")))
+                })
+                .collect()
+        });
+        // Report the first failure, but only after every thread has been joined,
+        // so an early return cannot leave one still writing into the cache.
+        for result in results {
+            result?;
         }
         Ok(())
     }
 
+    /// A cheap answer to "have the agents on this machine changed?".
+    ///
+    /// Detection and probing were the same operation, so noticing a newly
+    /// installed Claude Code meant spawning every agent -- far too expensive to
+    /// do often, which is why it ran on a fifteen-minute timer and why
+    /// installing an agent could take a quarter of an hour to show up.
+    ///
+    /// This separates them. Resolving four commands is a handful of `stat`
+    /// calls against directories already being searched; it can run every couple
+    /// of seconds without noticeable cost, and only a *change* pays for a probe.
+    /// Size and mtime are included so an in-place upgrade counts as a change,
+    /// not just an install or an uninstall.
     #[must_use]
+    pub fn installed_fingerprint(&self) -> String {
+        let mut digest = Sha256::new();
+        for adapter in &self.adapters {
+            digest.update(adapter.key.as_bytes());
+            fingerprint_path(&mut digest, resolve_executable(&adapter.upstream_command));
+            // The adapter cache counts too, and leaving it out was a bug with a
+            // very visible symptom: warming the cache in the background means a
+            // probe can run before it lands, so the harness publishes as
+            // `Installing` -- correctly -- and then the install finishes and
+            // *nothing has changed* as far as a fingerprint watching only the
+            // agent binaries is concerned. It sat at "Installing" until the
+            // fifteen-minute sweep, which is the exact wait this was meant to
+            // remove.
+            if adapter.distribution.starts_with("npm:")
+                && let Some(cache_root) = self.cache_root.as_ref()
+            {
+                let executable = cached_adapter_executable(cache_root, adapter);
+                fingerprint_path(&mut digest, executable.is_file().then_some(executable));
+            }
+        }
+        hex::encode(digest.finalize())
+    }
+
     /// Every certified adapter, resolved against this machine.
     ///
     /// Logged per adapter, because a GUI-launched app inherits
@@ -252,31 +294,141 @@ impl AdapterManifest {
     /// missing a directory is an agent the user can see installed that Lemma
     /// insists does not exist. Which path answered, or why none did, is the
     /// first thing worth knowing about that and was previously written nowhere.
+    ///
+    /// One thread per adapter, because resolving one means *spawning* it.
+    ///
+    /// `probe_version` waits up to five seconds for an agent to answer, and an
+    /// agent that is not installed spends the whole five. In sequence that was
+    /// four timeouts end to end before the list could say anything; concurrently
+    /// the slowest adapter sets the floor and the rest are free.
+    ///
+    /// This is also the step that raises the macOS file-access prompt, since it
+    /// is the first time an agent's own binary runs. Overlapping the probes
+    /// brings that prompt forward for every agent at once rather than staggering
+    /// it behind whichever one is slowest to answer.
+    #[must_use]
     pub fn discover(&self) -> Vec<HarnessSnapshot> {
-        self.adapters
-            .iter()
-            .map(|adapter| match self.resolve(&adapter.key) {
-                Ok(resolved) => {
-                    tracing::info!(
-                        harness = %adapter.key,
-                        command = %resolved.command.display(),
-                        upstream = %resolved.upstream_command.display(),
-                        version = resolved.upstream_version.as_deref().unwrap_or("unknown"),
-                        "adapter resolved"
-                    );
-                    snapshot_ready(&resolved)
-                }
-                Err(error) => {
-                    tracing::info!(
-                        harness = %adapter.key,
-                        error = %error,
-                        "adapter not available on this computer"
-                    );
-                    snapshot_unavailable(adapter, &error.to_string())
-                }
-            })
-            .collect()
+        std::thread::scope(|scope| {
+            let handles: Vec<_> = self
+                .adapters
+                .iter()
+                .map(|adapter| scope.spawn(move || self.snapshot_for(adapter)))
+                .collect();
+            handles
+                .into_iter()
+                .zip(&self.adapters)
+                .map(|(handle, adapter)| {
+                    handle.join().unwrap_or_else(|_| {
+                        snapshot_unavailable(adapter, "adapter probe thread panicked")
+                    })
+                })
+                .collect()
+        })
     }
+
+    fn snapshot_for(&self, adapter: &AdapterSpec) -> HarnessSnapshot {
+        // "Not there yet" is not "broken". Warming the cache in the background
+        // means discovery can now run while an adapter is still downloading, and
+        // resolving one that has not landed fails exactly like an agent that
+        // cannot start -- which would report a five-minute npm install as
+        // "Agent Host could not start this agent. Check the log."
+        //
+        // A *missing* cache directory is the install still running; a cache that
+        // exists and fails verification is a real integrity failure and keeps
+        // reporting as one.
+        if adapter.distribution.starts_with("npm:")
+            && let Some(cache_root) = self.cache_root.as_ref()
+            && !cached_adapter_directory(cache_root, adapter).exists()
+        {
+            tracing::info!(harness = %adapter.key, "adapter is still installing");
+            return snapshot_installing(adapter);
+        }
+        match self.resolve(&adapter.key) {
+            Ok(resolved) => {
+                tracing::info!(
+                    harness = %adapter.key,
+                    command = %resolved.command.display(),
+                    upstream = %resolved.upstream_command.display(),
+                    version = resolved.upstream_version.as_deref().unwrap_or("unknown"),
+                    "adapter resolved"
+                );
+                snapshot_ready(&resolved)
+            }
+            Err(error) => {
+                tracing::info!(
+                    harness = %adapter.key,
+                    error = %error,
+                    "adapter not available on this computer"
+                );
+                snapshot_unavailable(adapter, &error.to_string())
+            }
+        }
+    }
+}
+
+/// Fold one resolved path — or its absence — into a fingerprint.
+///
+/// Size and mtime are included so an upgrade in place counts as a change, not
+/// only an install or an uninstall.
+fn fingerprint_path(digest: &mut Sha256, path: Option<PathBuf>) {
+    let Some(path) = path else {
+        digest.update(b"absent");
+        return;
+    };
+    digest.update(path.as_os_str().as_encoded_bytes());
+    if let Ok(metadata) = std::fs::metadata(&path) {
+        digest.update(metadata.len().to_le_bytes());
+        if let Ok(modified) = metadata.modified()
+            && let Ok(since) = modified.duration_since(std::time::UNIX_EPOCH)
+        {
+            digest.update(since.as_secs().to_le_bytes());
+        }
+    }
+}
+
+/// Install and verify one npm adapter into the cache. Runs on its own thread.
+fn install_cached_adapter(
+    spec: &AdapterSpec,
+    cache_root: &Path,
+    repair: bool,
+) -> anyhow::Result<()> {
+    let destination = cached_adapter_directory(cache_root, spec);
+    let executable = cached_adapter_executable(cache_root, spec);
+    if verify_cached_adapter(&executable).is_ok() {
+        return Ok(());
+    }
+    if destination.exists() && !repair {
+        anyhow::bail!(
+            "cached adapter {} failed integrity validation; run doctor --repair",
+            spec.key
+        );
+    }
+    let staging = cache_root.join(format!(".{}.{}.tmp", spec.key, uuid::Uuid::new_v4()));
+    if staging.exists() {
+        std::fs::remove_dir_all(&staging)?;
+    }
+    let staged = (|| -> anyhow::Result<()> {
+        install_npm_adapter(spec, &staging)?;
+        let staged_executable = platform_cached_executable(&staging, &spec.command);
+        anyhow::ensure!(
+            staged_executable.is_file(),
+            "installed adapter {} did not provide executable {}",
+            spec.key,
+            spec.command
+        );
+        let digest = directory_sha256(&staging)?;
+        std::fs::write(staging.join(".lemma-cache.sha256"), &digest)?;
+        verify_cached_adapter(&staged_executable)
+    })();
+    if let Err(error) = staged {
+        let _ = std::fs::remove_dir_all(&staging);
+        return Err(error);
+    }
+    if let Some(parent) = destination.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    activate_staged_cache(&staging, &destination)?;
+    verify_cached_adapter(&executable)
 }
 
 fn cached_adapter_directory(cache_root: &Path, spec: &AdapterSpec) -> PathBuf {
@@ -385,6 +537,18 @@ fn install_npm_adapter(spec: &AdapterSpec, staging: &Path) -> anyhow::Result<()>
             "--ignore-scripts",
             "--no-audit",
             "--no-fund",
+            // The certified adapters reach their agent through
+            // `upstream_path_env`, which points at the copy already installed on
+            // this machine. Their optional dependencies are per-platform
+            // *vendored builds of those same agents* -- a 259 MB `codex` and a
+            // 245 MB `claude` -- and fetching them took the cache from 50 MB to
+            // 602 MB to run code the host never invokes.
+            //
+            // Lemma exists to drive the agent the user already has, holding the
+            // user's own credentials and configuration. Downloading a second
+            // copy contradicts that even when it works, and it is most of why a
+            // first run took minutes.
+            "--omit=optional",
             "--package-lock=true",
             "--prefix",
         ])
@@ -445,6 +609,22 @@ impl ResolvedAdapter {
         if let Ok(joined) = env::join_paths(paths) {
             environment.insert("PATH".to_owned(), joined.to_string_lossy().into_owned());
         }
+        // Name the upstream binary outright rather than hoping `PATH` order
+        // decides it.
+        //
+        // Prepending the agent's directory above is necessary but not
+        // sufficient: an adapter that resolves its agent through `require`
+        // rather than `PATH` never sees it, which is exactly what
+        // `claude-agent-acp` does. So Lemma probed the version of the agent on
+        // this machine, published it, and then ran a vendored copy of a
+        // different one -- carrying none of the user's own configuration, which
+        // is the entire premise of running agents locally.
+        if let Some(variable) = self.spec.upstream_path_env.as_deref() {
+            environment.insert(
+                variable.to_owned(),
+                self.upstream_command.to_string_lossy().into_owned(),
+            );
+        }
         environment
     }
 }
@@ -472,6 +652,32 @@ fn snapshot_ready(adapter: &ResolvedAdapter) -> HarnessSnapshot {
     };
     snapshot.config_revision = snapshot.revision();
     snapshot
+}
+
+/// An adapter whose cache is still being fetched.
+///
+/// `HarnessHealth::Installing` and the copy for it both already existed; nothing
+/// ever produced it, because installing used to finish before anything could
+/// look. It goes stale quickly on purpose -- the install is expected to land in
+/// the next minute or two, and the point of the state is that it changes.
+fn snapshot_installing(spec: &AdapterSpec) -> HarnessSnapshot {
+    let now = Utc::now();
+    HarnessSnapshot {
+        harness_key: spec.key.clone(),
+        display_name: spec.display_name.clone(),
+        adapter_version: spec.adapter_version.clone(),
+        upstream_version: None,
+        health: HarnessHealth::Installing,
+        capabilities: HarnessCapabilities::default(),
+        config_revision: hex::encode(Sha256::digest(b"installing")),
+        config_options: Vec::new(),
+        stale_after: now + ChronoDuration::seconds(30),
+        // No reason. `stale_reason` is rendered underneath the health copy, and
+        // the health already *is* "Installing" with a sentence to match — so
+        // saying it again just put two lines of the same thing on one row.
+        // It carries a reason when the state alone does not explain itself.
+        stale_reason: None,
+    }
 }
 
 fn snapshot_unavailable(spec: &AdapterSpec, reason: &str) -> HarnessSnapshot {
@@ -734,6 +940,123 @@ mod tests {
                     .rsplit_once('@')
                     .is_some_and(|(_, version)| semver::Version::parse(version).is_ok())
         }));
+    }
+
+    #[test]
+    fn every_npm_adapter_is_told_which_agent_to_run() {
+        // The bug this exists to stop coming back: an npm adapter that is not
+        // told where the agent is picks one for itself, and `claude-agent-acp`
+        // picks a copy vendored inside its own package. Lemma then probed the
+        // agent on this machine, published *that* version, and ran a different
+        // binary carrying none of the user's configuration.
+        //
+        // Native adapters are exempt: they are the agent, so there is nothing to
+        // point them at.
+        let manifest = AdapterManifest::builtin().unwrap();
+        for adapter in &manifest.adapters {
+            if adapter.distribution.starts_with("npm:") {
+                assert!(
+                    adapter
+                        .upstream_path_env
+                        .as_deref()
+                        .is_some_and(|name| !name.trim().is_empty()),
+                    "npm adapter {} must name the variable that points at the agent",
+                    adapter.key
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_adapter_environment_names_the_upstream_binary() {
+        let manifest = AdapterManifest::builtin().unwrap();
+        let spec = manifest
+            .adapters
+            .iter()
+            .find(|adapter| adapter.key == "claude-code")
+            .expect("claude-code is a certified adapter")
+            .clone();
+        let variable = spec
+            .upstream_path_env
+            .clone()
+            .expect("claude-code names its variable");
+        let resolved = ResolvedAdapter {
+            spec,
+            command: PathBuf::from("/cache/claude-agent-acp"),
+            upstream_command: PathBuf::from("/usr/local/bin/claude"),
+            upstream_version: Some("2.1.0".to_owned()),
+        };
+
+        let environment = resolved.environment();
+        assert_eq!(
+            environment.get(&variable).map(String::as_str),
+            Some("/usr/local/bin/claude"),
+            "the adapter must be pointed at the agent the host actually probed"
+        );
+        // PATH still leads with the agent's directory; the variable is belt and
+        // braces for adapters that never consult it.
+        assert!(
+            environment
+                .get("PATH")
+                .is_some_and(|path| path.starts_with("/cache")),
+            "the adapter and agent directories still lead PATH"
+        );
+    }
+
+    #[test]
+    fn the_installed_fingerprint_is_stable_and_covers_every_adapter() {
+        // Stability is the whole point: an unstable fingerprint would re-probe
+        // every couple of seconds forever, which is worse than the fifteen
+        // minute timer it replaces.
+        let manifest = AdapterManifest::builtin().unwrap();
+        assert_eq!(
+            manifest.installed_fingerprint(),
+            manifest.installed_fingerprint()
+        );
+        assert_eq!(manifest.installed_fingerprint().len(), 64);
+
+        // And it has to distinguish machines, or nothing is ever detected. A
+        // manifest naming a command that cannot exist must not collide with the
+        // real one.
+        let mut absent = manifest.clone();
+        for adapter in &mut absent.adapters {
+            adapter.upstream_command = format!("lemma-absent-{}", adapter.key);
+        }
+        assert_ne!(
+            manifest.installed_fingerprint(),
+            absent.installed_fingerprint(),
+            "a different set of installed agents must fingerprint differently"
+        );
+    }
+
+    #[test]
+    fn an_adapter_landing_in_the_cache_counts_as_a_change() {
+        // The bug: warming the cache in the background lets a probe run first,
+        // so the harness publishes as Installing — correctly — and then the
+        // install completes and nothing re-probes, because a fingerprint over
+        // the *agent* binaries alone cannot see an *adapter* arrive. It stayed
+        // "Installing" until the fifteen-minute sweep, which is the wait the
+        // fingerprint exists to remove.
+        let cache = tempfile::tempdir().unwrap();
+        let manifest = AdapterManifest::builtin()
+            .unwrap()
+            .with_cache_root(cache.path().to_path_buf());
+        let empty = manifest.installed_fingerprint();
+
+        let spec = manifest
+            .adapters
+            .iter()
+            .find(|adapter| adapter.distribution.starts_with("npm:"))
+            .expect("a certified npm adapter");
+        let executable = cached_adapter_executable(cache.path(), spec);
+        std::fs::create_dir_all(executable.parent().unwrap()).unwrap();
+        std::fs::write(&executable, b"#!/bin/sh\n").unwrap();
+
+        assert_ne!(
+            empty,
+            manifest.installed_fingerprint(),
+            "an adapter appearing in the cache must trigger a re-probe"
+        );
     }
 
     #[test]

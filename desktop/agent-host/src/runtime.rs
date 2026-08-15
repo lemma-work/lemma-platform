@@ -38,8 +38,18 @@ const HARNESS_REFRESH_INTERVAL: Duration = Duration::from_secs(15 * 60);
 /// referencing a harness it had never announced.
 const HARNESS_RETRY_INTERVAL: Duration = Duration::from_secs(10);
 /// How long a queued command waits for the first harness publish before it is
-/// rejected. Generous: probing every adapter can genuinely take this long.
-const FIRST_HARNESS_WAIT: Duration = Duration::from_secs(60);
+/// rejected.
+///
+/// Was 60s, when probing every adapter ran in sequence behind four five-second
+/// timeouts. Probes are concurrent now, so the slowest adapter sets the floor
+/// and the old number was measuring a shape that no longer exists.
+const FIRST_HARNESS_WAIT: Duration = Duration::from_secs(15);
+/// How often to check whether the agents installed on this machine changed.
+///
+/// This is the budget line for noticing a newly installed agent, and it is
+/// affordable only because detection no longer means probing: it is a handful of
+/// `stat` calls, not four spawned processes.
+const DISK_SCAN_INTERVAL: Duration = Duration::from_secs(2);
 const JOURNAL_CLEANUP_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
 const RETRY_MIN: Duration = Duration::from_millis(500);
 const RETRY_MAX: Duration = Duration::from_secs(30);
@@ -354,6 +364,12 @@ struct TargetWorker {
     refused_heartbeats: HashMap<Uuid, u32>,
     draining: bool,
     refresh_due: std::time::Instant,
+    /// What the agents on this machine looked like when we last probed, and
+    /// when to look again. Cheap enough to check every couple of seconds, which
+    /// is what turns "install an agent, wait up to fifteen minutes" into
+    /// "install an agent, it appears".
+    installed_fingerprint: String,
+    disk_scan_due: std::time::Instant,
     /// Raised by a run that failed because its agent is signed out.
     ///
     /// A signed-out harness is only *discovered* by probing, and probing is on
@@ -437,6 +453,10 @@ impl TargetWorker {
             refused_heartbeats: HashMap::new(),
             draining,
             refresh_due: std::time::Instant::now(),
+            // Empty, so the first scan always differs and the first probe is
+            // never skipped on the strength of a fingerprint nothing produced.
+            installed_fingerprint: String::new(),
+            disk_scan_due: std::time::Instant::now(),
             reprobe_requested: Arc::new(AtomicBool::new(false)),
             events_ready: Arc::new(tokio::sync::Notify::new()),
             probed: mpsc::unbounded_channel(),
@@ -463,6 +483,7 @@ impl TargetWorker {
                 }
             }
             if self.reprobe_requested.swap(false, Ordering::SeqCst)
+                || self.agents_on_disk_changed()
                 || self.refresh_due <= std::time::Instant::now()
             {
                 self.refresh_harnesses();
@@ -534,6 +555,20 @@ impl TargetWorker {
                     }
                 }
                 Err(error) => {
+                    // Revoked is final, so stop being paired rather than
+                    // retrying forever. The target task ends either way, but
+                    // the supervisor respawns any target still in the config —
+                    // which is how a removed computer kept polling a pairing
+                    // the workspace had already destroyed, reporting
+                    // "Unreachable" for as long as the app was open.
+                    if error
+                        .downcast_ref::<ApiError>()
+                        .is_some_and(ApiError::is_revoked)
+                    {
+                        self.cancel_all("Lemma revoked this Agent Host")?;
+                        self.forget_target()?;
+                        return Err(error);
+                    }
                     if error
                         .downcast_ref::<ApiError>()
                         .is_some_and(ApiError::is_unauthorized)
@@ -549,6 +584,31 @@ impl TargetWorker {
                 }
             }
         }
+    }
+
+    /// Drop this pairing from the on-disk config.
+    ///
+    /// Only for a refusal that cannot become valid again. Re-pairing is a fresh
+    /// single-use code, which is the right bar: the machine is either signed in
+    /// and welcome, in which case an authenticated page pairs it again in
+    /// seconds, or it is not, in which case it should hold nothing.
+    fn forget_target(&mut self) -> anyhow::Result<()> {
+        let mut config = HostConfig::load_or_create(&self.paths)?;
+        let before = config.targets.len();
+        config
+            .targets
+            .retain(|target| target.target_id != self.target.target_id);
+        if config.targets.len() == before {
+            return Ok(());
+        }
+        config.save(&self.paths)?;
+        self.journal
+            .update_target_state(self.target.target_id, "REVOKED", Some("revoked by Lemma"))?;
+        tracing::info!(
+            target = %self.target.name,
+            "dropped a revoked pairing; this computer will not poll it again"
+        );
+        Ok(())
     }
 
     fn apply_local_controls(&mut self) -> anyhow::Result<()> {
@@ -1079,6 +1139,29 @@ impl TargetWorker {
     /// its own first, and the probes then run concurrently rather than one
     /// after another. The machine appears with its agents almost immediately;
     /// their config options arrive a moment later.
+    /// Whether the agents installed on this machine have changed since the last
+    /// probe, rate-limited so the poll loop cannot turn it into a hot path.
+    ///
+    /// Returns false on the very first call after startup: the constructor
+    /// already schedules an immediate refresh, and reporting a change as well
+    /// would probe twice for one event.
+    fn agents_on_disk_changed(&mut self) -> bool {
+        if self.disk_scan_due > std::time::Instant::now() {
+            return false;
+        }
+        self.disk_scan_due = std::time::Instant::now() + DISK_SCAN_INTERVAL;
+        let fingerprint = self.manifest.installed_fingerprint();
+        if fingerprint == self.installed_fingerprint {
+            return false;
+        }
+        let first = self.installed_fingerprint.is_empty();
+        self.installed_fingerprint = fingerprint;
+        if !first {
+            tracing::info!("agents on this computer changed; re-probing");
+        }
+        !first
+    }
+
     fn refresh_harnesses(&mut self) {
         let client = self.client.clone();
         let sender = self.probed.0.clone();
@@ -3339,12 +3422,27 @@ mod adapter_failure_message_tests {
 
 #[cfg(test)]
 mod harness_publish_scheduling_tests {
-    use super::{FIRST_HARNESS_WAIT, HARNESS_REFRESH_INTERVAL, HARNESS_RETRY_INTERVAL};
+    use super::{
+        DISK_SCAN_INTERVAL, FIRST_HARNESS_WAIT, HARNESS_REFRESH_INTERVAL, HARNESS_RETRY_INTERVAL,
+    };
+
+    #[test]
+    fn noticing_a_new_agent_is_not_gated_on_the_refresh_interval() {
+        // The refresh interval used to be the only thing that noticed a newly
+        // installed agent, which put a quarter of an hour between installing
+        // Claude Code and being able to use it. `installed_fingerprint` answers
+        // that question now, cheaply enough to ask every couple of seconds, and
+        // the interval is a safety net behind it.
+        assert!(
+            DISK_SCAN_INTERVAL * 30 <= HARNESS_REFRESH_INTERVAL,
+            "detection must be orders of magnitude faster than the safety net",
+        );
+    }
 
     #[test]
     fn a_failed_publish_is_retried_in_seconds_not_a_quarter_of_an_hour() {
-        // The refresh interval answers "have the installed agents changed",
-        // which is rarely. It is the wrong answer to "the publish failed":
+        // The refresh interval is the safety net behind fingerprint detection,
+        // so it fires rarely. It is the wrong answer to "the publish failed":
         // the backend restarts whenever its configuration changes, and a
         // publish that landed during one used to leave this host with nothing
         // published until the next refresh — rejecting every command in

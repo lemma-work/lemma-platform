@@ -72,6 +72,7 @@ fn fake_adapter(directory: &TempDir) -> (ResolvedAdapter, PathBuf) {
                 ],
                 upstream_command: "python3".into(),
                 upstream_version_args: vec!["--version".into()],
+                upstream_path_env: None,
                 minimum_upstream_version: None,
                 distribution: "native".into(),
                 artifact_integrity: None,

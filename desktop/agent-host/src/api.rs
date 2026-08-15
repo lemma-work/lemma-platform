@@ -57,6 +57,30 @@ impl ApiError {
         )
     }
 
+    /// Whether Lemma has forgotten this pairing for good.
+    ///
+    /// A revoked host is refused exactly like an unknown one — deliberately, so
+    /// a stolen credential learns nothing — and both answer 401 with
+    /// `AGENT_HOST_REVOKED_OR_MISSING`. `HostStatus::Revoked` exists in the
+    /// protocol for this and is never reachable on the poll path, because
+    /// authentication fails before a body is ever composed.
+    ///
+    /// That distinction matters because the two 401s mean opposite things. A
+    /// malformed or momentarily rejected credential is worth retrying; a
+    /// revoked one never becomes valid again, and retrying it is how a removed
+    /// computer went on polling a dead pairing indefinitely while the workspace
+    /// reported it as unreachable.
+    #[must_use]
+    pub fn is_revoked(&self) -> bool {
+        matches!(
+            self,
+            Self::Status {
+                status: StatusCode::UNAUTHORIZED,
+                body,
+            } if body.contains("AGENT_HOST_REVOKED_OR_MISSING")
+        )
+    }
+
     /// Whether Lemma rejected this request on its own merits rather than
     /// because the host cannot reach or authenticate with the target.
     ///
@@ -275,6 +299,38 @@ async fn status_error(response: reqwest::Response) -> ApiError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_revoked_pairing_is_distinguished_from_any_other_rejection() {
+        // Both are 401 and the backend makes them deliberately identical to a
+        // caller holding a bad secret. Only the code tells them apart, and they
+        // mean opposite things: one is worth retrying forever, the other must
+        // never be retried at all.
+        let revoked = ApiError::Status {
+            status: StatusCode::UNAUTHORIZED,
+            body: r#"{"detail":{"code":"AGENT_HOST_REVOKED_OR_MISSING","message":"Agent Host is unavailable"}}"#
+                .to_owned(),
+        };
+        assert!(revoked.is_revoked());
+        assert!(revoked.is_unauthorized());
+
+        let malformed = ApiError::Status {
+            status: StatusCode::UNAUTHORIZED,
+            body: r#"{"detail":{"code":"INVALID_AGENT_HOST_CREDENTIAL"}}"#.to_owned(),
+        };
+        assert!(
+            !malformed.is_revoked(),
+            "a malformed credential may become valid again and must keep retrying"
+        );
+        assert!(malformed.is_unauthorized());
+
+        // And a 403 carrying the same words is not a revocation.
+        let forbidden = ApiError::Status {
+            status: StatusCode::FORBIDDEN,
+            body: "AGENT_HOST_REVOKED_OR_MISSING".to_owned(),
+        };
+        assert!(!forbidden.is_revoked());
+    }
 
     #[test]
     fn endpoint_preserves_api_prefix() {

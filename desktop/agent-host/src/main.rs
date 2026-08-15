@@ -143,6 +143,34 @@ async fn main() -> anyhow::Result<()> {
             // draining as it exits.
             let _single = paths.lock_single_instance()?;
             let config = HostConfig::load_or_create(&paths)?;
+            // Warm the adapter cache the moment the app is open, off the serve
+            // path, rather than when someone finally pairs.
+            //
+            // Installing was the first thing `connect` did and it blocked the
+            // pairing call behind two registry installs and two whole-tree
+            // hashes -- so the machine looked like it was pairing for minutes,
+            // and the file-access prompt that the *probe* raises only appeared
+            // after all of it. Lemma runs while the app is open, so the app
+            // being open is the honest moment to do this: by the time anyone
+            // pairs the adapters are usually already there, and if they are not,
+            // discovery reports the harness as still installing.
+            //
+            // Detached and best-effort on purpose. A machine with no npm, or no
+            // network, must still serve the agents it already has, and a failure
+            // here is recorded rather than fatal -- `install_cache` runs again
+            // on the next launch and `doctor --repair` is the deliberate fix.
+            let warm_paths = paths.clone();
+            std::thread::spawn(move || {
+                match AdapterManifest::builtin()
+                    .map(|manifest| manifest.with_cache_root(warm_paths.adapters.clone()))
+                    .and_then(|manifest| manifest.install_cache(&warm_paths.adapters, false))
+                {
+                    Ok(()) => tracing::info!("adapter cache ready"),
+                    Err(error) => {
+                        tracing::warn!(%error, "adapter cache warm-up failed; agents may be missing");
+                    }
+                }
+            });
             HostRuntime::new(config, paths)?.serve().await
         }
         Command::Connect {
@@ -152,8 +180,12 @@ async fn main() -> anyhow::Result<()> {
             allow_insecure_http,
         } => {
             let mut config = HostConfig::load_or_create(&paths)?;
-            let manifest = AdapterManifest::builtin()?.with_cache_root(paths.adapters.clone());
-            manifest.install_cache(&paths.adapters, false)?;
+            // Deliberately does not install adapters. Pairing is an HTTP call
+            // with a single-use code and needs none of them, but it used to wait
+            // for the whole cache to be built first -- which is why connecting
+            // took minutes and why nothing appeared to be happening while it
+            // did. `serve` warms the cache when the app opens instead, and a
+            // harness that is not cached yet reports itself as installing.
             let target = lemma_agent_host::api::TargetClient::pair(
                 url,
                 &pairing_code,

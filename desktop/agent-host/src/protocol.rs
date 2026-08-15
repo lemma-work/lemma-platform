@@ -333,6 +333,102 @@ pub struct ConfigOption {
 mod tests {
     use super::*;
 
+    /// Variant names as written in `protocol.rs`, for one enum.
+    ///
+    /// Parsed from the source rather than hand-listed, because a hand-listed
+    /// set is only ever as current as the last person who remembered it — which
+    /// is the failure this test exists to catch.
+    fn rust_variants(source: &str, name: &str) -> Vec<String> {
+        let header = format!("pub enum {name} {{");
+        let start = source
+            .find(&header)
+            .unwrap_or_else(|| panic!("{name} is declared in protocol.rs"))
+            + header.len();
+        let body = &source[start..];
+        let end = body.find('}').expect("the enum body is closed");
+        body[..end]
+            .lines()
+            .map(str::trim)
+            .filter(|line| {
+                !line.is_empty() && !line.starts_with("//") && !line.starts_with("#[")
+            })
+            .map(|line| line.trim_end_matches(',').trim().to_owned())
+            .filter(|line| !line.is_empty())
+            .collect()
+    }
+
+    fn screaming_snake(variant: &str) -> String {
+        let mut out = String::new();
+        for (index, character) in variant.char_indices() {
+            if character.is_uppercase() && index > 0 {
+                out.push('_');
+            }
+            out.push(character.to_ascii_uppercase());
+        }
+        out
+    }
+
+    fn snake(variant: &str) -> String {
+        screaming_snake(variant).to_lowercase()
+    }
+
+    /// The committed client spec, which CI already holds to the backend.
+    fn spec_enum(name: &str) -> Vec<String> {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../lemma-python/lemma_sdk/openapi_spec.json"
+        );
+        let raw = std::fs::read_to_string(path).expect("the committed OpenAPI spec is readable");
+        let spec: serde_json::Value =
+            serde_json::from_str(&raw).expect("the committed OpenAPI spec parses");
+        spec["components"]["schemas"][name]["enum"]
+            .as_array()
+            .unwrap_or_else(|| panic!("{name} is an enum in the client spec"))
+            .iter()
+            .map(|value| value.as_str().expect("enum members are strings").to_owned())
+            .collect()
+    }
+
+    #[test]
+    fn the_wire_states_match_the_backend_exactly() {
+        // These enums exist twice — once here, once in the backend — and agreed
+        // only because someone kept them in step by hand. A variant added on one
+        // side and not the other is a run state the other end cannot parse, and
+        // nothing failed until it reached a user.
+        //
+        // The spec is the arbiter because CI already refuses to let it drift
+        // from the backend, so pinning to it pins to the backend transitively.
+        // Compared as sets in both directions: an addition here that the backend
+        // has never heard of is exactly as broken as the reverse.
+        let source = include_str!("protocol.rs");
+        for (rust_name, spec_name, screaming) in [
+            ("RunState", "AgentHostRunState", true),
+            ("HostStatus", "AgentHostStatus", true),
+            ("HarnessHealth", "AgentHostHarnessHealth", true),
+            ("RejectionCode", "AgentHostRejectionCode", true),
+            ("CommandKind", "AgentHostCommandKind", true),
+            ("EventType", "AgentHostEventType", false),
+        ] {
+            let mut ours: Vec<String> = rust_variants(source, rust_name)
+                .iter()
+                .map(|variant| {
+                    if screaming {
+                        screaming_snake(variant)
+                    } else {
+                        snake(variant)
+                    }
+                })
+                .collect();
+            let mut theirs = spec_enum(spec_name);
+            ours.sort();
+            theirs.sort();
+            assert_eq!(
+                ours, theirs,
+                "{rust_name} and {spec_name} have drifted apart"
+            );
+        }
+    }
+
     #[test]
     fn terminal_states_are_explicit() {
         assert!(RunState::Succeeded.is_terminal());
