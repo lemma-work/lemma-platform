@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 import json
 import logging
 import time
@@ -60,7 +61,7 @@ from app.core.observability.telemetry import (
     instrument_database_engine,
     shutdown_telemetry,
 )
-from app.core.origin import origin_from_payload, origin_scope
+from app.core.origin import Origin, OriginKind, origin_from_payload, origin_scope
 from app.core.request_context import bind_job_context, create_background_task
 
 if TYPE_CHECKING:
@@ -915,17 +916,42 @@ def _register_lane(name: str | None, lane: Lane) -> None:
         TASK_LANES[name] = lane
 
 
-def streaq_task(*args, lane: Lane = Lane.INTERACTIVE, **kwargs):
+def streaq_task(
+    *args,
+    lane: Lane = Lane.INTERACTIVE,
+    origin: OriginKind | None = None,
+    **kwargs,
+):
     """Register a task on ``lane``'s worker.
 
     A task is registered on exactly one lane's Worker, so it is consumed from
     exactly one queue and can never be picked up twice.
+
+    ``origin`` declares that this task *is* a way work arrives, overriding
+    whatever the enqueuing caller carried. An import kicked off from the web UI
+    is enqueued under ``WEB``, but everything it then creates arrived by
+    ``IMPORT`` -- and the loop metrics are only meaningful if that holds however
+    the import was driven. Declared here rather than as a `with` block inside
+    each task body, so the claim sits next to the registration and no
+    hundred-line body has to be reindented to make it.
     """
     kwargs.setdefault("max_tries", JOB_MAX_RETRIES)
     kwargs.setdefault("timeout", JOB_TIMEOUT_SECONDS)
     kwargs.setdefault("ttl", JOB_RESULT_TTL_SECONDS)
     _register_lane(kwargs.get("name"), lane)
-    return LANE_WORKERS[lane].task(*args, **kwargs)
+    register = LANE_WORKERS[lane].task(*args, **kwargs)
+    if origin is None:
+        return register
+
+    def decorate(fn):
+        @functools.wraps(fn)
+        async def with_origin(*call_args, **call_kwargs):
+            with origin_scope(Origin(origin)):
+                return await fn(*call_args, **call_kwargs)
+
+        return register(with_origin)
+
+    return decorate
 
 
 def streaq_cron(tab: str, *, lane: Lane = Lane.INTERACTIVE, **kwargs):

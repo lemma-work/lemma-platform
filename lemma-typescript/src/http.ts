@@ -7,8 +7,9 @@ import type { AuthManager } from "./auth.js";
 import { retryDelayForStatus, serverRetryAfterMs, sleep } from "./run-utils.js";
 import {
   CLIENT_HEADER_NAME,
-  CLIENT_HEADER_VALUE,
+  clientHeaderValue,
   shouldSendClientHeader,
+  type KnownClient,
 } from "./version.js";
 
 type RequestParams = Record<string, string | number | boolean | undefined | null>;
@@ -26,6 +27,10 @@ export interface HttpClientOptions {
   timeoutMs?: number;
   /** Max automatic retries on 429/502/503/504 (default 2). */
   maxRetries?: number;
+  /** Which Lemma client this is, sent as `X-Lemma-Client`. Defaults to
+   *  `lemma-sdk-ts`. Naming it is what lets the backend tell a person in a
+   *  browser from somebody's script. */
+  client?: KnownClient;
 }
 
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -97,6 +102,7 @@ export function apiErrorFromStatus(
 export class HttpClient {
   private readonly timeoutMs: number;
   private readonly maxRetries: number;
+  private readonly clientHeader: string;
 
   constructor(
     private readonly apiUrl: string,
@@ -105,6 +111,7 @@ export class HttpClient {
   ) {
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.maxRetries = options.maxRetries ?? DEFAULT_MAX_RETRIES;
+    this.clientHeader = clientHeaderValue(options.client);
   }
 
   getBaseUrl(): string {
@@ -230,7 +237,7 @@ export class HttpClient {
     const withAuth = this.auth.getRequestInit(initBase);
 
     const withClient = shouldSendClientHeader(this.apiUrl, method)
-      ? this.mergeHeaders(withAuth, { [CLIENT_HEADER_NAME]: CLIENT_HEADER_VALUE })
+      ? this.mergeHeaders(withAuth, { [CLIENT_HEADER_NAME]: this.clientHeader })
       : withAuth;
     return this.mergeHeaders(withClient, options.headers);
   }

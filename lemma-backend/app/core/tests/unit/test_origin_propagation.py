@@ -27,8 +27,10 @@ from app.core.origin import (
     Origin,
     OriginKind,
     current_origin,
+    origin_for_path,
     origin_from_payload,
     origin_scope,
+    resolve_client_identity,
 )
 from app.core.request_context import bind_request_context
 from app.core.tests.unit.test_job_observability import _Worker
@@ -125,6 +127,66 @@ def test_a_scope_restores_the_previous_origin_on_exit() -> None:
             assert current_origin().kind is OriginKind.WEB  # type: ignore[union-attr]
         assert current_origin().kind is OriginKind.IMPORT  # type: ignore[union-attr]
     assert current_origin() is None
+
+
+# -- inbound edges: the path is the only honest signal ---------------------
+
+
+def test_a_surface_webhook_is_surface_work_not_somebody_s_script() -> None:
+    """An inbound webhook carries the sending platform's headers, not Lemma's,
+    so `X-Lemma-Client` resolves it to SDK. Without the path rule an agent
+    answering in Slack is counted as a script."""
+    assert resolve_client_identity(None).origin.kind is OriginKind.SDK
+
+    resolved = origin_for_path("/surfaces/webhooks/slack")
+    assert resolved is not None
+    assert resolved.kind is OriginKind.SURFACE
+    assert resolved.platform == "slack"
+
+
+def test_a_surface_webhook_platform_is_lowercased_into_the_allowlist() -> None:
+    resolved = origin_for_path("/surfaces/webhooks/TELEGRAM")
+    assert resolved is not None
+    assert resolved.platform == "telegram"
+
+
+def test_a_surface_scoped_webhook_keeps_the_kind_without_inventing_a_platform() -> None:
+    resolved = origin_for_path("/surfaces/0192f1a0-dead-beef/webhook")
+    assert resolved is not None
+    assert resolved.kind is OriginKind.SURFACE
+    assert resolved.platform is None
+
+
+def test_connector_ingress_is_not_confused_with_a_surface() -> None:
+    """The catalog says never to sum inside reach with outside reach, which only
+    works if the two never share an origin."""
+    resolved = origin_for_path("/webhooks/composio")
+    assert resolved is not None
+    assert resolved.kind is OriginKind.CONNECTOR
+    assert resolved.platform == "composio"
+
+
+@pytest.mark.parametrize(
+    "path", ["/pods", "/surfaces", "/surfaces/webhooks", "/webhooks"]
+)
+def test_a_path_that_is_not_an_edge_claims_no_origin(path: str) -> None:
+    assert origin_for_path(path) is None
+
+
+@pytest.mark.parametrize(
+    ("header", "kind"),
+    [
+        ("lemma-web/0.7.0", OriginKind.WEB),
+        ("lemma-desktop/0.7.0", OriginKind.DESKTOP),
+        ("lemma-app/0.7.0", OriginKind.APP),
+        ("lemma-sdk-ts/0.7.0", OriginKind.SDK),
+        ("something-else/1.0", OriginKind.SDK),
+    ],
+)
+def test_a_client_that_names_itself_gets_its_own_origin(
+    header: str, kind: OriginKind
+) -> None:
+    assert resolve_client_identity(header).origin.kind is kind
 
 
 @pytest.mark.parametrize(

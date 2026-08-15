@@ -1,5 +1,6 @@
 import { LemmaClient } from 'lemma-sdk';
 import { config } from '@/lib/config';
+import { desktopBridgeAvailable } from '@/lib/desktop/local-capabilities';
 
 function toOrigin(value: string): string | null {
     try {
@@ -27,6 +28,11 @@ function createBaseClient(): LemmaClient {
     return new LemmaClient({
         apiUrl: getApiBaseUrl(),
         authUrl: getAuthBaseUrl(),
+        // Naming the client is what makes WEB and DESKTOP reachable as origins.
+        // Unnamed, this SDK identifies as `lemma-sdk-ts` and every human's
+        // traffic lands under SDK -- indistinguishable from somebody's script,
+        // which makes "how much of this pod's work is a person?" unanswerable.
+        client: desktopBridgeAvailable() ? 'lemma-desktop' : 'lemma-web',
     });
 }
 

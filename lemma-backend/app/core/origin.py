@@ -188,10 +188,40 @@ def origin_from_payload(payload: Mapping[str, Any]) -> Origin | None:
     return Origin(kind, platform=str(platform) if platform else None)
 
 
+#: Surface webhooks. The platform is in the path, and it is the only signal
+#: available: an inbound webhook carries the sending platform's headers, not
+#: Lemma's, so ``X-Lemma-Client`` resolves it to ``SDK`` -- an agent answering in
+#: Slack would be counted as somebody's script. The path is the honest answer,
+#: and like the MCP mounts above it is a route this deployment owns rather than
+#: a header a caller controls.
+_SURFACE_PLATFORM_WEBHOOK = re.compile(r"^/surfaces/webhooks/([A-Za-z0-9_-]{1,32})/?$")
+_SURFACE_SCOPED_WEBHOOK = re.compile(r"^/surfaces/[^/]+/webhook/?$")
+
+#: Connector ingress: ``/webhooks/{source}``. This is the only path by which
+#: work reaches a pod from outside it (REACH_RULE), so it must not be confused
+#: with the surface mounts above -- they measure different products and the
+#: catalog says never to sum them.
+_CONNECTOR_WEBHOOK = re.compile(r"^/webhooks/([A-Za-z0-9_-]{1,32})/?$")
+
+
 def origin_for_path(path: str) -> Origin | None:
     for prefix, kind in _PATH_ORIGINS:
         if path.startswith(prefix):
             return Origin(kind)
+    match = _SURFACE_PLATFORM_WEBHOOK.match(path)
+    if match is not None:
+        # `.lower()` is load-bearing: `SurfacePlatform` values are uppercase and
+        # the allowlist here is lowercase, so an uppercase platform is silently
+        # nulled by `Origin.__post_init__`. A telegram-manager callback is not a
+        # platform in that allowlist and correctly resolves to a bare SURFACE.
+        return Origin(OriginKind.SURFACE, platform=match.group(1).lower())
+    if _SURFACE_SCOPED_WEBHOOK.match(path):
+        # Surface-scoped callbacks address the surface by id, so the platform is
+        # not in the path. The kind is still the honest part.
+        return Origin(OriginKind.SURFACE)
+    match = _CONNECTOR_WEBHOOK.match(path)
+    if match is not None:
+        return Origin(OriginKind.CONNECTOR, platform=match.group(1).lower())
     return None
 
 

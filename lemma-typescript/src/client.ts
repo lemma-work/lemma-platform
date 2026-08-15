@@ -97,10 +97,12 @@ export class LemmaClient {
     this._http = new HttpClient(this._config.apiUrl, this.auth, {
       timeoutMs: this._config.timeoutMs,
       maxRetries: this._config.maxRetries,
+      client: this._config.client,
     });
     this._generated = new GeneratedClientAdapter(this._config.apiUrl, this.auth, {
       maxRetries: this._config.maxRetries,
       timeoutMs: this._config.timeoutMs,
+      client: this._config.client,
     });
 
     const podIdFn = () => {

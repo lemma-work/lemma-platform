@@ -34,6 +34,7 @@ from app.core.infrastructure.jobs.streaq_runtime import (
     streaq_worker,
 )
 from app.core.log.log import get_logger
+from app.core.origin import OriginKind
 from app.modules.pod_bundle.config import pod_bundle_settings
 from app.modules.pod_bundle.domain.errors import (
     BundleInvalidError,
@@ -306,7 +307,7 @@ async def _fail(store, state: ExportState, message: str) -> None:
         )
 
 
-@streaq_task(name="plan_pod_import", lane=Lane.BULK)
+@streaq_task(name="plan_pod_import", lane=Lane.BULK, origin=OriginKind.IMPORT)
 async def plan_pod_import(context: dict[str, str | None]) -> None:
     """Diff a staged bundle against the pod and produce a resumable plan.
 
@@ -399,7 +400,7 @@ async def _plan_from_staging(worker_ctx, store, staging, state: ImportState) -> 
     )
 
 
-@streaq_task(name="import_pod_github", lane=Lane.BULK)
+@streaq_task(name="import_pod_github", lane=Lane.BULK, origin=OriginKind.IMPORT)
 async def import_pod_github(context: dict[str, str | None]) -> None:
     """Fetch a GitHub zipball, using the selected connector account when set."""
     worker_ctx: AppWorkerContext = streaq_worker.context
@@ -475,7 +476,7 @@ async def import_pod_github(context: dict[str, str | None]) -> None:
     )
 
 
-@streaq_task(name="import_pod_url", lane=Lane.BULK)
+@streaq_task(name="import_pod_url", lane=Lane.BULK, origin=OriginKind.IMPORT)
 async def import_pod_url(context: dict[str, str | None]) -> None:
     """Copy a lemma-origin source object (an export or an uploaded bundle) into
     this import's own staging, then plan — one job per ``import_id``. The source
@@ -534,7 +535,7 @@ async def import_pod_url(context: dict[str, str | None]) -> None:
         raise
 
 
-@streaq_task(name="apply_pod_import", lane=Lane.BULK)
+@streaq_task(name="apply_pod_import", lane=Lane.BULK, origin=OriginKind.IMPORT)
 async def apply_pod_import(context: dict[str, str | None]) -> None:
     """Apply an approved plan step by step: each step runs in its own short UoW
     (commit) then a Redis checkpoint, so a crash resumes from the first pending

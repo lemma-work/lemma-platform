@@ -6,7 +6,8 @@ import { OpenAPI } from "./openapi_client/core/OpenAPI.js";
 import { retryDelayForStatus, sleep } from "./run-utils.js";
 import {
   CLIENT_HEADER_NAME,
-  CLIENT_HEADER_VALUE,
+  clientHeaderValue,
+  type KnownClient,
   shouldSendClientHeader,
 } from "./version.js";
 
@@ -37,14 +38,16 @@ function extractDetails(body: unknown): unknown {
 export class GeneratedClientAdapter {
   private readonly maxRetries: number;
   private readonly timeoutMs: number;
+  private readonly clientHeader: string;
 
   constructor(
     private readonly apiUrl: string,
     private readonly auth: AuthManager,
-    options: { maxRetries?: number; timeoutMs?: number } = {},
+    options: { maxRetries?: number; timeoutMs?: number; client?: KnownClient } = {},
   ) {
     this.maxRetries = options.maxRetries ?? DEFAULT_MAX_RETRIES;
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    this.clientHeader = clientHeaderValue(options.client);
   }
 
   private configure(): void {
@@ -54,7 +57,7 @@ export class GeneratedClientAdapter {
     OpenAPI.TOKEN = this.auth.getBearerToken() ?? undefined;
     OpenAPI.HEADERS = async (options): Promise<Record<string, string>> => {
       if (shouldSendClientHeader(this.apiUrl, options.method)) {
-        return { [CLIENT_HEADER_NAME]: CLIENT_HEADER_VALUE };
+        return { [CLIENT_HEADER_NAME]: this.clientHeader };
       }
       return {};
     };
