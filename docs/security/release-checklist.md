@@ -14,6 +14,13 @@
       unresolved high/critical findings.
 - [ ] A protected-environment run for the release commit is successful and less
       than seven days old.
+- [ ] Each release workflow verified its own artifact before publishing: the two
+      PyPI workflows ran the Python SDK/CLI suites and the distribution checks,
+      the npm workflow ran the TypeScript typechecks, bundle-freshness diff and
+      unit tests, and the Desktop workflow ran the workspace fmt, clippy and
+      tests. These run inside the publishing job, so no separate CI dispatch is
+      required — but a release commit whose CI run shows those suites as
+      *skipped* is expected, not a finding.
 - [ ] Migration-first rolling sequence and worker-drain requirements are in the
       release notes.
 - [ ] Every resolved issue entry contains implementation and exact test evidence.

@@ -95,7 +95,15 @@ function freshDraft(target: HarnessDialogTarget | null): HarnessDraft {
         key,
         name: target?.harness.display_name ?? '',
         description: '',
-        scope: RuntimeProfileScope.ORGANIZATION,
+        // Personal until you say otherwise. This profile points at a coding
+        // agent on somebody's own laptop, holding their credentials and seeing
+        // their files, and a run dispatches to that machine whoever picked the
+        // model — so "Everyone in this workspace" is the one setting here that
+        // hands your computer to other people, and it should not be the setting
+        // you get by not reading the dialog. It used to be, and it sat one step
+        // after a pairing click that has since become automatic, which took away
+        // the last moment anyone was obliged to look.
+        scope: RuntimeProfileScope.PERSONAL,
         defaultModel: HARNESS_DEFAULT_VALUE,
         selections: {},
     };
@@ -228,8 +236,8 @@ export function HarnessProfileDialog({
                                     <SelectValue />
                                 </SelectTrigger>
                                 <SelectContent>
-                                    <SelectItem value={RuntimeProfileScope.ORGANIZATION}>Everyone in this workspace</SelectItem>
                                     <SelectItem value={RuntimeProfileScope.PERSONAL}>Only me</SelectItem>
+                                    <SelectItem value={RuntimeProfileScope.ORGANIZATION}>Everyone in this workspace</SelectItem>
                                 </SelectContent>
                             </Select>
                         </DialogField>

@@ -1,0 +1,51 @@
+name: Verify TypeScript SDK
+description: Typechecks, committed-bundle freshness, and unit tests for lemma-typescript.
+
+# The caller sets up Node; this owns everything after that. CI runs it as the
+# "TypeScript SDK checks" job, and release-lemma-typescript.yml runs it against
+# the release commit -- CI's path filter skips that job on a backend-only
+# release commit, so a green CI run for the release SHA is not evidence these
+# checks ever executed for it.
+#
+# Run it before `npm version` rewrites package.json: the SDK_VERSION check and
+# the committed-bundle diff both read the tree as committed.
+
+runs:
+  using: composite
+  steps:
+    - name: Install dependencies
+      working-directory: ${{ github.workspace }}/lemma-typescript
+      shell: bash
+      run: npm ci
+
+    - name: Typecheck (src)
+      working-directory: ${{ github.workspace }}/lemma-typescript
+      shell: bash
+      run: npx tsc --noEmit -p tsconfig.json
+
+    - name: Typecheck (tests)
+      working-directory: ${{ github.workspace }}/lemma-typescript
+      shell: bash
+      run: npx tsc --noEmit -p tsconfig.test.json
+
+    - name: SDK_VERSION matches package.json
+      working-directory: ${{ github.workspace }}/lemma-typescript
+      shell: bash
+      run: |
+        PKG=$(node -p "require('./package.json').version")
+        SRC=$(grep -oE '"[0-9]+\.[0-9]+\.[0-9]+"' src/version.ts | head -1 | tr -d '"')
+        echo "package.json=$PKG version.ts=$SRC"
+        test "$PKG" = "$SRC" || { echo "::error::src/version.ts SDK_VERSION ($SRC) != package.json version ($PKG)"; exit 1; }
+
+    - name: Browser bundle is fresh
+      working-directory: ${{ github.workspace }}/lemma-typescript
+      shell: bash
+      run: |
+        npm run build:bundle
+        git diff --exit-code public/lemma-client.js \
+          || { echo "::error::Committed public/lemma-client.js is stale — run 'npm run build:bundle' and commit"; exit 1; }
+
+    - name: Unit tests
+      working-directory: ${{ github.workspace }}/lemma-typescript
+      shell: bash
+      run: npx vitest run

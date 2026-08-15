@@ -175,11 +175,84 @@ private func configuration(
     return configuration
 }
 
+/// Hands idle guest memory back to macOS, without asking the guest to do it all
+/// at once and without mistaking "not started yet" for "finished".
+///
+/// This crashed a guest. `active_sandboxes == 0` was read as idle, which is true
+/// once the stack has run something and false during first setup, when there are
+/// no sandboxes because nothing has started. Sixty seconds into the very first
+/// boot — with Postgres mid-`initdb` and migrations running — it asked the guest
+/// to give back 4.5 of its 6 GiB in a single step. The kernel began mass page
+/// migration to comply and took an Oops in `migrate_pages`:
+///
+///     BUG: Bad rss-counter state mm:… type:MM_ANONPAGES val:9      (t+4.5s)
+///     Unable to handle kernel paging request at … kcompactd0       (t+65s)
+///
+/// Setup then failed with every vsock connect reset and migrations timing out
+/// after 300s, none of which named memory.
+///
+/// ## Why it fired then, of all times
+///
+/// The balloon was driven by the *arrival* of health responses: `observe` is
+/// called from `annotate`, which only runs on a `health` reply, and each idle
+/// reply restarted the countdown. locald polls health every 5 seconds — but it
+/// skips the poll entirely while a long local operation is running, which first
+/// setup is. So the only way the countdown ever completed was for the polling to
+/// stop, and the thing that stops it is the guest being busy with work the
+/// sandbox count cannot see. The balloon was not merely wrong about setup; it
+/// was anti-correlated with idleness, and could never have fired on a genuinely
+/// idle machine.
+///
+/// So the clock is its own now. `observe` records what it saw and when;
+/// a repeating timer decides. Silence is read as *unknown*, which is the honest
+/// reading — nobody has told us anything — and unknown is never grounds to
+/// reclaim.
+///
+/// The other two changes: it steps down instead of jumping, so the guest is
+/// never asked to migrate gigabytes in one go; and it holds off for
+/// `bootGraceSeconds` after start rather than until the first sandbox ever runs.
+/// A grace period covers first setup, which is what the crash needed, without
+/// also covering forever — "has never run a sandbox" is a state a machine can
+/// legitimately sit in for its whole life, and such a machine used to keep its
+/// full ceiling permanently while reporting `starting`.
+///
+/// A correct kernel should not Oops however rudely it is ballooned. We can only
+/// stop provoking it.
 private final class MemoryController {
     private let device: VZVirtioTraditionalMemoryBalloonDevice?
     private let ceiling: UInt64
     private let idleTarget = UInt64(1_536 * 1_024 * 1_024)
-    private var idleGeneration = 0
+    /// The most memory to reclaim in one step, and how long to settle between
+    /// steps. Reclaiming is page migration in the guest, and the cost of it is
+    /// superlinear in how much is asked for at once.
+    private let stepBytes = UInt64(1_024 * 1_024 * 1_024)
+    private let stepSeconds = 20.0
+    /// How long the guest must have been idle before any of it is reclaimed.
+    private let idleSeconds = 60.0
+    /// How long after boot the balloon stays out of the way entirely.
+    ///
+    /// First setup is minutes of real work with nothing running that
+    /// `active_sandboxes` can count: `initdb`, migrations, image pulls. Ten
+    /// minutes clears it comfortably. This replaces "has ever run a sandbox",
+    /// which covered the same case and never expired.
+    private let bootGraceSeconds = 600.0
+    /// How stale an observation may be before it stops meaning anything.
+    ///
+    /// locald polls health every 5 seconds and suppresses the poll while a long
+    /// local operation is in flight. A gap is therefore evidence of work, not of
+    /// quiet, and reclaiming into one is exactly the mistake that crashed a
+    /// guest.
+    private let observationValidSeconds = 30.0
+    /// How often to reconsider. Short relative to `idleSeconds`, so the decision
+    /// is made from what is true now rather than from whenever a reply landed.
+    private let tickSeconds = 5.0
+    private let startedAt = Date()
+    /// When the guest was last observed doing something, or nil if never.
+    private var lastBusyAt: Date?
+    /// When we last heard anything at all about the guest.
+    private var lastObservedAt: Date?
+    /// Whether a walk down to the idle target is already scheduled.
+    private var shrinking = false
     private(set) var state = "active"
 
     init(virtualMachine: VZVirtualMachine, ceiling: UInt64) {
@@ -188,12 +261,29 @@ private final class MemoryController {
         self.ceiling = ceiling
         if device == nil {
             state = "unsupported"
+            return
+        }
+        scheduleTick()
+    }
+
+    /// Reconsider on our own clock, forever.
+    ///
+    /// The whole point of the rewrite: the decision must not be driven by the
+    /// arrival of a health reply, because those stop arriving exactly when the
+    /// guest is busiest.
+    private func scheduleTick() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + tickSeconds) { [weak self] in
+            guard let self else { return }
+            self.reconsider()
+            self.scheduleTick()
         }
     }
 
     func requireCapacity() {
         dispatchPrecondition(condition: .onQueue(.main))
-        idleGeneration += 1
+        lastBusyAt = Date()
+        lastObservedAt = lastBusyAt
+        shrinking = false
         guard let device else {
             state = "unsupported"
             return
@@ -202,22 +292,79 @@ private final class MemoryController {
         state = "active"
     }
 
+    /// Record what the guest last said. Decides nothing.
     func observe(activeSandboxes: Int) {
         dispatchPrecondition(condition: .onQueue(.main))
+        let now = Date()
+        lastObservedAt = now
         if activeSandboxes > 0 {
             requireCapacity()
             return
         }
-        idleGeneration += 1
-        let generation = idleGeneration
-        DispatchQueue.main.asyncAfter(deadline: .now() + 60) { [weak self] in
-            guard let self, self.idleGeneration == generation else { return }
-            guard let device = self.device else {
-                self.state = "unsupported"
-                return
-            }
-            device.targetVirtualMachineMemorySize = min(self.idleTarget, self.ceiling)
-            self.state = "idle-requested"
+        guard device != nil else {
+            state = "unsupported"
+            return
+        }
+        // Deliberately does not touch `lastBusyAt`, and deliberately does not
+        // restart anything. Restarting on every idle reply is what made a
+        // completed countdown impossible at 5-second polling: the timer was
+        // reset twelve times for every minute it was asked to wait.
+    }
+
+    /// Decide, from what is true now rather than from when something last
+    /// arrived.
+    private func reconsider() {
+        dispatchPrecondition(condition: .onQueue(.main))
+        guard device != nil else { return }
+        let now = Date()
+
+        // Nothing is reclaimed during first setup. Minutes of `initdb`,
+        // migrations and image pulls, none of it visible as a sandbox.
+        guard now.timeIntervalSince(startedAt) >= bootGraceSeconds else {
+            state = "starting"
+            return
+        }
+        // Silence means a health poll is being suppressed, which locald does
+        // while a long local operation runs. Unknown is not idle.
+        guard let lastObservedAt, now.timeIntervalSince(lastObservedAt) < observationValidSeconds
+        else {
+            state = "unknown"
+            shrinking = false
+            return
+        }
+        // Busy recently enough that reclaiming would only be undone.
+        if let lastBusyAt, now.timeIntervalSince(lastBusyAt) < idleSeconds {
+            return
+        }
+        // A guest that has never been busy still qualifies once the grace period
+        // is behind it: `lastBusyAt == nil` means nothing has run, and after ten
+        // minutes of a live stack that is a fact about the machine rather than a
+        // gap in what we know.
+        guard !shrinking else { return }
+        shrinking = true
+        stepDown()
+    }
+
+    /// Walk the target down one step at a time, rescheduling until it lands.
+    ///
+    /// Abandoned by anything that clears `shrinking` — `requireCapacity` when
+    /// work arrives, and `reconsider` when the guest goes quiet on us — so a
+    /// reclaim nobody wants any more stops rather than finishing.
+    private func stepDown() {
+        dispatchPrecondition(condition: .onQueue(.main))
+        guard shrinking, let device else { return }
+        let floor = min(idleTarget, ceiling)
+        let current = device.targetVirtualMachineMemorySize
+        guard current > floor else {
+            state = "idle"
+            shrinking = false
+            return
+        }
+        let next = current - min(stepBytes, current - floor)
+        device.targetVirtualMachineMemorySize = next
+        state = next > floor ? "idle-shrinking" : "idle-requested"
+        DispatchQueue.main.asyncAfter(deadline: .now() + stepSeconds) { [weak self] in
+            self?.stepDown()
         }
     }
 

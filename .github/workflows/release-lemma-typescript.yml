@@ -49,6 +49,15 @@ jobs:
       - name: Use npm with trusted publishing support
         run: npm install --global npm@11.18.0
 
+      # The run that publishes the package is the run that checks it. CI's path
+      # filter skips "TypeScript SDK checks" whenever the release commit did not
+      # touch lemma-typescript -- a backend-only release commit is the common
+      # case -- and CI is green anyway, because "CI passed" treats a skipped
+      # suite as passing. Before `npm version` below: the SDK_VERSION check and
+      # the committed-bundle diff read the tree as committed.
+      - name: Verify TypeScript SDK
+        uses: ./.github/actions/verify-typescript-sdk
+
       # See the note in release-lemma-python.yml: consistency is enforced at
       # release time, in one place, instead of per-PR version bumps. It covers
       # every component, where the src/version.ts check below sees only this one
@@ -87,9 +96,9 @@ jobs:
       - name: Build package
         run: npm run build
 
-      - name: Run unit tests
-        run: npm test
-
+      # Unit tests ran in "Verify TypeScript SDK" above, against the same
+      # sources -- vitest runs src, not dist, and `npm version` touches nothing
+      # it reads.
       - name: Verify registry blocks
         run: npm run registry:check
 

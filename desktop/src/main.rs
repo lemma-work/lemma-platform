@@ -85,10 +85,6 @@ struct UiState {
     api_url: String,
     log_source: String,
     component: String,
-    // Not sent to the splash page, which has no Agent Host UI. The tray reads
-    // it to know which way its toggle should point.
-    #[serde(skip)]
-    agent_host_running: bool,
     #[serde(skip)]
     active_operation_id: String,
     #[serde(skip)]
@@ -136,7 +132,9 @@ struct Shell {
     quit_after_stop: AtomicBool,
     // The tray is built once, so its Agent Host entries are kept here to be
     // rewritten as status arrives.
-    tray_agent_host: Mutex<Option<(MenuItem<tauri::Wry>, MenuItem<tauri::Wry>)>>,
+    /// The tray's Agent Host line. A label, never a control: the toggle beside
+    /// it was the off switch, and it is gone.
+    tray_agent_host: Mutex<Option<MenuItem<tauri::Wry>>>,
     /// The tray's one-line answer to "is Lemma up?", so that question does not
     /// require opening the app to find out.
     tray_status: Mutex<Option<MenuItem<tauri::Wry>>>,
@@ -3023,24 +3021,29 @@ fn agent_host_status_impl(app: AppHandle) -> Result<Value, String> {
 /// Runs off the UI thread. A synchronous `#[tauri::command]` is dispatched on
 /// the main thread, so any command that waits on the daemon, the network or a
 /// child process freezes every window for its whole duration.
-async fn agent_host_set_enabled(
-    window: Webview,
-    app: AppHandle,
-    enabled: bool,
-) -> Result<(), String> {
+/// Ask this computer's Agent Host to be running. There is no counterpart.
+///
+/// This used to be `set_enabled(bool)`, and the `false` half was the off switch
+/// the workspace page drew as "Turn off". It also wrote a preference that had to
+/// be remembered, reconciled against the automatic connection, and reported as a
+/// state of its own — which is how "off" became indistinguishable from "not
+/// paired", "not installed" and "cannot reach the workspace" in the one place a
+/// user looks. Removing the `false` removes the preference, the reconciliation,
+/// and the state. Quitting Lemma still stops the sidecar; that is a consequence
+/// of the app closing, not a setting.
+async fn agent_host_start(window: Webview, app: AppHandle) -> Result<(), String> {
     require_agent_host_caller(&window, &app)?;
-    tauri::async_runtime::spawn_blocking(move || agent_host_set_enabled_impl(app, enabled))
+    tauri::async_runtime::spawn_blocking(move || agent_host_start_impl(app))
         .await
         .map_err(|error| error.to_string())?
 }
 
-fn agent_host_set_enabled_impl(app: AppHandle, enabled: bool) -> Result<(), String> {
+fn agent_host_start_impl(app: AppHandle) -> Result<(), String> {
     ensure_agent_host_daemon(&app)?;
-    let command = if enabled { "start" } else { "stop" };
     send_to_locald(
         &app,
         json!({
-            "cmd": format!("agent-host.{command}"),
+            "cmd": "agent-host.start",
             "id": operation_id("agent-host"),
         }),
     )
@@ -3085,32 +3088,12 @@ fn agent_host_pair_impl(
     )
 }
 
-#[tauri::command]
-/// Runs off the UI thread. A synchronous `#[tauri::command]` is dispatched on
-/// the main thread, so any command that waits on the daemon, the network or a
-/// child process freezes every window for its whole duration.
-async fn agent_host_unpair(
-    window: Webview,
-    app: AppHandle,
-    target_id: Option<String>,
-) -> Result<(), String> {
-    require_agent_host_caller(&window, &app)?;
-    tauri::async_runtime::spawn_blocking(move || agent_host_unpair_impl(app, target_id))
-        .await
-        .map_err(|error| error.to_string())?
-}
-
-fn agent_host_unpair_impl(app: AppHandle, target_id: Option<String>) -> Result<(), String> {
-    ensure_agent_host_daemon(&app)?;
-    send_to_locald(
-        &app,
-        json!({
-            "cmd": "agent-host.unpair",
-            "id": operation_id("agent-host-unpair"),
-            "target_id": target_id.unwrap_or_default(),
-        }),
-    )
-}
+// No `agent_host_unpair`. Dropping the pairing of the machine you are sitting
+// at is undone by the next authenticated page, which pairs it again — so the
+// command could only ever be honest alongside a flag remembering that you meant
+// it, and that flag was a state plane of its own that nothing else could see.
+// Removing a computer is `agent.host.revoke` on the backend, where it is durable
+// and where it also works for a machine you cannot reach.
 
 #[tauri::command]
 /// Runs off the UI thread. A synchronous `#[tauri::command]` is dispatched on
@@ -3134,18 +3117,20 @@ fn agent_host_refresh_impl(app: AppHandle) -> Result<(), String> {
     )
 }
 
-/// Whether this machine has an Agent Host worth supervising, read from the
-/// files locald itself uses, so the shell can decide before locald exists.
+/// Whether to bring locald up at launch so the sidecar is there to be reached.
+///
+/// Read from the files locald itself uses, so the shell can decide before locald
+/// exists.
+///
+/// Purely derived: this machine is paired to something, so it has work waiting.
+/// It used to consult `supervisor.json`'s `{"enabled": bool}` first, which was
+/// the persisted half of the off switch — and with the switch gone, nothing
+/// writes that file, while a `false` left behind by an older build would hold a
+/// paired machine off forever with no UI left to turn it back on. An unpaired
+/// machine still gets no daemon at all, which is the case this guard exists for.
 fn agent_host_wants_to_run() -> bool {
     let root = locald_root();
     let data_dir = root.parent().unwrap_or(&root).join("agent-host");
-    if let Ok(raw) = std::fs::read_to_string(data_dir.join("supervisor.json")) {
-        if let Ok(preference) = serde_json::from_str::<Value>(&raw) {
-            if let Some(enabled) = preference.get("enabled").and_then(Value::as_bool) {
-                return enabled;
-            }
-        }
-    }
     let Ok(raw) = std::fs::read_to_string(data_dir.join("config.json")) else {
         return false;
     };
@@ -3178,24 +3163,6 @@ fn agent_host_open_log(window: Webview, app: AppHandle) -> Result<(), String> {
     reveal_path(&log)
 }
 
-/// Flip the Agent Host from the tray, without needing a window open.
-fn toggle_agent_host_from_tray(app: &AppHandle) -> Result<(), String> {
-    let enabled = {
-        let shell: State<Shell> = app.state();
-        let ui = shell.ui.lock().unwrap();
-        ui.agent_host_running
-    };
-    ensure_agent_host_daemon(app)?;
-    let command = if enabled { "stop" } else { "start" };
-    send_to_locald(
-        app,
-        json!({
-            "cmd": format!("agent-host.{command}"),
-            "id": operation_id("agent-host-tray"),
-        }),
-    )
-}
-
 /// What the tray says about the Agent Host.
 ///
 /// Reachability, not liveness. A running host that is unpaired or cannot reach
@@ -3216,11 +3183,21 @@ fn agent_host_tray_label(
     paired: bool,
     connected: bool,
     unreachable: bool,
+    failed_to_start: bool,
 ) -> String {
     if !available {
         "Agent Host: not installed".into()
+    } else if !running && failed_to_start {
+        // The supervisor tried and could not. Saying "starting…" here is a
+        // promise the process is not keeping: it arms a backoff on every failed
+        // spawn, so a sidecar that cannot start says "starting…" for as long as
+        // the app is open and nothing ever contradicts it.
+        "Agent Host: not starting — see log".into()
     } else if !running {
-        "Agent Host: off".into()
+        // Not "off". Nothing can switch this computer off any more, so the only
+        // way to be installed, not running and not failing is to be on the way
+        // up — and a tray that says "off" with no way to say "on" is a dead end.
+        "Agent Host: starting…".into()
     } else if !paired {
         "Agent Host: not paired".into()
     } else if connected {
@@ -3258,33 +3235,42 @@ fn refresh_agent_host_tray(app: &AppHandle, status: &Value) {
             })
     });
 
-    let state = agent_host_tray_label(available, running, paired, connected, unreachable);
+    // The supervisor records why the last spawn or exit failed and clears it on
+    // a success, so this is "it tried and could not", not "it failed once weeks
+    // ago". Only meaningful while it is not running; a running host's errors are
+    // about its workspaces, which the states below already cover.
+    let failed_to_start = status
+        .get("last_error")
+        .and_then(Value::as_str)
+        .is_some_and(|error| !error.trim().is_empty());
 
-    {
-        let shell: State<Shell> = app.state();
-        shell.ui.lock().unwrap().agent_host_running = running;
-    }
-    // Clone the handles out and drop the guard before touching them. Every
+    let state = agent_host_tray_label(
+        available,
+        running,
+        paired,
+        connected,
+        unreachable,
+        failed_to_start,
+    );
+
+    // `running` used to be mirrored onto `Shell::ui` as well, because the tray's
+    // toggle had to know which way to point. Nothing asks any more.
+    //
+    // Clone the handle out and drop the guard before touching it. Every
     // `set_*` below is a blocking round-trip to the main thread, and this runs on
     // the locald reader thread -- so holding the lock across them meant a busy
     // main thread stopped daemon events being read at all. Progress stopped
     // updating and `ready` was never handled, which is how a slow start became a
     // permanently dead-looking splash. `refresh_tray_status` already does this.
-    let items = {
+    let item = {
         let shell: State<Shell> = app.state();
         let guard = shell.tray_agent_host.lock().unwrap();
         guard.clone()
     };
-    let Some((state_item, toggle_item)) = items else {
+    let Some(state_item) = item else {
         return;
     };
     let _ = state_item.set_text(state);
-    let _ = toggle_item.set_text(if running {
-        "Turn Agent Host Off"
-    } else {
-        "Turn Agent Host On"
-    });
-    let _ = toggle_item.set_enabled(available);
     if let Some(tray) = app.tray_by_id("lemma-tray") {
         let _ = tray.set_tooltip(Some(if running && connected {
             "Lemma · Agent Host connected"
@@ -4024,13 +4010,6 @@ fn confirm_then_switch_connection(app: AppHandle) {
         });
 }
 
-/// Whether the Agent Host is running, as the tray last understood it.
-fn agent_host_is_running(app: &AppHandle) -> bool {
-    let shell: State<Shell> = app.state();
-    let ui = shell.ui.lock().unwrap();
-    ui.agent_host_running
-}
-
 /// Say so when a menu action fails.
 ///
 /// Every arm of `handle_menu_action` used to discard its `Result`, so a menu
@@ -4257,15 +4236,6 @@ fn handle_menu_action(app: &AppHandle, id: &str) {
         "diagnostics" => {
             let _ = show_control_center_page(&app, Some("diagnostics"));
         }
-        "agent-host-toggle" => {
-            let action = if agent_host_is_running(&app) {
-                "Turn Agent Host off"
-            } else {
-                "Turn Agent Host on"
-            };
-            let handle = app.clone();
-            menu_background(&app, action, move || toggle_agent_host_from_tray(&handle));
-        }
         "agent-host-log" => {
             menu_background(&app, "Open Agent Host log", || {
                 reveal_path(&agent_host_log_path())
@@ -4488,19 +4458,9 @@ fn build_tray_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         false,
         None::<&str>,
     )?;
-    let agent_host_toggle_item = MenuItem::with_id(
-        app,
-        "agent-host-toggle",
-        "Turn Agent Host On",
-        true,
-        None::<&str>,
-    )?;
     {
         let shell: State<Shell> = app.state();
-        *shell.tray_agent_host.lock().unwrap() = Some((
-            agent_host_state_item.clone(),
-            agent_host_toggle_item.clone(),
-        ));
+        *shell.tray_agent_host.lock().unwrap() = Some(agent_host_state_item.clone());
         *shell.tray_status.lock().unwrap() = Some(status_item.clone());
     }
 
@@ -4556,7 +4516,6 @@ fn build_tray_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
             &control_item,
             &PredefinedMenuItem::separator(app)?,
             &agent_host_state_item,
-            &agent_host_toggle_item,
             &PredefinedMenuItem::separator(app)?,
             &troubleshoot,
             &PredefinedMenuItem::separator(app)?,
@@ -4894,9 +4853,8 @@ fn main() {
             control_snapshot,
             agent_host_action,
             agent_host_status,
-            agent_host_set_enabled,
+            agent_host_start,
             agent_host_pair,
-            agent_host_unpair,
             agent_host_refresh,
             agent_host_open_log,
             apply_operator_config,
@@ -5371,6 +5329,14 @@ mod tests {
         );
     }
 
+    // The memory balloon's policy used to be asserted here, by `include_str!`ing
+    // a Swift file from a package this crate does not build and grepping it. It
+    // now lives in `scripts/check-balloon-policy.sh`, wired into
+    // `make desktop-lint`: still a source check, because the package has no test
+    // target, but one that says so, explains each rule it enforces, and fails
+    // where someone changing Swift will see it rather than in an unrelated
+    // crate's unit tests.
+
     #[test]
     fn the_tray_lock_is_not_held_across_main_thread_round_trips() {
         // Every `set_*` on a menu item blocks until the main thread is free, and
@@ -5784,39 +5750,69 @@ mod tests {
         // Each of these is a live process that cannot take work, and the old
         // process-only status called them all "running".
         assert_eq!(
-            agent_host_tray_label(true, true, false, false, false),
+            agent_host_tray_label(true, true, false, false, false, false),
             "Agent Host: not paired",
         );
         assert_eq!(
-            agent_host_tray_label(true, true, true, false, false),
+            agent_host_tray_label(true, true, true, false, false, false),
             "Agent Host: reconnecting…",
         );
         assert_eq!(
-            agent_host_tray_label(true, true, true, true, false),
+            agent_host_tray_label(true, true, true, true, false, false),
             "Agent Host: connected",
         );
+        // Paired and not running is a stage, not a setting: the off switch is
+        // gone, so this state is only ever on its way to "connected".
         assert_eq!(
-            agent_host_tray_label(true, false, true, false, false),
-            "Agent Host: off"
+            agent_host_tray_label(true, false, true, false, false, false),
+            "Agent Host: starting…"
         );
-        // A build without the sidecar cannot be switched on, so say so rather
-        // than offering a toggle that always fails.
+        // A build without the sidecar has no host to report on at all.
         assert_eq!(
-            agent_host_tray_label(false, false, false, false, false),
+            agent_host_tray_label(false, false, false, false, false, false),
             "Agent Host: not installed",
         );
         // The state this distinction was added for: a workspace that answered
         // yesterday and is not there today. "Reconnecting" for a week is a
         // promise the retry loop cannot keep.
         assert_eq!(
-            agent_host_tray_label(true, true, true, false, true),
+            agent_host_tray_label(true, true, true, false, true, false),
             "Agent Host: workspace unreachable",
         );
         // Connected wins over a stale error on another target: one workspace
         // failing does not stop this computer taking work from the other.
         assert_eq!(
-            agent_host_tray_label(true, true, true, true, true),
+            agent_host_tray_label(true, true, true, true, true, false),
             "Agent Host: connected",
+        );
+    }
+
+    #[test]
+    fn a_sidecar_that_cannot_start_does_not_say_it_is_starting() {
+        // "starting…" replaced "off" because nothing can switch this computer
+        // off any more — but it is a promise about what happens next, and the
+        // supervisor arms a restart backoff on every failed spawn. A sidecar
+        // that cannot start at all said "starting…" for as long as the app was
+        // open, with nothing anywhere to contradict it. Same shape as an adapter
+        // stuck at "Setting up": a failure wearing the clothes of progress.
+        assert_eq!(
+            agent_host_tray_label(true, false, true, false, false, true),
+            "Agent Host: not starting — see log",
+        );
+        // A failure recorded against a host that is up is about its workspaces,
+        // not its startup, and the reachability states already say that better.
+        assert_eq!(
+            agent_host_tray_label(true, true, true, true, false, true),
+            "Agent Host: connected",
+        );
+        assert_eq!(
+            agent_host_tray_label(true, true, true, false, true, true),
+            "Agent Host: workspace unreachable",
+        );
+        // And a build with no sidecar has nothing to fail.
+        assert_eq!(
+            agent_host_tray_label(false, false, false, false, false, true),
+            "Agent Host: not installed",
         );
     }
 
@@ -6577,9 +6573,11 @@ mod tests {
     fn first_launch_chooser_explains_both_connection_modes() {
         let html = include_str!("../ui/index.html");
 
-        assert!(html.contains("Connect to lemma.work"));
-        assert!(html.contains("Run Lemma on this Mac"));
-        assert!(html.contains("Cloud and local workspaces do not share data"));
+        assert!(html.contains("Welcome to Lemma."));
+        assert!(html.contains("run Lemma on this Mac"));
+        // The consequence of choosing local now sits on the screen that asks
+        // for that choice, rather than on the one that no longer does.
+        assert!(html.contains("A local workspace shares no data with a cloud one"));
         assert!(html.contains("Install local services"));
         assert!(html.contains("Set up Windows runtime"));
         assert!(html.contains("prepareRuntime: () => invoke(\"prepare_runtime\")"));
@@ -6609,23 +6607,48 @@ mod tests {
     /// The disclosure screen local opens is unchanged and still runs before
     /// anything is installed, which is what the old label was trying to promise.
     #[test]
-    fn neither_connection_choice_reads_as_the_effortful_one() {
+    fn the_first_screen_asks_one_thing_and_prices_the_alternative() {
+        // This used to assert the opposite: that both choices carried the same
+        // call to action, so neither read as the effortful one. The label fix
+        // behind it was right — "Review →" beside "Continue →" read as homework
+        // — but the conclusion was not. Drawing a sign-in and a fifteen-minute
+        // install as equals is misdirection however well meant, and the cost
+        // only appeared after the choice had been made.
+        //
+        // It also cannot pitch. Any line about coding agents tells the person
+        // who has not installed one that the app is not for them, on the first
+        // screen they ever see. What this machine has is checked after sign-in,
+        // where it is a fact.
         let html = include_str!("../ui/index.html");
 
         assert!(
-            !html.contains("<span class=\"choice-action\">Review →</span>"),
-            "the local choice should invite in the same words as the cloud one"
+            !html.contains("setup-kicker\">Workspace location"),
+            "the screen should not open on an architecture question"
         );
-        assert_eq!(
-            html.matches("<span class=\"choice-action\">Continue →</span>")
-                .count(),
-            2,
-            "both choices should carry the same call to action"
+        assert!(
+            !html.contains("choice-action"),
+            "there is one action now, so nothing needs a matching call to action"
+        );
+        assert!(
+            html.contains(">Sign in</button>"),
+            "the one action is signing in"
+        );
+        // The alternative stays reachable and states its cost in the same breath,
+        // which is what makes the smaller weighting honest rather than a nudge.
+        assert!(html.contains("id=\"choose-local\""));
+        assert!(
+            html.contains("id=\"local-choice-cost\""),
+            "the local path must price itself where it is offered"
         );
         // Still gated: nothing is installed until the review screen is answered.
+        // Proven by that screen existing between the link and the install, not
+        // by a line of reassurance on a screen that installs nothing.
         assert!(html.contains("id=\"local-confirm\""));
         assert!(html.contains("Install local services"));
-        assert!(html.contains("no local services are installed until you confirm"));
+        assert!(
+            !html.contains("no local services are installed until you confirm"),
+            "the welcome screen should not answer a fear nobody arrives with"
+        );
     }
 
     #[test]
