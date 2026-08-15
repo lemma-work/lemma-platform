@@ -133,6 +133,13 @@ class ConversationRepository(Protocol):
         agent_run_id: UUID,
     ) -> list[AgentRun]: ...
 
+    async def load_runtime_history_by_run_id(
+        self,
+        agent_run_id: UUID,
+        *,
+        full_run_count: int,
+    ) -> list[AgentRun]: ...
+
     async def append_message(
         self,
         *,

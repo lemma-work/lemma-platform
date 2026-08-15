@@ -145,6 +145,122 @@ class ConversationRunQueriesMixin:
             return []
         return await self.list_agent_runs_with_messages(conversation_id)
 
+    async def load_runtime_history_by_run_id(
+        self,
+        agent_run_id: UUID,
+        *,
+        full_run_count: int,
+    ) -> list[AgentRunEntity]:
+        """Runs for the conversation, carrying only the messages history needs.
+
+        The runtime prompt keeps every message of the most recent
+        ``full_run_count`` runs and elides each older run to its first and last
+        message. Loading the whole transcript to then discard most of it is what
+        made a long conversation slow to start: messages present at run time
+        measured p50 12, p90 271 and p99 13688, each row carrying its text and
+        its tool argument and result JSON.
+
+        So the shape is loaded instead of filtered. Older runs come back with
+        two messages and a ``total_message_count`` saying how many there really
+        were, which is what the elision notice counts and what the surface
+        history budget measures.
+
+        Choosing the full runs from the untrimmed list is safe because every
+        trim the caller then applies -- the surface age window and the message
+        budget -- removes runs from the front and always keeps the last, so the
+        trimmed list is a suffix of this one and its most recent runs are a
+        subset of these.
+        """
+        conversation_id = (
+            await self.session.execute(
+                select(AgentRunModel.conversation_id).where(
+                    AgentRunModel.id == agent_run_id
+                )
+            )
+        ).scalar_one_or_none()
+        if conversation_id is None:
+            return []
+
+        runs = list(
+            (
+                await self.session.execute(
+                    select(AgentRunModel)
+                    .where(AgentRunModel.conversation_id == conversation_id)
+                    .order_by(AgentRunModel.created_at.asc(), AgentRunModel.id.asc())
+                )
+            ).scalars()
+        )
+        if not runs:
+            return []
+
+        run_ids = [run.id for run in runs]
+        full_ids = set(run_ids[-full_run_count:]) if full_run_count > 0 else set()
+        elided_ids = [run_id for run_id in run_ids if run_id not in full_ids]
+
+        counts = dict(
+            (
+                await self.session.execute(
+                    select(MessageModel.agent_run_id, func.count())
+                    .where(MessageModel.agent_run_id.in_(run_ids))
+                    .group_by(MessageModel.agent_run_id)
+                )
+            ).all()
+        )
+
+        messages: list[MessageModel] = []
+        if full_ids:
+            messages.extend(
+                (
+                    await self.session.execute(
+                        select(MessageModel)
+                        .where(MessageModel.agent_run_id.in_(full_ids))
+                        .order_by(
+                            MessageModel.agent_run_id, MessageModel.sequence.asc()
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+        if elided_ids:
+            # First and last per run, both served by the
+            # (agent_run_id, sequence) index rather than by reading the run.
+            for order in (MessageModel.sequence.asc(), MessageModel.sequence.desc()):
+                messages.extend(
+                    (
+                        await self.session.execute(
+                            select(MessageModel)
+                            .where(MessageModel.agent_run_id.in_(elided_ids))
+                            .distinct(MessageModel.agent_run_id)
+                            .order_by(MessageModel.agent_run_id, order)
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
+
+        by_run: dict[UUID, list[MessageModel]] = {}
+        seen: set[UUID] = set()
+        for message in messages:
+            # A one-message run is its own first and last; keep it once.
+            if message.id in seen:
+                continue
+            seen.add(message.id)
+            by_run.setdefault(message.agent_run_id, []).append(message)
+
+        entities: list[AgentRunEntity] = []
+        for run in runs:
+            entity = run.to_entity()
+            entity.messages = [
+                model.to_entity()
+                for model in sorted(
+                    by_run.get(run.id, []), key=lambda model: model.sequence
+                )
+            ]
+            entity.total_message_count = counts.get(run.id, 0)
+            entities.append(entity)
+        return entities
+
     async def get_agent_run(self, agent_run_id: UUID) -> AgentRunEntity | None:
         result = await self.session.execute(
             select(AgentRunModel).where(AgentRunModel.id == agent_run_id)
