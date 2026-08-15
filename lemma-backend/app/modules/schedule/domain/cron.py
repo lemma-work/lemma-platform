@@ -66,7 +66,14 @@ class CronSchedule:
         """
         moment = after if after.tzinfo is not None else after.replace(tzinfo=timezone.utc)
         moment = moment.astimezone(timezone.utc)
-        seconds = self._tab.next(moment, default_utc=True)
+        # `crontab` ships no stubs for `CronTab.next`, so basedpyright cannot
+        # see it. Narrowed to this one call rather than silenced file-wide: the
+        # rest of this module is exactly the code the critical-types gate should
+        # be checking, and cron arithmetic is where a silent type error would
+        # cost a schedule firing at the wrong time.
+        seconds = self._tab.next(  # pyright: ignore[reportAttributeAccessIssue]
+            moment, default_utc=True
+        )
         if seconds is None:
             return None
         return moment + timedelta(seconds=float(seconds))
