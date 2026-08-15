@@ -38,6 +38,7 @@ from pydantic_ai.messages import (
 from app.modules.agent.domain.context import AgentContext
 from app.modules.agent.domain.entities import Agent, Conversation, Message
 from app.modules.agent.domain.prompts import build_agent_instructions
+from app.modules.agent.services.run_phase_spans import run_phase
 from app.modules.agent.domain.value_objects import (
     AgentEvent,
     AgentEventType,
@@ -165,6 +166,29 @@ DEFAULT_TOOL_RETRIES = 5
 
 # Ceiling for the pause between stream-drop retries; see `_retry_backoff`.
 _RETRY_BACKOFF_CAP_SECONDS = 6.0
+
+
+def _instructions(
+    *,
+    agent: Agent,
+    conversation: Conversation,
+    ctx: AgentContext,
+) -> str:
+    """The run's system instructions, timed as its own phase.
+
+    Prompt assembly reads and renders every prompt fragment the agent's
+    configuration pulls in, so it is worth telling apart from the model call it
+    sits immediately in front of.
+    """
+    with run_phase("instructions") as span:
+        text = build_agent_instructions(
+            agent=agent,
+            conversation=conversation,
+            ctx=ctx,
+            include_toolset_prompts=False,
+        )
+        span.set_attribute("lemma.instructions.chars", len(text))
+        return text
 
 
 def _reraise_driver_failure(
@@ -396,7 +420,9 @@ class PydanticAIHarness:
         emitted_tool_response_ids: set[str],
         should_stop: StopChecker | None,
     ) -> AsyncIterator[AgentEvent]:
-        history, user_prompt = self._history_and_prompt(messages)
+        with run_phase("history_convert") as history_span:
+            history, user_prompt = self._history_and_prompt(messages)
+            history_span.set_attribute("lemma.history.model_messages", len(history))
         # e2e mock mode swaps only the model — the rest of the harness (tool
         # execution, streaming, events, persistence) runs for real.
         if is_mock_llm_enabled():
@@ -406,11 +432,10 @@ class PydanticAIHarness:
         agent_kwargs: dict[str, object] = {
             # Per-toolset prompt fragments (e.g. web search) are contributed by the
             # matching capabilities, so they're suppressed here to avoid duplication.
-            "instructions": build_agent_instructions(
+            "instructions": _instructions(
                 agent=agent,
                 conversation=conversation,
                 ctx=ctx,
-                include_toolset_prompts=False,
             ),
             # A single invalid tool call must not kill the run: give the model room
             # to self-correct from validation feedback before giving up.
@@ -428,15 +453,17 @@ class PydanticAIHarness:
             agent_kwargs["toolsets"] = options.toolsets
         # History processors ride as ProcessHistory capabilities (the
         # history_processors= kwarg is deprecated in pydantic-ai).
-        history_processors = build_history_processors(
-            options,
+        with run_phase("summarization_model"):
             # Falls back to this run's model when HISTORY_SUMMARIZATION_MODEL is
             # unset, so behaviour is unchanged unless a deployment opts in.
-            summarization_model=await resolve_summarization_model(
+            summarization_model = await resolve_summarization_model(
                 organization_id=conversation.organization_id,
                 user_id=conversation.user_id,
                 fallback=model,
-            ),
+            )
+        history_processors = build_history_processors(
+            options,
+            summarization_model=summarization_model,
         )
         capabilities = list(options.capabilities or [])
         capabilities.extend(

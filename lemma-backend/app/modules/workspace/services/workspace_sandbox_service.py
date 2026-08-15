@@ -12,6 +12,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 from uuid import UUID, uuid4
 
+from opentelemetry import trace
+
 from app.core.config import settings
 from app.core.request_context import create_inherited_task
 from sandbox_runtime.protocol import (
@@ -35,6 +37,17 @@ from app.modules.workspace.services.workspace_storage_generation_store import (
 _storage_generation_store: WorkspaceStorageGenerationStore | None = None
 _process_store: WorkspaceProcessStore | None = None
 _SANDBOX_MANAGER_HTTP_TIMEOUT_SECONDS = 300.0
+# How long a created workspace directory is believed without re-checking. Long
+# enough that a run's tool calls stop paying for it, short enough that an agent
+# which deleted its own working directory recovers on its own.
+_DIRECTORY_READY_SECONDS = 60.0
+
+# Own tracer rather than the agent module's run_phase helper: a workspace
+# session is acquired again for every single shell tool call, and the split
+# between "ask the sandbox manager where the box is" and "mint the env vars" is
+# only visible from inside this module. Hard-coded ``app.`` name because the
+# span sanitizer keeps a span's own name only for scopes under ``app.``.
+_tracer = trace.get_tracer("app.modules.workspace.tool_phases")
 
 
 def get_workspace_storage_generation_store() -> WorkspaceStorageGenerationStore:
@@ -69,6 +82,12 @@ class WorkspaceSandboxService:
     _inflight_directories: dict[
         tuple[int, UUID, str, int, str], asyncio.Task[SandboxInfo]
     ] = {}
+    # Directories already created, by the same key. The singleflight above only
+    # collapses concurrent callers, so every tool call re-ran the mkdir round
+    # trip -- 833ms at p50, on a directory that had existed since the first
+    # command. The key carries the sandbox's allocation and epoch, so a
+    # recreated sandbox misses rather than inheriting a stale readiness.
+    _ready_directories: dict[tuple[int, UUID, str, int, str], float] = {}
     _stopping: dict[tuple[int, UUID], asyncio.Event] = {}
 
     def __init__(
@@ -131,6 +150,7 @@ class WorkspaceSandboxService:
         if directory_tasks:
             await asyncio.gather(*directory_tasks, return_exceptions=True)
         cls._inflight_directories.clear()
+        cls._ready_directories.clear()
 
     async def _get_sandbox_info(self, user_id: UUID) -> SandboxInfo | None:
         return await self.sandbox.get_sandbox(user_id)
@@ -200,6 +220,21 @@ class WorkspaceSandboxService:
             task.add_done_callback(clear)
         return await asyncio.shield(task)
 
+    @classmethod
+    def forget_workspace(cls, user_id: UUID) -> None:
+        """Drop what is remembered about a user's workspace.
+
+        One entry point, because everything remembered here stops being true at
+        the same moment: the sandbox went away.
+        """
+        loop_key = (id(asyncio.get_running_loop()), user_id)
+        for cache_key in [
+            cache_key
+            for cache_key in cls._ready_directories
+            if cache_key[: len(loop_key)] == loop_key
+        ]:
+            cls._ready_directories.pop(cache_key, None)
+
     async def stop_sandbox(self, user_id: UUID) -> None:
         key = (id(asyncio.get_running_loop()), user_id)
         existing_stop = self._stopping.get(key)
@@ -215,6 +250,9 @@ class WorkspaceSandboxService:
                 for cache_key, task in self._inflight_directories.items()
                 if cache_key[: len(key)] == key
             )
+            # A stopped sandbox's directories are not ready any more, whatever
+            # the epoch says: stopping is how a workspace is torn down.
+            self.forget_workspace(user_id)
             for task in directory_tasks:
                 task.cancel()
             if directory_tasks:
@@ -326,23 +364,25 @@ class WorkspaceSandboxService:
         env_vars: dict[str, str] | None = None,
     ) -> IWorkspaceSession:
         resolved_cwd = canonical_workspace_cwd(initial_cwd)
-        sandbox_info = await self._ensure_workspace_directory(
-            user_id,
-            resolved_cwd,
-        )
+        with _tracer.start_as_current_span("lemma.workspace.ensure_dir"):
+            sandbox_info = await self._ensure_workspace_directory(
+                user_id,
+                resolved_cwd,
+            )
 
         if env_vars is None:
-            env_vars = await self.get_env_vars(
-                user_id,
-                pod_id,
-                workspace_url=sandbox_info.endpoint,
-                organization_id=organization_id,
-                workload_type=workload_type,
-                workload_id=workload_id,
-                workload_name=workload_name,
-                scope=scope,
-                session_id=session_id,
-            )
+            with _tracer.start_as_current_span("lemma.workspace.env_vars"):
+                env_vars = await self.get_env_vars(
+                    user_id,
+                    pod_id,
+                    workspace_url=sandbox_info.endpoint,
+                    organization_id=organization_id,
+                    workload_type=workload_type,
+                    workload_id=workload_id,
+                    workload_name=workload_name,
+                    scope=scope,
+                    session_id=session_id,
+                )
 
         # Tell this session, once, if the disk it is about to use is not the one
         # it saw last. Without it an agent cannot distinguish a recreated
@@ -350,12 +390,13 @@ class WorkspaceSandboxService:
         workspace_recreated = False
         if session_id and sandbox_info.storage_generation is not None:
             try:
-                workspace_recreated = (
-                    await self.storage_generation_store.observe_storage_generation(
-                        session_id=session_id,
-                        generation=sandbox_info.storage_generation,
+                with _tracer.start_as_current_span("lemma.workspace.storage_generation"):
+                    workspace_recreated = (
+                        await self.storage_generation_store.observe_storage_generation(
+                            session_id=session_id,
+                            generation=sandbox_info.storage_generation,
+                        )
                     )
-                )
             except Exception:
                 # A missing notice is far better than a failed tool call.
                 workspace_recreated = False
@@ -390,6 +431,21 @@ class WorkspaceSandboxService:
                 deadline_at=deadline_at,
             )
 
+        ready_at = self._ready_directories.get(cache_key)
+        if ready_at is not None:
+            if (
+                asyncio.get_running_loop().time() - ready_at
+            ) < _DIRECTORY_READY_SECONDS:
+                # The freshly resolved info, never the one cached alongside the
+                # readiness. Its storage generation is what tells a conversation
+                # its workspace was recreated, the generation is not in the key,
+                # and it is bumped in a different transaction from the epoch --
+                # so returning a remembered copy can swallow the one notice that
+                # stops an agent reading an empty workspace as "nothing was ever
+                # here".
+                return sandbox_info
+            self._ready_directories.pop(cache_key, None)
+
         task = self._inflight_directories.get(cache_key)
         if task is None:
             task = create_inherited_task(
@@ -409,7 +465,9 @@ class WorkspaceSandboxService:
 
             task.add_done_callback(clear)
 
-        return await asyncio.shield(task)
+        info = await asyncio.shield(task)
+        self._ready_directories[cache_key] = asyncio.get_running_loop().time()
+        return info
 
     async def _create_workspace_directory_until_ready(
         self,
