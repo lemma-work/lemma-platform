@@ -16,6 +16,9 @@ class FunctionCreatedEvent(DomainEvent):
     event_type: str = "function.created"
     function_id: UUID
     pod_id: UUID
+    #: Whoever created it. The row has always carried this; the event did not,
+    #: so every function landed in analytics attributed to the machine actor.
+    user_id: UUID | None = None
 
     @classmethod
     def stream_name(cls) -> str:
