@@ -351,7 +351,7 @@ async def on_pod_event(
             parsed_deleted = PodDeletedEvent.model_validate(event)
             emit(
                 "pod.deleted",
-                actor=AnalyticsActor.autonomous(ActorType.SYSTEM),
+                actor=_actor_or_system(parsed_deleted.deleted_by_user_id),
                 origin=origin,
                 organization_id=parsed_deleted.organization_id,
                 pod_id=parsed_deleted.pod_id,
@@ -439,7 +439,7 @@ async def on_function_event(
         parsed = FunctionCreatedEvent.model_validate(event)
         emit(
             "function.created",
-            actor=AnalyticsActor.autonomous(ActorType.SYSTEM),
+            actor=_actor_or_system(parsed.user_id),
             origin=_origin_of(event),
             pod_id=parsed.pod_id,
             properties={"pod_id": parsed.pod_id, "function_id": parsed.function_id},
@@ -638,7 +638,15 @@ async def on_schedule_event(
             return
         emit(
             "schedule_run.completed",
-            actor=AnalyticsActor.autonomous(ActorType.SYSTEM),
+            # Delegated, not autonomous: the run is unattended but it is done for
+            # somebody, and `DELEGATED_USER_WORKLOAD` is exactly the case where
+            # the work belongs on a human's timeline while staying
+            # distinguishable from what they did themselves.
+            actor=(
+                AnalyticsActor.delegated(delegated_by_user_id=completed.user_id)
+                if completed.user_id
+                else AnalyticsActor.autonomous(ActorType.SYSTEM)
+            ),
             origin=origin,
             pod_id=completed.pod_id,
             properties={
@@ -768,7 +776,7 @@ async def on_surface_event(
             return
         emit(
             "surface.connected",
-            actor=AnalyticsActor.autonomous(ActorType.SYSTEM),
+            actor=_actor_or_system(parsed.connected_by_user_id),
             origin=_origin_of(event),
             pod_id=parsed.pod_id,
             properties={

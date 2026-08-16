@@ -67,7 +67,13 @@ class FunctionRepository(FunctionRepositoryPort):
         # the row exists by this point, so an event that fires is an event that
         # committed.
         self.uow.collect_events(
-            [FunctionCreatedEvent(function_id=model.id, pod_id=model.pod_id)]
+            [
+                FunctionCreatedEvent(
+                    function_id=model.id,
+                    pod_id=model.pod_id,
+                    user_id=getattr(model, "user_id", None),
+                )
+            ]
         )
         return model.to_entity()
 

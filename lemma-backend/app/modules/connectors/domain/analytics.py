@@ -39,7 +39,15 @@ def operation_execution_recorded(
     finally:
         emit(
             "connector.operation_executed",
-            actor=AnalyticsActor.autonomous(ActorType.SYSTEM),
+            actor=(
+                AnalyticsActor.user(resolved.acting_user_id)
+                if resolved.acting_user_id
+                # Only when the plan genuinely has no person behind it. Every
+                # request-driven execution does, and attributing those to the
+                # machine actor made "who is using connectors?" unanswerable.
+                else AnalyticsActor.autonomous(ActorType.SYSTEM)
+            ),
+            organization_id=resolved.organization_id,
             properties={
                 "connector_id": resolved.connector_id,
                 "provider": resolved.provider,

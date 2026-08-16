@@ -583,6 +583,7 @@ class ConnectorOperationService:
             api_url=api_url,
             account_id=getattr(account, "id", None),
             account_user_id=getattr(account, "user_id", None),
+            acting_user_id=user_id,
             organization_id=getattr(account, "organization_id", None),
         )
 

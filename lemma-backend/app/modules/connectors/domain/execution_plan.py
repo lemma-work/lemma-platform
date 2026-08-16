@@ -37,3 +37,8 @@ class ResolvedConnectorExecution:
     account_id: UUID | None = None
     account_user_id: UUID | None = None
     organization_id: UUID | None = None
+    #: Who asked for this operation. Distinct from ``account_user_id``, which is
+    #: whoever owns the connected account -- a pod member can run an operation
+    #: through an account somebody else connected, and analytics wants the person
+    #: who acted, not the person who set it up.
+    acting_user_id: UUID | None = None
