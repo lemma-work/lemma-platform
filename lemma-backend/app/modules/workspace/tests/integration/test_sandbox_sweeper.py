@@ -13,6 +13,10 @@ from app.modules.workspace.providers.base import (
     ProviderGone,
     ProviderInstance,
     ProviderObject,
+    ProviderStorageKind,
+)
+from app.modules.workspace.infrastructure.sandbox_repository import (
+    SandboxRepository,
 )
 from app.modules.workspace.services.sandbox_service import SandboxService
 from app.modules.workspace.services.sandbox_sweeper import SandboxSweeper
@@ -413,3 +417,77 @@ async def test_a_killed_process_does_not_pin_its_sandbox_forever(
 
     assert released == 1, "a sandbox whose only process was killed is idle"
     assert handle.provider_id in provider.released
+
+
+# ---------------------------------------------------------------------------
+# Whose epoch decides anything
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class _SandboxIsTheDiskProvider(SweepableProvider):
+    """A provider where destroying the object destroys the user's files.
+
+    E2B works this way, and `ProviderStorageKind.SANDBOX_NATIVE` says what
+    follows from it: "one object is both … the fence is the provider's own id
+    rather than an epoch in a name".
+    """
+
+    storage_kind: ProviderStorageKind = ProviderStorageKind.SANDBOX_NATIVE
+
+
+async def test_an_old_epoch_never_reclaims_a_sandbox_that_is_also_the_disk(
+    sandbox_uow_factory,
+) -> None:
+    """The regression, and it was destroying live user workspaces.
+
+    The row's epoch advances on every provision, including the ones that adopt
+    an existing sandbox. The epoch it was compared against is read from provider
+    metadata that nothing can update -- the re-stamp was guarded on
+    `set_metadata`, which the E2B SDK does not have -- so it stayed frozen at
+    the value the first create wrote. "epoch 1 is behind 6" was therefore
+    permanently true for every workspace a user had kept, and the sweep called
+    destroy on it every five minutes. It only ever failed to delete them because
+    destroy could not address a paused sandbox, which has since been fixed.
+    """
+    provider = _SandboxIsTheDiskProvider()
+    service = SandboxService(provider=provider, uow_factory=sandbox_uow_factory)
+    sweeper = SandboxSweeper(service=service, uow_factory=sandbox_uow_factory)
+    sandbox = await _workspace(service)
+    await service.ensure(sandbox.id)
+
+    name = f"lemma-ws-{sandbox.id.hex}-1"
+    provider.objects = [_object(name=name, sandbox_id=sandbox.id, epoch=1)]
+    async with sandbox_uow_factory() as uow:
+        await SandboxRepository(uow).bump_epoch(sandbox.id)
+        await SandboxRepository(uow).bump_epoch(sandbox.id)
+
+    reclaimed = await sweeper.reclaim_orphans()
+
+    assert provider.destroyed == [], (
+        "the sweep destroyed a live workspace, and here the sandbox is the disk"
+    )
+    assert reclaimed == ()
+
+
+async def test_an_old_epoch_still_reclaims_where_the_disk_is_separate(
+    sweeper: SandboxSweeper, provider: SweepableProvider, service: SandboxService
+) -> None:
+    """The exemption must stay narrow.
+
+    On a VOLUME provider the container and the volume are different objects, so
+    a superseded container is genuinely garbage and reclaiming it costs nothing
+    but a cold start. Turning the epoch off everywhere would leak those forever.
+    """
+    sandbox = await _workspace(service)
+    await service.ensure(sandbox.id)
+
+    name = f"lemma-ws-{sandbox.id.hex}-1"
+    provider.objects = [_object(name=name, sandbox_id=sandbox.id, epoch=1)]
+    async with sweeper._uow_factory() as uow:
+        await SandboxRepository(uow).bump_epoch(sandbox.id)
+
+    reclaimed = await sweeper.reclaim_orphans()
+
+    assert reclaimed == (name,)
+    assert provider.destroyed == [name]

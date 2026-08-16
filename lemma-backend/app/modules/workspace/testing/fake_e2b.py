@@ -96,6 +96,15 @@ class FakeE2B:
     # so "the provider passed no timeout" is indistinguishable from "the
     # provider asked for a minute" unless a test can see the argument.
     process_timeouts: list[float | None] = field(default_factory=list)
+    # The lifecycle each sandbox was created with, and the timeout each connect
+    # asked for. Both are recorded for the same reason as `process_timeouts`:
+    # E2B defaults them to values that destroy things -- `on_timeout: "kill"`
+    # and a five-minute lease -- so a fake that quietly accepted whatever it was
+    # given could not tell "the provider asked for this" from "the provider
+    # passed nothing". It did accept them, into `**_kwargs`, for the whole time
+    # the provider was passing neither.
+    created_lifecycles: list[Any] = field(default_factory=list)
+    connect_timeouts: list[float | None] = field(default_factory=list)
     _next: int = 0
 
     def sandbox_class(self):
@@ -223,6 +232,7 @@ class FakeE2B:
                 metadata=None,
                 envs=None,
                 volume_mounts=None,
+                lifecycle=None,
                 **_kwargs,
             ):
                 world._next += 1
@@ -236,12 +246,16 @@ class FakeE2B:
                         "metadata": dict(metadata or {}),
                         "volume_mounts": volume_mounts,
                         "envs": envs,
+                        "lifecycle": lifecycle,
+                        "timeout": timeout,
                     }
                 )
+                world.created_lifecycles.append(lifecycle)
                 return FakeAsyncSandbox(sandbox_id)
 
             @staticmethod
-            async def connect(sandbox_id, **_kwargs):
+            async def connect(sandbox_id, timeout=None, **_kwargs):
+                world.connect_timeouts.append(timeout)
                 if sandbox_id not in world.sandboxes:
                     raise NotFoundException(f"sandbox {sandbox_id} not found")
                 # Reconnecting resumes a paused sandbox, as the real SDK does.

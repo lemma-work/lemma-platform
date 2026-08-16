@@ -579,3 +579,29 @@ async def test_destroying_a_sandbox_that_is_already_gone_is_not_an_error(
 
     await provider.destroy(name, deadline_at=_deadline())
     await provider.destroy(name, deadline_at=_deadline())
+
+
+async def test_a_real_sandbox_is_created_to_pause_on_timeout_not_die(
+    provider: E2BSandboxProvider,
+) -> None:
+    """Against the real service, because it is unfixable if we get it wrong.
+
+    A lifecycle is chosen at create and E2B offers no way to change it
+    afterwards -- there is no `set_lifecycle`, and the connect endpoint carries
+    only a timeout. So every sandbox made while this is wrong stays wrong for as
+    long as it exists, and what "wrong" means here is that E2B deletes it, and
+    the user's files with it, the moment its timeout elapses.
+
+    That was the default. This asserts against the state E2B itself reports,
+    rather than against the argument we passed, because the argument being
+    accepted is not evidence that it was honoured.
+    """
+    sandbox_id = uuid4()
+    instance = await _create(provider, sandbox_id)
+
+    info = await provider._sdk.get_info(instance.provider_id, **provider._api())
+    lifecycle = getattr(info, "lifecycle", None) or {}
+
+    assert lifecycle.get("on_timeout") == "pause", (
+        f"E2B will kill this sandbox, and its disk, on timeout: {lifecycle!r}"
+    )

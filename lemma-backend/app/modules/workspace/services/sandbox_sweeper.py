@@ -29,6 +29,7 @@ from app.modules.workspace.providers.base import (
     ProviderGone,
     ProviderNotReady,
     ProviderRejected,
+    ProviderStorageKind,
 )
 from sandbox_runtime.errors import SandboxError
 
@@ -43,6 +44,34 @@ class SandboxSweeper:
     @property
     def _provider(self):
         return self._service._provider
+
+    @property
+    def _epoch_is_a_fence(self) -> bool:
+        """Whether a behind-the-times epoch means this object is superseded.
+
+        Only where compute and storage are separate objects. `ProviderStorageKind`
+        says so itself: on SANDBOX_NATIVE "one object is both … the fence is the
+        provider's own id rather than an epoch in a name", and the E2B provider
+        repeats it -- "Adoption deliberately ignores the epoch". This sweep did
+        not, and the two readings of the same number pointed at opposite
+        conclusions about the same live sandbox.
+
+        It resolved the wrong way. The row's epoch advances on every provision,
+        including the ones that adopt an existing E2B sandbox, while the epoch
+        this compares it against is read from provider metadata that nothing can
+        update: the re-stamp is guarded on `set_metadata`, which the E2B SDK does
+        not have. So the recorded epoch was frozen at 1 while the row climbed,
+        and "epoch 1 is behind 6" became permanently true for every workspace a
+        user had kept. The sweep then called destroy on it, every five minutes,
+        and on this provider destroying the sandbox destroys the disk.
+
+        It only ever failed to delete them because destroy could not address a
+        paused sandbox -- which is a bug that has since been fixed.
+        """
+        kind = getattr(
+            self._provider, "storage_kind", ProviderStorageKind.VOLUME
+        )
+        return kind is not ProviderStorageKind.SANDBOX_NATIVE
 
     async def release_idle(self, *, idle_after_seconds: int, limit: int = 50) -> int:
         """Stop sandboxes nobody has touched recently. Keeps every disk."""
@@ -156,7 +185,9 @@ class SandboxSweeper:
                 if instance is None:
                     continue
                 reason = "superseded by the current provisioning path"
-            elif obj.epoch is not None and obj.epoch < sandbox.epoch:
+            elif self._epoch_is_a_fence and obj.epoch is not None and (
+                obj.epoch < sandbox.epoch
+            ):
                 reason = f"epoch {obj.epoch} is behind {sandbox.epoch}"
             else:
                 continue

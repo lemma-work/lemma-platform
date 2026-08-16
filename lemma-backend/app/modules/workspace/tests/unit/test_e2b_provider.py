@@ -851,3 +851,79 @@ async def test_a_container_name_that_resolves_to_nothing_is_left_alone(
     )
 
     assert world.killed == []
+
+
+# ---------------------------------------------------------------------------
+# The lease: what E2B does when a sandbox's timeout runs out
+# ---------------------------------------------------------------------------
+
+
+async def test_a_created_sandbox_pauses_on_timeout_rather_than_being_killed(
+    provider: E2BSandboxProvider, world: FakeE2B
+) -> None:
+    """The default is `kill`, and here killing the sandbox deletes the disk.
+
+    This call passed no lifecycle at all, so every workspace was created already
+    scheduled for deletion thirty minutes out. Nothing recorded it and nothing
+    told the user; the only reason it was not a daily event is that the idle
+    sweep usually paused the sandbox first, which stops the clock. A five-minute
+    cron was all that stood between a long session and losing every file.
+    """
+    await provider.create(_spec(uuid4()))
+
+    lifecycle = world.created[0]["lifecycle"]
+    assert lifecycle is not None, "no lifecycle means E2B kills it on timeout"
+    assert lifecycle["on_timeout"]["action"] == "pause"
+
+
+async def test_the_timeout_pause_keeps_only_the_filesystem(
+    provider: E2BSandboxProvider, world: FakeE2B
+) -> None:
+    """A memory-preserving snapshot restores whatever was running.
+
+    That is how a browser which had exhausted the sandbox became permanent: the
+    pause captured the exhaustion and every later resume restored it, so the
+    sandbox could never recover on its own. `release` already pauses this way and
+    the timeout has to agree with it, or the fleet gets both behaviours depending
+    on which one happened to fire.
+    """
+    await provider.create(_spec(uuid4()))
+
+    assert world.created[0]["lifecycle"]["on_timeout"]["keep_memory"] is False
+
+
+async def test_resuming_a_sandbox_re_arms_its_lease(
+    provider: E2BSandboxProvider, world: FakeE2B
+) -> None:
+    """Connecting is what extends the lease, and it must say by how much.
+
+    The SDK's rule is that the timeout updates "only if the new timeout is longer
+    than the existing one" -- so passing nothing is not "leave it alone", it is
+    "five minutes", the SDK's default. A workspace resumed after days came back
+    with a five-minute lease, and every process inside it died together when it
+    elapsed. From outside that looks like three tool calls returning 502 at the
+    same instant, minutes into a turn that was working.
+    """
+    from app.modules.workspace.testing.fake_e2b import FakeSandboxInfo
+
+    sandbox_id = uuid4()
+    spec = _spec(sandbox_id)
+    world.sandboxes["paused"] = FakeSandboxInfo(
+        sandbox_id="paused",
+        state="paused",
+        metadata={
+            META_SANDBOX_ID: str(sandbox_id),
+            META_PROFILE_DIGEST: spec.profile_digest,
+            META_TEMPLATE: "lemma-workspace",
+        },
+    )
+    instance = await provider.create(spec)
+
+    await provider.wait_ready(
+        instance, kind=SandboxKind.WORKSPACE, deadline_at=_deadline()
+    )
+
+    assert world.connect_timeouts, "wait_ready never connected"
+    assert all(timeout is not None for timeout in world.connect_timeouts), (
+        "a connect with no timeout hands the sandbox a five-minute lease"
+    )
