@@ -49,8 +49,15 @@ def _pod_id_forms(pod_id: str) -> tuple[bytes, ...]:
     canonical = str(pod_id).strip().lower()
     if not canonical:
         return ()
-    forms = {canonical, canonical.replace("-", "")}
-    return tuple(form.encode() for form in forms if len(form) >= 8)
+    forms = [canonical]
+    # Only worth adding when it is long enough to be an id rather than a
+    # substring that could occur by chance. The canonical form is never dropped
+    # for being short -- doing so would leave nothing to search for, and every
+    # build would come back "rebuild it".
+    hyphenless = canonical.replace("-", "")
+    if hyphenless != canonical and len(hyphenless) >= 16:
+        forms.append(hyphenless)
+    return tuple(form.encode() for form in forms)
 
 
 def dist_is_portable(dist_archive: bytes | Path, *, pod_id: str) -> bool:
