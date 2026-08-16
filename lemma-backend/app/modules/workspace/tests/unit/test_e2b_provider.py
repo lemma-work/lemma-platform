@@ -31,6 +31,7 @@ from app.modules.workspace.providers.e2b_common import (
     META_EPOCH,
     META_PROFILE_DIGEST,
     META_SANDBOX_ID,
+    META_TEMPLATE,
 )
 from app.modules.workspace.testing.fake_e2b import (
     AuthenticationException,
@@ -278,6 +279,7 @@ async def test_a_sandbox_from_the_same_template_build_is_adopted(
         metadata={
             META_SANDBOX_ID: str(sandbox_id),
             META_PROFILE_DIGEST: spec.profile_digest,
+            META_TEMPLATE: "lemma-workspace",
         },
     )
 
@@ -287,6 +289,76 @@ async def test_a_sandbox_from_the_same_template_build_is_adopted(
     assert instance.storage_adopted is True
     assert world.created == [], "a second sandbox would strand the real one"
     assert world.killed == []
+
+
+async def test_a_workspace_on_a_different_template_is_replaced(
+    provider: E2BSandboxProvider, world: FakeE2B
+) -> None:
+    """Publishing a template has to reach the workspaces that already exist.
+
+    It did not. Adoption compared only `profile_digest`, a hand-maintained
+    environment variable sitting at its default, so a workspace stayed on
+    whatever template it was first created on for as long as it lived. Measured
+    against the real account: 249 sandboxes spread over four older templates and
+    zero on the configured one, through four releases that were each meant to
+    fix the workspaces that were failing.
+    """
+    from app.modules.workspace.testing.fake_e2b import FakeSandboxInfo
+
+    sandbox_id = uuid4()
+    spec = _spec(sandbox_id)
+    world.sandboxes["on-last-months-template"] = FakeSandboxInfo(
+        sandbox_id="on-last-months-template",
+        state="paused",
+        metadata={
+            META_SANDBOX_ID: str(sandbox_id),
+            META_PROFILE_DIGEST: spec.profile_digest,
+            META_TEMPLATE: "lemma-workspace-but-older",
+        },
+    )
+
+    instance = await provider.create(spec)
+
+    assert world.killed == ["on-last-months-template"]
+    assert instance.provider_id != "on-last-months-template"
+    assert instance.storage_adopted is False
+    assert world.created[0]["template"] == "lemma-workspace"
+
+
+async def test_a_workspace_with_no_recorded_template_is_replaced(
+    provider: E2BSandboxProvider, world: FakeE2B
+) -> None:
+    """Unstamped means "created before anything recorded this", which means at
+    least one template behind by construction. Reading the absence as "fine" is
+    the shape of the original bug: the fleet's staleness was invisible because
+    nothing wrote down what any of it was running."""
+    from app.modules.workspace.testing.fake_e2b import FakeSandboxInfo
+
+    sandbox_id = uuid4()
+    spec = _spec(sandbox_id)
+    world.sandboxes["unstamped"] = FakeSandboxInfo(
+        sandbox_id="unstamped",
+        state="paused",
+        metadata={
+            META_SANDBOX_ID: str(sandbox_id),
+            META_PROFILE_DIGEST: spec.profile_digest,
+        },
+    )
+
+    instance = await provider.create(spec)
+
+    assert world.killed == ["unstamped"]
+    assert instance.storage_adopted is False
+
+
+async def test_a_created_sandbox_records_the_template_it_was_built_from(
+    provider: E2BSandboxProvider, world: FakeE2B
+) -> None:
+    """Without the stamp there is nothing to compare on the next ensure, so the
+    fence would silently never fire again."""
+    await provider.create(_spec(uuid4()))
+
+    assert world.created[0]["metadata"][META_TEMPLATE] == "lemma-workspace"
 
 
 async def test_a_workspace_from_an_older_template_build_keeps_its_disk(
@@ -313,12 +385,15 @@ async def test_a_workspace_from_an_older_template_build_keeps_its_disk(
         metadata={
             META_SANDBOX_ID: str(sandbox_id),
             META_PROFILE_DIGEST: "sha256:" + "b" * 64,
+            # On the configured template, so this isolates the digest rule from
+            # the template fence, which does replace.
+            META_TEMPLATE: "lemma-workspace",
         },
     )
 
     instance = await provider.create(_spec(sandbox_id))
 
-    assert world.killed == [], "a workspace's files must survive a template bump"
+    assert world.killed == [], "a workspace's files must survive a digest bump"
     assert instance.provider_id == "older-build", "and it keeps serving them"
 
 
@@ -359,11 +434,12 @@ async def test_a_running_match_is_preferred_over_a_paused_duplicate(
         world.sandboxes[name] = FakeSandboxInfo(
             sandbox_id=name,
             state=state,
-            # Both carry the current profile digest, so the reuse fence is
-            # satisfied and this exercises the ordering rule on its own.
+            # Both satisfy the reuse fences -- current profile digest, current
+            # template -- so this exercises the ordering rule on its own.
             metadata={
                 META_SANDBOX_ID: str(sandbox_id),
                 META_PROFILE_DIGEST: spec.profile_digest,
+                META_TEMPLATE: "lemma-workspace",
             },
         )
 

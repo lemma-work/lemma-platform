@@ -56,6 +56,7 @@ from app.modules.workspace.providers.e2b_common import (
     meta_profile_digest,
     meta_sandbox_id,
     meta_sandbox_kind,
+    meta_template,
     sdk_best_effort,
     sdk_errors,
 )
@@ -152,6 +153,7 @@ class E2BSandboxProvider(E2BOpsMixin):
             meta_sandbox_kind(namespace): spec.kind.value,
             meta_epoch(namespace): str(spec.epoch),
             meta_profile_digest(namespace): spec.profile_digest,
+            meta_template(namespace): self._template(spec.kind),
         }
 
     def _template(self, kind: SandboxKind) -> str:
@@ -180,8 +182,37 @@ class E2BSandboxProvider(E2BOpsMixin):
         replacement would destroy the disk, so identity alone decides, and the
         fence is the E2B sandbox id -- a genuinely new sandbox has a new id, so
         a stale operation fails rather than landing on it.
+
+        It does not ignore the template. Adopting a sandbox adopts the code
+        inside it, so a workspace that is never replaced is a workspace that can
+        never be fixed -- which is what happened, and is documented on the
+        branch below.
         """
         existing = await self._find_any(spec.sandbox_id)
+        if existing is not None and self._template_is_stale(existing, spec.kind):
+            # The sandbox is running an image we no longer publish, and on this
+            # provider the image cannot be changed underneath it: the sandbox is
+            # the disk, so adopting it means adopting its code too. Tolerating
+            # that is what pinned every workspace in the fleet to whatever
+            # template it was first created on -- 249 sandboxes across four
+            # older templates, and zero on the configured one -- so every fix
+            # shipped in the image reached nobody who already had a workspace.
+            # The workspaces that were failing were exactly the ones the fixes
+            # could never reach.
+            #
+            # Replacing costs the disk, which is why this is deliberately
+            # narrow: it fires on the template, the identity of the artifact
+            # that is running, and not on `profile_digest`, a hand-maintained
+            # environment variable whose drift is still tolerated below.
+            logger.info(
+                "workspace.e2b.template_drift_replacing",
+                sandbox_id=str(spec.sandbox_id),
+                kind=spec.kind.value,
+                recorded=existing.template or "<unstamped>",
+                configured=self._template(spec.kind),
+            )
+            await self._kill_quietly(existing.provider_id)
+            existing = None
         drifted = (
             existing is not None
             and existing.profile_digest != spec.profile_digest
@@ -189,23 +220,7 @@ class E2BSandboxProvider(E2BOpsMixin):
         if drifted and spec.kind is SandboxKind.FUNCTION:
             # A function sandbox owns no durable disk, so replacing it to adopt
             # a new digest costs a cold start and nothing else.
-            #
-            # Not best-effort: if the stale sandbox survives, the fresh one
-            # carries the same sandbox-id metadata and a later lookup could
-            # land on either. Failing the provision is better than leaving a
-            # duplicate behind.
-            #
-            # Already gone is the outcome this wanted, though, and it is a
-            # normal race -- the listing that found it can be stale, or E2B
-            # can reap it first. ProviderGone is a bare RuntimeError that
-            # `_provision` does not catch, so letting it escape would leave
-            # the instance row stuck in CREATING until the claim times out.
-            try:
-                sandbox = await self._connect(existing.provider_id)
-                with sdk_errors():
-                    await sandbox.kill(**self._api())
-            except ProviderGone:
-                pass
+            await self._kill_quietly(existing.provider_id)
             existing = None
         elif drifted:
             # A workspace tolerates drift, and this is the whole reason the
@@ -251,6 +266,35 @@ class E2BSandboxProvider(E2BOpsMixin):
             running=True,
             storage_adopted=False,
         )
+
+    def _template_is_stale(self, existing: ProviderInstance, kind: SandboxKind) -> bool:
+        """Is this sandbox running something other than what we publish now?
+
+        An unstamped sandbox counts as stale. It was created before this fence
+        existed, which means it is at least one template behind by construction
+        -- and reading "unknown" as "fine" is the exact shape of the bug this
+        replaces, where the fleet's staleness was invisible because nothing
+        recorded what it was running.
+        """
+        return existing.template != self._template(kind)
+
+    async def _kill_quietly(self, provider_id: str) -> None:
+        """Kill a sandbox we have decided to replace.
+
+        Not best-effort: if the stale sandbox survives, the fresh one carries
+        the same sandbox-id metadata and a later lookup could land on either.
+        Already gone is the outcome this wanted, though, and it is a normal
+        race -- the listing that found it can be stale, or E2B can reap it
+        first. `ProviderGone` is a bare RuntimeError that `_provision` does not
+        catch, so letting it escape would leave the instance row stuck in
+        CREATING until the claim times out.
+        """
+        try:
+            sandbox = await self._connect(provider_id)
+            with sdk_errors():
+                await sandbox.kill(**self._api())
+        except ProviderGone:
+            pass
 
     async def _stamp(self, provider_id: str, spec: ProviderCreateSpec) -> None:
         """Best effort: record the current epoch on an adopted sandbox.
@@ -491,6 +535,9 @@ class E2BSandboxProvider(E2BOpsMixin):
                 running=str(info.state).lower().endswith("running"),
                 profile_digest=metadata.get(
                     meta_profile_digest(self._config.metadata_namespace)
+                ),
+                template=metadata.get(
+                    meta_template(self._config.metadata_namespace)
                 ),
             )
         return None
