@@ -44,7 +44,7 @@ from app.modules.workspace.providers.e2b_common import (
     sdk_errors,
 )
 from app.modules.workspace.providers.e2b_process_lifetime import seconds_until
-from app.modules.workspace.providers.e2b_python_runner import _PYTHON_RUNNER
+from app.modules.workspace.providers.e2b_python_runner import PYTHON_RUNNER
 
 WORKSPACE_MOUNT = "/workspace"
 
@@ -463,7 +463,7 @@ class E2BOpsMixin:
             await sandbox.files.write(code_path, request.code)
             await sandbox.files.write(
                 runner_path,
-                _PYTHON_RUNNER.format(
+                PYTHON_RUNNER.format(
                     state_path=state_path,
                     code_path=code_path,
                     result_path=result_path,

@@ -8,7 +8,7 @@ silently dropped -- `import pandas as pd` bound a name that was gone by the
 next call, and the agent got a bare `NameError` for something it had just
 imported.
 
-These execute the real `_PYTHON_RUNNER` template in a subprocess, because the
+These execute the real `PYTHON_RUNNER` template in a subprocess, because the
 bug lived in the generated script rather than in any Python this suite would
 otherwise import.
 """
@@ -21,7 +21,7 @@ import sys
 
 import pytest
 
-from app.modules.workspace.providers.e2b_python_runner import _PYTHON_RUNNER
+from app.modules.workspace.providers.e2b_python_runner import PYTHON_RUNNER
 
 
 def _run(tmp_path: Path, code: str) -> subprocess.CompletedProcess[str]:
@@ -30,7 +30,7 @@ def _run(tmp_path: Path, code: str) -> subprocess.CompletedProcess[str]:
     code_path.write_text(code)
     runner_path = tmp_path / "runner.py"
     runner_path.write_text(
-        _PYTHON_RUNNER.format(
+        PYTHON_RUNNER.format(
             state_path=str(tmp_path / "state.pkl"),
             code_path=str(code_path),
             result_path=str(tmp_path / "result.txt"),

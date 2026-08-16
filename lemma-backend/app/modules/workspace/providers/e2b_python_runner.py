@@ -10,7 +10,7 @@ here can be checked by the type checker or exercised by importing it.
 
 from __future__ import annotations
 
-_PYTHON_RUNNER = """
+PYTHON_RUNNER = """
 import ast, importlib, pickle, os, sys, types
 
 _STATE = {state_path!r}

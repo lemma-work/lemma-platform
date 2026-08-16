@@ -329,3 +329,63 @@ async def test_a_destroy_that_works_is_still_reported(
 
     assert reclaimed == (name,)
     assert provider.destroyed == [name]
+
+
+class _OpaqueIdProvider(SweepableProvider):
+    """A provider whose ids are nothing like its names, which E2B's are not.
+
+    `FakeProvider.create` returns `provider_id=spec.name`, so every other test
+    here has the two coincide and cannot see a caller that confuses them. E2B
+    mints its own (`i8fdef5eyd8zxnysl6bor`) against a name of
+    `lemma-ws-<hex>-<epoch>`, and the process index is written under the id.
+    """
+
+    async def create(self, spec):
+        instance = await super().create(spec)
+        opaque = ProviderInstance(
+            provider_id=f"i{abs(hash(spec.name)):x}",
+            name=spec.name,
+            volume_name=instance.volume_name,
+            running=True,
+            storage_adopted=instance.storage_adopted,
+            profile_digest=instance.profile_digest,
+        )
+        self.containers[instance.name] = instance
+        self.containers[opaque.provider_id] = opaque
+        self.probed_with = getattr(self, "probed_with", [])
+        return opaque
+
+    async def list_processes(self, instance, *, deadline_at):
+        self.probed_with = getattr(self, "probed_with", [])
+        self.probed_with.append(instance.provider_id)
+        return await super().list_processes(instance, deadline_at=deadline_at)
+
+
+async def test_the_liveness_probe_addresses_the_sandbox_by_its_provider_id(
+    sandbox_uow_factory,
+) -> None:
+    """The idle check has to reach the sandbox it is asking about.
+
+    E2B keys its process index by the real sandbox id, so a probe built from
+    the container name reads an index that is always empty -- an idle check
+    that returns is not an idle check that happened, and the sweep would pause
+    a sandbox mid-work. That is the exact harm the check exists to prevent, and
+    it is invisible wherever id and name coincide.
+    """
+    SandboxService._inflight.clear()
+    SandboxService._recent.clear()
+    provider = _OpaqueIdProvider()
+    service = SandboxService(provider=provider, uow_factory=sandbox_uow_factory)
+    sweeper = SandboxSweeper(service=service, uow_factory=sandbox_uow_factory)
+    sandbox = await _workspace(service)
+    handle = await service.ensure(sandbox.id)
+    provider.processes = [
+        ProcessDescriptor(process_id="op-1", state="running", exit_code=None)
+    ]
+
+    released = await sweeper.release_idle(idle_after_seconds=0)
+
+    assert provider.probed_with == [handle.provider_id], (
+        "the probe must carry the provider id, not the container name"
+    )
+    assert released == 0, "a sandbox with live work must not be paused"

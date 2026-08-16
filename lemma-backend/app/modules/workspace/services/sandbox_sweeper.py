@@ -26,7 +26,6 @@ from app.modules.workspace.infrastructure.sandbox_repository import SandboxRepos
 from app.modules.workspace.providers.base import (
     ProviderFailed,
     ProviderGone,
-    ProviderInstance,
     ProviderNotReady,
     ProviderRejected,
 )
@@ -79,14 +78,26 @@ class SandboxSweeper:
         sweep would stop compute underneath live work.
         """
 
-        handle = await self._service.describe(sandbox.id)
-        if handle is None:
+        async with self._uow_factory() as uow:
+            current = await SandboxRepository(uow).current_instance(sandbox.id)
+        if current is None or not current.provider_id:
             return False
-        instance = ProviderInstance(
-            provider_id=handle.name, name=handle.name, running=True
-        )
         deadline_at = datetime.now(timezone.utc) + timedelta(seconds=15)
         try:
+            # Ask the provider to resolve it, rather than assembling an
+            # instance here. The row records the deterministic container name,
+            # which is the provider id on Docker and nothing like it on E2B --
+            # there it mints its own (`i8fdef5eyd8zxnysl6bor`) and keys the
+            # process index by that. A probe carrying the name read an index
+            # that was always empty, so this check answered "idle" for every
+            # sandbox it was ever asked about, and the sweep would pause a
+            # workspace mid-command. An idle check that returns is not an idle
+            # check that happened.
+            instance = await self._provider.inspect(
+                current.provider_id, deadline_at=deadline_at
+            )
+            if instance is None:
+                return False
             processes = await self._provider.list_processes(
                 instance, deadline_at=deadline_at
             )

@@ -288,47 +288,56 @@ class E2BSandboxProvider(E2BOpsMixin):
         kind: SandboxKind,
         deadline_at: datetime,
     ) -> None:
-        """Pause, keeping the filesystem. The next ensure resumes this sandbox."""
-        sandbox = await self._connect(instance.provider_id)
-        if kind is SandboxKind.WORKSPACE:
-            await self._shed_browser(sandbox)
-        with sdk_errors():
-            await sandbox.beta_pause(**self._api())
+        """Pause, keeping the filesystem. The next ensure resumes this sandbox.
 
-    async def _shed_browser(self, sandbox) -> None:
-        """End the browser before the pause makes it permanent.
+        `keep_memory=False` because the SDK's default is `True`, and this call
+        passed nothing -- so every workspace pause was preserving resident
+        memory, while both architecture documents said the opposite:
+        "A workspace pause is filesystem-only. Files persist; running processes
+        and interpreter state do not, and callers must not treat them as
+        recoverable." Auto-resume is already disabled here, which E2B only
+        requires *because* of filesystem-only snapshots, so the rest of the
+        design had been built around a property the one call that decides it
+        never asked for.
 
-        A pause here is a *memory snapshot*, which is the whole difference from
-        Docker: stopping a container throws its memory away, so the quiesce
-        Docker runs first is a tidy-up. Pausing preserves whatever is resident,
-        and resuming brings all of it back -- so a headed Chrome left running by
-        one conversation is restored into the next one, and the next, without
-        ever being started again. That is why a workspace measured after a
-        research session held 63 Chrome processes at 2123 MB on a 2048 MB
-        sandbox, and why killing them by hand did not help: the snapshot they
-        came from was taken before the kill and taken again after the restore.
-
-        Best effort, and deliberately so. A sandbox whose browser cannot be
-        reached is exactly the one most in need of being paused, and failing
-        the release would leave it running instead.
+        That gap is what made a leaked browser invisible. A memory-preserving
+        pause snapshots whatever is running and hands it to the next
+        conversation, so a headed Chrome survived every idle release without
+        ever being started again -- 63 processes and 2123 MB on a 2048 MB
+        sandbox, restored rather than respawned. Reading the docs told you it
+        could not happen.
         """
-        with sdk_best_effort("browser shutdown"):
-            await sandbox.commands.run(
-                "agent-browser close --all >/dev/null 2>&1; "
-                "pkill -f agent-browser >/dev/null 2>&1; "
-                "pkill -f workspace-chrome >/dev/null 2>&1; "
-                "pkill -f Xvfb >/dev/null 2>&1; "
-                'rm -rf /tmp/lemma-browser "$HOME/.agent-browser" '
-                ">/dev/null 2>&1; true",
-                timeout=20,
-            )
+        del kind  # Both kinds pause the same way.
+        sandbox = await self._connect(instance.provider_id)
+        with sdk_errors():
+            await sandbox.beta_pause(keep_memory=False, **self._api())
 
     async def destroy(self, name: str, *, deadline_at: datetime) -> None:
+        """Kill a sandbox, addressed either by container name or by E2B id.
+
+        Both, because both are handed to this. `inspect` only understands
+        container names -- it parses one back into a metadata query -- but
+        `list_objects` names every object by its E2B sandbox id, since that is
+        what E2B reports. So the sweep's `destroy(obj.name)` parsed to nothing,
+        read as "already gone", and returned having killed nothing. That is why
+        the orphan sweep logged eighteen reclaims every five minutes for hours
+        against the same eighteen ids while the account's count never moved:
+        the destroy was a no-op for exactly the objects the sweep discovers.
+        """
+        from app.modules.workspace.providers import naming
+
         instance = await self.inspect(name, deadline_at=deadline_at)
-        if instance is None:
-            # Already gone is the outcome destroy was asking for.
+        provider_id = instance.provider_id if instance is not None else None
+        if provider_id is None and naming.parse_container_name(name) is None:
+            # Not one of our names, so it is an id -- which is the only other
+            # thing this is ever given, and `list_objects` has already
+            # established that it carries this platform's metadata.
+            provider_id = name
+        if provider_id is None:
+            # A name that parses but resolves to nothing really is gone, and
+            # that is the outcome destroy was asking for.
             return
-        sandbox = await self._connect(instance.provider_id)
+        sandbox = await self._connect(provider_id)
         with sdk_errors():
             await sandbox.kill(**self._api())
 
