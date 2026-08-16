@@ -115,13 +115,16 @@ class PodEntity(AggregateRoot):
 
     def mark_deleted(self) -> None:
         """Soft delete aggregate and emit deletion event for downstream cleanup."""
+        from app.core.authorization.current import get_current_context
         from app.modules.pod.domain.events import PodDeletedEvent
 
+        actor = get_current_context()
         self.is_deleted = True
         self.add_event(
             PodDeletedEvent(
                 pod_id=self.id,
                 organization_id=self.organization_id,
+                deleted_by_user_id=getattr(actor, "user_id", None),
             )
         )
 

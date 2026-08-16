@@ -22,6 +22,9 @@ EVENT_CATALOG: dict[str, EventSpec] = {
         "warning", frozenset({"status", "count", "error_type"})
     ),
     "analytics.buffer.overflowed": EventSpec("warning", frozenset({"count"})),
+    "analytics.actor.unattributed": EventSpec(
+        "warning", frozenset({"analytic_event", "actor_type"})
+    ),
     "analytics.flush.failed": EventSpec("warning", frozenset({"error_type"})),
     "analytics.pod_delivered.cache_unavailable": EventSpec("debug", frozenset()),
     "analytics.app_session.cache_unavailable": EventSpec("debug", frozenset()),

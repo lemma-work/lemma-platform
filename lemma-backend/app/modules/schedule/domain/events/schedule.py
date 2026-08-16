@@ -49,14 +49,23 @@ class ScheduleDeleted(ScheduleLifecycleEvent):
 class ScheduleRunCompleted(ScheduleEvent):
     """One scheduled run reached a terminal outcome.
 
-    Not a lifecycle event: it says nothing about the schedule's definition, and
-    it carries no ``user_id`` because a scheduled run has no person on it -- the
-    whole point of a schedule is that it runs when nobody is there.
+    Not a lifecycle event: it says nothing about the schedule's definition.
+
+    It does carry a person. Nobody is *watching* a scheduled run, which is not
+    the same as nobody being behind it: the work is done for the schedule's
+    owner, or -- for a datastore trigger on an RLS table -- for whoever owns the
+    row that fired it. Reporting these as machine work took every scheduled
+    outcome off its owner's timeline.
     """
 
     event_type: str = "schedule.run.completed"
     pod_id: UUID | None = None
     status: str
+    #: Who the run was for. The ledger row carries the row owner for a datastore
+    #: trigger on an RLS table and the schedule owner otherwise, so this is a real
+    #: person in almost every case -- a scheduled run is unattended, not
+    #: unattributed.
+    user_id: UUID | None = None
 
 
 class ScheduleDeactivated(ScheduleLifecycleEvent):

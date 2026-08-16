@@ -304,12 +304,16 @@ class AgentSurfaceEntity(AggregateRoot):
         )
         # `SurfaceRepository.create` already drains this via `_collect_events`;
         # the entity simply never recorded anything.
+        from app.core.authorization.current import get_current_context
+
+        actor = get_current_context()
         entity.add_event(
             SurfaceConnectedEvent(
                 surface_id=entity.id,
                 pod_id=pod_id,
                 platform=resolved.value,
                 agent_id=agent_id,
+                connected_by_user_id=getattr(actor, "user_id", None),
             )
         )
         return entity

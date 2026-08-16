@@ -27,6 +27,10 @@ class SurfaceConnectedEvent(DomainEvent):
     pod_id: UUID
     platform: str
     agent_id: UUID | None = None
+    #: Who connected it, from the request's authorization context. Absent for the
+    #: mailbox provisioned automatically with an agent, which is the one case
+    #: where nobody connected anything.
+    connected_by_user_id: UUID | None = None
 
     @classmethod
     def stream_name(cls) -> str:
