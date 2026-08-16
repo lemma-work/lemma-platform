@@ -756,7 +756,9 @@ const informationalChecks = [
         /\blemma-quiet-text-button\b/.test(match) ||
         /\bsurface-copy-field\b/.test(match) ||
         /\bsurface-identity-option\b/.test(match) ||
-        /\bsurface-default-option\b/.test(match)
+        /\bsurface-default-option\b/.test(match) ||
+        /\bnotification-ledger-row\b/.test(match) ||
+        /\bnotification-card-repeats\b/.test(match)
       );
     },
   },

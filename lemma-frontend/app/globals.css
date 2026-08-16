@@ -25,6 +25,7 @@
 @import "../styles/features/connectors.css";
 @import "../styles/features/resource-identity.css";
 @import "../styles/features/composer.css";
+@import "../styles/features/notifications.css";
 @import "../styles/tokens.css";
 @import "../styles/base.css";
 @import "../styles/primitives.css";

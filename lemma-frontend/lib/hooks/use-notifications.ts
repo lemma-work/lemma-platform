@@ -1,6 +1,6 @@
 'use client';
 
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { getLemmaClient } from '@/lib/sdk/lemma-client';
 
 /**
@@ -61,13 +61,84 @@ export type NotificationPage = {
 const LIST_KEY = 'notifications';
 const COUNT_KEY = 'notifications-unread-count';
 
-export const useNotifications = (podId: string | undefined, limit = 30) =>
+/**
+ * The statuses that mean a person still owes this notification something —
+ * either an answer or an acknowledgement. Everything else is history.
+ *
+ * Kept here rather than spelled out at each call site so the bell, home and the
+ * notifications page agree on what "needs you" means. They disagreeing by one
+ * status is how a count and the list under it start contradicting each other.
+ */
+export const UNATTENDED_NOTIFICATION_STATUSES: NotificationStatus[] = ['OPEN'];
+
+/**
+ * Everything that is no longer owed anything — the history half of the inbox.
+ *
+ * Deliberately the complement of the list above rather than "no filter": the
+ * page draws open asks and closed ones in two different shapes, and a history
+ * list that also carried the open ones would print every one of them twice.
+ * Asked of the API rather than filtered here so that paging counts the rows
+ * that actually get drawn.
+ */
+export const CLOSED_NOTIFICATION_STATUSES: NotificationStatus[] = [
+    'RESPONDED',
+    'ACKNOWLEDGED',
+    'EXPIRED',
+    'CANCELLED',
+];
+
+/**
+ * The SDK types this filter as its generated `enum`, which a string union is not
+ * assignable to even where every member matches — and the enum is not re-exported
+ * from the package root, so there is nothing to import. The values are the
+ * strings either way; the union above is what the rest of the app reads.
+ */
+type SdkNotificationStatusFilter = Parameters<
+    ReturnType<typeof getLemmaClient>['notifications']['list']
+>[0] extends { status?: infer TStatus } | undefined
+    ? TStatus
+    : never;
+
+const toStatusFilter = (status: NotificationStatus[] | undefined) =>
+    status as unknown as SdkNotificationStatusFilter;
+
+export const useNotifications = (
+    podId: string | undefined,
+    { limit = 30, status }: { limit?: number; status?: NotificationStatus[] } = {},
+) =>
     useQuery({
-        queryKey: [LIST_KEY, podId, limit],
+        queryKey: [LIST_KEY, podId, limit, status ?? null],
         queryFn: async (): Promise<NotificationPage> => {
-            const response = await getLemmaClient(podId).notifications.list({ limit });
+            const response = await getLemmaClient(podId).notifications.list({
+                limit,
+                status: toStatusFilter(status),
+            });
             return response as unknown as NotificationPage;
         },
+        enabled: !!podId,
+    });
+
+/**
+ * The same list, paged. The page shows everything a pod has ever asked of you,
+ * which is unbounded — the popover's single fixed-size read cannot stand in for
+ * it, and loading all of it up front to render thirty rows would be worse.
+ */
+export const useInfiniteNotifications = (
+    podId: string | undefined,
+    { limit = 40, status }: { limit?: number; status?: NotificationStatus[] } = {},
+) =>
+    useInfiniteQuery({
+        queryKey: [LIST_KEY, 'infinite', podId, limit, status ?? null],
+        queryFn: async ({ pageParam }): Promise<NotificationPage> => {
+            const response = await getLemmaClient(podId).notifications.list({
+                limit,
+                status: toStatusFilter(status),
+                pageToken: pageParam || undefined,
+            });
+            return response as unknown as NotificationPage;
+        },
+        initialPageParam: undefined as string | undefined,
+        getNextPageParam: (lastPage) => lastPage.next_page_token || undefined,
         enabled: !!podId,
     });
 
@@ -90,10 +161,18 @@ export const useUnreadNotificationCount = (
         refetchInterval: pollIntervalMs,
     });
 
+/**
+ * Invalidated on the bare list key, not on `[LIST_KEY, podId]`. The same
+ * notification is now read through several shapes — the popover's peek, the
+ * page's status-filtered infinite list, home's unattended slice — and they key
+ * on the filter, so a prefix that pins `podId` in second position misses every
+ * one of them. Answering something and watching it sit there unchanged is the
+ * bug that costs more than the extra refetch.
+ */
 const useNotificationRefresh = (podId: string | undefined) => {
     const queryClient = useQueryClient();
     return () => {
-        void queryClient.invalidateQueries({ queryKey: [LIST_KEY, podId] });
+        void queryClient.invalidateQueries({ queryKey: [LIST_KEY] });
         void queryClient.invalidateQueries({ queryKey: [COUNT_KEY, podId] });
     };
 };
@@ -144,5 +223,129 @@ export const useAcknowledgeNotification = (podId: string | undefined) => {
         mutationFn: (notificationId: string) =>
             getLemmaClient(podId).notifications.acknowledge(notificationId),
         onSuccess: refresh,
+    });
+};
+
+/**
+ * The same ask, asked N times, settled in one gesture.
+ *
+ * Six identical check-ins are six records with six runs waiting on them, and
+ * answering only the newest leaves five agents still waiting for something the
+ * person has already said. The inbox collapses them into one card, so the card's
+ * one button has to close all of them.
+ *
+ * Sequential and per-item tolerant on purpose. A 409 means somebody already
+ * answered that one — true of a single row in a group all the time — and
+ * `Promise.all` would abandon the rest of the group over it. The failure that
+ * matters is *all* of them failing, which is the only case this rejects on.
+ *
+ * Both counts come back rather than just the successes. Tolerating a partial
+ * failure is not the same as hiding one: "answered five of six" is a different
+ * sentence from "answered", and the card has to be able to say it.
+ */
+export type SettleOutcome = { settled: number; failed: number };
+
+const settleEach = async (
+    ids: string[],
+    settle: (notificationId: string) => Promise<unknown>,
+): Promise<SettleOutcome> => {
+    let settled = 0;
+    let failed = 0;
+    let lastError: unknown = null;
+    for (const id of ids) {
+        try {
+            await settle(id);
+            settled += 1;
+        } catch (error) {
+            failed += 1;
+            lastError = error;
+        }
+    }
+    if (settled === 0 && lastError) throw lastError;
+    return { settled, failed };
+};
+
+/**
+ * Reading a collapsed run reads all of it. The inbox draws six identical asks as
+ * one card, so a person who has looked at that card has seen all six — leaving
+ * five of them unread lights a badge for something already read.
+ */
+export const useMarkNotificationsRead = (podId: string | undefined) => {
+    const refresh = useNotificationRefresh(podId);
+    return useMutation({
+        mutationFn: (notificationIds: string[]) =>
+            settleEach(notificationIds, (id) =>
+                getLemmaClient(podId).notifications.markRead(id),
+            ),
+        onSuccess: refresh,
+    });
+};
+
+export const useAcknowledgeNotifications = (podId: string | undefined) => {
+    const refresh = useNotificationRefresh(podId);
+    return useMutation({
+        mutationFn: (notificationIds: string[]) =>
+            settleEach(notificationIds, (id) =>
+                getLemmaClient(podId).notifications.acknowledge(id),
+            ),
+        onSuccess: refresh,
+    });
+};
+
+export const useRespondToNotifications = (podId: string | undefined) => {
+    const refresh = useNotificationRefresh(podId);
+    return useMutation({
+        mutationFn: ({
+            notificationIds,
+            summary,
+        }: {
+            notificationIds: string[];
+            summary: string;
+        }) =>
+            settleEach(notificationIds, (id) =>
+                getLemmaClient(podId).notifications.respond(id, { summary }),
+            ),
+        onSuccess: refresh,
+    });
+};
+
+/**
+ * Answering a workflow form from the inbox.
+ *
+ * The submit endpoint is the workflow's, not the notification's — a form answer
+ * has to validate against the node's schema and resume the run, which is work
+ * only the engine can do. It closes the inbox entry in the same transaction, so
+ * nothing here needs to settle the notification as well; it only has to make
+ * both lists refetch, since the run this belongs to also just moved.
+ *
+ * Requires `workflow.execute`. That is a stricter gate than being the person who
+ * was asked, and there is nothing the frontend can do about it except say so.
+ */
+export const useSubmitNotificationForm = (podId: string | undefined) => {
+    const queryClient = useQueryClient();
+    const refresh = useNotificationRefresh(podId);
+    return useMutation({
+        mutationFn: ({
+            runId,
+            nodeId,
+            inputs,
+        }: {
+            runId: string;
+            nodeId: string;
+            inputs: Record<string, unknown>;
+        }) =>
+            getLemmaClient(podId).workflows.runs.submitForm(
+                runId,
+                { node_id: nodeId, inputs },
+                podId,
+            ),
+        // Spelled out rather than invalidated on a `workflow-run` prefix: query
+        // keys match element by element, so `['workflow-run']` matches neither
+        // of these and would have been a line that did nothing.
+        onSuccess: () => {
+            refresh();
+            void queryClient.invalidateQueries({ queryKey: ['workflow-run-waits'] });
+            void queryClient.invalidateQueries({ queryKey: ['workflow-run-snapshots'] });
+        },
     });
 };

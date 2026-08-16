@@ -73,6 +73,7 @@ export function RunInputForm({
     nextNodeLabel,
     onSubmitInput,
     variant = 'boxed',
+    heading = true,
 }: {
     nodeId: string;
     nodes: WorkflowNode[];
@@ -84,6 +85,10 @@ export function RunInputForm({
     nextNodeLabel?: string | null;
     onSubmitInput: (nodeId: string, data: Record<string, unknown>) => Promise<void>;
     variant?: 'boxed' | 'flat';
+    // Off where the surrounding block already said what this is. On a
+    // notification card the question is stated in full directly above, and
+    // "Input required" underneath it is the same sentence twice.
+    heading?: boolean;
 }) {
     const node = nodes.find((entry) => entry.id === nodeId);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -130,12 +135,14 @@ export function RunInputForm({
 
     return (
         <div className={cn(isFlat ? 'max-w-3xl py-1' : 'state-surface-warning rounded-lg px-3 py-3')}>
-            <div className="pb-3">
-                <h4 className="text-base font-semibold text-[var(--text-primary)]">Input required</h4>
-                <p className="text-sm text-[var(--text-secondary)]">
-                    {nextNodeLabel ? `Submit the required values to continue to ${nextNodeLabel}.` : 'Submit the required values to continue this run.'}
-                </p>
-            </div>
+            {heading ? (
+                <div className="pb-3">
+                    <h4 className="text-base font-semibold text-[var(--text-primary)]">Input required</h4>
+                    <p className="text-sm text-[var(--text-secondary)]">
+                        {nextNodeLabel ? `Submit the required values to continue to ${nextNodeLabel}.` : 'Submit the required values to continue this run.'}
+                    </p>
+                </div>
+            ) : null}
             <form onSubmit={handleSubmit} className="space-y-4">
                 {Object.entries(properties).map(([key, prop]) => {
                     const property = isRecord(prop) ? prop : {};
