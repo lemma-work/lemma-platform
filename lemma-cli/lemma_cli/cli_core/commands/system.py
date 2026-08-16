@@ -57,6 +57,47 @@ server_app = typer.Typer(
     invoke_without_command=True,
     no_args_is_help=False,
 )
+telemetry_app = typer.Typer(
+    help="Anonymous CLI usage telemetry.",
+    invoke_without_command=True,
+    no_args_is_help=False,
+)
+
+
+@telemetry_app.callback()
+def telemetry_root(ctx: typer.Context) -> None:
+    """Show telemetry status when no subcommand is given."""
+    if ctx.invoked_subcommand is not None:
+        return
+    from ..telemetry import status as telemetry_status
+
+    emit(state_from_ctx(ctx), telemetry_status())
+
+
+@telemetry_app.command("status")
+def telemetry_status_cmd(ctx: typer.Context) -> None:
+    """Show whether this installation reports anonymous CLI usage."""
+    from ..telemetry import status as telemetry_status
+
+    emit(state_from_ctx(ctx), telemetry_status())
+
+
+@telemetry_app.command("off")
+def telemetry_off(ctx: typer.Context) -> None:
+    """Stop reporting anonymous CLI usage from this installation."""
+    from ..telemetry import set_enabled, status as telemetry_status
+
+    set_enabled(False)
+    emit(state_from_ctx(ctx), telemetry_status())
+
+
+@telemetry_app.command("on")
+def telemetry_on(ctx: typer.Context) -> None:
+    """Resume reporting anonymous CLI usage from this installation."""
+    from ..telemetry import set_enabled, status as telemetry_status
+
+    set_enabled(True)
+    emit(state_from_ctx(ctx), telemetry_status())
 
 
 @auth_app.command("login")

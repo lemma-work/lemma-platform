@@ -31,6 +31,7 @@ import {
   resolveRuntimeModelName,
   runtimeCatalogToModelOptions,
   runtimeKey,
+  humanizeModelName,
   shortModelName,
 } from "@/components/agents/agent-runtime-helpers";
 
@@ -191,15 +192,13 @@ export const ModelPicker = forwardRef<HTMLDivElement, ModelPickerProps>(function
   }, [options, selectedRuntime]);
 
   const selectedModelLabel = selectedRuntime?.model_name
-    ? shortModelName(selectedRuntime.model_name)
+    ? humanizeModelName(selectedRuntime.model_name)
     : value
-      ? shortModelName(value)
+      ? humanizeModelName(value)
       : null;
   // On an explicit pick, show the model. On Auto, show what it resolves to —
   // "Auto · <model>" — so a configured default is visible without opening the picker.
-  const resolvedAutoTriggerLabel = autoTriggerLabel ?? (autoModelLabel
-    ? `${typeof autoLabel === "string" ? autoLabel : "Auto"} · ${autoModelLabel}`
-    : autoLabel);
+  const resolvedAutoTriggerLabel = autoTriggerLabel ?? autoModelLabel ?? autoLabel;
   // With Auto hidden, an unset value has nothing to inherit — prompt a pick.
   const triggerLabel = selectionIsMissing
     ? "Model unavailable"
@@ -311,13 +310,13 @@ export const ModelPicker = forwardRef<HTMLDivElement, ModelPickerProps>(function
       >
         <span
           className={cn(
-            "rounded-full border border-[var(--chip-border)] bg-[var(--chip-bg)] px-1.5 py-0.5 text-xs font-semibold text-[var(--text-secondary)]",
+            "rounded-full border border-[var(--chip-border)] bg-[var(--chip-bg)] px-1.5 py-0.5 text-xs font-medium text-[var(--text-secondary)]",
             compact && "sr-only",
           )}
         >
           Model
         </span>
-        <span className={cn("min-w-0 flex-1 truncate text-sm font-semibold text-[var(--text-primary)]", triggerLabelClassName)}>
+        <span className={cn("min-w-0 flex-1 truncate text-sm font-medium text-[var(--text-primary)]", triggerLabelClassName)}>
           {triggerLabel}
         </span>
         <ChevronDown className="size-3.5 shrink-0 text-[var(--text-tertiary)]" />
@@ -552,7 +551,7 @@ export function RuntimeModelPicker({
   // The default usually pins only a profile, so ask the catalog which model
   // that profile will actually run rather than showing a nameless "Default".
   const defaultModelName = resolveRuntimeModelName(defaultRuntime, catalog);
-  const defaultModelLabel = defaultModelName ? shortModelName(defaultModelName) : undefined;
+  const defaultModelLabel = defaultModelName ? humanizeModelName(defaultModelName) : undefined;
   // "Currently <model>" signals this tracks the default — it'll move if the
   // default changes, unlike pinning a specific model below. Callers that *are*
   // the default (e.g. the pod-default setting) override this, since "use the

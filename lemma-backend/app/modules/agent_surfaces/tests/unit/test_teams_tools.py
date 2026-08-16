@@ -104,7 +104,10 @@ class _FakeSession:
 
 
 def _session_factory(planned: list[_PlannedResponse], calls: list[dict]):
-    def _factory():
+    # Accepts whatever the real constructor is given — production builds its
+    # sessions through ``new_aiohttp_session``, which always passes a timeout.
+    def _factory(*args, **kwargs):
+        del args, kwargs
         return _FakeSession(planned, calls)
 
     return _factory
@@ -428,11 +431,25 @@ async def test_teams_download_attachment_returns_none_without_tokens(monkeypatch
     assert result is None
 
 
+class _ChunkedBody:
+    """aiohttp's `response.content`, enough of it to stream from."""
+
+    def __init__(self, body: bytes) -> None:
+        self._body = body
+
+    async def iter_chunked(self, size: int):
+        for start in range(0, len(self._body), size):
+            yield self._body[start : start + size]
+
+
 class _DownloadResponse:
     def __init__(self, status: int, headers=None, body: bytes = b""):
         self.status = status
         self.headers = headers or {}
         self._body = body
+        # The download reads chunk by chunk under the attachment cap rather
+        # than calling `read()`, so the fake has to offer the same shape.
+        self.content = _ChunkedBody(body)
 
     async def read(self) -> bytes:
         return self._body

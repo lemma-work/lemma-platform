@@ -2,7 +2,7 @@
 
 import { use, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { FileCode, Plus } from '@/components/ui/icons';
+import { FunctionSquare, Plus } from '@/components/ui/icons';
 import { toast } from 'sonner';
 
 import { FunctionEditor } from '@/components/functions/function-editor';
@@ -105,7 +105,7 @@ async def untitled_function(ctx: FunctionContext, data: FunctionInput) -> Functi
                 eyebrow="Function builder"
                 backHref={`/pod/${podId}/functions`}
                 backLabel="Functions"
-                icon={<FileCode className="h-3.5 w-3.5" />}
+                icon={<FunctionSquare className="h-3.5 w-3.5" />}
                 meta={<PodHeaderMetrics items={[
                     { label: 'Status', value: (localData.name || '').trim() ? 'Ready to create' : 'Draft', tone: (localData.name || '').trim() ? 'ready' : 'muted' },
                                     ]} />}

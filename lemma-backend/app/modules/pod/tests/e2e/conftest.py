@@ -5,7 +5,6 @@ from __future__ import annotations
 import pytest
 
 from app.modules.test_support.e2e import fixtures as e2e_fixtures
-from app.modules.test_support.e2e.runtime import scheduler_api_server
 
 pytestmark = pytest.mark.e2e
 
@@ -41,7 +40,6 @@ __all__ = [
     "redis_container",
     "sample_pod_entity",
     "scenario",
-    "scheduler_api_server",
     "supertokens_container",
     "test_app",
     "test_database_url",

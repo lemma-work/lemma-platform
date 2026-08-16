@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid7
 
+from app.core.infrastructure.db.transaction_locks import connection_released
 from app.core.authorization.context import (
     Context,
     ResourceRef,
@@ -356,7 +357,11 @@ class FunctionService:
                 "Function must be persisted before reading code"
             )
         storage = self.storage_factory(function.id)
-        code = await storage.read_file(function.code_path)
+        # Object storage, not the database. Reached from `get_function_by_name`
+        # on the permission paths, so without this the request-scoped connection
+        # is checked out for the length of a bucket read that never touches it.
+        async with connection_released(getattr(self.repository, "session", None)):
+            code = await storage.read_file(function.code_path)
         if isinstance(code, bytes):
             code = code.decode("utf-8")
         function.code = code

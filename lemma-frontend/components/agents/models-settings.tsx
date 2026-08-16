@@ -28,8 +28,7 @@ import { Switch, SwitchThumb, SwitchTrack } from '@/components/ui/switch';
 import { DestructiveConfirmationDialog } from '@/components/shared/destructive-confirmation-dialog';
 import { DestructiveResourceActionItem, ResourceActionsMenu } from '@/components/shared/resource-actions-menu';
 import { SettingsList, SettingsPanel, SettingsRow, SettingsStack } from '@/components/settings/settings-kit';
-import { declineAutoConnect } from '@/lib/desktop/auto-connect';
-import { useIsDesktopShell } from '@/lib/desktop/agent-host-bridge';
+import { agentHostBridge, useIsDesktopShell } from '@/lib/desktop/agent-host-bridge';
 import {
     useAgentHostHarnesses,
     useAgentHostHarnessOwners,
@@ -42,13 +41,12 @@ import {
     type AgentHostHarness,
 } from '@/lib/hooks/use-agent-runtime';
 import { ThisComputerCard } from './this-computer-card';
+import { HarnessRow, StatusBadge } from './harness-row';
 import { HarnessProfileDialog, type HarnessDialogTarget } from './harness-profile-dialog';
 import { ProviderProfileDialog, type ProviderDialogTarget } from './provider-profile-dialog';
 import { cn } from '@/lib/utils';
 import {
     CUSTOM_PROVIDER_OPTIONS,
-    agentHostHarnessHealth,
-    agentHostHarnessModelCount,
     agentHostStatusLabel,
     isArchivedProfile,
     isDiscoveringHarnesses,
@@ -613,7 +611,7 @@ function GetTheAppCard() {
                 </div>
                 <p className="mt-1 text-sm text-[var(--text-tertiary)]">
                     Claude Code, Codex and OpenCode already live on your machine. Install the Lemma app
-                    there, sign in, and connect it in one click.
+                    there and sign in — it connects itself.
                 </p>
             </div>
             <Button asChild variant="primary" size="sm" className="gap-1.5">
@@ -663,7 +661,7 @@ function ConnectComputerDialog({
                     {[
                         'Install the Lemma app on that computer.',
                         'Open it and sign in to this workspace.',
-                        'Models → Computers → Connect this computer.',
+                        'It appears here on its own, with the agents it found.',
                     ].map((step, index) => (
                         <li key={step} className="flex items-baseline gap-3">
                             <span className="min-w-5 font-mono text-xs text-[var(--text-tertiary)]">
@@ -703,23 +701,32 @@ function AgentHostCard({
     const harnesses = useAgentHostHarnesses(host.id);
     // An empty list means "still looking" for as long as looking is plausible.
     const discovering = isDiscoveringHarnesses(host, harnesses.data?.items.length ?? 0);
+    // Only this computer can be asked to look again from here: the bridge talks
+    // to the Agent Host in this process, not to somebody else's laptop.
+    const onRecheckThisComputer = useCallback(() => {
+        void agentHostBridge.refresh().then(
+            () => {
+                toast.success('Rechecking the agents on this computer');
+                // The host answers on locald's event stream, so the harness
+                // list this returns was read before the re-probe finished.
+                setTimeout(() => void harnesses.refetch(), 1200);
+            },
+            (error: unknown) => toast.error(error instanceof Error ? error.message : String(error)),
+        );
+    }, [harnesses]);
     const revoke = useRevokeAgentHost();
-    const [confirmDisconnect, setConfirmDisconnect] = useState(false);
+    const [confirmRemove, setConfirmRemove] = useState(false);
     const activeRuns = host.capacity?.active_runs ?? 0;
     const maxRuns = host.capacity?.max_runs ?? null;
     const online = host.status === 'ONLINE';
 
-    const disconnect = async () => {
+    const remove = async () => {
         try {
-            // Revoking is the same decision as Disconnect on the card, and has
-            // to survive a navigation for the same reason: otherwise this
-            // computer silently pairs itself back on the next page.
-            if (isThisComputer) declineAutoConnect();
             await revoke.mutateAsync(host.id);
-            setConfirmDisconnect(false);
-            toast.success(`${host.display_name} disconnected`);
+            setConfirmRemove(false);
+            toast.success(`${host.display_name} removed`);
         } catch (error) {
-            toast.error(`Couldn't disconnect: ${error instanceof Error ? error.message : 'Unknown error'}`);
+            toast.error(`Couldn't remove: ${error instanceof Error ? error.message : 'Unknown error'}`);
         }
     };
 
@@ -751,32 +758,44 @@ function AgentHostCard({
                 >
                     <RefreshCw className={cn('size-4', harnesses.isFetching && 'lemma-spin')} />
                 </Button>
-                <Button
-                    type="button"
-                    variant="quiet"
-                    size="sm"
-                    onClick={() => setConfirmDisconnect(true)}
-                    loading={revoke.isPending}
-                    aria-label={`Disconnect ${host.display_name}`}
-                >
-                    <Trash2 className="size-4" />
-                </Button>
-                <DestructiveConfirmationDialog
-                    open={confirmDisconnect}
-                    onOpenChange={setConfirmDisconnect}
-                    title={`Disconnect ${host.display_name}?`}
-                    description="Its credential is revoked immediately and new runs stop."
-                    resourceName={host.display_name}
-                    confirmationText=""
-                    consequences={[
-                        'Coding agents added from this computer stop being available.',
-                        'Pair the computer again to bring them back.',
-                    ]}
-                    confirmLabel="Disconnect"
-                    pendingLabel="Disconnecting..."
-                    isPending={revoke.isPending}
-                    onConfirm={() => void disconnect()}
-                />
+                {/*
+                  * Only for a machine you are *not* at. Removing this computer
+                  * revokes a credential the app would mint again on the next
+                  * page, so the button could only ever be honest with a flag
+                  * remembering that you meant it — which is exactly the state
+                  * this lifecycle no longer keeps. Revoking a remote machine
+                  * sticks by construction: it is not there to re-pair itself.
+                  */}
+                {isThisComputer ? null : (
+                    <>
+                        <Button
+                            type="button"
+                            variant="quiet"
+                            size="sm"
+                            onClick={() => setConfirmRemove(true)}
+                            loading={revoke.isPending}
+                            aria-label={`Remove ${host.display_name}`}
+                        >
+                            <Trash2 className="size-4" />
+                        </Button>
+                        <DestructiveConfirmationDialog
+                            open={confirmRemove}
+                            onOpenChange={setConfirmRemove}
+                            title={`Remove ${host.display_name}?`}
+                            description="Its credential is revoked immediately and new runs stop."
+                            resourceName={host.display_name}
+                            confirmationText=""
+                            consequences={[
+                                'Coding agents added from this computer stop being available.',
+                                'Opening Lemma on that computer connects it again.',
+                            ]}
+                            confirmLabel="Remove"
+                            pendingLabel="Removing..."
+                            isPending={revoke.isPending}
+                            onConfirm={() => void remove()}
+                        />
+                    </>
+                )}
             </div>
             <div className="flex flex-col gap-2 border-t border-[var(--border-subtle)] p-3">
                 {/*
@@ -791,7 +810,7 @@ function AgentHostCard({
                     <p className="flex items-center gap-2 px-1 text-xs text-[var(--text-tertiary)]">
                         <RefreshCw className="size-3 lemma-spin" />
                         Looking for agents on this computer…
-                        {isThisComputer ? ' The first time takes a few minutes.' : null}
+                        {isThisComputer ? ' The first time takes a few seconds longer.' : null}
                     </p>
                 ) : null}
                 {(harnesses.data?.items ?? []).map((harness) => (
@@ -802,13 +821,14 @@ function AgentHostCard({
                         hostOnline={online}
                         savedProfile={savedProfileByHarnessId.get(harness.id) ?? null}
                         onRefresh={onRefresh}
+                        onRecheck={isThisComputer ? onRecheckThisComputer : undefined}
                     />
                 ))}
                 {!harnesses.isLoading && !discovering && !(harnesses.data?.items.length ?? 0) ? (
                     <p className="px-1 text-xs text-[var(--text-tertiary)]">
                         No agents published yet. {isThisComputer
                             ? 'Use "Recheck agents" above to look again now.'
-                            : 'That computer republishes what it finds every 15 minutes.'}
+                            : 'That computer publishes what it finds as soon as it changes.'}
                     </p>
                 ) : null}
             </div>
@@ -822,27 +842,17 @@ function AgentHostHarnessRow({
     hostOnline,
     savedProfile,
     onRefresh,
+    onRecheck,
 }: {
     harness: AgentHostHarness;
     organizationId: string;
     hostOnline: boolean;
     savedProfile: AgentRuntimeProfileResponse | null;
     onRefresh?: () => void;
+    onRecheck?: () => void;
 }) {
     const [dialog, setDialog] = useState<HarnessDialogTarget | null>(null);
     const restore = useRestoreAgentRuntime();
-    const health = agentHostHarnessHealth(harness.health);
-    const modelCount = agentHostHarnessModelCount(harness.config_options ?? []);
-    const logo = harnessLogo(harness.harness_key);
-    // A healthy harness on an offline computer still can't take work, so say so
-    // instead of showing a green badge next to an unreachable machine.
-    const usable = health.ready && hostOnline;
-    const blockedReason = health.ready
-        ? hostOnline
-            ? null
-            : 'That computer is offline. Runs resume when Agent Host reconnects.'
-        : health.detail;
-
     const archived = savedProfile ? isArchivedProfile(savedProfile) : false;
 
     const restoreSaved = async () => {
@@ -857,73 +867,53 @@ function AgentHostHarnessRow({
     };
 
     return (
-        <div className="rounded-md bg-[var(--surface-1)] px-3 py-3">
-            <div className="flex flex-wrap items-center gap-3">
-                <span className="flex size-7 shrink-0 items-center justify-center rounded-md bg-[var(--surface-2)]">
-                    {logo ? (
-                        <Image src={logo} alt="" width={16} height={16} className="size-4 object-contain" />
-                    ) : (
-                        <TerminalSquare className="size-3.5 text-[var(--text-tertiary)]" />
-                    )}
-                </span>
-                <div className="min-w-0 flex-1">
-                    <div className="truncate text-sm font-medium text-[var(--text-primary)]">{harness.display_name}</div>
-                    <div className="text-xs text-[var(--text-tertiary)]">
-                        adapter {harness.adapter_version}
-                        {harness.upstream_version ? ` · agent ${harness.upstream_version}` : ''}
-                        {modelCount ? ` · ${modelCount} model${modelCount === 1 ? '' : 's'}` : ''}
-                    </div>
-                </div>
-                {savedProfile ? (
-                    <StatusBadge
-                        label={archived ? `Archived as ${savedProfile.name}` : `Added as ${savedProfile.name}`}
-                        tone="muted"
-                    />
-                ) : null}
-                <StatusBadge label={health.label} tone={usable ? 'ok' : 'muted'} />
-            </div>
-            {blockedReason ? <p className="mt-2 text-xs text-[var(--text-tertiary)]">{blockedReason}</p> : null}
-            {/*
-             * Offered only when the computer can actually take the profile.
-             * Creating one binds it to a live harness — the backend reads the
-             * host's config options to validate the selections — so offering
-             * this against a sleeping laptop meant taking the user through the
-             * whole dialog and then failing on save. Everything else on this
-             * row still renders while offline; only creating is withheld.
-             */}
-            {!savedProfile && usable ? (
-                <div className="mt-2">
-                    <Button
-                        type="button"
-                        size="sm"
-                        variant="quiet"
-                        className="gap-1.5 px-2"
-                        onClick={() => setDialog({ mode: 'create', harness })}
-                    >
-                        <Plus className="size-3.5" />
-                        Add to models
-                    </Button>
-                </div>
-            ) : null}
-            {archived ? (
-                <div className="mt-2">
-                    <Button
-                        type="button"
-                        size="sm"
-                        variant="quiet"
-                        className="gap-1.5 px-2"
-                        loading={restore.isPending}
-                        loadingLabel="Restoring"
-                        onClick={() => void restoreSaved()}
-                    >
-                        <RotateCcw className="size-3.5" />
-                        Restore
-                    </Button>
-                </div>
-            ) : null}
-            {harness.stale_reason ? (
-                <p className="mt-1 text-xs text-[var(--text-tertiary)]">{harness.stale_reason}</p>
-            ) : null}
+        <>
+            <HarnessRow
+                harness={harness}
+                hostOnline={hostOnline}
+                savedProfile={savedProfile ? { name: savedProfile.name, archived } : null}
+                onRecheck={onRecheck}
+                action={(usable: boolean) => {
+                    if (archived) {
+                        return (
+                            <Button
+                                type="button"
+                                size="sm"
+                                variant="quiet"
+                                className="gap-1.5 px-2"
+                                loading={restore.isPending}
+                                loadingLabel="Restoring"
+                                onClick={() => void restoreSaved()}
+                            >
+                                <RotateCcw className="size-3.5" />
+                                Restore
+                            </Button>
+                        );
+                    }
+                    /*
+                     * Offered only when the computer can actually take the
+                     * profile. Creating one binds it to a live harness — the
+                     * backend reads the host's config options to validate the
+                     * selections — so offering this against a sleeping laptop
+                     * meant taking the user through the whole dialog and then
+                     * failing on save. Everything else on the row still renders
+                     * while offline; only creating is withheld.
+                     */
+                    if (savedProfile || !usable) return null;
+                    return (
+                        <Button
+                            type="button"
+                            size="sm"
+                            variant="quiet"
+                            className="gap-1.5 px-2"
+                            onClick={() => setDialog({ mode: 'create', harness })}
+                        >
+                            <Plus className="size-3.5" />
+                            Add to models
+                        </Button>
+                    );
+                }}
+            />
 
             <HarnessProfileDialog
                 target={dialog}
@@ -931,21 +921,7 @@ function AgentHostHarnessRow({
                 onClose={() => setDialog(null)}
                 onSaved={onRefresh}
             />
-        </div>
+        </>
     );
 }
 
-function StatusBadge({ label, tone }: { label: string; tone: 'ok' | 'muted' }) {
-    return (
-        <span
-            className={cn(
-                'shrink-0 rounded-full px-2 py-0.5 text-xs font-medium',
-                tone === 'ok'
-                    ? 'bg-[var(--state-success-soft,var(--surface-1))] text-[var(--state-success,var(--text-secondary))]'
-                    : 'bg-[var(--surface-1)] text-[var(--text-tertiary)]',
-            )}
-        >
-            {label}
-        </span>
-    );
-}

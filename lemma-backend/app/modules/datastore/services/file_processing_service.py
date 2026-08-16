@@ -382,9 +382,6 @@ class DatastoreFileProcessingService:
                         markdown, images
                     )
                     return extraction, raw
-            logger.debug(
-                'datastore.file_processing_service.file_s_flagged_markdown_source.diagnostic'
-            )
 
         # Stream the source to a temp file instead of buffering the whole file in
         # memory. The processor extracts from the path (Kreuzberg streams it to
@@ -447,9 +444,6 @@ class DatastoreFileProcessingService:
                     )
                 )
             except DatastoreObjectNotFoundError:
-                logger.debug(
-                    'datastore.file_processing_service.user_markdown_asset_s_missing.diagnostic'
-                )
                 continue
             images.append(
                 DocumentImage(

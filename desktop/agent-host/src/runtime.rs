@@ -11,7 +11,6 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use chrono::Utc;
 use serde_json::Value;
-use sha2::{Digest, Sha256};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc, watch};
 use tokio::task::JoinHandle;
 use uuid::Uuid;
@@ -23,9 +22,9 @@ use crate::config::{HostConfig, HostPaths, TargetConfig};
 use crate::journal::{AcceptOutcome, Checkpoint, Journal};
 use crate::permissions::{PermissionDecision, PermissionGate};
 use crate::protocol::{
-    Command, CommandKind, CommandRejection, EventType, HarnessCapabilities, HarnessHealth,
-    HarnessSnapshot, HostCapacity, HostStatus, JsonMap, PollResponse, RejectionCode, RunCheckpoint,
-    RunSpec, RunState,
+    Command, CommandKind, CommandRejection, ConfigOption, EventType, HarnessCapabilities,
+    HarnessHealth, HarnessSnapshot, HostCapacity, HostStatus, JsonMap, PollResponse, RejectionCode,
+    RunCheckpoint, RunSpec, RunState,
 };
 
 const HARNESS_REFRESH_INTERVAL: Duration = Duration::from_secs(15 * 60);
@@ -39,8 +38,39 @@ const HARNESS_REFRESH_INTERVAL: Duration = Duration::from_secs(15 * 60);
 /// referencing a harness it had never announced.
 const HARNESS_RETRY_INTERVAL: Duration = Duration::from_secs(10);
 /// How long a queued command waits for the first harness publish before it is
-/// rejected. Generous: probing every adapter can genuinely take this long.
-const FIRST_HARNESS_WAIT: Duration = Duration::from_secs(60);
+/// rejected.
+///
+/// Was 60s, when probing every adapter ran in sequence behind four five-second
+/// timeouts. Probes are concurrent now, so the slowest adapter sets the floor
+/// and the old number was measuring a shape that no longer exists.
+const FIRST_HARNESS_WAIT: Duration = Duration::from_secs(15);
+/// How often to check whether the agents installed on this machine changed.
+///
+/// This is the budget line for noticing a newly installed agent, and it is
+/// affordable only because detection no longer means probing: it is a handful of
+/// `stat` calls, not four spawned processes.
+///
+/// It only means anything because the poll loop has a tick of its own to wake it
+/// — see `POLL_HOLD`. As a check performed once per iteration it would have been
+/// a *ceiling* on frequency and nothing at all on latency, since an iteration is
+/// however long the server holds the poll.
+const DISK_SCAN_INTERVAL: Duration = Duration::from_secs(2);
+/// How often to re-read the local control file (drain, resume, refresh).
+///
+/// Its own deadline because the scan tick made the loop twelve times faster, and
+/// `apply_local_controls` reads and parses `config.json` on every pass. Noticing
+/// a drain request within five seconds is well inside what asked for it; doing it
+/// thirty times a minute is just file I/O.
+const LOCAL_CONTROL_INTERVAL: Duration = Duration::from_secs(5);
+/// How many consecutive `AGENT_HOST_REVOKED_OR_MISSING` refusals it takes
+/// before this host drops the pairing.
+///
+/// More than one because the backend cannot say which of the two it means, and
+/// "missing" is survivable: a host pointed at the wrong backend, a database
+/// restored behind its own writes, a workspace mid-rebuild. Three, with the
+/// retry backoff doubling between them, is long enough that nothing transient
+/// spans it and short enough that a real revocation is over in seconds.
+const REVOKED_REFUSALS: u32 = 3;
 const JOURNAL_CLEANUP_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
 const RETRY_MIN: Duration = Duration::from_millis(500);
 const RETRY_MAX: Duration = Duration::from_secs(30);
@@ -72,6 +102,32 @@ const MAX_CONTROL_PROBES: u32 = 12;
 const GENERATED_ARTIFACT_DIRECTORY: &str = ".lemma-artifacts";
 const MAX_GENERATED_IMAGE_BYTES: u64 = 5 * 1024 * 1024;
 const MAX_GENERATED_IMAGES: usize = 10;
+
+/// The last fingerprint of the agents installed on this machine.
+///
+/// Detection, separated from probing. Resolving four commands is a handful of
+/// `stat` calls against directories already being searched, cheap enough to ask
+/// every `DISK_SCAN_INTERVAL`; only a *change* pays for spawning agents.
+#[derive(Default)]
+struct InstalledAgents {
+    fingerprint: String,
+}
+
+impl InstalledAgents {
+    /// Record a fresh sweep, and answer whether it is worth re-probing for.
+    ///
+    /// The first sweep establishes the baseline and answers `false`: every
+    /// worker probes when it starts, so announcing here as well would spawn
+    /// every agent twice for one event.
+    fn note(&mut self, fingerprint: String) -> bool {
+        if fingerprint == self.fingerprint {
+            return false;
+        }
+        let baseline = self.fingerprint.is_empty();
+        self.fingerprint = fingerprint;
+        !baseline
+    }
+}
 
 pub struct HostRuntime {
     config: HostConfig,
@@ -123,8 +179,16 @@ impl HostRuntime {
         let global_capacity = Arc::new(Semaphore::new(usize::from(self.config.max_runs)));
         let mut targets =
             HashMap::<Uuid, (watch::Sender<bool>, JoinHandle<anyhow::Result<()>>)>::new();
-        let mut scan = tokio::time::interval(Duration::from_secs(2));
+        let mut scan = tokio::time::interval(DISK_SCAN_INTERVAL);
         scan.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        // One sweep for the process, announced to every worker.
+        //
+        // Each worker used to run its own, so a machine paired to two workspaces
+        // resolved four commands through `PATH` and stat'd them twice over, every
+        // two seconds, to answer one question about one disk. The answer is a
+        // property of the machine, not of a pairing.
+        let (agents_changed, agents_changed_rx) = watch::channel(0_u64);
+        let mut installed_fingerprint = InstalledAgents::default();
         let mut cleanup_due = std::time::Instant::now() + JOURNAL_CLEANUP_INTERVAL;
         let shutdown = shutdown_signal();
         tokio::pin!(shutdown);
@@ -146,6 +210,10 @@ impl HostRuntime {
                         }
                         cleanup_due =
                             std::time::Instant::now() + JOURNAL_CLEANUP_INTERVAL;
+                    }
+                    if installed_fingerprint.note(self.manifest.installed_fingerprint()) {
+                        tracing::info!("agents on this computer changed; re-probing");
+                        agents_changed.send_modify(|generation| *generation += 1);
                     }
                     let current = HostConfig::load_or_create(&self.paths)?;
                     current.validate()?;
@@ -218,6 +286,7 @@ impl HostRuntime {
                             Arc::clone(&global_capacity),
                             current.max_runs,
                             shutdown_rx,
+                            agents_changed_rx.clone(),
                         )?;
                         targets.insert(target_id, (
                             shutdown_tx,
@@ -244,17 +313,16 @@ impl HostRuntime {
     /// reloads the config on every scan, so an in-memory flag would be undone
     /// on the next tick and the failing worker would start again.
     fn disable_target(paths: &HostPaths, target_id: Uuid) -> anyhow::Result<()> {
-        let mut config = HostConfig::load_or_create(paths)?;
-        let mut changed = false;
-        for target in &mut config.targets {
-            if target.target_id == target_id && target.enabled {
-                target.enabled = false;
-                changed = true;
+        HostConfig::mutate(paths, |config| {
+            let mut changed = false;
+            for target in &mut config.targets {
+                if target.target_id == target_id && target.enabled {
+                    target.enabled = false;
+                    changed = true;
+                }
             }
-        }
-        if changed {
-            config.save(paths)?;
-        }
+            Ok(changed)
+        })?;
         Ok(())
     }
 }
@@ -338,10 +406,11 @@ struct TargetWorker {
     max_runs: u16,
     shutdown: watch::Receiver<bool>,
     harnesses: BTreeMap<Uuid, PublishedHarness>,
-    /// What each probed adapter said it can do, keyed by harness key. Lemma is
-    /// told the same thing, but a run needs it locally and synchronously to
-    /// decide whether resuming a session is even on the table.
-    capabilities: HashMap<String, HarnessCapabilities>,
+    /// What each probe learned, keyed by harness key. Lemma is told the same
+    /// thing, but a run needs it locally and synchronously — to decide whether
+    /// resuming a session is on the table, and to know which configuration
+    /// this harness was published as offering.
+    probes: HashMap<String, ProbedHarness>,
     active_runs: HashMap<Uuid, ActiveRun>,
     permissions: PermissionGate,
     /// Runs whose event batches Lemma has rejected, and how often. Kept per
@@ -354,6 +423,23 @@ struct TargetWorker {
     refused_heartbeats: HashMap<Uuid, u32>,
     draining: bool,
     refresh_due: std::time::Instant,
+    /// When to re-read the local control file. See `LOCAL_CONTROL_INTERVAL`.
+    controls_due: std::time::Instant,
+    /// Bumped by the supervisor's sweep when the agents installed on this
+    /// machine change. Awaiting it is what turns "install an agent, wait up to
+    /// fifteen minutes" into "install an agent, it appears".
+    agents_changed: watch::Receiver<u64>,
+    /// Consecutive refusals saying Lemma does not know this pairing. Reset by
+    /// any answered poll, so only an unbroken run of them drops the pairing.
+    revoked_refusals: u32,
+    /// Raised by a run that failed because its agent is signed out.
+    ///
+    /// A signed-out harness is only *discovered* by probing, and probing is on
+    /// a fifteen-minute timer -- so a run failing for exactly that reason was
+    /// the freshest information the host had, and it threw it away. The
+    /// harness stayed READY in the workspace, the next run failed the same
+    /// way, and signing in did nothing until someone restarted the host.
+    reprobe_requested: Arc<AtomicBool>,
     events_ready: Arc<tokio::sync::Notify>,
     /// Enriched harnesses from probes that ran off the poll loop's critical
     /// path. Drained each iteration so a slow probe never delays a heartbeat.
@@ -378,7 +464,19 @@ struct ActiveRun {
 /// One completed refresh: what Lemma accepted, and what the probes learned.
 struct ProbedHarnesses {
     published: Vec<PublishedHarness>,
-    capabilities: HashMap<String, HarnessCapabilities>,
+    probes: HashMap<String, ProbedHarness>,
+}
+
+/// What one adapter's probe found, kept for the runs that need it in hand.
+///
+/// `config_options` is here because it is the *published* answer to "what does
+/// this harness offer" — the one Lemma validated a profile against. A run's own
+/// session can disagree with it (see `AcpRunRequest::published_config_options`),
+/// and when it does, this is the version that was actually agreed.
+#[derive(Clone, Default)]
+struct ProbedHarness {
+    capabilities: HarnessCapabilities,
+    config_options: Vec<ConfigOption>,
 }
 
 impl TargetWorker {
@@ -394,6 +492,7 @@ impl TargetWorker {
         global_capacity: Arc<Semaphore>,
         max_runs: u16,
         shutdown: watch::Receiver<bool>,
+        agents_changed: watch::Receiver<u64>,
     ) -> anyhow::Result<Self> {
         let client = TargetClient::new(target.clone(), installation_id)?;
         journal.register_target(target.target_id)?;
@@ -410,13 +509,17 @@ impl TargetWorker {
             max_runs,
             shutdown,
             harnesses: BTreeMap::new(),
-            capabilities: HashMap::new(),
+            probes: HashMap::new(),
             active_runs: HashMap::new(),
             permissions: PermissionGate::new(),
             event_rejections: HashMap::new(),
             refused_heartbeats: HashMap::new(),
             draining,
             refresh_due: std::time::Instant::now(),
+            controls_due: std::time::Instant::now(),
+            agents_changed,
+            revoked_refusals: 0,
+            reprobe_requested: Arc::new(AtomicBool::new(false)),
             events_ready: Arc::new(tokio::sync::Notify::new()),
             probed: mpsc::unbounded_channel(),
         })
@@ -425,13 +528,21 @@ impl TargetWorker {
     async fn run(mut self) -> anyhow::Result<()> {
         self.recover_interrupted_runs()?;
         let mut retry = RETRY_MIN;
+        // Cloned out of `self` once, so the select below can await it without
+        // borrowing `self` twice. A `watch` receiver tracks versions rather than
+        // edges, so a change that lands while the loop is busy elsewhere is
+        // still waiting when it next reaches the select.
+        let mut agents_changed = self.agents_changed.clone();
         loop {
             if *self.shutdown.borrow() {
                 return self.graceful_shutdown().await;
             }
             self.reap_finished().await;
             self.enforce_cancellations()?;
-            self.apply_local_controls()?;
+            if self.controls_due <= std::time::Instant::now() {
+                self.controls_due = std::time::Instant::now() + LOCAL_CONTROL_INTERVAL;
+                self.apply_local_controls()?;
+            }
             while let Ok(outcome) = self.probed.1.try_recv() {
                 match outcome {
                     Some(published) => self.store_published(published),
@@ -441,7 +552,9 @@ impl TargetWorker {
                     }
                 }
             }
-            if self.refresh_due <= std::time::Instant::now() {
+            if self.reprobe_requested.swap(false, Ordering::SeqCst)
+                || self.refresh_due <= std::time::Instant::now()
+            {
                 self.refresh_harnesses();
                 self.refresh_due = std::time::Instant::now() + HARNESS_REFRESH_INTERVAL;
             }
@@ -459,15 +572,33 @@ impl TargetWorker {
                 active_runs: active,
                 available_runs: if self.draining { 0 } else { available },
             };
-            // The poll blocks for up to 25s server-side. A run finishing inside
-            // that window used to have its output sit in the journal until the
-            // poll returned — the agent answered in 8s and the conversation
-            // still waited 20+. Abandon the wait as soon as a run has something
-            // to send; the next iteration flushes it and polls again.
+            // Lemma holds the poll open for `POLL_HOLD`, so this is where the
+            // loop spends nearly all of its time. Anything that has to happen
+            // sooner than that needs an arm here — reaching the top of the loop
+            // is not something that happens on a schedule, it is something that
+            // happens when the poll returns.
+            //
+            // Both of the other arms abandon a poll that is mid-flight, which is
+            // the point of them and costs nothing: the poll is a lease-based
+            // pull, so anything the server was about to hand over is handed over
+            // by the next one.
             let events_ready = Arc::clone(&self.events_ready);
             let polled = tokio::select! {
+                // A run finishing inside the hold used to have its output sit in
+                // the journal until the poll returned — the agent answered in 8s
+                // and the conversation still waited 20+.
                 result = self.poll_target(capacity) => Some(result),
                 () = events_ready.notified() => None,
+                // The agents on this machine changed. This is what makes
+                // `DISK_SCAN_INTERVAL` mean what it says: the scan itself was
+                // always cheap, but it used to be *reached* once per iteration,
+                // so noticing a newly installed agent waited out a held poll and
+                // took up to `POLL_HOLD` rather than the two seconds the
+                // interval reads as.
+                _ = agents_changed.changed() => {
+                    self.refresh_due = std::time::Instant::now();
+                    None
+                }
             };
             let Some(polled) = polled else {
                 continue;
@@ -475,6 +606,9 @@ impl TargetWorker {
             match polled {
                 Ok(response) => {
                     retry = RETRY_MIN;
+                    // One answered poll proves the pairing is known, so any
+                    // refusals before it were the transient kind.
+                    self.revoked_refusals = 0;
                     self.journal
                         .update_target_state(self.target.target_id, "ONLINE", None)?;
                     if response.host_status == HostStatus::Revoked {
@@ -511,6 +645,48 @@ impl TargetWorker {
                     }
                 }
                 Err(error) => {
+                    // Lemma does not know this pairing. Stop being paired rather
+                    // than retrying forever: the target task ends either way,
+                    // but the supervisor respawns any target still in the config
+                    // — which is how a removed computer kept polling a pairing
+                    // the workspace had already destroyed, reporting
+                    // "Unreachable" for as long as the app was open.
+                    //
+                    // Not on the first refusal, though. The backend cannot tell
+                    // us whether the host was revoked or is merely missing, and
+                    // "missing" includes a machine pointed at the wrong backend
+                    // and a database restored behind its own writes. Dropping
+                    // the pairing there costs a re-pair for a condition that
+                    // heals itself. So it has to say so `REVOKED_REFUSALS`
+                    // times, across a backoff that is doubling toward
+                    // `RETRY_MAX` — long enough that no blip spans it, short
+                    // enough that a genuine revocation is over in under a
+                    // minute.
+                    if error
+                        .downcast_ref::<ApiError>()
+                        .is_some_and(ApiError::is_revoked_or_missing)
+                    {
+                        self.revoked_refusals += 1;
+                        if self.revoked_refusals >= REVOKED_REFUSALS {
+                            tracing::warn!(
+                                target = %self.target.name,
+                                refusals = self.revoked_refusals,
+                                "Lemma does not know this pairing; dropping it"
+                            );
+                            self.cancel_all("Lemma revoked this Agent Host")?;
+                            self.forget_target()?;
+                            return Err(error);
+                        }
+                        tracing::info!(
+                            target = %self.target.name,
+                            refusals = self.revoked_refusals,
+                            "Lemma does not know this pairing; retrying before dropping it"
+                        );
+                        self.note_offline(&error.to_string())?;
+                        self.wait_retry(retry).await;
+                        retry = (retry * 2).min(RETRY_MAX);
+                        continue;
+                    }
                     if error
                         .downcast_ref::<ApiError>()
                         .is_some_and(ApiError::is_unauthorized)
@@ -526,6 +702,38 @@ impl TargetWorker {
                 }
             }
         }
+    }
+
+    /// Drop this pairing from the on-disk config.
+    ///
+    /// Only for a refusal that cannot become valid again. Re-pairing is a fresh
+    /// single-use code, which is the right bar: the machine is either signed in
+    /// and welcome, in which case an authenticated page pairs it again in
+    /// seconds, or it is not, in which case it should hold nothing.
+    fn forget_target(&mut self) -> anyhow::Result<()> {
+        let target_id = self.target.target_id;
+        let mut dropped = false;
+        HostConfig::mutate(&self.paths, |config| {
+            let before = config.targets.len();
+            config
+                .targets
+                .retain(|target| target.target_id != target_id);
+            dropped = config.targets.len() != before;
+            Ok(dropped)
+        })?;
+        if !dropped {
+            return Ok(());
+        }
+        self.journal.update_target_state(
+            self.target.target_id,
+            "REVOKED",
+            Some("revoked by Lemma"),
+        )?;
+        tracing::info!(
+            target = %self.target.name,
+            "dropped a revoked pairing; this computer will not poll it again"
+        );
+        Ok(())
     }
 
     fn apply_local_controls(&mut self) -> anyhow::Result<()> {
@@ -628,10 +836,19 @@ impl TargetWorker {
             .get(&spec.harness_id)
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("command references an unknown harness"))?;
-        anyhow::ensure!(
-            published.config_revision == spec.profile_revision,
-            "harness configuration revision changed"
-        );
+        if published.config_revision != spec.profile_revision {
+            // Both revisions, because the question a reader has is always "how
+            // far behind was the command?", and one hash alone cannot answer
+            // it. Lemma re-mints the command against the revision it is told
+            // here, so this line is also the record of what it was told.
+            tracing::warn!(
+                harness = %published.harness_key,
+                commanded = %short_revision(&spec.profile_revision),
+                published = %short_revision(&published.config_revision),
+                "rejecting a run minted against a superseded harness revision"
+            );
+            anyhow::bail!("harness configuration revision changed");
+        }
         if self.active_runs.contains_key(&spec.agent_run_id) {
             let outcome = self.journal.accept_start(
                 self.target.target_id,
@@ -651,10 +868,11 @@ impl TargetWorker {
         // fallback, so waiting on the semaphore after that point can duplicate
         // provider work.
         let adapter = self.manifest.resolve(&published.harness_key)?;
-        let can_load_session = self
-            .capabilities
-            .get(&published.harness_key)
-            .is_some_and(|capabilities| capabilities.load_session);
+        let probe = self.probes.get(&published.harness_key).cloned();
+        let can_load_session = probe
+            .as_ref()
+            .is_some_and(|probe| probe.capabilities.load_session);
+        let published_config_options = probe.map(|probe| probe.config_options).unwrap_or_default();
         let permit = Arc::clone(&self.global_capacity)
             .try_acquire_owned()
             .map_err(|_| anyhow::anyhow!("Agent Host capacity changed; command will be retried"))?;
@@ -668,7 +886,13 @@ impl TargetWorker {
         if outcome == AcceptOutcome::Duplicate {
             return Ok(());
         }
-        self.spawn_run(spec, adapter, can_load_session, permit);
+        self.spawn_run(
+            spec,
+            adapter,
+            can_load_session,
+            published_config_options,
+            permit,
+        );
         Ok(())
     }
 
@@ -677,6 +901,7 @@ impl TargetWorker {
         spec: RunSpec,
         adapter: ResolvedAdapter,
         can_load_session: bool,
+        published_config_options: Vec<ConfigOption>,
         permit: OwnedSemaphorePermit,
     ) {
         let target_id = self.target.target_id;
@@ -686,6 +911,7 @@ impl TargetWorker {
         let paths = self.paths.clone();
         let permissions = self.permissions.clone();
         let events_ready = Arc::clone(&self.events_ready);
+        let reprobe_requested = Arc::clone(&self.reprobe_requested);
         let run_id = spec.agent_run_id;
         // Captured before the task takes ownership of `adapter`, so a failure
         // can name the agent rather than describing it as an internal error.
@@ -771,6 +997,7 @@ impl TargetWorker {
                 scratch_directory: scratch.clone(),
                 mcp_server: Some(mcp_server),
                 can_load_session,
+                published_config_options,
                 permissions: permissions.clone(),
                 permission_timeout: PERMISSION_DECISION_TIMEOUT,
                 cancel: cancel_rx,
@@ -826,10 +1053,31 @@ impl TargetWorker {
                         RunState::Failed
                     };
                     let raw = error.to_string();
-                    let message = authentication_hint(&adapter_name, &raw)
-                        .or_else(|| adapter_failure_message(&adapter_name, &redact_error(&raw)))
-                        .unwrap_or_else(|| redact_error(&raw));
-                    terminal_failure(&journal, target_id, run_id, lease_epoch, state, &message)?;
+                    // A recognised failure is one we are restating in our own
+                    // words -- and the adapter has already streamed its own
+                    // into the transcript, so Lemma is told to drop that.
+                    if authentication_hint(&adapter_name, &raw).is_some() {
+                        // The freshest evidence anyone has that this agent is
+                        // signed out. Probing is what publishes AUTH_REQUIRED,
+                        // and it is otherwise up to fifteen minutes away, so
+                        // ask for one now -- that is what makes the workspace
+                        // say "Sign-in needed" while the user is still looking
+                        // at the failure that told them.
+                        reprobe_requested.store(true, Ordering::SeqCst);
+                    }
+                    let rewritten = authentication_hint(&adapter_name, &raw)
+                        .or_else(|| adapter_failure_message(&adapter_name, &redact_error(&raw)));
+                    let supersedes = rewritten.is_some();
+                    let message = rewritten.unwrap_or_else(|| redact_error(&raw));
+                    terminal_failure_detail(
+                        &journal,
+                        target_id,
+                        run_id,
+                        lease_epoch,
+                        state,
+                        &message,
+                        supersedes,
+                    )?;
                 }
                 Err(_) => {
                     terminal_failure(
@@ -1035,8 +1283,15 @@ impl TargetWorker {
                         return snapshot;
                     }
                     let Ok(adapter) = manifest.resolve(&snapshot.harness_key) else {
+                        tracing::info!(
+                            harness = %snapshot.harness_key,
+                            outcome = "unresolved",
+                            "harness probe skipped"
+                        );
                         return snapshot;
                     };
+                    let started = std::time::Instant::now();
+                    let previous_revision = snapshot.config_revision.clone();
                     match tokio::time::timeout(
                         Duration::from_secs(20),
                         driver.probe(adapter, scratch),
@@ -1046,7 +1301,18 @@ impl TargetWorker {
                         Ok(Ok(probe)) => {
                             snapshot.config_options = probe.config_options;
                             snapshot.capabilities = capabilities_from_acp(&probe.capabilities);
-                            snapshot.config_revision = snapshot_revision(&snapshot);
+                            snapshot.config_revision = snapshot.revision();
+                            tracing::info!(
+                                harness = %snapshot.harness_key,
+                                outcome = "ready",
+                                elapsed_ms = started.elapsed().as_millis(),
+                                models = model_option_count(&snapshot.config_options),
+                                revision_changed =
+                                    previous_revision != snapshot.config_revision,
+                                revision = %short_revision(&snapshot.config_revision),
+                                auth_methods = %probe.auth_methods,
+                                "harness probe finished"
+                            );
                         }
                         Ok(Err(error)) => {
                             let raw = error.to_string();
@@ -1062,10 +1328,23 @@ impl TargetWorker {
                                 snapshot.health = HarnessHealth::ProbeFailed;
                                 snapshot.stale_reason = Some(redact_error(&raw));
                             }
+                            tracing::info!(
+                                harness = %snapshot.harness_key,
+                                outcome = ?snapshot.health,
+                                elapsed_ms = started.elapsed().as_millis(),
+                                detail = %redact_error(&raw),
+                                "harness probe finished"
+                            );
                         }
                         Err(_) => {
                             snapshot.health = HarnessHealth::ProbeFailed;
                             snapshot.stale_reason = Some("ACP probe timed out".to_owned());
+                            tracing::info!(
+                                harness = %snapshot.harness_key,
+                                outcome = "timeout",
+                                elapsed_ms = started.elapsed().as_millis(),
+                                "harness probe finished"
+                            );
                         }
                     }
                     snapshot
@@ -1088,16 +1367,50 @@ impl TargetWorker {
         tokio::spawn(async move {
             let discovered = discover_manifest.discover();
             let enriched = futures_util::future::join_all(build_probes(discovered)).await;
-            let capabilities = enriched
+            let probes = enriched
                 .iter()
-                .map(|snapshot| (snapshot.harness_key.clone(), snapshot.capabilities.clone()))
+                .map(|snapshot| {
+                    (
+                        snapshot.harness_key.clone(),
+                        ProbedHarness {
+                            capabilities: snapshot.capabilities.clone(),
+                            config_options: snapshot.config_options.clone(),
+                        },
+                    )
+                })
                 .collect();
+            // Logged before the request, and again with its outcome, because a
+            // publish that never returns is indistinguishable in a log from one
+            // that was never attempted -- and "was this host even trying?" is
+            // the first question asked of a machine whose agents never answer.
+            let attempted = enriched
+                .iter()
+                .map(|snapshot| {
+                    format!(
+                        "{}={:?}@{}",
+                        snapshot.harness_key,
+                        snapshot.health,
+                        short_revision(&snapshot.config_revision)
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(" ");
+            tracing::info!(harnesses = %attempted, "publishing probed harnesses");
             match client.publish_harnesses(enriched).await {
                 Ok(published) => {
-                    let _ = sender.send(Some(ProbedHarnesses {
-                        published,
-                        capabilities,
-                    }));
+                    let accepted = published
+                        .iter()
+                        .map(|harness| {
+                            format!(
+                                "{}@{}",
+                                harness.harness_key,
+                                short_revision(&harness.config_revision)
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    tracing::info!(harnesses = %accepted, "published probed harnesses");
+                    let _ = sender.send(Some(ProbedHarnesses { published, probes }));
                 }
                 Err(error) => {
                     tracing::warn!(%error, "publishing probed harnesses failed");
@@ -1117,7 +1430,7 @@ impl TargetWorker {
             .into_iter()
             .map(|harness| (harness.id, harness))
             .collect();
-        self.capabilities = probed.capabilities;
+        self.probes = probed.probes;
     }
 
     /// The control updates due for delivery, minus the ones Lemma refuses.
@@ -1706,9 +2019,51 @@ fn terminal_failure(
     state: RunState,
     message: &str,
 ) -> anyhow::Result<()> {
+    terminal_failure_detail(
+        journal,
+        target_id,
+        run_id,
+        lease_epoch,
+        state,
+        message,
+        false,
+    )
+}
+
+/// The shared body, plus the one thing a caller may say about its message.
+///
+/// `supersedes_stream` means "this message is a rewrite of text the agent has
+/// already streamed". An adapter reporting its own failure does it twice: once
+/// as an ordinary `agent_message_chunk`, which Lemma turns into assistant text
+/// in the transcript, and again when the turn ends. So a signed-out Claude Code
+/// produced a bare "Failed to authenticate: OAuth session expired…" message
+/// *and* the card saying the same thing in words the user can act on.
+///
+/// That is worse than untidy. Lemma only offers Retry on a failed run whose
+/// messages are all the user's (`AgentRun.is_safely_retryable`), because
+/// retrying a run that produced output can duplicate work -- so the stray
+/// assistant message is also what removed the button. The one failure a retry
+/// obviously fixes was the one failure that never offered one.
+///
+/// Set it only where the message really is a rewrite. A run that answered for
+/// three paragraphs and then hit its deadline keeps all three, and keeps
+/// blocking Retry, which is correct.
+#[allow(clippy::fn_params_excessive_bools)]
+fn terminal_failure_detail(
+    journal: &Journal,
+    target_id: Uuid,
+    run_id: Uuid,
+    lease_epoch: u32,
+    state: RunState,
+    message: &str,
+    supersedes_stream: bool,
+) -> anyhow::Result<()> {
     let mut detail = JsonMap::new();
     detail.insert("state".to_owned(), serde_json::to_value(state)?);
     detail.insert("message".to_owned(), Value::String(message.to_owned()));
+    if supersedes_stream {
+        detail.insert("supersedes_stream".to_owned(), Value::Bool(true));
+    }
     journal.append_event(
         target_id,
         run_id,
@@ -1855,16 +2210,26 @@ fn generated_image_signature_matches(bytes: &[u8], mime_type: &str) -> bool {
     }
 }
 
-fn snapshot_revision(snapshot: &HarnessSnapshot) -> String {
-    let value = serde_json::json!({
-        "adapter_version": snapshot.adapter_version,
-        "upstream_version": snapshot.upstream_version,
-        "config_options": snapshot.config_options,
-        "capabilities": snapshot.capabilities,
-    });
-    hex::encode(Sha256::digest(
-        serde_json::to_vec(&value).expect("snapshot revision serialization"),
-    ))
+/// Enough of a revision to correlate two log lines, without the other 56 chars.
+///
+/// Revisions are only ever compared for equality, and a reader tracing a run
+/// that was rejected for naming the wrong one needs to see *that* they differ,
+/// not which bytes.
+fn short_revision(revision: &str) -> &str {
+    &revision[..revision.len().min(8)]
+}
+
+/// How many models a probe came back with, for the probe log line.
+///
+/// The interesting failure is a harness that probes fine and offers nothing:
+/// that is what leaves a saved model unselectable and a run rejected for a
+/// model "the harness does not offer".
+fn model_option_count(options: &[ConfigOption]) -> usize {
+    options
+        .iter()
+        .filter(|option| option.category == "model")
+        .map(|option| option.options.len())
+        .sum()
 }
 
 fn capabilities_from_acp(value: &Value) -> HarnessCapabilities {
@@ -1906,9 +2271,15 @@ fn authentication_hint(harness: &str, error: &str) -> Option<String> {
     if !looks_like_auth {
         return None;
     }
+    // "…and send the message again" was wrong, and wrong in a way that cost
+    // people a restart: a signed-out harness is published AUTH_REQUIRED, and
+    // admission refuses every run against it until the next probe — up to
+    // fifteen minutes away. Sending again does nothing for that whole window.
+    // What does work is asking the host to look again, which is what the
+    // "Re-check" action on the failure does.
     Some(format!(
         "{harness} is installed on this computer but not signed in. \
-         Open it in a terminal, sign in, and send the message again. \
+         Sign in to it in a terminal, then press Re-check. \
          Lemma runs it with your credentials and never sees them."
     ))
 }
@@ -2143,6 +2514,7 @@ mod target_worker_tests {
                 Arc::new(Semaphore::new(2)),
                 2,
                 shutdown_rx,
+                watch::channel(0_u64).1,
             )
             .unwrap();
             Self {
@@ -3153,12 +3525,122 @@ mod adapter_failure_message_tests {
 
 #[cfg(test)]
 mod harness_publish_scheduling_tests {
-    use super::{FIRST_HARNESS_WAIT, HARNESS_REFRESH_INTERVAL, HARNESS_RETRY_INTERVAL};
+    use super::{
+        DISK_SCAN_INTERVAL, FIRST_HARNESS_WAIT, HARNESS_REFRESH_INTERVAL, HARNESS_RETRY_INTERVAL,
+    };
+    use crate::protocol::POLL_HOLD;
+
+    #[test]
+    fn noticing_a_new_agent_is_not_gated_on_the_refresh_interval() {
+        // The refresh interval used to be the only thing that noticed a newly
+        // installed agent, which put a quarter of an hour between installing
+        // Claude Code and being able to use it. The supervisor's sweep answers
+        // that question now, cheaply enough to ask every couple of seconds, and
+        // the interval is a safety net behind it.
+        assert!(
+            DISK_SCAN_INTERVAL * 30 <= HARNESS_REFRESH_INTERVAL,
+            "detection must be orders of magnitude faster than the safety net",
+        );
+        // And — the part this pair of constants cannot show on its own — the
+        // scan has to be able to *reach* the worker inside its own interval.
+        // It could not: the check ran once per loop iteration, and an iteration
+        // is one held poll, so a two-second interval detected in up to
+        // `POLL_HOLD`. `the_scan_does_not_wait_out_a_held_poll` below is the
+        // one that fails if that comes back; this only fixes the budget.
+        assert!(
+            DISK_SCAN_INTERVAL < POLL_HOLD,
+            "a scan slower than the poll hold would have nothing to add to it",
+        );
+    }
+
+    /// The regression this pair of tests exists for.
+    ///
+    /// `DISK_SCAN_INTERVAL` was read as "an agent is noticed within two
+    /// seconds". It was not: it bounded how often the check *could* run, and
+    /// the check was reached once per iteration of a loop whose every iteration
+    /// waits out a poll Lemma holds for `POLL_HOLD`. So the real answer was
+    /// 0-25s, and the constant said 2.
+    ///
+    /// Both halves are asserted, because either alone still permits the bug:
+    /// a select arm that does not abandon the poll would not help, and a scan
+    /// that abandons the poll on every tick would mean the poll never returns.
+    #[tokio::test(start_paused = true)]
+    async fn the_scan_does_not_wait_out_a_held_poll() {
+        use tokio::sync::watch;
+
+        let (agents_changed, mut receiver) = watch::channel(0_u64);
+
+        // A poll that is being held, exactly as Lemma holds it.
+        let held_poll = tokio::time::sleep(POLL_HOLD);
+        tokio::pin!(held_poll);
+
+        let woke_at = {
+            let started = tokio::time::Instant::now();
+            // The supervisor's sweep notices a new agent one interval in.
+            tokio::spawn(async move {
+                tokio::time::sleep(DISK_SCAN_INTERVAL).await;
+                agents_changed.send_modify(|generation| *generation += 1);
+            });
+            tokio::select! {
+                () = &mut held_poll => tokio::time::Instant::now() - started,
+                _ = receiver.changed() => tokio::time::Instant::now() - started,
+            }
+        };
+
+        assert!(
+            woke_at < POLL_HOLD,
+            "a newly installed agent must not wait out the poll: woke after {woke_at:?}",
+        );
+        assert_eq!(
+            woke_at, DISK_SCAN_INTERVAL,
+            "and it must wake on the scan, not on anything else",
+        );
+    }
+
+    #[test]
+    fn only_a_change_after_the_baseline_is_worth_re_probing() {
+        use super::InstalledAgents;
+
+        let mut installed = InstalledAgents::default();
+        // The baseline is not news: every worker probes on startup, so
+        // announcing the first sweep too spawns every agent twice for one event.
+        assert!(!installed.note("aaa".to_owned()));
+        // A sweep that finds the same machine is not news either. This is the
+        // one that has to hold at two-second intervals forever.
+        assert!(!installed.note("aaa".to_owned()));
+        // An agent installed, upgraded in place, or removed is.
+        assert!(installed.note("bbb".to_owned()));
+        assert!(!installed.note("bbb".to_owned()));
+        assert!(installed.note("aaa".to_owned()));
+    }
+
+    /// The other half: nothing wakes the loop when the disk is unchanged.
+    ///
+    /// A tick that fired unconditionally would abandon the in-flight poll every
+    /// two seconds, so a 25-second poll would never once return and no command
+    /// would ever be delivered. The arm has to be a change notification, not a
+    /// timer.
+    #[tokio::test(start_paused = true)]
+    async fn an_unchanged_disk_lets_the_poll_run_to_completion() {
+        use tokio::sync::watch;
+
+        let (_agents_changed, mut receiver) = watch::channel(0_u64);
+        let held_poll = tokio::time::sleep(POLL_HOLD);
+        tokio::pin!(held_poll);
+        let started = tokio::time::Instant::now();
+
+        tokio::select! {
+            () = &mut held_poll => {}
+            _ = receiver.changed() => panic!("an unchanged disk must not abandon the poll"),
+        }
+
+        assert_eq!(tokio::time::Instant::now() - started, POLL_HOLD);
+    }
 
     #[test]
     fn a_failed_publish_is_retried_in_seconds_not_a_quarter_of_an_hour() {
-        // The refresh interval answers "have the installed agents changed",
-        // which is rarely. It is the wrong answer to "the publish failed":
+        // The refresh interval is the safety net behind fingerprint detection,
+        // so it fires rarely. It is the wrong answer to "the publish failed":
         // the backend restarts whenever its configuration changes, and a
         // publish that landed during one used to leave this host with nothing
         // published until the next refresh — rejecting every command in

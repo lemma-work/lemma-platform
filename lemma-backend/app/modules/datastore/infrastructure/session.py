@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy.pool import NullPool
 
 from app.core.config import settings
+from app.core.observability.connection_scope import attach_connection_scope_monitor
 
 _engine = None
 _session_maker = None
@@ -25,9 +26,12 @@ def _build_datastore_connect_args() -> dict:
     """Build asyncpg connect_args with server-side session settings."""
     connect_args: dict = {}
     server_settings: dict[str, str] = {}
-    timeout_ms = int(settings.db_idle_in_transaction_timeout_seconds * 1000)
-    if timeout_ms > 0:
-        server_settings["idle_in_transaction_session_timeout"] = str(timeout_ms)
+    idle_ms = int(settings.db_idle_in_transaction_timeout_seconds * 1000)
+    if idle_ms > 0:
+        server_settings["idle_in_transaction_session_timeout"] = str(idle_ms)
+    statement_ms = int(settings.db_statement_timeout_seconds * 1000)
+    if statement_ms > 0:
+        server_settings["statement_timeout"] = str(statement_ms)
     if server_settings:
         connect_args["server_settings"] = server_settings
     return connect_args
@@ -42,17 +46,29 @@ def get_datastore_engine():
         if settings.environment == "testing":
             engine_kwargs["poolclass"] = NullPool
         else:
-            engine_kwargs["pool_size"] = settings.datastore_db_pool_size
-            engine_kwargs["max_overflow"] = settings.datastore_db_max_overflow
+            # Same knob as the primary engine, same reasoning: one number, and
+            # pool_size is the ceiling because max_overflow is pinned to 0.
+            engine_kwargs["pool_size"] = settings.db_pool_size
+            engine_kwargs["max_overflow"] = 0
+            engine_kwargs["pool_timeout"] = settings.db_pool_timeout_seconds
             engine_kwargs["pool_recycle"] = settings.db_pool_recycle_seconds
+            engine_kwargs["pool_use_lifo"] = True
             connect_args = _build_datastore_connect_args()
         _engine = create_async_engine(
             url,
             json_serializer=lambda obj: json.dumps(obj, default=_json_serial),
             pool_pre_ping=True,
             connect_args=connect_args,
+            # Distinguishes this pool from the primary one in the connection
+            # metrics. When both point at the same database the two pools are
+            # otherwise indistinguishable, and their readings sum into a single
+            # meaningless series.
+            pool_logging_name="datastore",
             **engine_kwargs,
         )
+        # The datastore pool has no telemetry of its own; one line gives the
+        # monitor both engines.
+        attach_connection_scope_monitor(_engine)
     return _engine
 
 

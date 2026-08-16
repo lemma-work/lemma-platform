@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 from typing import Callable, Optional
 from uuid import UUID
 
@@ -42,6 +41,7 @@ from app.modules.datastore.services.files.transaction_writer import (
     _MARKDOWN_SOURCE_KEY,
 )
 from app.modules.datastore.services.system_skill_files import SystemSkillFileProvider
+from app.core.concurrency.offload import run_blocking
 
 logger = get_logger(__name__)
 
@@ -363,7 +363,7 @@ class FileWriter(FileTransactionWriter):
         if content is None:
             return False
         file_entity.size_bytes = upload_source_size(content)
-        file_entity.content_sha256 = await asyncio.to_thread(
+        file_entity.content_sha256 = await run_blocking(
             upload_source_sha256, content
         )
         return True

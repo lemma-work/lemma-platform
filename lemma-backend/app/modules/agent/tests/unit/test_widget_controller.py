@@ -71,6 +71,24 @@ def test_widget_router_has_no_submit_route():
     assert not any(path.endswith("/submit") for path in paths)
 
 
+
+def _uow_factory(uow=None):
+    """A factory the controller can open, standing in for `get_uow_factory`.
+
+    The route takes a factory now rather than a live session: the SuperTokens
+    lookup between its two database phases used to run with a pooled connection
+    checked out. These tests patch the services that would use the unit of work,
+    so the scope only has to be enterable.
+    """
+    from contextlib import asynccontextmanager
+
+    @asynccontextmanager
+    async def _scope():
+        yield uow if uow is not None else SimpleNamespace(session=None)
+
+    return lambda: _scope()
+
+
 @pytest.mark.asyncio
 async def test_serve_widget_with_token(monkeypatch):
     pod_id = uuid4()
@@ -88,7 +106,7 @@ async def test_serve_widget_with_token(monkeypatch):
     )
 
     resp = await ctrl.serve_widget(
-        uuid4(), "tc_1", SimpleNamespace(), SimpleNamespace(session=None), token="tok"
+        uuid4(), "tc_1", SimpleNamespace(), _uow_factory(), token="tok"
     )
 
     assert resp.status_code == 200
@@ -107,7 +125,7 @@ async def test_serve_missing_returns_404(monkeypatch):
     monkeypatch.setattr(ctrl, "WidgetAssetService", _fake_service(None))
     with pytest.raises(HTTPException) as exc:
         await ctrl.serve_widget(
-            uuid4(), "x", SimpleNamespace(), SimpleNamespace(session=None), token=None
+            uuid4(), "x", SimpleNamespace(), _uow_factory(), token=None
         )
     assert exc.value.status_code == 404
 
@@ -119,7 +137,7 @@ async def test_serve_unauthenticated_returns_401(monkeypatch):
     monkeypatch.setattr(ctrl, "get_session", AsyncMock(return_value=None))
     with pytest.raises(HTTPException) as exc:
         await ctrl.serve_widget(
-            uuid4(), "tc", SimpleNamespace(), SimpleNamespace(session=None), token=None
+            uuid4(), "tc", SimpleNamespace(), _uow_factory(), token=None
         )
     assert exc.value.status_code == 401
 
@@ -143,7 +161,7 @@ async def test_serve_non_owner_returns_404(monkeypatch):
 
     with pytest.raises(HTTPException) as exc:
         await ctrl.serve_widget(
-            uuid4(), "tc", SimpleNamespace(), SimpleNamespace(session=None), token="tok"
+            uuid4(), "tc", SimpleNamespace(), _uow_factory(), token="tok"
         )
     assert exc.value.status_code == 404
     # Pod-level permission passed, so the owner check is what denied access.
@@ -165,7 +183,7 @@ async def test_mint_non_owner_returns_404(monkeypatch):
 
     with pytest.raises(HTTPException) as exc:
         await ctrl.mint_widget_embed_url(
-            pod_id, uuid4(), "tc", SimpleNamespace(session=None), ctx
+            pod_id, uuid4(), "tc", _uow_factory(), ctx
         )
     assert exc.value.status_code == 404
 
@@ -186,7 +204,7 @@ async def test_serve_non_member_returns_403(monkeypatch):
 
     with pytest.raises(DomainError) as exc:
         await ctrl.serve_widget(
-            uuid4(), "tc", SimpleNamespace(), SimpleNamespace(session=None), token="tok"
+            uuid4(), "tc", SimpleNamespace(), _uow_factory(), token="tok"
         )
     assert exc.value.status_code == 403
 
@@ -207,7 +225,7 @@ async def test_mint_embed_url(monkeypatch):
     ctx = SimpleNamespace(require=AsyncMock(return_value=None), user_id=user_id)
 
     resp = await ctrl.mint_widget_embed_url(
-        pod_id, conversation_id, "tc_1", SimpleNamespace(session=None), ctx
+        pod_id, conversation_id, "tc_1", _uow_factory(), ctx
     )
 
     assert f"/widgets/serve/{conversation_id}/tc_1" in resp.url
@@ -226,6 +244,6 @@ async def test_mint_cross_pod_returns_404(monkeypatch):
     ctx = SimpleNamespace(require=AsyncMock(), user_id=uuid4())
     with pytest.raises(HTTPException) as exc:
         await ctrl.mint_widget_embed_url(
-            uuid4(), uuid4(), "tc", SimpleNamespace(session=None), ctx
+            uuid4(), uuid4(), "tc", _uow_factory(), ctx
         )
     assert exc.value.status_code == 404

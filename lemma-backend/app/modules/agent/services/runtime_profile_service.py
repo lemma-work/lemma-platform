@@ -48,6 +48,7 @@ from app.modules.agent.infrastructure.repositories import (
 )
 # Imported as a module, not by name: tests patch the discovery functions, and a
 # `from ... import f` binding here would keep calling the unpatched original.
+from app.core.infrastructure.db.transaction_locks import connection_released
 from app.modules.agent.services import runtime_provider_discovery as discovery
 
 logger = get_logger(__name__)
@@ -204,6 +205,14 @@ class AgentRuntimeProfileService:
         self.repository = repository
         self.host_repository = host_repository
 
+    def _session(self):
+        """The session behind the repository, so the connection can be released.
+
+        ``None`` when there is no repository (unit tests); `connection_released`
+        treats that as nothing to release and passes straight through.
+        """
+        return getattr(getattr(self.repository, "uow", None), "session", None)
+
     def system_profiles(self) -> list[AgentRuntimeProfile]:
         profile = _system_lemma_profile()
         return [profile] if profile is not None else []
@@ -268,7 +277,10 @@ class AgentRuntimeProfileService:
         user_id: UUID,
         harness_id: UUID,
         name: str,
-        scope: RuntimeProfileScope = RuntimeProfileScope.ORGANIZATION,
+        # See CreateAgentHostRuntimeProfileRequest: sharing one person's machine
+        # with a whole workspace is never the thing a caller meant by saying
+        # nothing.
+        scope: RuntimeProfileScope = RuntimeProfileScope.PERSONAL,
         description: str | None = None,
         default_model_name: str | None = None,
         config_selections: JsonObject | None = None,
@@ -396,11 +408,16 @@ class AgentRuntimeProfileService:
             raise RuntimeError("Runtime profile repository is required")
         normalized_name = _normalize_profile_name(name)
         normalized_headers = _normalized_headers(headers)
-        discovered_models = await discovery._discover_openai_compatible_models(
-            base_url=str(base_url),
-            api_key=api_key,
-            headers=normalized_headers,
-        )
+        # Nothing has been read or written yet, so the caller's connection goes
+        # back for the provider round trip -- an HTTP call to a base URL the
+        # caller supplied, which is as slow as whatever answers it. The writes
+        # below re-acquire.
+        async with connection_released(self._session()):
+            discovered_models = await discovery._discover_openai_compatible_models(
+                base_url=str(base_url),
+                api_key=api_key,
+                headers=normalized_headers,
+            )
         catalog = discovery._provider_model_catalog(
             discovered_models=discovered_models,
             fallback_model_names=model_names or [],
@@ -457,11 +474,16 @@ class AgentRuntimeProfileService:
             raise RuntimeError("Runtime profile repository is required")
         normalized_name = _normalize_profile_name(name)
         normalized_headers = _normalized_headers(headers)
-        discovered_models = await discovery._discover_anthropic_compatible_models(
-            base_url=str(base_url or "https://api.anthropic.com"),
-            api_key=api_key,
-            headers=normalized_headers,
-        )
+        # Nothing has been read or written yet, so the caller's connection goes
+        # back for the provider round trip -- an HTTP call to a base URL the
+        # caller supplied, which is as slow as whatever answers it. The writes
+        # below re-acquire.
+        async with connection_released(self._session()):
+            discovered_models = await discovery._discover_anthropic_compatible_models(
+                base_url=str(base_url or "https://api.anthropic.com"),
+                api_key=api_key,
+                headers=normalized_headers,
+            )
         catalog = discovery._provider_model_catalog(
             discovered_models=discovered_models,
             fallback_model_names=model_names or [],
@@ -835,7 +857,6 @@ def _selected_model(
     # the profile's own default — and then the first catalog entry — rather than
     # hard-failing every run that relies on this profile.
     if requested_model_name:
-        logger.debug('agent.runtime_profile_service.requested_model_r_not_runtime.diagnostic')
         if profile.default_model_name:
             for model in profile.model_catalog:
                 if profile.default_model_name == model.name:

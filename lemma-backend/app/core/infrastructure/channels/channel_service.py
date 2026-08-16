@@ -65,7 +65,9 @@ class RedisChannelAdapter:
             return
         async with self._connect_lock:
             if self._redis is None:
-                self._redis = get_redis(url=self.redis_url or settings.redis_url)
+                self._redis = get_redis(
+                    url=self.redis_url or settings.redis_url, blocking=True
+                )
 
     async def disconnect(self) -> None:
         """Stop the one listener, close its lease, then close the owned pool."""

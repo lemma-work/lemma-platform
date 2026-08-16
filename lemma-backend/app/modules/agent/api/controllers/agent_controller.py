@@ -10,6 +10,7 @@ from fastapi import APIRouter, Query, status
 from app.core.api.dependencies import CurrentUser, UoWDep
 from app.core.authorization.dependencies import PodContextDep
 from app.core.authorization.grants import (
+    apply_inline_workload_grants,
     list_grantee_resource_grants,
     normalize_pod_resource_grants,
     replace_grantee_resource_grants,
@@ -110,21 +111,14 @@ async def create_agent(
     # don't have to follow create with a separate permissions-replace call (which
     # previously was the *only* way grants stuck — passing them to create used to
     # silently no-op). Same session as the create above, so it's atomic.
-    if data.permissions is not None and data.permissions.grants:
-        validate_pod_resource_grant_permissions(data.permissions.grants)
-        grants = await normalize_pod_resource_grants(
-            uow.session,
-            pod_id=pod_id,
-            grants=data.permissions.grants,
-        )
-        await replace_grantee_resource_grants(
-            uow.session,
-            pod_id=pod_id,
-            grantee_type="AGENT",
-            grantee_id=agent.id,
-            grants=grants,
-            created_by_user_id=user.id,
-        )
+    await apply_inline_workload_grants(
+        uow.session,
+        pod_id=pod_id,
+        grantee_type="AGENT",
+        grantee_id=agent.id,
+        permissions=data.permissions,
+        created_by_user_id=user.id,
+    )
     return await _agent_action_response(agent)
 
 
@@ -324,9 +318,12 @@ async def update_agent(
     data: UpdateAgentRequest,
     user: CurrentUser,
     service: AgentServiceDep,
+    uow: UoWDep,
     ctx: PodContextDep,
 ) -> AgentActionResponse:
     update_payload = data.model_dump(exclude_unset=True)
+    # Grants are not a column on the agent; they go to the grants table below.
+    update_payload.pop("permissions", None)
     if "agent_runtime" in update_payload:
         update_payload["agent_runtime"] = data.agent_runtime
     agent = await service.update_agent(
@@ -335,6 +332,18 @@ async def update_agent(
         requester_user_id=user.id,
         ctx=ctx,
         **update_payload,
+    )
+    assert agent.id is not None
+    # Same request as the update above, matching create. Without this an author
+    # could create an agent with its grants and then silently lose them on the
+    # next edit — the block was accepted and dropped.
+    await apply_inline_workload_grants(
+        uow.session,
+        pod_id=pod_id,
+        grantee_type="AGENT",
+        grantee_id=agent.id,
+        permissions=data.permissions,
+        created_by_user_id=user.id,
     )
     return await _agent_action_response(agent)
 

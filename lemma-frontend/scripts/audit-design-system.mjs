@@ -60,6 +60,7 @@ const allowedInlineSvgFiles = new Set([
   'components/landing/landing-animations.tsx',
   'components/lemma/assistant/assistant-parts.tsx',
   'components/shared/resource-icon-uploader.tsx',
+  'components/shared/resource-identity.tsx',
 ]);
 
 if (help) {
@@ -711,6 +712,7 @@ const informationalChecks = [
         /\bresource-feedback-action-button\b/.test(match) ||
         /\bagent-test-history-button\b/.test(match) ||
         /\bagent-test-summary-button\b/.test(match) ||
+        /\bagent-email-copy\b/.test(match) ||
         /\bsetup-secondary-action-button\b/.test(match) ||
         /\bsetup-domain-toggle\b/.test(match) ||
         /\bsetup-example-button\b/.test(match) ||

@@ -72,7 +72,6 @@ unauthorized response is classified.
 ## Tests and operations
 
 Tests cover native and Composio routing, OAuth state, account identity,
-credential encryption/refresh, catalog import, and operation timeouts. Current
-unit coverage is 70.9% (2,237 of 3,155 statements). Error redaction,
-credential-response, dynamic schema compilation, and oversized-service findings
-are listed in [issues.md](issues.md).
+credential encryption/refresh, catalog import, and operation timeouts. Dynamic
+connector schemas are parsed by a restricted AST reader, never `exec()`; see
+`infrastructure/schema_compiler.py` and its hostile-input tests.

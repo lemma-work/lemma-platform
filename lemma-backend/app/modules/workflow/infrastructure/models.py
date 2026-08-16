@@ -56,7 +56,15 @@ class WorkflowModel(UUIDAuditBase):
     visibility: Mapped[str] = mapped_column(String(30), default="POD", nullable=False)
 
     runs: Mapped[list["WorkflowRunModel"]] = relationship(
-        "WorkflowRunModel", back_populates="flow", cascade="all, delete-orphan"
+        "WorkflowRunModel",
+        back_populates="flow",
+        cascade="all, delete-orphan",
+        # The FK already declares ON DELETE CASCADE, so the database removes
+        # these rows itself. Without passive_deletes SQLAlchemy insists on
+        # loading every child into the session first and deleting them one
+        # at a time -- which on a large collection is a memory event, not a
+        # slow query.
+        passive_deletes=True,
     )
 
     def __str__(self) -> str:
@@ -231,6 +239,16 @@ class WorkflowRunWaitModel(UUIDAuditBase):
         index=True,
     )
     external_ref: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Promoted out of `payload`, where it was unindexable and so could only be
+    # found by reading every ACTIVE wait and parsing JSON in Python.
+    scheduled_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    # Held while a fire is in flight. A timer has no next occurrence to advance,
+    # so the lease is what stops two replicas dispatching the same wake.
+    fire_lease_until: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     payload: Mapped[dict] = mapped_column(JSONB, default=dict)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
@@ -251,6 +269,7 @@ class WorkflowRunWaitModel(UUIDAuditBase):
             status=WorkflowRunWaitStatus(self.status),
             assigned_pod_member_id=self.assigned_pod_member_id,
             external_ref=self.external_ref,
+            scheduled_at=self.scheduled_at,
             payload=self.payload or {},
             completed_at=self.completed_at,
             created_at=self.created_at,

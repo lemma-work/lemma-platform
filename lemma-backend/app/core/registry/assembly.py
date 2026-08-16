@@ -59,6 +59,23 @@ def register_streaq_tasks(modules: Sequence[LemmaModule]) -> None:
             module.register_streaq()
 
 
+def import_module_tasks(modules: Sequence[LemmaModule]) -> None:
+    """Import every module's task definitions, without wiring a broker.
+
+    ``register_streaq`` is not the only thunk that carries ``@streaq_task``:
+    plenty of modules define their tasks alongside their FastStream handlers,
+    so importing ``event_routers`` is what registers those. The worker gets
+    both because ``wire_module_events`` calls both. A process that only
+    *publishes* jobs needs the same imports to know which lane each task runs
+    on, but has no broker to include the routers on — so it comes here instead.
+    """
+    for module in modules:
+        if module.register_streaq is not None:
+            module.register_streaq()
+        if module.event_routers is not None:
+            module.event_routers()
+
+
 def wire_module_events(
     modules: Sequence[LemmaModule], broker: "RedisBroker"
 ) -> None:

@@ -10,6 +10,7 @@ from uuid import UUID
 import obstore as obs
 from obstore.exceptions import NotFoundError as ObstoreNotFoundError
 from obstore.store import LocalStore, ObjectStore
+from app.core.concurrency.offload import run_blocking
 
 
 class AppFileManager:
@@ -20,6 +21,15 @@ class AppFileManager:
         root_path: str | Path | None = None,
         store: ObjectStore | None = None,
     ):
+        """The store is shared across apps; the app id lives in the key.
+
+        It used to live in the store's own prefix, which made the store
+        per-tenant — a fresh one per app, and once stores were cached, a cache
+        entry per app that nothing could ever evict. Prefixing here instead
+        means one store per bucket, and the resulting object keys are
+        byte-identical to what the prefixed store produced, so nothing needs
+        migrating.
+        """
         if (root_path is None) == (store is None):
             raise ValueError("Provide exactly one of root_path or store")
 
@@ -28,10 +38,14 @@ class AppFileManager:
         self._local_base: Path | None = Path(root_path) / self.prefix if root_path else None
 
         if root_path is not None:
-            self.store = LocalStore(prefix=self._local_base, mkdir=True)
+            self.store = LocalStore(prefix=Path(root_path), mkdir=True)
         else:
             assert store is not None
             self.store = store
+
+    def _key(self, path: str) -> str:
+        """This app's object key for a caller-relative path."""
+        return f"{self.prefix}{path.lstrip('/')}"
 
     def _local_path(self, path: str) -> Path:
         if self._local_base is None:
@@ -40,7 +54,7 @@ class AppFileManager:
 
     async def read_file(self, path: str) -> bytes | str:
         try:
-            result = await obs.get_async(self.store, path)
+            result = await obs.get_async(self.store, self._key(path))
         except ObstoreNotFoundError:
             raise FileNotFoundError(f"File {path} not found")
         data = await result.bytes_async()
@@ -56,7 +70,7 @@ class AppFileManager:
 
         await obs.put_async(
             self.store,
-            path,
+            self._key(path),
             content,
             use_multipart=isinstance(content, Path),
             chunk_size=1024 * 1024,
@@ -71,18 +85,28 @@ class AppFileManager:
 
     async def delete_file(self, path: str) -> None:
         try:
-            await obs.delete_async(self.store, path)
+            await obs.delete_async(self.store, self._key(path))
         except ObstoreNotFoundError:
             return
 
     async def delete_prefix(self, prefix: str) -> None:
         normalized_prefix = prefix.rstrip("/")
 
-        list_prefix = normalized_prefix or None
-        for chunk in self.store.list(prefix=list_prefix):
+        # Scoped to this app. Without the app's own prefix a bare `list()` on a
+        # now-shared store would walk — and delete — every app in the bucket.
+        list_prefix = self._key(normalized_prefix) if normalized_prefix else self.prefix.rstrip("/")
+        # `async for`, not `for`. The stream supports both, and driving the
+        # synchronous side from a coroutine means every page of the listing is a
+        # blocking round trip to object storage on the event loop — once per
+        # page, for as many pages as the release has files.
+        async for chunk in self.store.list(prefix=list_prefix):
             paths = [item["path"] for item in chunk]
             if paths:
                 await self.store.delete_async(paths)
         if self._local_base:
             target_dir = self._local_base if not normalized_prefix else self._local_path(normalized_prefix)
-            shutil.rmtree(target_dir, ignore_errors=True)
+            # Recursive unlink over a whole release tree: filesystem work
+            # proportional to the app, so it goes off the loop like the rest.
+            await run_blocking(
+                shutil.rmtree, target_dir, ignore_errors=True, limiter="cpu_bound"
+            )

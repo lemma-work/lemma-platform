@@ -4,6 +4,7 @@ import asyncio
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
+from app.core.infrastructure.db.transaction_locks import connection_released
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.datastore.config import datastore_settings
 from app.modules.datastore.domain.file_entities import FileStatus
@@ -76,20 +77,26 @@ class DatastoreFileRecoveryService:
         )
         batch_size = max(1, datastore_settings.recovery_enqueue_batch_size)
         enqueued_count = 0
-        for index, file_entity in enumerate(candidates):
-            queued = await self.reindex_queue.enqueue(
-                file_id=file_entity.id,
-                pod_id=file_entity.pod_id,
-                metadata=file_entity.metadata or {},
-                defer_until=None,
-                bypass_admission=True,
-            )
-            if queued:
-                enqueued_count += 1
-            # Yield between batches so a large backlog is spread out instead of
-            # dispatched as one burst that spikes DB + worker pickup demand.
-            if (index + 1) % batch_size == 0:
-                await asyncio.sleep(0)
+        # The candidates are already read; everything below is Redis. Holding
+        # the connection through one enqueue per file would mean a whole
+        # backlog drain runs with a pooled connection checked out and the
+        # database asked nothing.
+        async with connection_released(getattr(self.uow, "session", None)):
+            for index, file_entity in enumerate(candidates):
+                queued = await self.reindex_queue.enqueue(
+                    file_id=file_entity.id,
+                    pod_id=file_entity.pod_id,
+                    metadata=file_entity.metadata or {},
+                    defer_until=None,
+                    bypass_admission=True,
+                )
+                if queued:
+                    enqueued_count += 1
+                # Yield between batches so a large backlog is spread out
+                # instead of dispatched as one burst that spikes DB + worker
+                # pickup demand.
+                if (index + 1) % batch_size == 0:
+                    await asyncio.sleep(0)
 
         return DatastoreFileDispatchSummary(
             considered_count=len(candidates),
@@ -154,22 +161,25 @@ class DatastoreFileRecoveryService:
         # pickup + DB connection demand.
         batch_size = max(1, datastore_settings.recovery_enqueue_batch_size)
         enqueued_count = 0
-        for index, file_entity in enumerate(stale_files):
-            # Indexing-eligibility is NOT re-checked here: ``reindex_queue.enqueue``
-            # gates on PENDING + search_enabled, which is the same rule the
-            # indexing policy enforces at write time. Non-indexable files are
-            # persisted as NOT_REQUIRED and so are never recovery candidates nor
-            # re-enqueued. The rule lives in the queue/policy, not duplicated here.
-            queued = await self.reindex_queue.enqueue(
-                file_id=file_entity.id,
-                pod_id=file_entity.pod_id,
-                metadata=file_entity.metadata or {},
-                defer_until=None,
-            )
-            if queued:
-                enqueued_count += 1
-            if (index + 1) % batch_size == 0:
-                await asyncio.sleep(0)
+        # Same shape as the dispatch pass above: the rows are read, the rest
+        # is Redis.
+        async with connection_released(getattr(self.uow, "session", None)):
+            for index, file_entity in enumerate(stale_files):
+                # Indexing-eligibility is NOT re-checked here: ``reindex_queue.enqueue``
+                # gates on PENDING + search_enabled, which is the same rule the
+                # indexing policy enforces at write time. Non-indexable files are
+                # persisted as NOT_REQUIRED and so are never recovery candidates nor
+                # re-enqueued. The rule lives in the queue/policy, not duplicated here.
+                queued = await self.reindex_queue.enqueue(
+                    file_id=file_entity.id,
+                    pod_id=file_entity.pod_id,
+                    metadata=file_entity.metadata or {},
+                    defer_until=None,
+                )
+                if queued:
+                    enqueued_count += 1
+                if (index + 1) % batch_size == 0:
+                    await asyncio.sleep(0)
 
         return DatastoreFileRecoverySummary(
             examined_count=len(stale_files),

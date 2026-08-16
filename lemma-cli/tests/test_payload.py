@@ -18,7 +18,6 @@ import pytest
 import typer
 
 import lemma_sdk.openapi_client.models as sdk_models
-from lemma_sdk.openapi_client.models.create_agent_request import CreateAgentRequest
 from lemma_sdk.openapi_client.models.create_function_request import (
     CreateFunctionRequest,
 )
@@ -70,17 +69,41 @@ def test_accepted_field_names_matches_every_sdk_model_from_dict():
 
 
 def test_ignored_fields_flags_keys_the_request_has_no_slot_for():
-    # The exact payload that used to create a grant-less function.
+    # `revision_hash` is server-owned: the endpoint has no field for it, so a
+    # payload carrying one loses it silently unless this reports it.
     data = {
         "name": "maybe_rewrite_lesson",
         "code": "#function_name: maybe_rewrite_lesson\n",
-        "permissions": {"grants": [{"resource_type": "datastore_table"}]},
+        "revision_hash": "sha256:" + "a" * 64,
     }
-    assert ignored_fields(CreateFunctionRequest, data) == ["permissions"]
-    # Agents declare `permissions`, so it is not ignored there.
-    assert ignored_fields(
-        CreateAgentRequest, {"name": "a", "instruction": "i", "permissions": {}}
-    ) == []
+    assert ignored_fields(CreateFunctionRequest, data) == ["revision_hash"]
+
+
+@pytest.mark.parametrize(
+    "model, payload",
+    [
+        ("create_agent_request", {"name": "a", "instruction": "i"}),
+        ("update_agent_request", {"instruction": "i"}),
+        ("create_function_request", {"name": "f", "code": "x"}),
+        ("update_function_request", {"description": "d"}),
+    ],
+)
+def test_every_workload_request_declares_permissions(model: str, payload: dict):
+    """All four verbs take an inline ``permissions`` block, so none of them can
+    drop one.
+
+    This used to be true of ``create_agent_request`` alone. The other three had
+    no slot, so the block was reported as ignored here and dropped by the
+    server — which is how `lemma functions create` could accept
+    `permissions.grants` (its own help advertised it), report success, and
+    create a function with zero access.
+    """
+    request_model = getattr(
+        importlib.import_module(f"lemma_sdk.openapi_client.models.{model}"),
+        "".join(part.title() for part in model.split("_")),
+    )
+
+    assert ignored_fields(request_model, {**payload, "permissions": {}}) == []
 
 
 def test_ignored_fields_ignores_additional_properties_slot():
@@ -93,13 +116,13 @@ def test_ignored_fields_ignores_additional_properties_slot():
 def test_build_request_warns_but_proceeds_for_ad_hoc_commands(capsys):
     request = build_request(
         CreateFunctionRequest,
-        {"name": "f", "code": "x", "permissions": {"grants": []}},
+        {"name": "f", "code": "x", "revision_hash": "sha256:" + "a" * 64},
         context="function f",
     )
     # Warnings go to STDERR so stdout stays a clean, pipeable result.
     captured = capsys.readouterr()
     assert captured.out == ""
-    assert "permissions" in captured.err
+    assert "revision_hash" in captured.err
     assert "NOT" in captured.err  # "were NOT sent"
     # The rest of the payload still goes through.
     assert request.to_dict() == {"name": "f", "code": "x"}

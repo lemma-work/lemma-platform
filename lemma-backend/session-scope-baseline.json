@@ -1,0 +1,6 @@
+{
+  "_comment": "Pre-existing places where a DB connection is held across non-database work. This file may shrink freely; growing it means a new connection is being held across an LLM call, an HTTP request or a thread offload. Entries are {key: count}: the key has no line number so that edits above a violation do not churn the file, and the count is what stops a baselined function having a free slot for a second one. See scripts/check_session_scope.py.",
+  "violations": {
+    "app/core/api/dependencies.py::get_uow::session-across-yield::get_uow": 1
+  }
+}

@@ -50,6 +50,10 @@ from app.modules.agent_surfaces.platforms.slack.models import (
     SlackSearchChannelMessagesResult,
 )
 from app.core.log.log import get_logger
+from app.core.net.capped_read import read_capped
+from app.modules.agent_surfaces.platforms.attachment_limits import (
+    INBOUND_ATTACHMENT_BYTE_CAP,
+)
 
 logger = get_logger(__name__)
 
@@ -420,12 +424,18 @@ class SlackPlatformService:
             or "slack_file"
         )
         async with httpx.AsyncClient(timeout=60.0) as http_client:
-            response = await http_client.get(
+            # Streamed and capped: the caller checked `attachment["size"]`
+            # first, but Slack does not always send one, and a declared size is
+            # the sender's claim rather than a limit on what arrives.
+            async with http_client.stream(
+                "GET",
                 download_url,
                 headers={"Authorization": f"Bearer {token}"},
-            )
-            response.raise_for_status()
-            content = response.content
+            ) as response:
+                response.raise_for_status()
+                content = await read_capped(
+                    response.aiter_bytes(), max_bytes=INBOUND_ATTACHMENT_BYTE_CAP
+                )
         mime_type = (
             str(
                 attachment.get("mime_type") or attachment.get("content_type") or ""

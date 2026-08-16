@@ -61,13 +61,18 @@ async def collect_process_output(
         # output appears, so a quiet 30s wait costs one request, not thirty.
         # The safety margin is load-bearing — the HTTP timeout comes off the
         # same deadline, and asking the server to hold longer than the
-        # client waits turns "still running" into a transport error.
-        window = (deadline_at - datetime.now(timezone.utc)).total_seconds()
+        # client waits turns "still running" into a transport error. It is
+        # charged against the deadline alone. Taking it out of the caller's
+        # yield window as well put a cliff at the margin: any yield at or
+        # under a second became a single non-waiting poll, so a command that
+        # finished in milliseconds still came back "still running" and cost
+        # the caller another round trip to find out otherwise.
+        window = (
+            deadline_at - datetime.now(timezone.utc)
+        ).total_seconds() - _POLL_SAFETY_MARGIN_SECONDS
         if yield_seconds is not None:
             window = min(window, yield_seconds - elapsed)
-        wait_seconds = (
-            min(window, _MAX_OUTPUT_WAIT_SECONDS) - _POLL_SAFETY_MARGIN_SECONDS
-        )
+        wait_seconds = min(window, _MAX_OUTPUT_WAIT_SECONDS)
         if wait_seconds <= 0:
             # A very short yield still wants whatever is already buffered, so
             # read once — but never twice, or this becomes the busy loop it

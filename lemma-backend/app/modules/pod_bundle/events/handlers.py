@@ -3,7 +3,7 @@
 Imported for side effects by ``module.register_streaq`` at worker startup.
 Tasks land slice by slice: export, plan, apply, GitHub import, publish, sweep.
 
-Export job phases (see ``docs/design/pod-bundle-share-import.md``):
+Export job phases:
   (a) mark ``EXPORTING`` + publish status
   (b) one short UoW: build ctx, assemble the archive bytes via ``BundleExporter``
       (list+get reads inside the scope; progress writes bump Redis)
@@ -19,7 +19,6 @@ always safe.
 from __future__ import annotations
 
 import tempfile
-from pathlib import Path
 from uuid import UUID
 
 from streaq import StreaqRetry
@@ -35,7 +34,9 @@ from app.core.infrastructure.jobs.streaq_runtime import (
     streaq_worker,
 )
 from app.core.log.log import get_logger
+from app.core.origin import OriginKind
 from app.modules.pod_bundle.config import pod_bundle_settings
+from app.modules.pod_bundle.events import analytics as bundle_analytics
 from app.modules.pod_bundle.domain.errors import (
     BundleInvalidError,
     BundleStagingMissingError,
@@ -47,6 +48,9 @@ from app.modules.pod_bundle.domain.state import (
     ImportState,
     ImportStatus,
     PublishStatus,
+)
+from app.modules.pod_bundle.infrastructure.archive_offload import (
+    extract_bundle_offloaded,
 )
 from app.modules.pod_bundle.infrastructure.exporter import BundleExporter
 from app.modules.pod_bundle.infrastructure import github_fetcher
@@ -257,6 +261,10 @@ async def export_pod_bundle(context: dict[str, str | None]) -> None:
             kind="pod-exports", job_id=export_id, ttl_seconds=ttl
         )
         state.expires_at = _now() + timedelta(seconds=ttl)
+        await bundle_analytics.record_bundle_exported(
+            worker_ctx, export_id=export_id, pod_id=pod_id, user_id=user_id,
+            resource_count=len(getattr(state, "manifest", None) or ()),
+        )
         state.completed_at = _now()
         # Retain the READY export state (and thus its archive) for the URL's TTL,
         # longer than the default import horizon, so a shared link stays valid.
@@ -304,7 +312,7 @@ async def _fail(store, state: ExportState, message: str) -> None:
         )
 
 
-@streaq_task(name="plan_pod_import", lane=Lane.BULK)
+@streaq_task(name="plan_pod_import", lane=Lane.BULK, origin=OriginKind.IMPORT)
 async def plan_pod_import(context: dict[str, str | None]) -> None:
     """Diff a staged bundle against the pod and produce a resumable plan.
 
@@ -364,14 +372,8 @@ async def _plan_from_staging(worker_ctx, store, staging, state: ImportState) -> 
     await _raise_if_cancelled(store, import_id)
 
     with tempfile.TemporaryDirectory(prefix="lemma-pod-import-") as tmp:
-        from lemma_pod_bundle import extract_bundle
-
         try:
-            bundle_root = extract_bundle(
-                archive,
-                Path(tmp),
-                max_uncompressed_bytes=pod_bundle_settings.pod_bundle_max_uncompressed_bytes,
-            )
+            bundle_root = await extract_bundle_offloaded(archive, tmp)
         except ValueError as exc:
             raise BundleInvalidError(str(exc)) from exc
         publish_manifest.prepare_published_bundle(bundle_root)
@@ -403,7 +405,7 @@ async def _plan_from_staging(worker_ctx, store, staging, state: ImportState) -> 
     )
 
 
-@streaq_task(name="import_pod_github", lane=Lane.BULK)
+@streaq_task(name="import_pod_github", lane=Lane.BULK, origin=OriginKind.IMPORT)
 async def import_pod_github(context: dict[str, str | None]) -> None:
     """Fetch a GitHub zipball, using the selected connector account when set."""
     worker_ctx: AppWorkerContext = streaq_worker.context
@@ -479,7 +481,7 @@ async def import_pod_github(context: dict[str, str | None]) -> None:
     )
 
 
-@streaq_task(name="import_pod_url", lane=Lane.BULK)
+@streaq_task(name="import_pod_url", lane=Lane.BULK, origin=OriginKind.IMPORT)
 async def import_pod_url(context: dict[str, str | None]) -> None:
     """Copy a lemma-origin source object (an export or an uploaded bundle) into
     this import's own staging, then plan — one job per ``import_id``. The source
@@ -538,7 +540,7 @@ async def import_pod_url(context: dict[str, str | None]) -> None:
         raise
 
 
-@streaq_task(name="apply_pod_import", lane=Lane.BULK)
+@streaq_task(name="apply_pod_import", lane=Lane.BULK, origin=OriginKind.IMPORT)
 async def apply_pod_import(context: dict[str, str | None]) -> None:
     """Apply an approved plan step by step: each step runs in its own short UoW
     (commit) then a Redis checkpoint, so a crash resumes from the first pending
@@ -593,14 +595,8 @@ async def apply_pod_import(context: dict[str, str | None]) -> None:
         function_runner = None
 
         with tempfile.TemporaryDirectory(prefix="lemma-pod-apply-") as tmp:
-            from lemma_pod_bundle import extract_bundle
-
             try:
-                bundle_root = extract_bundle(
-                    archive,
-                    Path(tmp),
-                    max_uncompressed_bytes=pod_bundle_settings.pod_bundle_max_uncompressed_bytes,
-                )
+                bundle_root = await extract_bundle_offloaded(archive, tmp)
             except ValueError as exc:
                 raise BundleInvalidError(str(exc)) from exc
             publish_manifest.prepare_published_bundle(bundle_root)
@@ -704,6 +700,11 @@ async def apply_pod_import(context: dict[str, str | None]) -> None:
         state.status = ImportStatus.COMPLETED
         state.completed_at = _now()
         await store.save_import(state)
+        await bundle_analytics.record_import_completed(
+            worker_ctx, import_id=import_id, pod_id=pod_id, user_id=user_id,
+            resource_count=len(getattr(state.plan, "steps", None) or ()),
+            is_remix=bool(getattr(state, "is_remix", False)),
+        )
         await publish_bundle_event(
             import_id, completed_payload(state.status.value, state.seq)
         )
@@ -934,7 +935,7 @@ async def sweep_pod_bundle_staging() -> None:
         get_pod_bundle_state_store(), BundleStagingStorage()
     )
     if reclaimed or recovered:
-        logger.debug("pod_bundle.handlers.pod_bundle_sweep_reclaimed_d.observed")
+        logger.debug("pod_bundle.handlers.swept", reclaimed=reclaimed, recovered=recovered)
 
 
 async def _sweep(store, staging) -> tuple[int, int]:
@@ -974,7 +975,6 @@ async def _sweep(store, staging) -> tuple[int, int]:
         try:
             archives = await staging.list_archives(kind)  # type: ignore[arg-type]
         except Exception:  # noqa: BLE001
-            logger.debug('pod_bundle.handlers.sweep_could_not_list_s.diagnostic')
             continue
         for job_id, _ in archives:
             state = await get_state(job_id)

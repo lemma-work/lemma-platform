@@ -37,6 +37,16 @@ jobs:
         with:
           python-version: "3.14"
 
+      # The run that publishes the artifact is the run that tests it. CI's path
+      # filter skips "Python SDK + CLI tests" whenever the release commit did not
+      # touch these packages -- a backend-only release commit is the common case
+      # -- and CI is green anyway, because "CI passed" treats a skipped suite as
+      # passing. So a CI run for this SHA proves nothing about this wheel.
+      # Before the version rewrite below: `uv lock --check` reads pyproject.toml,
+      # and the rewrite pins lemma-sdk to a version not yet on PyPI.
+      - name: Verify Python SDK and CLI
+        uses: ./.github/actions/verify-python-sdk
+
       - name: Set package version from release tag
         shell: python
         env:
@@ -71,59 +81,6 @@ jobs:
               raise SystemExit("Could not find the lemma-sdk pin in lemma-cli/pyproject.toml")
           pyproject.write_text(pp_text)
 
-      - name: Vendor agent skills into the package
-        run: |
-          mkdir -p lemma-cli/lemma_cli/skills
-          for d in lemma-skills/*/; do
-            if [ -f "$d/SKILL.md" ]; then
-              cp -r "$d" "lemma-cli/lemma_cli/skills/"
-            fi
-          done
-
-      - name: Vendor the shared pod-bundle package into the wheel
-        shell: python
-        run: |
-          import pathlib
-          import re
-          import shutil
-
-          # lemma-terminal imports lemma_pod_bundle at runtime, but that package
-          # is unpublished: locally/CI it resolves from the sibling monorepo
-          # checkout via [tool.uv.sources]. PyPI users have no such checkout, and
-          # setuptools ignores [tool.uv.sources], so the dependency would leak
-          # into the wheel's Requires-Dist and every `pip install lemma-terminal`
-          # would fail on the missing lemma-pod-bundle distribution. Vendor the
-          # (stdlib-only) package into the wheel and drop the runtime dependency.
-          src = pathlib.Path("lemma-pod-bundle/lemma_pod_bundle")
-          dst = pathlib.Path("lemma-cli/lemma_pod_bundle")
-          if not src.is_dir():
-              raise SystemExit(f"Vendor source not found: {src}")
-          if dst.exists():
-              shutil.rmtree(dst)
-          shutil.copytree(src, dst)
-
-          pyproject = pathlib.Path("lemma-cli/pyproject.toml")
-          text = pyproject.read_text()
-
-          # Drop the now-vendored dependency so it stays out of Requires-Dist.
-          text, dep_count = re.subn(
-              r'(?m)^\s*"lemma-pod-bundle>=[^"]+",\n', "", text, count=1
-          )
-          if dep_count != 1:
-              raise SystemExit("Could not find the lemma-pod-bundle dependency to strip")
-
-          # Ship the vendored package alongside lemma_cli in the wheel.
-          text, inc_count = re.subn(
-              r'(?m)^include = \["lemma_cli\*"\]$',
-              'include = ["lemma_cli*", "lemma_pod_bundle*"]',
-              text,
-              count=1,
-          )
-          if inc_count != 1:
-              raise SystemExit("Could not find the packages.find include list to extend")
-
-          pyproject.write_text(text)
-
       - name: Install build tools
         run: python -m pip install --upgrade build twine
 
@@ -131,41 +88,14 @@ jobs:
         working-directory: lemma-cli
         run: python -m build
 
-      - name: Verify skills are bundled
-        working-directory: lemma-cli
-        shell: bash
-        run: |
-          set -euo pipefail
-          count=$(python -c "import zipfile,glob; w=glob.glob('dist/*.whl')[0]; print(sum(1 for n in zipfile.ZipFile(w).namelist() if n.endswith('SKILL.md')))")
-          echo "SKILL.md files in wheel: $count"
-          test "$count" -ge 1 || { echo 'No skills bundled in the wheel — aborting release.'; exit 1; }
-
-      - name: Verify pod-bundle is vendored and not a PyPI dependency
-        working-directory: lemma-cli
-        shell: bash
-        run: |
-          set -euo pipefail
-          python - <<'PY'
-          import glob, sys, zipfile
-
-          wheel = glob.glob("dist/*.whl")[0]
-          zf = zipfile.ZipFile(wheel)
-          names = zf.namelist()
-
-          if "lemma_pod_bundle/__init__.py" not in names:
-              sys.exit("lemma_pod_bundle is not vendored into the wheel — aborting release.")
-
-          meta = next(n for n in names if n.endswith(".dist-info/METADATA"))
-          leaked = [
-              line
-              for line in zf.read(meta).decode().splitlines()
-              if line.startswith("Requires-Dist:") and "lemma-pod-bundle" in line
-          ]
-          if leaked:
-              sys.exit(f"lemma-pod-bundle still declared as a dependency {leaked} — aborting release.")
-
-          print("pod-bundle vendored into the wheel, no PyPI dependency — ok")
-          PY
+      # Skills, lemma_pod_bundle, and no unpublished distribution in
+      # Requires-Dist, then an import from a venv with no checkout in sight —
+      # the same checks CI runs on every pull request that touches the CLI, so a
+      # release is never the first build anyone verified.
+      - name: Verify the distributions carry what PyPI cannot supply
+        uses: ./.github/actions/verify-cli-distributions
+        with:
+          dist-dir: lemma-cli/dist
 
       - name: Check distribution
         working-directory: lemma-cli

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 import json
 import logging
 import time
@@ -11,6 +12,7 @@ from collections.abc import AsyncGenerator, Awaitable, Callable, Sequence
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
 from enum import StrEnum
+from typing import TYPE_CHECKING
 
 from faststream.redis import RedisBroker
 from opentelemetry import context as otel_context
@@ -38,6 +40,7 @@ from app.core.infrastructure.events.outbox import outbox_dispatcher_lifespan
 from app.core.infrastructure.events.stream_observability import (
     redis_stream_snapshot_loop,
 )
+from app.core.observability.backlog_gauges import backlog_gauge_loop
 from app.core.infrastructure.jobs.streaq_job_queue import (
     SharedStreaqJobQueue,
     close_streaq_job_queue,
@@ -58,7 +61,11 @@ from app.core.observability.telemetry import (
     instrument_database_engine,
     shutdown_telemetry,
 )
+from app.core.origin import Origin, OriginKind, origin_from_payload, origin_scope
 from app.core.request_context import bind_job_context, create_background_task
+
+if TYPE_CHECKING:
+    from app.core.registry.contract import LemmaModule
 
 logger = get_logger(__name__)
 tracer = trace.get_tracer(__name__)
@@ -187,6 +194,38 @@ def lane_concurrency(lane: Lane) -> int:
     return settings.worker_concurrency
 
 
+def ensure_task_lanes_registered(modules: Sequence[LemmaModule] | None = None) -> None:
+    """Populate ``TASK_LANES`` in a process that only *publishes* jobs.
+
+    The decorators fill ``TASK_LANES`` as a side effect of importing each
+    module's handlers, which the worker entrypoint does via ``app.events``. The
+    API imports controllers, not handlers — so its ``TASK_LANES`` was empty and
+    every bulk task it enqueued was routed to the interactive queue, where the
+    interactive worker read a task it had never registered and dropped it with
+    "missing function". Pod bundle export, import, and GitHub publish are
+    enqueued only from the API, so all three were silently doing nothing.
+
+    Registration is import-for-side-effect and touches no I/O, so the publisher
+    can do it on demand. Skipped when the table is already populated: the worker
+    registers at import scope and must not register a second time.
+
+    ``modules`` is the composed module list — lemma-cloud installs more than
+    OSS, and a cloud-only task missing from this table lands back on the exact
+    bug above. Callers with no module list (the lazy fallback on the enqueue
+    path) get the OSS set.
+    """
+    if TASK_LANES:
+        return
+    # Deferred: the registry imports the modules that import this one.
+    from app.core.registry.assembly import import_module_tasks
+    from app.core.registry.installed import OSS_MODULES
+
+    # The core's own crons, which app/events.py imports explicitly.
+    from app.core.infrastructure.events import tasks as _core_tasks  # noqa: F401
+
+    import_module_tasks(OSS_MODULES if modules is None else modules)
+
+
 def lane_for_task(task_name: str) -> Lane:
     """Lane a task runs on; unregistered names default to interactive.
 
@@ -194,12 +233,9 @@ def lane_for_task(task_name: str) -> Lane:
     explicitly moved, so forgetting to annotate a task degrades to "as before"
     rather than to a silently unconsumed queue.
     """
+    ensure_task_lanes_registered()
     return TASK_LANES.get(task_name, Lane.INTERACTIVE)
 
-
-# Headroom between task concurrency and the DB pool, leaving room for the
-# crons, event handlers and reconcilers that share the worker.
-_DB_POOL_SAFETY_FACTOR = 0.8
 
 # How long the non-primary lanes get to unwind once the primary has shut down.
 # The primary has already served its own grace period by this point, so the
@@ -366,7 +402,7 @@ async def _ensure_consumer_groups_once() -> None:
 
     # FastStream and streaq speak raw bytes, so this shares the
     # decode_responses=False pool rather than the application one.
-    client = get_redis(decode_responses=False)
+    client = get_redis(decode_responses=False, blocking=True)
     try:
         len(registered_stream_groups())
         await ensure_consumer_groups(client, warn_on_create=False)
@@ -389,7 +425,7 @@ async def _consumer_group_reconcile_loop() -> None:
     from app.core.infrastructure.events.stream_subscriber import ensure_consumer_groups
 
     interval = event_transport_settings.consumer_group_reconcile_interval_seconds
-    client = get_redis(decode_responses=False)
+    client = get_redis(decode_responses=False, blocking=True)
     try:
         while True:
             try:
@@ -427,36 +463,33 @@ async def worker_lifespan() -> AsyncGenerator[AppWorkerContext]:
     init_telemetry(service_name="lemma-worker")
     instrument_database_engine(get_engine())
     # Size the thread-offload pool before any task runs blocking work off-loop.
+    from app.core.analytics.bootstrap import start_analytics, stop_analytics
     from app.core.concurrency.offload import configure_thread_pool
+    from app.core.net.http_client import close_shared_http_client
+    from app.core.observability.connection_scope import (
+        start_connection_scope_monitor_from_settings,
+    )
 
     configure_thread_pool()
+    start_connection_scope_monitor_from_settings(service_name="lemma-worker")
+    # The analytics consumer runs *here*, in the worker -- not in the API. Without
+    # this the process-wide sink stays the import-time NullSink and every
+    # product-analytics event is discarded, key or no key. Installs a null sink
+    # unless ANALYTICS_WRITE_KEY is set, so a self-hosted or Desktop-local worker
+    # still reports nothing.
+    start_analytics()
 
-    # Guardrail: each task that opens a DB session holds a pooled connection for
-    # its duration, so concurrency above the pool capacity means tasks block on
-    # connection checkout — which looks like the whole worker hanging. Warn (not
-    # fail, to keep dev flexible) when the margin is too thin so it can't
-    # silently regress.
-    # The shipped defaults sit exactly on this line: concurrency 20 against a
-    # pool of 20. `worker_concurrency`'s own docstring calls that acceptable
-    # ("should not exceed"), but equal is not enough — the worker also runs
-    # crons, event-bus handlers and reconcilers that each need a connection, so
-    # at parity the first one of those blocks behind a full pool. Hence the 0.8
-    # margin, and hence logging the numbers: a bare "degraded" event tells an
-    # operator nothing about which of the two knobs to move.
+    # There used to be a guardrail here requiring worker concurrency to fit
+    # inside the DB pool, on the theory that a task holds a pooled connection
+    # for its whole lifetime. It doesn't: every task takes a session per unit of
+    # work and gives it back before any LLM call, HTTP request, sandbox
+    # operation or thread offload — `make lint-session-scope` fails the build if
+    # that stops being true. So concurrency is bounded by the pod's RAM and CPU,
+    # not by the pool, and the two knobs are independent. Real pool pressure is
+    # reported from measurement instead: the `database_pool_capacity` incident
+    # in app/core/infrastructure/db/session.py fires on sustained checkout
+    # saturation, which is the signal that actually means something.
     #
-    # Concurrency is summed across the lanes this process actually runs: with
-    # both enabled, interactive and bulk tasks draw from the same pool at the
-    # same time, so their combined budget is what can exhaust it.
-    pool_capacity = settings.db_pool_size + settings.db_max_overflow
-    safe_concurrency = int(pool_capacity * _DB_POOL_SAFETY_FACTOR)
-    configured_concurrency = sum(lane_concurrency(lane) for lane in enabled_lanes())
-    if pool_capacity and configured_concurrency > safe_concurrency:
-        logger.warning(
-            "infrastructure.streaq_runtime.worker_concurrency_exceeds_safe_db.degraded",
-            configured_concurrency=configured_concurrency,
-            pool_capacity=pool_capacity,
-            safe_concurrency=safe_concurrency,
-        )
     # Pre-create Redis consumer groups BEFORE the broker starts its subscribers.
     # Several subscribers share a stream (e.g. workflow + surface both consume
     # `schedule_events`); at broker.start FastStream races to create each group,
@@ -500,6 +533,15 @@ async def worker_lifespan() -> AsyncGenerator[AppWorkerContext]:
         ),
         name="worker-loop-lag-watchdog",
     )
+    # Resident-memory floor. The worker is the longer-lived of the two processes
+    # and the one whose growth has nowhere to surface, having no HTTP endpoint
+    # to expose it.
+    from app.core.observability.memory_sampler import memory_sampler
+
+    memory_task = create_background_task(
+        memory_sampler(service_name="lemma-worker"),
+        name="worker-memory-sampler",
+    )
     # Low-rate structured heartbeat for remote absence detection of this
     # singleton background process. At 5 min this is <600 records/48h. The
     # worker has no HTTP server, so the heartbeat event + the watchdog's
@@ -511,6 +553,35 @@ async def worker_lifespan() -> AsyncGenerator[AppWorkerContext]:
         redis_stream_snapshot_loop(get_message_bus()),
         name="redis-stream-snapshot",
     )
+    # Runs on the worker only: it is the process that owns the queues, and one
+    # sampler is enough -- lane depth and pending-row counts are properties of
+    # the shared Redis and database, not of the sampling process.
+    backlog_gauge_task = create_background_task(
+        backlog_gauge_loop(
+            async_session_maker,
+            interval_seconds=settings.backlog_gauge_interval_seconds,
+        ),
+        name="backlog-gauges",
+    )
+
+    # Fires due schedules and timers. Runs on every worker replica: the poll
+    # claims with FOR UPDATE SKIP LOCKED, so replicas share the work rather than
+    # duplicating it, and there is no leader to lose.
+    from app.modules.agent.services.due_snooze_claimer import claim_due_snooze_waits
+    from app.modules.schedule.services.schedule_poller import run_schedule_poller
+    from app.modules.workflow.services.due_wait_claimer import (
+        claim_due_workflow_waits,
+    )
+
+    schedule_poller_task = create_background_task(
+        run_schedule_poller(
+            context.uow_factory,
+            # Injected here, where crossing module boundaries is the job.
+            timer_claimers=(claim_due_workflow_waits, claim_due_snooze_waits),
+            interval_seconds=settings.schedule_poll_interval_seconds,
+        ),
+        name="schedule-poller",
+    )
 
     started = False
     global _primary_lane_context
@@ -520,7 +591,12 @@ async def worker_lifespan() -> AsyncGenerator[AppWorkerContext]:
         # after core startup and unwound before the core closers below.
         async with AsyncExitStack() as module_stack:
             await module_stack.enter_async_context(
-                outbox_dispatcher_lifespan(async_session_maker, get_message_bus())
+                outbox_dispatcher_lifespan(
+                    async_session_maker,
+                    get_message_bus(),
+                    database_url=settings.database_url,
+                    label="main",
+                )
             )
             await enter_worker_lifespans(module_stack, OSS_MODULES, context)
             # Emit only after every core and module lifespan has entered.
@@ -545,8 +621,11 @@ async def worker_lifespan() -> AsyncGenerator[AppWorkerContext]:
         for background_task in (
             reconcile_task,
             watchdog_task,
+            memory_task,
             heartbeat_task,
             stream_snapshot_task,
+            backlog_gauge_task,
+            schedule_poller_task,
         ):
             if background_task is not None and not background_task.done():
                 background_task.cancel()
@@ -555,6 +634,14 @@ async def worker_lifespan() -> AsyncGenerator[AppWorkerContext]:
                 except BaseException:
                     pass
         await _safe_shutdown_step("broker.stop", broker.stop)
+        # After the broker, because the analytics consumer is what produces
+        # these events -- draining a buffer that has stopped growing is the only
+        # way the drain terminates. Before the HTTP client, which the sink posts
+        # through.
+        await _safe_shutdown_step("stop_analytics", stop_analytics)
+        await _safe_shutdown_step(
+            "close_shared_http_client", close_shared_http_client
+        )
         await _safe_shutdown_step("close_streaq_job_queue", close_streaq_job_queue)
         await _safe_shutdown_step("close_message_bus", close_message_bus)
         await _safe_shutdown_step("close_redis_json_caches", close_redis_json_caches)
@@ -786,7 +873,7 @@ def _register_observability_middleware(
                         task_name=task.fn_name,
                         attempt=task.tries,
                         inherited=inherited,
-                    ):
+                    ), origin_scope(origin_from_payload(inherited)):
                         try:
                             result = await call_next(*args, **kwargs)
                             span.set_attribute("lemma.outcome", outcome)
@@ -844,17 +931,42 @@ def _register_lane(name: str | None, lane: Lane) -> None:
         TASK_LANES[name] = lane
 
 
-def streaq_task(*args, lane: Lane = Lane.INTERACTIVE, **kwargs):
+def streaq_task(
+    *args,
+    lane: Lane = Lane.INTERACTIVE,
+    origin: OriginKind | None = None,
+    **kwargs,
+):
     """Register a task on ``lane``'s worker.
 
     A task is registered on exactly one lane's Worker, so it is consumed from
     exactly one queue and can never be picked up twice.
+
+    ``origin`` declares that this task *is* a way work arrives, overriding
+    whatever the enqueuing caller carried. An import kicked off from the web UI
+    is enqueued under ``WEB``, but everything it then creates arrived by
+    ``IMPORT`` -- and the loop metrics are only meaningful if that holds however
+    the import was driven. Declared here rather than as a `with` block inside
+    each task body, so the claim sits next to the registration and no
+    hundred-line body has to be reindented to make it.
     """
     kwargs.setdefault("max_tries", JOB_MAX_RETRIES)
     kwargs.setdefault("timeout", JOB_TIMEOUT_SECONDS)
     kwargs.setdefault("ttl", JOB_RESULT_TTL_SECONDS)
     _register_lane(kwargs.get("name"), lane)
-    return LANE_WORKERS[lane].task(*args, **kwargs)
+    register = LANE_WORKERS[lane].task(*args, **kwargs)
+    if origin is None:
+        return register
+
+    def decorate(fn):
+        @functools.wraps(fn)
+        async def with_origin(*call_args, **call_kwargs):
+            with origin_scope(Origin(origin)):
+                return await fn(*call_args, **call_kwargs)
+
+        return register(with_origin)
+
+    return decorate
 
 
 def streaq_cron(tab: str, *, lane: Lane = Lane.INTERACTIVE, **kwargs):

@@ -3,7 +3,7 @@
 import { use, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import { ArrowRight, ArrowUp, ChevronDown, ChevronUp, Plus, UserPlus, X } from '@/components/ui/icons';
+import { ArrowRight, ChevronDown, ChevronUp, Plus, UserPlus, X } from '@/components/ui/icons';
 
 import { useAIAssistant } from '@/components/ai/ai-assistant-context';
 import { ProjectBranchChip } from '@/components/lemma/assistant/project-branch';
@@ -42,8 +42,12 @@ import { usePodSurfaces } from '@/lib/hooks/use-pod-surfaces';
 import { buildScopedConversationHref } from '@/lib/assistant/conversation-composer-context';
 import { useSchedules } from '@/lib/hooks/use-schedules';
 import { PodHomePresence } from '@/components/pod/pod-home-presence';
+import { Composer } from '@/components/shared/composer';
+import { ConversationAgentPicker } from '@/components/conversations/conversation-agent-picker';
+import { ResourceCover } from '@/components/shared/resource-identity';
 import { cn } from '@/lib/utils';
 import { formatAgentName } from '@/lib/utils/agents';
+import { humanizeName } from '@/lib/utils/display-name';
 import { isConversationRunningStatus, normalizeConversationStatus } from '@/lib/utils/conversations';
 import { describeScheduleConfig, getScheduleTargetKind, getScheduleTargetName } from '@/lib/utils/schedules';
 import {
@@ -118,7 +122,12 @@ function PodBlankChatHome({ podId }: { podId: string }) {
         { limit: POD_HOME_CONVERSATION_LIMIT, enabled: canReadConversations },
     );
     const homeConversations = useMemo(() => homeConversationsData?.items || [], [homeConversationsData?.items]);
+    const homeAgents = useMemo(() => homeAgentsData?.items || [], [homeAgentsData?.items]);
     const [draft, setDraft] = useState('');
+    // Which agent should answer. Home could only ever pick a *model*, so
+    // starting a conversation with a particular agent meant going to /new
+    // first and typing the sentence there instead.
+    const [selectedAgentName, setSelectedAgentName] = useState<string | null>(null);
     const [isSending, setIsSending] = useState(false);
     const [launchAnimation, setLaunchAnimation] = useState<ComposerLaunchAnimation | null>(null);
     const [pendingRouteConversationId, setPendingRouteConversationId] = useState<string | null>(null);
@@ -126,7 +135,10 @@ function PodBlankChatHome({ podId }: { podId: string }) {
     const [showHomePanels, setShowHomePanels] = useState(false);
     const rootRef = useRef<HTMLDivElement>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
-    const composerFormRef = useRef<HTMLFormElement>(null);
+    // Measured for the launch animation only, so the element type is free.
+    // It used to be the composer's own <form>; the shared Composer brings its
+    // own, and a form inside a form is not markup.
+    const composerFormRef = useRef<HTMLDivElement>(null);
     const composerInputRef = useRef<HTMLTextAreaElement>(null);
     const submittedFromConversationRef = useRef<string | null>(null);
     const launchFrameRef = useRef<number | null>(null);
@@ -141,7 +153,6 @@ function PodBlankChatHome({ podId }: { podId: string }) {
     const isLaunchingComposer = launchAnimation !== null;
     const isBlankingHome = isLaunchingComposer || isRouteHandoff;
     const isBusy = isSending || isBlankingHome || assistant.isLoading || assistant.isOpenedConversationRunning || assistant.isUploadingFiles;
-    const canSend = canWriteConversations && draft.trim().length > 0 && !isBusy;
     const podDefaultRuntime = pod?.config?.default_runtime
         ?? resolveDefaultAgentRuntime(runtimeCatalog, pod?.config?.default_profile_id);
     const selectedCommandRuntime = assistant.conversationRuntime ?? null;
@@ -304,6 +315,24 @@ function PodBlankChatHome({ podId }: { podId: string }) {
     const submit = async () => {
         const message = draft.trim();
         if (!canWriteConversations || !message || isBusy) return;
+        if (selectedAgentName) {
+            // `sendMessage` carries no agent — the assistant takes it from the
+            // conversation's scope, which is set by the route. So a chosen
+            // agent hands the sentence to /new with `?agent=`, using the same
+            // `assistantMessage` contract that start paths already use, and
+            // /new sends it on arrival.
+            const params = new URLSearchParams();
+            params.set('agent', selectedAgentName);
+            params.set('assistantMessage', message);
+            if (launchInstructionsRef.current) params.set('conversationInstructions', launchInstructionsRef.current);
+            if (launchMetadataRef.current) params.set('conversationMetadata', JSON.stringify(launchMetadataRef.current));
+            launchInstructionsRef.current = null;
+            launchMetadataRef.current = null;
+            setDraft('');
+            router.push(`/pod/${podId}/conversations/new?${params.toString()}`);
+            return;
+        }
+
         submittedFromConversationRef.current = assistant.openedConversationId || '';
         startComposerLaunchAnimation(message);
         setIsSending(true);
@@ -385,11 +414,7 @@ function PodBlankChatHome({ podId }: { podId: string }) {
                             ))}
                         </div>
                     ) : null}
-                    <form
-                        onSubmit={(event) => {
-                            event.preventDefault();
-                            void submit();
-                        }}
+                    <div
                         ref={composerFormRef}
                         className={cn(
                             "pod-home-composer transition-opacity duration-150",
@@ -406,76 +431,76 @@ function PodBlankChatHome({ podId }: { podId: string }) {
                                 event.currentTarget.value = '';
                             }}
                         />
-                        <button
-                            type="button"
-                            aria-label="Attach files"
-                            title="Attach files"
-                            onClick={() => fileInputRef.current?.click()}
-                            disabled={isBusy || !canWriteConversations}
-                            className="lemma-quiet-icon-button custom-focus-ring h-9 w-9 disabled:opacity-50"
-                        >
-                            <Plus className="h-4.5 w-4.5" strokeWidth={1.8} />
-                        </button>
-                        <textarea
-                            ref={composerInputRef}
-                            value={draft}
-                            onChange={(event) => setDraft(event.target.value)}
+                        {/* The same composer `/new` and every conversation render.
+                            Home used to grow its own — one row, the input squeezed
+                            between the attach button and a model chip heavier than
+                            itself — which is why the two never quite matched. */}
+                        <Composer
+                            inputRef={composerInputRef}
+                            draft={draft}
+                            onDraftChange={(event) => setDraft(event.target.value)}
+                            onSubmit={() => { void submit(); }}
                             onKeyDown={(event) => {
                                 if (event.key === 'Enter' && !event.shiftKey) {
                                     event.preventDefault();
                                     void submit();
                                 }
                             }}
-                            rows={1}
                             placeholder={canWriteConversations
                                 ? showStarterHome
-                                    ? "Describe the app, agent, or workflow you want..."
-                                    : "What should happen next?"
-                                : "You can read this pod, but not start new conversations."}
+                                    ? 'Describe the app, agent, or workflow you want...'
+                                    : 'What should happen next?'
+                                : 'You can read this pod, but not start new conversations.'}
                             disabled={!canWriteConversations}
-                            className="inline-edit-field min-h-10 flex-1 resize-none bg-transparent py-3 text-base leading-6 text-[var(--text-primary)] outline-none placeholder:text-[var(--text-tertiary)]"
+                            isBusy={isBusy}
+                            onAttach={() => fileInputRef.current?.click()}
+                            onDropFiles={(files) => { void handleFiles(files); }}
+                            controls={(
+                                <>
+                                    {canWriteConversations && homeAgents.length > 0 ? (
+                                        <ConversationAgentPicker
+                                            agents={homeAgents}
+                                            selectedAgentName={selectedAgentName}
+                                            onAgentChange={setSelectedAgentName}
+                                            disabled={!canWriteConversations}
+                                        />
+                                    ) : null}
+                                    <RuntimeModelPicker
+                                        catalog={runtimeCatalog}
+                                        defaultRuntime={podDefaultRuntime}
+                                        value={selectedCommandRuntime}
+                                        onChange={handleCommandRuntimeChange}
+                                        disabled={!canWriteConversations}
+                                        compact
+                                        triggerLabelClassName="hidden sm:block"
+                                        scopeHint="Just for this chat"
+                                        manageHref={pod?.organization_id ? `/organizations/${pod.organization_id}/settings/agent-runtimes` : undefined}
+                                    />
+                                    {canWriteConversations ? (
+                                        <ProjectPicker
+                                            value={assistant.pendingProject}
+                                            onChange={assistant.setPendingProject}
+                                            projects={githubProjects.projects}
+                                            isConnected={githubProjects.isConnected}
+                                            isLoadingProjects={githubProjects.isLoadingProjects}
+                                            error={githubProjects.error}
+                                            accountId={githubProjects.accountId}
+                                            connectHref={`/pod/${encodeURIComponent(podId)}/connectors`}
+                                        />
+                                    ) : null}
+                                    {canWriteConversations && assistant.pendingProject ? (
+                                        <ProjectBranchChip
+                                            project={assistant.pendingProject}
+                                            onChange={(ref) => assistant.setPendingProject({
+                                                ...assistant.pendingProject!,
+                                                ref,
+                                            })}
+                                        />
+                                    ) : null}
+                                </>
+                            )}
                         />
-                        <RuntimeModelPicker
-                            catalog={runtimeCatalog}
-                            defaultRuntime={podDefaultRuntime}
-                            value={selectedCommandRuntime}
-                            onChange={handleCommandRuntimeChange}
-                            disabled={!canWriteConversations}
-                            compact
-                            triggerLabelClassName="hidden sm:block"
-                            scopeHint="Just for this chat"
-                            manageHref={pod?.organization_id ? `/organizations/${pod.organization_id}/settings/agent-runtimes` : undefined}
-                        />
-                        {canWriteConversations ? (
-                            <ProjectPicker
-                                value={assistant.pendingProject}
-                                onChange={assistant.setPendingProject}
-                                projects={githubProjects.projects}
-                                isConnected={githubProjects.isConnected}
-                                isLoadingProjects={githubProjects.isLoadingProjects}
-                                error={githubProjects.error}
-                                accountId={githubProjects.accountId}
-                                connectHref={`/pod/${encodeURIComponent(podId)}/connectors`}
-                            />
-                        ) : null}
-                        {canWriteConversations && assistant.pendingProject ? (
-                            <ProjectBranchChip
-                                project={assistant.pendingProject}
-                                onChange={(ref) => assistant.setPendingProject({
-                                    ...assistant.pendingProject!,
-                                    ref,
-                                })}
-                            />
-                        ) : null}
-                        <button
-                            type="submit"
-                            aria-label="Send"
-                            disabled={!canSend}
-                            className="pod-home-send-button custom-focus-ring inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-[var(--action-primary)] text-[var(--text-on-brand)] transition-colors hover:bg-[var(--action-primary-hover)] disabled:bg-[var(--surface-2)] disabled:text-[var(--text-tertiary)]"
-                        >
-                            {isBusy ? <StepLoader size="sm" /> : <ArrowUp className="h-4 w-4" />}
-                        </button>
-                    </form>
+                    </div>
                     {/* The room, directly under the box you type into: who is here,
                         human and agent, and what is already on duty. */}
                     {isLoadingHomeState || showStarterHome ? null : (
@@ -587,6 +612,57 @@ function PodHomePanelsSkeleton() {
         <div className="mt-8 w-full space-y-6">
             <PodHomeActivitySkeleton />
         </div>
+    );
+}
+
+/**
+ * The apps this pod has built, on the page people actually land on.
+ *
+ * Apps were already loaded here — but only to be counted, as one input to the
+ * "is this pod fresh?" question. So the one resource a non-builder actually
+ * *opens* was the one resource home never showed, and getting to it meant
+ * knowing to go to Apps first.
+ *
+ * Deliberately small. Home is chat-first: the composer is the page and this
+ * sits under it, so these are thumbnails at a quarter the size of the ones on
+ * the apps index rather than the same cards again. Four at most, newest first,
+ * with the rest a link away — a pod with twenty apps must not push its own
+ * activity below the fold.
+ */
+function PodAppsHomePanel({ podId }: { podId: string }) {
+    const { pages, isLoading } = useAppPages(podId);
+    if (isLoading || pages.length === 0) return null;
+
+    const shown = pages.slice(0, 4);
+
+    return (
+        <section className="pod-home-work-section">
+            <div className="pod-home-work-heading">
+                <h2 className="pod-home-work-title">Apps</h2>
+                <Link href={`/pod/${podId}/app/pages`} className="pod-home-app-all custom-focus-ring">
+                    {pages.length > shown.length ? `All ${pages.length}` : 'All apps'}
+                </Link>
+            </div>
+
+            <div className="pod-home-app-row">
+                {shown.map((page) => {
+                    const title = humanizeName(page.title || page.slug);
+                    return (
+                        <Link
+                            key={page.slug}
+                            href={`/pod/${podId}/app/view?page=${encodeURIComponent(page.slug)}`}
+                            className="pod-home-app-tile custom-focus-ring"
+                            title={title}
+                        >
+                            <span className="pod-home-app-cover">
+                                <ResourceCover seed={page.slug} />
+                            </span>
+                            <span className="pod-home-app-name">{title}</span>
+                        </Link>
+                    );
+                })}
+            </div>
+        </section>
     );
 }
 
@@ -810,6 +886,9 @@ function PodAgentWorkflowKanban({
         <>
             <div className="mt-8 w-full space-y-6">
                 <PodJoinRequestsHomePanel podId={podId} />
+                {/* Above Activity on purpose: apps are the durable things this pod
+                    has, activity is what happened to be running when you looked. */}
+                <PodAppsHomePanel podId={podId} />
                 {/* The same skeleton the deferred region just showed, so the hand-off
                     from "not mounted yet" to "mounted and fetching" is invisible.
                     It used to render the real heading over an empty panel with a

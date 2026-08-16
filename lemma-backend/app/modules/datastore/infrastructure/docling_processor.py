@@ -28,7 +28,6 @@ import os
 import tempfile
 
 import aiohttp
-import anyio
 
 from app.core.concurrency.offload import run_blocking
 from app.modules.datastore.infrastructure.streaming import read_file_bytes
@@ -105,7 +104,7 @@ class DoclingDocumentProcessor(PdfPageRenderingMixin):
             if markdown.strip()
             else []
         )
-        pages = await anyio.to_thread.run_sync(
+        pages = await run_blocking(
             self._pdf_pages, content, mime_type, filename
         )
         return DocumentExtraction(
@@ -158,9 +157,6 @@ class DoclingDocumentProcessor(PdfPageRenderingMixin):
             ) as exc:
                 if attempt < _SUBMIT_RETRY_ATTEMPTS - 1:
                     delay = _SUBMIT_RETRY_BASE_DELAY_SECONDS * (2**attempt)
-                    logger.debug(
-                        'datastore.docling_processor.docling_async_submit_connection_s.diagnostic'
-                    )
                     await asyncio.sleep(delay)
                     continue
                 raise RuntimeError("Docling async submit failed") from exc

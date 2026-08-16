@@ -133,10 +133,30 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v5
         with:
-          node-version: 22
+          node-version-file: .nvmrc
+
+      # The Agent Host's ACP integration tests spawn a scripted Python agent over
+      # stdio, and panic outright when there is no interpreter to spawn.
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      # The same gate CI's "Desktop workspace" job applies, applied here because
+      # CI's path filter skips that job whenever the release commit did not touch
+      # desktop/** -- a backend-only release commit is the common case -- and CI
+      # is green anyway, because "CI passed" treats a skipped suite as passing.
+      # rustfmt compiles nothing, so it runs before the cache is warm; clippy and
+      # the tests wait for the sidecars below, because tauri-build resolves the
+      # externalBin sidecars at build-script time.
+      - name: Check formatting
+        working-directory: desktop
+        run: cargo fmt --all --check
 
       - name: Cache cargo
         uses: actions/cache@v4
@@ -146,7 +166,12 @@ jobs:
             ~/.cargo/git
             desktop/target
           key: desktop-cargo-${{ runner.os }}-${{ hashFiles('desktop/Cargo.lock') }}
-          restore-keys: desktop-cargo-${{ runner.os }}-
+          # Falls back to CI's cache from main. Releases are rare, so this key is
+          # cold most times it is read; CI's is warm from the last merge, and the
+          # lockfile hash still decides whether the restore is usable.
+          restore-keys: |
+            desktop-cargo-${{ runner.os }}-
+            desktop-ci-cargo-${{ runner.os }}-
 
       - name: Download and verify native runtime artifacts
         shell: bash
@@ -200,6 +225,14 @@ jobs:
 
       - name: Build native local sidecars
         run: desktop/scripts/build-sidecar.sh
+
+      - name: Lint
+        working-directory: desktop
+        run: cargo clippy --workspace --locked --all-targets -- -D warnings
+
+      - name: Test
+        working-directory: desktop
+        run: cargo test --workspace --locked
 
       - name: Sign virtualization helper with its entitlement
         shell: bash
@@ -299,6 +332,16 @@ jobs:
       - name: Upload online DMG to release
         uses: softprops/action-gh-release@v2
         with:
+          # Name the tag rather than letting the action infer it. On
+          # `release: published` it reads the tag off the event payload, but on
+          # `workflow_dispatch` there is no release in the payload and it falls
+          # back to `github.ref` — `refs/heads/main` for a dispatch, which is
+          # not a tag, so the upload failed with "GitHub Releases requires a
+          # tag" *after* the DMG had been built, signed, notarized and
+          # verified. Dispatch is how a release is repaired when the publish
+          # event does not fire (a release created by GITHUB_TOKEN does not
+          # trigger workflows), so that path has to be able to attach.
+          tag_name: v${{ steps.version.outputs.version }}
           files: desktop/target/release/release-artifacts/Lemma_*_aarch64-*.dmg
 
       - name: Remove temporary signing keychain
@@ -311,6 +354,16 @@ jobs:
     # official release build for a tag that has no version in it.
     if: startsWith(github.event.release.tag_name || format('v{0}', inputs.version), 'v')
     runs-on: windows-latest
+    # Same posture as release-local-images.yml: this installer is built and kept
+    # for whoever is testing it and is never attached to a release, so a missing
+    # certificate must not fail the run. Signing happens when the secrets exist
+    # and is skipped, loudly, when they do not. `secrets` cannot be read from a
+    # step `if`, so availability resolves once here.
+    env:
+      WINDOWS_SIGNING_AVAILABLE: >-
+        ${{ secrets.WINDOWS_CERTIFICATE != ''
+        && secrets.WINDOWS_CERTIFICATE_PASSWORD != ''
+        && secrets.WINDOWS_TIMESTAMP_URL != '' }}
 
     steps:
       - name: Checkout
@@ -386,14 +439,25 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v5
         with:
-          node-version: 22
+          node-version-file: .nvmrc
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-pc-windows-msvc
 
+      - name: Report unsigned Windows build
+        if: env.WINDOWS_SIGNING_AVAILABLE != 'true'
+        shell: bash
+        run: |
+          echo "::warning title=Windows Desktop build is unsigned::\
+          WINDOWS_CERTIFICATE, WINDOWS_CERTIFICATE_PASSWORD and \
+          WINDOWS_TIMESTAMP_URL are not all configured. This installer is \
+          built unsigned and is not attached to the release. macOS is \
+          unaffected."
+
       - name: Import Windows code-signing certificate
+        if: env.WINDOWS_SIGNING_AVAILABLE == 'true'
         id: windows-signing
         uses: ./.github/actions/setup-windows-signing
         with:
@@ -402,6 +466,7 @@ jobs:
           timestamp-url: ${{ secrets.WINDOWS_TIMESTAMP_URL }}
 
       - name: Configure Tauri Authenticode signing
+        if: env.WINDOWS_SIGNING_AVAILABLE == 'true'
         shell: python
         env:
           CERTIFICATE_THUMBPRINT: ${{ steps.windows-signing.outputs.thumbprint }}
@@ -483,6 +548,7 @@ jobs:
         run: desktop/scripts/build-sidecar.ps1
 
       - name: Sign native runtime bridge
+        if: env.WINDOWS_SIGNING_AVAILABLE == 'true'
         shell: pwsh
         env:
           CERTIFICATE_THUMBPRINT: ${{ steps.windows-signing.outputs.thumbprint }}
@@ -527,6 +593,7 @@ jobs:
             "target/release/release-artifacts/Lemma_${env:VERSION}_x64-online-setup.exe"
 
       - name: Verify Authenticode signatures
+        if: env.WINDOWS_SIGNING_AVAILABLE == 'true'
         shell: pwsh
         run: |
           $paths = @(

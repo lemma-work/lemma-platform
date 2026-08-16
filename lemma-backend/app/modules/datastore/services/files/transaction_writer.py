@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
 from typing import Any
 from uuid import UUID
@@ -14,6 +13,7 @@ from app.core.api.uploads import (
 )
 from app.core.authorization.context import Context
 from app.core.log.log import get_logger
+from app.core.concurrency.offload import run_blocking
 from app.modules.datastore.domain.errors import (
     DatastoreFileNotFoundError,
     DatastoreInfrastructureError,
@@ -164,7 +164,7 @@ class FileTransactionWriter:
             status=draft_status,
             metadata=metadata,
         )
-        content_sha256 = await asyncio.to_thread(upload_source_sha256, file_content)
+        content_sha256 = await run_blocking(upload_source_sha256, file_content)
         draft.content_sha256 = content_sha256
         storage_key = build_datastore_file_storage_key(pod_id, path)
         entity = await self.file_repository.create(draft)
@@ -262,7 +262,7 @@ class FileTransactionWriter:
         *,
         images: list[tuple[str, bytes | Path]] | None = None,
     ) -> list[str]:
-        if not await asyncio.to_thread(upload_source_has_content, markdown_content):
+        if not await run_blocking(upload_source_has_content, markdown_content):
             raise DatastoreValidationError("Markdown content cannot be empty")
         entity = plan.entity
         await self.storage.upload_file(

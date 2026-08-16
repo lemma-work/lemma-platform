@@ -5,9 +5,7 @@ from pathlib import Path
 from uuid import UUID, uuid4
 
 import pytest
-from apscheduler.triggers.date import DateTrigger
 from httpx import AsyncClient
-from pytz import utc
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -30,6 +28,22 @@ pytestmark = pytest.mark.e2e
 
 SCHEDULE_E2E_TIMEOUT_SECONDS = 90
 SCHEDULE_E2E_POLL_SECONDS = 0.5
+
+
+
+def _returns_async(fn):
+    """Adapt a sync stub to the now-async ``WebhookVerifier.verify`` port.
+
+    The port became a coroutine so implementations are forced to offload the
+    blocking Composio SDK off the event loop. A sync stub still type-checks as
+    a callable, so without this the route awaits a dict, raises, and answers
+    403 -- which is what these tests started doing.
+    """
+
+    async def _call(*args, **kwargs):
+        return fn(*args, **kwargs)
+
+    return _call
 
 
 async def _create_pod(client: AsyncClient, org_id: str) -> str:
@@ -858,33 +872,42 @@ async def test_wait_until_resumes_through_scheduler_with_exact_wait_ref(
 
 
 @pytest.mark.asyncio
-async def test_wait_until_resumes_from_a_timer_persisted_without_an_owner(
+async def test_wait_until_resumes_from_a_timer_that_carries_no_owner(
     authenticated_client: AsyncClient,
     fixed_test_org,
+    db_session: AsyncSession,
     worker,
 ):
-    """A wait timer from before ownership existed must still wake its run.
+    """A fired wait timer names no user, and the run still resumes.
 
-    APScheduler's job store is durable across deployments, so timers scheduled
-    by an older build deserialize with kwargs that carry no ``user_id``, and
-    ``reconcile_time_schedule_jobs`` deliberately leaves wait timers alone. This
-    registers a job with exactly those kwargs and lets the real scheduler fire
-    it: the run row supplies the owner, so the workflow resumes instead of
-    hanging until someone notices.
+    This used to be about legacy APScheduler job rows: jobs written by an older
+    build deserialized with kwargs carrying no ``user_id``, and the test proved
+    those still woke their run. The job store is gone, and the case it guarded
+    is now the *only* case -- `claim_due_workflow_waits` builds its payload from
+    the wait row's typed columns (`run_id`, `external_ref`, `scheduled_at`) and
+    passes `user_id=None` for every timer it claims, because a timer is not a
+    thing a user is doing.
+
+    So the ownership has to come from the run row on the resume path, for every
+    workflow wait rather than for old ones. This drives it end to end: the wait
+    row is aged into the past, and the real poller inside the worker claims,
+    dispatches, and resumes it.
     """
-    from app.modules.schedule.scheduler.scheduler_service import get_scheduler_service
+    from sqlalchemy import update
+
+    from app.modules.workflow.infrastructure.models import WorkflowRunWaitModel
 
     pod_id = await _create_pod(authenticated_client, fixed_test_org["id"])
     workflow = await _create_workflow(
         authenticated_client,
         pod_id,
         start={"type": "MANUAL"},
-        name_prefix="legacy-timer-workflow",
+        name_prefix="ownerless-timer-workflow",
         nodes=[
             {
                 "id": "timer",
                 "type": "WAIT_UNTIL",
-                # Long enough that only the fire below can resume this run.
+                # Long enough that only the ageing below can resume this run.
                 "config": {"timeout_seconds": 3600},
             },
             {"id": "end", "type": "END"},
@@ -900,26 +923,14 @@ async def test_wait_until_resumes_from_a_timer_persisted_without_an_owner(
     assert waiting["active_wait"]["wait_type"] == "TIME"
     wait_ref = waiting["active_wait"]["external_ref"]
 
-    # Replace the timer with one whose kwargs are exactly what a pre-ownership
-    # job row deserializes to: schedule_id and payload, no user_id.
-    scheduler = get_scheduler_service()
-    scheduler.scheduler.add_job(
-        func=("app.modules.schedule.scheduler.scheduler_service:execute_scheduled_job"),
-        trigger=DateTrigger(
-            run_date=datetime.now(timezone.utc) + timedelta(seconds=1),
-            timezone=utc,
-        ),
-        id=wait_ref,
-        kwargs={
-            "schedule_id": wait_ref,
-            "payload": {
-                "workflow_run_id": waiting["id"],
-                "wait_ref": wait_ref,
-                "source": "workflow_wait_until",
-            },
-        },
-        replace_existing=True,
+    # Make it due. The poller's claim query is the thing under test from here:
+    # nothing else knows this wait exists.
+    await db_session.execute(
+        update(WorkflowRunWaitModel)
+        .where(WorkflowRunWaitModel.external_ref == wait_ref)
+        .values(scheduled_at=datetime.now(timezone.utc) - timedelta(seconds=1))
     )
+    await db_session.commit()
 
     completed = await _wait_for_run_status(
         authenticated_client,
@@ -967,7 +978,8 @@ async def test_composio_webhook_schedule_starts_event_workflow_from_logged_paylo
 
     monkeypatch.setattr(
         "app.composition.schedule_connectors.ComposioWebhookVerifier.verify",
-        lambda self, payload_text, headers: {
+        _returns_async(
+            lambda self, payload_text, headers: {
             "version": "V3",
             "payload": {
                 "id": provider_id,
@@ -983,7 +995,8 @@ async def test_composio_webhook_schedule_starts_event_workflow_from_logged_paylo
                 "payload": {**payload["data"], "source": "composio-log"},
             },
             "raw_payload": payload,
-        },
+        }
+        ),
     )
     webhook = await authenticated_client.post("/webhooks/composio", json=payload)
     assert webhook.status_code == 200, webhook.text

@@ -281,6 +281,14 @@ class NotificationService:
                     notification=notification,
                     message=message,
                 )
+                # Commit before the platform call, for two reasons that point
+                # the same way. It makes "persist before send" mean it — an
+                # uncommitted row is not a message anyone can read. And it hands
+                # the pooled connection back, so the send below does not hold
+                # one (nor the row locks it is sitting on) for the seconds a
+                # platform API can take. The update after the send opens its own
+                # transaction.
+                await self.uow.commit()
                 sent = await self.egress.send(
                     channel,
                     conversation_id=conversation_id,

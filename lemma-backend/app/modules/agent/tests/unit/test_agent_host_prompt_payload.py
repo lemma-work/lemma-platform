@@ -19,11 +19,13 @@ import pytest
 
 from app.modules.agent.domain.entities import Agent, Conversation, Message
 from app.modules.agent.domain.value_objects import (
+    AgentToolset,
     ConversationStatus,
     ConversationType,
     MessageKind,
     MessageRole,
 )
+from app.modules.agent.domain.prompts import load_agent_host_runtime_prompt
 from app.modules.agent.infrastructure.harnesses.remote_payload import run_start_payload
 from app.modules.agent.tools.context import BaseAgentContext
 
@@ -129,3 +131,82 @@ class TestCredentials:
         )
 
         assert "runtime_credentials" not in payload
+
+
+def _system_prompt(*, toolsets: list[AgentToolset] | None = None) -> str:
+    agent = _agent()
+    if toolsets is not None:
+        agent = agent.model_copy(update={"toolsets": toolsets})
+    payload = run_start_payload(
+        agent=agent,
+        conversation=_conversation(),
+        messages=_transcript(),
+        ctx=_ctx(),
+        agent_run_id=uuid7(),
+        runtime_instructions=load_agent_host_runtime_prompt(),
+        carries_history=False,
+    )
+    return str(payload["prompt"]["system_prompt"])
+
+
+class TestTheAgentIsToldWhichDirectoryIsReal:
+    """A local coding agent has two working directories and believes the wrong one.
+
+    Agent Host starts the agent as a real OS process in a Lemma scratch
+    directory (`scratch/<target>/<conversation>`), while its actual workspace is
+    the sandbox reached over MCP. `pwd` answers with the scratch one. Nothing
+    said otherwise, so "we want to build this on lemma (but locally), it should
+    run on my mac" met an empty directory and did the obvious wrong thing.
+
+    The working-directory section used to be gated on having the workspace
+    toolset, which is right for the in-process harness — it has only one
+    directory, so with no tools there is nothing to say. A remote harness has
+    two either way.
+    """
+
+    async def test_a_remote_run_is_told_the_sandbox_is_the_workspace(self) -> None:
+        prompt = _system_prompt(toolsets=[AgentToolset.WORKSPACE_CLI])
+
+        assert "# Working Directory" in prompt
+        assert "/workspace/" in prompt
+        assert "exec_command" in prompt
+
+    async def test_a_remote_run_is_told_its_own_directory_is_not(self) -> None:
+        prompt = _system_prompt(toolsets=[AgentToolset.WORKSPACE_CLI])
+
+        assert "the directory this process started in" in prompt
+        assert "pwd" in prompt
+
+    async def test_the_users_own_machine_is_ruled_out_in_words(self) -> None:
+        """The instruction the runtime prompt exists to carry.
+
+        Not a sandbox boundary — a local agent could reach the whole filesystem
+        if it tried. It is the only control there is here, so it has to be
+        unambiguous rather than implied.
+        """
+        prompt = _system_prompt(toolsets=[AgentToolset.WORKSPACE_CLI])
+
+        assert "not yours to use" in prompt
+        assert "home directory" in prompt
+
+    async def test_a_remote_run_without_workspace_tools_still_gets_the_warning(
+        self,
+    ) -> None:
+        """The case the old gate missed entirely.
+
+        No workspace toolset used to mean no working-directory section at all,
+        which left the agent with a real directory, no correction, and every
+        reason to treat it as the workspace.
+        """
+        prompt = _system_prompt(toolsets=[])
+
+        assert "# Working Directory" in prompt
+        assert "scratch space belonging to Lemma" in prompt
+
+    async def test_pod_files_are_named_as_the_third_place(self) -> None:
+        """Workspace, pod files, and the user's machine are three things, and
+        conflating the first two is how work ends up somewhere nobody looks."""
+        prompt = _system_prompt(toolsets=[AgentToolset.WORKSPACE_CLI])
+
+        assert "Pod files" in prompt
+        assert "not scratch space" in prompt

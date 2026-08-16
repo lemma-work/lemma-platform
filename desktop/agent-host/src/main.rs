@@ -143,6 +143,34 @@ async fn main() -> anyhow::Result<()> {
             // draining as it exits.
             let _single = paths.lock_single_instance()?;
             let config = HostConfig::load_or_create(&paths)?;
+            // Warm the adapter cache the moment the app is open, off the serve
+            // path, rather than when someone finally pairs.
+            //
+            // Installing was the first thing `connect` did and it blocked the
+            // pairing call behind two registry installs and two whole-tree
+            // hashes -- so the machine looked like it was pairing for minutes,
+            // and the file-access prompt that the *probe* raises only appeared
+            // after all of it. Lemma runs while the app is open, so the app
+            // being open is the honest moment to do this: by the time anyone
+            // pairs the adapters are usually already there, and if they are not,
+            // discovery reports the harness as still installing.
+            //
+            // Detached and best-effort on purpose. A machine with no npm, or no
+            // network, must still serve the agents it already has, and a failure
+            // here is recorded rather than fatal -- `install_cache` runs again
+            // on the next launch and `doctor --repair` is the deliberate fix.
+            let warm_paths = paths.clone();
+            std::thread::spawn(move || {
+                match AdapterManifest::builtin()
+                    .map(|manifest| manifest.with_cache_root(warm_paths.adapters.clone()))
+                    .and_then(|manifest| manifest.install_cache(&warm_paths.adapters, false))
+                {
+                    Ok(()) => tracing::info!("adapter cache ready"),
+                    Err(error) => {
+                        tracing::warn!(%error, "adapter cache warm-up failed; agents may be missing");
+                    }
+                }
+            });
             HostRuntime::new(config, paths)?.serve().await
         }
         Command::Connect {
@@ -151,9 +179,13 @@ async fn main() -> anyhow::Result<()> {
             name,
             allow_insecure_http,
         } => {
-            let mut config = HostConfig::load_or_create(&paths)?;
-            let manifest = AdapterManifest::builtin()?.with_cache_root(paths.adapters.clone());
-            manifest.install_cache(&paths.adapters, false)?;
+            let config = HostConfig::load_or_create(&paths)?;
+            // Deliberately does not install adapters. Pairing is an HTTP call
+            // with a single-use code and needs none of them, but it used to wait
+            // for the whole cache to be built first -- which is why connecting
+            // took minutes and why nothing appeared to be happening while it
+            // did. `serve` warms the cache when the app opens instead, and a
+            // harness that is not cached yet reports itself as installing.
             let target = lemma_agent_host::api::TargetClient::pair(
                 url,
                 &pairing_code,
@@ -169,12 +201,14 @@ async fn main() -> anyhow::Result<()> {
             // server no longer knows. That stale target then failed
             // authentication forever, once per refresh, while the new one
             // worked - the logs filled with 401s that could never recover.
-            config
-                .targets
-                .retain(|item| item.base_url != target.base_url && item.host_id != target.host_id);
-            config.targets.push(target.clone());
-            config.validate()?;
-            config.save(&paths)?;
+            HostConfig::mutate(&paths, |config| {
+                config.targets.retain(|item| {
+                    item.base_url != target.base_url && item.host_id != target.host_id
+                });
+                config.targets.push(target.clone());
+                config.validate()?;
+                Ok(true)
+            })?;
             Journal::open(&paths.journal)?.register_target(target.target_id)?;
             println!(
                 "Connected {} as Agent Host {}.",
@@ -215,7 +249,7 @@ async fn main() -> anyhow::Result<()> {
             target,
             force_local,
         } => {
-            let mut config = HostConfig::load_or_create(&paths)?;
+            let config = HostConfig::load_or_create(&paths)?;
             let selected = select_one_target(&config, target.as_deref())?.clone();
             let client = lemma_agent_host::api::TargetClient::new(
                 selected.clone(),
@@ -229,10 +263,12 @@ async fn main() -> anyhow::Result<()> {
                     "Warning: remote revocation failed; removing local state because --force-local was supplied: {error}"
                 );
             }
-            config
-                .targets
-                .retain(|item| item.target_id != selected.target_id);
-            config.save(&paths)?;
+            HostConfig::mutate(&paths, |config| {
+                config
+                    .targets
+                    .retain(|item| item.target_id != selected.target_id);
+                Ok(true)
+            })?;
             Journal::open(&paths.journal)?.remove_target(selected.target_id)?;
             println!(
                 "Disconnected {} ({}) and removed its local credential.",
@@ -402,6 +438,7 @@ async fn main() -> anyhow::Result<()> {
                         scratch_directory: scratch,
                         mcp_server: None,
                         can_load_session: false,
+                        published_config_options: Vec::new(),
                         // A local one-off run has no Lemma target to ask, so a
                         // native permission request is denied immediately
                         // rather than stalling on a prompt nobody will see.
@@ -543,23 +580,25 @@ fn update_targets(
     selector: Option<&str>,
     mut update: impl FnMut(&mut TargetConfig),
 ) -> anyhow::Result<()> {
-    let mut config = HostConfig::load_or_create(paths)?;
-    if let Some(selector) = selector {
-        let selected_id = select_one_target(&config, Some(selector))?.target_id;
-        let target = config
-            .targets
-            .iter_mut()
-            .find(|target| target.target_id == selected_id)
-            .expect("selected target remains present");
-        update(target);
-    } else {
-        anyhow::ensure!(!config.targets.is_empty(), "no targets are configured");
-        for target in &mut config.targets {
+    HostConfig::mutate(paths, |config| {
+        if let Some(selector) = selector {
+            let selected_id = select_one_target(config, Some(selector))?.target_id;
+            let target = config
+                .targets
+                .iter_mut()
+                .find(|target| target.target_id == selected_id)
+                .expect("selected target remains present");
             update(target);
+        } else {
+            anyhow::ensure!(!config.targets.is_empty(), "no targets are configured");
+            for target in &mut config.targets {
+                update(target);
+            }
         }
-    }
-    config.validate()?;
-    config.save(paths)
+        config.validate()?;
+        Ok(true)
+    })?;
+    Ok(())
 }
 
 async fn show_logs(path: &std::path::Path, lines: usize, follow: bool) -> anyhow::Result<()> {

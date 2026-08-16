@@ -17,6 +17,10 @@ from app.modules.identity.domain.errors import (
     OrganizationNotFoundError,
 )
 from app.modules.identity.domain.email import normalize_identity_email
+from app.modules.identity.domain.events import (
+    OrganizationCreatedEvent,
+    OrganizationMemberAddedEvent,
+)
 from app.modules.identity.domain.organization_entities import (
     OrganizationEntity,
     OrganizationInvitationEntity,
@@ -90,6 +94,7 @@ class OrganizationRepository(OrganizationRepositoryPort):
         instance = Organization(**entity.model_dump())
         self.session.add(instance)
         await self.session.flush()
+        entity.add_event(OrganizationCreatedEvent(organization_id=instance.id))
         self._collect_events(entity)
         return instance.to_entity()
 
@@ -181,6 +186,17 @@ class OrganizationRepository(OrganizationRepositoryPort):
         self.session.add(member)
         await self.session.flush()
         await self.session.refresh(member, attribute_names=["user"])
+        # The one place all three join routes pass through -- creation,
+        # auto-join, and invitation acceptance.
+        entity.add_event(
+            OrganizationMemberAddedEvent(
+                organization_id=member.organization_id,
+                user_id=member.user_id,
+                role=member.role.value
+                if hasattr(member.role, "value")
+                else str(member.role),
+            )
+        )
         self._collect_events(entity)
         return member.to_entity()
 

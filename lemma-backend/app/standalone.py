@@ -1,4 +1,4 @@
-"""Reusable single-process (API + embedded worker + scheduler) assembly.
+"""Reusable single-process (API + embedded worker) assembly.
 
 Lives inside the `app` package (editable when installed as a library) so
 lemma-cloud's standalone app can import it reliably. The top-level
@@ -15,11 +15,6 @@ from dataclasses import dataclass
 from anyio import create_task_group, sleep_forever
 from fastapi import FastAPI
 
-from app.modules.schedule.scheduler.api.scheduler_controller import (
-    router as scheduler_router,
-)
-from app.modules.schedule.scheduler.internal_auth import ensure_internal_token
-from app.modules.schedule.scheduler.scheduler_service import get_scheduler_service
 
 
 @dataclass(frozen=True)
@@ -72,41 +67,19 @@ def build_standalone_app(
                     item.app.router.lifespan_context(item.app)
                 )
 
-            scheduler = get_scheduler_service()
-            await scheduler.start()
-
             embedded_worker = _prepare_embedded_worker(worker)
-            try:
-                async with create_task_group() as task_group:
-                    await task_group.start(embedded_worker.run_async)
-                    try:
-                        yield
-                    finally:
-                        task_group.cancel_scope.cancel()
-            finally:
-                await scheduler.shutdown()
-
-    async def scheduler_health_check():
-        scheduler = get_scheduler_service()
-        status = "healthy" if scheduler._started else "starting"
-        return {"status": status, "message": "Scheduler API is running"}
+            async with create_task_group() as task_group:
+                await task_group.start(embedded_worker.run_async)
+                try:
+                    yield
+                finally:
+                    task_group.cancel_scope.cancel()
 
     api_app.router.lifespan_context = standalone_lifespan
 
-    # Here the backend and the job API share a process, so a token minted now
-    # is one both sides can use and the operator has nothing to configure.
-    ensure_internal_token()
-
-    # The job API carries its own service-token dependency and is listed in
-    # `EXCLUDED_PATHS`, so the session dependency does not apply to it. It is
-    # kept out of the schema because it is an internal control plane and
-    # `/openapi.json` is served unauthenticated.
-    api_app.include_router(scheduler_router, include_in_schema=False)
-    api_app.add_api_route(
-        "/scheduler/health",
-        scheduler_health_check,
-        methods=["GET"],
-        include_in_schema=False,
-    )
+    # No scheduler to start, and no job API to mount. Schedules are fired by the
+    # poller inside the embedded worker, so standalone gets scheduling by
+    # running a worker rather than by assembling a second control plane and
+    # calling it over loopback HTTP.
 
     return api_app

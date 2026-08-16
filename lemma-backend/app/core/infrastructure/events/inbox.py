@@ -24,6 +24,7 @@ from app.core.domain.errors import DomainError
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.events.models import DomainEventInbox
 from app.core.log.log import get_logger
+from app.core.origin import origin_from_payload, origin_scope
 from app.core.request_context import event_lineage
 
 
@@ -149,7 +150,13 @@ class InboxConsumer:
                     ),
                     event_type=event_type,
                     consumer=consumer,
-                ):
+                ), origin_scope(origin_from_payload(payload)):
+                    # Origin rides on the event, so a handler that raises its own
+                    # domain events inherits how the *original* work arrived --
+                    # a pod created by an import stays IMPORT, a run started by a
+                    # schedule stays SCHEDULE. Deriving it from this worker's own
+                    # surroundings instead is how the dimension goes quietly
+                    # wrong: the worker knows nothing about the caller.
                     try:
                         await handler()
                     except asyncio.CancelledError:

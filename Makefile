@@ -448,7 +448,7 @@ _init-backend-env:
 
 _ensure-backend-env-keys:
 	@set -e; missing=""; \
-	for k in ENVIRONMENT DEBUG LOG_LEVEL JSON_LOGS_ENABLED API_URL FRONTEND_URL AUTH_FRONTEND_URL CLI_API_URL CLI_AUTH_FRONTEND_URL APP_BASE_DOMAIN AUTH_WEBSITE_BASE_PATH SUPERTOKENS_API_BASE_PATH SUPERTOKENS_API_GATEWAY_PATH SUPERTOKENS_CORE_URL DATABASE_URL DATASTORE_DATABASE_URL REDIS_URL DOCUMENT_PROCESSOR STORAGE_BACKEND LOCAL_OBJECT_STORAGE_ROOT LOCAL_FILE_STORAGE_ROOT EMAIL_TRANSPORT EMAIL_OUTPUT_DIR AUTH_EMAIL_VERIFICATION_REQUIRED ENABLE_TELEGRAM_POLLING_MODE ENABLE_SLACK_SOCKET_MODE CORS_ORIGINS CORS_ORIGIN_REGEX; do \
+	for k in ENVIRONMENT DEBUG API_DOCS_ENABLED LOG_LEVEL JSON_LOGS_ENABLED API_URL FRONTEND_URL AUTH_FRONTEND_URL CLI_API_URL CLI_AUTH_FRONTEND_URL APP_BASE_DOMAIN AUTH_WEBSITE_BASE_PATH SUPERTOKENS_API_BASE_PATH SUPERTOKENS_API_GATEWAY_PATH SUPERTOKENS_CORE_URL DATABASE_URL DATASTORE_DATABASE_URL REDIS_URL DOCUMENT_PROCESSOR STORAGE_BACKEND LOCAL_OBJECT_STORAGE_ROOT LOCAL_FILE_STORAGE_ROOT EMAIL_TRANSPORT EMAIL_OUTPUT_DIR AUTH_EMAIL_VERIFICATION_REQUIRED ENABLE_TELEGRAM_POLLING_MODE ENABLE_SLACK_SOCKET_MODE CORS_ORIGINS CORS_ORIGIN_REGEX; do \
 		if ! grep -qE "^$$k=" $(BACKEND_DIR)/.env; then missing="$$missing $$k"; fi; \
 	done; \
 	if [ -z "$$missing" ]; then \
@@ -459,6 +459,7 @@ _ensure-backend-env-keys:
 		append() { key="$$1"; value="$$2"; grep -qE "^$${key}=" $(BACKEND_DIR)/.env || printf '%s=%s\n' "$$key" "$$value" >> $(BACKEND_DIR)/.env; }; \
 		append ENVIRONMENT local; \
 		append DEBUG true; \
+		append API_DOCS_ENABLED true; \
 		append LOG_LEVEL $(DEV_LOG_LEVEL); \
 		append JSON_LOGS_ENABLED $(DEV_JSON_LOGS_ENABLED); \
 		append API_URL '$(DEV_BACKEND_URL)'; \
@@ -927,6 +928,8 @@ desktop-lint: _desktop-ensure-sidecars
 	@echo "→ Desktop workspace clippy…"
 	@cd $(DESKTOP_DIR) && cargo clippy $(DESKTOP_CARGO_SCOPE) --locked --all-targets -- -D warnings
 	@echo "  ✓ clippy clean"
+	@echo "→ Memory balloon policy…"
+	@$(DESKTOP_DIR)/scripts/check-balloon-policy.sh
 
 # guestd's vsock listener is behind a Linux cfg that only a Linux build ever
 # compiles, so a green macOS run says nothing about the code that actually runs
@@ -1250,12 +1253,21 @@ lint:
 # that a red PR is something you can reproduce and fix here instead of learning
 # about it twenty minutes after pushing.
 
-# Everything the "lemma-backend quality gates" job runs, in its order.
+# Everything the "lemma-backend quality gates" job runs, in its order — except
+# the runtime connection-scope suite, which needs Docker. Run that with
+# `make -C lemma-backend test-connection-scope`. Stated rather than implied,
+# because the last comment here claiming parity was wrong for weeks.
 quality:
 	@echo "→ Ruff…"
 	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint
 	@echo "→ Async-safety…"
 	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-async
+	@echo "→ DB connection scope…"
+	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-session-scope
+	@echo "→ I/O hygiene…"
+	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-io-hygiene
+	@echo "→ Import budget…"
+	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-import-budget
 	@echo "→ Critical domain types…"
 	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory typecheck-critical
 	@echo "→ Architecture ratchet + route inventory…"

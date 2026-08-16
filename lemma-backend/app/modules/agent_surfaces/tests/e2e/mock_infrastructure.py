@@ -7,6 +7,7 @@ WhatsApp, Telegram) and capture outbound messages for assertion.
 
 from __future__ import annotations
 
+import ast
 import asyncio
 import base64
 import hashlib
@@ -1321,21 +1322,91 @@ def slack_delivered(store: MockPlatformMessageStore) -> list[str]:
     well. One entry per message, so counting entries counts replies rather
     than the fields a reply happens to occupy.
     """
-    delivered: list[str] = []
+    return [text for _, text in _slack_deliveries(store)]
+
+
+def _slack_deliveries(store: MockPlatformMessageStore) -> list[tuple[dict, str]]:
+    """One entry per Slack *message*: the call that opened it, and its text.
+
+    A streamed answer is not one API call. ``TokenStreamMixin`` flushes the
+    model's deltas every 280 characters or 0.8 seconds, so "Thanks, recorded."
+    can reach Slack as ``chat.appendStream`` carrying "Thanks, rec" and then
+    "orded." against the same stream ``ts``. On screen that is a single
+    message, so it is a single entry here — otherwise every assertion that
+    counts replies over-counts one answer as several, and every assertion
+    looking for a phrase misses it at whichever seam the flush happened to
+    fall on.
+    """
+    deliveries: list[tuple[dict, list[str]]] = []
+    streams: dict[tuple[str, str], list[str]] = {}
     for platform, message in store.get_ordered("SLACK", "SLACK_STREAM_APPEND"):
-        joined = _slack_reply_text(platform, message)
-        if joined:
-            delivered.append(joined)
-    return delivered
+        text = _slack_reply_text(platform, message)
+        if not text:
+            continue
+        if platform == "SLACK":
+            deliveries.append((message, [text]))
+            continue
+        # Keyed on the stream, not on arrival order: two surfaces can stream
+        # into the same thread at once, and their appends interleave.
+        key = (str(message.get("channel") or ""), str(message.get("ts") or ""))
+        appended = streams.get(key)
+        if appended is not None:
+            appended.append(text)
+            continue
+        streams[key] = parts = [text]
+        deliveries.append((message, parts))
+    return [(message, "".join(parts)) for message, parts in deliveries]
 
 
 def _slack_reply_text(platform: str, message: dict) -> str:
-    parts = (
-        [message.get("text"), message.get("blocks")]
-        if platform == "SLACK"
-        else [message.get("chunks")]
-    )
+    if platform != "SLACK":
+        return _slack_stream_text(message)
+    parts = [message.get("text"), message.get("blocks")]
     return "\n".join(str(part) for part in parts if part)
+
+
+def _slack_stream_text(message: dict) -> str:
+    """The visible text of one ``chat.appendStream`` call.
+
+    ``markdown_text`` chunks carry model text and are concatenated as written:
+    a chunk is a fragment of a sentence, not a line, so joining them with a
+    separator would insert whitespace the user never sees. Every other chunk
+    (the step timeline's ``task_update``) keeps its repr on its own line, which
+    is the form the assertions about steps read.
+    """
+    chunks = _slack_stream_chunks(message)
+    if not chunks:
+        raw = message.get("chunks")
+        return str(raw) if raw else ""
+    rendered = ""
+    for chunk in chunks:
+        if chunk.get("type") == "markdown_text":
+            rendered += str(chunk.get("text") or "")
+        else:
+            rendered += f"\n{chunk}" if rendered else str(chunk)
+    return rendered
+
+
+def _slack_stream_chunks(message: dict) -> list[dict]:
+    """The chunk list of a ``chat.appendStream`` call, decoded.
+
+    ``_collect_params`` records every parameter through ``str()``, so ``chunks``
+    arrives as the repr of the list slack_sdk sent rather than the list itself.
+    Parsing it back is confined to here; a shape that will not parse falls back
+    to being treated as opaque text by the caller.
+    """
+    raw = message.get("chunks")
+    if not raw:
+        return []
+    if isinstance(raw, list):
+        return [chunk for chunk in raw if isinstance(chunk, dict)]
+    try:
+        decoded = ast.literal_eval(str(raw))
+    except ValueError, SyntaxError:
+        return []
+    if not isinstance(decoded, list):
+        return []
+    return [chunk for chunk in decoded if isinstance(chunk, dict)]
 
 
 def slack_delivered_calls(store: MockPlatformMessageStore) -> list[dict]:
@@ -1343,13 +1414,10 @@ def slack_delivered_calls(store: MockPlatformMessageStore) -> list[dict]:
 
     ``slack_delivered`` is the text; this is for the handful of assertions
     that need the call itself — which channel it went to, or how many replies
-    there were. Both posted messages and stream appends carry ``channel``.
+    there were. Both posted messages and stream appends carry ``channel``. One
+    entry per message, so a streamed answer is the call that opened its stream.
     """
-    return [
-        message
-        for platform, message in store.get_ordered("SLACK", "SLACK_STREAM_APPEND")
-        if _slack_reply_text(platform, message)
-    ]
+    return [message for message, _ in _slack_deliveries(store)]
 
 
 async def wait_for_slack_replies(

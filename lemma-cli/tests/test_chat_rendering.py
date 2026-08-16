@@ -92,3 +92,81 @@ def test_a_stopped_run_still_reports_its_status(capsys):
     renderer.handle(SimpleNamespace(type="stopped", data={"status": "STOPPED"}))
     renderer.finish()
     assert "STOPPED" in capsys.readouterr().out
+
+
+# --- token channels ----------------------------------------------------------
+
+
+def _tokens(renderer: ChatRenderer, *payloads) -> str:
+    for payload in payloads:
+        renderer.handle(SimpleNamespace(type="TOKEN", data=payload, agent_run_id=None))
+    return "".join(renderer.buffered)
+
+
+def test_a_tool_delta_never_reaches_the_answer():
+    """The bug, exactly as it was reported.
+
+    The harness tags every delta — `text` is the answer, `thinking` is model
+    reasoning, `tool` is the literal serialized call it streams so a UI can show
+    a tool running. This renderer stringified the payload without reading the
+    tag, so all three landed in the reply:
+
+        I'll check the items table count.
+        {"tool_name":"pod_query","args":{"sql":"SELECT COUNT(*) AS cnt FROM items"}}1
+    """
+    renderer = ChatRenderer(agent="pod agent")
+
+    answer = _tokens(
+        renderer,
+        {"kind": "text", "data": "I'll check the items table count."},
+        {"kind": "tool", "data": '{"tool_name":"pod_query","args":'},
+        {"kind": "tool", "data": '{"sql":"SELECT COUNT(*) AS cnt FROM items"}}'},
+        {"kind": "text", "data": " There is 1 row."},
+    )
+
+    assert answer == "I'll check the items table count. There is 1 row."
+    assert "tool_name" not in answer
+    assert "SELECT COUNT" not in answer
+
+
+def test_reasoning_deltas_are_not_the_answer_either():
+    renderer = ChatRenderer(agent="pod agent")
+
+    answer = _tokens(
+        renderer,
+        {"kind": "thinking", "data": "The user wants a row count. I should query."},
+        {"kind": "text", "data": "There is 1 row."},
+    )
+
+    assert answer == "There is 1 row."
+
+
+def test_an_untagged_string_delta_still_renders():
+    """Not every runtime sends the envelope.
+
+    Dropping their output would trade a cosmetic bug for a silent one — the
+    reply would simply be empty.
+    """
+    renderer = ChatRenderer(agent="pod agent")
+
+    assert _tokens(renderer, "plain text from an older runtime") == (
+        "plain text from an older runtime"
+    )
+
+
+def test_a_payload_with_no_kind_is_treated_as_text():
+    renderer = ChatRenderer(agent="pod agent")
+
+    assert _tokens(renderer, {"data": "no kind here"}) != ""
+
+
+def test_verbose_shows_the_answer_channel_only():
+    """--verbose is for watching a run, not for leaking the tool envelope."""
+    renderer = ChatRenderer(agent="pod agent", verbose=True)
+    renderer.handle(
+        SimpleNamespace(
+            type="TOKEN", data={"kind": "tool", "data": '{"tool_name":"x"}'}, agent_run_id=None
+        )
+    )
+
+    assert renderer.printed_tokens is False, "a tool delta is not the answer"

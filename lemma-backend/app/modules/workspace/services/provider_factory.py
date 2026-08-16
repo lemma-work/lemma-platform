@@ -99,5 +99,10 @@ def _build_e2b_provider():
             workspace_template=workspace_settings.e2b_workspace_template,
             function_template=workspace_settings.e2b_function_template,
             domain=workspace_settings.e2b_domain,
+            # Carried explicitly. The provider defaults this, and defaulting it
+            # here too is what let a test run share production's namespace --
+            # which the orphan sweep reads as "these are mine and have no row",
+            # against a database where nothing does.
+            metadata_namespace=workspace_settings.e2b_metadata_namespace,
         )
     )

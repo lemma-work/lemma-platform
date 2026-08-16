@@ -92,3 +92,32 @@ def test_validate_raster_icon_maps_decode_failures() -> None:
             max_dimension=10,
             max_pixels=100,
         )
+
+
+def test_a_png_of_empty_chunks_is_refused_without_walking_all_of_them():
+    """The iteration count is the uploader's to choose, so it has to be bounded.
+
+    A chunk declaring length 0 advances only its 12-byte header, so a file of
+    nothing but empty chunks costs len(data)/12 passes — ~437k for 5 MiB, and
+    measured at 74ms of uninterruptible event loop. The dimension limits cannot
+    help: they are checked after this returns.
+
+    Asserted as wall clock rather than a call count because the cost IS the
+    wall clock, with a margin wide enough that only a genuinely unbounded walk
+    trips it.
+    """
+    import struct
+    import time
+
+    from app.modules.icon.services.raster_validation import _container_ends_at_eof
+
+    # 5 MiB of zero-length, non-IEND chunks after a PNG signature.
+    header = b"\x89PNG\r\n\x1a\n"
+    empty_chunk = struct.pack(">I", 0) + b"tEXt" + b"\x00\x00\x00\x00"
+    payload = header + empty_chunk * ((5 * 1024 * 1024) // len(empty_chunk))
+
+    started = time.monotonic()
+    assert _container_ends_at_eof(payload, "image/png") is False
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 0.05, f"walk was not bounded: took {elapsed * 1000:.0f}ms"

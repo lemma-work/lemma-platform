@@ -15,6 +15,7 @@ from app.core.infrastructure.db.uow_factory import create_uow_from_session_maker
 from app.modules.datastore.contracts import DatastoreFileNotFoundError
 from app.composition.agent_datastore import create_agent_skill_file_service
 from app.composition.authorization import create_authorization_service
+from functools import lru_cache
 
 _FRONTMATTER_NAME_PATTERN = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$")
 _SKILLS_ROOT = "/skills"
@@ -123,7 +124,20 @@ def _parse_frontmatter(skill_md: Path, content: str) -> tuple[str, str]:
     return name, description
 
 
+@lru_cache(maxsize=1)
 def _build_system_skill_catalog() -> dict[str, SkillEntry]:
+    """The skills shipped with the process, read once.
+
+    Walks the skills directory and reads every SKILL.md. That is filesystem
+    work proportional to how many skills ship, and it ran on the event loop on
+    every skill tool call and every catalog build — to produce the same answer
+    each time, because these files are baked into the image and cannot change
+    while the process runs.
+
+    Cached rather than moved off the loop: the cheapest filesystem walk is the
+    one that does not happen. Callers only read the result (the pod catalog
+    builds its own dict), so sharing one is safe.
+    """
     skills_root = _skills_root()
     entries: dict[str, SkillEntry] = {}
     repo_root = _repo_root()

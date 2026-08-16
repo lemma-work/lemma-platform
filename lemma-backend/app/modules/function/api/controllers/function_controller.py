@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, Query, Request, status
 from app.core.api.dependencies import UoWDep, get_uow_factory
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.authorization.grants import (
+    apply_inline_workload_grants,
     list_grantee_resource_grants,
     normalize_pod_resource_grants,
     replace_grantee_resource_grants,
@@ -62,6 +63,39 @@ def _to_function_response(function: FunctionEntity) -> FunctionResponse:
     return FunctionResponse.model_validate(payload)
 
 
+async def _apply_function_grants(
+    uow,
+    *,
+    pod_id: UUID,
+    function: FunctionEntity,
+    data,
+    user: UserEntity,
+) -> None:
+    """Apply a create/update payload's inline ``permissions`` block.
+
+    Functions accepted this block on neither verb while agents accepted it on
+    create, so the same bundle payload wired an agent and silently left a
+    function with nothing.
+    """
+
+    assert function.id is not None
+    applied = await apply_inline_workload_grants(
+        uow.session,
+        pod_id=pod_id,
+        grantee_type="FUNCTION",
+        grantee_id=function.id,
+        permissions=getattr(data, "permissions", None),
+        created_by_user_id=user.id,
+    )
+    if applied:
+        # The sandbox reads its grants from a cached environment, so skipping
+        # this leaves the function running with the access it had before.
+        await invalidate_function_workspace_env_cache(
+            pod_id=pod_id,
+            function_id=function.id,
+        )
+
+
 async def _function_action_response(
     function: FunctionEntity,
 ) -> FunctionActionResponse:
@@ -99,6 +133,7 @@ async def create_function(
     pod_id: UUID,
     data: CreateFunctionRequest,
     use_cases: FunctionUseCasesDep,
+    uow: UoWDep,
 ) -> FunctionActionResponse:
     """Create a new function in a pod."""
     user: UserEntity = request.state.user
@@ -115,6 +150,7 @@ async def create_function(
     function = await use_cases.create_function(
         pod_id=pod_id, entity=entity, user_id=user.id, code=data.code, request=request
     )
+    await _apply_function_grants(uow, pod_id=pod_id, function=function, data=data, user=user)
     return await _function_action_response(function)
 
 
@@ -337,10 +373,14 @@ async def update_function(
     function_name: str,
     data: UpdateFunctionRequest,
     use_cases: FunctionUseCasesDep,
+    uow: UoWDep,
 ) -> FunctionActionResponse:
     """Update a function."""
     user: UserEntity = request.state.user
-    update_entity = FunctionUpdateEntity(**data.model_dump(exclude_unset=True))
+    update_fields = data.model_dump(exclude_unset=True)
+    # Grants are not a column on the function; they go to the grants table below.
+    update_fields.pop("permissions", None)
+    update_entity = FunctionUpdateEntity(**update_fields)
     function = await use_cases.update_function(
         pod_id=pod_id,
         name=function_name,
@@ -348,6 +388,7 @@ async def update_function(
         user_id=user.id,
         request=request,
     )
+    await _apply_function_grants(uow, pod_id=pod_id, function=function, data=data, user=user)
     return await _function_action_response(function)
 
 

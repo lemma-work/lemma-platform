@@ -7,6 +7,7 @@ from uuid import UUID
 from aiohttp import ClientError
 from slack_sdk.errors import SlackApiError
 
+from app.core.infrastructure.db.transaction_locks import connection_released
 from app.core.authorization.context import ResourceRef, ResourceType
 from app.core.authorization.factory import create_authorization_data_service
 from app.composition.surface_identity import Pod
@@ -56,10 +57,16 @@ class SurfaceConfigurationAuthorizationMixin:
             message_text="",
             is_dm=True,
         )
+        # Credentials are resolved first, inside the session; the profile fetch
+        # that follows is an HTTP call to the platform, so the connection goes
+        # back for it. Only reads have happened at this point, so the release is
+        # a plain commit -- `safe_to_release` declines it otherwise.
+        credentials = await self._resolve_credentials(first)
         try:
-            profile = await adapter.fetch_sender_profile(
-                credentials=await self._resolve_credentials(first), event=event
-            )
+            async with connection_released(self.uow.session):
+                profile = await adapter.fetch_sender_profile(
+                    credentials=credentials, event=event
+                )
         except (SlackApiError, ClientError):
             profile = None
         resolved = await self.identity_service.resolve(

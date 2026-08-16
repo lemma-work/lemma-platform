@@ -117,10 +117,11 @@ async def test_export_pod_bundle_roundtrip(
     await _create_agent(authenticated_client, pod_id, agent_name)
     await _create_function(authenticated_client, pod_id, func_name)
 
-    # Start the export (202 + export_id).
+    # Start the export (202 + export_id). Row data is requested table by table:
+    # there is no "every table" switch, so the table under test is named.
     start = await authenticated_client.post(
         f"/pods/{pod_id}/bundle/exports",
-        json={"with_data": True},
+        json={"data_tables": [table_name]},
     )
     assert start.status_code == status.HTTP_202_ACCEPTED, start.text
     export_id = start.json()["export_id"]
@@ -158,7 +159,7 @@ async def test_export_pod_bundle_roundtrip(
     assert pod["format_version"] == 3
     assert pod["name"] == test_pod["name"]
 
-    # Table manifest + seeded data.csv (with_data=True).
+    # Table manifest + seeded data.csv (the table was named in data_tables).
     table_json = root / "tables" / table_name / f"{table_name}.json"
     assert table_json.is_file()
     assert json.loads(table_json.read_text())["name"] == table_name
@@ -223,7 +224,7 @@ async def test_export_includes_app_source_and_tokenizes_slug(
 
     start = await authenticated_client.post(
         f"/pods/{pod_id}/bundle/exports",
-        json={"with_data": False, "include": ["apps"]},
+        json={"include": ["apps"]},
     )
     assert start.status_code == status.HTTP_202_ACCEPTED, start.text
     export_id = start.json()["export_id"]
@@ -264,9 +265,10 @@ async def test_export_without_data_omits_data_csv(authenticated_client, test_pod
     table_name = f"nodata_{uuid4().hex[:8]}"
     await _create_table_with_rows(authenticated_client, pod_id, table_name)
 
+    # No `data_tables`: the table's shape travels, its rows do not.
     start = await authenticated_client.post(
         f"/pods/{pod_id}/bundle/exports",
-        json={"with_data": False, "include": ["tables"]},
+        json={"include": ["tables"]},
     )
     assert start.status_code == status.HTTP_202_ACCEPTED, start.text
     export_id = start.json()["export_id"]

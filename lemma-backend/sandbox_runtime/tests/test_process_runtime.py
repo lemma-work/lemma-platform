@@ -60,7 +60,11 @@ def decode_output(content: bytes) -> list[tuple[int, int, bytes]]:
 async def wait_for_terminal(
     client: httpx.AsyncClient, operation_id: str
 ) -> dict[str, object]:
-    deadline = asyncio.get_running_loop().time() + 5
+    # Generous on purpose: this waits for a real forked process to be reaped,
+    # and the property under test is that it becomes terminal at all. A tight
+    # budget turns a loaded machine into a red build, which is how a timing
+    # assertion teaches people to re-run rather than read.
+    deadline = asyncio.get_running_loop().time() + 30
     while asyncio.get_running_loop().time() < deadline:
         response = await client.get(f"/processes/{operation_id}", headers=HEADERS)
         payload = response.json()
@@ -250,7 +254,12 @@ async def test_direct_exit_is_terminal_when_descendant_holds_output_pipe(
     assert terminal["state"] == "succeeded"
     assert terminated.json()["state"] == "succeeded"
     assert child_pid is not None
-    for _ in range(100):
+    # Same reasoning as wait_for_terminal: the claim is that the detached
+    # descendant does not survive, not that the kernel reaps it inside one
+    # second. The old 100 x 10ms budget failed on a machine that was busy
+    # running other tests.
+    deadline = asyncio.get_running_loop().time() + 30
+    while asyncio.get_running_loop().time() < deadline:
         try:
             os.kill(child_pid, 0)
         except ProcessLookupError:

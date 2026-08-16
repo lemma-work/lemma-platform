@@ -83,8 +83,25 @@ async def pod_context_scope(
     non-DB work (storage / sandbox / streaming) AFTER the block, never inside it.
     """
     async with uow_factory() as uow:
-        ctx = await resolve_pod_context(
-            session=uow.session, request=request, user_id=user_id, pod_id=pod_id
+        # Reuse the Context the request already resolved, exactly as
+        # ``get_pod_context`` does. A handler that opens several of these — file
+        # create opens two to four, and the app-asset route opens one per static
+        # file — was rebuilding the whole thing each time, queries and all, and
+        # each rebuild arrived with an EMPTY decision cache so every
+        # authorization check inside it started from nothing too.
+        # Nested getattr: callers include lightweight request doubles that have
+        # no .state at all, and evaluating request.state would raise on them.
+        existing = getattr(getattr(request, "state", None), "ctx", None)
+        ctx = (
+            existing
+            if (
+                existing is not None
+                and existing.user_id == user_id
+                and existing.pod_id == pod_id
+            )
+            else await resolve_pod_context(
+                session=uow.session, request=request, user_id=user_id, pod_id=pod_id
+            )
         )
         async with context_scope(ctx):
             yield UowContext(uow=uow, ctx=ctx)

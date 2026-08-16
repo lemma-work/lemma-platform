@@ -39,6 +39,11 @@ from app.modules.agent_surfaces.platforms.teams.models import (
     TeamsMessageAttachmentSnapshot,
 )
 from app.core.log.log import get_logger
+from app.core.net.aiohttp_client import new_aiohttp_session
+from app.core.net.capped_read import read_capped
+from app.modules.agent_surfaces.platforms.attachment_limits import (
+    INBOUND_ATTACHMENT_BYTE_CAP,
+)
 
 logger = get_logger(__name__)
 # Graph answers `/content` with a redirect to a pre-signed URL, so redirects have
@@ -145,7 +150,7 @@ class TeamsPlatformService:
             )
 
         try:
-            async with aiohttp.ClientSession() as session:
+            async with new_aiohttp_session() as session:
                 graph_team_id = await client.resolve_graph_team_id(
                     raw_team_id=team_id,
                     team_aad_group_id=team_aad_group_id,
@@ -256,7 +261,7 @@ class TeamsPlatformService:
             token = await client.get_graph_token(tenant_id)
             if not token:
                 return []
-            async with aiohttp.ClientSession() as session:
+            async with new_aiohttp_session() as session:
                 graph_team_id = await client.resolve_graph_team_id(
                     raw_team_id=team_id,
                     team_aad_group_id=getattr(meta, "team_aad_group_id", None),
@@ -440,7 +445,9 @@ class TeamsPlatformService:
                         status=response.status,
                     )
                     return None
-                return await response.read()
+                # aiohttp's chunk iterator, same cap as the httpx platforms.
+                chunks = response.content.iter_chunked(64 * 1024)
+                return await read_capped(chunks, max_bytes=INBOUND_ATTACHMENT_BYTE_CAP)
         logger.debug('agent_surfaces.service.teams_download_file_redirects.diagnostic')
         return None
 

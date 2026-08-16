@@ -39,6 +39,22 @@ POLL_INTERVAL = 1.0
 # --------------------------------------------------------------------------- #
 
 
+
+def _returns_async(fn):
+    """Adapt a sync stub to the now-async ``WebhookVerifier.verify`` port.
+
+    The port became a coroutine so implementations are forced to offload the
+    blocking Composio SDK off the event loop. A sync stub still type-checks as
+    a callable, so without this the route awaits a dict, raises, and answers
+    403 -- which is what these tests started doing.
+    """
+
+    async def _call(*args, **kwargs):
+        return fn(*args, **kwargs)
+
+    return _call
+
+
 async def _create_org(client: httpx.AsyncClient) -> str:
     response = await client.post(
         "/organizations",
@@ -572,8 +588,8 @@ async def test_webhook_event_trigger_runs_full_real_workflow(full_stack, db_sess
         )
 
         monkeypatch.setattr(
-            "app.modules.schedule.infrastructure.adapters."
-            "composio_webhook_verifier.ComposioWebhookVerifier.verify",
+            "app.composition.schedule_connectors.ComposioWebhookVerifier.verify",
+            _returns_async(
             lambda self, payload_text, headers: {
                 "version": "V3",
                 "payload": {
@@ -590,7 +606,8 @@ async def test_webhook_event_trigger_runs_full_real_workflow(full_stack, db_sess
                     "payload": {**payload["data"]},
                 },
                 "raw_payload": payload,
-            },
+            }
+        ),
         )
 
         webhook = await client.post("/webhooks/composio", json=payload)

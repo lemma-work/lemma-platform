@@ -1,0 +1,253 @@
+"""Loading only the history that gets sent must select what loading it all did.
+
+The runtime prompt keeps every message of the five most recent runs and elides
+each older run to its first and last. It used to get there by loading the whole
+transcript and discarding most of it -- p90 271 messages at run time, p99 13688,
+each carrying its text and its tool argument and result JSON -- so a long
+conversation was slow to start for no benefit.
+
+The loader now returns older runs already reduced to two messages, carrying
+``total_message_count`` so the elision notice and the surface budget still know
+how big the run really was. These tests pin the equivalence: for the same
+conversation, the bounded shape and the full shape must select the same
+messages, with the same counts.
+"""
+
+from __future__ import annotations
+
+from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
+from uuid import UUID, uuid4
+
+from app.modules.agent.domain.entities import (
+    AgentRun,
+    AgentRuntimeConfig,
+    Message,
+    MessageKind,
+    MessageRole,
+)
+from app.modules.agent.services.agent_runner_service import (
+    FULL_HISTORY_AGENT_RUN_COUNT,
+    AgentRunnerService,
+)
+from app.modules.agent.services.runtime_history import runtime_full_run_ids
+
+# Relative to now, not a fixed date: the surface age window is measured against
+# `datetime.now()`, so a hard-coded base silently stops exercising the window a
+# day after it is written -- every shape collapses to one or two runs and the
+# comparison still passes while testing nothing.
+_BASE = datetime.now(timezone.utc) - timedelta(hours=1)
+
+
+def _run(conversation_id: UUID, run_index: int, message_count: int) -> AgentRun:
+    run_id = uuid4()
+    return AgentRun(
+        id=run_id,
+        conversation_id=conversation_id,
+        agent_runtime=AgentRuntimeConfig(profile_id="system:lemma"),
+        started_at=_BASE + timedelta(minutes=run_index),
+        messages=[
+            Message(
+                conversation_id=conversation_id,
+                sequence=(run_index * 1000) + index,
+                agent_run_id=run_id,
+                role=(
+                    MessageRole.USER.value
+                    if index == 0
+                    else MessageRole.ASSISTANT.value
+                ),
+                kind=MessageKind.TEXT,
+                text=f"run {run_index} message {index}",
+                created_at=_BASE + timedelta(minutes=run_index, seconds=index),
+            )
+            for index in range(message_count)
+        ],
+    )
+
+
+def _as_bounded(runs: list[AgentRun], conversation=None) -> list[AgentRun]:
+    """What the two-phase load returns.
+
+    Mirrors production: digests first (sizes and newest-message times, no
+    payloads), the trim decides which runs need every message, then messages are
+    attached. Selecting `full_ids` positionally instead is the bug this file
+    exists to catch.
+    """
+    digests = [
+        run.model_copy(
+            update={
+                "messages": [],
+                "total_message_count": len(run.messages),
+                "newest_message_at": max(
+                    (
+                        message.created_at
+                        for message in run.messages
+                        if message.created_at is not None
+                    ),
+                    default=None,
+                ),
+            }
+        )
+        for run in runs
+    ]
+    full_ids = runtime_full_run_ids(digests, conversation)
+    bounded: list[AgentRun] = []
+    for run, digest in zip(runs, digests):
+        ordered = run.ordered_messages()
+        keep = (
+            ordered
+            if run.id in full_ids or len(ordered) <= 2
+            else [ordered[0], ordered[-1]]
+        )
+        bounded.append(digest.model_copy(update={"messages": list(keep)}))
+    return bounded
+
+
+def _runner() -> AgentRunnerService:
+    return AgentRunnerService(uow_factory=object(), harness_registry=object())
+
+
+def _fingerprint(messages: list[Message]) -> list[tuple]:
+    return [
+        (
+            message.agent_run_id,
+            message.role,
+            message.text,
+            (message.metadata or {}).get("elided_message_count"),
+        )
+        for message in messages
+    ]
+
+
+def _surface_conversation():
+    return SimpleNamespace(
+        id=uuid4(), metadata={"surface_platform": "slack"}, is_pod_assistant=False
+    )
+
+
+def _shapes() -> list[list[AgentRun]]:
+    conversation_id = uuid4()
+    return [
+        # Fewer runs than the full-history window: nothing is elided at all.
+        [_run(conversation_id, i, 5) for i in range(3)],
+        # Exactly the window.
+        [_run(conversation_id, i, 5) for i in range(FULL_HISTORY_AGENT_RUN_COUNT)],
+        # One over, which is where elision starts.
+        [_run(conversation_id, i, 5) for i in range(FULL_HISTORY_AGENT_RUN_COUNT + 1)],
+        # The shape that hurt in production: a long tail of old runs.
+        [_run(conversation_id, i, 8) for i in range(40)],
+        # Runs at the elision boundary -- one and two messages stay whole.
+        [_run(conversation_id, i, (i % 3) + 1) for i in range(12)],
+        # An empty run in the middle, which has no first or last message.
+        [
+            _run(conversation_id, 0, 4),
+            _run(conversation_id, 1, 0),
+            _run(conversation_id, 2, 6),
+            *[_run(conversation_id, i, 3) for i in range(3, 9)],
+        ],
+    ]
+
+
+def test_bounded_history_selects_what_the_full_load_selected() -> None:
+    runner = _runner()
+    for index, runs in enumerate(_shapes()):
+        full = _fingerprint(runner._select_runtime_history(runs))
+        bounded = _fingerprint(
+            runner._select_runtime_history(
+                _as_bounded(runs)
+            )
+        )
+        assert bounded == full, f"shape {index} diverged"
+
+
+def test_bounded_history_matches_on_surface_conversations(monkeypatch) -> None:
+    """The surface budget counts messages, so it must count unloaded ones too."""
+    import app.composition.agent_surface_runtime as surface_runtime
+
+    monkeypatch.setattr(surface_runtime, "surface_history_limits", lambda: (40, 24))
+    runner = _runner()
+    conversation = _surface_conversation()
+    for index, runs in enumerate(_shapes()):
+        full = _fingerprint(runner._select_runtime_history(runs, conversation))
+        bounded = _fingerprint(
+            runner._select_runtime_history(
+                _as_bounded(runs, conversation), conversation
+            )
+        )
+        assert bounded == full, f"surface shape {index} diverged"
+
+
+def test_an_old_run_that_is_still_active_keeps_all_of_its_messages(monkeypatch) -> None:
+    """The age window is a filter, not a truncation.
+
+    A run created long ago whose newest message is recent survives the window
+    while runs created after it do not, so the trimmed list is NOT a suffix of
+    the loaded one. Deciding which runs to load whole from position alone
+    therefore drops messages from a run the trim then keeps in full -- and
+    because the trimmed list is short, the elision branch never runs and no
+    notice is emitted. Silent loss, which is the part that matters.
+    """
+    import app.composition.agent_surface_runtime as surface_runtime
+
+    monkeypatch.setattr(surface_runtime, "surface_history_limits", lambda: (0, 24))
+    conversation_id = uuid4()
+    now = datetime.now(timezone.utc)
+
+    def _at(run_index: int, created_hours_ago: float, message_hours_ago: float):
+        run = _run(conversation_id, run_index, 6)
+        run.started_at = now - timedelta(hours=created_hours_ago)
+        for offset, message in enumerate(run.messages):
+            message.created_at = now - timedelta(
+                hours=message_hours_ago, seconds=-offset
+            )
+        return run
+
+    runs = [
+        _at(0, created_hours_ago=40, message_hours_ago=1),  # old run, still active
+        *[_at(i, created_hours_ago=39 - i, message_hours_ago=30) for i in range(1, 9)],
+        _at(9, created_hours_ago=0.1, message_hours_ago=0.1),
+    ]
+    conversation = _surface_conversation()
+    runner = _runner()
+
+    full = _fingerprint(runner._select_runtime_history(runs, conversation))
+    bounded = _fingerprint(
+        runner._select_runtime_history(
+            _as_bounded(runs, conversation), conversation
+        )
+    )
+
+    assert bounded == full
+
+
+def test_the_elision_notice_counts_messages_that_were_never_loaded() -> None:
+    """The regression a naive bounded load would introduce.
+
+    With only two messages in hand, ``len(messages) - 2`` is zero and the notice
+    would claim nothing was skipped.
+    """
+    conversation_id = uuid4()
+    runs = [_run(conversation_id, i, 9) for i in range(FULL_HISTORY_AGENT_RUN_COUNT + 1)]
+    bounded = _as_bounded(runs)
+
+    selected = _runner()._select_runtime_history(bounded)
+
+    notices = [
+        message
+        for message in selected
+        if (message.metadata or {}).get("summary_kind") == "agent_run_middle_elision"
+    ]
+    assert len(notices) == 1
+    assert notices[0].metadata["elided_message_count"] == 7
+
+
+def test_a_run_reports_its_real_size_not_the_loaded_one() -> None:
+    conversation_id = uuid4()
+    run = _run(conversation_id, 0, 9)
+    assert run.message_count == 9  # nothing elided: falls back to what is loaded
+
+    # Six distinct runs, so the first falls outside the full-history window and
+    # comes back elided to its first and last message.
+    older = _as_bounded([run, *(_run(conversation_id, i, 3) for i in range(1, 6))])[0]
+    assert len(older.messages) == 2
+    assert older.message_count == 9

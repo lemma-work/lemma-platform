@@ -13,7 +13,6 @@ The DB→storage hand-off dataclasses live here (their natural home) so
 
 from __future__ import annotations
 
-import asyncio
 import mimetypes
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
@@ -27,6 +26,7 @@ from app.modules.apps.domain.entities import AppAssetDocument, AppReleaseEntity
 from app.modules.apps.domain.errors import AppNotFoundError
 from app.modules.apps.domain.ports import AppStorageFactoryPort, AppStoragePort
 from app.modules.apps.services.app_dist_bundle import load_app_dist_bundle
+from app.core.concurrency.offload import run_blocking
 
 logger = structlog.get_logger()
 
@@ -126,6 +126,7 @@ class AppStoragePhase:
                 content,
                 inputs.pod_id,
                 app=inputs.app,
+                app_id=getattr(inputs, "app_id", None),
                 branding=inputs.branding,
             )
         return AppAssetDocument(
@@ -159,13 +160,13 @@ class AppStoragePhase:
         dist_archive_path: str | None = None
         try:
             if plan.has_source and source_archive_bytes is not None:
-                source_version = await asyncio.to_thread(
+                source_version = await run_blocking(
                     upload_source_sha256, source_archive_bytes
                 )
                 source_path = f"source/{source_version}/archive.zip"
                 await storage.write_file(source_path, source_archive_bytes)
             if plan.needs_dist_write and dist_archive_bytes is not None:
-                bundle = await asyncio.to_thread(
+                bundle = await run_blocking(
                     load_app_dist_bundle, dist_archive_bytes
                 )
                 for item in bundle.files:

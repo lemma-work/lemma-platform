@@ -10,6 +10,7 @@ from uuid import UUID
 
 from app.core.authorization.permissions import equivalent_permission_ids
 from app.core.domain.errors import DomainError
+from app.core.infrastructure.db.transaction_locks import safe_to_release
 
 
 class ActorType(str, Enum):
@@ -291,6 +292,15 @@ class Context:
     _decision_cache: dict[tuple[str, ResourceType | None, UUID | None], AuthorizationDecision] = field(
         default_factory=dict
     )
+    #: permission_id -> session-approval answer, for this request only.
+    #:
+    #: The lookup is a Redis GET, and it runs while FastAPI holds the request's
+    #: pooled connection. The decision cache above keys on the resource too, so
+    #: a workload touching several resources under one permission repeats the
+    #: same approval lookup once per resource — each one a network round trip
+    #: with a database connection checked out and idle behind it. The answer
+    #: cannot change within a request, so ask once.
+    _session_approval_cache: dict[str, bool] = field(default_factory=dict)
 
     @property
     def is_authenticated(self) -> bool:
@@ -414,4 +424,34 @@ class Context:
             return cached
         decision = await self.authorizer.authorize(self, permission_id, resource)
         self._decision_cache[key] = decision
+        await self._release_connection_after_check()
         return decision
+
+    async def _release_connection_after_check(self) -> None:
+        """Give the pooled connection back once a decision is reached.
+
+        Authorization runs on every request and reads from the application
+        database — the pod row, the resource row, the role snapshot. Under a
+        FastAPI yield-dependency the session it reads through stays checked out
+        until the response is written, so the cost is not the queries (they are
+        milliseconds) but the connection held for everything that comes after.
+
+        Doing it here rather than at each call site is the point: `require` and
+        `can` are called from route dependencies, from services, and from
+        agent tools, and every one of them was leaving the connection held.
+
+        Guarded. Authorization itself is read-only, so normally nothing is
+        pending and this simply returns the connection. A caller that has
+        already written keeps the old behaviour rather than having its work
+        committed on its behalf.
+        """
+        session = getattr(self.authorizer, "session", None)
+        if session is None:
+            return
+        # `safe_to_release` carries the full list of reasons not to: pending or
+        # flushed writes, staged outbox events, a transaction-scoped advisory
+        # lock. This runs mid-flow from services and agent tools, not only from
+        # route dependencies, so the caller's transaction is not ours to end.
+        if not safe_to_release(session):
+            return
+        await session.commit()

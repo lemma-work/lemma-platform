@@ -27,7 +27,7 @@ import {
 import { useAppPagesForPods } from '@/lib/hooks/use-app';
 import { useDeletePod, useUpdatePod, type AccessiblePod } from '@/lib/hooks/use-pods';
 import { readLastOpenedPodId, subscribeToLastOpenedPodId } from '@/lib/pods/last-opened-pod';
-import { formatSlugTitle } from '@/lib/utils/display-name';
+import { humanizeName } from '@/lib/utils/display-name';
 import { parseResourceIcon } from '@/lib/utils/resource-icon-value';
 import { formatRelativeTime } from '@/lib/utils/relative-time';
 import type { AppPageRef } from '@/lib/types/app';
@@ -233,7 +233,7 @@ export function HomeWorkspaceOverview({
 function AppShortcut({ pod, page }: { pod: AccessiblePod; page: AppPageRef }) {
     // Apps are named as slugs because a bundle and a URL both need one. The
     // shelf is the one place that name is read rather than resolved.
-    const title = formatSlugTitle(page.title);
+    const title = humanizeName(page.title);
 
     // One glyph, and it is the one carrying information. Sitting on the shelf
     // under a pod already says "app"; what the row cannot otherwise tell you is
@@ -379,6 +379,9 @@ function PodItem({
             iconUrl={pod.icon_url}
             alt={`${pod.name} icon`}
             label={pod.name}
+            identityKind="team"
+            identitySeed={pod.id}
+            identitySize={44}
             className="h-11 w-11 shrink-0 rounded-lg bg-transparent text-[var(--text-tertiary)]"
             fallback={<PodMark name={pod.name} size="lg" />}
         />

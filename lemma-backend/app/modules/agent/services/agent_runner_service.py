@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from contextlib import suppress
 import asyncio
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from typing import Awaitable, Callable, Protocol
 from uuid import UUID
 
@@ -42,8 +43,6 @@ from app.modules.agent.domain.value_objects import (
     HarnessOptions,
     JsonObject,
     JsonValue,
-    MessageKind,
-    MessageRole,
 )
 from app.modules.agent.domain.runtime_profiles import (
     RuntimeModelCapability,
@@ -74,6 +73,13 @@ from app.modules.agent.services.realtime import (
 )
 from app.modules.agent.services.agent_context_brief import AgentContextBriefBuilder
 from app.modules.agent.services.run_message_writer import RunMessageWriter
+from app.modules.agent.services.run_phase_spans import observe_first_output, record_history_size, run_phase
+from app.modules.agent.services.runtime_history import (
+    FULL_HISTORY_AGENT_RUN_COUNT,  # noqa: F401 - re-exported for callers and tests
+    apply_surface_history_window,
+    runtime_full_run_ids,
+    select_runtime_history,
+)
 from app.modules.agent.services.run_observer_delivery import notify_run_failed
 from app.modules.agent.services.run_usage_recorder import RunUsageRecorder
 from app.composition.agent_usage import (
@@ -95,7 +101,6 @@ from app.core.crypto import get_secret_cipher
 from app.core.authorization.delegation import DEFAULT_POD_AGENT_NAME
 
 logger = get_logger(__name__)
-FULL_HISTORY_AGENT_RUN_COUNT = 5
 
 # Ceiling on the shielded finalization write. Comfortably longer than the write
 # takes and comfortably inside the worker's shutdown grace period, so a healthy
@@ -126,21 +131,6 @@ def _run_failure_message(exc: BaseException) -> str:
         return "Agent run was interrupted (timeout or shutdown)"
     return "Agent run failed. Please check the agent runtime configuration."
 
-
-def _newest_message_time(run: AgentRun) -> datetime | None:
-    """The newest message ``created_at`` in a run as an aware UTC datetime, or
-    None when the run has no timestamped messages. Naive timestamps are treated
-    as UTC (matching the DM-reset window handling)."""
-    newest: datetime | None = None
-    for message in run.messages:
-        created = getattr(message, "created_at", None)
-        if created is None:
-            continue
-        if created.tzinfo is None:
-            created = created.replace(tzinfo=timezone.utc)
-        if newest is None or created > newest:
-            newest = created
-    return newest
 
 
 async def _finalize_safely(coro: Awaitable[None], *, agent_run_id: UUID) -> None:
@@ -303,7 +293,7 @@ class AgentRunnerService:
                 is_pod_default_agent=(agent.id == _POD_ASSISTANT_AGENT_ID),
                 **surface_context,
             )
-            try:
+            with suppress(Exception):
                 ctx.context_brief = await AgentContextBriefBuilder(
                     self.uow_factory
                 ).build(
@@ -312,8 +302,6 @@ class AgentRunnerService:
                     user_id=user_id,
                     pod_id=conversation.pod_id,
                 )
-            except Exception:
-                logger.debug('agent.agent_runner_service.build_agent_context_brief_s.diagnostic')
             full_toolsets = await self.tool_assembler.assemble(
                 agent=agent,
                 conversation=conversation,
@@ -430,13 +418,15 @@ class AgentRunnerService:
                             source_id=str(agent_run_id),
                         )
                         with usage_execution_context(run_usage_context):
-                            async for event in harness.run(
-                                agent=harness_agent,
-                                conversation=conversation,
-                                messages=messages,
-                                ctx=ctx,
-                                options=options,
-                                agent_run_id=agent_run_id,
+                            async for event in observe_first_output(
+                                harness.run(
+                                    agent=harness_agent,
+                                    conversation=conversation,
+                                    messages=messages,
+                                    ctx=ctx,
+                                    options=options,
+                                    agent_run_id=agent_run_id,
+                                )
                             ):
                                 if terminal_event_seen:
                                     continue
@@ -573,18 +563,19 @@ class AgentRunnerService:
         user_id: UUID,
         organization_id: UUID | None,
     ) -> ResolvedAgentRuntime:
-        async with self.uow_factory() as uow:
-            service = AgentRuntimeProfileService(
-                AgentRuntimeProfileRepository(
-                    uow,
-                    encryption=get_secret_cipher(),
+        with run_phase("resolve_runtime"):
+            async with self.uow_factory() as uow:
+                service = AgentRuntimeProfileService(
+                    AgentRuntimeProfileRepository(
+                        uow,
+                        encryption=get_secret_cipher(),
+                    )
                 )
-            )
-            return await service.resolve(
-                runtime=agent_runtime,
-                organization_id=organization_id,
-                user_id=user_id,
-            )
+                return await service.resolve(
+                    runtime=agent_runtime,
+                    organization_id=organization_id,
+                    user_id=user_id,
+                )
 
     def _agent_with_resolved_runtime_metadata(
         self,
@@ -642,24 +633,34 @@ class AgentRunnerService:
         pod_id: UUID,
         agent_name: str | None,
     ) -> tuple[Conversation, Agent, AgentRun, list[Message]]:
-        async with self.uow_factory() as uow:
-            repo = ConversationRepository(uow)
-            runs = await repo.list_agent_runs_with_messages_by_run_id(agent_run_id)
-            agent_run = self._find_agent_run(runs, agent_run_id)
-            conversation = await repo.get_conversation(agent_run.conversation_id)
-            self._validate_conversation_access(
-                conversation,
-                user_id=user_id,
-                pod_id=pod_id,
-            )
-            agent = await self._resolve_agent(
-                uow=uow,
-                conversation=conversation,
-                user_id=user_id,
-                agent_name=agent_name,
-            )
-            messages = self._select_runtime_history(runs, conversation)
-            return conversation, agent, agent_run, messages
+        with run_phase("load_context") as span:
+            async with self.uow_factory() as uow:
+                repo = ConversationRepository(uow)
+                runs = await repo.load_runtime_history_digests_by_run_id(agent_run_id)
+                agent_run = self._find_agent_run(runs, agent_run_id)
+                conversation = await repo.get_conversation(agent_run.conversation_id)
+                self._validate_conversation_access(
+                    conversation,
+                    user_id=user_id,
+                    pod_id=pod_id,
+                )
+                agent = await self._resolve_agent(
+                    uow=uow,
+                    conversation=conversation,
+                    user_id=user_id,
+                    agent_name=agent_name,
+                )
+                # Which runs survive the trim decides which need every message,
+                # and the trim can keep an old-but-active run while dropping
+                # newer ones -- so it has to run before the messages are asked
+                # for, not after.
+                await repo.attach_runtime_history_messages(
+                    runs, full_run_ids=runtime_full_run_ids(runs, conversation)
+                )
+                agent_run = self._find_agent_run(runs, agent_run_id)
+                messages = self._select_runtime_history(runs, conversation)
+                record_history_size(span, runs=runs, sent=messages)
+                return conversation, agent, agent_run, messages
 
     async def _handle_harness_event(
         self,
@@ -989,93 +990,12 @@ class AgentRunnerService:
     def _apply_surface_history_window(
         self, runs: list[AgentRun], conversation: Conversation | None
     ) -> list[AgentRun]:
-        """For surface conversations, bound history by age + message count.
-
-        Trims at run granularity (a tool-call and its return live in the same run,
-        so whole-run trimming never splits a pair) and always keeps at least the
-        most recent run. No-op for non-surface conversations or when a limit is
-        disabled. Runs are assumed chronologically ordered.
-        """
-        if conversation is None or not runs:
-            return runs
-        metadata = conversation.metadata or {}
-        if not metadata.get("surface_platform"):
-            return runs
-
-        from app.composition.agent_surface_runtime import surface_history_limits
-
-        max_messages, window_hours = surface_history_limits()
-
-        trimmed = list(runs)
-        # Age window: drop whole runs whose newest message predates the window,
-        # keeping the most recent run regardless.
-        if window_hours > 0 and len(trimmed) > 1:
-            cutoff = datetime.now(timezone.utc) - timedelta(hours=window_hours)
-            kept: list[AgentRun] = []
-            for index, run in enumerate(trimmed):
-                is_last = index == len(trimmed) - 1
-                newest = _newest_message_time(run)
-                if is_last or newest is None or newest >= cutoff:
-                    kept.append(run)
-            trimmed = kept or trimmed[-1:]
-
-        # Message-count budget: keep the most recent whole runs that fit, always
-        # keeping the most recent run.
-        if max_messages > 0:
-            result: list[AgentRun] = []
-            total = 0
-            for run in reversed(trimmed):
-                count = len(run.ordered_messages())
-                if result and total + count > max_messages:
-                    break
-                result.insert(0, run)
-                total += count
-            trimmed = result or trimmed[-1:]
-
-        return trimmed
+        return apply_surface_history_window(runs, conversation)
 
     def _select_runtime_history(
         self, runs: list[AgentRun], conversation: Conversation | None = None
     ) -> list[Message]:
-        # Surface (Slack/Telegram/WhatsApp/…) conversations bound how much prior
-        # history reaches the model by age + count. Trim at run granularity first
-        # so tool-call/tool-return pairs (which live within a run) stay intact.
-        runs = self._apply_surface_history_window(runs, conversation)
-        if len(runs) <= FULL_HISTORY_AGENT_RUN_COUNT:
-            return [message for run in runs for message in run.ordered_messages()]
-
-        recent_run_ids = {run.id for run in runs[-FULL_HISTORY_AGENT_RUN_COUNT:]}
-        selected: list[Message] = []
-        for run in runs:
-            messages = run.ordered_messages()
-            if not messages:
-                continue
-            if run.id in recent_run_ids or len(messages) <= 2:
-                selected.extend(messages)
-                continue
-
-            skipped_count = max(0, len(messages) - 2)
-            selected.append(messages[0])
-            selected.append(
-                Message(
-                    conversation_id=run.conversation_id,
-                    sequence=messages[0].sequence,
-                    agent_run_id=run.id,
-                    role=MessageRole.SYSTEM.value,
-                    kind=MessageKind.NOTIFICATION,
-                    text=(
-                        "Earlier agent run summarized: "
-                        f"worked through {skipped_count} intermediate messages."
-                    ),
-                    metadata={
-                        "synthetic": True,
-                        "summary_kind": "agent_run_middle_elision",
-                        "elided_message_count": skipped_count,
-                    },
-                )
-            )
-            selected.append(messages[-1])
-        return selected
+        return select_runtime_history(runs, conversation)
 
     def _surface_context_from_conversation(
         self,
@@ -1125,6 +1045,7 @@ class AgentRunnerService:
         agent: Agent,
         user_id: UUID,
     ) -> dict[str, UUID]:
-        return await AgentCallableToolFactory(
-            self.uow_factory
-        ).resolve_configured_accounts(agent=agent, user_id=user_id)
+        with run_phase("configured_accounts"):
+            return await AgentCallableToolFactory(
+                self.uow_factory
+            ).resolve_configured_accounts(agent=agent, user_id=user_id)

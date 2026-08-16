@@ -302,3 +302,41 @@ async def test_email_is_never_claimed_because_its_key_is_not_an_identity(monkeyp
     assert email_claim.claimed_by_pod_id is None
     # The identity platforms are unchanged — this exempts email, not the rule.
     assert by_platform[SurfacePlatform.WHATSAPP].system_claim.available is False
+
+
+async def test_email_domain_is_published_so_the_builder_can_name_an_address(monkeypatch):
+    """The agent builder shows the address before the agent exists.
+
+    Every other part of that address is derivable in the client — it comes from
+    the agent's own name and the pod's. The domain is the one piece that is
+    deployment configuration, so without it here the builder can only promise an
+    address rather than show one.
+    """
+    monkeypatch.setattr(mod, "has_native_credentials", lambda p: p in _NATIVE)
+    monkeypatch.setattr(
+        mod.surface_settings, "resend_inbound_domain", "ops.lemma.work", raising=False
+    )
+    surfaces = _by_platform(
+        await build_available_surfaces(connector_service=_connector_service())
+    )
+    assert surfaces[SurfacePlatform.RESEND].email_domain == "ops.lemma.work"
+    # Nothing else mints addresses: Gmail and Outlook read a mailbox somebody
+    # else owns, and its domain is not ours to name.
+    assert all(
+        surface.email_domain is None
+        for platform, surface in surfaces.items()
+        if platform is not SurfacePlatform.RESEND
+    )
+
+
+async def test_no_email_domain_without_the_key_that_makes_it_work(monkeypatch):
+    """A domain published with no Resend key would promise an address that never
+    arrives — ``provision_email_surface`` refuses on exactly the same test."""
+    monkeypatch.setattr(mod, "has_native_credentials", lambda p: False)
+    monkeypatch.setattr(
+        mod.surface_settings, "resend_inbound_domain", "ops.lemma.work", raising=False
+    )
+    surfaces = _by_platform(
+        await build_available_surfaces(connector_service=_connector_service())
+    )
+    assert surfaces[SurfacePlatform.RESEND].email_domain is None

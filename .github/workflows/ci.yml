@@ -44,9 +44,15 @@ jobs:
               - 'lemma-stack/**'
               - 'install.sh'
               - 'install.ps1'
+              # The composite actions these jobs are made of. Without these
+              # entries a change to what CI *checks* triggers nothing that runs
+              # it, and the release workflows that share them find out first.
+              - '.github/actions/verify-python-sdk/**'
+              - '.github/actions/verify-cli-distributions/**'
               - '.github/workflows/ci.yml'
             typescript:
               - 'lemma-typescript/**'
+              - '.github/actions/verify-typescript-sdk/**'
               - '.github/workflows/ci.yml'
             frontend:
               - 'lemma-frontend/**'
@@ -82,6 +88,12 @@ jobs:
               - 'Makefile'
               - 'tests/**'
               - 'scripts/check_version_consistency.py'
+              # tests/ imports these two as modules, so they are covered by a
+              # job that took twenty seconds and did not run for them. Editing
+              # prepare_desktop_test_runtime.py started the ninety-minute
+              # desktop job and skipped the test that reads it.
+              - 'scripts/build_local_host_pack.py'
+              - 'scripts/prepare_desktop_test_runtime.py'
               # These tests assert on the env names the backend settings read,
               # so the drift they exist to catch lands in the settings module,
               # not only in the Makefile that writes it.
@@ -161,6 +173,20 @@ jobs:
         run: make lint
       - name: Async-safety lint
         run: make lint-async
+      # The pool is sized on the promise that a connection is never held across
+      # non-database work, and worker concurrency is sized on the promise that
+      # blocking work is bounded. These two gates are what keep both true.
+      - name: DB connection scope
+        run: make lint-session-scope
+      - name: I/O hygiene (bounded offloads, timed HTTP sessions)
+        run: make lint-io-hygiene
+      # The static gates above check the shapes they can see. This one runs the
+      # flows and measures: a connection checked out with no statement running
+      # is a hold, whatever the code looks like. Deliberately a small marked
+      # subset rather than the whole e2e suite — this gates merges, so it has to
+      # stay hermetic and fast. The full suite stays advisory in e2e.yml.
+      - name: DB connection scope (runtime)
+        run: make test-connection-scope
       - name: Critical domain type safety
         run: make typecheck-critical
       - name: Architecture, complexity, and broad-catch ratchet
@@ -218,29 +244,38 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.14"
-      - uses: astral-sh/setup-uv@v5
-      - name: Check Python SDK lockfile
-        working-directory: lemma-python
-        run: uv lock --check
-      - name: Install SDK + CLI
+      # Shared with release-lemma-python.yml and release-lemma-terminal.yml, so
+      # what a release verifies cannot drift from what a pull request does.
+      - uses: ./.github/actions/verify-python-sdk
+
+  cli-packaging:
+    name: lemma-terminal wheel (clean checkout)
+    # What users install is a built artifact, and its two most important
+    # contents — the agent skills and lemma_pod_bundle — exist in it only
+    # because setup.py copies them in. No test that reads the source tree can
+    # see that fail, and a build in a tree that has built before cannot either:
+    # the copies from the previous build are still lying there. Only a build
+    # from a clean checkout tells the truth, which is what a fresh `actions/
+    # checkout` gives us, and what `uv tool install` from git gives a user.
+    timeout-minutes: 15
+    needs: changes
+    if: needs.changes.outputs.python_sdk == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+      - name: Build sdist + wheel the way the release does
+        working-directory: lemma-cli
         run: |
-          python -m pip install --upgrade pip
-          pip install -e ./lemma-python
-          pip install -e ./lemma-pod-bundle
-          pip install -e ./lemma-cli
-          pip install pytest pytest-asyncio
-      - name: Test (CLI + Python SDK, offline only)
-        # Run each package's tests as a separate pytest invocation so each
-        # resolves its own pyproject.toml (markers, strict-markers, rootdir).
-        # A single combined run picks lemma-cli's config (strict-markers with
-        # only `unit`/`e2e`), which rejects lemma-python's `connector`/`integration`
-        # markers. Splitting also lets us exclude docker-only suites per package:
-        # lemma-cli e2e tests need postgres/redis/supertokens containers, and
-        # lemma-python integration tests need a live Lemma API + LEMMA_TOKEN.
-        run: |
-          pytest lemma-cli/tests -m "not e2e"
-          pytest lemma-python/tests -m "not integration"
-          pytest lemma-pod-bundle/tests
+          python -m pip install --upgrade pip build
+          python -m build
+      # Shared with release-lemma-terminal.yml, which runs it on the exact
+      # distributions it is about to upload.
+      - uses: ./.github/actions/verify-cli-distributions
+        with:
+          dist-dir: lemma-cli/dist
 
   typescript-sdk:
     name: TypeScript SDK checks
@@ -248,32 +283,16 @@ jobs:
     needs: changes
     if: needs.changes.outputs.typescript == 'true'
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: lemma-typescript
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v5
         with:
-          node-version: 24
-      - run: npm ci
-      - name: Typecheck (src)
-        run: npx tsc --noEmit -p tsconfig.json
-      - name: Typecheck (tests)
-        run: npx tsc --noEmit -p tsconfig.test.json
-      - name: SDK_VERSION matches package.json
-        run: |
-          PKG=$(node -p "require('./package.json').version")
-          SRC=$(grep -oE '"[0-9]+\.[0-9]+\.[0-9]+"' src/version.ts | head -1 | tr -d '"')
-          echo "package.json=$PKG version.ts=$SRC"
-          test "$PKG" = "$SRC" || { echo "::error::src/version.ts SDK_VERSION ($SRC) != package.json version ($PKG)"; exit 1; }
-      - name: Browser bundle is fresh
-        run: |
-          npm run build:bundle
-          git diff --exit-code public/lemma-client.js \
-            || { echo "::error::Committed public/lemma-client.js is stale — run 'npm run build:bundle' and commit"; exit 1; }
-      - name: Unit tests
-        run: npx vitest run
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: lemma-typescript/package-lock.json
+      # Shared with release-lemma-typescript.yml, so what a release verifies
+      # cannot drift from what a pull request does.
+      - uses: ./.github/actions/verify-typescript-sdk
 
   codegen-drift:
     name: Codegen drift gate
@@ -288,9 +307,12 @@ jobs:
           python-version: "3.14"
       - uses: actions/setup-node@v5
         with:
-          node-version: 24
-      - name: Install uv
-        run: pip install uv
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: lemma-typescript/package-lock.json
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
       - name: Regenerate Python client from committed spec
         working-directory: lemma-python
         run: OPENAPI_FILE=lemma_sdk/openapi_spec.json bash scripts/generate_openapi_client.sh
@@ -317,13 +339,16 @@ jobs:
     name: Frontend lint, design audit, test
     timeout-minutes: 30
     needs: changes
-    if: needs.changes.outputs.frontend == 'true'
+    # Also on an SDK change: the frontend typechecks against lemma-typescript,
+    # so an SDK signature change breaks `npm run check` here while only
+    # "Frontend build" was watching for it.
+    if: needs.changes.outputs.frontend == 'true' || needs.changes.outputs.typescript == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v5
         with:
-          node-version: 24
+          node-version-file: .nvmrc
           cache: npm
           cache-dependency-path: |
             lemma-typescript/package-lock.json
@@ -351,7 +376,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v5
         with:
-          node-version: 24
+          node-version-file: .nvmrc
           cache: npm
           cache-dependency-path: |
             lemma-typescript/package-lock.json
@@ -441,8 +466,9 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.14"
-      - name: Install uv
-        run: pip install uv
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
       - name: Install lemma-cli from local checkout
         run: uv tool install --force ./lemma-cli
       - name: lemma --version
@@ -469,6 +495,24 @@ jobs:
           $env:PATH = "$lemmaBin;$env:PATH"
           lemma doctor 2>&1
           # doctor may exit 1 if no server; just verify it doesn't crash
+      # Absorbed from windows-cli-smoke.yml, which ran a second Windows runner
+      # on every push to main to assert these two and nothing else this job did
+      # not already cover.
+      - name: lemma servers list / auth status
+        run: |
+          $ErrorActionPreference = "Stop"
+          $lemmaBin = uv tool dir --bin
+          $env:PATH = "$lemmaBin;$env:PATH"
+          lemma servers list
+          if ($LASTEXITCODE -ne 0) { throw "lemma servers list exited $LASTEXITCODE" }
+          # auth status exits 1 when logged out — that is expected; it just must
+          # not crash with a Windows-incompatibility error.
+          lemma auth status
+          if ($LASTEXITCODE -notin 0, 1) { throw "lemma auth status exited $LASTEXITCODE" }
+          # `auth status` leaves $LASTEXITCODE at 1 when logged out, and pwsh
+          # hands the step whatever it holds at the end. Say so explicitly.
+          Write-Host "smoke commands ok"
+          exit 0
       - name: Validate install.ps1
         shell: pwsh
         run: |
@@ -497,7 +541,7 @@ jobs:
 
       - uses: actions/setup-node@v5
         with:
-          node-version: 22
+          node-version-file: .nvmrc
 
       - uses: astral-sh/setup-uv@v6
         with:
@@ -719,7 +763,7 @@ jobs:
 
       - uses: actions/setup-node@v5
         with:
-          node-version: 22
+          node-version-file: .nvmrc
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -803,6 +847,9 @@ jobs:
       - backend-lint
       - backend-migration
       - python-sdk
+      # Was missing: a wheel that ships without its skills or lemma_pod_bundle
+      # failed this job and "CI passed" stayed green.
+      - cli-packaging
       - typescript-sdk
       - codegen-drift
       - frontend-check

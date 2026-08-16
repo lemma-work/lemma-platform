@@ -329,6 +329,11 @@
   color: var(--text-on-brand);
 }
 
+/* The box a platform's mark sits in. Neutral on purpose: a brand logo brings
+   its own colour, and a box tinted per platform underneath one is two brands
+   arguing. The per-platform tints that used to live here were already dead —
+   `.surface-platform-mark-logo[data-platform]` reset every one of them back to
+   `--surface-1`, on every chip in the product. */
 .surface-platform-mark {
   display: inline-flex;
   width: 2rem;
@@ -336,15 +341,16 @@
   flex-shrink: 0;
   align-items: center;
   justify-content: center;
-  border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--surface-2) 76%, transparent);
-  color: var(--text-secondary);
-}
-
-.surface-platform-mark-logo {
   border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
   background: var(--surface-1);
   color: var(--text-primary);
+}
+
+.surface-platform-mark-sm {
+  width: 1.5rem;
+  height: 1.5rem;
+  border-radius: var(--radius-sm);
 }
 
 .surface-platform-logo {
@@ -354,35 +360,31 @@
   object-fit: contain;
 }
 
-.surface-platform-icon-fallback {
-  display: none;
+.surface-platform-mark-sm .surface-platform-logo {
+  width: 0.875rem;
+  height: 0.875rem;
 }
 
-.surface-platform-mark[data-platform="slack"],
-.surface-platform-mark[data-platform="telegram"] {
-  background: color-mix(in srgb, var(--intelligence) 18%, var(--surface-1));
-  color: color-mix(in srgb, var(--intelligence) 68%, var(--text-primary));
+/* A glyph has no brand colour of its own, so the box supplies one — otherwise
+   email is the one mark on a row of saturated brand logos that reads as
+   disabled. Lemma's own colour, because this is Lemma's own mailbox: it sits
+   beside Slack and Gmail as a peer, not as a warning. (`--intelligence` is the
+   terracotta accent, which read as an error state here.) */
+.surface-platform-mark[data-mark="glyph"] {
+  border-color: transparent;
+  background: color-mix(in srgb, var(--action-primary) 12%, var(--surface-1));
+  color: var(--action-primary);
 }
 
-.surface-platform-mark[data-platform="teams"],
-.surface-platform-mark[data-platform="whatsapp"] {
-  background: color-mix(in srgb, var(--collaboration) 16%, var(--surface-1));
-  color: color-mix(in srgb, var(--collaboration) 70%, var(--text-primary));
+.surface-platform-glyph {
+  display: block;
+  width: 1.125rem;
+  height: 1.125rem;
 }
 
-.surface-platform-mark[data-platform="gmail"] {
-  background: color-mix(in srgb, var(--attention) 16%, var(--surface-1));
-  color: color-mix(in srgb, var(--attention) 72%, var(--text-primary));
-}
-
-.surface-platform-mark[data-platform="outlook"] {
-  background: color-mix(in srgb, var(--state-info) 16%, var(--surface-1));
-  color: color-mix(in srgb, var(--state-info) 72%, var(--text-primary));
-}
-
-.surface-platform-mark-logo[data-platform] {
-  background: var(--surface-1);
-  color: var(--text-primary);
+.surface-platform-mark-sm .surface-platform-glyph {
+  width: 0.875rem;
+  height: 0.875rem;
 }
 
 .surfaces-platform-title {
@@ -1392,6 +1394,93 @@
 
 .surface-verdict.is-invalid {
   color: var(--state-error);
+}
+
+/* An agent's own address ---------------------------------------------------
+   Mono, because it is a string someone will type or paste and the difference
+   between `l` and `1` has to survive. The local part carries the weight and the
+   domain goes quiet: every managed address in a deployment shares one domain,
+   so at equal weight the line spends itself on the half that identifies
+   nothing. */
+
+.agent-email {
+  display: inline-flex;
+  min-width: 0;
+  max-width: 100%;
+  align-items: center;
+  gap: var(--space-1-5);
+  color: var(--text-primary);
+}
+
+.agent-email-icon {
+  width: 0.875rem;
+  height: 0.875rem;
+  flex-shrink: 0;
+  color: var(--text-tertiary);
+}
+
+/* The icon is redundant beside a platform mark that is already an envelope. */
+.surface-platform-mark + .agent-email .agent-email-icon,
+.agent-email-sm .agent-email-icon {
+  display: none;
+}
+
+.agent-email-address {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono-family);
+  font-size: var(--text-sm);
+  line-height: var(--leading-snug);
+  letter-spacing: -0.01em;
+}
+
+.agent-email-sm .agent-email-address {
+  font-size: var(--text-xs);
+}
+
+.agent-email-local {
+  color: var(--text-primary);
+}
+
+.agent-email-domain {
+  color: var(--text-tertiary);
+}
+
+.agent-email-copy {
+  display: inline-flex;
+  height: 1.375rem;
+  width: 1.375rem;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-sm);
+  color: var(--text-tertiary);
+  opacity: 0;
+  transition:
+    opacity var(--dur-fast) var(--ease-out),
+    background-color var(--dur-base) var(--ease-out),
+    color var(--dur-base) var(--ease-out);
+}
+
+/* Revealed on approach, not always-on: the address is the content, and a button
+   parked beside every one of them competes with it. Keyboard users get it from
+   focus, and coarse pointers — which never hover — get it unconditionally. */
+.agent-email:hover .agent-email-copy,
+.agent-email-copy:focus-visible {
+  opacity: 1;
+}
+
+.agent-email-copy:hover {
+  background: color-mix(in srgb, var(--surface-2) 60%, transparent);
+  color: var(--text-primary);
+}
+
+@media (hover: none) {
+  .agent-email-copy {
+    opacity: 1;
+  }
 }
 
 /* Reach card --------------------------------------------------------------- */

@@ -41,7 +41,35 @@ const MAX_GLYPH_CODE_POINTS = 16;
 
 export type ResourceIconValue =
     | { kind: 'glyph'; glyph: string }
-    | { kind: 'url'; url: string };
+    | { kind: 'url'; url: string }
+    | { kind: 'identity'; variant: number };
+
+/**
+ * A chosen variant of the generated identity.
+ *
+ * An empty `icon_url` already means "draw the identity seeded from this
+ * resource", which covers everyone who never opens the picker. Choosing a
+ * *different* generated face needs somewhere to record which one, and this
+ * field is the only somewhere there is — so a variant is stored as a small
+ * sentinel rather than as a URL to a rendered file.
+ *
+ * Storing an index instead of a whole seed keeps the value short and keeps the
+ * avatar tied to the resource: the picture is still drawn from the resource's
+ * own seed, shifted by the variant. It also degrades honestly — an older client
+ * that has never heard of this prefix fails the URL load and falls back, rather
+ * than printing the sentinel into the interface.
+ */
+const IDENTITY_PREFIX = 'lemma-identity:';
+const MAX_IDENTITY_VARIANT = 999;
+
+export function formatIdentityIcon(variant: number): string {
+    return `${IDENTITY_PREFIX}${variant}`;
+}
+
+/** The seed a variant draws from, given the resource's own base seed. */
+export function identityVariantSeed(baseSeed: string, variant: number): string {
+    return variant === 0 ? baseSeed : `${baseSeed}#${variant}`;
+}
 
 /**
  * Anything that is not confidently a glyph is treated as a URL — the behaviour
@@ -51,6 +79,20 @@ export type ResourceIconValue =
 export function parseResourceIcon(value?: string | null): ResourceIconValue | null {
     const trimmed = value?.trim();
     if (!trimmed) return null;
+
+    if (trimmed.startsWith(IDENTITY_PREFIX)) {
+        // Matched with a digit pattern rather than parsed with `Number`, which
+        // reads a bare `lemma-identity:` as 0 and would hand back a perfectly
+        // valid-looking variant for a value that carries no variant at all.
+        const digits = /^\d{1,3}$/.exec(trimmed.slice(IDENTITY_PREFIX.length));
+        const variant = digits ? Number(digits[0]) : NaN;
+        if (Number.isInteger(variant) && variant >= 0 && variant <= MAX_IDENTITY_VARIANT) {
+            return { kind: 'identity', variant };
+        }
+        // A malformed sentinel is not a URL either — fall through to the
+        // resource's default identity rather than rendering a broken image.
+        return null;
+    }
 
     if (
         GLYPH_ONLY.test(trimmed) &&

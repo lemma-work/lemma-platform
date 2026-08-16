@@ -81,7 +81,7 @@ async def handle_webhook(
 
         # Verify webhook signature
         try:
-            verification_result = composio_webhook_verifier.verify(
+            verification_result = await composio_webhook_verifier.verify(
                 payload_text, headers
             )
             normalized_payload = _normalize_composio_payload(verification_result)

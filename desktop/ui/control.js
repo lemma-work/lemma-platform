@@ -489,6 +489,17 @@ function render() {
   renderSharing(sharing);
 }
 
+// Matches `formatUptime` in the workspace's own This computer card, which is
+// the other place the same number is shown. "1434s uptime" is a reading of a
+// field, not a sentence, and under a minute the number says nothing worth the
+// space it takes.
+function formatUptime(seconds) {
+  if (!seconds || seconds < 60) return null;
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  return hours > 0 ? `up ${hours}h ${minutes}m` : `up ${minutes}m`;
+}
+
 function renderAgentHost(agentHost) {
   const targets = Array.isArray(agentHost.targets) ? agentHost.targets : [];
   const connected = targets.some((target) => target.connection_state === "ONLINE");
@@ -509,9 +520,11 @@ function renderAgentHost(agentHost) {
   } else if (agentHost.available && connected) {
     status = "connected";
     tone = "ok";
-    detail = activeRuns > 0
-      ? `Running ${activeRuns} task${activeRuns === 1 ? "" : "s"} · ${agentHost.uptime_seconds || 0}s uptime`
-      : `Ready for work · ${agentHost.uptime_seconds || 0}s uptime`;
+    const uptime = formatUptime(agentHost.uptime_seconds);
+    const running = activeRuns > 0
+      ? `Running ${activeRuns} task${activeRuns === 1 ? "" : "s"}`
+      : "Ready for work";
+    detail = uptime ? `${running} · ${uptime}` : running;
   } else if (agentHost.available) {
     status = "reconnecting";
     tone = "";

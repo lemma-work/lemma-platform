@@ -9,6 +9,7 @@ from sqlalchemy.dialects.postgresql import ARRAY, UUID as PG_UUID
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.sql import text
 
+from app.core.concurrency.offload import run_blocking
 from app.core.config import settings
 from app.modules.datastore.infrastructure.sql_identifiers import (
     escape_like as _escape_like,
@@ -28,17 +29,13 @@ class DatastoreFileChunkRepository:
         self._session_factory = session_factory
         self.schema_name = schema_name
 
-    async def add_chunks(
-        self,
+    @staticmethod
+    def _build_rows(
         file_id: UUID,
         chunks: list[dict[str, Any]],
         embeddings: list[list[float]],
-        metadata: dict | None = None,
-    ) -> int:
-        if len(chunks) != len(embeddings):
-            raise ValueError(
-                f"Cannot index {len(chunks)} chunks with {len(embeddings)} embeddings"
-            )
+        metadata: dict | None,
+    ) -> list[dict[str, Any]]:
         rows = []
         for idx, (chunk, embedding) in enumerate(zip(chunks, embeddings, strict=True)):
             final_meta = {**(metadata or {}), **chunk.get("metadata", {})}
@@ -51,10 +48,37 @@ class DatastoreFileChunkRepository:
                     "metadata": json.dumps(final_meta),
                 }
             )
+        return rows
+
+    async def add_chunks(
+        self,
+        file_id: UUID,
+        chunks: list[dict[str, Any]],
+        embeddings: list[list[float]],
+        metadata: dict | None = None,
+    ) -> int:
+        if len(chunks) != len(embeddings):
+            raise ValueError(
+                f"Cannot index {len(chunks)} chunks with {len(embeddings)} embeddings"
+            )
+        # Off the loop: this formats every dimension of every vector into text
+        # (768 floats per chunk, hundreds of chunks for one document) and
+        # json-dumps each chunk's metadata beside it. Pure CPU, proportional to
+        # the document, on the indexing hot path.
+        rows = await run_blocking(
+            self._build_rows, file_id, chunks, embeddings, metadata,
+            limiter="cpu_bound",
+        )
 
         async with self._session_factory() as session:
+            # SET LOCAL, never bare SET: the connection goes back to the pool
+            # when this session closes, and a bare SET would leave this pod's
+            # schema on the search_path for whoever borrows it next. Every
+            # statement here is schema-qualified anyway, so the setting is
+            # belt-and-braces — but leaking session state across borrowers is
+            # also what makes a transaction-mode connection pooler unusable.
             await session.execute(
-                text(f'SET search_path TO "{self.schema_name}", public')
+                text(f'SET LOCAL search_path TO "{self.schema_name}", public')
             )
             await session.execute(
                 text(
@@ -76,7 +100,7 @@ class DatastoreFileChunkRepository:
     async def remove_chunks_by_file(self, file_id: UUID) -> bool:
         async with self._session_factory() as session:
             await session.execute(
-                text(f'SET search_path TO "{self.schema_name}", public')
+                text(f'SET LOCAL search_path TO "{self.schema_name}", public')
             )
             await session.execute(
                 text(
@@ -95,7 +119,7 @@ class DatastoreFileChunkRepository:
     ) -> bool:
         async with self._session_factory() as session:
             await session.execute(
-                text(f'SET search_path TO "{self.schema_name}", public')
+                text(f'SET LOCAL search_path TO "{self.schema_name}", public')
             )
             await session.execute(
                 text(
@@ -141,7 +165,7 @@ class DatastoreFileChunkRepository:
         dim = settings.embedding_dimension
         async with self._session_factory() as session:
             await session.execute(
-                text(f'SET search_path TO "{self.schema_name}", public')
+                text(f'SET LOCAL search_path TO "{self.schema_name}", public')
             )
             # Tune the HNSW scan for this query. iterative_scan keeps pulling
             # candidates from the index until enough survive the WHERE filter
@@ -231,7 +255,7 @@ class DatastoreFileChunkRepository:
             return []
         async with self._session_factory() as session:
             await session.execute(
-                text(f'SET search_path TO "{self.schema_name}", public')
+                text(f'SET LOCAL search_path TO "{self.schema_name}", public')
             )
             file_filter = ""
             params: dict[str, Any] = {

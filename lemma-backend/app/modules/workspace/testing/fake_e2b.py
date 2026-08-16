@@ -90,6 +90,11 @@ class FakeE2B:
     paused: list[str] = field(default_factory=list)
     files: dict[str, bytes] = field(default_factory=dict)
     commands: list[str] = field(default_factory=list)
+    # The lifetime each started process was given, in the order they started.
+    # Recorded because E2B kills a command at this value and defaults it to 60s,
+    # so "the provider passed no timeout" is indistinguishable from "the
+    # provider asked for a minute" unless a test can see the argument.
+    process_timeouts: list[float | None] = field(default_factory=list)
     _next: int = 0
 
     def sandbox_class(self):
@@ -119,6 +124,7 @@ class FakeE2B:
                 **_kwargs,
             ):
                 world.commands.append(cmd)
+                world.process_timeouts.append(timeout)
                 if on_stdout is not None:
                     await on_stdout(f"ran: {cmd}")
                 if background:
@@ -177,8 +183,17 @@ class FakeE2B:
                 return True
 
         class _Pty:
-            async def create(self, size, on_data=None, cwd=None, envs=None, **_kwargs):
+            async def create(
+                self,
+                size,
+                on_data=None,
+                cwd=None,
+                envs=None,
+                timeout=None,
+                **_kwargs,
+            ):
                 world._next += 1
+                world.process_timeouts.append(timeout)
                 if on_data is not None:
                     await on_data(b"$ ")
                 return FakeCommandHandle(pid=world._next)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from collections.abc import AsyncIterable, AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
@@ -7,6 +8,7 @@ from typing import Any
 from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
 import httpx
+from opentelemetry import trace
 
 from sandbox_runtime.errors import (
     SandboxError,
@@ -19,6 +21,7 @@ from sandbox_runtime.protocol import (
     WorkloadKind,
 )
 from sandbox_runtime.protocol import PythonExecutionState
+from app.core.errors.describe import describe_exception
 from app.core.log.log import get_logger
 from app.modules.workspace.config import workspace_settings
 from app.modules.workspace.contracts import PythonExecutionResult, ShellCommandResult
@@ -43,6 +46,25 @@ logger = get_logger(__name__)
 # 35s deadline.
 _POLL_YIELD_MS = 30_000
 
+# Stateful interpreters already created, by (sandbox, python session, epoch).
+#
+# The session object is rebuilt for every tool call, so its own
+# `_python_session_observed` flag was always False and `execute_python` opened
+# with a create round trip every single time. Keyed by the *container* epoch
+# rather than the storage generation: a kernel is memory, so it dies with the
+# container hosting it -- the mirror image of a workspace directory, which lives
+# on the volume and survives exactly that.
+_python_sessions_observed: dict[tuple[UUID, UUID, int], float] = {}
+_PYTHON_SESSION_OBSERVED_SECONDS = 60.0
+_PYTHON_SESSION_CACHE_MAX = 512
+_tracer = trace.get_tracer("app.modules.workspace.tool_phases")
+
+
+def forget_python_sessions(logical_id: UUID) -> None:
+    """Drop remembered interpreters for a sandbox that is going away."""
+    for key in [key for key in _python_sessions_observed if key[0] == logical_id]:
+        _python_sessions_observed.pop(key, None)
+
 
 
 class SandboxWorkspaceSession:
@@ -60,6 +82,7 @@ class SandboxWorkspaceSession:
         owns_client: bool = True,
         output_cursor_store=None,
         workspace_recreated: bool = False,
+        allocation_epoch: int | None = None,
     ) -> None:
         self.client = client
         self.logical_id = UUID(str(sandbox_id))
@@ -78,6 +101,7 @@ class SandboxWorkspaceSession:
         self.auto_close = auto_close
         self._owns_client = owns_client
         self._python_session_observed = False
+        self._allocation_epoch = allocation_epoch
         self._output_cursor = OutputCursor(
             output_cursor_store, sandbox_id=self.sandbox_id
         )
@@ -201,13 +225,13 @@ class SandboxWorkspaceSession:
             )
         except SandboxError as exc:
             return _sandbox_command_failure(
-                error=f"{type(exc).__name__}: {exc}",
+                error=f"{describe_exception(exc)}",
                 retryable=isinstance(exc, SandboxUnavailable),
                 process_id=str(operation_id),
             )
         except (httpx.HTTPError, OSError) as exc:
             return _sandbox_command_failure(
-                error=f"the sandbox runtime transport failed: {type(exc).__name__}: {exc}",
+                error=f"the sandbox runtime transport failed: {describe_exception(exc)}",
                 retryable=True,
                 process_id=str(operation_id),
             )
@@ -253,7 +277,7 @@ class SandboxWorkspaceSession:
                 return _sandbox_command_failure(
                     error=(
                         "The sandbox accepted the input, but subsequent process "
-                        f"status collection failed ({type(exc).__name__}: {exc}). "
+                        f"status collection failed ({describe_exception(exc)}). "
                         "Poll again without resending the input."
                     ),
                     retryable=False,
@@ -270,7 +294,7 @@ class SandboxWorkspaceSession:
                 return _sandbox_command_failure(
                     error=(
                         "the sandbox runtime process status polling failed: "
-                        f"{type(exc).__name__}: {exc}"
+                        f"{describe_exception(exc)}"
                     ),
                     retryable=True,
                     process_id=process_id,
@@ -289,7 +313,7 @@ class SandboxWorkspaceSession:
                     else "the sandbox runtime process input outcome is unknown: "
                 )
                 + (
-                    f"{type(exc).__name__}: {exc}"
+                    f"{describe_exception(exc)}"
                 ),
                 retryable=False,
                 process_id=process_id,
@@ -501,7 +525,22 @@ class SandboxWorkspaceSession:
     async def __aexit__(self, *_args: object) -> None:
         await self.close()
 
+    def _python_session_key(self) -> tuple[UUID, UUID, int] | None:
+        if self._allocation_epoch is None:
+            return None
+        return (self.logical_id, self.python_session_id, self._allocation_epoch)
+
     async def _ensure_python_session(self, deadline: datetime) -> None:
+        key = self._python_session_key()
+        if key is not None:
+            seen_at = _python_sessions_observed.get(key)
+            if (
+                seen_at is not None
+                and (time.monotonic() - seen_at) < _PYTHON_SESSION_OBSERVED_SECONDS
+            ):
+                self._python_session_observed = True
+                return
+
         async def create() -> None:
             await self.client.create_python_session(
                 self.logical_id,
@@ -511,8 +550,17 @@ class SandboxWorkspaceSession:
                 deadline_at=deadline,
             )
             self._python_session_observed = True
+            if key is not None:
+                if len(_python_sessions_observed) >= _PYTHON_SESSION_CACHE_MAX:
+                    for stale in sorted(
+                        _python_sessions_observed,
+                        key=lambda entry: _python_sessions_observed[entry],
+                    )[: len(_python_sessions_observed) - _PYTHON_SESSION_CACHE_MAX + 1]:
+                        _python_sessions_observed.pop(stale, None)
+                _python_sessions_observed[key] = time.monotonic()
 
-        await await_python_session_ready(create, deadline)
+        with _tracer.start_as_current_span("lemma.workspace.python_session"):
+            await await_python_session_ready(create, deadline)
 
     async def _collect_process(
         self,

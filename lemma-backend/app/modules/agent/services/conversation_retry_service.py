@@ -53,15 +53,12 @@ class ConversationRetryService(ConversationService):
         )
         if failed_run is None or failed_run.status != AgentRunStatus.FAILED:
             raise ConversationStateError("The latest conversation run did not fail")
-        runs = (
-            await self.conversation_repository.list_agent_runs_with_messages_by_run_id(
-                failed_run.id
-            )
-        )
-        persisted_failed_run = next(
-            (run for run in runs if run.id == failed_run.id), None
-        )
-        if persisted_failed_run is None or not persisted_failed_run.is_safely_retryable:
+        # Asks about this one run rather than loading every run of the
+        # conversation with every message attached to find it again -- the run
+        # is already in hand, and only its message roles were ever in question.
+        if not await self.conversation_repository.run_has_only_user_messages(
+            failed_run.id
+        ):
             raise ConversationStateError("The failed run cannot be retried safely")
 
         await self._assert_usage_preflight_allowed(

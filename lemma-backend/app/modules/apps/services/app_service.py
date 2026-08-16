@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from io import BytesIO
 from pathlib import Path
 from uuid import UUID
@@ -10,6 +9,7 @@ from zipfile import ZIP_DEFLATED, ZipFile
 
 import structlog
 
+from app.core.infrastructure.db.transaction_locks import connection_released
 from app.core.api.uploads import upload_source_sha256
 from app.core.authorization.context import (
     Context,
@@ -23,6 +23,7 @@ from app.core.ports.widget_content import WidgetArtifact
 from app.core.widget_html_validation import lint_app_html
 from app.core.authorization.permissions import Permissions
 from app.core.helpers.slug import normalize_public_slug, normalize_resource_name
+from app.modules.apps.domain.events import AppPublishedEvent
 from app.modules.apps.domain.entities import (
     AppAssetDocument,
     AppEntity,
@@ -50,6 +51,7 @@ from app.modules.apps.services.app_storage_phase import (
     _WrittenBundle,
 )
 from app.modules.pod.contracts import PodRole
+from app.core.concurrency.offload import run_blocking
 
 logger = structlog.get_logger()
 
@@ -210,7 +212,9 @@ class AppService:
             app.name,
             user_id,
             source_archive_bytes=None,
-            dist_archive_bytes=self._single_index_html_zip(document),
+            dist_archive_bytes=await run_blocking(
+                self._single_index_html_zip, document
+            ),
             ctx=ctx,
         )
 
@@ -388,8 +392,13 @@ class AppService:
             # Validate the bundle up front (raises AppValidationError on a missing
             # root index.html), regardless of dedup — matches prior behavior and
             # ensures no storage write happens for an invalid bundle.
-            await asyncio.to_thread(load_app_dist_bundle, dist_archive_bytes)
-            version = await asyncio.to_thread(upload_source_sha256, dist_archive_bytes)
+            # Both are thread offloads over the whole archive. The method's own
+            # docstring calls this phase "DB only", which it was not.
+            async with connection_released(getattr(self.repository, "session", None)):
+                await run_blocking(load_app_dist_bundle, dist_archive_bytes)
+                version = await run_blocking(
+                    upload_source_sha256, dist_archive_bytes
+                )
             release_root = f"releases/{version}/dist/"
             existing = await self.repository.get_release_by_version(app.id, version)
             existing_release_id = existing.id if existing is not None else None
@@ -438,11 +447,24 @@ class AppService:
             release_id = release.id
         if written.source_path is not None:
             app.source_archive_path = written.source_path
+        newly_published = plan.version is not None and app.status is not AppStatus.READY
         if plan.version is not None:
             app.current_release_id = release_id
             app.status = AppStatus.READY
         app.user_id = user_id
-        return await self.repository.update(app)
+        updated = await self.repository.update(app)
+        if newly_published:
+            # The transition, not the state: a re-upload of an already-published
+            # app is a new release, and counting those would make this track
+            # deploy frequency rather than how many pods have shipped something.
+            self.repository.uow.collect_events(
+                [
+                    AppPublishedEvent(
+                        app_id=updated.id, pod_id=updated.pod_id, user_id=user_id
+                    )
+                ]
+            )
+        return updated
 
     async def cleanup_written_bundle(
         self, plan: _UploadPlan, written: _WrittenBundle
@@ -464,7 +486,15 @@ class AppService:
         from app.modules.apps.services.archive_validation import inspect_app_archive
 
         if source_archive_bytes is not None:
-            inspect_app_archive(source_archive_bytes, label="Source archive")
+            # Offloaded: opens the zip and walks its whole member list. The
+            # controller path already offloads this (``app_use_cases.upload_bundle``);
+            # this back-compat entry point was calling it inline.
+            await run_blocking(
+                inspect_app_archive,
+                source_archive_bytes,
+                label="Source archive",
+                limiter="cpu_bound",
+            )
         plan = await self.resolve_upload_bundle(
             pod_id,
             name,

@@ -50,6 +50,7 @@ class WorkflowRunWaitEntity(AggregateRoot):
 
     assigned_pod_member_id: UUID | None = None
     external_ref: str | None = None
+    scheduled_at: datetime | None = None
     payload: dict[str, Any] = Field(default_factory=dict)
     completed_at: datetime | None = None
 

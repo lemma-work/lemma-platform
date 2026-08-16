@@ -26,19 +26,38 @@ streaq runtime: started in the lifespan, cancelled on shutdown.
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 import os
 from pathlib import Path
 import tempfile
 import time
 
+from app.core.concurrency.offload import run_blocking
 from app.core.config import settings
 from app.core.log.log import get_logger
+from app.core.observability.stall_sampler import (
+    start_loop_stall_sampler,
+    stop_loop_stall_sampler,
+)
 
 logger = get_logger(__name__)
 
-# Most-recent measured event-loop lag (seconds). Module-global so /health/live
-# and metrics can read it without holding a reference to the task.
-_last_lag_seconds: float = 0.0
+@dataclass
+class _LagGauge:
+    """Most-recent measured event-loop lag, in seconds.
+
+    An object rather than a bare module global because the watchdog coroutine
+    is the only writer and ``/health/live`` and the metrics reader are the only
+    readers — none of which hold a reference to the task. A global would need a
+    ``global`` declaration in a coroutine that writes it and never reads it,
+    which reads as a dead store to anyone (and to any analyser) looking at that
+    function alone.
+    """
+
+    seconds: float = 0.0
+
+
+_lag = _LagGauge()
 
 # Degraded-state machine for loop-lag telemetry. Module-global so the watchdog
 # task and tests can reset/inspect it without holding a reference to the task.
@@ -50,32 +69,66 @@ _healthy_since: float | None = None
 _breach_count: int = 0
 _last_incident_at: float = -1e9
 
+_last_unhealthy_at: float | None = None
+
 _WARN_SAMPLES_TO_DEGRADE = 3
 _RECOVERY_HEALTHY_SECONDS = 30.0
+# How long a finished stall keeps `/health/live` failing. Long enough that a
+# prober on a multi-second period observes it, short enough to sit well inside
+# any realistic `periodSeconds x failureThreshold` window so a recovered
+# process is never restarted for a stall it survived.
+_LIVENESS_STICKY_SECONDS = 5.0
 _INCIDENT_COOLDOWN_SECONDS = 300.0
 
 
 def get_loop_lag_seconds() -> float:
-    return _last_lag_seconds
+    return _lag.seconds
 
 
 def is_loop_healthy() -> bool:
-    """False when measured lag exceeds the unhealthy threshold (for /health/live)."""
-    return _last_lag_seconds < settings.loop_lag_unhealthy_seconds
+    """False while the loop is stalling, plus a short tail (for ``/health/live``).
+
+    The last sample alone is a poor probe answer: a process that spent four
+    seconds wedged reports the stall on exactly one probe and reads healthy on
+    the next, so a liveness check on a multi-second interval sees a wedged
+    process as fine nearly every time. Hence the tail -- a stall stays visible
+    for ``_LIVENESS_STICKY_SECONDS`` after it ends, long enough for a prober to
+    catch it.
+
+    It is deliberately NOT the ``_degraded`` flag, which holds for
+    ``_RECOVERY_HEALTHY_SECONDS`` (30) so the telemetry does not flap. Liveness
+    is not telemetry: with a typical ``periodSeconds: 10`` and
+    ``failureThreshold: 3``, a 30-second unhealthy window is exactly a kill, so
+    tying liveness to it converts every recovered stall into a guaranteed
+    restart.
+
+    A loop that is genuinely wedged keeps failing the current-lag check on its
+    own merit and still gets restarted -- stickiness only ever changes the
+    answer for a process that has already recovered, which is the one case
+    where restarting is pure harm.
+    """
+    if _lag.seconds >= settings.loop_lag_unhealthy_seconds:
+        return False
+    if _last_unhealthy_at is None:
+        return True
+    return (
+        time.monotonic() - _last_unhealthy_at
+    ) >= _LIVENESS_STICKY_SECONDS
 
 
 def reset_loop_watchdog_state() -> None:
     """Reset the degraded-state machine (for tests and process restart)."""
     global _degraded, _degraded_since, _max_lag_seconds, _warning_streak
-    global _healthy_since, _breach_count, _last_incident_at, _last_lag_seconds
+    global _healthy_since, _breach_count, _last_incident_at, _last_unhealthy_at
     _degraded = False
+    _last_unhealthy_at = None
     _degraded_since = 0.0
     _max_lag_seconds = 0.0
     _warning_streak = 0
     _healthy_since = None
     _breach_count = 0
     _last_incident_at = -1e9
-    _last_lag_seconds = 0.0
+    _lag.seconds = 0.0
 
 
 def _evaluate_lag(
@@ -94,9 +147,14 @@ def _evaluate_lag(
     deterministic.
     """
     global _degraded, _degraded_since, _max_lag_seconds, _warning_streak
-    global _healthy_since, _breach_count, _last_incident_at
+    global _healthy_since, _breach_count, _last_incident_at, _last_unhealthy_at
     clock = time.monotonic() if now is None else now
     unhealthy = settings.loop_lag_unhealthy_seconds
+    if lag >= unhealthy:
+        # Stamped on every unhealthy sample, so `/health/live` keeps failing for
+        # a few seconds after the stall ends and a prober on a multi-second
+        # period can still see it.
+        _last_unhealthy_at = clock
     if lag > warn:
         _healthy_since = None
         _warning_streak += 1
@@ -175,25 +233,42 @@ async def loop_lag_watchdog(
     service_name: str = "lemma",
     heartbeat_path: str | None = None,
 ) -> None:
-    """Background task: measure loop lag + refresh the liveness heartbeat."""
-    global _last_lag_seconds
+    """Background task: measure loop lag + refresh the liveness heartbeat.
+
+    Also starts the stall sampler, which answers the question this loop cannot:
+    the lag is measured *after* the loop is running again, so the blocking call
+    is already gone by the time there is a number to report. The sampler watches
+    from a thread and captures the culprit's stack during the stall.
+    """
     interval = max(0.05, settings.loop_lag_watchdog_interval_seconds)
     warn = settings.loop_lag_warn_seconds
-    while True:
-        scheduled_at = time.perf_counter()
-        await asyncio.sleep(interval)
-        lag = time.perf_counter() - scheduled_at - interval
-        lag = max(0.0, lag)
-        _last_lag_seconds = lag
+    sampler = start_loop_stall_sampler(
+        stall_seconds=max(warn, settings.loop_stall_sample_seconds),
+        service_name=service_name,
+    )
+    try:
+        while True:
+            scheduled_at = time.perf_counter()
+            await asyncio.sleep(interval)
+            lag = time.perf_counter() - scheduled_at - interval
+            lag = max(0.0, lag)
+            _lag.seconds = lag
+            sampler.note_loop_alive()
 
-        if heartbeat_path:
-            try:
-                _write_heartbeat(heartbeat_path)
-            except OSError as exc:  # pragma: no cover - defensive
-                logger.debug(
-                    "runtime.heartbeat.write_failed",
-                    error_type=type(exc).__name__,
-                    service=service_name,
-                )
+            if heartbeat_path:
+                try:
+                    # Offloaded because it is real filesystem I/O — mkdir, a
+                    # temp file, an atomic rename — on whatever volume the pod
+                    # was given. Small, but the one thing in this process that
+                    # must never be the reason the loop it measures stalls.
+                    await run_blocking(_write_heartbeat, heartbeat_path, limiter="cpu_bound")
+                except OSError as exc:  # pragma: no cover - defensive
+                    logger.debug(
+                        "runtime.heartbeat.write_failed",
+                        error_type=type(exc).__name__,
+                        service=service_name,
+                    )
 
-        _evaluate_lag(lag, warn, service_name=service_name)
+            _evaluate_lag(lag, warn, service_name=service_name)
+    finally:
+        stop_loop_stall_sampler()

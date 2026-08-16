@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from redis.asyncio import BlockingConnectionPool
 
+from app.core.config import settings
 from app.core.infrastructure.redis.client import get_redis
 
 
@@ -29,12 +30,33 @@ def test_connecting_cannot_hang_forever() -> None:
     assert kwargs["socket_connect_timeout"] > 0
 
 
-def test_read_timeouts_are_opt_in_because_pubsub_blocks_forever() -> None:
-    """``listen()`` performs an indefinite read; a default socket_timeout would
-    tear the realtime multiplexer down and resubscribe on every idle interval."""
+def test_ordinary_callers_get_a_read_timeout_without_asking() -> None:
+    """The safe choice must not be the one you have to remember.
+
+    This was opt-in, and exactly one of the forty-odd call sites opted in — so
+    every cache on the request path would wait for TCP keepalive if Redis
+    accepted the connection and then went quiet, holding whatever database
+    connection or lock the caller had with it.
+    """
     default = get_redis(url="redis://read-timeout-check")
 
-    assert default.connection_pool.connection_kwargs.get("socket_timeout") is None
+    assert (
+        default.connection_pool.connection_kwargs["socket_timeout"]
+        == settings.redis_read_timeout_seconds
+    )
+
+
+def test_blocking_callers_declare_themselves_and_get_no_read_timeout() -> None:
+    """``listen()`` performs an indefinite read.
+
+    A read timeout there would tear the realtime multiplexer down and
+    resubscribe on every idle interval, so Pub/Sub listeners and stream readers
+    opt out — explicitly, which is the only kind of exception that stays true.
+    """
+    blocking = get_redis(url="redis://blocking-check", blocking=True)
+
+    assert blocking.connection_pool.connection_kwargs.get("socket_timeout") is None
+    assert blocking is not get_redis(url="redis://blocking-check")
 
 
 def test_a_caller_asking_for_a_read_timeout_gets_its_own_pool() -> None:

@@ -17,6 +17,12 @@ from app.core.authorization.delegation import (
 from app.core.authorization.delegation_revocation import is_delegation_revoked
 from app.core.log.log import get_logger
 from app.modules.identity.domain.user_entities import AuthUserEntity
+from app.core.auth_state_cache import (
+    AccountStanding,
+    get_account_standing,
+    set_account_standing,
+)
+from app.composition.app_session import maybe_record_app_session
 from app.core.infrastructure.db.session import async_session_maker
 from app.modules.identity.infrastructure.models.user_models import User
 from sqlalchemy import select
@@ -24,15 +30,38 @@ from sqlalchemy import select
 logger = get_logger(__name__)
 
 
-async def _get_local_auth_state(user_id: UUID):
+async def _get_local_auth_state(user_id: UUID) -> AccountStanding | None:
+    """The caller's account standing, from cache when it is there.
+
+    This runs on every authenticated request. Reading it from the database each
+    time cost a query *and* a connection checkout of its own — measured at a
+    meaningful share of the latency of every authenticated endpoint — for three
+    booleans that change rarely and are invalidated when they do.
+    """
+    cached = await get_account_standing(user_id)
+    if cached is not None:
+        return cached
+
     async with async_session_maker() as db_session:
-        return (
+        row = (
             await db_session.execute(
                 select(User.is_active, User.is_verified, User.is_deleted).where(
                     User.id == user_id
                 )
             )
         ).first()
+    if row is None:
+        # Not cached: an absent user is either a race with signup or a token for
+        # a row that is gone, and neither should be remembered as a fact.
+        return None
+
+    standing = AccountStanding(
+        is_active=bool(row.is_active),
+        is_verified=bool(row.is_verified),
+        is_deleted=bool(row.is_deleted),
+    )
+    await set_account_standing(user_id, standing)
+    return standing
 
 
 # Define the security scheme for OpenAPI
@@ -207,6 +236,9 @@ async def verify_auth(connection: HTTPConnection):
 
             connection.state.user = AuthUserEntity(id=parsed_user_id)
             connection.state.session = session
+            # Cheap for every request that is not from a published app: the
+            # header check short-circuits before anything else runs.
+            await maybe_record_app_session(connection, session, parsed_user_id)
             connection.state.auth_claims = payload
             connection.state.delegation_claims = None
             if settings.authz_delegated_tokens_enabled:

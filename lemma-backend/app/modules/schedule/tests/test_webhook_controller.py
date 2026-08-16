@@ -1,3 +1,8 @@
+from types import SimpleNamespace
+
+import pytest
+
+from app.composition import schedule_connectors as schedule_connectors_module
 from app.modules.schedule.api.controllers.webhook_controller import (
     _normalize_composio_payload,
     router,
@@ -94,3 +99,66 @@ def test_normalize_composio_payload_falls_back_to_raw_data_payload():
 
     assert normalized["data"] == {"event_id": "evt_123"}
     assert normalized["metadata"]["trigger_id"] == "ti_123"
+
+
+@pytest.mark.asyncio
+async def test_composio_webhook_verification_does_not_run_on_the_event_loop(
+    monkeypatch,
+) -> None:
+    """Signature verification runs the Composio SDK, which is synchronous.
+
+    This path is unauthenticated and externally driven: the sender chooses the
+    rate, and every delivery used to construct a fresh `Composio(...)` client
+    (measured at 76ms cold / 4ms warm at the sibling call site in
+    `composio_auth_provider`) and then run a blocking SDK call -- all of it on
+    the event loop, where it stalls every other request in the process.
+
+    Asserting on the thread rather than on elapsed time: a timing test would be
+    flaky under load, while the thread identity is exactly the property. If
+    someone drops the `run_blocking` the SDK lands back on the loop thread and
+    this fails.
+    """
+    import threading
+
+    from app.composition import schedule_connectors
+    from app.modules.connectors.config import connector_settings
+
+    loop_thread = threading.current_thread()
+    ran_on: list[threading.Thread] = []
+
+    class _Triggers:
+        def verify_webhook(self, **kwargs):
+            ran_on.append(threading.current_thread())
+            return {"payload": {"id": "ti_1"}}
+
+    monkeypatch.setattr(
+        schedule_connectors,
+        "_webhook_verification_client",
+        lambda: SimpleNamespace(triggers=_Triggers()),
+    )
+    monkeypatch.setattr(
+        connector_settings, "composio_webhook_secret", "shh", raising=False
+    )
+
+    result = await schedule_connectors.ComposioWebhookVerifier().verify(
+        "{}", {"webhook-id": "wh_1"}
+    )
+
+    assert result == {"payload": {"id": "ti_1"}}
+    (thread,) = ran_on
+    assert thread is not loop_thread, (
+        "the Composio SDK ran on the event loop thread; an unauthenticated "
+        "sender can now stall every other request by sending webhooks"
+    )
+
+
+def test_the_verifier_port_is_async_so_implementations_must_offload() -> None:
+    """A sync `verify` cannot offload, so the port forbids writing one."""
+    import inspect
+
+    from app.modules.schedule.domain.interfaces import WebhookVerifier
+
+    assert inspect.iscoroutinefunction(WebhookVerifier.verify)
+    assert inspect.iscoroutinefunction(
+        schedule_connectors_module.ComposioWebhookVerifier.verify
+    )

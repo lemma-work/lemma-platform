@@ -14,7 +14,6 @@ pooled DB connection is ever held across non-DB work.
 
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
 from typing import Any, Callable
 from uuid import UUID
@@ -26,6 +25,7 @@ from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.apps.domain.entities import AppAssetDocument, AppEntity
 from app.modules.apps.services.app_service import AppService
 from app.modules.apps.services.archive_validation import inspect_app_archive
+from app.core.concurrency.offload import run_blocking
 
 
 class AppUseCases:
@@ -67,7 +67,7 @@ class AppUseCases:
         """Resolve+authorize+dedup (short UoW) -> write the bundle bytes (no
         connection) -> persist the release pointer (short UoW)."""
         if source_archive_bytes is not None:
-            await asyncio.to_thread(
+            await run_blocking(
                 inspect_app_archive,
                 source_archive_bytes,
                 label="Source archive",

@@ -22,6 +22,10 @@ from typing import Any
 import httpx
 
 from app.modules.agent_surfaces.platforms.delivery import DeliveryClassification
+from app.core.net.capped_read import read_capped
+from app.modules.agent_surfaces.platforms.attachment_limits import (
+    INBOUND_ATTACHMENT_BYTE_CAP,
+)
 
 # The one canonical WhatsApp Graph API base. ``api_base_url`` in the bot
 # credentials overrides it (used by tests to point at a fake server).
@@ -261,14 +265,21 @@ class WhatsAppClient:
 
     async def download_media(self, url: str) -> bytes:
         async with httpx.AsyncClient(timeout=self._timeout) as client:
-            response = await client.get(url, headers=self._auth_headers)
-            if response.status_code >= 400:
-                raise WhatsAppApiError(
-                    method="media.download",
-                    status_code=response.status_code,
-                    body_excerpt=_body_excerpt(response),
+            async with client.stream(
+                "GET", url, headers=self._auth_headers
+            ) as response:
+                if response.status_code >= 400:
+                    # The excerpt helper needs a body, and an error body is
+                    # small by construction -- read it before giving up.
+                    await response.aread()
+                    raise WhatsAppApiError(
+                        method="media.download",
+                        status_code=response.status_code,
+                        body_excerpt=_body_excerpt(response),
+                    )
+                return await read_capped(
+                    response.aiter_bytes(), max_bytes=INBOUND_ATTACHMENT_BYTE_CAP
                 )
-            return response.content
 
     async def get_phone_number_field(self, field: str) -> str | None:
         """Read one field off the phone-number node (e.g. display_phone_number)."""

@@ -20,12 +20,21 @@ from app.modules.connectors.application import connector_operation_use_cases as 
 from app.modules.connectors.application.connector_operation_use_cases import (
     ConnectorOperationUseCases,
 )
-from app.modules.connectors.domain.errors import OperationExecutionUnauthorizedError
+from app.modules.connectors.domain.errors import (
+    OperationExecutionInfrastructureError,
+    OperationExecutionTimeoutError,
+    OperationExecutionUnauthorizedError,
+)
 from app.modules.connectors.services.connector_operation_service import (
     ResolvedConnectorExecution,
 )
 
 pytestmark = pytest.mark.asyncio
+
+
+async def _record(sink: list[str], scope: str) -> None:
+    """Stand in for the Redis-backed `record_failure`, capturing the scope."""
+    sink.append(scope)
 
 
 @dataclass
@@ -164,3 +173,137 @@ async def test_unauthorized_execution_flags_account_for_reauth(events):
     connector_service.mark_account_reauth_required.assert_awaited_once_with(
         account_id, user_id, org_id
     )
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        OperationExecutionInfrastructureError("provider is down"),
+        OperationExecutionTimeoutError("provider timed out"),
+    ],
+    ids=["infrastructure", "timeout"],
+)
+async def test_a_provider_failure_on_the_credential_retry_still_trips_the_breaker(
+    monkeypatch, failure
+):
+    """The retry is inside the breaker's judgement, not beside it.
+
+    The first call raising a 401 hands control to the credential-refresh path.
+    If the *retry* then fails because the provider is unwell, that is the same
+    provider fault the breaker exists for, and it has to count.
+
+    It did not, once: the refresh ran inside an `except` handler, so an
+    infrastructure error raised there propagated past the clause that records
+    failures. The shape that made this matter is the systemic one -- a provider
+    whose token endpoint is down rejects every account's credential at once, and
+    every one of them then retries into the same outage. So the failure most
+    worth breaking on was the single failure that could not trip the breaker.
+    """
+    recorded: list[str] = []
+    monkeypatch.setattr(
+        ucmod,
+        "breaker_record_failure",
+        lambda scope: _record(recorded, scope),
+    )
+
+    resolved = ResolvedConnectorExecution(
+        connector_id="airtable",
+        operation_execution_name="AIRTABLE_LIST_BASES",
+        provider="COMPOSIO",
+        third_party_credentials={"connection_id": "ca_x"},
+        payload={},
+        auth_token=None,
+        api_url=None,
+        account_id=uuid4(),
+        account_user_id=uuid4(),
+        organization_id=uuid4(),
+    )
+    connector_service = AsyncMock()
+    attempts: list[int] = []
+
+    class _FakeService:
+        def __init__(self, uow):
+            self.connector_service = connector_service
+
+        async def resolve_execution_for_auth_config(self, **kwargs):
+            return resolved
+
+        async def execute_resolved(self, _resolved):
+            attempts.append(1)
+            # First the credential is rejected; then the retry hits the outage.
+            if len(attempts) == 1:
+                raise OperationExecutionUnauthorizedError("unauthorized")
+            raise failure
+
+    uc = ConnectorOperationUseCases(uow_factory=object(), service_builder=_FakeService)
+
+    with pytest.raises(type(failure)):
+        await uc.execute_operation_for_auth_config(
+            organization_id=resolved.organization_id,
+            auth_config_name="airtable",
+            operation_name="AIRTABLE_LIST_BASES",
+            payload={},
+            user_id=resolved.account_user_id,
+            request=object(),
+            account_id=resolved.account_id,
+        )
+
+    assert len(attempts) == 2, "the credential refresh retry ran"
+    assert recorded == ["airtable:AIRTABLE_LIST_BASES"]
+    # The provider fault surfaces as itself. Swapping it for the 401 would tell
+    # the user to reconnect an account that is fine.
+    connector_service.mark_account_reauth_required.assert_not_awaited()
+
+
+async def test_a_rejected_credential_alone_never_trips_the_breaker(monkeypatch):
+    """The other half of the same boundary.
+
+    A 401 that survives a refresh is one account's problem. Counting it would
+    let a single tenant's revoked credential disable the operation for everyone
+    else on the same connector -- the exact failure the breaker is supposed to
+    prevent, caused by the breaker.
+    """
+    recorded: list[str] = []
+    monkeypatch.setattr(
+        ucmod,
+        "breaker_record_failure",
+        lambda scope: _record(recorded, scope),
+    )
+
+    resolved = ResolvedConnectorExecution(
+        connector_id="airtable",
+        operation_execution_name="AIRTABLE_LIST_BASES",
+        provider="COMPOSIO",
+        third_party_credentials={"connection_id": "ca_x"},
+        payload={},
+        auth_token=None,
+        api_url=None,
+        account_id=uuid4(),
+        account_user_id=uuid4(),
+        organization_id=uuid4(),
+    )
+
+    class _FakeService:
+        def __init__(self, uow):
+            self.connector_service = AsyncMock()
+
+        async def resolve_execution_for_auth_config(self, **kwargs):
+            return resolved
+
+        async def execute_resolved(self, _resolved):
+            raise OperationExecutionUnauthorizedError("unauthorized")
+
+    uc = ConnectorOperationUseCases(uow_factory=object(), service_builder=_FakeService)
+
+    with pytest.raises(OperationExecutionUnauthorizedError):
+        await uc.execute_operation_for_auth_config(
+            organization_id=resolved.organization_id,
+            auth_config_name="airtable",
+            operation_name="AIRTABLE_LIST_BASES",
+            payload={},
+            user_id=resolved.account_user_id,
+            request=object(),
+            account_id=resolved.account_id,
+        )
+
+    assert recorded == []

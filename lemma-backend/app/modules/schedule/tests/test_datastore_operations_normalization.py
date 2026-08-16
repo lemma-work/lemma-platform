@@ -188,7 +188,6 @@ async def test_update_path_normalizes_and_requires_operations():
     service = ScheduleService(
         uow=uow,
         schedule_repository=repo,
-        scheduler_service=AsyncMock(),
         external_schedule_writer=AsyncMock(),
     )
     existing = ScheduleEntity(

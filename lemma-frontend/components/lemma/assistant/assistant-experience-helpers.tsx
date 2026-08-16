@@ -22,8 +22,7 @@ import {
   splitAssistantMessageSegments,
 } from "@/lib/assistant/json-blocks";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
-import { CheckCircle2, XCircle } from "@/components/ui/icons";
+import { CheckCircle2, FileText, Image as ImageIcon, X, XCircle } from "@/components/ui/icons";
 import { AssistantJsonBlock } from "./assistant-json-block";
 import { humanizeKey } from "./assistant-format";
 import { suggestionIconForTitle } from "./assistant-parts";
@@ -382,39 +381,58 @@ export function assistantChromeStyleFromAppearance(appearance: LemmaAssistantApp
   return "subtle";
 }
 
+/** "184 kB" — a size a person reads, not a byte count. */
+function formatFileSize(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return "";
+  const units = ["B", "kB", "MB", "GB"];
+  const index = Math.min(units.length - 1, Math.floor(Math.log(bytes) / Math.log(1024)));
+  const value = bytes / 1024 ** index;
+  return `${value >= 10 || index === 0 ? Math.round(value) : value.toFixed(1)} ${units[index]}`;
+}
+
+/**
+ * A staged file, before it is sent.
+ *
+ * This was a 24px badge with the name truncated to 160px, which turned every
+ * screenshot into "Screenshot 2026-08-14 at 2.4…" — the part that identifies
+ * one from another is exactly the part that got cut. It now reads as a small
+ * card: a type mark, the full name allowed two lines of room via the middle
+ * being clipped rather than the tail, and its size or state underneath.
+ */
 export function defaultPendingFile({ file, remove, status = "queued", error }: AssistantPendingFileRenderArgs): ReactNode {
   const isUploading = status === "uploading";
   const isUploaded = status === "uploaded";
   const isFailed = status === "failed";
+  const isImage = file.type.startsWith("image/");
+  const meta = isFailed ? (error || "Upload failed") : isUploading ? "Uploading…" : formatFileSize(file.size);
+
   return (
-    <Badge
-      variant="default"
-      className={cn(
-        "inline-flex h-6 items-center gap-1.5 px-2 text-xs",
-        isFailed && "lemma-assistant-pending-file-error",
-      )}
-      title={error || file.name}
-    >
-      {isUploading ? (
-        <span className="size-2.5 lemma-spin rounded-full border border-[var(--text-tertiary)] border-t-transparent" aria-hidden="true" />
-      ) : isUploaded ? (
-        <CheckCircle2 className="size-3 text-[var(--state-success)]" aria-hidden="true" />
-      ) : isFailed ? (
-        <XCircle className="size-3" aria-hidden="true" />
-      ) : null}
-      <span className="truncate max-w-[160px]">{file.name}</span>
-      {!isUploading ? (
-        <Button
-          type="button"
-          variant="quiet"
-          size="icon"
-          onClick={remove}
-          className="inline-flex size-4 items-center justify-center rounded-sm text-[var(--text-secondary)] hover:bg-[color:color-mix(in_srgb,var(--surface-2)_80%,transparent)] hover:text-[var(--text-primary)]"
-          title="Remove file"
-        >
-          ×
-        </Button>
-      ) : null}
-    </Badge>
+    <span className="lm-file-chip" data-status={status} title={error || file.name}>
+      <span className="lm-file-chip-mark" aria-hidden="true">
+        {isUploading ? (
+          <span className="size-3 lemma-spin rounded-full border border-current border-t-transparent" />
+        ) : isFailed ? (
+          <XCircle className="size-3.5" />
+        ) : isUploaded ? (
+          <CheckCircle2 className="size-3.5" />
+        ) : isImage ? (
+          <ImageIcon className="size-3.5" />
+        ) : (
+          <FileText className="size-3.5" />
+        )}
+      </span>
+      <span className="lm-file-chip-name">{file.name}</span>
+      {meta ? <span className="lm-file-chip-meta">{meta}</span> : null}
+      <Button
+        type="button"
+        variant="quiet"
+        size="icon"
+        onClick={remove}
+        aria-label={`Remove ${file.name}`}
+        className="lm-file-chip-remove size-5 shrink-0"
+      >
+        <X className="size-3" />
+      </Button>
+    </span>
   );
 }

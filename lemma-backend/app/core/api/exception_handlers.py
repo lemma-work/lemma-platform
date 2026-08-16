@@ -65,6 +65,24 @@ def _record_request_failure(
 
     The observer owns the single terminal request log, avoiding duplicate
     records from exception handlers and middleware.
+
+    ``exception`` is what the observer turns into ``exc_info``, so passing it
+    decides whether the failure is diagnosable. The rule is the status code,
+    and only the status code:
+
+    * **4xx** — the message is written for the client and may quote what the
+      client sent. It stays out of the log entirely; the code and type are
+      enough to count them.
+    * **5xx** — a server bug, whoever raised it. The message and stack are ours
+      and the log is the only place they exist, because the response is a fixed
+      envelope by design.
+
+    A 500 raised as a ``DomainError`` used to be the exception to that rule,
+    for no reason anyone recorded: it reached the client as the same opaque
+    envelope as an unhandled one but reached the log as a bare error type. That
+    is how eleven upload failures became undiagnosable — the wrapper said
+    "Failed to upload file content" and the ``__cause__`` that knew why was
+    unwound before anyone read it.
     """
     state = request.scope.setdefault("state", {})
     state["lemma_error_code"] = code
@@ -87,7 +105,12 @@ def register_exception_handlers(app: FastAPI) -> None:
             },
             mark_span_as_error=exc.status_code >= 500,
         )
-        _record_request_failure(request, code=exc.code, error_type=type(exc).__name__)
+        _record_request_failure(
+            request,
+            code=exc.code,
+            error_type=type(exc).__name__,
+            exception=exc if exc.status_code >= 500 else None,
+        )
         return JSONResponse(
             status_code=exc.status_code,
             content=_error_body(request, exc.message, exc.code, exc.details),
@@ -125,6 +148,7 @@ def register_exception_handlers(app: FastAPI) -> None:
             request,
             code=f"HTTP_{exc.status_code}",
             error_type=type(exc).__name__,
+            exception=exc if exc.status_code >= 500 else None,
         )
         return JSONResponse(
             status_code=exc.status_code,

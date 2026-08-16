@@ -9,11 +9,18 @@ from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.modules.schedule.config import BREAKER_STREAK_SCAN_LIMIT
 from app.modules.schedule.domain.schedule import (
     ScheduleRunEntity,
     ScheduleRunStatus,
 )
 from app.modules.schedule.infrastructure.models.run import ScheduleRun
+
+# Re-exported under the private name this module has always used. The definition
+# lives in config because ``schedule_max_consecutive_failures`` is validated
+# against it: a threshold past the scan depth is a breaker that can never trip,
+# and two copies of the number is how that becomes true silently.
+_BREAKER_SCAN_LIMIT = BREAKER_STREAK_SCAN_LIMIT
 
 
 class ScheduleRunRepository:
@@ -153,6 +160,35 @@ class ScheduleRunRepository:
         await self.session.flush()
         return status
 
+    async def dead_letter(self, run_id: UUID, *, error_type: str) -> bool:
+        """End a run terminally without spending its remaining attempts.
+
+        ``mark_failed`` decides between FAILED and DEAD_LETTERED from the attempt
+        count, because it serves a run that might still succeed on a retry. Some
+        failures are not like that: a fire whose pod is out of budget will fail
+        the same way for the rest of the window, so retrying it nine more times
+        only delays the moment the owner is told.
+
+        The distinction matters to the breaker, which counts DEAD_LETTERED and
+        deliberately ignores FAILED as an intermediate state — so a run that
+        stops here is one that counts.
+        """
+        model = await self.session.get(ScheduleRun, run_id, with_for_update=True)
+        if model is None:
+            raise LookupError(f"Schedule run {run_id} no longer exists")
+        if model.target_outcome is not None or model.status in {
+            ScheduleRunStatus.COMPLETED.value,
+            ScheduleRunStatus.TARGET_FAILED.value,
+            ScheduleRunStatus.CANCELLED.value,
+            ScheduleRunStatus.DEAD_LETTERED.value,
+        }:
+            return False
+        model.status = ScheduleRunStatus.DEAD_LETTERED.value
+        model.error_type = error_type
+        model.completed_at = datetime.now(timezone.utc)
+        await self.session.flush()
+        return True
+
     async def transition_target_outcome(
         self,
         *,
@@ -203,6 +239,31 @@ class ScheduleRunRepository:
         return model.to_entity()
 
     async def consecutive_terminal_failures(self, schedule_id: UUID) -> int:
+        """Length of the current failure streak, counted back from the newest run.
+
+        Bounded, because this runs on *every* run completion and the ledger is
+        append-only. Unbounded, it read every completed run the schedule had
+        ever had: measured in production at 5,946 rows and a sort, 48ms, for the
+        busiest schedule — work proportional to the schedule's whole history,
+        paid again on each new run, and growing by ~1,000 rows a day with no
+        retention behind it.
+
+        The window is safe because of what the caller does with the number: it
+        compares against a threshold of five, and ``schedule_max_consecutive_
+        failures`` is validated at startup to be no deeper than the scan, so the
+        count can never be truncated below a threshold it would have reached.
+
+        **The streak has no time component, deliberately.** Five failures over
+        five months trip the breaker exactly as five over five minutes do, and
+        an old success arbitrarily far back still resets it. A decay window was
+        considered and rejected: the alternative is a schedule that fires
+        monthly, fails every single time for a year, and is never deactivated
+        because no window ever holds enough failures at once. "Consecutive" is
+        the property the owner is told about in the deactivation email, and it
+        is the one that is actually true of the schedule. The cost is that a
+        rarely-firing schedule takes a long wall-clock time to trip -- which is
+        the correct amount of patience for something that rarely fires.
+        """
         rows = (
             await self.session.execute(
                 select(ScheduleRun.status, ScheduleRun.target_outcome)
@@ -211,6 +272,7 @@ class ScheduleRunRepository:
                     ScheduleRun.completed_at.is_not(None),
                 )
                 .order_by(ScheduleRun.completed_at.desc(), ScheduleRun.id.desc())
+                .limit(_BREAKER_SCAN_LIMIT)
             )
         ).all()
         failures = 0

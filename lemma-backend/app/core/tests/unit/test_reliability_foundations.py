@@ -60,11 +60,14 @@ class _TestEvent(DomainEvent):
 class _FakeSession:
     def __init__(self) -> None:
         self.statements: list[object] = []
+        self.parameters: list[object] = []
         self.committed = False
         self.rolled_back = False
+        self.info: dict = {}
 
-    async def execute(self, statement):
+    async def execute(self, statement, parameters=None):
         self.statements.append(statement)
+        self.parameters.append(parameters)
 
     async def commit(self) -> None:
         self.committed = True
@@ -84,14 +87,18 @@ async def test_uow_stages_event_before_database_commit() -> None:
     await uow.commit()
 
     assert session.committed is True
-    assert len(session.statements) == 1
-    params = session.statements[0].compile().params
-    assert params["event_type_m0"] == "test.created"
-    assert params["stream_m0"] == "test_events"
-    assert params["id_m0"] == event.event_id
-    assert params["payload_m0"]["value"] == "committed"
-    assert params["id_m1"] == second_event.event_id
-    assert params["payload_m1"]["value"] == "also-committed"
+    # The insert, then the dispatcher wake -- both before the commit.
+    assert len(session.statements) == 2
+    # Rows travel as executemany parameters, so the statement does not depend on
+    # how many events were collected -- see the note at the insert.
+    rows = session.parameters[0]
+    assert [row["event_type"] for row in rows] == ["test.created", "test.created"]
+    assert [row["stream"] for row in rows] == ["test_events", "test_events"]
+    assert [row["id"] for row in rows] == [event.event_id, second_event.event_id]
+    assert [row["payload"]["value"] for row in rows] == [
+        "committed",
+        "also-committed",
+    ]
     assert not uow.has_pending_events()
 
 
@@ -773,3 +780,40 @@ def test_redaction_of_malformed_urls_is_bounded_and_non_throwing(value: str) -> 
     rendered = redact_text(f"dependency failed at {value}")
     assert REDACTED_URL in rendered
     assert "CANARY" not in rendered
+
+
+async def test_after_commit_callbacks_run_only_once_the_commit_has_happened():
+    """Deferred work must not observe, or be observed by, an open transaction.
+
+    Cache invalidation is the reason this exists. Running it inline holds the
+    connection across a Redis round trip, and it is the wrong order besides: a
+    concurrent reader can repopulate the cache from the pre-commit state in the
+    window between invalidating and committing.
+    """
+    from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+
+    order: list[str] = []
+
+    class _Session:
+        info: dict = {}
+
+        async def commit(self) -> None:
+            order.append("commit")
+
+        async def execute(self, *args, **kwargs):
+            return None
+
+    uow = SqlAlchemyUnitOfWork(_Session())
+
+    async def _invalidate() -> None:
+        order.append("invalidate")
+
+    uow.after_commit(_invalidate)
+    assert order == [], "the callback ran before the commit"
+
+    await uow.commit()
+    assert order == ["commit", "invalidate"]
+
+    # And it does not run again on a second commit.
+    await uow.commit()
+    assert order == ["commit", "invalidate", "commit"]

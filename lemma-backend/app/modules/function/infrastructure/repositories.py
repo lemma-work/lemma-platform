@@ -27,7 +27,10 @@ from app.modules.function.domain.entities import (
     FunctionRunStatus,
     FunctionStatus,
 )
-from app.modules.function.domain.events import FunctionRunFailedEvent
+from app.modules.function.domain.events import (
+    FunctionCreatedEvent,
+    FunctionRunFailedEvent,
+)
 from app.modules.function.domain.errors import (
     FunctionNotFoundError,
     FunctionRunNotFoundError,
@@ -58,6 +61,14 @@ class FunctionRepository(FunctionRepositoryPort):
         model = FunctionModel(**payload)
         self.session.add(model)
         await self.session.flush()
+        # `FunctionEntity` is a plain BaseModel with its own `id` field, so it
+        # cannot become an AggregateRoot without a field collision. Collect here
+        # instead: this is the single write path behind every creation route, and
+        # the row exists by this point, so an event that fires is an event that
+        # committed.
+        self.uow.collect_events(
+            [FunctionCreatedEvent(function_id=model.id, pod_id=model.pod_id)]
+        )
         return model.to_entity()
 
     def _to_entity_with_allowed_actions(
@@ -266,6 +277,28 @@ class FunctionRepository(FunctionRepositoryPort):
         return deleted_id is not None
 
 
+def _expired_run_error(run, *, now: datetime) -> str:
+    """Why a swept run failed, in the terms its reader can act on.
+
+    The budget is stated because it is not visible anywhere else: it comes from
+    a deployment-wide setting chosen by function type, so a reader looking at a
+    failed run has no way to know whether it was given two minutes or ten.
+    """
+
+    started = getattr(run, "started_at", None)
+    deadline = getattr(run, "deadline_at", None)
+    if started is None or deadline is None:
+        return "Function execution deadline exceeded; the runtime never reported a result"
+    budget = round((deadline - started).total_seconds())
+    ran_for = round((now - started).total_seconds())
+    return (
+        f"Function execution deadline exceeded: no result after {ran_for}s "
+        f"against a {budget}s budget. The run was ended by the platform sweep, "
+        "so either the function is still working or the runtime never reported "
+        "back."
+    )
+
+
 class FunctionRunRepository(FunctionRunRepositoryPort):
     def __init__(
         self,
@@ -328,10 +361,33 @@ class FunctionRunRepository(FunctionRunRepositoryPort):
         limit: int = 100,
         job_callback_grace_seconds: int = 0,
     ) -> int:
-        """Terminalize runs whose one allowed execution window has elapsed."""
+        """Terminalize runs whose one allowed execution window has elapsed.
+
+        Note the sweep is deliberately late for job-backed runs: the deadline
+        plus ``job_callback_grace_seconds``, and then only at the next tick of
+        the once-a-minute cron. A run can therefore be marked failed a minute or
+        two after its deadline, which is the grace window doing its job and not
+        a stuck sweep.
+        """
 
         statement = (
             select(FunctionRunModel)
+            # The sweep needs the deadline arithmetic, the failure event's
+            # fields, and nothing else. Without this it also dragged
+            # ``input_data`` and ``output_data`` -- two JSONB columns, TOASTed
+            # and detoasted per row -- through a query that never reads them.
+            .options(
+                load_only(
+                    FunctionRunModel.id,
+                    FunctionRunModel.function_id,
+                    FunctionRunModel.status,
+                    FunctionRunModel.error,
+                    FunctionRunModel.logs,
+                    FunctionRunModel.started_at,
+                    FunctionRunModel.deadline_at,
+                    FunctionRunModel.completed_at,
+                )
+            )
             .where(
                 or_(
                     and_(
@@ -359,7 +415,15 @@ class FunctionRunRepository(FunctionRunRepositoryPort):
         runs = list((await self.session.scalars(statement)).all())
         for run in runs:
             run.status = FunctionRunStatus.FAILED
-            run.error = "Function execution deadline exceeded"
+            # Says which of the two timeouts this was, and what the budget
+            # actually was. The dispatcher reports its own inline timeout as
+            # "Function execution timed out (deadline exceeded)"; this one is
+            # the sweeper finding a run whose result never came back at all.
+            # The two read identically in a run list and have opposite
+            # remedies — make the function faster, versus find out why the
+            # runtime never reported — so 41 failures in one afternoon said
+            # "timed out" and left the reader to guess which kind.
+            run.error = _expired_run_error(run, now=now)
             run.completed_at = now
             self.uow.collect_events(
                 [
@@ -375,6 +439,47 @@ class FunctionRunRepository(FunctionRunRepositoryPort):
         if runs:
             await self.session.flush()
         return len(runs)
+
+    async def delete_terminal_before(
+        self,
+        *,
+        cutoff: datetime,
+        batch_size: int,
+    ) -> int:
+        """Remove one batch of finished runs older than ``cutoff``.
+
+        Only terminal runs are eligible: an unfinished run is either live work
+        or something the deadline sweep still has to fail, and deleting it
+        would strand whatever is waiting on the result.
+
+        ``SKIP LOCKED`` keeps this off rows another statement is already
+        holding, so the sweep never blocks the execution path -- it just leaves
+        those rows for the next batch.
+        """
+
+        claimed = (
+            select(FunctionRunModel.id)
+            .where(
+                FunctionRunModel.status.in_(
+                    (
+                        FunctionRunStatus.COMPLETED,
+                        FunctionRunStatus.FAILED,
+                        FunctionRunStatus.CANCELLED,
+                    )
+                ),
+                FunctionRunModel.created_at < cutoff,
+            )
+            .order_by(FunctionRunModel.id)
+            .limit(batch_size)
+            .with_for_update(skip_locked=True)
+            .cte("function_run_retention_batch")
+        )
+        result = await self.session.execute(
+            delete(FunctionRunModel).where(
+                FunctionRunModel.id.in_(select(claimed.c.id))
+            )
+        )
+        return int(getattr(result, "rowcount", 0) or 0)
 
     async def list_pending_async_runs(
         self,

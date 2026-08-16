@@ -17,6 +17,7 @@ from app.modules.agent_surfaces.config import surface_settings
 from app.core.config import settings
 from app.core.infrastructure.cache.redis_json_cache import RedisJsonCache
 from app.core.log.log import get_logger
+from app.core.net.aiohttp_client import new_aiohttp_session
 
 logger = get_logger(__name__)
 
@@ -100,7 +101,7 @@ async def _get_token(tenant_id: str, scope: str) -> str | None:
         "client_secret": app_password,
         "scope": scope,
     }
-    async with aiohttp.ClientSession() as session:
+    async with new_aiohttp_session() as session:
         async with session.post(url, data=data) as response:
             if response.status >= 400:
                 try:
@@ -149,7 +150,7 @@ async def _get_token(tenant_id: str, scope: str) -> str | None:
 
 
 async def get_json(url: str, token: str) -> dict[str, Any] | None:
-    async with aiohttp.ClientSession() as session:
+    async with new_aiohttp_session() as session:
         async with session.get(url, headers=auth_headers(token)) as response:
             if response.status >= 400:
                 return None
@@ -183,7 +184,7 @@ async def resolve_graph_team_id(
     details_url = f"{bf_service_url(service_url)}/v3/teams/{quote(str(raw_team_id))}"
 
     owns_session = session is None
-    http = session or aiohttp.ClientSession()
+    http = session or new_aiohttp_session()
     try:
         async with http.get(details_url, headers=auth_headers(bot_token)) as response:
             if response.status >= 400:

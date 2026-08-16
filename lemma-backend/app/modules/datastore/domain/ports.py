@@ -18,6 +18,7 @@ from app.modules.datastore.domain.document_processing import (
     DocumentExtraction,
     IndexingMetrics,
 )
+from app.modules.datastore.domain.file_projections import DispatchableFileRef
 from app.modules.datastore.domain.file_entities import (
     DatastoreFileEntity,
     DatastoreFileSearchResult,
@@ -127,6 +128,13 @@ class DatastoreFileRepositoryPort(Protocol):
         file_ids: Sequence[UUID],
     ) -> set[UUID]: ...
 
+    async def list_pending_dispatch_candidates(
+        self,
+        *,
+        per_pod_limit: int,
+        global_limit: int,
+    ) -> Sequence[DispatchableFileRef]: ...
+
     async def list_stale_recovery_candidates(
         self,
         *,
@@ -134,7 +142,8 @@ class DatastoreFileRepositoryPort(Protocol):
         processing_cutoff: datetime,
         failed_cutoff: datetime | None = None,
         max_attempts: int = 3,
-    ) -> Sequence[DatastoreFileEntity]: ...
+        limit: int = 500,
+    ) -> Sequence[DispatchableFileRef]: ...
 
     async def list_exhausted_recovery_candidates(
         self,
@@ -142,7 +151,8 @@ class DatastoreFileRepositoryPort(Protocol):
         processing_cutoff: datetime,
         failed_cutoff: datetime | None = None,
         max_attempts: int = 3,
-    ) -> Sequence[DatastoreFileEntity]: ...
+        limit: int = 500,
+    ) -> Sequence[DispatchableFileRef]: ...
 
     async def bulk_update_status(
         self,

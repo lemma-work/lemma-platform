@@ -241,8 +241,37 @@ def create_inherited_task(
     return asyncio.create_task(coroutine, name=name)
 
 
+def _log_unhandled_task_exception(task: "asyncio.Task[Any]") -> None:
+    """Report a background task that died, with its traceback.
+
+    An HTTP request that raises is logged by ``http.request.failed`` and a
+    streaq task by ``worker.job.failed``, both with ``exc_info``. A task spawned
+    here had no such backstop: asyncio only complains at garbage-collection
+    time, through the ``asyncio`` logger this service holds at WARNING as a
+    foreign library, so a watchdog or dispatcher loop could die and take its
+    duty with it in silence.
+    """
+    if task.cancelled():
+        return
+    exception = task.exception()
+    if exception is None:
+        return
+    # Deferred: the logging module imports this one for the context it attaches
+    # to every record, so importing it at module scope would be a cycle.
+    from app.core.log.log import get_logger
+
+    get_logger(__name__).error(
+        "background_task.failed",
+        task_name=task.get_name(),
+        error_type=type(exception).__name__,
+        exc_info=exception,
+    )
+
+
 def create_background_task(
     coroutine: Coroutine[Any, Any, TaskResultT], *, name: str | None = None
 ) -> asyncio.Task[TaskResultT]:
     """Spawn long-lived service work with a clean business/request context."""
-    return asyncio.create_task(coroutine, name=name, context=Context())
+    task = asyncio.create_task(coroutine, name=name, context=Context())
+    task.add_done_callback(_log_unhandled_task_exception)
+    return task

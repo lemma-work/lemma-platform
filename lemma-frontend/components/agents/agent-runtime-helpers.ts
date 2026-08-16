@@ -7,6 +7,7 @@ import type {
     AvailableModelInfo,
     RuntimeModelCatalogEntry,
 } from 'lemma-sdk';
+import { humanizeName } from '@/lib/utils/display-name';
 
 // There is no longer a HarnessKind per coding tool — Codex, Claude Code and the
 // rest are all HarnessKind.HARNESS, dispatched through a paired machine's Agent
@@ -29,19 +30,22 @@ export const HARNESS_LOGOS: Partial<Record<string, string>> = {
 /**
  * How long a computer may plausibly still be finding its coding agents.
  *
- * Ninety seconds, borrowed from the window above, was far too short. The first
- * pairing on a machine does not probe agents, it *installs* them: the host
- * fetches and verifies a pinned adapter package per certified agent against an
- * empty npm cache, which is why its own connect timeout is ten minutes. A
- * re-probe afterwards spawns each agent and opens an ACP session with a
- * twenty-second ceiling of its own.
+ * This was ten minutes, and the reasoning behind it was sound at the time: the
+ * first pairing did not probe agents, it *installed* them — a pinned adapter
+ * package per certified agent, fetched against an empty npm cache, ahead of
+ * anything else. The list really was empty for minutes, and saying "No agents
+ * published yet" after two seconds was a lie the page told constantly.
  *
- * So the list is legitimately empty for minutes on a fresh machine, and the
- * page used to conclude "No agents published yet" within two seconds of the
- * first empty response and then poll only every twenty seconds — which is
- * exactly how Claude Code appeared to be missing until someone hit Recheck.
+ * Three things moved underneath it. Installing no longer happens on the pairing
+ * path at all; it is warmed when the app opens. The adapters no longer drag
+ * along vendored copies of the agents themselves, so the download is a
+ * twelfth of what it was. And an adapter that genuinely is still installing now
+ * reports itself as such instead of being indistinguishable from a missing one.
+ *
+ * So the honest window is the budget, not the worst case of a path that no
+ * longer exists. A minute is two full budgets of patience.
  */
-export const HARNESS_DISCOVERY_WINDOW_MS = 10 * 60_000;
+export const HARNESS_DISCOVERY_WINDOW_MS = 60_000;
 
 /**
  * Whether an empty harness list means "still looking" rather than "found none".
@@ -217,6 +221,17 @@ export function shortModelName(modelName: string): string {
     return normalized.split('/').filter(Boolean).at(-1) || normalized;
 }
 
+/**
+ * The model name as a person reads it: the short name, humanised.
+ *
+ * Kept separate from `shortModelName` on purpose — that one is also fed to
+ * `modelPathHint`, which does string surgery against the raw value, and to the
+ * picker's search haystack. Humanising in there would break both.
+ */
+export function humanizeModelName(modelName: string): string {
+    return humanizeName(shortModelName(modelName));
+}
+
 export function modelPathHint(modelName: string): string | null {
     const shortName = shortModelName(modelName);
     if (shortName === modelName) return null;
@@ -248,9 +263,40 @@ const AGENT_HOST_HARNESS_HEALTH: Record<string, { label: string; detail: string 
         label: 'Probe failed',
         detail: 'Agent Host could not start this agent. Check the Agent Host log on that computer.',
     },
-    INSTALLING: { label: 'Installing', detail: 'Agent Host is still installing the adapter.' },
+    // Covers the whole not-ready-yet window, because the row cannot see where in
+    // it we are. Fetching the adapter takes about three seconds; the rest is the
+    // probe, which starts the agent and opens a session with it and is most of
+    // the wait. Saying "installing" for the twenty-odd seconds after the install
+    // has finished was a lie the user could time.
+    INSTALLING: {
+        label: 'Setting up',
+        detail: 'Starting this agent to see what it offers. Usually under a minute.',
+    },
     DISABLED: { label: 'Disabled', detail: 'Turned off in the Agent Host configuration on that computer.' },
 };
+
+// The sentence the Agent Host writes when a coding agent on this Mac is
+// installed but signed out (`authentication_hint`, desktop/agent-host/src/runtime.rs).
+// It reaches the user through two different doors — a harness row's
+// `stale_reason` and a failed run's error — and only one of them used to offer
+// anything to press.
+const LOCAL_AGENT_SIGN_IN_MARKER = 'installed on this computer but not signed in';
+
+/**
+ * Whether this failure is a local coding agent that just needs signing in.
+ *
+ * Matters because "send the message again" does not fix it: a signed-out
+ * harness is published AUTH_REQUIRED and admission refuses every run against it
+ * until the host re-probes, which is otherwise up to fifteen minutes away. The
+ * fix is to ask the host to look again — so the failure carries that action
+ * rather than advice that cannot work yet.
+ *
+ * Deliberately a substring test on one stable clause, not a parse: the message
+ * is written for a person and its wording will move.
+ */
+export function isLocalAgentSignInFailure(detail: string | null | undefined): boolean {
+    return typeof detail === 'string' && detail.includes(LOCAL_AGENT_SIGN_IN_MARKER);
+}
 
 export function agentHostHarnessHealth(health: string): { label: string; detail: string; ready: boolean } {
     const known = AGENT_HOST_HARNESS_HEALTH[health];

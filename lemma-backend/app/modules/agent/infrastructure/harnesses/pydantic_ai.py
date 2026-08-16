@@ -38,6 +38,7 @@ from pydantic_ai.messages import (
 from app.modules.agent.domain.context import AgentContext
 from app.modules.agent.domain.entities import Agent, Conversation, Message
 from app.modules.agent.domain.prompts import build_agent_instructions
+from app.modules.agent.services.run_phase_spans import run_phase
 from app.modules.agent.domain.value_objects import (
     AgentEvent,
     AgentEventType,
@@ -78,6 +79,18 @@ from app.core.request_context import create_inherited_task
 
 logger = get_logger(__name__)
 StopChecker = Callable[[], Awaitable[bool]]
+
+
+class HarnessDriverCancelled(Exception):
+    """The graph-driving task was cancelled while the run was still healthy.
+
+    An ordinary `Exception` rather than a `CancelledError` subclass on purpose:
+    nothing about *this* task is being cancelled, so every `except
+    CancelledError` between here and the runner would draw the wrong conclusion
+    and re-raise a cancellation that isn't happening. Raised as a failure
+    because that is what it is — the graph stopped mid-node and whatever tool
+    was executing was cancelled with it.
+    """
 
 
 def _user_facing_error_message(exc: Exception) -> str:
@@ -130,6 +143,14 @@ def _user_facing_error_message(exc: Exception) -> str:
             "The agent run hit a usage limit. "
             "Please check the agent runtime configuration."
         )
+    if isinstance(exc, HarnessDriverCancelled):
+        # Whatever the agent was doing stopped part-way, so "try again" is the
+        # honest advice. Everything it finished before that point is persisted.
+        return (
+            "The agent stopped part-way through a step and could not finish. "
+            "Nothing you sent was lost — send another message, or press Retry "
+            "to pick up where it stopped."
+        )
     return (
         "The model provider returned an error. "
         "Please check the agent runtime configuration."
@@ -145,6 +166,69 @@ DEFAULT_TOOL_RETRIES = 5
 
 # Ceiling for the pause between stream-drop retries; see `_retry_backoff`.
 _RETRY_BACKOFF_CAP_SECONDS = 6.0
+
+
+def _instructions(
+    *,
+    agent: Agent,
+    conversation: Conversation,
+    ctx: AgentContext,
+) -> str:
+    """The run's system instructions, timed as its own phase.
+
+    Prompt assembly reads and renders every prompt fragment the agent's
+    configuration pulls in, so it is worth telling apart from the model call it
+    sits immediately in front of.
+    """
+    with run_phase("instructions") as span:
+        text = build_agent_instructions(
+            agent=agent,
+            conversation=conversation,
+            ctx=ctx,
+            include_toolset_prompts=False,
+        )
+        span.set_attribute("lemma.instructions.chars", len(text))
+        return text
+
+
+def _reraise_driver_failure(
+    pending_error: BaseException | None,
+    *,
+    cancelled_by_us: bool,
+    agent_run_id: UUID,
+) -> None:
+    """Decide what a failure relayed out of the driver task means.
+
+    A real error is re-raised so ``run()``'s handlers (ModelHTTPError,
+    UsageLimitExceeded, AgentInputRequired, …) still fire.
+
+    A relayed ``CancelledError`` is only ours to drop when we are the ones who
+    cancelled — either our own cancellation is already propagating out of the
+    consumer loop, or we tore the driver down on the way out. Otherwise the
+    driver died under a healthy parent: the graph stopped mid-node, so any tool
+    still executing was cancelled with it and its call will never get a result.
+
+    Dropping that silently is how a truncated run came to report success. The
+    generator returned normally, so ``run()`` emitted COMPLETED and the run was
+    finalized with no error, no log line, and a trailing tool call that nothing
+    ever answered — the agent simply stopped, and every layer above said it went
+    fine.
+    """
+
+    if pending_error is None:
+        return
+    if not isinstance(pending_error, asyncio.CancelledError):
+        raise pending_error
+    if cancelled_by_us:
+        return
+    logger.error(
+        "agent.pydantic_ai.driver_cancelled_mid_run.failed",
+        agent_run_id=str(agent_run_id),
+        exc_info=pending_error,
+    )
+    raise HarnessDriverCancelled(
+        "The agent run was cancelled while a tool call was still running."
+    ) from pending_error
 
 
 async def _drive_with_retry(
@@ -336,7 +420,9 @@ class PydanticAIHarness:
         emitted_tool_response_ids: set[str],
         should_stop: StopChecker | None,
     ) -> AsyncIterator[AgentEvent]:
-        history, user_prompt = self._history_and_prompt(messages)
+        with run_phase("history_convert") as history_span:
+            history, user_prompt = self._history_and_prompt(messages)
+            history_span.set_attribute("lemma.history.model_messages", len(history))
         # e2e mock mode swaps only the model — the rest of the harness (tool
         # execution, streaming, events, persistence) runs for real.
         if is_mock_llm_enabled():
@@ -346,11 +432,10 @@ class PydanticAIHarness:
         agent_kwargs: dict[str, object] = {
             # Per-toolset prompt fragments (e.g. web search) are contributed by the
             # matching capabilities, so they're suppressed here to avoid duplication.
-            "instructions": build_agent_instructions(
+            "instructions": _instructions(
                 agent=agent,
                 conversation=conversation,
                 ctx=ctx,
-                include_toolset_prompts=False,
             ),
             # A single invalid tool call must not kill the run: give the model room
             # to self-correct from validation feedback before giving up.
@@ -368,15 +453,17 @@ class PydanticAIHarness:
             agent_kwargs["toolsets"] = options.toolsets
         # History processors ride as ProcessHistory capabilities (the
         # history_processors= kwarg is deprecated in pydantic-ai).
-        history_processors = build_history_processors(
-            options,
+        with run_phase("summarization_model"):
             # Falls back to this run's model when HISTORY_SUMMARIZATION_MODEL is
             # unset, so behaviour is unchanged unless a deployment opts in.
-            summarization_model=await resolve_summarization_model(
+            summarization_model = await resolve_summarization_model(
                 organization_id=conversation.organization_id,
                 user_id=conversation.user_id,
                 fallback=model,
-            ),
+            )
+        history_processors = build_history_processors(
+            options,
+            summarization_model=summarization_model,
         )
         capabilities = list(options.capabilities or [])
         capabilities.extend(
@@ -629,6 +716,7 @@ class PydanticAIHarness:
 
         task = create_inherited_task(_drive(), name="agent-model-stream")
         pending_error: BaseException | None = None
+        cancelled_by_us = False
         try:
             while True:
                 kind, payload = await queue.get()
@@ -640,6 +728,7 @@ class PydanticAIHarness:
                 yield payload  # type: ignore[misc]
         finally:
             if not task.done():
+                cancelled_by_us = True
                 task.cancel()
             # Let the child finish unwinding pydantic's scopes (in its own task),
             # shielded so our own cancellation doesn't abandon that cleanup.
@@ -649,14 +738,11 @@ class PydanticAIHarness:
                 except BaseException:
                     pass
 
-        # On normal completion, re-raise a real error from the driver so run()'s
-        # handlers (ModelHTTPError, UsageLimitExceeded, AgentInputRequired, …)
-        # still fire. A CancelledError relayed here is dropped: the parent's own
-        # cancellation (if any) already propagated out of the loop above.
-        if pending_error is not None and not isinstance(
-            pending_error, asyncio.CancelledError
-        ):
-            raise pending_error
+        _reraise_driver_failure(
+            pending_error,
+            cancelled_by_us=cancelled_by_us,
+            agent_run_id=agent_run_id,
+        )
 
     async def _stream_model_request(
         self,
@@ -1049,7 +1135,6 @@ class PydanticAIHarness:
         try:
             return await should_stop()
         except Exception:
-            logger.debug('agent.pydantic_ai.agent_stop_check_s.diagnostic')
             return False
 
     def _stopped_event(self, agent_run_id: UUID) -> AgentEvent:

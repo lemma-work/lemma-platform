@@ -32,7 +32,10 @@ from app.core.authorization.delegation import (
     WorkloadPrincipalType,
 )
 from app.core.authorization.session_approvals import has_session_approval
+
+
 from app.core.domain.errors import DomainError
+from app.core.infrastructure.db.transaction_locks import connection_released
 from app.core.authorization.grants import (
     delete_grantee_grants,
     grant_resource_type_values,
@@ -73,6 +76,37 @@ from app.modules.pod.domain.visibility import (
 from app.modules.pod.infrastructure.models.pod_models import Pod, PodMember
 from app.modules.schedule.infrastructure.models.schedule import Schedule
 from app.modules.workflow.infrastructure.models import WorkflowModel
+
+
+async def _session_approval(
+    ctx: "Context",
+    *,
+    session_id: str | None,
+    workload_actor_id: str | None,
+    permission_id: str,
+) -> bool:
+    """``has_session_approval``, asked at most once per permission per request.
+
+    The lookup is a Redis round trip made while the request's pooled database
+    connection is checked out, so repeating it per check is the expensive part.
+
+    Caching it means an approval granted *during* a request is not seen by that
+    request. That is correct for an ordinary request, which is short; for a
+    long-lived streamed one it means the approval takes effect on the next call
+    rather than mid-stream. Acceptable because approvals are awaited through the
+    approval flow rather than polled here -- but it is a staleness window, not
+    an invariant.
+    """
+    cached = ctx._session_approval_cache.get(permission_id)  # noqa: SLF001
+    if cached is not None:
+        return cached
+    approved = await has_session_approval(
+        session_id=session_id,
+        workload_actor_id=workload_actor_id,
+        permission_id=permission_id,
+    )
+    ctx._session_approval_cache[permission_id] = approved  # noqa: SLF001
+    return approved
 
 
 SYSTEM_ORG_ROLES = {"ORG_MEMBER", "ORG_EDITOR", "ORG_OWNER"}
@@ -230,7 +264,7 @@ class AuthorizationDataService:
             granted_by_user_id=created_by_user_id,
         )
         await self.session.flush()
-        await invalidate_role_snapshot_cache(
+        await self._invalidate_snapshots_after_commit(
             organization_id=organization_id, pod_id=pod_id
         )
         return await self._to_summary(role)
@@ -260,9 +294,42 @@ class AuthorizationDataService:
             )
         await self.session.delete(role)
         await self.session.flush()
-        await invalidate_role_snapshot_cache(
+        await self._invalidate_snapshots_after_commit(
             organization_id=organization_id, pod_id=pod_id
         )
+
+
+    async def _invalidate_snapshots_after_commit(
+        self,
+        *,
+        organization_id: UUID | None = None,
+        pod_id: UUID | None = None,
+        user_id: UUID | None = None,
+    ) -> None:
+        """Drop the affected snapshots once the mutation has actually committed.
+
+        Not inline: invalidating inside the transaction holds the connection
+        across a Redis round trip, and it is the wrong order besides — between
+        the invalidation and the commit a concurrent reader can repopulate the
+        cache from the state this mutation is about to replace.
+
+        Falls back to invalidating immediately when there is no unit of work to
+        defer to (a service constructed straight from a session), because a
+        stale snapshot is worse than an early one.
+        """
+        uow = self.session.info.get("lemma_uow")
+
+        async def _run() -> None:
+            await invalidate_role_snapshot_cache(
+                organization_id=organization_id, pod_id=pod_id, user_id=user_id
+            )
+
+        if uow is None:
+            # No unit of work to defer to (a service built straight from a
+            # session). A stale snapshot is worse than an early invalidation.
+            await _run()
+            return
+        uow.after_commit(_run)
 
     async def resolve_resource_id_by_name(
         self,
@@ -380,12 +447,38 @@ class AuthorizationDataService:
         snapshot_principal_id = await self._resolve_snapshot_principal_id(
             principal_type, principal_id
         )
-        await invalidate_role_snapshot_cache(
+        await self._invalidate_snapshots_after_commit(
             organization_id=organization_id,
             pod_id=pod_id,
             user_id=snapshot_principal_id,
         )
         return normalized
+
+    async def _cache_snapshot_without_holding(
+        self, user_id: UUID, snapshot: RoleSnapshot
+    ) -> None:
+        """Write the derived snapshot to Redis with no pooled connection held.
+
+        The read side is already free: ``get_role_snapshot`` runs before this
+        service touches the session, so a cache hit costs no database time at
+        all. The write is the opposite -- it lands *after* the pod, membership
+        and role reads that derive the snapshot, so the connection those reads
+        checked out is still held across a Redis round trip.
+
+        It looks small, and it was the single largest entry in the connection
+        gate's baseline: 37 of 108 violations, because ``build_user_context``
+        propagates through ``build_delegated_workload_context`` into every
+        caller across twenty files.
+
+        Committing first returns the connection. ``safe_to_release`` decides
+        whether that is allowed -- it refuses when the caller has pending or
+        flushed writes, staged outbox events, or a transaction-scoped advisory
+        lock. When it refuses we write anyway and keep the old behaviour: a
+        cache miss that had to hold is strictly better than a caller whose
+        transaction we ended underneath it.
+        """
+        async with connection_released(getattr(self, "session", None)):
+            await set_role_snapshot(user_id=user_id, snapshot=snapshot)
 
     async def build_user_context(
         self,
@@ -405,16 +498,23 @@ class AuthorizationDataService:
                 request_id=request_id,
             )
 
-        if pod_id is not None:
+        # Ask the cache FIRST. The pod-scoped key does not include the
+        # organization (see ``_snapshot_suffix``), so a hit needs no database
+        # read at all — the snapshot carries the organization in its payload.
+        # This used to read the Pod row first, purely to build the key, and paid
+        # for it on every pod request no matter how warm the cache was.
+        async with connection_released(getattr(self, "session", None)):
+            cached = await get_role_snapshot(
+                user_id=user_id,
+                organization_id=organization_id,
+                pod_id=pod_id,
+            )
+        if cached is None and pod_id is not None:
+            # Miss: the snapshot has to be derived, and that needs the org.
             pod = await self.session.get(Pod, pod_id)
             if pod is not None:
                 organization_id = pod.organization_id
 
-        cached = await get_role_snapshot(
-            user_id=user_id,
-            organization_id=organization_id,
-            pod_id=pod_id,
-        )
         if cached is not None:
             return Context(
                 actor_type=ActorType.USER,
@@ -475,7 +575,7 @@ class AuthorizationDataService:
             principal_refs=frozenset(principal_refs),
             grant_principal_sets=(frozenset(principal_refs),),
         )
-        await set_role_snapshot(user_id=user_id, snapshot=snapshot)
+        await self._cache_snapshot_without_holding(user_id, snapshot)
         return Context(
             actor_type=ActorType.USER,
             actor_id=str(user_id),
@@ -500,18 +600,29 @@ class AuthorizationDataService:
         request_id: str | None = None,
     ) -> Context:
         authorizer = Authorizer(self.session)
-        pod = await self.session.get(Pod, pod_id)
-        organization_id = pod.organization_id if pod is not None else None
         normalized_principal_type = principal_type.upper()
         actor_type = ActorType.AGENT if normalized_principal_type == "AGENT" else ActorType.FUNCTION
 
+        # Ask the cache FIRST, exactly as the user path does. The pod-scoped key
+        # omits the organization (see ``_snapshot_suffix``), so a hit needs no
+        # database read: the snapshot carries the organization in its payload.
+        # This read the Pod row first purely to build the key, and every agent
+        # tool call that touches a pod, datastore or connector paid for it no
+        # matter how warm the cache was.
+        #
         # The role snapshot cache is keyed by principal id; workload principals
         # (agent/function ids) share it with user ids without collision.
-        cached = await get_role_snapshot(
-            user_id=principal_id,
-            organization_id=organization_id,
-            pod_id=pod_id,
-        )
+        async with connection_released(getattr(self, "session", None)):
+            cached = await get_role_snapshot(
+                user_id=principal_id,
+                organization_id=None,
+                pod_id=pod_id,
+            )
+        organization_id: UUID | None = None
+        if cached is None:
+            # Miss: deriving the snapshot needs the organization.
+            pod = await self.session.get(Pod, pod_id)
+            organization_id = pod.organization_id if pod is not None else None
         if cached is not None:
             return Context(
                 actor_type=actor_type,
@@ -556,7 +667,7 @@ class AuthorizationDataService:
             principal_refs=frozenset(principal_refs),
             grant_principal_sets=(frozenset(principal_refs),),
         )
-        await set_role_snapshot(user_id=principal_id, snapshot=snapshot)
+        await self._cache_snapshot_without_holding(principal_id, snapshot)
         return Context(
             actor_type=actor_type,
             actor_id=str(principal_id),
@@ -955,7 +1066,7 @@ class AuthorizationDataService:
             principal_type="ORG_MEMBER",
             principal_id=targets.organization_member_id,
         )
-        await invalidate_role_snapshot_cache(user_id=targets.user_id)
+        await self._invalidate_snapshots_after_commit(user_id=targets.user_id)
 
 
 class Authorizer:
@@ -1144,7 +1255,8 @@ class Authorizer:
             or permission_id not in DESTRUCTIVE_ACTIONS
         ):
             return None
-        if await has_session_approval(
+        if await _session_approval(
+            ctx,
             session_id=ctx.delegation_session_id,
             workload_actor_id=ctx.actor_id,
             permission_id=permission_id,
@@ -1239,7 +1351,8 @@ class Authorizer:
             # by the time an ungranted destructive action reaches here it must
             # carry an approval — but check generically so any approved action
             # is honored.)
-            if await has_session_approval(
+            if await _session_approval(
+                ctx,
                 session_id=ctx.delegation_session_id,
                 workload_actor_id=ctx.actor_id,
                 permission_id=permission_id,
@@ -1535,6 +1648,14 @@ class Authorizer:
     async def _hydrate_datastore_file(self, resource: ResourceRef) -> ResourceRef:
         """Hydrate a FOLDER/DOCUMENT ref, including its path so folder grants
         can cascade to descendants."""
+        # A path-only check carries the POD id in resource_id — the caller uses
+        # `resource_id or pod_id` because a ResourceRef wants one, and the path
+        # is what the grant cascade actually matches on. Querying for a file row
+        # whose id equals a pod id can only ever return nothing, so skip it:
+        # this ran on every datastore path check.
+        if resource.resource_id is None or resource.resource_id == resource.pod_id:
+            return resource
+
         stmt = select(
             DatastoreFile.pod_id,
             DatastoreFile.owner_user_id,

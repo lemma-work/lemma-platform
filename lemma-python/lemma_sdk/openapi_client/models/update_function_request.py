@@ -10,6 +10,9 @@ from ..models.resource_visibility import ResourceVisibility
 from ..types import UNSET, Unset
 
 if TYPE_CHECKING:
+    from ..models.function_permissions_replace_request import (
+        FunctionPermissionsReplaceRequest,
+    )
     from ..models.json_object import JsonObject
 
 
@@ -26,6 +29,10 @@ class UpdateFunctionRequest:
         config (JsonObject | None | Unset):
         description (None | str | Unset):
         icon_url (None | str | Unset):
+        permissions (FunctionPermissionsReplaceRequest | None | Unset): Optional resource grants to REPLACE on this
+            function, in the same request. Equivalent to calling the permissions-replace endpoint right after this call —
+            grants are keyed by resource_name. Omit the key to leave existing grants alone; an empty grant list revokes
+            them.
         type_ (FunctionType | None | Unset):
         visibility (None | ResourceVisibility | Unset):
     """
@@ -34,10 +41,14 @@ class UpdateFunctionRequest:
     config: JsonObject | None | Unset = UNSET
     description: None | str | Unset = UNSET
     icon_url: None | str | Unset = UNSET
+    permissions: FunctionPermissionsReplaceRequest | None | Unset = UNSET
     type_: FunctionType | None | Unset = UNSET
     visibility: None | ResourceVisibility | Unset = UNSET
 
     def to_dict(self) -> dict[str, Any]:
+        from ..models.function_permissions_replace_request import (
+            FunctionPermissionsReplaceRequest,
+        )
         from ..models.json_object import JsonObject
 
         code: None | str | Unset
@@ -66,6 +77,14 @@ class UpdateFunctionRequest:
         else:
             icon_url = self.icon_url
 
+        permissions: dict[str, Any] | None | Unset
+        if isinstance(self.permissions, Unset):
+            permissions = UNSET
+        elif isinstance(self.permissions, FunctionPermissionsReplaceRequest):
+            permissions = self.permissions.to_dict()
+        else:
+            permissions = self.permissions
+
         type_: None | str | Unset
         if isinstance(self.type_, Unset):
             type_ = UNSET
@@ -93,6 +112,8 @@ class UpdateFunctionRequest:
             field_dict["description"] = description
         if icon_url is not UNSET:
             field_dict["icon_url"] = icon_url
+        if permissions is not UNSET:
+            field_dict["permissions"] = permissions
         if type_ is not UNSET:
             field_dict["type"] = type_
         if visibility is not UNSET:
@@ -102,6 +123,9 @@ class UpdateFunctionRequest:
 
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
+        from ..models.function_permissions_replace_request import (
+            FunctionPermissionsReplaceRequest,
+        )
         from ..models.json_object import JsonObject
 
         d = dict(src_dict)
@@ -150,6 +174,25 @@ class UpdateFunctionRequest:
 
         icon_url = _parse_icon_url(d.pop("icon_url", UNSET))
 
+        def _parse_permissions(
+            data: object,
+        ) -> FunctionPermissionsReplaceRequest | None | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            try:
+                if not isinstance(data, dict):
+                    raise TypeError()
+                permissions_type_0 = FunctionPermissionsReplaceRequest.from_dict(data)
+
+                return permissions_type_0
+            except TypeError, ValueError, AttributeError, KeyError:
+                pass
+            return cast(FunctionPermissionsReplaceRequest | None | Unset, data)
+
+        permissions = _parse_permissions(d.pop("permissions", UNSET))
+
         def _parse_type_(data: object) -> FunctionType | None | Unset:
             if data is None:
                 return data
@@ -189,6 +232,7 @@ class UpdateFunctionRequest:
             config=config,
             description=description,
             icon_url=icon_url,
+            permissions=permissions,
             type_=type_,
             visibility=visibility,
         )

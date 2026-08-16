@@ -24,6 +24,10 @@ import httpx
 from app.composition.surface_connectors import (
     ComposioOperationGateway,
 )
+from app.core.net.capped_read import read_capped
+from app.modules.agent_surfaces.platforms.attachment_limits import (
+    INBOUND_ATTACHMENT_BYTE_CAP,
+)
 
 # Reserved key the surface credential resolver stamps with the account's
 # auth-config kind. Falls back to connection_id sniffing for credential
@@ -91,6 +95,8 @@ async def fetch_composio_file_bytes(data: Any) -> bytes:
             "Composio file-download result did not include an s3url or inline content."
         )
     async with httpx.AsyncClient(timeout=120.0, follow_redirects=True) as client:
-        response = await client.get(s3url)
-        response.raise_for_status()
-        return response.content
+        async with client.stream("GET", s3url) as response:
+            response.raise_for_status()
+            return await read_capped(
+                response.aiter_bytes(), max_bytes=INBOUND_ATTACHMENT_BYTE_CAP
+            )

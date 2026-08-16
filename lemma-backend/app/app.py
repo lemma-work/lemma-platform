@@ -19,6 +19,7 @@ from app.core.api.streaming_multipart import install_streaming_multipart_openapi
 from app.core.domain.errors import PayloadTooLargeError
 from app.core.config import settings
 from app.core.cors import get_allowed_cors_origin_regex, get_allowed_cors_origins
+from app.core.origin import origin_for_path, origin_scope, resolve_client_identity
 from app.core.infrastructure.events.message_bus import (
     close_message_bus,
     get_message_bus,
@@ -28,6 +29,7 @@ from app.core.infrastructure.jobs.streaq_job_queue import (
     close_streaq_job_queue,
     get_streaq_job_queue,
 )
+from app.core.infrastructure.jobs.streaq_runtime import ensure_task_lanes_registered
 from app.core.infrastructure.cache.redis_json_cache import close_redis_json_caches
 from app.core.infrastructure.redis.client import close_redis_clients
 from app.core.security import verify_auth
@@ -141,19 +143,60 @@ async def lifespan(app: FastAPI):
             await stack.enter_async_context(pod_mcp_app.lifespan(app))
 
         # Core startup
-        from app.core.concurrency.offload import configure_thread_pool
+        from app.core.analytics.bootstrap import start_analytics
+        from app.core.concurrency.offload import configure_thread_pool, run_blocking
+        from app.core.observability.connection_scope import (
+            start_connection_scope_monitor_from_settings,
+        )
         from app.core.observability.loop_watchdog import loop_lag_watchdog
+        from app.core.observability.memory_sampler import memory_sampler
 
         configure_thread_pool()
+        start_connection_scope_monitor_from_settings(service_name="lemma-api")
+        # Installs a null sink unless ANALYTICS_WRITE_KEY is set, so a
+        # self-hosted or Desktop-local process reports nothing.
+        start_analytics()
+        embedded_worker = getattr(app.state, "embedded_worker", False)
         watchdog_task = (
             None
-            if getattr(app.state, "embedded_worker", False)
+            if embedded_worker
             else create_background_task(
                 loop_lag_watchdog(service_name="lemma-api"),
                 name="api-loop-lag-watchdog",
             )
         )
+        # Skipped under an embedded worker for the same reason as the watchdog:
+        # the worker runtime starts its own, and two samplers in one process
+        # would report the same resident memory twice under two service names.
+        memory_task = (
+            None
+            if embedded_worker
+            else create_background_task(
+                memory_sampler(service_name="lemma-api"),
+                name="api-memory-sampler",
+            )
+        )
         initialize_supertokens()
+        # Build the OpenAPI document now rather than on whichever request first
+        # asks for it. `custom_openapi` caches correctly, but the first call
+        # costs ~3.35s of pydantic model-graph construction on the event loop —
+        # the api's loop-stall sampler caught it in
+        # `fastapi._compat.get_flat_models_from_fields`, and it blocks every
+        # concurrent request when it lands. Off the loop because it is pure CPU.
+        #
+        # Only where the document is actually served. In production it is not,
+        # so this whole cost leaves the cold start rather than moving within it.
+        if settings.api_docs_served():
+            await run_blocking(app.openapi, limiter="cpu_bound")
+        # Learn which lane each task runs on before serving traffic. The
+        # enqueue path resolves this lazily as a safety net, but the first
+        # resolution imports every module's handlers — half a second that
+        # would otherwise land on whichever request first enqueues a job.
+        # The composed list, not OSS: lemma-cloud installs more modules, and a
+        # cloud-only task missing here would be enqueued to the wrong lane.
+        ensure_task_lanes_registered(
+            getattr(app.state, "lemma_modules", OSS_MODULES)
+        )
         await channel_service.connect()
         await get_streaq_job_queue().connect()
         await get_message_bus().connect()
@@ -177,12 +220,33 @@ async def lifespan(app: FastAPI):
             # Core closers — explicit and last so they tear down after modules.
             if started:
                 logger.info("service.stopped")
-            if watchdog_task is not None and not watchdog_task.done():
-                watchdog_task.cancel()
-                try:
-                    await watchdog_task
-                except BaseException:
-                    pass
+            for lifecycle_task in (watchdog_task, memory_task):
+                if lifecycle_task is not None and not lifecycle_task.done():
+                    lifecycle_task.cancel()
+                    try:
+                        await lifecycle_task
+                    except asyncio.CancelledError:
+                        # The expected path: we just cancelled it. Swallowed
+                        # rather than re-raised because this is a `finally` and
+                        # every closer below still has to run.
+                        pass
+                    except BaseException:
+                        # Anything else is the sampler failing on its own way
+                        # out. Still swallowed, for the same reason -- a broken
+                        # diagnostic must not take the shutdown with it -- but
+                        # not silently: a bare `pass` here is how a sampler that
+                        # has been dying at every shutdown for months goes
+                        # unnoticed.
+                        logger.warning(
+                            "runtime.lifecycle_task.shutdown_failed.degraded",
+                            task=getattr(lifecycle_task.get_coro(), "__name__", "?"),
+                            exc_info=True,
+                        )
+            # Before the shared HTTP client closes below: the sink delivers
+            # what it has buffered on the way out.
+            from app.core.analytics.bootstrap import stop_analytics
+
+            await stop_analytics()
             await close_streaq_job_queue()
             await close_message_bus()
             # Outbound connector plumbing: the shared HTTP pool and any engines
@@ -217,6 +281,9 @@ class RequestObserverMiddleware:
     """Bind HTTP correlation, emit bounded terminal signals, and record metrics."""
 
     HEADER = b"x-request-id"
+    # How the work arrived, per docs/design/product-analytics.md. Resolved once
+    # here so every downstream emit reads it from context rather than guessing.
+    CLIENT_HEADER = b"x-lemma-client"
     REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
     SLOW_SECONDS = 2.0
     QUIET_PATHS = frozenset(
@@ -273,9 +340,23 @@ class RequestObserverMiddleware:
                 message = {**message, "headers": raw_headers}
             await send(message)
 
+        client_header = next(
+            (v for k, v in headers if k.lower() == self.CLIENT_HEADER), None
+        )
+        # The mount point wins over the header where the route itself settles
+        # the question: an MCP caller sends no Lemma client header.
+        resolved_origin = origin_for_path(scope.get("path") or "") or (
+            resolve_client_identity(
+                client_header.decode("latin-1", "replace") if client_header else None
+            ).origin
+        )
+
         caught: Exception | None = None
         cancelled = False
-        with bind_request_context(request_id=request_id, correlation_id=correlation_id):
+        with (
+            bind_request_context(request_id=request_id, correlation_id=correlation_id),
+            origin_scope(resolved_origin),
+        ):
             try:
                 await self.app(scope, receive, send_with_request_id)
             except asyncio.CancelledError:
@@ -291,7 +372,12 @@ class RequestObserverMiddleware:
                 attributes = {
                     "http.request.method": str(scope.get("method", "UNKNOWN")),
                     "http.route": route,
-                    "http.response.status_class": f"{status_code // 100}xx",
+                    # The exact code, not the class. The FastAPI instrumentation's
+                    # own histogram records exact codes but no route, and this
+                    # counter records the route -- matching the vocabularies is
+                    # what lets a dashboard join them into per-route error rate.
+                    # Cardinality is bounded by the codes we actually return.
+                    "http.response.status_code": status_code,
                 }
                 http_request_count.add(1, attributes)
                 http_request_duration.record(duration_ms, attributes)
@@ -456,6 +542,13 @@ def create_app(modules=OSS_MODULES) -> FastAPI:
         log_level=settings.log_level,
     )
     validate_release_identity(settings.environment)
+    # Production serves no API documentation. Building the document costs ~3.35s
+    # of a cold start (second only to the imports), nothing in production reads
+    # it -- both SDKs are generated at build time and the route inventory is a CI
+    # gate -- and the endpoints are unauthenticated, so serving them publishes
+    # the shape of every route to anyone who asks. `API_DOCS_ENABLED` overrides
+    # in either direction.
+    docs_served = settings.api_docs_served()
     app = FastAPI(
         title=settings.app_name,
         description="Authentication API with JWT, user management, and OAuth support",
@@ -465,6 +558,9 @@ def create_app(modules=OSS_MODULES) -> FastAPI:
         dependencies=[Depends(verify_auth)],
         redirect_slashes=False,
         separate_input_output_schemas=False,
+        openapi_url="/openapi.json" if docs_served else None,
+        docs_url="/docs" if docs_served else None,
+        redoc_url="/redoc" if docs_served else None,
     )
     app.state.lemma_modules = modules
 
@@ -530,6 +626,7 @@ def create_app(modules=OSS_MODULES) -> FastAPI:
             "Content-Type",
             "Authorization",
             "X-Lemma-Client",
+            "X-Lemma-App",
             "x-altcha-payload",
         ]
         + get_all_cors_headers(),
@@ -695,14 +792,18 @@ def create_app(modules=OSS_MODULES) -> FastAPI:
         }
         return JSONResponse(payload, status_code=200 if healthy else 503)
 
-    @app.get("/scalar", include_in_schema=False)
-    async def scalar_html():
-        return get_scalar_api_reference(
-            # Your OpenAPI document
-            openapi_url=app.openapi_url,
-            # authentication={"preferredSecurityScheme": "HTTPBearer"},
-            persist_auth=True,
-        )
+    # Registered only alongside the document it renders. Left on with
+    # `openapi_url=None` it would serve a reference UI pointed at nothing.
+    if docs_served:
+
+        @app.get("/scalar", include_in_schema=False)
+        async def scalar_html():
+            return get_scalar_api_reference(
+                # Your OpenAPI document
+                openapi_url=app.openapi_url,
+                # authentication={"preferredSecurityScheme": "HTTPBearer"},
+                persist_auth=True,
+            )
 
     def custom_openapi():
         if app.openapi_schema:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -14,12 +15,19 @@ from app.core.infrastructure.events.inbox import InboxStatus
 from app.core.infrastructure.events.models import DomainEventInbox, DomainEventOutbox
 
 
-async def _delete_batch(
+async def delete_batch(
     session: AsyncSession,
     model,
     *filters,
     batch_size: int,
 ) -> int:
+    """Delete one bounded batch, skipping rows another sweep holds.
+
+    Shared with the schedule-run pruner rather than reimplemented there: the
+    ``SKIP LOCKED`` claim and the id-ordered CTE are the parts that make a
+    pruner safe to run concurrently with the writers, and are worth having in
+    one place.
+    """
     claimed = (
         select(model.id)
         .where(*filters)
@@ -39,7 +47,22 @@ async def prune_event_delivery_records(
     *,
     now: datetime | None = None,
 ) -> dict[str, int]:
-    """Delete at most one configured batch from each retention category."""
+    """Drain each retention category, bounded by a wall-clock budget.
+
+    This used to delete exactly one batch per category per run. With the
+    default 1,000-row batch and an hourly cron that is a ceiling of 24,000
+    rows a day, which any install producing events faster than that outruns --
+    the table then grows without bound no matter what the retention window
+    says, and the pruner never catches up. That is how the outbox reached
+    several hundred thousand rows.
+
+    So each category now deletes repeatedly until a short batch says it is
+    drained. The budget keeps one sweep from running into the next: it is
+    checked between batches, so a run stops cleanly at a batch boundary and
+    the next cron tick resumes where it left off. Nothing is lost by stopping
+    early -- the cutoff is recomputed from ``now`` on the next run, and rows
+    past it stay eligible.
+    """
     now = now or datetime.now(timezone.utc)
     completed_cutoff = now - timedelta(
         days=event_transport_settings.event_completed_retention_days
@@ -84,13 +107,31 @@ async def prune_event_delivery_records(
             ),
         ),
     )
+    budget = event_transport_settings.event_retention_run_budget_seconds
+    started = time.monotonic()
+
+    def budget_spent() -> bool:
+        return budget > 0 and (time.monotonic() - started) >= budget
+
     deleted: dict[str, int] = {}
     for name, model, filters in categories:
-        async with session_maker() as session, session.begin():
-            deleted[name] = await _delete_batch(
-                session,
-                model,
-                *filters,
-                batch_size=batch_size,
-            )
+        removed = 0
+        while True:
+            # One batch per transaction, as before. Holding a single
+            # transaction open across the whole drain would pin a connection
+            # and keep every deleted row's tuple alive for the duration.
+            async with session_maker() as session, session.begin():
+                batch = await delete_batch(
+                    session,
+                    model,
+                    *filters,
+                    batch_size=batch_size,
+                )
+            removed += batch
+            # A short batch means the category is drained. Anything skipped by
+            # SKIP LOCKED is being deleted by a concurrent sweep, or is leased
+            # by the dispatcher and no longer matches the cutoff anyway.
+            if batch < batch_size or budget == 0 or budget_spent():
+                break
+        deleted[name] = removed
     return deleted

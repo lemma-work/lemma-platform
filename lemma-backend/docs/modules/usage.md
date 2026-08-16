@@ -66,5 +66,4 @@ admission.
 ## Tests and operations
 
 Tests cover optional pricing, unlimited defaults, injected reservations,
-atomic counter concurrency, queries, and API authorization. Issue evidence is in
-[issues.md](issues.md).
+atomic counter concurrency, queries, and API authorization.

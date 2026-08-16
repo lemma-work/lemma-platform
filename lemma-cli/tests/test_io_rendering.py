@@ -113,3 +113,51 @@ def test_list_items_from_list():
 def test_list_items_empty_for_non_dict():
     result = list_items("foo")
     assert result == []
+
+
+# ---------------------------------------------------------------------------
+# format_columns() — ENUM options
+# ---------------------------------------------------------------------------
+
+_ENUM_TABLE = {
+    "name": "tickets",
+    "primary_key_column": "id",
+    "columns": [
+        {"name": "id", "type": "UUID"},
+        {
+            "name": "status",
+            "type": "ENUM",
+            "options": ["new", "triaged", "waiting", "closed"],
+        },
+    ],
+}
+
+
+def test_detail_view_shows_enum_options():
+    """An ENUM's whole meaning is its options. They used to be readable only via
+    `--output json`, while the docs told QA to read them off this output."""
+    state = SimpleNamespace(output="pretty", full=False)
+    output = _capture_emit(state, _ENUM_TABLE)
+    assert "status:enum(new|triaged|waiting|+1)" in output
+
+
+def test_full_uncaps_enum_options():
+    state = SimpleNamespace(output="pretty", full=True)
+    output = _capture_emit(state, _ENUM_TABLE)
+    assert "status:enum(new|triaged|waiting|closed)" in output
+
+
+def test_list_view_keeps_columns_compact():
+    """Options belong to the detail view — rendering them in list rows would
+    widen the Columns cell of every table with an enum."""
+    state = SimpleNamespace(output="pretty", full=False)
+    output = _capture_emit(state, {"items": [_ENUM_TABLE]})
+    assert "status:enum" in output
+    assert "triaged" not in output
+
+
+def test_column_without_options_is_unchanged():
+    state = SimpleNamespace(output="pretty", full=False)
+    output = _capture_emit(state, {"name": "t", "columns": [{"name": "n", "type": "TEXT"}]})
+    assert "n:text" in output
+    assert "n:text(" not in output

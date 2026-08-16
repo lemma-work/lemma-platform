@@ -9,6 +9,7 @@ live behind ``DocumentProcessorPort``.
 
 from __future__ import annotations
 
+from contextlib import suppress
 from dataclasses import dataclass
 from uuid import UUID
 
@@ -143,10 +144,8 @@ class FilePageRenderer:
     async def _store_cached(
         self, key: str, jpeg: bytes, path: str, page_number: int
     ) -> None:
-        try:
+        with suppress(Exception):
             await self.storage.upload_file(key, jpeg)
-        except Exception:
-            logger.debug('datastore.renderer.caching_rendered_page_s_s.diagnostic')
 
     async def _render_missing(
         self, entity: DatastoreFileEntity, page_numbers: list[int]

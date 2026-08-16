@@ -40,7 +40,10 @@ from app.modules.agent_surfaces.tests.e2e.helpers import (
     _seed_external_user,
     _telegram_payload,
 )
-from app.modules.agent_surfaces.tests.e2e.mock_infrastructure import wait_for_messages
+from app.modules.agent_surfaces.tests.e2e.mock_infrastructure import (
+    wait_for_messages,
+    wait_for_slack_text,
+)
 from app.modules.agent_surfaces.tests.e2e.scripted_llm import (
     process_ingress_and_run_scripted,
     script_progress,
@@ -104,7 +107,10 @@ async def test_progress_streams_via_chat_update_on_slack(
     chunks = await wait_for_messages(
         message_store, "SLACK_STREAM_APPEND", min_count=1
     )
-    assert any("Here is the answer." in json.dumps(item) for item in chunks)
+    # Across appends, not within one: the token buffer flushes on a size *or*
+    # time trigger, so the answer can be split at an arbitrary character.
+    delivered = await wait_for_slack_text(message_store, "Here is the answer.")
+    assert any("Here is the answer." in text for text in delivered), delivered
     stops = await wait_for_messages(message_store, "SLACK_STREAM_STOP", min_count=1)
     assert stops[-1]["ts"] == chunks[-1]["ts"]
 

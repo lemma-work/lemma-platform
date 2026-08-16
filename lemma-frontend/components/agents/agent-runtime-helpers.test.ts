@@ -18,6 +18,7 @@ import {
     harnessConfigControls,
     harnessProfileChanges,
     hydrateRuntimeModel,
+    isLocalAgentSignInFailure,
     isArchivedProfile,
     isDiscoveringHarnesses,
     HARNESS_DISCOVERY_WINDOW_MS,
@@ -174,10 +175,18 @@ describe('harness discovery', () => {
         expect(isDiscoveringHarnesses(host({ created_at: old }), 0)).toBe(false);
     });
 
-    it('covers the host\'s own connect timeout, which is what makes it slow', () => {
-        // agent-host's CONNECT_TIMEOUT is 600s; a window shorter than that
-        // would call discovery finished while the host was still working.
-        expect(HARNESS_DISCOVERY_WINDOW_MS).toBeGreaterThanOrEqual(600_000);
+    it('gives discovery the budget, not the worst case of a path that is gone', () => {
+        // This used to assert the window covered agent-host's 600s
+        // CONNECT_TIMEOUT, because pairing *was* the install: it fetched an
+        // adapter package per agent before it could report success, and calling
+        // discovery finished sooner would have been a lie.
+        //
+        // Pairing no longer installs anything, that timeout no longer exists,
+        // and the target is thirty seconds from an agent appearing on disk to
+        // showing as ready. The window is patience beyond the budget, so it is
+        // bounded by the budget rather than by a download.
+        expect(HARNESS_DISCOVERY_WINDOW_MS).toBeGreaterThanOrEqual(30_000);
+        expect(HARNESS_DISCOVERY_WINDOW_MS).toBeLessThanOrEqual(5 * 60_000);
     });
 
     it('never claims a revoked computer is still looking', () => {
@@ -430,5 +439,33 @@ describe('harnessProfileChanges', () => {
     it('notices a selection that was removed', () => {
         expect(harnessProfileChanges(stored, { ...stored, selections: {} }))
             .toEqual({ config_selections: {} });
+    });
+});
+
+describe('isLocalAgentSignInFailure', () => {
+    // The Agent Host's own wording, from `authentication_hint`. Matching it is
+    // what puts a Re-check button on the one failure where "try again" cannot
+    // work on its own: the harness stays AUTH_REQUIRED and admission keeps
+    // refusing until the host re-probes.
+    const hint =
+        'Claude Code is installed on this computer but not signed in. ' +
+        'Sign in to it in a terminal, then press Re-check. ' +
+        'Lemma runs it with your credentials and never sees them.';
+
+    it('recognises a signed-out coding agent', () => {
+        expect(isLocalAgentSignInFailure(hint)).toBe(true);
+    });
+
+    it('leaves every other failure alone', () => {
+        // Offering a re-probe here would be a button that fixes nothing.
+        expect(isLocalAgentSignInFailure('Agent run was interrupted (timeout or shutdown)')).toBe(false);
+        expect(isLocalAgentSignInFailure('No LLM model is configured on this server')).toBe(false);
+        expect(isLocalAgentSignInFailure('')).toBe(false);
+        expect(isLocalAgentSignInFailure(null)).toBe(false);
+        expect(isLocalAgentSignInFailure(undefined)).toBe(false);
+    });
+
+    it('is not fooled by an unrelated mention of signing in', () => {
+        expect(isLocalAgentSignInFailure('The user is not signed in to Lemma.')).toBe(false);
     });
 });

@@ -76,6 +76,75 @@ carry log message bodies beyond a bounded field allowlist
 (`SanitizingLoggingHandler`). None of this is configurable — it's a
 production-safety invariant, not a dev convenience.
 
+## Metric labels are allowlisted, and that is where labels go to die
+
+One catch-all View is applied to every instrument
+(`app/core/observability/telemetry.py`), keeping only the keys in
+`METRIC_ATTRIBUTE_KEYS` (`app/core/observability/span_sanitizer.py`) and
+silently dropping the rest. Spans have their own allowlist,
+`GENERAL_SPAN_ATTRIBUTE_KEYS`, and the resource a third,
+`RESOURCE_ATTRIBUTE_KEYS`.
+
+This is a production-safety invariant and it stays default-deny. But it means
+**a label you add to an instrument does not appear on a dashboard until its key
+is in that set**, and nothing warns you — the metric exports, the label is just
+gone, and points that differed only by that label silently aggregate into one
+series. If a metric looks like it lost its dimensions, check the allowlist
+before checking the instrumentation. `app/core/tests/unit/test_otel_safety.py`
+asserts the keys the dashboards depend on.
+
+Tenancy is deliberately split: `lemma.organization_id` is allowed on **spans**
+and not on metrics. As a span attribute it costs storage proportional to
+sampled traffic and turns "the API is slow" into "it is slow for this
+customer"; as a metric label it would multiply every series by the customer
+count.
+
+### Metrics worth knowing about
+
+| Metric | Labels | Answers |
+|---|---|---|
+| `lemma.http.server.requests` | `http.route`, `http.request.method`, `http.response.status_code` | Per-route error rate. Exact status, so it joins the FastAPI instrumentation's own histogram |
+| `http.client.request.duration` | `server.address`, `http.request.method`, `http.response.status_code` | Which third party is slow |
+| `db.client.connections.usage` | `pool.name`, `state` | Pool utilisation per pool. `pool.name` is safe only because the engines set an explicit `pool_logging_name`; the instrumentation's fallback is the DSN |
+| `lemma.worker.queue.depth` | `lane` | How much work is *waiting*, which throughput cannot tell you |
+| `lemma.event.outbox.pending` / `.inbox.pending` | — | A growing pile behind a healthy-looking publish rate |
+| `lemma.llm.tokens` | `gen_ai.request.model`, `gen_ai.token.type` | Tokens per day by model |
+| `lemma.llm.cost_usd` | `gen_ai.request.model` | Spend, next to everything else |
+
+The backlog gauges are sampled by a loop on the **worker** and report nothing
+until the first successful sample — a gauge that reports a stale level reads as
+a healthy steady state, which is the failure these exist to catch.
+
+### HTTP semantic conventions
+
+`OTEL_SEMCONV_STABILITY_OPT_IN=http/dup` is set in-process before the aiohttp
+and httpx instrumentations are installed. Those two default to the superseded
+conventions, which key outbound calls by `net.peer.name` — and that key is not
+on the metric allowlist, so every third party collapsed into one series. pyqwest
+(via `e2b` and `connectrpc`) already emits the stable conventions, so the
+process was describing the same calls two ways.
+
+**`dup`, not `http`, and the distinction matters.** This variable is
+process-global, and the ASGI/FastAPI **server** instrumentation reads it too.
+Setting it to `http` would also rename the inbound histogram —
+`http.server.duration` (ms) → `http.server.request.duration` (s) — silently
+breaking every dashboard on request latency, which is not a change anyone asked
+for by wanting a host label on outbound calls.
+
+`dup` emits both vocabularies at once:
+
+| | old (still emitted) | new (also emitted) |
+|---|---|---|
+| client | `http.client.duration` (ms) | `http.client.request.duration` (s), with `server.address` |
+| server | `http.server.duration` (ms) | `http.server.request.duration` (s) |
+
+Nothing breaks, the new dimensions are available immediately, and dashboards
+migrate on their own schedule. The cost is duplicate series while both are live.
+
+Flipping to plain `http` and dropping the old series is a deliberate follow-up —
+do it once the dashboards read the new names, not as a side effect of this. A
+deployment can set the variable itself to pin either behaviour.
+
 ## LLM observability
 
 Pydantic AI/OpenInference traces use a separate, disabled-by-default pipeline

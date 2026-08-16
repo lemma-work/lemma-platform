@@ -2,7 +2,8 @@
 
 import { use, useState } from 'react';
 import Link from 'next/link';
-import { ChevronRight, Edit2, MoreHorizontal, Play, Plus, Trash2, Workflow, Zap } from '@/components/ui/icons';
+import { ChevronRight, Edit2, FunctionSquare, MoreHorizontal, Play, Plus, Trash2, Workflow } from '@/components/ui/icons';
+import { ResourceIdentity } from '@/components/shared/resource-identity';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
@@ -101,7 +102,7 @@ export default function FunctionsIndexPage({
                 empty={(
                     <EmptyState
                         variant="region"
-                        icon={<Zap className="h-5 w-5" />}
+                        icon={<FunctionSquare className="h-5 w-5" />}
                         title="No functions yet"
                         description={canCreateFunction
                             ? "Add a reusable capability that agents and workflows can call when the pod needs to act."
@@ -172,9 +173,14 @@ function FunctionRow({
 
     return (
         <div className="lemma-index-row group flex items-center gap-2.5">
-            <span className="state-badge-brand flex h-6 w-6 shrink-0 items-center justify-center rounded-md">
-                <Zap className="h-3.5 w-3.5" />
-            </span>
+            <ResourceIdentity
+                seed={func.id || func.name}
+                label=""
+                kind="mark"
+                glyph={FunctionSquare}
+                size={24}
+                className="shrink-0"
+            />
 
             <Link
                 href={`/pod/${podId}/functions/${encodeURIComponent(func.name)}`}

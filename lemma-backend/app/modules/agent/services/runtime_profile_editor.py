@@ -38,6 +38,7 @@ from app.modules.agent.services.runtime_profile_service import (
     _normalized_headers,
 )
 # Imported as a module so a patched discovery function is the one that runs.
+from app.core.infrastructure.db.transaction_locks import connection_released
 from app.modules.agent.services import runtime_provider_discovery as discovery
 
 
@@ -70,6 +71,17 @@ class AgentRuntimeProfileEditor:
 
     def __init__(self, service: AgentRuntimeProfileService):
         self._service = service
+
+    def _session(self):
+        """The session behind the repository, so the connection can be released.
+
+        Reached through the repository because the editor is constructed from a
+        service, not a unit of work. Returns ``None`` when there is no
+        repository (unit tests), which `connection_released` treats as "nothing
+        to release" and passes straight through.
+        """
+        repository = self._service.repository
+        return getattr(getattr(repository, "uow", None), "session", None)
 
 
     async def _load_editable(
@@ -318,8 +330,11 @@ class AgentRuntimeProfileEditor:
         if base_url_changed and next_base_url is not None:
             # Validate directly rather than relying on discovery to do it: an
             # edit that changes the URL without re-discovering would otherwise
-            # never see the SSRF guard at all.
-            await discovery._validate_public_base_url(str(next_base_url))
+            # never see the SSRF guard at all. Released for the same reason as
+            # the discovery below -- the guard resolves DNS, so it is a network
+            # call however quick it usually is.
+            async with connection_released(self._session()):
+                await discovery._validate_public_base_url(str(next_base_url))
 
         next_headers = (
             stored.headers if isinstance(headers, _UnsetType) else _normalized_headers(headers)
@@ -353,19 +368,24 @@ class AgentRuntimeProfileEditor:
             revealed = reveal_credentials(next_credentials) or {}
             secret = revealed.get("api_key")
             discovery_url = str(next_base_url or "https://api.anthropic.com")
-            discovered = (
-                await discovery._discover_anthropic_compatible_models(
-                    base_url=discovery_url,
-                    api_key=str(secret or ""),
-                    headers=next_headers,
+            # The profile was read above and nothing has been written yet, so
+            # the connection can go back for the length of the provider call --
+            # an HTTP round trip to a caller-supplied base URL, which is as slow
+            # as whatever is at the other end. The write below re-acquires.
+            async with connection_released(self._session()):
+                discovered = (
+                    await discovery._discover_anthropic_compatible_models(
+                        base_url=discovery_url,
+                        api_key=str(secret or ""),
+                        headers=next_headers,
+                    )
+                    if is_anthropic
+                    else await discovery._discover_openai_compatible_models(
+                        base_url=discovery_url,
+                        api_key=str(secret) if secret else None,
+                        headers=next_headers,
+                    )
                 )
-                if is_anthropic
-                else await discovery._discover_openai_compatible_models(
-                    base_url=discovery_url,
-                    api_key=str(secret) if secret else None,
-                    headers=next_headers,
-                )
-            )
             if not isinstance(model_names, _UnsetType):
                 fallback_names = list(model_names)
             elif discovered:

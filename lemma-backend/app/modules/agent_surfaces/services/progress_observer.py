@@ -307,9 +307,6 @@ class SurfaceAgentRunProgressObserver(TokenStreamMixin):
             except Exception:
                 if rendered_key is not None:
                     self._rendered_waiting_tool_calls.discard(rendered_key)
-                logger.debug(
-                    'agent_surfaces.progress_observer.surface_s_render_conversation_s.diagnostic'
-                )
         if not ends_run:
             # Nothing about this run's final answer is settled yet: the narration
             # above was the lead-in to the prompt, and the real answer only comes

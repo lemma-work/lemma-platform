@@ -15,6 +15,7 @@ and is skipped — never blocking the agent run.
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -30,6 +31,7 @@ from app.modules.agent_surfaces.domain.entities import ParsedInboundSurfaceEvent
 from app.modules.agent_surfaces.infrastructure.adapters.registry import (
     SurfacePlatformAdapterRegistry,
 )
+from app.core.net.capped_read import ResponseTooLargeError
 from app.modules.agent_surfaces.platforms.attachment_limits import (
     INBOUND_ATTACHMENT_BYTE_CAP,
     INBOUND_VOICE_TRANSCRIBE_BYTE_CAP,
@@ -40,6 +42,14 @@ from app.modules.datastore.contracts import normalize_datastore_name
 logger = get_logger(__name__)
 
 _AUDIO_CONTENT_TYPES = {"voice", "audio"}
+
+# Given a callable that wants a file service, run it in whatever transaction is
+# appropriate and return what it produced. Production opens a fresh one per
+# file; unit tests hand a fake service straight through.
+StoreInTransaction = Callable[
+    [Callable[[Any], Awaitable["IngestedAttachment | None"]]],
+    Awaitable["IngestedAttachment | None"],
+]
 
 
 @dataclass(slots=True)
@@ -116,29 +126,51 @@ class SurfaceFileIngestService:
         if adapter is None:
             return []
 
+        # Three phases, and the middle one is the reason for the shape: an
+        # attachment is up to 50 MB over a 60s-timeout HTTP call, once per file.
+        # Building the context and storing the bytes are the only parts that
+        # need a connection, so those are the only parts that have one.
         async with SessionUnitOfWorkFactory(async_session_maker)() as uow:
             auth_ctx = await create_authorization_data_service(uow).build_user_context(
                 user_id=user_id,
                 pod_id=pod_id,
             )
-            token = set_current_context(auth_ctx)
-            try:
-                file_service = build_file_service(uow)
-                saved = await self._ingest_all(
-                    adapter=adapter,
-                    pod_id=pod_id,
-                    platform=platform_key,
-                    parsed=parsed,
-                    credentials=credentials,
-                    file_service=file_service,
-                    ctx=auth_ctx,
-                    attachments=attachments,
-                )
-                if saved:
-                    await uow.commit()
-            finally:
-                reset_current_context(token)
+        token = set_current_context(auth_ctx)
+        try:
+            saved = await self._ingest_all(
+                adapter=adapter,
+                pod_id=pod_id,
+                platform=platform_key,
+                parsed=parsed,
+                credentials=credentials,
+                ctx=auth_ctx,
+                attachments=attachments,
+                store=self._store_in_own_transaction,
+            )
+        finally:
+            reset_current_context(token)
         return saved
+
+    @staticmethod
+    async def _store_in_own_transaction(
+        persist_ingested_attachment: Callable[
+            [Any], Awaitable[IngestedAttachment | None]
+        ],
+    ) -> IngestedAttachment | None:
+        """Run one file's write in a transaction of its own.
+
+        One per attachment rather than one for the batch, because the batch
+        version could not commit until the last download finished -- so the
+        first file's row locks were held across every remaining transfer. There
+        is no atomicity lost: the previous code committed between attachments
+        too (that was how it let the connection go), so a partial batch was
+        always a possible outcome.
+        """
+        async with SessionUnitOfWorkFactory(async_session_maker)() as uow:
+            result = await persist_ingested_attachment(build_file_service(uow))
+            if result is not None:
+                await uow.commit()
+            return result
 
     async def _ingest_all(
         self,
@@ -148,12 +180,20 @@ class SurfaceFileIngestService:
         platform: str,
         parsed: ParsedInboundSurfaceEvent,
         credentials: dict[str, Any],
-        file_service: Any,
         ctx: Any,
         attachments: list[dict[str, Any]],
+        store: StoreInTransaction,
     ) -> list[IngestedAttachment]:
         """Core ingest loop — pure of DB/session setup so it is unit-testable
-        with a fake adapter and file service."""
+        with a fake adapter and file service.
+
+        ``store`` is what keeps it that way while still holding no pooled
+        connection across a download: it is handed a callable that wants a file
+        service and returns the saved attachment, and decides for itself what
+        transaction to run it in. Production opens one per file; a unit test
+        passes a fake service straight through. The loop knows the write needs
+        a boundary; it does not need to know what the boundary is.
+        """
         directory = f"/me/{str(platform).lower()}"
         saved: list[IngestedAttachment] = []
         for attachment in attachments:
@@ -163,10 +203,10 @@ class SurfaceFileIngestService:
                 platform=platform,
                 parsed=parsed,
                 credentials=credentials,
-                file_service=file_service,
                 ctx=ctx,
                 directory=directory,
                 attachment=attachment,
+                store=store,
             )
             if result is not None:
                 saved.append(result)
@@ -180,10 +220,10 @@ class SurfaceFileIngestService:
         platform: str,
         parsed: ParsedInboundSurfaceEvent,
         credentials: dict[str, Any],
-        file_service: Any,
         ctx: Any,
         directory: str,
         attachment: dict[str, Any],
+        store: StoreInTransaction,
     ) -> IngestedAttachment | None:
         declared_size = attachment.get("size")
         if (
@@ -192,15 +232,35 @@ class SurfaceFileIngestService:
         ):
             return None
 
+        # The download runs with no session open at all. It used to run inside
+        # one that committed first to hand the connection back -- correct, but
+        # only legible as a comment, and invisible to the static gate because
+        # the release arrived as a callback.
         try:
             downloaded = await adapter.download_attachment(
                 credentials=credentials,
                 event=parsed,
                 attachment=attachment,
             )
+        except ResponseTooLargeError:
+            # Its own case because it is not a failure: the adapter abandoned
+            # the transfer mid-stream, on purpose, rather than letting the
+            # sender pick how much of this replica's heap to fill.
+            logger.info(
+                "agent_surfaces.file_ingest.attachment_over_cap",
+                platform=platform,
+                cap_bytes=INBOUND_ATTACHMENT_BYTE_CAP,
+            )
+            return None
         except Exception:
-            logger.debug(
-                'agent_surfaces.surface_file_ingest_service.surface_attachment_download_platform_s.diagnostic'
+            # Skipping one attachment should not sink the whole message, so the
+            # broad catch stays -- but it used to swallow the reason entirely
+            # and return None, which made "the file never arrived" unanswerable
+            # from the logs. Now the traceback is there.
+            logger.warning(
+                "agent_surfaces.file_ingest.attachment_download_failed.degraded",
+                platform=platform,
+                exc_info=True,
             )
             return None
         if downloaded is None:
@@ -208,9 +268,20 @@ class SurfaceFileIngestService:
 
         content, name, mime = downloaded
         if len(content) > INBOUND_ATTACHMENT_BYTE_CAP:
+            # Belt and braces. Adapters stream under the cap now, so reaching
+            # this means one of them read a whole body some other way -- keep
+            # the check, and say so rather than dropping the file in silence.
+            logger.warning(
+                "agent_surfaces.file_ingest.attachment_over_cap_after_read.degraded",
+                platform=platform,
+                size_bytes=len(content),
+                cap_bytes=INBOUND_ATTACHMENT_BYTE_CAP,
+            )
             return None
 
-        try:
+        content_type = attachment.get("content_type")
+
+        async def _persist(file_service: Any) -> IngestedAttachment | None:
             entity = await file_service.create_file(
                 pod_id=pod_id,
                 name=_safe_file_name(name),
@@ -219,21 +290,25 @@ class SurfaceFileIngestService:
                 directory_path=directory,
                 search_enabled=True,
             )
+            result = IngestedAttachment(
+                path=entity.path,
+                name=entity.name,
+                mime=mime,
+                content_type=str(content_type) if content_type else None,
+            )
+            # Carry audio bytes for in-ingress transcription when small enough;
+            # larger audio is still saved (the agent can `listen` to it) but not
+            # transcribed.
+            if result.is_audio and len(content) <= INBOUND_VOICE_TRANSCRIBE_BYTE_CAP:
+                result.audio_bytes = content
+            return result
+
+        try:
+            return await store(_persist)
         except Exception:
-            logger.debug(
-                'agent_surfaces.surface_file_ingest_service.surface_attachment_persist_platform_s.diagnostic'
+            logger.warning(
+                "agent_surfaces.file_ingest.attachment_store_failed.degraded",
+                platform=platform,
+                exc_info=True,
             )
             return None
-
-        content_type = attachment.get("content_type")
-        result = IngestedAttachment(
-            path=entity.path,
-            name=entity.name,
-            mime=mime,
-            content_type=str(content_type) if content_type else None,
-        )
-        # Carry audio bytes for in-ingress transcription when small enough; larger
-        # audio is still saved (the agent can `listen` to it) but not transcribed.
-        if result.is_audio and len(content) <= INBOUND_VOICE_TRANSCRIBE_BYTE_CAP:
-            result.audio_bytes = content
-        return result

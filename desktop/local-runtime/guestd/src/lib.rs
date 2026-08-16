@@ -185,6 +185,14 @@ struct CoreImages {
     postgres: String,
     redis: String,
     supertokens: String,
+    /// The sandbox images, warmed at start rather than on first use.
+    ///
+    /// Optional so a host pack that predates this still parses -- `deny_unknown_fields`
+    /// is on the struct, not the absence of a field.
+    #[serde(default)]
+    workspace: Option<String>,
+    #[serde(default)]
+    function: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -204,6 +212,7 @@ struct CoreParameters {
 #[derive(Clone, Copy)]
 enum CoreStage {
     Images,
+    SandboxImages,
     Postgres,
     Redis,
     SuperTokens,
@@ -444,6 +453,9 @@ impl<E: Engine> GuestService<E> {
             "system.shutdown" => self.shutdown(),
             "core.ensure" => self.ensure_core(request.parameters),
             "core.images" => self.ensure_core_stage(request.parameters, CoreStage::Images),
+            "core.sandbox_images" => {
+                self.ensure_core_stage(request.parameters, CoreStage::SandboxImages)
+            }
             "core.postgres" => self.ensure_core_stage(request.parameters, CoreStage::Postgres),
             "core.redis" => self.ensure_core_stage(request.parameters, CoreStage::Redis),
             "core.supertokens" => {
@@ -478,6 +490,7 @@ impl<E: Engine> GuestService<E> {
         let parameters = self.parse_core_parameters(value)?;
         match stage {
             CoreStage::Images => self.ensure_core_images(&parameters)?,
+            CoreStage::SandboxImages => self.ensure_sandbox_images(&parameters)?,
             CoreStage::Postgres => self.ensure_postgres(&parameters)?,
             CoreStage::Redis => self.ensure_redis(&parameters)?,
             CoreStage::SuperTokens => self.ensure_supertokens(&parameters)?,
@@ -501,7 +514,53 @@ impl<E: Engine> GuestService<E> {
         for image in images {
             validate_image(image)?;
         }
+        for image in [
+            parameters.images.workspace.as_deref(),
+            parameters.images.function.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            validate_image(image)?;
+        }
         Ok(parameters)
+    }
+
+    /// Pull the workspace and function sandbox images before anyone needs one.
+    ///
+    /// They used to arrive on the first `sandbox.ensure`, from `pull --quiet`,
+    /// with no progress anywhere -- so the first time a pod actually tried to do
+    /// work, it stopped for however long a multi-hundred-megabyte transfer takes
+    /// and said nothing. Doing it here spends the same minutes once, during an
+    /// install that is already showing a progress bar, and leaves the first real
+    /// run fast.
+    ///
+    /// A pack that carries no sandbox images is not an error: this is a warm-up,
+    /// and `sandbox.ensure` still pulls what it needs.
+    fn ensure_sandbox_images(&self, parameters: &CoreParameters) -> Result<(), GuestError> {
+        let images = [
+            (
+                parameters.images.workspace.as_deref(),
+                WorkloadKind::Workspace,
+            ),
+            (
+                parameters.images.function.as_deref(),
+                WorkloadKind::Function,
+            ),
+        ];
+        thread::scope(|scope| -> Result<(), GuestError> {
+            let handles: Vec<_> = images
+                .into_iter()
+                .filter_map(|(image, kind)| image.map(|image| (image, kind)))
+                .map(|(image, kind)| scope.spawn(move || self.ensure_sandbox_image(image, kind)))
+                .collect();
+            for handle in handles {
+                handle
+                    .join()
+                    .map_err(|_| GuestError::engine("sandbox image warm-up panicked"))??;
+            }
+            Ok(())
+        })
     }
 
     fn ensure_core_images(&self, parameters: &CoreParameters) -> Result<(), GuestError> {

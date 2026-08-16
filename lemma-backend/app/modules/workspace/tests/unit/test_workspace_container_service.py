@@ -10,6 +10,9 @@ import pytest
 
 from app.core.config import settings
 from app.modules.workspace.contracts import SandboxInfo
+from app.modules.workspace.services import (
+    workspace_sandbox_service as container_service,
+)
 from app.modules.workspace.services.workspace_sandbox_service import (
     WorkspaceSandboxService,
 )
@@ -20,6 +23,7 @@ def _sandbox_info(
     *,
     allocation_id: UUID | None = None,
     allocation_epoch: int = 1,
+    storage_generation: int = 1,
 ) -> SandboxInfo:
     return SandboxInfo(
         sandbox_id=str(user_id),
@@ -29,6 +33,7 @@ def _sandbox_info(
         endpoint=f"sandbox://{user_id}",
         allocation_id=str(allocation_id or uuid4()),
         allocation_epoch=allocation_epoch,
+        storage_generation=storage_generation,
     )
 
 
@@ -72,6 +77,31 @@ def _retryable_failure(code: str = "PROVIDER_UNAVAILABLE") -> SandboxUnavailable
     """A failure the caller is expected to wait out and retry."""
 
     return SandboxUnavailable(code, retry_after_ms=250)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_service_caches():
+    """The singleflights and readiness caches are class attributes.
+
+    They outlive an instance, so a test that leaves an entry behind changes what
+    the next one measures -- and with tests running in random order that is a
+    flake rather than a failure.
+    """
+    for cache in (
+        WorkspaceSandboxService._inflight_ensures,
+        WorkspaceSandboxService._inflight_directories,
+        WorkspaceSandboxService._ready_directories,
+        WorkspaceSandboxService._stopping,
+    ):
+        cache.clear()
+    yield
+    for cache in (
+        WorkspaceSandboxService._inflight_ensures,
+        WorkspaceSandboxService._inflight_directories,
+        WorkspaceSandboxService._ready_directories,
+        WorkspaceSandboxService._stopping,
+    ):
+        cache.clear()
 
 
 def _service(sandbox: _FakeSandbox) -> WorkspaceSandboxService:
@@ -266,23 +296,51 @@ async def test_get_session_coalesces_concurrent_directory_checks_but_revalidates
     monkeypatch.setattr(service, "get_env_vars", environment)
     monkeypatch.setattr(service, "_get_manager_client", lambda: manager_client)
 
+    monkeypatch.setattr(container_service, "_DIRECTORY_READY_SECONDS", 0.05)
+
     await asyncio.gather(
         service.get_session(user_id=user_id, pod_id=None, session_id="first"),
         service.get_session(user_id=user_id, pod_id=None, session_id="second"),
     )
+    # Inside the readiness window, a later call reuses the directory rather than
+    # re-running the mkdir round trip -- 833ms at p50 against a real sandbox, on
+    # a directory created by the first command of the run.
     await service.get_session(user_id=user_id, pod_id=None, session_id="third")
+    assert manager_client.directories == [(user_id, "/workspace")]
+
+    # It is a window, not a permanent answer: the check comes back afterwards.
+    await asyncio.sleep(0.08)
+    await service.get_session(user_id=user_id, pod_id=None, session_id="fourth")
 
     assert manager_client.directories == [
         (user_id, "/workspace"),
         (user_id, "/workspace"),
     ]
 
+    # A container recreate keeps the disk, and /workspace IS the disk -- so the
+    # directory is still there and must not be remade. Same allocation, new
+    # epoch, same storage generation.
     sandbox.infos[user_id] = _sandbox_info(
         user_id,
-        allocation_id=uuid4(),
+        allocation_id=first_allocation_id,
         allocation_epoch=2,
+        storage_generation=1,
     )
-    await service.get_session(user_id=user_id, pod_id=None, session_id="fourth")
+    await service.get_session(user_id=user_id, pod_id=None, session_id="fifth")
+    assert manager_client.directories == [
+        (user_id, "/workspace"),
+        (user_id, "/workspace"),
+    ]
+
+    # A storage reset is the case where the files really are gone, so the
+    # directory has to be created again.
+    sandbox.infos[user_id] = _sandbox_info(
+        user_id,
+        allocation_id=first_allocation_id,
+        allocation_epoch=2,
+        storage_generation=2,
+    )
+    await service.get_session(user_id=user_id, pod_id=None, session_id="sixth")
 
     assert manager_client.directories == [
         (user_id, "/workspace"),

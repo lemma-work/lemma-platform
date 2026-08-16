@@ -26,6 +26,55 @@ class ConnectorSettings(BaseSettings):
         env_file=dotenv_path(), env_file_encoding="utf-8", case_sensitive=False, extra="ignore"
     )
 
+    connector_breaker_enabled: bool = Field(
+        default=True,
+        description=(
+            "Stop calling a connector operation that has failed repeatedly, "
+            "instead of making every caller wait for the same timeout. Env: "
+            "``CONNECTOR_BREAKER_ENABLED``."
+        ),
+    )
+    connector_breaker_failure_threshold: int = Field(
+        default=5,
+        ge=1,
+        description=(
+            "Consecutive infrastructure failures before an operation is "
+            "disabled. Only 5xx/timeout failures count -- a rejected request or "
+            "a stale credential is the caller's problem, not the provider's. "
+            "Env: ``CONNECTOR_BREAKER_FAILURE_THRESHOLD``."
+        ),
+    )
+    connector_breaker_cooldown_seconds: int = Field(
+        default=60,
+        ge=1,
+        description=(
+            "How long an operation stays disabled. The first call after this "
+            "is a probe: one failure re-opens it. Env: "
+            "``CONNECTOR_BREAKER_COOLDOWN_SECONDS``."
+        ),
+    )
+    connector_breaker_failure_window_seconds: int = Field(
+        default=120,
+        ge=1,
+        description=(
+            "How long a failure counts toward the streak. Without a window, "
+            "five failures spread over a week would trip a breaker on a "
+            "provider that is fine. Env: "
+            "``CONNECTOR_BREAKER_FAILURE_WINDOW_SECONDS``."
+        ),
+    )
+    connector_composio_deadline_seconds: float = Field(
+        default=90.0,
+        ge=1,
+        description=(
+            "Last-resort ceiling on one Composio SDK call, for callers that do "
+            "not route through the operation gateway -- surface email builds "
+            "the Composio gateway directly, and that path had no bound at all. "
+            "Deliberately equal to the dispatcher's Composio per-kind ceiling "
+            "so it never pre-empts the tighter timeouts the routed path already "
+            "applies. Env: ``CONNECTOR_COMPOSIO_DEADLINE_SECONDS``."
+        ),
+    )
     composio_api_key: Optional[str] = Field(
         default=None, description="Composio API key"
     )

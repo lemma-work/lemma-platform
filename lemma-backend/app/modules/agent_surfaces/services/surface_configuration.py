@@ -15,6 +15,7 @@ from __future__ import annotations
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.authorization.factory import create_authorization_data_service
+from app.core.infrastructure.db.transaction_locks import connection_released
 from app.core.authorization.permissions import Permissions
 from app.core.config import settings
 from app.core.log.log import get_logger
@@ -51,7 +52,10 @@ class SurfaceConfigurationMixin(SurfaceConfigurationAuthorizationMixin):
         adapter, platform = self._adapter_for_request(request)
         if adapter is None:
             return False
-        setup = await adapter.parse_channel_setup(request.payload, request.headers)
+        # Egress: connection back for the platform round trip. Every
+        # `connection_released` below is the same idea.
+        async with connection_released(self.uow.session):
+            setup = await adapter.parse_channel_setup(request.payload, request.headers)
         if setup is None:
             return False
 
@@ -145,27 +149,29 @@ class SurfaceConfigurationMixin(SurfaceConfigurationAuthorizationMixin):
         if not channel_id or not actor or not candidates:
             return
         prompt_surface = authorized[0][0] if authorized else candidates[0]
-        await adapter.send_channel_setup_prompt(
-            credentials=await self._resolve_credentials(prompt_surface),
-            channel_id=channel_id,
-            user_id=actor,
-            surface_choices=(
-                await self._surface_choice_labels(authorized)
-                if len(authorized) > 1
-                else None
-            ),
-            configuration_error=(
-                None
-                if authorized
-                else "Only a Lemma pod editor can configure this channel. Ask a pod admin to set it up."
-            ),
-        )
+        async with connection_released(self.uow.session):
+            await adapter.send_channel_setup_prompt(
+                credentials=await self._resolve_credentials(prompt_surface),
+                channel_id=channel_id,
+                user_id=actor,
+                surface_choices=(
+                    await self._surface_choice_labels(authorized)
+                    if len(authorized) > 1
+                    else None
+                ),
+                configuration_error=(
+                    None
+                    if authorized
+                    else "Only a Lemma pod editor can configure this channel. Ask a pod admin to set it up."
+                ),
+            )
 
     async def _dispatch_configuration_action(
         self, *, kind, setup, surface, ctx, adapter, credentials, channel_id
     ) -> None:
         if kind == "starter_prompt":
-            await self._send_starter_prompt(adapter, credentials, setup)
+            async with connection_released(self.uow.session):
+                await self._send_starter_prompt(adapter, credentials, setup)
         elif kind == "open_dm":
             await self._open_dm_setup(adapter, credentials, setup, surface, ctx)
         elif kind == "submit_dm":
@@ -181,6 +187,7 @@ class SurfaceConfigurationMixin(SurfaceConfigurationAuthorizationMixin):
 
     @staticmethod
     async def _send_starter_prompt(adapter, credentials, setup) -> None:
+        """Pure egress. The caller releases the connection around this."""
         await adapter.send_starter_prompt(
             credentials=credentials,
             user_id=str(setup.get("actor_external_user_id") or ""),
@@ -191,15 +198,16 @@ class SurfaceConfigurationMixin(SurfaceConfigurationAuthorizationMixin):
         agents = await self._visible_agents(
             surface=surface, ctx=ctx, action=Permissions.AGENT_READ
         )
-        await adapter.open_dm_agent_modal(
-            credentials=credentials,
-            trigger_id=str(setup.get("trigger_id") or ""),
-            agent_names=[agent.name for agent in agents],
-            current=surface.config.slack.choice_for_user(
-                setup.get("actor_external_user_id")
-            ),
-            surface_id=str(surface.id),
-        )
+        async with connection_released(self.uow.session):
+            await adapter.open_dm_agent_modal(
+                credentials=credentials,
+                trigger_id=str(setup.get("trigger_id") or ""),
+                agent_names=[agent.name for agent in agents],
+                current=surface.config.slack.choice_for_user(
+                    setup.get("actor_external_user_id")
+                ),
+                surface_id=str(surface.id),
+            )
 
     async def _submit_dm_setup(self, adapter, credentials, setup, surface, ctx) -> None:
         agent_name = await self._validated_agent_choice(
@@ -230,16 +238,17 @@ class SurfaceConfigurationMixin(SurfaceConfigurationAuthorizationMixin):
         agents = await self._visible_agents(
             surface=surface, ctx=ctx, action=Permissions.AGENT_UPDATE
         )
-        await adapter.open_channel_setup_modal(
-            credentials=credentials,
-            trigger_id=str(setup.get("trigger_id") or ""),
-            channel_id=channel_id,
-            channel_label=await adapter.channel_name(
-                credentials=credentials, channel_id=channel_id
-            ),
-            agent_names=[agent.name for agent in agents],
-            surface_id=str(surface.id),
-        )
+        async with connection_released(self.uow.session):
+            await adapter.open_channel_setup_modal(
+                credentials=credentials,
+                trigger_id=str(setup.get("trigger_id") or ""),
+                channel_id=channel_id,
+                channel_label=await adapter.channel_name(
+                    credentials=credentials, channel_id=channel_id
+                ),
+                agent_names=[agent.name for agent in agents],
+                surface_id=str(surface.id),
+            )
 
     async def _submit_channel_setup(
         self, adapter, credentials, setup, surface, ctx, channel_id
@@ -255,12 +264,13 @@ class SurfaceConfigurationMixin(SurfaceConfigurationAuthorizationMixin):
         await self._route_channel_to_agent(
             surface=surface, channel_id=channel_id, agent_name=agent_name
         )
-        await adapter.send_channel_setup_prompt(
-            credentials=credentials,
-            channel_id=channel_id,
-            user_id=str(setup.get("actor_external_user_id") or ""),
-            confirmed_agent=agent_name or "the pod assistant",
-        )
+        async with connection_released(self.uow.session):
+            await adapter.send_channel_setup_prompt(
+                credentials=credentials,
+                channel_id=channel_id,
+                user_id=str(setup.get("actor_external_user_id") or ""),
+                confirmed_agent=agent_name or "the pod assistant",
+            )
 
     async def _set_dm_agent_for_user(
         self,
@@ -295,35 +305,38 @@ class SurfaceConfigurationMixin(SurfaceConfigurationAuthorizationMixin):
             surface=surface, ctx=ctx, action=Permissions.AGENT_READ
         )
         pod = await self.uow.session.get(Pod, surface.pod_id)
-        await adapter.publish_home_view(
-            credentials=credentials,
-            user_id=external_user_id,
-            pod_name=str(getattr(pod, "name", "") or "") or None,
-            dm_agent_name=(
-                None
-                if surface.config.slack.chose_pod_assistant(external_user_id)
-                else (
-                    surface.config.slack.agent_for_user(external_user_id)
-                    or await self._agent_name_for_agent_id(surface.agent_id)
-                )
-            ),
-            channel_routes=[
-                (
-                    route.channel_id,
-                    None if route.use_pod_assistant else route.agent_name,
-                )
-                for route in surface.config.channels
-                if route.channel_id
-            ],
-            agents=[(agent.name, agent.description) for agent in agents],
-            apps=await self._home_apps(
-                surface=surface,
-                external_user_id=external_user_id,
-                auth_ctx=ctx,
-            ),
-            workspace_url=str(getattr(settings, "frontend_url", "") or "") or None,
-            logo_url=surface_settings.slack_home_logo_url,
-        )
+        # Egress: the pod and agent rows are read above; the connection
+        # goes back before the view is pushed to the platform.
+        async with connection_released(self.uow.session):
+            await adapter.publish_home_view(
+                credentials=credentials,
+                user_id=external_user_id,
+                pod_name=str(getattr(pod, "name", "") or "") or None,
+                dm_agent_name=(
+                    None
+                    if surface.config.slack.chose_pod_assistant(external_user_id)
+                    else (
+                        surface.config.slack.agent_for_user(external_user_id)
+                        or await self._agent_name_for_agent_id(surface.agent_id)
+                    )
+                ),
+                channel_routes=[
+                    (
+                        route.channel_id,
+                        None if route.use_pod_assistant else route.agent_name,
+                    )
+                    for route in surface.config.channels
+                    if route.channel_id
+                ],
+                agents=[(agent.name, agent.description) for agent in agents],
+                apps=await self._home_apps(
+                    surface=surface,
+                    external_user_id=external_user_id,
+                    auth_ctx=ctx,
+                ),
+                workspace_url=str(getattr(settings, "frontend_url", "") or "") or None,
+                logo_url=surface_settings.slack_home_logo_url,
+            )
 
     async def _home_apps(
         self, *, surface, external_user_id: str, auth_ctx=None
@@ -425,9 +438,12 @@ class SurfaceConfigurationMixin(SurfaceConfigurationAuthorizationMixin):
             adapter = self.adapter_registry.get(platform) if platform else None
         if adapter is None:
             return False
-        parsed = await adapter.parse_inbound_lifecycle(
-            request.payload, request.headers
-        )
+        # Parsing can reach the platform (Slack parses locally, but Teams and
+        # Telegram fetch a profile or a token here), so treat it as egress.
+        async with connection_released(self.uow.session):
+            parsed = await adapter.parse_inbound_lifecycle(
+                request.payload, request.headers
+            )
         if parsed is None:
             return False
 
@@ -462,6 +478,36 @@ class SurfaceConfigurationMixin(SurfaceConfigurationAuthorizationMixin):
             credentials = await self._resolve_credentials(prompt_surface)
             if not authorized:
                 if parsed.kind is SurfaceLifecycleKind.HOME_OPENED:
+                    async with connection_released(self.uow.session):
+                        await adapter.publish_home_view(
+                            credentials=credentials,
+                            user_id=parsed.actor_external_user_id,
+                            pod_name=None,
+                            dm_agent_name=None,
+                            channel_routes=[],
+                            agents=[],
+                            apps=[],
+                            access_message=(
+                                "You need access to a connected Lemma pod before this app can show agents or settings."
+                            ),
+                        )
+                elif (
+                    parsed.kind is SurfaceLifecycleKind.JOINED_CHANNEL
+                    and parsed.external_channel_id
+                ):
+                    async with connection_released(self.uow.session):
+                        await adapter.send_channel_setup_prompt(
+                            credentials=credentials,
+                            channel_id=parsed.external_channel_id,
+                            user_id=parsed.actor_external_user_id,
+                            configuration_error=(
+                                "Only a Lemma pod editor can configure this channel. Ask a pod admin to set it up."
+                            ),
+                        )
+                return True
+            choices = await self._surface_choice_labels(authorized)
+            if parsed.kind is SurfaceLifecycleKind.HOME_OPENED:
+                async with connection_released(self.uow.session):
                     await adapter.publish_home_view(
                         credentials=credentials,
                         user_id=parsed.actor_external_user_id,
@@ -470,45 +516,19 @@ class SurfaceConfigurationMixin(SurfaceConfigurationAuthorizationMixin):
                         channel_routes=[],
                         agents=[],
                         apps=[],
-                        access_message=(
-                            "You need access to a connected Lemma pod before this app can show agents or settings."
-                        ),
+                        surface_choices=choices,
                     )
-                elif (
-                    parsed.kind is SurfaceLifecycleKind.JOINED_CHANNEL
-                    and parsed.external_channel_id
-                ):
-                    await adapter.send_channel_setup_prompt(
-                        credentials=credentials,
-                        channel_id=parsed.external_channel_id,
-                        user_id=parsed.actor_external_user_id,
-                        configuration_error=(
-                            "Only a Lemma pod editor can configure this channel. Ask a pod admin to set it up."
-                        ),
-                    )
-                return True
-            choices = await self._surface_choice_labels(authorized)
-            if parsed.kind is SurfaceLifecycleKind.HOME_OPENED:
-                await adapter.publish_home_view(
-                    credentials=credentials,
-                    user_id=parsed.actor_external_user_id,
-                    pod_name=None,
-                    dm_agent_name=None,
-                    channel_routes=[],
-                    agents=[],
-                    apps=[],
-                    surface_choices=choices,
-                )
             elif (
                 parsed.kind is SurfaceLifecycleKind.JOINED_CHANNEL
                 and parsed.external_channel_id
             ):
-                await adapter.send_channel_setup_prompt(
-                    credentials=credentials,
-                    channel_id=parsed.external_channel_id,
-                    user_id=parsed.actor_external_user_id,
-                    surface_choices=choices,
-                )
+                async with connection_released(self.uow.session):
+                    await adapter.send_channel_setup_prompt(
+                        credentials=credentials,
+                        channel_id=parsed.external_channel_id,
+                        user_id=parsed.actor_external_user_id,
+                        surface_choices=choices,
+                    )
             return True
         surface, ctx = selected
         try:
@@ -563,11 +583,12 @@ class SurfaceConfigurationMixin(SurfaceConfigurationAuthorizationMixin):
             channel_id=parsed.external_channel_id, channel_name=""
         ):
             return
-        await adapter.send_channel_setup_prompt(
-            credentials=credentials,
-            channel_id=parsed.external_channel_id,
-            user_id=parsed.actor_external_user_id,
-            channel_name=await adapter.channel_name(
-                credentials=credentials, channel_id=parsed.external_channel_id
-            ),
-        )
+        async with connection_released(self.uow.session):
+            await adapter.send_channel_setup_prompt(
+                credentials=credentials,
+                channel_id=parsed.external_channel_id,
+                user_id=parsed.actor_external_user_id,
+                channel_name=await adapter.channel_name(
+                    credentials=credentials, channel_id=parsed.external_channel_id
+                ),
+            )

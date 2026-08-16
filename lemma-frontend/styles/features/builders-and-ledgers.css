@@ -225,6 +225,20 @@
   color: var(--text-secondary);
 }
 
+/* Consequence of the field above it, so it hangs off that field rather than
+   announcing itself — no rule, no tint, just a line that appears once there is
+   a name to make an address out of. Wraps on narrow columns, because the
+   address must never be the thing that gets clipped. */
+.agent-builder-email-note {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1-5);
+  margin-top: var(--space-2);
+  font-size: var(--text-xs);
+  line-height: var(--leading-snug);
+}
+
 .resource-soft-block {
   border-radius: var(--radius-lg);
   background: color-mix(in srgb, var(--surface-2) 30%, transparent);

@@ -3,23 +3,27 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urljoin
 from uuid import UUID
 
 import httpx
+from opentelemetry import trace
 
 
 from app.core.config import settings
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
+from app.core.concurrency.offload import run_blocking
 from app.core.redaction import redact_text
 from sandbox_runtime.errors import (
     SandboxError,
     SandboxUnavailable,
 )
 from app.core.request_context import create_inherited_task
+from app.modules.function.application.runtime_logs import terminal_logs
 from app.modules.function.application.function_session_token_cache import (
     FunctionSessionToken,
     FunctionSessionTokenCache,
@@ -55,6 +59,11 @@ from app.modules.function.infrastructure.repositories import FunctionRunReposito
 
 
 logger = get_logger(__name__)
+tracer = trace.get_tracer(__name__)
+
+# What a run keeps of its own output, and how much extra is redacted before
+# trimming so a credential cannot survive by straddling the cut. The margin is
+# far larger than any single credential (a PEM private key block is a few KB).
 
 
 RuntimeHttpClientFactory = Callable[[], httpx.AsyncClient]
@@ -99,10 +108,26 @@ class FunctionDispatcher:
         *,
         mode: FunctionDispatchMode,
     ) -> FunctionRunEntity:
-        dispatch = await self._resolve_dispatch(run_id, mode=mode)
-        if isinstance(dispatch, FunctionRunEntity):
-            return dispatch
+        # Spanned per phase because the gap between a run being created and
+        # reaching RUNNING was measurable (p50 ~0.7s warm and uncontended) but
+        # not attributable: this path had no instrumentation at all, so the only
+        # visible boundary was the whole worker task. Each phase below is one of
+        # the candidates, and the cache spans record hit or miss.
+        with tracer.start_as_current_span("lemma.function.dispatch") as span:
+            span.set_attribute("lemma.run_id", str(run_id))
+            span.set_attribute("lemma.dispatch_mode", mode.value)
+            with tracer.start_as_current_span("lemma.function.dispatch.resolve"):
+                dispatch = await self._resolve_dispatch(run_id, mode=mode)
+            if isinstance(dispatch, FunctionRunEntity):
+                return dispatch
+            span.set_attribute("lemma.pod_id", str(dispatch.pod_id))
+            return await self._execute_dispatch(run_id, dispatch)
 
+    async def _execute_dispatch(
+        self,
+        run_id: UUID,
+        dispatch: FunctionExecutionDispatch,
+    ) -> FunctionRunEntity:
         endpoint_task = create_inherited_task(self._runtime_endpoint(dispatch))
         token_task = create_inherited_task(self._function_session_token(dispatch))
         organization_task = create_inherited_task(
@@ -111,12 +136,17 @@ class FunctionDispatcher:
         endpoint: FunctionRuntimeEndpoint | None = None
         started: FunctionRunRuntimeContext | None = None
         try:
-            endpoint, function_token, organization_id = await asyncio.gather(
-                endpoint_task,
-                token_task,
-                organization_task,
-            )
-            started = await self._start_dispatch(dispatch)
+            # Concurrent, so the span around the gather measures the slowest of
+            # the three rather than their sum. Which one that is comes from the
+            # child spans each of them opens.
+            with tracer.start_as_current_span("lemma.function.dispatch.prepare"):
+                endpoint, function_token, organization_id = await asyncio.gather(
+                    endpoint_task,
+                    token_task,
+                    organization_task,
+                )
+            with tracer.start_as_current_span("lemma.function.dispatch.start"):
+                started = await self._start_dispatch(dispatch)
             if started is None:
                 return await self._load_run(run_id)
 
@@ -234,7 +264,12 @@ class FunctionDispatcher:
         context: FunctionRunRuntimeContext,
         terminal: RuntimeTerminalRequest,
     ) -> FunctionRunEntity:
-        logs = self._terminal_logs(terminal)
+        # Off the loop: even after trimming, this is megabytes through thirteen
+        # regex passes, and this runs on the API's loop when the runtime posts
+        # its terminal callback.
+        logs = await run_blocking(
+            self._terminal_logs, terminal, limiter="cpu_bound"
+        )
         error = (
             self._runtime_failure_message(terminal)
             if terminal.error is not None
@@ -394,11 +429,42 @@ class FunctionDispatcher:
                 run_id=str(dispatch.run_id),
             )
 
+    # Above this, the lease was not reusable and a sandbox had to be brought up.
+    # A warm reuse is a dict lookup; anything in this range is a control-plane
+    # round trip and, usually, a container start.
+    _COLD_ENDPOINT_MS = 250.0
+
     async def _runtime_endpoint(
         self,
         dispatch: FunctionExecutionDispatch,
     ) -> FunctionRuntimeEndpoint:
-        return await self._routes.endpoint(dispatch)
+        """Acquire the runtime lease, and say how much it cost.
+
+        This is the largest single component of function latency and nothing
+        measured it. Production over seven days: 8,877 runs, a median wait of
+        2.6s between the run row being created and the function starting, p95
+        8.3s. Split by whether the pod had run anything recently, the median is
+        727ms warm against 3,272ms cold -- and 64% of runs are cold.
+
+        That is not a bug; it is the cost side of a deliberate trade. The lease
+        horizon is kept short on purpose because the sandbox runtime treats a
+        lease as activity, so a generous horizon keeps idle sandboxes billing
+        (see ``function_runtime_endpoint_reuse_seconds``). But the trade was
+        being made blind: there was no signal anywhere saying how often a run
+        pays for a cold start, so nobody could tell what lengthening the horizon
+        would buy or cost. This is that signal.
+        """
+        started = time.monotonic()
+        endpoint = await self._routes.endpoint(dispatch)
+        elapsed_ms = (time.monotonic() - started) * 1000
+        logger.info(
+            "function.runtime.endpoint_acquired",
+            pod_id=str(dispatch.pod_id),
+            elapsed_ms=round(elapsed_ms, 1),
+            cold=elapsed_ms >= self._COLD_ENDPOINT_MS,
+            mode=dispatch.mode.value,
+        )
+        return endpoint
 
     async def _load_run(self, run_id: UUID) -> FunctionRunEntity:
         async with self._uow_factory() as uow:
@@ -440,18 +506,7 @@ class FunctionDispatcher:
     def _now() -> datetime:
         return datetime.now(timezone.utc)
 
-    @staticmethod
-    def _terminal_logs(request: RuntimeTerminalRequest) -> str | None:
-        sections: list[str] = []
-        if request.stdout:
-            sections.append(request.stdout)
-        if request.stderr:
-            sections.append(request.stderr)
-        if request.output_truncated:
-            sections.append("[function output truncated]")
-        if not sections:
-            return None
-        return redact_text("\n".join(sections))[: 4 * 1024 * 1024]
+    _terminal_logs = staticmethod(terminal_logs)
 
     @staticmethod
     def _runtime_failure_message(request: RuntimeTerminalRequest) -> str:

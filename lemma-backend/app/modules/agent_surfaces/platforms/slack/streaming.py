@@ -133,9 +133,6 @@ class SlackStreamSurface:
                 "task_title": title,
             }
         except SlackApiError:
-            logger.debug(
-                'agent_surfaces.service.slack_stream_progress_channel_s.diagnostic'
-            )
             return progress_handle
 
     async def append_stream_text(

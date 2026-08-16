@@ -1,0 +1,7 @@
+{
+  "_comment": "Pre-existing thread offloads that bypass the named limiters, aiohttp sessions with no timeout, and process-lifetime clients built per call. This file may shrink freely; growing it means new unbounded I/O. See scripts/check_io_hygiene.py.",
+  "violations": {
+    "app/modules/workspace/providers/docker_engine.py::DockerEngineClient.__init__::process-lifetime-construction::httpx.AsyncClient": 1,
+    "app/modules/workspace/providers/runtime_client.py::WorkspaceRuntimeClient.__init__::process-lifetime-construction::httpx.AsyncClient": 1
+  }
+}

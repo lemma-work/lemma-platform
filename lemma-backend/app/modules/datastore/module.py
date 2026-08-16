@@ -159,8 +159,9 @@ def _event_routers():
 @asynccontextmanager
 async def _backfill_query_role(app):
     """Ensure the RLS-subject role can read every existing pod schema, so ad-hoc
-    datastore queries (run under that role) are scoped. Non-fatal: new tables
-    also grant on creation, and queries fail closed."""
+    datastore queries (run under that role) are scoped. Non-fatal: schemas and
+    tables also grant on creation, and queries fail closed. This is the repair
+    path for schemas that predate those grants — not the primary one."""
     from app.modules.datastore.infrastructure.transactional_events import (
         ensure_datastore_event_outbox,
     )
@@ -175,8 +176,11 @@ async def _backfill_query_role(app):
         await get_schema_manager().backfill_query_role_grants()
         logger.debug("datastore.module.datastore_query_role_grants_ensured.observed")
     except Exception:  # noqa: BLE001
-        logger.debug(
-            'datastore.module.ensure_datastore_query_role_grants.diagnostic',
+        # Warning, not debug: when this fails, every pod schema whose grant was
+        # never established stays unqueryable, and this is the only line that
+        # says so.
+        logger.warning(
+            'datastore.module.query_role_grant_backfill.degraded',
             exc_info=True,
         )
     yield
@@ -202,7 +206,10 @@ async def _datastore_outbox_dispatcher(context):
         return
     await ensure_datastore_event_outbox()
     async with outbox_dispatcher_lifespan(
-        get_datastore_session_maker(), get_message_bus()
+        get_datastore_session_maker(),
+        get_message_bus(),
+        database_url=datastore_url,
+        label="datastore",
     ):
         yield
 

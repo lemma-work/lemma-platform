@@ -16,6 +16,8 @@ from app.modules.schedule.domain.value_objects import (
 from app.modules.schedule.repositories.schedule_repository import ScheduleRepository
 from app.modules.schedule.services.schedule_processor import ScheduleProcessor
 from app.core.log.log import get_logger
+from app.core.origin import Origin, OriginKind, origin_scope
+from collections.abc import Awaitable, Callable
 
 logger = get_logger(__name__)
 
@@ -31,7 +33,12 @@ class DatastoreEventHandler:
         self.schedule_repository = schedule_repository
         self.schedule_processor = schedule_processor
 
-    async def handle_datastore_event(self, event: DatastoreRecordEvent) -> List[UUID]:
+    async def handle_datastore_event(
+        self,
+        event: DatastoreRecordEvent,
+        *,
+        release: Callable[[], Awaitable[None]] | None = None,
+    ) -> List[UUID]:
         """Handle a datastore record event and fire matching schedules."""
 
         # Bridge datastore's record operation (lowercase) to schedule's
@@ -66,15 +73,30 @@ class DatastoreEventHandler:
                 )
                 continue
 
+            # Let the connection go before processing. A schedule carrying a
+            # filter_instruction runs an LLM inference inline here, once per
+            # matching schedule, and holding the transaction across that keeps
+            # a pooled connection idle for the length of every call in the
+            # loop. The webhook sibling (schedule_consumer) already does this
+            # and says why in its docstring.
+            if release is not None:
+                await release()
+
             # One bad schedule must not drop the event for the rest.
             try:
-                fired = await self.schedule_processor.process_event(
-                    schedule=schedule,
-                    payload=event.payload or {},
-                    user_id=event.owner_user_id or schedule.user_id,
-                    metadata=metadata,
-                    source_event_id=str(event.event_id),
-                )
+                # Deliberately *overrides* the inbound event's origin. The row
+                # may well have been written from the web, but that is how the
+                # write arrived -- this schedule's work arrived because a table
+                # changed, and DATA_TRIGGER is the honest answer for everything
+                # raised from here down.
+                with origin_scope(Origin(OriginKind.DATA_TRIGGER)):
+                    fired = await self.schedule_processor.process_event(
+                        schedule=schedule,
+                        payload=event.payload or {},
+                        user_id=event.owner_user_id or schedule.user_id,
+                        metadata=metadata,
+                        source_event_id=str(event.event_id),
+                    )
             except Exception as exc:
                 logger.debug(
                     'schedule.datastore_event_handler.fire_datastore_schedule_s_s.propagated',

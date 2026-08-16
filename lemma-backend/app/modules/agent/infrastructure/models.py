@@ -194,6 +194,12 @@ class ConversationModel(UUIDAuditBase):
         "app.modules.agent.infrastructure.models.MessageModel",
         back_populates="conversation",
         cascade="all, delete-orphan",
+        # The FK already declares ON DELETE CASCADE, so the database removes
+        # these rows itself. Without passive_deletes SQLAlchemy insists on
+        # loading every child into the session first and deleting them one
+        # at a time -- which on a large collection is a memory event, not a
+        # slow query.
+        passive_deletes=True,
         order_by=lambda: MessageModel.sequence,
         foreign_keys=lambda: [MessageModel.conversation_id],
     )
@@ -201,6 +207,12 @@ class ConversationModel(UUIDAuditBase):
         "app.modules.agent.infrastructure.models.AgentRunModel",
         back_populates="conversation",
         cascade="all, delete-orphan",
+        # The FK already declares ON DELETE CASCADE, so the database removes
+        # these rows itself. Without passive_deletes SQLAlchemy insists on
+        # loading every child into the session first and deleting them one
+        # at a time -- which on a large collection is a memory event, not a
+        # slow query.
+        passive_deletes=True,
         order_by=lambda: AgentRunModel.created_at,
         foreign_keys=lambda: [AgentRunModel.conversation_id],
     )
@@ -538,6 +550,11 @@ class AgentConversationWaitModel(UUIDAuditBase):
     external_ref: Mapped[str | None] = mapped_column(String, nullable=True)
     scheduled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     wake_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    # See the workflow wait model: a timer fires once, so a row lock is not a
+    # claim -- it is released at commit and the next tick reclaims the row.
+    fire_lease_until: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     # Nullable to match the migration: `create` always writes a dict, but a row
     # inserted by hand or by a future backfill must not need one.

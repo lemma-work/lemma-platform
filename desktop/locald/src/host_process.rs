@@ -71,6 +71,14 @@ pub struct ManagedRuntimeImages {
     pub postgres: String,
     pub redis: String,
     pub supertokens: String,
+    /// The sandbox images, warmed at start rather than on first use.
+    ///
+    /// Optional because a host pack written before this carries neither, and a
+    /// missing warm-up is a slower first run rather than a broken install.
+    #[serde(default)]
+    pub workspace: Option<String>,
+    #[serde(default)]
+    pub function: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -2773,14 +2781,40 @@ mod tests {
             .unwrap_or_else(|| panic!("{id} is not a managed service"))
     }
 
+    /// Blocks until the supervisor reports `id` running, and answers with its
+    /// pid.
+    ///
+    /// The mirror of `wait_for_recorded_exit`, and needed for the same reason.
+    /// "Started" is not a moment the caller of `start_all` or `reconcile_crashes`
+    /// observes — a spawn is recorded when the supervisor gets to it — so a test
+    /// that reads the pid straight afterwards is racing it. That read is not
+    /// even the assertion in most cases; it is the setup for one, so on a loaded
+    /// runner these failed as `backend is not running` from inside a helper,
+    /// several lines away from anything the test was actually about.
+    #[cfg(unix)]
+    fn wait_for_running(manager: &HostProcessManager, id: &str) -> u32 {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            if let Some(pid) = process_status(manager, id).pid {
+                return pid;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "{id} never started; the supervisor still reports no process for it"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
     /// Kills a running service the way a crash takes one: no notice, no chance
     /// to shut down. The whole process group goes, so nothing of it survives to
     /// be reported as still running.
+    ///
+    /// Waits for the service to be up first, so "crash it" means what it says
+    /// whether or not the supervisor has caught up with a start or a restart.
     #[cfg(unix)]
     fn crash(manager: &HostProcessManager, id: &str) {
-        let pid = process_status(manager, id)
-            .pid
-            .unwrap_or_else(|| panic!("{id} is not running"));
+        let pid = wait_for_running(manager, id);
         let group = -i32::try_from(pid).expect("process id fits a signed integer");
         // SAFETY: the pid names a child this manager spawned into its own
         // process group and has not yet reaped, so the group is still ours.
@@ -2827,6 +2861,12 @@ mod tests {
         let manager = HostProcessManager::new(value, root.path().into()).unwrap();
 
         manager.start_all().unwrap();
+        // Both, before anything is crashed. The frontend depends on the backend
+        // and is asserted at the end to have survived the backend's circuit
+        // opening — an assertion that reads as a real failure when in fact the
+        // frontend had never finished starting.
+        wait_for_running(&manager, "backend");
+        wait_for_running(&manager, "frontend");
 
         // One restart is budgeted, so it takes two crashes to exhaust it. Each
         // crash is followed by the supervisor actually observing the exit,

@@ -7,6 +7,7 @@ import { ArrowRight, ExternalLink, ShieldCheck, Sparkles } from '@/components/ui
 
 import { ProtectedRoute } from '@/components/auth/protected-route';
 import { Logo } from '@/components/brand/logo';
+import { captureEvent } from '@/lib/analytics/client';
 import { PageLoader } from '@/components/brand/loader';
 import { PlainPageShell } from '@/components/dashboard/plain-page-shell';
 import { Button } from '@/components/ui/button';
@@ -157,6 +158,11 @@ function RemixAppLanding({ rawSource }: { rawSource?: string }) {
                                     disabled={!effectivePod}
                                     onClick={() => {
                                         if (!effectivePod) return;
+                                        // The step the server never sees: the
+                                        // click happens before any API call, so
+                                        // an abandoned remix is only countable
+                                        // from here.
+                                        captureEvent('import.started', { is_remix: true });
                                         router.push(
                                             buildAppRemixConversationHref(effectivePod.id, source),
                                         );

@@ -19,21 +19,26 @@ class UsageRecord(UUIDAuditBase):
 
     __tablename__ = "usage_records"
 
-    organization_id: Mapped[UUID | None] = mapped_column(index=True, nullable=True)
-    pod_id: Mapped[UUID | None] = mapped_column(index=True, nullable=True)
-    user_id: Mapped[UUID] = mapped_column(index=True, nullable=False)
-    agent_id: Mapped[UUID | None] = mapped_column(index=True, nullable=True)
-    conversation_id: Mapped[UUID | None] = mapped_column(index=True, nullable=True)
-    agent_run_id: Mapped[UUID | None] = mapped_column(index=True, nullable=True)
-    parent_agent_run_id: Mapped[UUID | None] = mapped_column(index=True, nullable=True)
-    source_type: Mapped[str] = mapped_column(String(60), index=True, nullable=False)
-    source_id: Mapped[str | None] = mapped_column(String(120), index=True, nullable=True)
-    profile_id: Mapped[str] = mapped_column(String(120), index=True, nullable=False)
-    profile_scope: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
-    model_name: Mapped[str] = mapped_column(String(160), index=True, nullable=False)
+    # This table gains a row per model call — the highest insert rate in the
+    # system — so an index here is paid on every one of them. Fourteen of these
+    # columns carried a single-column index; twelve are gone (see migration
+    # 0018) because they were either redundant with a composite below that
+    # already leads with the same column, or never usable by any query we run.
+    # What survives is only what a query actually reads.
+    organization_id: Mapped[UUID | None] = mapped_column(nullable=True)
+    pod_id: Mapped[UUID | None] = mapped_column(nullable=True)
+    user_id: Mapped[UUID] = mapped_column(nullable=False)
+    agent_id: Mapped[UUID | None] = mapped_column(nullable=True)
+    conversation_id: Mapped[UUID | None] = mapped_column(nullable=True)
+    agent_run_id: Mapped[UUID | None] = mapped_column(nullable=True)
+    parent_agent_run_id: Mapped[UUID | None] = mapped_column(nullable=True)
+    source_type: Mapped[str] = mapped_column(String(60), nullable=False)
+    source_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    profile_id: Mapped[str] = mapped_column(String(120), nullable=False)
+    profile_scope: Mapped[str] = mapped_column(String(32), nullable=False)
+    model_name: Mapped[str] = mapped_column(String(160), nullable=False)
     usage_kind: Mapped[str] = mapped_column(
         String(40),
-        index=True,
         nullable=False,
         default="llm",
     )
@@ -48,6 +53,8 @@ class UsageRecord(UUIDAuditBase):
         default=dict,
         nullable=True,
     )
+    # Kept: ``get_system_cost`` may be called with no organization, and then
+    # the time range is the only predicate any index can serve.
     occurred_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         index=True,

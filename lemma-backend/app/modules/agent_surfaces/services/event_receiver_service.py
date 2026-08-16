@@ -148,7 +148,8 @@ class NativeSurfaceReceiverCoordinator:
         }
 
     async def run(self) -> None:
-        self._redis = get_redis(url=self._redis_url)
+        # Holds a Pub/Sub subscription open, so a silent connection is normal.
+        self._redis = get_redis(url=self._redis_url, blocking=True)
         self._listener_task = create_background_task(
             self._listen_for_wakeups(), name="surface-receiver-wakeups"
         )
@@ -393,7 +394,6 @@ class TelegramPollingReceiverRunner:
                         )
                         _chat = _msg.get("chat") or {}
                         logger.debug("agent_surfaces.event_receiver_service.telegram_polling_received_update_id.observed", update_id=update_id)
-                        logger.debug("agent_surfaces.event_receiver_service.telegram_raw_update_s.observed")
                         if isinstance(update_id, int):
                             offset = update_id + 1
                             if self._candidate.surface_ids:

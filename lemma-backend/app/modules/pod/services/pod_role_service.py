@@ -24,6 +24,7 @@ from app.modules.pod.infrastructure.pod_role_repository import PodRoleQueryRepos
 
 class PodRoleService:
     def __init__(self, uow: SqlAlchemyUnitOfWork):
+        self._uow = uow
         self._authz = create_authorization_data_service(uow)
         self._pods = PodRepository(uow)
         self._roles = PodRoleQueryRepository(uow)
@@ -156,7 +157,17 @@ class PodRoleService:
     ) -> None:
         """Drop a removed pod member's role assignments and resource grants and
         invalidate their cached role snapshot, so pod access is revoked on the
-        next request instead of lingering until the snapshot TTL elapses."""
+        next request instead of lingering until the snapshot TTL elapses.
+
+        The invalidation runs *after* the commit, and that is a correctness
+        point rather than a connection one. Invalidating inline is the wrong
+        order: between the delete and the caller's commit, a concurrent request
+        for this user can miss the cache, rebuild the snapshot from rows that
+        still grant access, and store it again -- leaving the removed member
+        with pod access until the TTL elapses, which is the exact outcome this
+        method exists to prevent. It also held a pooled connection across the
+        Redis round trip, which is how it was found.
+        """
         await self._authz.delete_principal_role_assignments(
             principal_type="POD_MEMBER", principal_id=pod_member_id
         )
@@ -166,7 +177,9 @@ class PodRoleService:
             grantee_type="POD_MEMBER",
             grantee_id=pod_member_id,
         )
-        await invalidate_role_snapshot_cache(user_id=user_id)
+        self._uow.after_commit(
+            lambda: invalidate_role_snapshot_cache(user_id=user_id)
+        )
 
     async def get_member_roles_by_user_id(
         self,

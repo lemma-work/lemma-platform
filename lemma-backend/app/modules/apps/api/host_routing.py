@@ -95,8 +95,14 @@ class AppHostRoutingMiddleware:
 
         new_path = _APP_PATH_PREFIX if path == "/" else _APP_PATH_PREFIX + path
 
-        new_scope = dict(scope)
-        new_scope["path"] = new_path
-        new_scope["raw_path"] = new_path.encode("latin-1")
-        new_scope["headers"] = headers + [(_SLUG_HEADER, slug.encode("latin-1"))]
-        await self.app(new_scope, receive, send)
+        # Mutated in place rather than copied. Starlette's router records the
+        # matched route by writing `scope["route"]`, and the request observer
+        # that reads it sits *outside* this middleware — so with a copy the
+        # router wrote to an object the observer never saw, and every app-host
+        # request was logged as `route: "unmatched"`. That covered the whole
+        # apps product: 52 slow 404s and 21 slow 200s in a day, none of them
+        # attributable to a route on any per-route dashboard.
+        scope["path"] = new_path
+        scope["raw_path"] = new_path.encode("latin-1")
+        scope["headers"] = headers + [(_SLUG_HEADER, slug.encode("latin-1"))]
+        await self.app(scope, receive, send)

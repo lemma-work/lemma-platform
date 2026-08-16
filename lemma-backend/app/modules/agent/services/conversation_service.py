@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
+from functools import partial
 from contextvars import ContextVar
-from typing import NamedTuple
 from uuid import UUID
 
 
@@ -36,6 +36,7 @@ from app.modules.agent.domain.ports import (
     AgentRepository,
     ConversationRepository,
 )
+from app.modules.agent.domain.approvals import ApprovalResolution
 from app.modules.agent.domain.value_objects import (
     AgentRunApprovalDecision,
     AgentRunStartResult,
@@ -93,19 +94,6 @@ _POD_ASSISTANT_AGENT_ID = DEFAULT_POD_AGENT_ID
 # Defined with the primitive that consumes it, so the list and the resume path
 # that depends on it cannot drift apart.
 _PAUSING_TOOL_NAMES = PAUSING_TOOL_NAMES
-
-
-class ApprovalResolution(NamedTuple):
-    """Approval status plus the authoritative (stored) decision.
-
-    ``status`` is ``"resolved"`` when this call recorded the decision,
-    ``"reconciled"`` when it only finished a prior half-done resume (the
-    self-heal path), or ``"queued"`` when the decision is durable and a worker
-    job owns the rest.
-    """
-
-    status: str
-    decision: AgentRunApprovalDecision
 
 
 # When set, starting a new agent run does NOT publish the AgentRunStartedEvent
@@ -289,7 +277,7 @@ class ConversationService(PauseResumeMixin):
             pod_id=pod_id,
             agent_name=agent_name,
         )
-        # Include run messages so failure diagnostics also carry retry safety.
+        # The latest run carries the failure diagnostics and the retry decision.
         conversation = await self.conversation_repository.get_conversation(
             conversation_id,
             include_runs=True,
@@ -310,8 +298,26 @@ class ConversationService(PauseResumeMixin):
                 agent_id=conversation.agent_id,
                 action=Permissions.AGENT_READ,
             )
-        conversation.last_run_retryable = bool(conversation.agent_runs and conversation.agent_runs[-1].is_safely_retryable)
+        conversation.last_run_retryable = await self._latest_run_is_retryable(
+            conversation
+        )
         return conversation
+
+    async def _latest_run_is_retryable(self, conversation: Conversation) -> bool:
+        """Whether the newest run can be replayed without duplicating output.
+
+        The status check runs first and short-circuits: a run that did not fail
+        is not retryable whatever its messages say, and that is nearly every
+        conversation, so the message query below is rarely reached. Asking the
+        database that question directly is what replaced eager-loading the
+        whole transcript to evaluate it in Python.
+        """
+        latest = conversation.agent_runs[-1] if conversation.agent_runs else None
+        if latest is None or latest.status != AgentRunStatus.FAILED:
+            return False
+        return await self.conversation_repository.run_has_only_user_messages(
+            latest.id
+        )
 
     async def update_conversation(
         self,
@@ -602,11 +608,19 @@ class ConversationService(PauseResumeMixin):
             decision=effective_decision,
             has_tool_return=existing_return is not None,
         ):
-            await queue_approval_reconciliation(
-                conversation_id=conversation.id,
-                approval_id=approval_id,
-                user_id=user_id,
-                pod_id=pod_id,
+            # Deferred to after the commit, for two reasons. The connection is
+            # the smaller one: enqueuing is a Redis round trip and this runs
+            # inside the caller's transaction. The larger one is ordering -- an
+            # enqueue that happens before the commit queues a job against state
+            # that a rollback would erase, and the worker would then reconcile
+            # an approval the database never accepted.
+            self.uow.after_commit(
+                lambda: queue_approval_reconciliation(
+                    conversation_id=conversation.id,
+                    approval_id=approval_id,
+                    user_id=user_id,
+                    pod_id=pod_id,
+                )
             )
             return ApprovalResolution(status="queued", decision=effective_decision)
 
@@ -741,6 +755,7 @@ class ConversationService(PauseResumeMixin):
             # host too, or its ACP agent sits blocked until the request times
             # out half an hour later.
             return "request_approval", await agent_host_permission_tool_return(
+                uow=self.uow,
                 request=host_permission,
                 agent_run_id=paused_agent_run_id,
                 decision=decision,
@@ -781,11 +796,19 @@ class ConversationService(PauseResumeMixin):
             # which is the only unlock for DESTRUCTIVE_ACTIONS besides an
             # explicit grant). The permission ids ride in the request_approval
             # args, copied by the agent from the denied tool result.
-            await record_session_approvals(
-                conversation_id=conversation.id,
-                agent_id=conversation.agent_id,
-                tool_args=tool_args,
-                user_id=user_id,
+            # Queued, not awaited: a Redis write inline holds a connection
+            # inside an open write transaction, and a rollback must not leave an
+            # approval standing. Lands before the tool runs because
+            # `execute_approved_tool_as_user` commits first -- see
+            # `test_a_session_approval_is_recorded_before_the_tool_runs`.
+            self.uow.after_commit(
+                partial(
+                    record_session_approvals,
+                    conversation_id=conversation.id,
+                    agent_id=conversation.agent_id,
+                    tool_args=tool_args,
+                    user_id=user_id,
+                )
             )
 
         executed = await self._execute_approved_tool_as_user(
@@ -1229,20 +1252,20 @@ class ConversationService(PauseResumeMixin):
         # atomically before the worker can safely load them; normal CRUD methods
         # still rely on the request UoW.
         await self.uow.commit()
-        # Publish superseded-interaction returns only now that they're durably
-        # committed alongside the new run/message (same transaction as above).
-        for superseded_return in superseded_returns:
-            await publish_conversation_event(
-                conversation.id,
-                message_payload(
-                    superseded_return.agent_run_id,
-                    message_to_payload(superseded_return),
-                ),
-            )
-        await publish_conversation_event(
-            conversation.id,
-            input_added_payload(active_run.id, message_to_payload(saved_user_message)),
-        )
+        # After the commit, not inside it: this claimed to run "now that they're
+        # durably committed", but the commit is the caller's, so it held a
+        # connection across a Redis round trip with the row locked. Not the
+        # outbox -- these are live UI frames; the next fetch recovers a lost one.
+        frames = [
+            message_payload(item.agent_run_id, message_to_payload(item))
+            for item in superseded_returns
+        ] + [input_added_payload(active_run.id, message_to_payload(saved_user_message))]
+
+        async def _publish_frames() -> None:
+            for frame in frames:
+                await publish_conversation_event(conversation.id, frame)
+
+        self.uow.after_commit(_publish_frames)
         return AgentRunStartResult(
             conversation_id=conversation.id,
             agent_run_id=active_run.id,

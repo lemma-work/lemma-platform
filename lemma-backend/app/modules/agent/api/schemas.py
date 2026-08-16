@@ -258,6 +258,16 @@ class UpdateAgentRequest(BaseModel):
     output_schema: JsonObject | None = None
     visibility: ResourceVisibility | None = None
     metadata: JsonObject | None = None
+    permissions: AgentPermissionsReplaceRequest | None = Field(
+        default=None,
+        description=(
+            "Optional resource grants to REPLACE on this agent, in the same "
+            "request. Equivalent to calling the permissions-replace endpoint "
+            "right after update — grants are keyed by resource_name. Omit the "
+            "key to leave existing grants alone; an empty grant list revokes "
+            "them."
+        ),
+    )
 
 
 class AgentMessageResponse(BaseModel):
@@ -294,7 +304,11 @@ class CreateAgentHostRuntimeProfileRequest(BaseModel):
     # From GET /me/runtime/agent-hosts/{id}/harnesses, which is what Lemma
     # Desktop lists under Models.
     harness_id: UUID
-    scope: RuntimeProfileScope = RuntimeProfileScope.ORGANIZATION
+    # Personal unless asked for. Unlike a provider profile, which carries an
+    # organization's own credential, this one points at a coding agent on one
+    # person's machine and dispatches runs there whoever selects the model.
+    # Omitting the field is not a decision to share a laptop with a workspace.
+    scope: RuntimeProfileScope = RuntimeProfileScope.PERSONAL
     name: str = Field(min_length=1, max_length=255)
     description: str | None = None
     default_model_name: str | None = Field(default=None, min_length=1)

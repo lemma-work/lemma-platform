@@ -14,7 +14,6 @@ snoozes in one conversation cannot cross-resume each other.
 from datetime import datetime
 from uuid import UUID, uuid4
 
-from app.modules.schedule.scheduler.api_client import SchedulerAPIClient
 
 SNOOZE_WAKE_SOURCE = "agent_snooze"
 
@@ -26,28 +25,26 @@ async def schedule_snooze_wake(
     wake_at: datetime,
 ) -> UUID:
     """Arm the timer that ends this snooze. Returns its per-wait token."""
-    timer_id = uuid4()
-    await SchedulerAPIClient().schedule_once_job(
-        schedule_id=timer_id,
-        user_id=user_id,
-        run_date=wake_at,
-        payload={
-            "conversation_id": str(conversation_id),
-            "wait_ref": str(timer_id),
-            "scheduled_at": wake_at.isoformat(),
-            "source": SNOOZE_WAKE_SOURCE,
-        },
-        replace_existing=True,
-    )
-    return timer_id
+    # Nothing to arm. The wait row the caller is about to persist carries
+    # `scheduled_at` and `external_ref`, and the schedule poller claims from
+    # those columns -- the row is the timer. This still mints the token the two
+    # are joined by, and still returns it before the row is written, so the
+    # ordering the caller relies on is unchanged.
+    del conversation_id, user_id, wake_at
+    return uuid4()
 
 
 async def cancel_snooze_wake(timer_id: str) -> None:
     """Drop the timer for a snooze that will never be resumed.
 
-    Best effort by design: ``remove_job`` already treats a missing job as
-    success, and the wait row is the real guard — a fired timer resolves through
-    ``find_active_by_external_ref``, which ignores anything not ACTIVE. Removing
-    the job just stops the scheduler doing pointless work.
+    Nothing to drop, and nothing ever really depended on it. The wait row was
+    always the guard -- a fired timer resolves through
+    ``find_active_by_external_ref``, which ignores anything not ACTIVE -- and now
+    the poller's due query filters on the same status, so a completed or
+    cancelled wait is invisible to it.
+
+    Kept as a call rather than deleted at the call sites: cancelling a snooze is
+    a real domain event, and the day it needs to do something again, this is
+    where it goes.
     """
-    await SchedulerAPIClient().remove_job(UUID(timer_id))
+    del timer_id

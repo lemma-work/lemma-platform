@@ -87,6 +87,6 @@ through signed, purpose-bound embed access.
 
 The test suite covers tool assembly, messages, approvals, cancellation,
 runtime profiles, Agent Host dispatch, MCP, widgets, usage, subagents, and
-mocked/real harness paths. Current unit coverage is 63.2% (5,339 of 8,444
-statements). Large orchestration classes and cross-module coupling are tracked
-in [issues.md](issues.md).
+mocked/real harness paths. This module carries the largest orchestration classes
+in the backend; their size and cross-module coupling are held flat by the
+`make architecture` ratchet rather than reduced.

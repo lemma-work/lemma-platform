@@ -8,7 +8,6 @@ import tempfile
 from typing import Any
 
 import aiohttp
-import anyio
 
 from app.core.concurrency.offload import run_blocking
 from app.modules.datastore.config import datastore_settings
@@ -213,7 +212,7 @@ class KreuzbergHelper:
 
         async def _probe(path: str) -> bool:
             try:
-                pages_sampled, total_chars = await anyio.to_thread.run_sync(probe, path)
+                pages_sampled, total_chars = await run_blocking(probe, path)
             except Exception:
                 logger.debug(
                     "datastore.kreuzberg_helper.pdfium_ocr_probe_defaulting_native.observed",
@@ -409,9 +408,6 @@ class KreuzbergHelper:
                 continue
 
         if last_error is not None:
-            logger.debug(
-                'datastore.kreuzberg_helper.kreuzberg_compatible_extraction_also_s.diagnostic'
-            )
             raise last_error
         raise RuntimeError("Kreuzberg extraction failed before sending a request")
 
@@ -487,8 +483,15 @@ class KreuzbergHelper:
                     await self._raise_for_status(response)
                     # A completed HTTP round-trip means the extractor is reachable.
                     circuit.record_success()
-                    data = await response.json()
-                    return self._parse_extract_response(data)
+                    # Read bytes and parse OFF the loop. An extraction
+                    # response carries the whole document's text and, when
+                    # figures are requested, base64 images inline — tens of
+                    # megabytes of JSON. aiohttp's .json() parses that on the
+                    # event loop, and _parse_extract_response walks it again.
+                    raw = await response.read()
+                    return await run_blocking(
+                        self._parse_extract_bytes, raw, limiter="cpu_bound"
+                    )
             except (asyncio.TimeoutError, TimeoutError) as exc:
                 # A timeout may happen after Kreuzberg accepted the upload and
                 # started CPU-heavy work. Retrying immediately can duplicate that
@@ -580,7 +583,15 @@ class KreuzbergHelper:
         try:
             async with session.post(f"{self.base_url}/chunk", json=payload) as response:
                 await self._raise_for_status(response)
-                data = await response.json()
+                raw = await response.read()
+            # Parsing stays inside the try. Returning [] is what makes the
+            # caller fall back to in-process chunking, and a 200 carrying
+            # something that is not JSON -- a proxy error page, an engine that
+            # dropped this endpoint -- has to reach that fallback rather than
+            # raise out of extract().
+            return await run_blocking(
+                self._normalize_chunk_bytes, raw, limiter="cpu_bound"
+            )
         except Exception:
             logger.debug(
                 'datastore.kreuzberg_helper.chunking_request_text_chunker_s.diagnostic',
@@ -589,7 +600,13 @@ class KreuzbergHelper:
             )
             return []
 
-        return self._normalize_chunk_response(data)
+    def _parse_extract_bytes(self, raw: bytes) -> KreuzbergExtractionResult:
+        """Parse and normalize an extract response, off the event loop."""
+        return self._parse_extract_response(json.loads(raw))
+
+    def _normalize_chunk_bytes(self, raw: bytes) -> list[dict[str, Any]]:
+        """Parse and normalize a chunk response, off the event loop."""
+        return self._normalize_chunk_response(json.loads(raw))
 
     def _normalize_chunk_response(self, data: Any) -> list[dict[str, Any]]:
         if isinstance(data, dict):

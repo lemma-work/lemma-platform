@@ -378,6 +378,22 @@ jobs:
     name: Build native host pack (${{ matrix.target }})
     runs-on: ${{ matrix.runner }}
     needs: [merge, infra-digests]
+    # Windows signing is best-effort. macOS is the platform this project ships:
+    # the Windows installer is built and kept for whoever is testing it, and is
+    # deliberately never attached to a release, because attaching it is what
+    # makes it an offer of support. Hard-failing the Windows pack when no
+    # certificate is configured therefore blocks the release of the platform we
+    # *do* ship on the one we do not — which is exactly what happened on the
+    # v0.7.0 tag, the first time this path ran with `publish` true.
+    #
+    # `secrets` cannot be read from a step `if`, so the availability test is
+    # resolved once here, where the job `env` can see it, and compared as a
+    # string below.
+    env:
+      WINDOWS_SIGNING_AVAILABLE: >-
+        ${{ secrets.WINDOWS_CERTIFICATE != ''
+        && secrets.WINDOWS_CERTIFICATE_PASSWORD != ''
+        && secrets.WINDOWS_TIMESTAMP_URL != '' }}
     strategy:
       fail-fast: false
       matrix:
@@ -416,12 +432,26 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v5
         with:
-          node-version: 24
+          node-version-file: .nvmrc
+
+      - name: Report unsigned Windows host pack
+        if: >-
+          matrix.target == 'x86_64-pc-windows-msvc' &&
+          (github.event_name == 'push' || inputs.publish) &&
+          env.WINDOWS_SIGNING_AVAILABLE != 'true'
+        shell: bash
+        run: |
+          echo "::warning title=Windows host pack is unsigned::\
+          WINDOWS_CERTIFICATE, WINDOWS_CERTIFICATE_PASSWORD and \
+          WINDOWS_TIMESTAMP_URL are not all configured, so this host pack is \
+          published unsigned. macOS is unaffected. Set the three secrets to \
+          restore signing."
 
       - name: Import Windows host-pack signing certificate
         if: >-
           matrix.target == 'x86_64-pc-windows-msvc' &&
-          (github.event_name == 'push' || inputs.publish)
+          (github.event_name == 'push' || inputs.publish) &&
+          env.WINDOWS_SIGNING_AVAILABLE == 'true'
         id: windows-signing
         uses: ./.github/actions/setup-windows-signing
         with:
@@ -510,7 +540,8 @@ jobs:
       - name: Sign downloadable Windows host runtime
         if: >-
           matrix.target == 'x86_64-pc-windows-msvc' &&
-          (github.event_name == 'push' || inputs.publish)
+          (github.event_name == 'push' || inputs.publish) &&
+          env.WINDOWS_SIGNING_AVAILABLE == 'true'
         shell: pwsh
         env:
           CERTIFICATE_THUMBPRINT: ${{ steps.windows-signing.outputs.thumbprint }}
@@ -870,7 +901,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v5
         with:
-          node-version: 22
+          node-version-file: .nvmrc
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable

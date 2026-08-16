@@ -265,7 +265,13 @@ def _build_service(
             get=AsyncMock(side_effect=_fake_get),
             execute=AsyncMock(return_value=_EmptyExecuteResult()),
             flush=AsyncMock(),
-        )
+        ),
+        # Egress releases the pooled connection before every platform call, so
+        # the double needs the method the real unit of work has. Given rather
+        # than made optional in the service: a helper that shrugs at a uow
+        # without `commit` would also shrug in production, where that means the
+        # connection is quietly held across the send.
+        commit=AsyncMock(),
     )
 
     adapter.enrich_inbound_event.side_effect = lambda *, credentials, event: event

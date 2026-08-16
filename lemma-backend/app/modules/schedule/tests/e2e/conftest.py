@@ -6,7 +6,6 @@ import pytest
 import pytest_asyncio
 
 from app.modules.test_support.e2e import fixtures as e2e_fixtures
-from app.modules.test_support.e2e.runtime import scheduler_api_server
 
 pytestmark = pytest.mark.e2e
 
@@ -27,13 +26,6 @@ fixed_test_user = e2e_fixtures.fixed_test_user
 authenticated_client = e2e_fixtures.authenticated_client
 fixed_test_org = e2e_fixtures.fixed_test_org
 scenario = e2e_fixtures.scenario
-
-
-@pytest_asyncio.fixture(scope="function", autouse=True)
-async def _schedule_scheduler_api_server(scheduler_api_server):
-    """Preserve the schedule e2e autouse scheduler API setup."""
-
-    yield scheduler_api_server
 
 
 @pytest_asyncio.fixture(scope="function", autouse=True)
@@ -77,7 +69,6 @@ __all__ = [
     "redis_client",
     "redis_container",
     "scenario",
-    "scheduler_api_server",
     "supertokens_container",
     "test_app",
     "test_database_url",

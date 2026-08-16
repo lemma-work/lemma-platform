@@ -27,8 +27,12 @@ def _event(attachments: list[dict]) -> ParsedInboundSurfaceEvent:
 
 
 class _FakeAdapter:
-    def __init__(self, *, results: dict[str, tuple[bytes, str, str] | None] | None = None,
-                 raise_for: set[str] | None = None):
+    def __init__(
+        self,
+        *,
+        results: dict[str, tuple[bytes, str, str] | None] | None = None,
+        raise_for: set[str] | None = None,
+    ):
         self.results = results or {}
         self.raise_for = raise_for or set()
         self.calls: list[dict] = []
@@ -45,8 +49,17 @@ class _FakeFileService:
     def __init__(self):
         self.created: list[dict] = []
 
-    async def create_file(self, *, pod_id, name, file_content, ctx, directory_path,
-                          search_enabled=True, **kwargs):
+    async def create_file(
+        self,
+        *,
+        pod_id,
+        name,
+        file_content,
+        ctx,
+        directory_path,
+        search_enabled=True,
+        **kwargs,
+    ):
         self.created.append(
             {
                 "pod_id": pod_id,
@@ -58,8 +71,19 @@ class _FakeFileService:
         return SimpleNamespace(path=f"{directory_path}/{name}", name=name)
 
 
+def _direct_store(file_service):
+    """The unit-test `store`: no transaction, just hand the fake service over."""
+
+    async def _store(persist_ingested_attachment):
+        return await persist_ingested_attachment(file_service)
+
+    return _store
+
+
 def _service() -> SurfaceFileIngestService:
-    return SurfaceFileIngestService(adapter_registry=SimpleNamespace(get=lambda p: None))
+    return SurfaceFileIngestService(
+        adapter_registry=SimpleNamespace(get=lambda p: None)
+    )
 
 
 async def test_ingest_all_writes_files_to_me_platform_folder():
@@ -79,7 +103,7 @@ async def test_ingest_all_writes_files_to_me_platform_folder():
         platform="TELEGRAM",
         parsed=_event([{"file_id": "a1"}, {"file_id": "a2"}]),
         credentials={},
-        file_service=file_service,
+        store=_direct_store(file_service),
         ctx=SimpleNamespace(),
         attachments=[{"file_id": "a1"}, {"file_id": "a2"}],
     )
@@ -97,7 +121,9 @@ async def test_ingest_all_writes_files_to_me_platform_folder():
 
 async def test_ingest_skips_attachment_whose_declared_size_exceeds_cap():
     service = _service()
-    adapter = _FakeAdapter(results={"big": (b"x", "big.bin", "application/octet-stream")})
+    adapter = _FakeAdapter(
+        results={"big": (b"x", "big.bin", "application/octet-stream")}
+    )
     file_service = _FakeFileService()
 
     saved = await service._ingest_all(
@@ -106,7 +132,7 @@ async def test_ingest_skips_attachment_whose_declared_size_exceeds_cap():
         platform="TELEGRAM",
         parsed=_event([]),
         credentials={},
-        file_service=file_service,
+        store=_direct_store(file_service),
         ctx=SimpleNamespace(),
         attachments=[{"file_id": "big", "size": INBOUND_ATTACHMENT_BYTE_CAP + 1}],
     )
@@ -130,7 +156,7 @@ async def test_ingest_isolates_download_failure_and_continues():
         platform="TELEGRAM",
         parsed=_event([]),
         credentials={},
-        file_service=file_service,
+        store=_direct_store(file_service),
         ctx=SimpleNamespace(),
         attachments=[{"file_id": "bad"}, {"file_id": "ok"}],
     )
@@ -150,7 +176,7 @@ async def test_ingest_skips_when_adapter_returns_none():
         platform="TELEGRAM",
         parsed=_event([]),
         credentials={},
-        file_service=file_service,
+        store=_direct_store(file_service),
         ctx=SimpleNamespace(),
         attachments=[{"file_id": "x"}],
     )
@@ -175,7 +201,7 @@ async def test_ingest_carries_audio_bytes_for_voice_and_not_for_docs():
         platform="TELEGRAM",
         parsed=_event([]),
         credentials={},
-        file_service=file_service,
+        store=_direct_store(file_service),
         ctx=SimpleNamespace(),
         attachments=[
             {"file_id": "voice", "content_type": "voice"},
@@ -198,3 +224,89 @@ def test_safe_file_name_strips_paths_and_falls_back():
     assert _safe_file_name("a/b/c.txt") == "c.txt"
     assert _safe_file_name("") == "attachment"
     assert _safe_file_name(None) == "attachment"
+
+
+async def test_no_transaction_is_open_while_an_attachment_downloads():
+    """Download first, open the write transaction second — once per attachment.
+
+    Each attachment is up to 50 MB fetched over a 60s-timeout HTTP call. The
+    previous shape ran the loop inside one transaction and committed before
+    every download to hand the connection back; that was correct but only
+    legible as a comment. Now the download simply has no transaction around it.
+
+    An ordering assertion, not a timing one: the fake adapter returns instantly
+    and always will, so only the sequence can carry the property.
+    """
+    service = _service()
+    adapter = _FakeAdapter(
+        results={
+            "a1": (b"hello", "report.pdf", "application/pdf"),
+            "a2": (b"world!!", "data.csv", "text/csv"),
+        }
+    )
+    order: list[str] = []
+
+    class _RecordingAdapter:
+        async def download_attachment(self, **kwargs):
+            order.append("download")
+            return await adapter.download_attachment(**kwargs)
+
+    file_service = _FakeFileService()
+
+    async def _store(persist):
+        order.append("open")
+        try:
+            return await persist(file_service)
+        finally:
+            order.append("close")
+
+    saved = await service._ingest_all(
+        adapter=_RecordingAdapter(),
+        pod_id=uuid4(),
+        platform="TELEGRAM",
+        parsed=_event([{"file_id": "a1"}, {"file_id": "a2"}]),
+        credentials={},
+        ctx=SimpleNamespace(),
+        attachments=[{"file_id": "a1"}, {"file_id": "a2"}],
+        store=_store,
+    )
+
+    assert len(saved) == 2
+    assert order == [
+        "download",
+        "open",
+        "close",
+        "download",
+        "open",
+        "close",
+    ]
+
+
+async def test_a_failed_download_opens_no_transaction_at_all():
+    """The write scope is never entered for a file that never arrived."""
+    service = _service()
+
+    class _FailingAdapter:
+        async def download_attachment(self, **kwargs):
+            raise RuntimeError("boom")
+
+    opened = 0
+
+    async def _store(persist):
+        nonlocal opened
+        opened += 1
+        return await persist(_FakeFileService())
+
+    saved = await service._ingest_all(
+        adapter=_FailingAdapter(),
+        pod_id=uuid4(),
+        platform="TELEGRAM",
+        parsed=_event([{"file_id": "a1"}]),
+        credentials={},
+        ctx=SimpleNamespace(),
+        attachments=[{"file_id": "a1"}],
+        store=_store,
+    )
+
+    assert saved == []
+    assert opened == 0

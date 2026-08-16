@@ -10,6 +10,7 @@ from uuid import UUID
 
 from sqlalchemy.exc import IntegrityError
 
+from app.core.infrastructure.db.transaction_locks import connection_released
 from app.core.authorization.context import Context, ResourceRef, ResourceType
 from app.core.authorization.permissions import Permissions
 from app.core.authorization.service import AuthorizationDataService
@@ -211,10 +212,12 @@ class WorkflowEngine:
         # create() persisted only the entry-node state; write the post-advance state
         # (final node, status, step history, context) before committing.
         run = await self.run_repo.update(run)
-        await self._persist_wait(run, result)
+        pending_wait = await self._persist_wait(run, result)
         self._collect_terminal_event(run)
         await self.uow.commit()
         await self._announce(run)
+        if pending_wait is not None:
+            await self._announce_human_wait(run, pending_wait)
 
         return run
 
@@ -279,10 +282,12 @@ class WorkflowEngine:
         result = await self._stepper(ctx).continue_after(run, flow, node_id)
 
         run = await self.run_repo.update(run)
-        await self._persist_wait(run, result)
+        pending_wait = await self._persist_wait(run, result)
         self._collect_terminal_event(run)
         await self.uow.commit()
         await self._announce(run)
+        if pending_wait is not None:
+            await self._announce_human_wait(run, pending_wait)
         return run
 
     async def resume_internal(
@@ -331,10 +336,12 @@ class WorkflowEngine:
         result = await self._stepper(ctx).continue_after(run, flow, wait.node_id)
 
         run = await self.run_repo.update(run)
-        await self._persist_wait(run, result)
+        pending_wait = await self._persist_wait(run, result)
         self._collect_terminal_event(run)
         await self.uow.commit()
         await self._announce(run)
+        if pending_wait is not None:
+            await self._announce_human_wait(run, pending_wait)
         return run
 
     async def fail_internal(
@@ -472,18 +479,7 @@ class WorkflowEngine:
     def _collect_terminal_event(self, run: WorkflowRunEntity) -> None:
         if run.status not in TERMINAL_STATUSES:
             return
-        if run.completed_at is None:
-            raise RuntimeError(f"Terminal workflow run {run.id} has no completed_at")
-        self.uow.collect_events(
-            [
-                WorkflowRunTerminalEvent(
-                    run_id=run.id,
-                    status=run.status,
-                    error=run.error,
-                    completed_at=run.completed_at,
-                )
-            ]
-        )
+        self.uow.collect_events([WorkflowRunTerminalEvent.from_run(run)])
 
     def _entry_node_id(self, flow: WorkflowEntity) -> str:
         if not flow.nodes:
@@ -512,11 +508,15 @@ class WorkflowEngine:
         # turn a successful advance into a raised exception. Clients still poll.
         try:
             wait = await self.wait_repo.get_active_for_run(run.id)
-            await publish_run_state(
-                run.id,
-                run_response_from_domain(run, wait).model_dump(mode="json"),
-                terminal=run.status in TERMINAL_STATUSES,
-            )
+            payload = run_response_from_domain(run, wait).model_dump(mode="json")
+            # The wait read above needs a connection; the Redis publish does
+            # not, and this runs after every node advance.
+            async with connection_released(getattr(self.wait_repo, "session", None)):
+                await publish_run_state(
+                    run.id,
+                    payload,
+                    terminal=run.status in TERMINAL_STATUSES,
+                )
         except Exception:
             logger.debug("workflow.run.announce_failed", exc_info=True)
 
@@ -529,15 +529,24 @@ class WorkflowEngine:
             function_adapter=self.function_adapter,
         )
 
-    async def _persist_wait(self, run: WorkflowRunEntity, result: StepResult) -> None:
+    async def _persist_wait(
+        self, run: WorkflowRunEntity, result: StepResult
+    ) -> WorkflowRunWaitEntity | None:
+        """Write the wait row. Telling the assignee happens after the commit.
+
+        It used to happen here, which put a Slack/Teams/WhatsApp/email send
+        inside the run transaction and under the run's row lock — for the
+        seconds a platform API can take, with a pooled connection held. The
+        cheap Redis announce next door already had the right sequencing, and
+        says why in its own docstring; the expensive one had the opposite.
+        """
         if result.wait is None or run.status not in (
             WorkflowRunStatus.WAITING,
             WorkflowRunStatus.RUNNING,
         ):
-            return
+            return None
         assert run.current_node_id is not None
-        wait = await self.wait_repo.create(self._wait_entity(run, result.wait))
-        await self._announce_human_wait(run, wait)
+        return await self.wait_repo.create(self._wait_entity(run, result.wait))
 
     async def _announce_human_wait(
         self, run: WorkflowRunEntity, wait: WorkflowRunWaitEntity
@@ -582,6 +591,9 @@ class WorkflowEngine:
             wait_type=request.wait_type,
             assigned_pod_member_id=request.assigned_pod_member_id,
             external_ref=request.external_ref,
+            # Kept in `payload` too: the reconcile sweep still reads it from
+            # there, and older rows have only that copy.
+            scheduled_at=request.scheduled_at,
             payload=payload,
         )
 

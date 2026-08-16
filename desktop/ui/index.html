@@ -257,10 +257,43 @@
   .scene.choosing .whisper,
   .scene.choosing .corner,
   .scene.choosing .progress { display: none; }
-  #choose, #local-confirm {
+  /* The sign-in screen is the splash with a button on it, so it takes no
+     layout of its own. Only the local review screen, which genuinely has a
+     column of disclosures to read, switches into `.choosing`. */
+  .scene.choosing #choose, .scene.choosing #local-confirm {
     width: 100%;
     padding: 0 0 0 clamp(40px, 5vw, 72px);
     border-left: 1px solid rgba(28, 24, 18, 0.14);
+  }
+  #choose { width: 100%; display: flex; flex-direction: column; align-items: center; }
+  button.start {
+    all: unset;
+    box-sizing: border-box;
+    cursor: pointer;
+    padding: 13px 42px;
+    border: 1px solid #131313;
+    border-radius: 6px;
+    background: #131313;
+    color: #faf6ee;
+    font-family: var(--sans);
+    font-size: 0.95rem;
+    font-weight: 600;
+  }
+  button.start:hover { background: #2a2a28; }
+  button.start:focus-visible { outline: 3px solid rgba(192, 128, 31, 0.28); outline-offset: 3px; }
+  button.linklike {
+    all: unset;
+    cursor: pointer;
+    color: var(--ink);
+    font-weight: 560;
+    border-bottom: 1px solid rgba(28, 24, 18, 0.32);
+  }
+  button.linklike:hover { border-bottom-color: var(--gold); }
+  button.linklike:focus-visible { outline: 3px solid rgba(192, 128, 31, 0.28); outline-offset: 3px; }
+  .local-cost {
+    font-family: var(--mono);
+    font-size: 0.72rem;
+    color: var(--ink-faint);
   }
   .setup-kicker {
     margin: 0 0 18px;
@@ -277,97 +310,6 @@
     color: var(--ink-soft);
     font-size: 0.9rem;
     line-height: 1.55;
-  }
-  .choices {
-    display: flex;
-    flex-direction: column;
-    gap: 0;
-    margin-top: 6px;
-  }
-  .choice {
-    all: unset;
-    box-sizing: border-box;
-    position: relative;
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
-    grid-template-areas:
-      "meta action"
-      "title action"
-      "body action";
-    column-gap: 28px;
-    cursor: pointer;
-    width: 100%;
-    padding: 27px 0 28px;
-    border-top: 1px solid rgba(28, 24, 18, 0.15);
-    text-align: left;
-    transition: color 0.2s ease, padding-left 0.2s ease;
-  }
-  .choice:last-child { border-bottom: 1px solid rgba(28, 24, 18, 0.15); }
-  .choice:hover {
-    padding-left: 10px;
-  }
-  .choice:focus-visible {
-    outline: 3px solid rgba(192, 128, 31, 0.28);
-    outline-offset: 3px;
-  }
-  .choice.recommended::before {
-    content: "";
-    position: absolute;
-    top: 25px;
-    bottom: 25px;
-    left: -22px;
-    width: 2px;
-    background: var(--gold);
-  }
-  .choice strong {
-    grid-area: title;
-    display: block;
-    margin: 9px 0 5px;
-    font-family: var(--sans);
-    font-size: 1.28rem;
-    font-weight: 560;
-    line-height: 1.25;
-    color: var(--ink);
-  }
-  .choice-top {
-    grid-area: meta;
-    display: flex;
-    align-items: center;
-    gap: 12px;
-  }
-  .choice .choice-body {
-    grid-area: body;
-    display: block;
-    max-width: 390px;
-    font-size: 0.84rem;
-    color: var(--ink-soft);
-    line-height: 1.45;
-  }
-  .choice .flag {
-    display: block;
-    font-family: var(--mono);
-    font-size: 0.6rem;
-    font-weight: 500;
-    letter-spacing: 0.14em;
-    text-transform: uppercase;
-    color: var(--gold-deep);
-  }
-  .choice-badge {
-    color: var(--gold-deep);
-    font-family: var(--mono);
-    font-size: 0.55rem;
-    letter-spacing: 0.1em;
-    text-transform: uppercase;
-  }
-  .choice .choice-action {
-    grid-area: action;
-    align-self: center;
-    display: block;
-    padding-bottom: 2px;
-    border-bottom: 1px solid rgba(28, 24, 18, 0.35);
-    color: var(--ink);
-    font-size: 0.82rem;
-    font-weight: 600;
   }
   .mode-note {
     margin: 20px 0 0;
@@ -454,7 +396,6 @@
     .scene.choosing { padding-top: 36px; padding-bottom: 36px; }
     .scene.choosing .statement { min-height: 200px; }
     .scene.choosing .statement p { font-size: 3.15rem; }
-    .choice { padding-top: 22px; padding-bottom: 23px; }
   }
 
   /* ---------- quiet chrome ---------- */
@@ -678,28 +619,31 @@
   </div>
   <p class="truth" id="truth"></p>
 
+  <!--
+    One button, because on this screen we do not yet know who is holding the app.
+
+    This used to be two equal choices under the heading "Workspace location" — an
+    architecture question asked before anything had been established, of someone
+    with no basis to answer it. Equal visual weight for options with wildly
+    unequal cost is misdirection however well meant, and the cost only appeared
+    on the next screen.
+
+    It also cannot pitch. Any line about coding agents excludes the person who
+    has not installed one, on the first screen they ever see. What the machine
+    actually has is checked after sign-in, where it is a fact rather than a
+    guess — and now cheap enough to check that the screen can be built on it.
+  -->
   <section id="choose" hidden>
-    <p class="setup-kicker">Workspace location</p>
-    <div class="choices">
-      <button class="choice recommended" id="choose-cloud" type="button">
-        <span class="choice-top">
-          <span class="flag">Cloud</span>
-          <span class="choice-badge">Recommended</span>
-        </span>
-        <strong>Connect to lemma.work</strong>
-        <span class="choice-body">Sign in or create a workspace. Ready immediately.</span>
-        <span class="choice-action">Continue →</span>
-      </button>
-      <button class="choice" id="choose-local" type="button">
-        <span class="choice-top">
-          <span class="flag">Local</span>
-        </span>
-        <strong id="local-choice-title">Run Lemma on this Mac</strong>
-        <span class="choice-body">Set up local services and keep workspace data here.</span>
-        <span class="choice-action">Review →</span>
-      </button>
-    </div>
-    <p class="mode-note">Cloud and local workspaces do not share data.</p>
+    <button class="primary start" id="choose-cloud" type="button">Sign in</button>
+    <p class="mode-note">
+      Or <button class="linklike" id="choose-local" type="button">run Lemma on this Mac</button>
+      <!-- Qualitative on purpose. A figure here is a promise made on the first
+           screen anyone sees, over a download whose length is somebody else's
+           network, and the review screen behind this link is where the cost is
+           actually laid out. "A number in prose goes stale silently" applies to
+           product copy as much as to docs. -->
+      <span class="local-cost" id="local-choice-cost">· downloads and installs services</span>
+    </p>
   </section>
 
   <section id="local-confirm" hidden>
@@ -708,7 +652,11 @@
     <div class="local-review">
       <ul>
         <li id="local-data-copy">Workspace data is stored on this Mac.</li>
-        <li>First setup takes a few minutes and uses additional disk space.</li>
+        <!-- Moved here from the choice screen. It is a consequence of picking
+             local, so it belongs where that is being decided rather than on a
+             screen that no longer asks the question. -->
+        <li>A local workspace shares no data with a cloud one.</li>
+        <li>First setup downloads several gigabytes and can take a while on a slow connection.</li>
         <li>AI models and connected integrations may send data to their providers.</li>
       </ul>
       <p class="setup-error" id="local-setup-error" hidden></p>
@@ -861,7 +809,7 @@
   const operationMeta = document.getElementById("operation-meta");
 
   if (IS_WINDOWS) {
-    document.getElementById("local-choice-title").textContent = "Run Lemma on this PC";
+    document.getElementById("choose-local").textContent = "run Lemma on this PC";
     document.getElementById("local-confirm-intro").textContent =
       "Lemma will install and run services on this PC.";
     document.getElementById("local-data-copy").textContent =
@@ -1292,7 +1240,8 @@
   const localSetupError = document.getElementById("local-setup-error");
   const confirmLocalBtn = document.getElementById("confirm-local");
   function showChooser() {
-    scene.classList.add("choosing");
+    // Deliberately not `.choosing`: this is the splash, with a button.
+    scene.classList.remove("choosing");
     chooseEl.hidden = false;
     localConfirmEl.hidden = true;
     switchModeBtn.hidden = true;
@@ -1302,8 +1251,17 @@
     stopWhispers();
     whisper.classList.remove("on");
     hideOperationStatus();
-    say("Where do you want to run Lemma?");
-    truth.textContent = "no local services are installed until you confirm";
+    // The serif line is the welcome. It says nothing about what is installed on
+    // this machine, because nothing has looked yet and a wrong guess here tells
+    // someone the app is not for them before they have used it.
+    say("Welcome to Lemma.");
+    // Nothing. This used to promise "no local services are installed until you
+    // confirm" — a reassurance against a fear nobody arrives with, referring to
+    // a confirmation step they have not seen, on a screen whose only action is
+    // signing in. It was written for the other path and was invisible here
+    // anyway until this screen stopped being a two-column layout. The gating it
+    // describes is self-evident on the review screen that actually does it.
+    truth.textContent = "";
   }
   function showLocalConfirmation() {
     scene.classList.add("choosing");

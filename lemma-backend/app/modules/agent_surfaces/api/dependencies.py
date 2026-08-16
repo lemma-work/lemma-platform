@@ -169,13 +169,24 @@ async def _pod_name(uow: UoWDep, pod_id: UUID) -> str | None:
 
 
 def get_surface_webhook_security_service(
-    uow: UoWDep,
+    uow_factory: UnitOfWorkFactory = Depends(get_uow_factory),
 ) -> SurfaceWebhookSecurityService:
-    return SurfaceWebhookSecurityService(
-        credential_resolver=SurfaceCredentialResolver(
+    """Factory mode: the secret lookup opens its own short scope.
+
+    Inbound webhook routes carry this, and their request rate belongs to the
+    sending platform. Holding a request-scoped connection so that signature
+    verification can read one per-workspace secret is the worst place in the app
+    to pin one.
+    """
+
+    def _resolver(uow) -> SurfaceCredentialResolver:
+        return SurfaceCredentialResolver(
             session=uow.session,
             connector_service=get_connector_service(uow),
         )
+
+    return SurfaceWebhookSecurityService(
+        uow_factory=uow_factory, resolver_factory=_resolver
     )
 
 

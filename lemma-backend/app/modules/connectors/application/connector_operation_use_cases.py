@@ -26,7 +26,15 @@ import httpx
 from app.modules.connectors.domain.errors import (
     ConnectorDomainError,
     OperationExecutionAccessDeniedError,
+    OperationExecutionInfrastructureError,
+    OperationExecutionTimeoutError,
     OperationExecutionUnauthorizedError,
+)
+from app.modules.connectors.infrastructure.operation_breaker import (
+    breaker_scope,
+    guard as breaker_guard,
+    record_failure as breaker_record_failure,
+    record_success as breaker_record_success,
 )
 from app.modules.connectors.services.connector_operation_service import (
     ConnectorOperationService,
@@ -89,30 +97,31 @@ class ConnectorOperationUseCases:
         # checks out a connection across the (1-45s) external call. The scope only
         # supplies the service collaborator that owns the gateway + timeout +
         # error-mapping logic.
+        # A provider that is down makes every caller wait the full timeout to be
+        # told the same thing, and adds load to something already struggling.
+        # Only infrastructure and timeout failures feed the breaker; a rejected
+        # request or a stale credential is the caller's problem and must not
+        # disable the operation for everyone else.
+        scope_key = breaker_scope(resolved.connector_id, operation_name)
+        await breaker_guard(scope_key)
         try:
-            async with uow_scope(self._uow_factory) as uow:
-                response = await self._build(uow).execute_resolved(resolved)
-        except OperationExecutionUnauthorizedError:
-            # The credential was rejected. Rather than refreshing before every
-            # call on the chance this happens, refresh here, once, and retry
-            # once. This also covers the case an expiry check never can: a
-            # credential revoked at the provider while still unexpired.
-            retried = await self._retry_with_refreshed_credentials(
+            response = await self._attempt_with_credential_refresh(
                 resolved, user_id=user_id, request=request
             )
-            if retried is not None:
-                response = retried
-            else:
-                # Still rejected after a refresh: the account is unusable until
-                # the user reconnects. Flagged in a fresh short scope, then the
-                # original error is re-raised unchanged.
-                await self._flag_account_reauth_required(resolved)
-                raise
-        except OperationExecutionAccessDeniedError:
-            # A scope/permission problem, not a stale credential -- refreshing
-            # would not help, so flag and surface it directly.
-            await self._flag_account_reauth_required(resolved)
+        except (
+            OperationExecutionInfrastructureError,
+            OperationExecutionTimeoutError,
+        ):
+            # Wraps the credential retry as well as the first call. Wrapping only
+            # the first call left a hole: a 401 that refreshed and then timed out
+            # raised from inside the handler, past this clause, and the breaker
+            # never saw it -- so the failure mode most likely to be *systemic*
+            # (every account's credential rejected because the provider's token
+            # endpoint is down, each one then retrying into the same outage) was
+            # the one failure mode that could not trip it.
+            await breaker_record_failure(scope_key)
             raise
+        await breaker_record_success(scope_key)
 
         # Phase 3: if the result carries a file, decide what the caller actually
         # receives -- inline bytes for something small, a pod-datastore reference
@@ -141,27 +150,72 @@ class ConnectorOperationUseCases:
         in Composio's own envelope -- now resolves at all. Persisting is decided
         by size; ``output_path`` only chooses the destination.
         """
-        from app.modules.connectors.services.files.capture import find_binary
         from app.modules.connectors.services.files.capture_writer import (
             BinaryResultWriter,
         )
 
         result = getattr(response, "result", None)
-        if find_binary(result) is None:
+        # Resolve BEFORE opening a session. Finding the binary walks and
+        # base64-decodes the whole third-party response, and for a URL-sourced
+        # result it downloads the file too — seconds of work proportional to
+        # something we do not control. Only persisting it needs the database.
+        writer = BinaryResultWriter(None)
+        resolved = await writer.resolve(result)
+        if resolved is None:
             return response
 
         async with current_context_scope(
             self._uow_factory, request=request, user_id=user_id
         ) as scope:
-            gateway = self._pod_file_gateway_factory(scope.uow)
-            captured = await BinaryResultWriter(gateway).capture(
+            captured = await BinaryResultWriter(
+                self._pod_file_gateway_factory(scope.uow)
+            ).capture(
                 result,
                 connector_id=connector_id,
                 pod_id=getattr(scope.ctx, "pod_id", None),
                 ctx=scope.ctx,
                 output_path=(payload or {}).get("output_path"),
+                resolved=resolved,
             )
         return OperationExecutionResponse(result=captured)
+
+    async def _attempt_with_credential_refresh(
+        self,
+        resolved: ResolvedConnectorExecution,
+        *,
+        user_id: UUID,
+        request: Request,
+    ) -> OperationExecutionResponse:
+        """Run the operation, refreshing the credential once if it is rejected.
+
+        One unit so the caller has a single place to judge "did this attempt
+        fail because the provider is unwell", which is the question the breaker
+        asks. The credential handling underneath is bookkeeping about *this*
+        account and is nobody else's business.
+        """
+        try:
+            async with uow_scope(self._uow_factory) as uow:
+                return await self._build(uow).execute_resolved(resolved)
+        except OperationExecutionUnauthorizedError:
+            # The credential was rejected. Rather than refreshing before every
+            # call on the chance this happens, refresh here, once, and retry
+            # once. This also covers the case an expiry check never can: a
+            # credential revoked at the provider while still unexpired.
+            retried = await self._retry_with_refreshed_credentials(
+                resolved, user_id=user_id, request=request
+            )
+            if retried is not None:
+                return retried
+            # Still rejected after a refresh: the account is unusable until the
+            # user reconnects. Flagged in a fresh short scope, then the original
+            # error is re-raised unchanged.
+            await self._flag_account_reauth_required(resolved)
+            raise
+        except OperationExecutionAccessDeniedError:
+            # A scope/permission problem, not a stale credential -- refreshing
+            # would not help, so flag and surface it directly.
+            await self._flag_account_reauth_required(resolved)
+            raise
 
     async def _retry_with_refreshed_credentials(
         self,

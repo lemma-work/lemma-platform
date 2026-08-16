@@ -470,3 +470,49 @@ async def list_grantee_resource_grants(
             row.permission_id
         )
     return grouped
+
+
+async def apply_inline_workload_grants(
+    session: AsyncSession,
+    *,
+    pod_id: UUID,
+    grantee_type: str,
+    grantee_id: UUID,
+    permissions,
+    created_by_user_id: UUID,
+) -> bool:
+    """Apply a create/update payload's inline ``permissions`` block.
+
+    One helper because the alternative is four copies of the same three calls —
+    validate, normalize, replace — and they had already drifted: an agent could
+    be created with its grants in one request, but updating it silently dropped
+    the same block, and functions accepted it on neither. Which of the four you
+    used decided whether your grants existed.
+
+    Semantics match the permissions-replace endpoint the CLI and pod import both
+    go through: a present block REPLACES the grantee's grants, an absent one
+    (``None``) leaves them alone. An explicitly empty grant list therefore
+    revokes, which is what makes "replace" mean the same thing everywhere.
+
+    Returns whether anything was applied, so a caller can skip follow-up work
+    (cache invalidation) when the payload said nothing about permissions.
+    """
+
+    if permissions is None:
+        return False
+    grants_payload = permissions.grants or []
+    validate_pod_resource_grant_permissions(grants_payload)
+    grants = await normalize_pod_resource_grants(
+        session,
+        pod_id=pod_id,
+        grants=grants_payload,
+    )
+    await replace_grantee_resource_grants(
+        session,
+        pod_id=pod_id,
+        grantee_type=grantee_type,
+        grantee_id=grantee_id,
+        grants=grants,
+        created_by_user_id=created_by_user_id,
+    )
+    return True

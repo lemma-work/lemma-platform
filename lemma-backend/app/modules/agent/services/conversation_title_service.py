@@ -34,6 +34,7 @@ from app.modules.agent.services.realtime import (
 )
 from app.modules.agent.services.runtime_model_factory import (
     require_pydantic_ai_model_from_runtime_profile,
+    usage_limits_for,
 )
 from app.modules.agent.services.runtime_profile_service import (
     DEFAULT_SYSTEM_AGENT_RUNTIME_PROFILE_ID,
@@ -59,7 +60,13 @@ _TITLE_USAGE_LIMITS = UsageLimits(
 _TITLE_SYSTEM_PROMPT = (
     "You generate a concise title for a chat conversation. "
     "Respond with a short, descriptive title of 3-6 words that captures the "
-    "user's intent. Return only the title text: no quotes, no surrounding "
+    "user's intent. "
+    # Without this the model picks a language of its own: an English prompt
+    # came back titled 查询items表行数 while another conversation in the same pod
+    # titled in English. The non-LLM fallback derives the title from the user's
+    # own message and never had the problem, so the two paths disagreed.
+    "Write the title in the same language as the user's message. "
+    "Return only the title text: no quotes, no surrounding "
     "punctuation, no trailing period, no prefix like 'Title:'."
 )
 
@@ -171,7 +178,7 @@ class ConversationTitleService:
         try:
             result = await agent.run(
                 _build_user_prompt(user_text, reply_text),
-                usage_limits=_TITLE_USAGE_LIMITS,
+                usage_limits=usage_limits_for(model, _TITLE_USAGE_LIMITS),
             )
             await record_pydantic_ai_result_usage(
                 ctx=usage_context,

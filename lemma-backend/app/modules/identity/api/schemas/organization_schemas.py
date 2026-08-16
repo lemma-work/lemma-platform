@@ -141,3 +141,84 @@ class OrganizationMessageResponse(BaseSchema):
     message: str
     success: bool = True
     redirect_uri: str | None = None
+
+
+class NavigationPodResponse(BaseSchema):
+    """A pod as a listing entry — enough to draw it, label it, and link to it.
+
+    The line this payload holds is scalars yes, collections no. A pod's own
+    columns cost nothing to return: they ride along in the query that found the
+    pod, so the response grows with the number of pods and not with what is
+    inside them. Apps, agents and roles are the other side of that line, and
+    live on ``/organizations/{org_id}/home``.
+    """
+
+    id: UUID
+    name: str
+    description: str | None = None
+    icon_url: str | None = None
+    #: When the pod record last changed — not when work last ran in it. The home
+    #: screen sorts and labels on it, which is the only reason it is here.
+    updated_at: datetime
+
+
+class NavigationOrganizationResponse(BaseSchema):
+    """An organization and the pods the caller can see inside it."""
+
+    id: UUID
+    name: str
+    slug: str | None = None
+    role: str
+    pods: list[NavigationPodResponse]
+
+
+class NavigationResponse(BaseSchema):
+    """Everything a sidebar and a pod list need, for every organization, at once.
+
+    Shallow in the sense that matters: it carries each pod's own columns, and
+    nothing that would require looking inside a pod. Apps, agents and roles are
+    the detail endpoint's job, because carrying them here would make the payload
+    grow with the content of every organization a person happens to belong to,
+    which is precisely the cost this endpoint exists to remove.
+    """
+
+    items: list[NavigationOrganizationResponse]
+
+
+class HomeAppResponse(BaseSchema):
+    id: UUID
+    name: str
+    description: str | None = None
+    url: str
+    status: str
+
+
+class HomeAgentResponse(BaseSchema):
+    id: UUID
+    name: str
+    description: str | None = None
+    icon_url: str | None = None
+
+
+class HomePodResponse(BaseSchema):
+    """A pod with what it contains and what the caller is to it."""
+
+    id: UUID
+    name: str
+    description: str | None = None
+    icon_url: str | None = None
+    #: Empty for an organization owner who can see the pod without having joined
+    #: it — visibility and membership are not the same thing here.
+    roles: list[str]
+    apps: list[HomeAppResponse]
+    agents: list[HomeAgentResponse]
+
+
+class OrganizationHomeResponse(BaseSchema):
+    """One organization's landing page in a single response."""
+
+    organization_id: UUID
+    name: str
+    slug: str | None = None
+    role: str
+    pods: list[HomePodResponse]

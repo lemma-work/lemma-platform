@@ -43,7 +43,58 @@ LOG_LEVEL=INFO
 JSON_LOGS_ENABLED=true
 # Per-request access logs. Noisy in production, useful in a checkout.
 LOCAL_HTTP_ACCESS_LOGS_ENABLED=false
+# The source commit this image was built from. Required in production —
+# startup refuses to continue without it. See "Release identity" below.
+LEMMA_RELEASE_SHA=4f2c1a9e8b7d3f5a1c0e6b2d8a4f7c3e9b1d5a02
+# Serve /docs, /redoc, /scalar and /openapi.json. Off unless set. See
+# "API documentation" below.
+API_DOCS_ENABLED=false
 ```
+
+### API documentation
+
+`API_DOCS_ENABLED` gates `/openapi.json`, `/docs`, `/redoc` and `/scalar`
+together. It defaults to **off**, and it is a flag rather than something
+inferred from `ENVIRONMENT`, so **every** deployment that wants the docs has to
+say so — staging and preview environments included, not just production. A
+deployment that sets nothing serves nothing and returns 404.
+
+That is the deliberate direction to fail in. The alternative is inferring from
+`ENVIRONMENT`, where a deployment that forgets to set it, or sets a value the
+check does not recognise, starts publishing the shape of every endpoint to
+anyone who asks. Nothing in production reads these: both SDKs are generated at
+build time and the route inventory is a CI gate. Generating the document also
+costs ~3.35s of a cold start, measured in a production container.
+
+`make init` writes `API_DOCS_ENABLED=true` into the generated `.env`, so a local
+checkout has them without doing anything.
+
+### Release identity
+
+`LEMMA_RELEASE_SHA` is what makes a metric, a log line, or a trace attributable
+to a deploy. It becomes `service.version` on the OpenTelemetry resource and
+`service.version`/`release.sha` on every log line, and without it you cannot
+answer whether a release caused a latency change.
+
+It must be the **full 40-character lowercase hex git SHA**. Nothing else is
+accepted, and the failure is quiet in the direction that matters: a short SHA,
+an image digest (`sha256:…`), a tag, or a branch name all fail the format check
+and fall back to the string `unknown`, which is what every dashboard then
+groups by. Set it from the source commit and bump it alongside the image digest
+at release.
+
+Production is stricter — startup raises if the value is missing or malformed.
+So a *running* production process reporting `service.version=unknown` means
+`ENVIRONMENT` is not being seen as `production` either, and that is worth
+fixing first.
+
+There is no `OTEL_SERVICE_VERSION`; the OTel SDK does not define one, and this
+setting is where the value comes from.
+
+`SERVICE_INSTANCE_ID` is not a setting — `service.instance.id` is derived
+automatically from `LEMMA_RUNTIME_INSTANCE_ID` if set, and otherwise from the
+hostname, which under Kubernetes is the pod name. It is what keeps replicas
+from colliding on the same metric series.
 
 ## Database and Redis
 
@@ -56,14 +107,47 @@ DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/lemma
 DATASTORE_DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/lemma_datastore
 REDIS_URL=redis://localhost:6379
 
-# Pool sizing. The ceiling that matters is POSTGRES_MAX_CONNECTIONS: every API
-# and worker process opens up to DB_POOL_SIZE + DB_MAX_OVERFLOW, so the product
-# across all replicas has to stay under what the server allows.
+# Pool sizing. One number, used by both engines, and it is a hard ceiling —
+# there is no overflow — so a process opens at most DB_POOL_SIZE connections per
+# engine and cluster capacity stays predictable when replicas autoscale.
 DB_POOL_SIZE=10
-DB_MAX_OVERFLOW=10
-POSTGRES_MAX_CONNECTIONS=100
-WORKER_CONCURRENCY=20
+WORKER_CONCURRENCY=50
 ```
+
+### Sizing the pool
+
+Size `DB_POOL_SIZE` from concurrent in-flight *queries*, not from request or
+task concurrency. A session holds its connection only for one unit of work and
+gives it back before any LLM call, HTTP request, sandbox operation or thread
+offload — `make lint-session-scope` fails the build if that stops being true.
+So the steady-state demand is roughly `queries_per_second × seconds_per_query`.
+An agent run spends 95%+ of its wall clock outside the database, which is why a
+worker at `WORKER_CONCURRENCY=50` still needs single-digit connections in
+steady state. The pool is there to absorb the burst at task start and finish.
+
+Raise it in response to measurement, not anticipation: the backend reports a
+`database_pool_capacity` incident when checkout saturation is sustained, and
+`pg_stat_activity` shows what the server actually sees. `WORKER_CONCURRENCY` is
+a RAM and CPU budget for the pod, unrelated to the pool.
+
+### Enforcing the cluster-wide ceiling
+
+Per-process arithmetic (`replicas × pool size < max_connections`) stops holding
+the moment an autoscaler, a rolling deploy or a migration job changes the
+replica count. Enforce it where it is actually enforceable — at the server:
+
+```sql
+ALTER ROLE lemma_app CONNECTION LIMIT 200;
+```
+
+Postgres then refuses connection 201 instead of letting a runaway deployment
+consume the slots reserved for administration. For deployments large enough
+that the total starts to matter, put a transaction-mode pooler (PgBouncer, or
+whatever your managed provider offers) in front and let the per-process pools
+stay small and uniform. Two things in this codebase are deliberately kept
+compatible with that: no session-level state outside a transaction (always
+`SET LOCAL`, never bare `SET`), and only transaction-scoped advisory locks
+(`pg_advisory_xact_lock`).
 
 ## Sandboxes
 
@@ -167,9 +251,21 @@ E2B_WORKSPACE_TEMPLATE=lemma-workspace
 E2B_FUNCTION_TEMPLATE=lemma-function
 # Only for a self-hosted or non-default E2B deployment.
 E2B_DOMAIN=
+# Namespace for the metadata the provider writes and queries. Leave unset in
+# production; override it for anything sharing an E2B account with real
+# workspaces.
+E2B_METADATA_NAMESPACE=
 ```
 
-These four are the whole backend-side E2B surface. In particular:
+These five are the whole backend-side E2B surface. In particular:
+
+- **`E2B_METADATA_NAMESPACE` is a safety boundary.** A provider is blind to
+  sandboxes labelled with any other namespace, and the orphan sweep destroys
+  every object it *can* identify that has no sandbox row. A test runs against a
+  throwaway database in which no production workspace has a row, so a test
+  sharing this value with a live account would sweep that account's workspaces
+  away. E2E runs generate their own namespace and refuse to start in the
+  production one.
 
 - **`E2B_WORKSPACE_BUILD_ID` and `E2B_FUNCTION_BUILD_ID` are not backend
   settings.** `WorkspaceSettings` does not declare them and the backend never
@@ -449,7 +545,15 @@ OBSERVABILITY_ENABLED=true
 OTEL_EXPORTER_OTLP_ENDPOINT=http://collector:4317
 OTEL_SERVICE_NAME=lemma-backend
 OTEL_TRACES_SAMPLER_ARG=0.05
+# How often the worker samples queue depth and pending event rows. Matching the
+# metric export interval is the useful floor; sampling faster only costs
+# queries. Zero disables the backlog gauges.
+BACKLOG_GAUGE_INTERVAL_SECONDS=60
 ```
+
+Set `LEMMA_RELEASE_SHA` too — see [Release identity](#release-identity). Without
+it every signal reports `service.version=unknown` and nothing correlates to a
+deploy.
 
 ## Chat surfaces
 

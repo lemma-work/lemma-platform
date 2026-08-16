@@ -73,6 +73,13 @@ async def test_app_file_manager_accepts_any_obstore_adapter():
 
 
 def test_app_storage_composition_uses_selected_cloud_adapter(monkeypatch):
+    """The cloud store is built without the app id in it.
+
+    The app id used to be passed as ``remote_prefix``, which made the store part
+    of the app's identity — one store, and once stores were cached one cache
+    entry, per tenant. The id belongs in the key instead; see
+    ``test_app_storage_is_shared_across_apps`` for the property that buys.
+    """
     app_id = uuid4()
     captured: dict[str, object] = {}
 
@@ -87,4 +94,42 @@ def test_app_storage_composition_uses_selected_cloud_adapter(monkeypatch):
     manager = dependencies._get_app_storage_factory()(app_id)
 
     assert isinstance(manager, AppFileManager)
-    assert captured["remote_prefix"] == f"apps/{app_id}"
+    assert "remote_prefix" not in captured
+    assert manager._key("build/index.html") == f"apps/{app_id}/build/index.html"
+
+
+def test_app_storage_is_shared_across_apps(monkeypatch):
+    """Two apps resolve to the same store object, not one store each."""
+    monkeypatch.setattr(settings, "storage_backend", "s3")
+    monkeypatch.setattr(settings, "storage_bucket", "documents")
+
+    store = MemoryStore()
+    monkeypatch.setattr(dependencies, "build_object_store", lambda **_: store)
+
+    build = dependencies._get_app_storage_factory()
+    first, second = build(uuid4()), build(uuid4())
+
+    assert first.store is second.store
+    assert first._key("x.js") != second._key("x.js")
+
+
+@pytest.mark.asyncio
+async def test_apps_sharing_one_store_cannot_delete_each_other(tmp_path):
+    """``delete_prefix("")`` clears its own app and leaves the neighbour alone.
+
+    With a per-app store this was structurally impossible. On a shared store an
+    unscoped ``list()`` would walk the whole bucket, so the scoping is now load-
+    bearing rather than incidental.
+    """
+    store = MemoryStore()
+    mine = AppFileManager(uuid4(), store=store)
+    theirs = AppFileManager(uuid4(), store=store)
+
+    await mine.write_file("build/index.html", "<html>mine</html>")
+    await theirs.write_file("build/index.html", "<html>theirs</html>")
+
+    await mine.delete_prefix("")
+
+    with pytest.raises(FileNotFoundError):
+        await mine.read_file("build/index.html")
+    assert await theirs.read_file("build/index.html") == "<html>theirs</html>"

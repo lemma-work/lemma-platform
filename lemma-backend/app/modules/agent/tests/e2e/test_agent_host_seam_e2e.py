@@ -36,6 +36,7 @@ from app.modules.agent.domain.value_objects import (
     ConversationStatus,
     ConversationType,
     HarnessOptions,
+    MessageKind,
 )
 from app.modules.agent.infrastructure.agent_host_dispatch_repository import (
     AgentHostDispatchRepository,
@@ -276,9 +277,25 @@ async def test_the_stream_carries_a_permission_request_without_ending_the_run(
     )
 
     messages = [event.data for event in events if event.type is AgentEventType.MESSAGE]
-    approvals = [m for m in messages if m.tool_name == "request_approval"]
+    approvals = [
+        m
+        for m in messages
+        if m.tool_name == "request_approval" and m.kind is MessageKind.TOOL_CALL
+    ]
     assert len(approvals) == 1, "the pause must surface as an ordinary approval"
     assert approvals[0].tool_call_id == "agent-host-permission:native-shell"
+
+    # The run here ends while the permission is still outstanding, so the call
+    # is closed with a synthetic return rather than left dangling — a tool call
+    # with no return renders as a spinner that never stops.
+    returns = [
+        m
+        for m in messages
+        if m.tool_name == "request_approval" and m.kind is MessageKind.TOOL_RETURN
+    ]
+    assert len(returns) == 1, "the unanswered approval must be closed out"
+    assert returns[0].tool_call_id == approvals[0].tool_call_id
+    assert returns[0].tool_result["interaction_fallback"] is True
 
     # A permission pause is not a WAITING run: it continues once answered.
     assert not any(event.type is AgentEventType.WAITING for event in events)
