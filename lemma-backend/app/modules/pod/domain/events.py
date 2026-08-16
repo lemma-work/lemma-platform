@@ -50,6 +50,11 @@ class PodDeletedEvent(DomainEvent):
     event_type: str = "pod.deleted"
     pod_id: UUID
     organization_id: UUID
+    #: Who deleted it -- read from the request's authorization context, not from
+    #: the pod's own ``user_id``: an admin can delete a pod somebody else built,
+    #: and attributing that to the creator would be a false statement rather than
+    #: a missing one.
+    deleted_by_user_id: UUID | None = None
 
     @classmethod
     def stream_name(cls) -> str:

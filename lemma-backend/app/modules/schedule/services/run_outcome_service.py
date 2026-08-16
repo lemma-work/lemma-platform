@@ -69,6 +69,9 @@ class ScheduleRunOutcomeService:
                     schedule_type=schedule.schedule_type,
                     pod_id=schedule.pod_id,
                     status=status.value,
+                    # The run's own owner first: for a datastore trigger that is
+                    # the row owner, who is not the schedule owner.
+                    user_id=getattr(schedule_run, "user_id", None) or schedule.user_id,
                 )
             ]
         )

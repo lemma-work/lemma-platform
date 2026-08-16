@@ -129,16 +129,30 @@ class AnalyticsActor:
 AUTONOMOUS_DISTINCT_ID: str = "lemma:autonomous"
 
 
-def _resolve_distinct_id(actor: AnalyticsActor) -> str:
+def _resolve_distinct_id(actor: AnalyticsActor, *, event: str) -> str:
     """Whose timeline this event belongs on.
 
-    Autonomous work has no person on it. Rather than invent one, it all lands on
-    a single constant machine actor -- see ``AUTONOMOUS_DISTINCT_ID``.
+    The machine actor is a last resort, not a default. Almost nothing the backend
+    does is unattributed: requests are authenticated, and unattended work --
+    a schedule firing, a trigger on an RLS row -- is still done *for* somebody
+    and belongs on their timeline as ``DELEGATED_USER_WORKLOAD``. Genuinely
+    anonymous traffic is a browser thing.
+
+    So falling through to the machine actor is reported. It shipped silently
+    once and put connector executions, scheduled runs, function creations, pod
+    deletions and surface connections on a fake person instead of the people who
+    caused them -- and nothing said so, because the fallback looked like a
+    design choice rather than a gap.
     """
     if actor.user_id:
         return actor.user_id
     if actor.anonymous_id:
         return actor.anonymous_id
+    logger.warning(
+        "analytics.actor.unattributed",
+        analytic_event=event,
+        actor_type=actor.actor_type.value,
+    )
     return AUTONOMOUS_DISTINCT_ID
 
 
@@ -200,7 +214,7 @@ def emit(
     org = str(organization_id) if organization_id else None
     pod = str(pod_id) if pod_id else None
 
-    distinct_id = _resolve_distinct_id(actor)
+    distinct_id = _resolve_distinct_id(actor, event=name)
 
     allowed = spec.properties
     payload: dict[str, str | int | float | bool] = {}
