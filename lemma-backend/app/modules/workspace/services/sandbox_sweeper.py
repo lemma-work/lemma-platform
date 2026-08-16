@@ -142,8 +142,8 @@ class SandboxSweeper:
             else:
                 continue
 
-            reclaimed.append(obj.name)
             if dry_run:
+                reclaimed.append(obj.name)
                 continue
             try:
                 await self._provider.destroy(obj.name, deadline_at=deadline_at)
@@ -154,9 +154,48 @@ class SandboxSweeper:
                     error_type=type(exc).__name__,
                 )
                 continue
+            # A destroy that returns is not a destroy that happened. On E2B a
+            # paused sandbox is listed like any other but does not go away when
+            # killed, so this loop logged eighteen reclaims every five minutes
+            # for hours -- the same eighteen ids, eleven times each -- while the
+            # account held ninety-nine paused sandboxes and the count never
+            # moved. Nothing was wrong with the sweep except that it believed
+            # itself. Confirming against the provider is what makes the count
+            # in `reclaimed_orphaned_objects.observed` mean anything, and what
+            # makes a provider that cannot reap this object say so instead of
+            # rediscovering it forever.
+            if await self._still_present(obj, deadline_at=deadline_at):
+                logger.warning(
+                    "workspace.sandbox_sweeper.orphan_destroy_ineffective",
+                    sandbox_id=str(obj.sandbox_id),
+                    reason=reason,
+                )
+                continue
+            reclaimed.append(obj.name)
             logger.info(
                 "workspace.sandbox_sweeper.orphan_reclaimed",
                 sandbox_id=str(obj.sandbox_id),
                 reason=reason,
             )
         return tuple(reclaimed)
+
+    async def _still_present(self, obj, *, deadline_at: datetime) -> bool:
+        """Whether the provider can still see *this* object after the destroy.
+
+        Identity, not existence. `inspect` resolves a name to whatever object
+        now holds that sandbox id, and reclaiming a superseded epoch leaves the
+        current one standing -- so "something is there" would read every
+        successful epoch reclaim as a failure. Only the same provider id means
+        nothing happened.
+
+        A provider that cannot answer is given the benefit of the doubt: the
+        sweep runs again in five minutes, and a false alarm every cycle would
+        bury the real signal this exists to raise.
+        """
+        try:
+            instance = await self._provider.inspect(obj.name, deadline_at=deadline_at)
+        except ProviderGone:
+            return False
+        except (ProviderFailed, ProviderNotReady, ProviderRejected, SandboxError):
+            return False
+        return instance is not None and instance.provider_id == obj.provider_id

@@ -416,3 +416,51 @@ async def test_a_short_yield_still_waits_long_enough_to_see_the_exit(
     assert result["exit_code"] == 0
     assert result["process_id"] is None
     assert client._reads > 1, "a short yield collapsed into one non-waiting poll"
+
+
+class _StdinRefusingClient(_CanonicalClient):
+    """Fails the stdin write the way a real sandbox does.
+
+    E2B answers a write to a process whose stdin is closed with
+    `Code.INTERNAL: error writing to stdin: stdin not enabled or closed`,
+    which the transport raises as `SandboxUnavailable`.
+    """
+
+    def __init__(self, error: Exception) -> None:
+        super().__init__()
+        self._error = error
+
+    async def send_process_input(self, *_args: Any, **_kwargs: Any) -> None:
+        raise self._error
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("error", "retryable"),
+    [
+        (SandboxUnavailable("stdin not enabled or closed"), True),
+        (SandboxRejected("stdin not enabled or closed"), False),
+    ],
+)
+async def test_a_failed_stdin_write_reports_the_sandbox_error_itself(
+    error: Exception, retryable: bool
+) -> None:
+    """The handler must not raise while describing the failure.
+
+    It read `exc.code` and `exc.retry` off the exception, and no sandbox error
+    has ever carried either. So every `SandboxError` on this path died with
+    `AttributeError: 'SandboxUnavailable' object has no attribute 'code'`, and
+    the agent was told that instead of what actually went wrong -- observed in
+    production as three consecutive `manage_process` calls failing identically
+    with the AttributeError, hiding "stdin not enabled or closed".
+    """
+    session = _session(_StdinRefusingClient(error))  # type: ignore[arg-type]
+
+    result = await session.write_stdin(process_id=str(uuid4()), chars="y\n")
+
+    assert result["success"] is False
+    assert "AttributeError" not in str(result["error"])
+    assert "stdin not enabled or closed" in str(result["error"])
+    # Retryability reaches the agent as the retry hint and the completed flag.
+    assert ("Retry the same operation" in str(result["error"])) is retryable
+    assert result["completed"] is not retryable

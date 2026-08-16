@@ -157,6 +157,11 @@ async def test_a_sandbox_from_a_superseded_profile_is_replaced(
         "workspace_profile_digest",
         "sha256:" + "f" * 64,
     )
+    # `ensure` reuses a just-provisioned handle for a few seconds without
+    # re-reading anything, so the staleness check under test is only reached
+    # once that window is given up. A real digest move arrives on deploy,
+    # minutes away from any ensure; here the two are microseconds apart.
+    service.forget(sandbox.id)
     second = await service.ensure(sandbox.id)
 
     assert second.provider_id != first.provider_id, "the stale one must not be reused"
@@ -191,6 +196,7 @@ async def test_the_recorded_profile_follows_the_configured_one(
         monkeypatch.setattr(
             profiles.workspace_settings, "workspace_profile_digest", digest
         )
+        service.forget(sandbox.id)  # see the superseded-profile test above
         await service.ensure(sandbox.id)
         assert provider.created[-1].profile_digest == digest
 
@@ -246,7 +252,10 @@ async def test_recreating_always_moves_the_epoch(
     first = await service.ensure(sandbox.id)
 
     # The container vanishes, exactly as it would if the host were restarted.
+    # Discovering that is what `forget` reports, and until something does, a
+    # handle provisioned moments ago is still served from memory.
     provider.containers.clear()
+    service.forget(sandbox.id)
     second = await service.ensure(sandbox.id)
 
     assert second.epoch == first.epoch + 1
@@ -305,6 +314,7 @@ async def test_losing_a_recorded_volume_moves_the_generation(
     # The disk is gone, and the row still says there was one.
     provider.volumes.clear()
     provider.containers.clear()
+    service.forget(sandbox.id)
     handle = await service.ensure(sandbox.id)
 
     assert handle.storage_generation == 2

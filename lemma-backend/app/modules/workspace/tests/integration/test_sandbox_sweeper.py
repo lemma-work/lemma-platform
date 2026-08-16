@@ -11,6 +11,7 @@ from app.modules.workspace.domain.sandbox import SandboxKind, SandboxOwnerKind
 from app.modules.workspace.providers.base import (
     ProcessDescriptor,
     ProviderGone,
+    ProviderInstance,
     ProviderObject,
 )
 from app.modules.workspace.services.sandbox_service import SandboxService
@@ -35,7 +36,13 @@ def provider() -> SweepableProvider:
 
 @pytest.fixture
 def service(provider: SweepableProvider, sandbox_uow_factory) -> SandboxService:
+    # Both caches are class attributes, so they outlive the instance and leak
+    # between tests. Only `_inflight` was being cleared, which left `_recent`
+    # to answer the second `ensure` of a test that had just emptied the
+    # provider -- so whether a test saw a re-provision depended on which tests
+    # ran before it.
     SandboxService._inflight.clear()
+    SandboxService._recent.clear()
     return SandboxService(provider=provider, uow_factory=sandbox_uow_factory)
 
 
@@ -110,7 +117,11 @@ async def test_a_superseded_epoch_is_reclaimed(
 ) -> None:
     sandbox = await _workspace(service)
     first = await service.ensure(sandbox.id)
+    # Losing the container is exactly what `forget` is for: `ensure` reuses a
+    # just-provisioned handle for a few seconds, so without this the second
+    # call answers from memory and no new epoch is ever minted.
     provider.containers.clear()
+    service.forget(sandbox.id)
     second = await service.ensure(sandbox.id)
     assert second.epoch > first.epoch
 
@@ -270,3 +281,51 @@ async def test_a_sandbox_that_cannot_be_probed_is_left_alone(
     provider.list_processes = _unreachable  # type: ignore[method-assign]
 
     assert await sweeper.release_idle(idle_after_seconds=0) == 0
+
+
+async def test_an_object_the_provider_cannot_reap_is_not_reported_as_reclaimed(
+    sweeper: SandboxSweeper, provider: SweepableProvider
+) -> None:
+    """A destroy that returns is not a destroy that happened.
+
+    On E2B a paused sandbox lists like any other but survives being killed, so
+    this loop logged eighteen reclaims every five minutes for hours -- the same
+    eighteen ids -- while the account held ninety-nine paused sandboxes and the
+    count never moved. Silence about that is worse than the leak: the sweep
+    looks like it is working.
+    """
+    orphan = uuid4()
+    name = f"lemma-ws-{orphan.hex}-1"
+    provider.objects = [_object(name=name, sandbox_id=orphan, epoch=1)]
+    # Accepts the call, keeps the object -- what killing a paused sandbox does.
+    provider.containers[name] = ProviderInstance(
+        provider_id=name, name=name, running=False
+    )
+
+    async def _destroy_that_does_nothing(destroyed_name: str, *, deadline_at) -> None:
+        del deadline_at
+        provider.destroyed.append(destroyed_name)
+
+    provider.destroy = _destroy_that_does_nothing  # type: ignore[method-assign]
+
+    reclaimed = await sweeper.reclaim_orphans()
+
+    assert provider.destroyed == [name], "the destroy must still be attempted"
+    assert reclaimed == (), "nothing was reclaimed, so nothing may be claimed"
+
+
+async def test_a_destroy_that_works_is_still_reported(
+    sweeper: SandboxSweeper, provider: SweepableProvider
+) -> None:
+    """The confirmation must not turn every real reclaim into a warning."""
+    orphan = uuid4()
+    name = f"lemma-ws-{orphan.hex}-1"
+    provider.objects = [_object(name=name, sandbox_id=orphan, epoch=1)]
+    provider.containers[name] = ProviderInstance(
+        provider_id=name, name=name, running=True
+    )
+
+    reclaimed = await sweeper.reclaim_orphans()
+
+    assert reclaimed == (name,)
+    assert provider.destroyed == [name]

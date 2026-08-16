@@ -13,6 +13,10 @@ export AGENT_BROWSER_EXECUTABLE_PATH=/usr/local/bin/workspace-chrome
 export AGENT_BROWSER_PROFILE=/tmp/lemma-browser/profile
 export AGENT_BROWSER_SESSION=workspace
 export AGENT_BROWSER_HEADED=true
+# The daemon closes Chrome after this long without a command. Set here too so a
+# browser started from an agent's login shell is bounded the same way one
+# started by the runtime is.
+export AGENT_BROWSER_IDLE_TIMEOUT_MS=120000
 export MPLBACKEND=Agg
 case ":${PATH}:" in
   *:/opt/node24/bin:*) ;;

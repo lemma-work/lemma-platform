@@ -285,8 +285,8 @@ class SandboxWorkspaceSession:
                     completed=False,
                 )
             return _sandbox_command_failure(
-                error=f"the sandbox runtime {exc.code}: {exc}",
-                retryable=exc.retry.value != "do_not_retry",
+                error=f"the sandbox runtime failed: {describe_exception(exc)}",
+                retryable=isinstance(exc, SandboxUnavailable),
                 process_id=process_id,
             )
         except (httpx.HTTPError, OSError, ValueError) as exc:

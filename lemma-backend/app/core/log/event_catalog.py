@@ -639,6 +639,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'workspace.sandbox_session.python_session_delete_failed': EventSpec('debug', frozenset({'sandbox_id', 'session_id'})),
     'workspace.sandbox_sweeper.idle_release_failed': EventSpec('warning', frozenset({'error_type', 'sandbox_id'})),
     'workspace.sandbox_sweeper.orphan_destroy_failed': EventSpec('warning', frozenset({'error_type', 'sandbox_id'})),
+    'workspace.sandbox_sweeper.orphan_destroy_ineffective': EventSpec('warning', frozenset({'reason', 'sandbox_id'})),
     'workspace.sandbox_sweeper.orphan_reclaimed': EventSpec('info', frozenset({'reason', 'sandbox_id'})),
     'workspace.sandbox_sweeper.reclaimed_orphaned_objects.observed': EventSpec('info', frozenset({'reclaimed_count'})),
     'workspace.sandbox_sweeper.released_idle_sandboxes.observed': EventSpec('info', frozenset({'released_count'})),

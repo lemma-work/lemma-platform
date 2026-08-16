@@ -272,6 +272,10 @@ def workspace_template():
                 "AGENT_BROWSER_PROFILE": "/tmp/lemma-browser/profile",
                 "AGENT_BROWSER_SESSION": "workspace",
                 "AGENT_BROWSER_HEADED": "true",
+                # See Dockerfile.workspace: the daemon closes Chrome after this
+                # long idle, which is what keeps a finished research session
+                # from holding the sandbox's whole memory budget.
+                "AGENT_BROWSER_IDLE_TIMEOUT_MS": "120000",
                 "LEMMA_NODE_BINARY": "/opt/node24/bin/node",
                 # Where the credential bridge writes gh's config.
                 "GH_CONFIG_DIR": "/tmp/lemma-gh",

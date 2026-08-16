@@ -16,9 +16,18 @@ class QuiesceResult:
 class WorkspaceQuiescer:
     """Remove nonportable compute state before a workspace is suspended."""
 
+    # The browser profile is under the *running user's* home, and which user
+    # that is depends on the runtime: the Docker image runs as `appuser`, the
+    # E2B template as `user`. Naming only one of them meant the E2B fleet --
+    # every production workspace -- carried its Chrome profile through every
+    # suspend, because the path being deleted did not exist there. Both are
+    # listed rather than derived from $HOME so that a quiesce running as root,
+    # which is how the runtime supervisor invokes it, still clears the profile
+    # belonging to the user the browser actually ran as.
     _ephemeral_directories = (
         Path("/tmp/lemma-browser"),
         Path("/home/appuser/.agent-browser"),
+        Path("/home/user/.agent-browser"),
         Path("/workspace/.browser-profile"),
     )
     _ephemeral_files = (
