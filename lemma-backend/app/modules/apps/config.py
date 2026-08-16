@@ -32,7 +32,26 @@ class AppsSettings(BaseSettings):
     app_release_retention_cron: str = Field(default="20 4 * * *")
     # How many apps one sweep tick may examine. Bounded so a tick is short and
     # overlapping ticks cannot pile up.
-    app_release_retention_batch: int = Field(default=200, ge=1)
+    app_release_retention_batch: int = Field(
+        default=200,
+        ge=1,
+        description=(
+            "Apps fetched per round trip by the release sweep. This is the PAGE "
+            "size, not the tick size: the sweep pages until the candidate set is "
+            "drained, so this bounds one query rather than deciding which apps "
+            "ever get swept. Env: ``APP_RELEASE_RETENTION_BATCH``."
+        ),
+    )
+    app_release_retention_budget_seconds: float = Field(
+        default=60.0,
+        ge=0.0,
+        description=(
+            "Wall-clock budget for one release sweep. ZERO MEANS UNLIMITED -- the "
+            "opposite of the schedule-run drain, where zero stops after one "
+            "batch. Draining is the point here, so the default must not be to "
+            "stop early. Env: ``APP_RELEASE_RETENTION_BUDGET_SECONDS``."
+        ),
+    )
 
 
 apps_settings = AppsSettings()

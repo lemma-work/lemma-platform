@@ -20,6 +20,7 @@ from app.modules.apps.domain.entities import (
     AppAssetDocument,
     AppEntity,
     AppReleaseEntity,
+    public_app_url,
 )
 from app.modules.apps.domain.errors import AppNotFoundError
 from app.modules.apps.domain.ports import AppRepositoryPort
@@ -52,11 +53,7 @@ class AppAssetResolver:
         The release number is used even when the caller addressed the release by
         digest, so one release has one preview URL.
         """
-        scheme = urlparse(settings.api_url).scheme or "https"
-        return (
-            f"{scheme}://{app.public_slug}--r{release.release_number}"
-            f".{settings.app_base_domain}"
-        )
+        return public_app_url(f"{app.public_slug}--r{release.release_number}")
 
     @staticmethod
     def _quote_etag(etag: str | None) -> str | None:

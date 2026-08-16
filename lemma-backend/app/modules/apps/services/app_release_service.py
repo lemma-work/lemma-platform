@@ -179,3 +179,16 @@ class AppReleaseService:
             version=release.version,
         )
         return release
+
+
+async def resolve_preview(repository, asset_resolver, app, release_ref):
+    """The release a preview host asks for, plus the URL that names it.
+
+    Lives here rather than on ``AppService`` so release-reference parsing stays
+    in one place: the serving path must not grow its own answer to "is this a
+    number or a digest prefix". The preview identifies itself as a preview, so
+    the branding badge and the og:url of a shared link do not claim to be the
+    live app at a build nobody has promoted.
+    """
+    release = await AppReleaseService(repository).resolve_release(app, release_ref)
+    return release, asset_resolver.preview_url(app, release)

@@ -14,7 +14,7 @@ bytes are half gone.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
 from app.core.retention import RetentionPolicy, select_prunable
@@ -81,6 +81,62 @@ def _prunable_source_paths(
     }
 
 
+# Two ticks of the daily cron. Bounded so a sweep does not re-issue deletes for
+# the whole history on every run, and so a genuinely stuck release stops costing
+# work rather than costing it forever.
+_RECONCILE_WINDOW = timedelta(days=2)
+
+
+def _unfinished_prunes(
+    releases: list[AppReleaseEntity], app: AppEntity, moment: datetime
+) -> list[AppReleaseEntity]:
+    """Releases stamped ``pruned_at`` whose bytes may still be there.
+
+    ``plan`` commits the stamp and then deletes outside the unit of work, so a
+    process that dies in between leaves a row that says "removed" over bytes
+    that are not -- and ``select_prunable`` skips already-pruned rows, so nothing
+    ever reclaimed them. Re-issuing the deletes is free: a missing object is
+    swallowed by both delete paths.
+
+    The live release is excluded even when it carries ``pruned_at``. An install
+    already damaged by the redeploy-onto-a-pruned-digest bug has exactly that
+    shape, and deleting those bytes would turn a stale row into a real outage.
+    """
+    return [
+        release
+        for release in releases
+        if release.pruned_at is not None
+        and release.id != app.current_release_id
+        and moment - release.pruned_at < _RECONCILE_WINDOW
+    ]
+
+
+def _prune_paths(
+    app_id: UUID,
+    doomed: list[AppReleaseEntity],
+    retained: list[AppReleaseEntity],
+    app: AppEntity,
+    counted: list[AppReleaseEntity],
+) -> ReleasePrunePlan:
+    """Turn the chosen releases into the paths whose bytes go."""
+    return ReleasePrunePlan(
+        app_id=app_id,
+        dist_roots=tuple(r.dist_root_path for r in doomed if r.dist_root_path),
+        dist_archives=tuple(
+            r.dist_archive_path
+            for r in doomed
+            # An archive stored inside its own release root goes with the
+            # prefix delete; only one outside it needs its own call.
+            if r.dist_archive_path
+            and not r.dist_archive_path.startswith(r.dist_root_path or "\0")
+        ),
+        source_archives=tuple(_prunable_source_paths(doomed, retained, app)),
+        release_numbers=tuple(
+            r.release_number for r in counted if r.release_number is not None
+        ),
+    )
+
+
 class AppReleaseRetention:
     def __init__(
         self,
@@ -103,35 +159,26 @@ class AppReleaseRetention:
         of work commits.
         """
         assert app.id is not None
+        moment = now or datetime.now(timezone.utc)
         releases = await self.repository.list_releases(app.id)
         prunable = select_prunable(
             releases,
             policy=policy or release_retention_policy(),
             live_id=app.current_release_id,
-            now=now or datetime.now(timezone.utc),
+            now=moment,
         )
-        if not prunable:
+        unfinished = _unfinished_prunes(releases, app, moment)
+        doomed = prunable + unfinished
+        if not doomed:
             return ReleasePrunePlan(app.id, (), (), (), ())
 
-        pruned_ids = {release.id for release in prunable}
-        retained = [release for release in releases if release.id not in pruned_ids]
-        await self.repository.mark_releases_pruned([r.id for r in prunable])
-        return ReleasePrunePlan(
-            app_id=app.id,
-            dist_roots=tuple(r.dist_root_path for r in prunable if r.dist_root_path),
-            dist_archives=tuple(
-                r.dist_archive_path
-                for r in prunable
-                # An archive stored inside its own release root goes with the
-                # prefix delete; only one outside it needs its own call.
-                if r.dist_archive_path
-                and not r.dist_archive_path.startswith(r.dist_root_path or "\0")
-            ),
-            source_archives=tuple(_prunable_source_paths(prunable, retained, app)),
-            release_numbers=tuple(
-                r.release_number for r in prunable if r.release_number is not None
-            ),
-        )
+        doomed_ids = {release.id for release in doomed}
+        retained = [release for release in releases if release.id not in doomed_ids]
+        # Only the freshly selected ones are stamped, and only they are counted:
+        # re-running a delete is not a new prune.
+        if prunable:
+            await self.repository.mark_releases_pruned([r.id for r in prunable])
+        return _prune_paths(app.id, doomed, retained, app, prunable)
 
     async def execute(self, plan: ReleasePrunePlan) -> None:
         """Storage phase: delete the bytes. Holds NO DB connection."""

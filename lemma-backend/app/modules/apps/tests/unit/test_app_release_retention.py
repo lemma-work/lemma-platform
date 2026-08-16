@@ -175,3 +175,85 @@ async def test_an_archive_inside_its_release_prefix_is_not_deleted_twice():
 
     # It sits under dist_root_path, so the prefix delete already covers it.
     assert plan.dist_archives == ()
+
+
+# -- unfinished prunes -------------------------------------------------------
+#
+# `plan` commits the tombstone and deletes the bytes afterwards, outside the
+# unit of work. A process that dies in between leaves a row saying "removed"
+# over bytes that are not -- and `select_prunable` skips already-pruned rows, so
+# nothing ever came back for them.
+
+
+@pytest.mark.asyncio
+async def test_a_prune_that_died_before_deleting_is_retried():
+    app = _app()
+    stale, live = _release(app.id, 1), _release(app.id, 2)
+    stale.pruned_at = NOW - timedelta(hours=1)
+    app.current_release_id = live.id
+    app.source_archive_path = live.source_archive_path
+    retention, repo, storage = _retention(app, [stale, live])
+
+    plan = await retention.plan(app, policy=_TIGHT, now=NOW)
+    await retention.execute(plan)
+
+    assert stale.dist_root_path in plan.dist_roots
+    assert stale.dist_root_path in [
+        call.args[0] for call in storage.delete_prefix.await_args_list
+    ]
+    # Nothing new to stamp, and re-running a delete is not a new prune.
+    repo.mark_releases_pruned.assert_not_awaited()
+    assert plan.release_numbers == ()
+
+
+@pytest.mark.asyncio
+async def test_an_old_prune_is_not_re_deleted_forever():
+    """The window is what keeps this bounded: a genuinely stuck release stops
+    costing work rather than costing it on every tick for the life of the app."""
+    app = _app()
+    ancient, live = _release(app.id, 1), _release(app.id, 2)
+    ancient.pruned_at = NOW - timedelta(days=30)
+    app.current_release_id = live.id
+    app.source_archive_path = live.source_archive_path
+    retention, _repo, storage = _retention(app, [ancient, live])
+
+    plan = await retention.plan(app, policy=_TIGHT, now=NOW)
+    await retention.execute(plan)
+
+    assert plan.is_empty
+    storage.delete_prefix.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_reconciliation_never_deletes_the_live_release():
+    """An install damaged by the redeploy-onto-a-pruned-digest bug has exactly
+    this shape: a live release still carrying pruned_at. Re-deleting its bytes
+    would turn a stale row into a real outage."""
+    app = _app()
+    live = _release(app.id, 1)
+    live.pruned_at = NOW - timedelta(hours=1)
+    app.current_release_id = live.id
+    retention, _repo, storage = _retention(app, [live])
+
+    plan = await retention.plan(app, policy=_TIGHT, now=NOW)
+    await retention.execute(plan)
+
+    assert live.dist_root_path not in plan.dist_roots
+    storage.delete_prefix.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_reconciliation_keeps_source_shared_with_a_retained_release():
+    """The stale row goes through the same shared-blob filter as a fresh one;
+    source is content-addressed, so its blob may belong to a release that stays."""
+    app = _app()
+    stale, live = _release(app.id, 1), _release(app.id, 2)
+    stale.pruned_at = NOW - timedelta(hours=1)
+    app.current_release_id = live.id
+    app.source_archive_path = live.source_archive_path
+    retention, _repo, _storage = _retention(app, [stale, live])
+
+    plan = await retention.plan(app, policy=_TIGHT, now=NOW)
+
+    assert stale.source_archive_path == live.source_archive_path
+    assert plan.source_archives == ()

@@ -8,7 +8,11 @@ from uuid import UUID, uuid7
 
 import pytest
 
-from app.core.retention import RetentionPolicy, select_prunable
+from app.core.retention import (
+    RetentionPolicy,
+    could_have_prunable,
+    select_prunable,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -126,3 +130,86 @@ def test_a_ceiling_below_the_floor_is_refused():
     """It would silently delete inside the range the floor promises to keep."""
     with pytest.raises(ValueError, match="max_keep"):
         RetentionPolicy(keep_last=10, max_keep=5)
+
+
+# -- the SQL shadow ----------------------------------------------------------
+#
+# `could_have_prunable` is what the sweep pushes into a HAVING clause so a
+# bounded batch stops deciding WHICH owners get swept. It is only safe if it
+# never says "nothing here" about an owner the rule would prune.
+
+
+def _candidate(versions, **policy_kwargs) -> bool:
+    unpruned = [v for v in versions if v.pruned_at is None]
+    return could_have_prunable(
+        unpruned_count=len(unpruned),
+        oldest_unpruned=min((v.created_at for v in unpruned), default=None),
+        policy=RetentionPolicy(**policy_kwargs),
+        now=NOW,
+    )
+
+
+@pytest.mark.parametrize(
+    "ages",
+    [
+        [],
+        [0],
+        [0, 1, 2],
+        [0] * 15,
+        [0] * 25,
+        [100] * 12,
+        [0, 0, 0, 100, 100],
+        [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 200],
+        list(range(0, 60, 3)),
+    ],
+)
+@pytest.mark.parametrize(
+    "policy_kwargs",
+    [
+        {},
+        {"keep_last": 1, "keep_days": 0, "max_keep": 1},
+        {"keep_last": 3, "keep_days": 30, "max_keep": 5},
+        {"keep_last": 10, "keep_days": 365, "max_keep": 20},
+        {"keep_last": 2, "keep_days": 0, "max_keep": 100},
+    ],
+)
+def test_the_candidate_predicate_never_misses_a_prunable_owner(ages, policy_kwargs):
+    """The one-sided guarantee the sweep depends on.
+
+    A false positive costs one wasted plan. A false negative is a build that is
+    never collected, on an owner the sweep would then never look at again.
+    """
+    versions = _history(ages)
+    prunable = _prune(versions, **policy_kwargs)
+    if prunable:
+        assert _candidate(versions, **policy_kwargs) is True
+
+
+def test_counting_alone_would_starve_the_tail():
+    """Why the predicate carries all three knobs and not just keep_last.
+
+    Fifteen deploys this week under 10/30/20: surplus versions, nothing prunable.
+    A `count(*) > keep_last` filter would return this app on every single tick
+    forever, and with a bounded batch that is how the tail stops being reached.
+    """
+    versions = _history([0] * 15)
+    assert _prune(versions) == []
+    assert len(versions) > RetentionPolicy().keep_last
+    assert _candidate(versions) is False
+
+
+def test_an_owner_with_nothing_unpruned_is_not_a_candidate():
+    versions = _history([100, 200])
+    for version in versions:
+        version.pruned_at = NOW
+    assert _candidate(versions, keep_last=1, keep_days=0, max_keep=1) is False
+
+
+def test_the_ceiling_alone_makes_a_burst_a_candidate():
+    # 25 deploys today: too new to age out, but past max_keep.
+    assert _candidate(_history([0] * 25)) is True
+
+
+def test_age_alone_makes_a_dormant_app_a_candidate():
+    # 12 builds, all long past keep_days, under the ceiling.
+    assert _candidate(_history([100] * 12)) is True

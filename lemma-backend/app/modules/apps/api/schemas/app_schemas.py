@@ -94,11 +94,10 @@ class AppReleaseResponse(BaseModel):
     @computed_field(return_type=str)
     @property
     def preview_url(self) -> str:
-        scheme = urlparse(settings.api_url).scheme or "https"
-        return (
-            f"{scheme}://{self.app_public_slug}--r{self.release_number}"
-            f".{settings.app_base_domain}"
-        )
+        # Through `public_app_url`, not a second copy of the scheme-and-domain
+        # rule: a preview host is the live host with the release in its label,
+        # so the two must never be able to disagree about the rest of it.
+        return public_app_url(f"{self.app_public_slug}--r{self.release_number}")
 
     # Carried so `preview_url` can be computed without a second app lookup.
     app_public_slug: str = Field(exclude=True)

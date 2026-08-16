@@ -90,3 +90,43 @@ def select_prunable(
             continue
         prunable.append(version)
     return prunable
+
+
+def could_have_prunable(
+    *,
+    unpruned_count: int,
+    oldest_unpruned: datetime | None,
+    policy: RetentionPolicy,
+    now: datetime,
+) -> bool:
+    """Whether an owner can possibly have a prunable version.
+
+    The SQL shadow of :func:`select_prunable`, kept beside it so the rule and the
+    query that pre-filters for it are argued with in one place rather than
+    drifting apart in two files.
+
+    The derivation rests on one invariant: because ranking is by ``created_at``
+    descending and pruning only ever removes from the old end, the prunable set
+    is always a SUFFIX of the ranking. So with ``k`` unpruned versions and ``m``
+    the oldest one's timestamp, something is prunable exactly when the floor is
+    cleared and either the ceiling is exceeded or the oldest has aged out::
+
+        k > keep_last AND (k > max_keep OR m < now - keep_days)
+
+    Counting alone is not enough, which is the trap this exists to avoid: an app
+    deployed fifteen times this week under 10/30/20 has surplus versions and
+    nothing prunable, and a filter that only checked ``k > keep_last`` would put
+    it at the head of every sweep forever while the tail starved.
+
+    One-sided by design. It cannot see the live version or a revision with a run
+    in flight, so it may say True where the rule then finds nothing -- that costs
+    one wasted plan. It must never say False where the rule would find something,
+    which is what the test against ``select_prunable`` pins.
+    """
+    if unpruned_count <= policy.keep_last:
+        return False
+    if unpruned_count > policy.max_keep:
+        return True
+    if oldest_unpruned is None:
+        return False
+    return oldest_unpruned < now - timedelta(days=policy.keep_days)

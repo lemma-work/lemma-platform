@@ -18,6 +18,7 @@ def test_apps_settings_own_archive_limits(monkeypatch):
         "app_release_max_keep": 20,
         "app_release_retention_cron": "20 4 * * *",
         "app_release_retention_batch": 200,
+        "app_release_retention_budget_seconds": 60.0,
     }
     assert set(AppsSettings.model_fields) == set(expected)
     for field, default in expected.items():

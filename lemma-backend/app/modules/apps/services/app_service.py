@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-from io import BytesIO
 from pathlib import Path
 from uuid import UUID
-from zipfile import ZIP_DEFLATED, ZipFile
 
 import structlog
 
@@ -42,7 +40,10 @@ from app.modules.apps.domain.ports import (
     AppStorageFactoryPort,
 )
 from app.modules.apps.services.app_asset_resolver import AppAssetResolver
-from app.modules.apps.services.app_dist_bundle import load_app_dist_bundle
+from app.modules.apps.services.app_dist_bundle import (
+    load_app_dist_bundle,
+    single_index_html_zip,
+)
 from app.modules.apps.services.app_storage_phase import (
     AppStoragePhase,
     _AppDeletionCleanup,
@@ -74,17 +75,6 @@ class AppService:
         # Storage side of the asset/archive/bundle/delete sagas, on an object
         # that holds NO repository (DB-free by construction).
         self._storage_phase = AppStoragePhase(file_manager_factory)
-
-    def _release_service(self):
-        """Release lookup over this service's own repository.
-
-        Built on demand rather than injected: it is a thin resolver, and sharing
-        it keeps release-reference parsing in one place instead of duplicating
-        "is this a number or a digest prefix" on the serving path.
-        """
-        from app.modules.apps.services.app_release_service import AppReleaseService
-
-        return AppReleaseService(self.repository)
 
     async def _validate_unique_public_slug(
         self,
@@ -177,13 +167,6 @@ class AppService:
             return refreshed or created
         return created
 
-    @staticmethod
-    def _single_index_html_zip(html: str) -> bytes:
-        buffer = BytesIO()
-        with ZipFile(buffer, "w", compression=ZIP_DEFLATED) as archive:
-            archive.writestr("index.html", html)
-        return buffer.getvalue()
-
     async def create_app_from_widget(
         self,
         pod_id: UUID,
@@ -218,12 +201,10 @@ class AppService:
         app = await self.create_app_with_context(
             AppEntity(**entity_data), user_id, ctx=ctx
         )
-        # The document IS the source for a promoted widget -- there is no build
-        # step behind it -- so it is uploaded as both. Deploying it as dist only
-        # left the app with no source archive, which meant a pod bundle exported
-        # this app's build and dropped its code (and every re-import propagated
-        # the gap). Source is an app's primary artifact; it always ships.
-        archive = await run_blocking(self._single_index_html_zip, document)
+        # The document IS the source for a promoted widget -- no build step sits
+        # behind it -- so it ships as both. Uploading dist only left the app
+        # source-less, and a pod bundle then exported its build without its code.
+        archive = await run_blocking(single_index_html_zip, document)
         return await self.upload_bundle(
             pod_id,
             app.name,
@@ -418,9 +399,8 @@ class AppService:
             release_root = f"releases/{version}/dist/"
             existing = await self.repository.get_release_by_version(app.id, version)
             existing_release_id = existing.id if existing is not None else None
-            # A matching digest is not proof the bytes are still on disk:
-            # retention deletes them and keeps the row. Deduping onto a pruned
-            # release skipped the write and pointed the app at nothing.
+            # A matching digest is not proof the bytes are still there:
+            # retention deletes them and keeps the row.
             revives_release = existing is not None and existing.is_pruned
             needs_dist_write = existing is None or revives_release
         return _UploadPlan(
@@ -457,11 +437,8 @@ class AppService:
             raise AppNotFoundError(f"App {plan.name} not found")
         release_id = plan.existing_release_id
         if plan.needs_dist_write:
-            # Upsert, not insert. `uq_app_release_version` forbids a second row
-            # for one digest, and both rows would point at the same
-            # content-addressed prefix anyway -- so a redeploy of a pruned build
-            # has to revive that release rather than mint a new one. The
-            # repository allocates the release number inside the INSERT.
+            # Upsert: a redeploy of a pruned build revives that release
+            # rather than minting a second row for the same digest.
             release = await self.repository.record_release(
                 AppReleaseEntity(
                     app_id=app.id,
@@ -475,10 +452,9 @@ class AppService:
             )
             release_id = release.id
         elif release_id is not None and written.source_path is not None:
-            # This upload deduped onto an existing release: the dist bytes are
-            # identical, so it is the same release, not a new one. The source
-            # can still differ (a comment-only edit compiles to the same output),
-            # and the newest source is the better answer to "what built this".
+            # Deduped onto an existing release: same dist bytes, same release.
+            # The source can still differ (a comment-only edit compiles to the
+            # same output), and the newest is the better answer to what built it.
             await self.repository.attach_release_source(
                 release_id,
                 source_archive_path=written.source_path,
@@ -585,11 +561,9 @@ class AppService:
     ) -> _AssetReadInputs | AppAssetDocument:
         """DB phase for serving a public (unauthenticated) app asset by slug.
 
-        ``release_ref`` serves a specific release instead of the live one -- the
-        preview host ``<slug>--r7.<app_base_domain>``. It is a host and not a
-        path prefix because a Vite build requests its assets at absolute
-        ``/assets/...``; under a prefix those would resolve against the live
-        release and the preview would silently serve a mixed build.
+        ``release_ref`` serves a specific release instead of the live one, for
+        the preview host ``<slug>--r7.<app_base_domain>``. See
+        ``AppAssetResolver.preview_url`` for why it is a host and not a prefix.
         """
         app = await self.repository.get_by_public_slug(public_slug)
         if not app:
@@ -605,11 +579,11 @@ class AppService:
         release = None
         public_url = self._asset_resolver.public_url(app)
         if release_ref is not None:
-            release = await self._release_service().resolve_release(app, release_ref)
-            # The preview identifies itself as the preview, so the branding badge
-            # and the og:url of a shared preview link do not claim to be the live
-            # app at a build nobody has promoted.
-            public_url = self._asset_resolver.preview_url(app, release)
+            from app.modules.apps.services.app_release_service import resolve_preview
+
+            release, public_url = await resolve_preview(
+                self.repository, self._asset_resolver, app, release_ref
+            )
         return await self._asset_resolver.resolve(
             app,
             raise_not_found_name=public_slug,

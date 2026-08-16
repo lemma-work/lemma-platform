@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Coroutine
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import UUID
@@ -242,70 +243,141 @@ async def sweep_function_revisions() -> None:
     if not settings.function_revision_retention_enabled:
         return
     try:
-        pruned = await _sweep_function_revisions(
+        outcome = await _sweep_function_revisions(
             provide_uow_factory(),
-            batch_size=settings.function_revision_retention_batch,
+            page_size=settings.function_revision_retention_batch,
+            budget_seconds=settings.function_revision_retention_budget_seconds,
         )
-        if pruned:
-            logger.info(
-                "function.handlers.sweep_function_revisions.observed",
-                pruned_function_count=pruned,
-            )
+        # Logged even on a no-op tick: "found nothing" and "frozen" looked the
+        # same from outside, which is how a sweep stuck on the head of the table
+        # went unnoticed.
+        logger.info(
+            "function.handlers.sweep_function_revisions.observed",
+            examined=outcome.examined,
+            pruned_functions=outcome.pruned_functions,
+            pruned_revisions=outcome.pruned_revisions,
+            failed=outcome.failed,
+            truncated=outcome.truncated,
+        )
     except Exception:
         # Swallowed at the cron boundary so one bad tick does not stop the next.
         logger.error("function.handlers.sweep_function_revisions.failed", exc_info=True)
 
 
-async def _sweep_function_revisions(
-    uow_factory: UnitOfWorkFactory, *, batch_size: int
-) -> int:
-    """Prune one bounded batch of functions. Extracted from the cron so it can be
-    driven directly in tests with a fake factory."""
-    from sqlalchemy import select
+@dataclass(frozen=True, slots=True)
+class RevisionSweepOutcome:
+    examined: int = 0
+    pruned_functions: int = 0
+    pruned_revisions: int = 0
+    failed: int = 0
+    truncated: bool = False
 
+
+async def _prune_one_function(uow_factory: UnitOfWorkFactory, function_id: UUID) -> int:
+    """Plan and stamp in one short unit of work, then delete the bytes outside
+    it. Returns how many revisions lost their artifacts."""
     from app.modules.function.api.dependencies import build_function_service
-    from app.modules.function.infrastructure.models import FunctionModel
     from app.modules.function.services.function_revision_retention import (
         FunctionRevisionRetention,
     )
 
     async with uow_factory() as uow:
-        function_ids = list(
-            (
-                await uow.session.execute(
-                    select(FunctionModel.id)
-                    .order_by(FunctionModel.id)
-                    .limit(batch_size)
-                )
-            )
-            .scalars()
-            .all()
+        service = build_function_service(uow)
+        function = await service.repository.get(function_id)
+        if function is None:
+            return 0
+        retention = FunctionRevisionRetention(
+            service.repository, service.storage_factory
         )
+        plan = await retention.plan(function)
+        await uow.commit()
+    if plan.is_empty:
+        return 0
+    await retention.execute(plan)
+    return len(plan.revision_numbers)
 
-    pruned_functions = 0
-    for function_id in function_ids:
-        # One short unit of work per function, then its storage deletes outside
-        # it -- no connection is held across object deletion, and one bad
-        # function cannot abort the sweep.
-        try:
-            async with uow_factory() as uow:
-                service = build_function_service(uow)
-                function = await service.repository.get(function_id)
-                if function is None:
-                    continue
-                retention = FunctionRevisionRetention(
-                    service.repository, service.storage_factory
+
+async def _sweep_function_revisions(
+    uow_factory: UnitOfWorkFactory,
+    *,
+    page_size: int,
+    budget_seconds: float = 0.0,
+    now: datetime | None = None,
+    prune_one=_prune_one_function,
+) -> RevisionSweepOutcome:
+    """Drain the functions that could have a prunable revision.
+
+    Was ``ORDER BY id LIMIT batch_size`` with no cursor and no filter, so every
+    tick examined the same functions and the tail -- a function that stopped
+    being edited, which is the only case this cron exists for -- was never
+    reached. See :mod:`app.core.infrastructure.db.retention_candidates`.
+
+    ``budget_seconds`` of 0 means unlimited.
+    """
+    from app.core.infrastructure.db.retention_candidates import (
+        owners_with_prunable_versions,
+    )
+    from app.modules.function.infrastructure.models import FunctionRevisionModel
+    from app.modules.function.services.function_revision_retention import (
+        revision_retention_policy,
+    )
+
+    moment = now or datetime.now(timezone.utc)
+    policy = revision_retention_policy()
+    started = time.monotonic()
+    after: UUID | None = None
+    examined = pruned_functions = pruned_revisions = failed = 0
+    truncated = False
+
+    while True:
+        async with uow_factory() as uow:
+            page = list(
+                (
+                    await uow.session.execute(
+                        owners_with_prunable_versions(
+                            owner_column=FunctionRevisionModel.function_id,
+                            created_at_column=FunctionRevisionModel.created_at,
+                            pruned_at_column=FunctionRevisionModel.pruned_at,
+                            policy=policy,
+                            now=moment,
+                            after=after,
+                            limit=page_size,
+                        )
+                    )
                 )
-                plan = await retention.plan(function)
-                await uow.commit()
-            if plan.is_empty:
-                continue
-            await retention.execute(plan)
-            pruned_functions += 1
-        except Exception:
-            logger.warning(
-                "function.handlers.sweep_function_revisions.skipped",
-                function_id=str(function_id),
-                exc_info=True,
+                .scalars()
+                .all()
             )
-    return pruned_functions
+        if not page:
+            break
+        after = page[-1]
+
+        for function_id in page:
+            examined += 1
+            try:
+                removed = await prune_one(uow_factory, function_id)
+            except Exception:
+                failed += 1
+                logger.warning(
+                    "function.handlers.sweep_function_revisions.skipped",
+                    function_id=str(function_id),
+                    exc_info=True,
+                )
+                continue
+            if removed:
+                pruned_functions += 1
+                pruned_revisions += removed
+
+        if len(page) < page_size:
+            break
+        if budget_seconds > 0 and (time.monotonic() - started) >= budget_seconds:
+            truncated = True
+            break
+
+    return RevisionSweepOutcome(
+        examined=examined,
+        pruned_functions=pruned_functions,
+        pruned_revisions=pruned_revisions,
+        failed=failed,
+        truncated=truncated,
+    )

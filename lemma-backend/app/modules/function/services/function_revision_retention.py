@@ -52,6 +52,30 @@ class RevisionPrunePlan:
         return not self.artifact_paths and not self.source_prefixes
 
 
+# Two ticks of the daily cron, matching the app side.
+_RECONCILE_WINDOW = timedelta(days=2)
+
+
+def _unfinished_prunes(
+    revisions: list[FunctionRevisionEntity],
+    live_id: UUID | None,
+    moment: datetime,
+) -> list[FunctionRevisionEntity]:
+    """Revisions stamped ``pruned_at`` whose artifacts may still be there.
+
+    The live revision is excluded even when it carries the stamp: re-saving code
+    whose artifact was pruned rewrites the bytes and clears the tombstone, and a
+    row caught mid-way through that would otherwise have its new bytes deleted.
+    """
+    return [
+        revision
+        for revision in revisions
+        if revision.pruned_at is not None
+        and revision.id != live_id
+        and moment - revision.pruned_at < _RECONCILE_WINDOW
+    ]
+
+
 class FunctionRevisionRetention:
     def __init__(
         self,
@@ -86,18 +110,29 @@ class FunctionRevisionRetention:
             now=moment,
         )
         candidates = await self._drop_in_flight(function.id, candidates, moment)
-        if not candidates:
+        # A sweep that died between the tombstone commit and its deletes leaves
+        # bytes nothing will ever come back for, because `select_prunable` skips
+        # rows already stamped. Re-issuing is free; both delete paths swallow a
+        # missing object. Routed through `_drop_in_flight` too, so a revision a
+        # dispatched run is pinned to is never re-deleted under it.
+        unfinished = await self._drop_in_flight(
+            function.id, _unfinished_prunes(revisions, live_id, moment), moment
+        )
+        doomed = candidates + unfinished
+        if not doomed:
             return RevisionPrunePlan(function.id, (), (), ())
 
-        await self.repository.mark_revisions_pruned([r.id for r in candidates])
+        if candidates:
+            await self.repository.mark_revisions_pruned([r.id for r in candidates])
         return RevisionPrunePlan(
             function_id=function.id,
-            artifact_paths=tuple(r.artifact_path for r in candidates),
+            artifact_paths=tuple(r.artifact_path for r in doomed),
             # `revisions/<hash>/function.py` -- delete the directory, not the
             # single file, so nothing is left behind if the layout ever grows.
             source_prefixes=tuple(
-                r.code_path.rsplit("/", 1)[0] for r in candidates if "/" in r.code_path
+                r.code_path.rsplit("/", 1)[0] for r in doomed if "/" in r.code_path
             ),
+            # Only the fresh ones: re-running a delete is not a new prune.
             revision_numbers=tuple(r.revision_number for r in candidates),
         )
 
