@@ -403,6 +403,7 @@ class AppService:
         release_root: str | None = None
         existing_release_id: UUID | None = None
         needs_dist_write = False
+        revives_release = False
         if dist_archive_bytes is not None:
             # Validate the bundle up front (raises AppValidationError on a missing
             # root index.html), regardless of dedup — matches prior behavior and
@@ -417,7 +418,11 @@ class AppService:
             release_root = f"releases/{version}/dist/"
             existing = await self.repository.get_release_by_version(app.id, version)
             existing_release_id = existing.id if existing is not None else None
-            needs_dist_write = existing is None
+            # A matching digest is not proof the bytes are still on disk:
+            # retention deletes them and keeps the row. Deduping onto a pruned
+            # release skipped the write and pointed the app at nothing.
+            revives_release = existing is not None and existing.is_pruned
+            needs_dist_write = existing is None or revives_release
         return _UploadPlan(
             app_id=app.id,
             pod_id=pod_id,
@@ -427,6 +432,7 @@ class AppService:
             release_root=release_root,
             existing_release_id=existing_release_id,
             needs_dist_write=needs_dist_write,
+            revives_release=revives_release,
         )
 
     async def write_bundle_storage(
@@ -451,11 +457,15 @@ class AppService:
             raise AppNotFoundError(f"App {plan.name} not found")
         release_id = plan.existing_release_id
         if plan.needs_dist_write:
-            release = await self.repository.create_release(
+            # Upsert, not insert. `uq_app_release_version` forbids a second row
+            # for one digest, and both rows would point at the same
+            # content-addressed prefix anyway -- so a redeploy of a pruned build
+            # has to revive that release rather than mint a new one. The
+            # repository allocates the release number inside the INSERT.
+            release = await self.repository.record_release(
                 AppReleaseEntity(
                     app_id=app.id,
                     version=plan.version,
-                    release_number=await self.repository.next_release_number(app.id),
                     dist_root_path=plan.release_root,
                     dist_archive_path=written.dist_archive_path,
                     source_archive_path=written.source_path,

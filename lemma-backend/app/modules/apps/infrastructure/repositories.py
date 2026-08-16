@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from uuid import UUID
+from uuid import UUID, uuid7
 
 from sqlalchemy import delete, desc, func, select, update
+from sqlalchemy.dialects.postgresql import insert
 
 from app.core.authorization.context import Context, ResourceType, ResourceVisibility
 from app.core.authorization.grants import delete_resource_sharing_grants
@@ -21,6 +22,53 @@ from app.modules.apps.domain.errors import AppNotFoundError
 from app.modules.apps.domain.events import AppCreatedEvent
 from app.modules.apps.domain.ports import AppRepositoryPort
 from app.modules.apps.infrastructure.models import AppModel, AppReleaseModel
+
+
+def _record_release_statement(entity: AppReleaseEntity):
+    """The upsert behind :meth:`AppRepository.record_release`.
+
+    Module-level so its compiled shape can be asserted without a database.
+    """
+    values = entity.model_dump(
+        exclude_unset=True,
+        exclude={"id", "created_at", "release_number", "pruned_at"},
+    )
+    statement = insert(AppReleaseModel).values(
+        id=uuid7(),
+        created_at=datetime.now(timezone.utc),
+        # Allocated inside the INSERT, not read first. The caller holds a lock on
+        # the parent app row, so max+1 is an allocation rather than a guess.
+        release_number=select(
+            func.coalesce(func.max(AppReleaseModel.release_number), 0) + 1
+        )
+        .where(AppReleaseModel.app_id == entity.app_id)
+        .scalar_subquery(),
+        **values,
+    )
+    return statement.on_conflict_do_update(
+        constraint="uq_app_release_version",
+        set_={
+            # The bytes are back, so the tombstone is no longer true.
+            "pruned_at": None,
+            # Taken unconditionally: a release backfilled before this column was
+            # canonical can carry a stale root, while the storage phase always
+            # writes to `releases/<digest>/dist/`.
+            "dist_root_path": statement.excluded.dist_root_path,
+            "dist_archive_path": func.coalesce(
+                statement.excluded.dist_archive_path,
+                AppReleaseModel.dist_archive_path,
+            ),
+            # coalesce, so a dist-only upload does not clobber a known source
+            # with NULL -- retention deletes source blobs nothing references.
+            "source_archive_path": func.coalesce(
+                statement.excluded.source_archive_path,
+                AppReleaseModel.source_archive_path,
+            ),
+            "source_digest": func.coalesce(
+                statement.excluded.source_digest, AppReleaseModel.source_digest
+            ),
+        },
+    ).returning(AppReleaseModel)
 
 
 class AppRepository(AppRepositoryPort):
@@ -191,11 +239,36 @@ class AppRepository(AppRepositoryPort):
         result = await self.session.execute(stmt)
         return result.rowcount > 0
 
-    async def create_release(self, entity: AppReleaseEntity) -> AppReleaseEntity:
-        model = AppReleaseModel(**entity.model_dump(exclude_unset=True))
-        self.session.add(model)
-        await self.session.flush()
-        return model.to_entity()
+    async def record_release(self, entity: AppReleaseEntity) -> AppReleaseEntity:
+        """Insert one release, or revive the existing row for its dist digest.
+
+        Idempotent on ``(app_id, version)``, which fixes three things at once.
+        The dist is content-addressed, so redeploying identical output IS the
+        same release -- but when retention has already deleted that release's
+        bytes, the upload bringing them back must clear ``pruned_at``, or the app
+        goes live on a release whose bytes are gone. And two concurrent uploads
+        of one digest used to both write the same prefix, with the loser's
+        cleanup deleting the winner's bytes; now the loser simply gets the
+        winner's row back.
+
+        ``release_number``, ``created_at`` and ``created_by`` are deliberately
+        not updated: a revived release keeps its identity and its place in the
+        history. It also keeps its original ``created_at``, so once superseded it
+        is immediately re-prunable again -- the same as before this was
+        idempotent, and preferable to rewriting history to buy ranking.
+
+        The ``FOR UPDATE`` is what makes the numbering an allocation rather than
+        a guess. It costs nothing: this unit of work UPDATEs the same app row a
+        few statements later anyway, so the lock adds no ordering that was not
+        already there.
+        """
+        await self.session.execute(
+            select(AppModel.id)
+            .where(AppModel.id == entity.app_id)
+            .with_for_update()
+        )
+        result = await self.session.execute(_record_release_statement(entity))
+        return result.scalar_one().to_entity()
 
     async def get_release(self, id: UUID) -> AppReleaseEntity | None:
         stmt = select(AppReleaseModel).where(AppReleaseModel.id == id)
@@ -245,19 +318,6 @@ class AppRepository(AppRepositoryPort):
             .where(AppModel.id == app_id)
             .values(current_release_id=release_id)
         )
-
-    async def next_release_number(self, app_id: UUID) -> int:
-        """The next per-app release number.
-
-        Racing uploads can both read the same maximum; the caller retries on the
-        ``uq_app_release_number`` violation rather than serializing every upload
-        behind a lock.
-        """
-        stmt = select(func.coalesce(func.max(AppReleaseModel.release_number), 0)).where(
-            AppReleaseModel.app_id == app_id
-        )
-        result = await self.session.execute(stmt)
-        return int(result.scalar_one()) + 1
 
     async def mark_releases_pruned(self, release_ids: list[UUID]) -> None:
         """Stamp ``pruned_at`` before the bytes go, so a sweep that dies midway

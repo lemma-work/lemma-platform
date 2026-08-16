@@ -228,16 +228,42 @@ class FunctionRepository(FunctionRepositoryPort):
     async def record_revision(
         self, entity: FunctionRevisionEntity
     ) -> FunctionRevisionEntity:
-        """Insert one revision, or return the existing row for its hash.
+        """Insert one revision, or revive the existing row for its hash.
 
         Idempotent on ``(function_id, revision_hash)`` because the artifact is
         content-addressed: re-saving unchanged code rebuilds to the same hash and
-        must not mint a second revision. ``ON CONFLICT DO NOTHING`` rather than a
-        read-then-write so two concurrent saves of the same code cannot both
-        insert.
+        must not mint a second revision.
+
+        ``DO UPDATE``, not ``DO NOTHING``, for two reasons. Re-saving code whose
+        artifact retention had already deleted rewrites both the artifact and the
+        source before this runs, so ``pruned_at`` has stopped being true -- left
+        set, the revision reads as "build removed", refuses to promote or pin
+        with a 410, and once superseded is skipped by ``select_prunable``
+        forever, leaking its artifact. And ``DO UPDATE ... RETURNING`` yields a
+        row on both paths, which removes a read-back whose ``assert`` would have
+        fired as an AssertionError if the conflicting transaction rolled back in
+        between.
+
+        Deliberately NOT in the SET: ``revision_number``, ``created_at`` and
+        ``created_by`` (updating them would reorder history), and ``code_path``
+        and the schemas -- the hash covers the artifact, ``code_path`` derives
+        from it, and schema extraction is deterministic per artifact, so the
+        stored values are already the right ones. No ``where=`` either: a false
+        predicate returns no row and would reinstate the read-back.
         """
         values = entity.model_dump(
-            exclude={"id", "created_at", "code", "revision_number"},
+            exclude={"id", "created_at", "code", "revision_number", "pruned_at"},
+        )
+        # Serializes the max+1 below against a concurrent save of DIFFERENT code,
+        # which would otherwise compute the same number and violate
+        # `uq_function_revision_number`. The callers happen to hold this lock
+        # already via the `UPDATE functions` that precedes them in the same unit
+        # of work; taking it here stops the numbering depending on an ordering
+        # two layers up that a refactor could quietly remove.
+        await self.session.execute(
+            select(FunctionModel.id)
+            .where(FunctionModel.id == entity.function_id)
+            .with_for_update()
         )
         statement = (
             insert(FunctionRevisionModel)
@@ -252,17 +278,13 @@ class FunctionRepository(FunctionRepositoryPort):
                 .scalar_subquery(),
                 **values,
             )
-            .on_conflict_do_nothing(constraint="uq_function_revision_hash")
+            .on_conflict_do_update(
+                constraint="uq_function_revision_hash",
+                set_={"pruned_at": None},
+            )
             .returning(FunctionRevisionModel)
         )
-        model = (await self.session.execute(statement)).scalar_one_or_none()
-        if model is not None:
-            return model.to_entity()
-        existing = await self.get_revision_by_hash(
-            entity.function_id, entity.revision_hash
-        )
-        assert existing is not None
-        return existing
+        return (await self.session.execute(statement)).scalar_one().to_entity()
 
     async def get_revision_by_hash(
         self, function_id: UUID, revision_hash: str

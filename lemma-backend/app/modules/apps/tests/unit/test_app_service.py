@@ -267,7 +267,7 @@ async def test_upload_bundle_sets_ready_and_persists_release_assets():
     repo.get_by_name.return_value = app
     repo.update.side_effect = lambda entity: entity
     repo.get_release_by_version.return_value = None
-    repo.create_release.return_value = AppReleaseEntity(
+    repo.record_release.return_value = AppReleaseEntity(
         id=release_id,
         app_id=app_id,
         version="version",
@@ -891,3 +891,122 @@ async def test_update_app_public_slug_conflict_raises():
             user_id,
             ctx=allow_all_context(user_id=user_id, pod_id=pod_id),
         )
+
+
+def _pruned_release(app_id, version="a" * 64):
+    """A release retention has already deleted the bytes of."""
+    from datetime import datetime, timezone
+
+    root = f"releases/{version}/dist/"
+    return AppReleaseEntity(
+        id=uuid4(),
+        app_id=app_id,
+        version=version,
+        release_number=3,
+        dist_root_path=root,
+        dist_archive_path=f"{root}archive.zip",
+        pruned_at=datetime(2026, 8, 13, tzinfo=timezone.utc),
+    )
+
+
+async def _resolve_dist_plan(service, repo, pod_id, user_id, app, dist_archive):
+    repo.get_by_name.return_value = app
+    return await service.resolve_upload_bundle(
+        pod_id,
+        app.name,
+        user_id,
+        has_source=False,
+        dist_archive_bytes=dist_archive,
+        ctx=allow_all_context(user_id=user_id, pod_id=pod_id),
+    )
+
+
+def _upload_service():
+    repo = AsyncMock()
+    storage = AsyncMock()
+    return AppService(repo, Mock(return_value=storage), AsyncMock()), repo, storage
+
+
+@pytest.mark.asyncio
+async def test_resolve_upload_bundle_marks_a_pruned_digest_for_rewrite():
+    """A matching digest is not proof the bytes are still there.
+
+    Retention deletes a release's bytes and keeps its row, so deduping on the
+    digest alone told the storage phase to skip a write it had to do.
+    """
+    service, repo, _storage = _upload_service()
+    pod_id, user_id, app_id = uuid4(), uuid4(), uuid4()
+    app = AppEntity(
+        id=app_id, pod_id=pod_id, user_id=user_id, name="orders", public_slug="orders"
+    )
+    dist = make_dist_zip({"index.html": "<html><body>v3</body></html>"})
+    pruned = _pruned_release(app_id)
+    repo.get_release_by_version.return_value = pruned
+
+    plan = await _resolve_dist_plan(service, repo, pod_id, user_id, app, dist)
+
+    assert plan.existing_release_id == pruned.id
+    assert plan.needs_dist_write is True
+    assert plan.revives_release is True
+
+
+@pytest.mark.asyncio
+async def test_redeploying_a_pruned_release_writes_its_bytes_back():
+    """The regression. Without the fix nothing under the release root is written
+    and the app is pointed at a release whose bytes retention deleted."""
+    service, repo, storage = _upload_service()
+    pod_id, user_id, app_id = uuid4(), uuid4(), uuid4()
+    app = AppEntity(
+        id=app_id, pod_id=pod_id, user_id=user_id, name="orders", public_slug="orders"
+    )
+    dist = make_dist_zip(
+        {"index.html": "<html><body>v3</body></html>", "assets/app.js": "console.log(3)"}
+    )
+    # The pruned release must carry the dist's real digest: its storage root is
+    # derived from it, and that root is where the rewrite has to land.
+    from app.core.api.uploads import upload_source_sha256
+
+    pruned = _pruned_release(app_id, version=upload_source_sha256(dist))
+    repo.get_release_by_version.return_value = pruned
+    repo.update.side_effect = lambda entity: entity
+    repo.record_release.return_value = pruned.model_copy(update={"pruned_at": None})
+
+    plan = await _resolve_dist_plan(service, repo, pod_id, user_id, app, dist)
+    written = await service.write_bundle_storage(plan, None, dist)
+    updated = await service.finalize_upload_bundle(plan, written, user_id)
+
+    wrote = [call.args[0] for call in storage.write_file.await_args_list]
+    assert f"{pruned.dist_root_path}index.html" in wrote
+    assert f"{pruned.dist_root_path}assets/app.js" in wrote
+    assert written.dist_archive_path == f"{pruned.dist_root_path}archive.zip"
+    # And the app goes live on the revived row rather than a second one.
+    assert updated.current_release_id == pruned.id
+    assert updated.status is AppStatus.READY
+
+
+@pytest.mark.asyncio
+async def test_redeploying_a_live_digest_still_skips_the_dist_write():
+    """The dedupe is the point of the digest; reviving must not defeat it."""
+    service, repo, storage = _upload_service()
+    pod_id, user_id, app_id = uuid4(), uuid4(), uuid4()
+    app = AppEntity(
+        id=app_id, pod_id=pod_id, user_id=user_id, name="orders", public_slug="orders"
+    )
+    dist = make_dist_zip({"index.html": "<html><body>v3</body></html>"})
+    live = _pruned_release(app_id).model_copy(update={"pruned_at": None})
+    repo.get_release_by_version.return_value = live
+    repo.update.side_effect = lambda entity: entity
+
+    plan = await _resolve_dist_plan(service, repo, pod_id, user_id, app, dist)
+    written = await service.write_bundle_storage(plan, None, dist)
+
+    assert plan.needs_dist_write is False
+    assert plan.revives_release is False
+    assert written.dist_archive_path is None
+    assert not [
+        path
+        for call in storage.write_file.await_args_list
+        for path in [call.args[0]]
+        if path.startswith("releases/")
+    ]
+    repo.record_release.assert_not_awaited()

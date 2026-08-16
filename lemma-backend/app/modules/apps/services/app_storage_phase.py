@@ -74,6 +74,10 @@ class _UploadPlan:
     release_root: str | None
     existing_release_id: UUID | None
     needs_dist_write: bool
+    # This upload is bringing back a release retention had already deleted.
+    # Correctness rides on `needs_dist_write`; this names *why* it is set, for
+    # the log line and for the test that would otherwise pass either way.
+    revives_release: bool = False
 
 
 @dataclass(frozen=True, slots=True)
