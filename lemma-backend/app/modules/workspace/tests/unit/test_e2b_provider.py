@@ -289,13 +289,21 @@ async def test_a_sandbox_from_the_same_template_build_is_adopted(
     assert world.killed == []
 
 
-async def test_a_sandbox_from_an_older_template_build_is_destroyed(
+async def test_a_workspace_from_an_older_template_build_keeps_its_disk(
     provider: E2BSandboxProvider, world: FakeE2B
 ) -> None:
-    """Here the sandbox is the disk, so there is no replacing the compute and
-    keeping the files. Resuming it would leave the workspace on the old
-    template, speaking a protocol the backend no longer speaks; the caller is
-    told the disk is new through `storage_adopted`."""
+    """Drift is tolerated for workspaces, because here the sandbox is the disk.
+
+    This branch used to kill the sandbox to adopt the new digest -- and the
+    digest comes from `WORKSPACE_PROFILE_DIGEST`, an environment variable. So
+    editing one env var and deploying wiped every workspace in the fleet on the
+    first ensure after rollout, with nothing to restore from. `Sandbox fabric`
+    README section 6 already stated the intent: "While a workspace owns a disk
+    it keeps running the profile it was created with, no generation fence is
+    raised, and nothing is replaced." The accepted cost, stated there too, is
+    that a workspace may run an N-1 template until it is next created from
+    scratch.
+    """
     from app.modules.workspace.testing.fake_e2b import FakeSandboxInfo
 
     sandbox_id = uuid4()
@@ -309,6 +317,28 @@ async def test_a_sandbox_from_an_older_template_build_is_destroyed(
     )
 
     instance = await provider.create(_spec(sandbox_id))
+
+    assert world.killed == [], "a workspace's files must survive a template bump"
+    assert instance.provider_id == "older-build", "and it keeps serving them"
+
+
+async def test_a_function_from_an_older_template_build_is_replaced(
+    provider: E2BSandboxProvider, world: FakeE2B
+) -> None:
+    """Functions own no durable disk, so adopting a new digest costs a restart."""
+    from app.modules.workspace.testing.fake_e2b import FakeSandboxInfo
+
+    sandbox_id = uuid4()
+    world.sandboxes["older-build"] = FakeSandboxInfo(
+        sandbox_id="older-build",
+        state="paused",
+        metadata={
+            META_SANDBOX_ID: str(sandbox_id),
+            META_PROFILE_DIGEST: "sha256:" + "b" * 64,
+        },
+    )
+
+    instance = await provider.create(_spec(sandbox_id, kind=SandboxKind.FUNCTION))
 
     assert world.killed == ["older-build"]
     assert instance.provider_id != "older-build"
