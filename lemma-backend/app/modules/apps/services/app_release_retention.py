@@ -17,6 +17,9 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
+from obstore.exceptions import BaseError as ObstoreBaseError
+from sqlalchemy.exc import SQLAlchemyError
+
 from app.core.retention import RetentionPolicy, select_prunable
 from app.modules.apps.config import apps_settings
 from app.modules.apps.domain.entities import AppEntity, AppReleaseEntity
@@ -24,6 +27,14 @@ from app.modules.apps.domain.ports import AppRepositoryPort, AppStorageFactoryPo
 from app.core.log.log import get_logger
 
 logger = get_logger(__name__)
+
+
+# How pruning actually fails: the database it selects from, the object store it
+# deletes through, and the local filesystem behind a local store. Named rather
+# than caught as `Exception` so a genuine defect -- a TypeError in the plan, a
+# bad assumption -- still reaches the worker log instead of being reported as a
+# degraded sweep and forgotten.
+PRUNE_FAILURES = (SQLAlchemyError, ObstoreBaseError, OSError)
 
 
 def release_retention_policy() -> RetentionPolicy:

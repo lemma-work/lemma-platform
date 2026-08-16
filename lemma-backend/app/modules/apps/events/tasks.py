@@ -24,6 +24,7 @@ from app.core.infrastructure.db.uow_factory import (
 )
 from app.core.infrastructure.jobs.streaq_runtime import Lane, streaq_cron
 from app.modules.apps.config import apps_settings
+from app.modules.apps.services.app_release_retention import PRUNE_FAILURES
 from app.core.log.log import get_logger
 
 logger = get_logger(__name__)
@@ -58,8 +59,10 @@ async def sweep_app_releases() -> None:
             failed=outcome.failed,
             truncated=outcome.truncated,
         )
-    except Exception:
-        # Swallowed at the cron boundary so one bad tick does not stop the next.
+    except PRUNE_FAILURES:
+        # The ways a sweep genuinely fails, swallowed so one bad tick does not
+        # stop the next. Anything else is a defect and propagates to the worker,
+        # which is louder than a "degraded" line nobody reads.
         logger.error("apps.tasks.sweep_app_releases.failed", exc_info=True)
 
 
@@ -161,7 +164,7 @@ async def _sweep(
             examined += 1
             try:
                 removed = await prune_one(uow_factory, app_id)
-            except Exception:
+            except PRUNE_FAILURES:
                 failed += 1
                 logger.warning(
                     "apps.tasks.sweep_app_releases.skipped",

@@ -125,7 +125,7 @@ async def test_one_bad_app_does_not_stop_the_sweep():
     async def prune_one(_factory, app_id):
         seen.append(app_id)
         if app_id == candidates[1]:
-            raise RuntimeError("storage is unreachable")
+            raise OSError("storage is unreachable")
         return 1
 
     outcome = await _sweep(_Factory(session), page_size=10, prune_one=prune_one)
@@ -170,3 +170,21 @@ async def test_a_settled_install_examines_nothing():
 
     assert outcome.examined == 0
     assert outcome.pruned_apps == 0
+
+
+@pytest.mark.asyncio
+async def test_a_defect_is_not_reported_as_a_degraded_sweep():
+    """The point of naming the failure surface.
+
+    A storage outage is expected and is swallowed per-app so the sweep keeps
+    going. A TypeError is a bug in the plan, and swallowing it would file the
+    defect as a "skipped" line nobody reads.
+    """
+    candidates = _sorted_ids(2)
+    session = _Session(candidates, page_size=10)
+
+    async def prune_one(_factory, _owner_id):
+        raise TypeError("plan built something impossible")
+
+    with pytest.raises(TypeError):
+        await _sweep(_Factory(session), page_size=10, prune_one=prune_one)

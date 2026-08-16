@@ -247,6 +247,7 @@ class FunctionUseCases(FunctionRevisionUseCasesMixin):
 
     async def _prune_revisions_quietly(self, function: FunctionEntity) -> None:
         from app.modules.function.services.function_revision_retention import (
+            PRUNE_FAILURES,
             FunctionRevisionRetention,
         )
 
@@ -261,7 +262,7 @@ class FunctionUseCases(FunctionRevisionUseCasesMixin):
                 prune_plan = await retention.plan(function)
             # Storage deletes hold no pooled connection.
             await retention.execute(prune_plan)
-        except Exception:
+        except PRUNE_FAILURES:
             logger.warning(
                 "function.use_cases.revision_retention.degraded",
                 function_id=str(function.id),

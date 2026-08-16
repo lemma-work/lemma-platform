@@ -240,28 +240,30 @@ async def sweep_function_revisions() -> None:
 
     Bulk lane: it is slow, bursty and touches object storage.
     """
+    # Through the module's shared cron boundary, which is why this module keeps
+    # exactly one broad catch rather than one per schedule.
+    await _guard_cron("sweep_function_revisions", _sweep_revisions())
+
+
+async def _sweep_revisions() -> None:
     if not settings.function_revision_retention_enabled:
         return
-    try:
-        outcome = await _sweep_function_revisions(
-            provide_uow_factory(),
-            page_size=settings.function_revision_retention_batch,
-            budget_seconds=settings.function_revision_retention_budget_seconds,
-        )
-        # Logged even on a no-op tick: "found nothing" and "frozen" looked the
-        # same from outside, which is how a sweep stuck on the head of the table
-        # went unnoticed.
-        logger.info(
-            "function.handlers.sweep_function_revisions.observed",
-            examined=outcome.examined,
-            pruned_functions=outcome.pruned_functions,
-            pruned_revisions=outcome.pruned_revisions,
-            failed=outcome.failed,
-            truncated=outcome.truncated,
-        )
-    except Exception:
-        # Swallowed at the cron boundary so one bad tick does not stop the next.
-        logger.error("function.handlers.sweep_function_revisions.failed", exc_info=True)
+    outcome = await _sweep_function_revisions(
+        provide_uow_factory(),
+        page_size=settings.function_revision_retention_batch,
+        budget_seconds=settings.function_revision_retention_budget_seconds,
+    )
+    # Logged even on a no-op tick: "found nothing" and "frozen" looked the same
+    # from outside, which is how a sweep stuck on the head of the table went
+    # unnoticed.
+    logger.info(
+        "function.handlers.sweep_function_revisions.observed",
+        examined=outcome.examined,
+        pruned_functions=outcome.pruned_functions,
+        pruned_revisions=outcome.pruned_revisions,
+        failed=outcome.failed,
+        truncated=outcome.truncated,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -319,6 +321,7 @@ async def _sweep_function_revisions(
     )
     from app.modules.function.infrastructure.models import FunctionRevisionModel
     from app.modules.function.services.function_revision_retention import (
+        PRUNE_FAILURES,
         revision_retention_policy,
     )
 
@@ -356,7 +359,7 @@ async def _sweep_function_revisions(
             examined += 1
             try:
                 removed = await prune_one(uow_factory, function_id)
-            except Exception:
+            except PRUNE_FAILURES:
                 failed += 1
                 logger.warning(
                     "function.handlers.sweep_function_revisions.skipped",

@@ -119,7 +119,10 @@ class AppUseCases:
     async def _prune_releases_quietly(
         self, pod_id: UUID, app_name: str, request: Request, user_id: UUID
     ) -> None:
-        from app.modules.apps.services.app_release_retention import AppReleaseRetention
+        from app.modules.apps.services.app_release_retention import (
+            PRUNE_FAILURES,
+            AppReleaseRetention,
+        )
 
         try:
             async with pod_context_scope(
@@ -138,7 +141,7 @@ class AppUseCases:
             # Storage deletes run outside the unit of work, holding no pooled
             # connection -- pruning can touch many objects.
             await retention.execute(prune_plan)
-        except Exception:
+        except PRUNE_FAILURES:
             logger.warning(
                 "apps.app_use_cases.release_retention.degraded",
                 pod_id=str(pod_id),

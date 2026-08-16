@@ -433,7 +433,6 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'function.handlers.function_run_job.propagated': EventSpec('debug', frozenset({'run_id'})),
     'function.handlers.prune_function_runs.observed': EventSpec('debug', frozenset({'deleted_count'})),
     'function.handlers.run_reconcile_enqueue_failed.degraded': EventSpec('warning', frozenset({'error_type', 'run_id'})),
-    'function.handlers.sweep_function_revisions.failed': EventSpec('error', frozenset()),
     'function.handlers.sweep_function_revisions.observed': EventSpec('info', frozenset({'examined', 'failed', 'pruned_functions', 'pruned_revisions', 'truncated'})),
     'function.handlers.sweep_function_revisions.skipped': EventSpec('warning', frozenset({'function_id'})),
     'function.use_cases.legacy_revision_backfilled': EventSpec('info', frozenset({'function_id', 'pod_id', 'revision_hash'})),
