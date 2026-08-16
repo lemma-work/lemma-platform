@@ -23,16 +23,16 @@ history that skips v3 with no explanation is worse than history that says the
 build was removed, and ``dist_root_path`` keeps its value as a record of where
 the bytes were.
 
-Revision ID: 0017_app_release_history
-Revises: 0016_unique_surface_email
+Revision ID: 0021_app_release_history
+Revises: 0020_schedule_run_last_inspected
 """
 
 from alembic import op
 import sqlalchemy as sa
 
 
-revision = "0017_app_release_history"
-down_revision = "0016_unique_surface_email"
+revision = "0021_app_release_history"
+down_revision = "0020_schedule_run_last_inspected"
 branch_labels = None
 depends_on = None
 

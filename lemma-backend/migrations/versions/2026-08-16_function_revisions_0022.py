@@ -19,8 +19,8 @@ Hashes that appear only on old ``function_runs`` rows are deliberately left
 alone: their artifacts still exist, but their schemas do not, and a row invented
 with today's schemas would be a guess presented as history.
 
-Revision ID: 0018_function_revisions
-Revises: 0017_app_release_history
+Revision ID: 0022_function_revisions
+Revises: 0021_app_release_history
 """
 
 from alembic import op
@@ -28,8 +28,8 @@ import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
 
-revision = "0018_function_revisions"
-down_revision = "0017_app_release_history"
+revision = "0022_function_revisions"
+down_revision = "0021_app_release_history"
 branch_labels = None
 depends_on = None
 
