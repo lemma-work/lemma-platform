@@ -86,7 +86,7 @@ put it there having to think about it on every operation.
 **Contracts:** `record.create`, `record.get`
 
 ### PS-DATA-011 — A person finds the records they want without reading all of them
-**Status:** planned
+**Status:** covered
 
 - When a person lists records, the system shall let them filter by column value,
   sort by column, and page through the result.
@@ -198,7 +198,7 @@ put it there having to think about it on every operation.
 ## Capability: Put documents in
 
 ### PS-DATA-030 — A person uploads a file and it lands where they put it
-**Status:** planned
+**Status:** covered
 
 - When a person uploads a file to a path, the system shall store it and make it
   listable at that path.
@@ -213,7 +213,7 @@ put it there having to think about it on every operation.
 **Contracts:** `file.upload`, `file.folder.create`, `file.get`, `document.added`
 
 ### PS-DATA-031 — A person browses a pod's files as a tree
-**Status:** planned
+**Status:** covered
 
 - When a person asks for the file tree, the system shall return the folders and
   files they are entitled to see, and no others.
@@ -223,7 +223,7 @@ put it there having to think about it on every operation.
 **Contracts:** `file.tree`, `file.list`, `file.children.list`
 
 ### PS-DATA-032 — A person moves, renames, and deletes files
-**Status:** planned
+**Status:** covered
 
 - When a person updates a file's path, the system shall move it and shall keep
   its identity, so references to it continue to resolve.
@@ -254,7 +254,7 @@ put it there having to think about it on every operation.
 **Contracts:** `file.upload`, `file.get`, `file.markdown.attach`, `file.markdown.detach`, `file.child.get`
 
 ### PS-DATA-041 — A document that fails to convert is not lost
-**Status:** planned
+**Status:** covered
 
 - If a document cannot be converted because of what it contains, then the system
   shall mark it failed, keep the original, and stop retrying.
@@ -296,7 +296,7 @@ put it there having to think about it on every operation.
 ## Capability: Share a file outside the pod
 
 ### PS-DATA-050 — A person gets a link to a file that works and then stops
-**Status:** planned
+**Status:** covered
 
 - When a person creates a signed link to a file, the system shall let that link
   fetch the file without a session, until it expires.

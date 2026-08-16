@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 from typing import Any
 from uuid import uuid4
 
@@ -187,6 +189,16 @@ class DatastoreSteps:
             )
         return response.status_code
 
+    @staticmethod
+    def sorted_by(field: str, direction: str = "asc") -> str:
+        """One sort clause, in the shape the API wants.
+
+        Sorts are JSON objects rather than the `field:direction` shorthand most
+        APIs take — easy to get wrong, and the error ("Invalid sort parameter")
+        does not say what the right shape is. Encoded once, here.
+        """
+        return json.dumps({"field": field, "direction": direction})
+
     async def records_in(
         self, table: str, *, in_pod: JSON, everyones: bool = False, **query: Any
     ) -> list[JSON]:
@@ -292,3 +304,40 @@ class DatastoreSteps:
                 f"({response.status_code})"
             )
         return response.status_code
+
+    async def creates_a_folder(self, *, at_path: str, in_pod: JSON) -> JSON:
+        return await self.api.post(
+            f"/pods/{in_pod['id']}/datastore/files/folders",
+            what=f"{self.label} creating folder {at_path!r}",
+            json={"path": at_path},
+        )
+
+    async def file_tree_of(self, pod: JSON) -> Any:
+        return await self.api.get(f"/pods/{pod['id']}/datastore/files/tree")
+
+    async def searches_files(self, query: str, *, in_pod: JSON, limit: int = 10) -> Any:
+        return await self.api.post(
+            f"/pods/{in_pod['id']}/datastore/files/search",
+            what=f"{self.label} searching files for {query!r}",
+            json={"query": query, "limit": limit},
+        )
+
+    async def signed_link_to(self, path: str, *, in_pod: JSON) -> JSON:
+        return await self.api.post(
+            f"/pods/{in_pod['id']}/datastore/files/signed-url",
+            params={"path": path},
+            what=f"{self.label} making a signed link to {path!r}",
+        )
+
+    async def downloads(self, path: str, *, in_pod: JSON) -> bytes:
+        response = await self.api.call(
+            "GET",
+            f"/pods/{in_pod['id']}/datastore/files/download",
+            params={"path": path},
+        )
+        if response.status_code != 200:
+            raise AssertionError(
+                f"{self.label} could not download {path!r}: {response.status_code}\n"
+                f"  body: {response.text[:500]}"
+            )
+        return response.content

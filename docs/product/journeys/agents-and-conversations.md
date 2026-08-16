@@ -47,7 +47,7 @@ it happens.
 **Contracts:** `agent.permissions.get`, `agent.permissions.replace`
 
 ### PS-AGENT-003 — A pod has an agent without anyone creating one
-**Status:** planned
+**Status:** covered
 
 - The system shall give every pod a default agent, so a person can ask a
   question before building anything.
@@ -106,7 +106,7 @@ it happens.
 **Contracts:** `agent.conversation.stream`, `agent.conversation.get`
 
 ### PS-AGENT-012 — A person can stop an agent
-**Status:** planned
+**Status:** covered
 
 - When a person stops a run, the system shall stop it and shall keep whatever
   the agent had produced up to that point.
@@ -143,7 +143,7 @@ it happens.
 ## Capability: Stay in control of what the agent does
 
 ### PS-AGENT-020 — Consequential actions come back to a person first
-**Status:** planned
+**Status:** covered
 
 - If an agent attempts something destructive — dropping a table, deleting
   records in bulk, sending a message outside the pod — then the system shall

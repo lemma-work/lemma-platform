@@ -20,7 +20,7 @@ dropped.
 ## Capability: Connect a pod to a platform
 
 ### PS-SURF-001 — A person connects a pod's agent to a platform
-**Status:** planned
+**Status:** covered
 
 - When a person connects a surface for a platform and binds it to an agent, the
   system shall start accepting messages for that pod on that platform.
@@ -33,7 +33,7 @@ dropped.
 **Contracts:** `agent.surface.create`, `agent.surface.get`, `agent.surface.list`, `agent.surface.available`, `agent.surface.setup`, `agent.surface.setup_guide`, `surface.connected`
 
 ### PS-SURF-002 — Setting up a platform does not require reading its documentation
-**Status:** planned
+**Status:** covered
 
 - Where a platform needs an app definition, the system shall generate it rather
   than asking a person to write one.
@@ -60,7 +60,7 @@ dropped.
 ## Capability: Receive a message from outside
 
 ### PS-SURF-010 — Only genuine messages from the platform are acted on
-**Status:** planned
+**Status:** covered
 
 - The system shall verify every inbound message is genuinely from the platform
   it claims to be from, before acting on it.
@@ -168,7 +168,7 @@ dropped.
 **Contracts:** `agent.surface.create`, `surface.webhook.handle_platform`, `agent.surface.send`
 
 ### PS-SURF-023 — A person reached on several platforms gets one predictable answer
-**Status:** planned
+**Status:** covered
 
 - Where a person has chosen a default surface, the system shall reach them there
   when it starts the contact, whatever platform any earlier conversation used.
@@ -185,7 +185,7 @@ dropped.
 ## Capability: Be told when something needs you
 
 ### PS-SURF-030 — A person has one place to see what needs them
-**Status:** planned
+**Status:** gap
 
 - When something in a pod needs a person's attention, the system shall put it in
   their notifications for that pod.
@@ -193,11 +193,17 @@ dropped.
   without them opening the list.
 - The system shall group a thread of related notifications as one item, rather
   than one item per message.
+- If someone who does not belong to the pod asks for its notifications, then the
+  system shall refuse, as it refuses every other read in that pod.
+
+> **Gap:** the two read endpoints answer 200 to a non-member. Nothing leaks —
+> the list is filtered to the caller — but there is no membership check behind
+> that filter. See `DEV-SURF-001`.
 
 **Contracts:** `notification.list`, `notification.unread_count`, `notification.send`
 
 ### PS-SURF-031 — A person clears what they have dealt with
-**Status:** planned
+**Status:** covered
 
 - When a person reads a notification, the system shall mark it read and shall
   reflect that in the unread count.
@@ -209,7 +215,7 @@ dropped.
 **Contracts:** `notification.mark_read`, `notification.mark_all_read`, `notification.unread_count`
 
 ### PS-SURF-032 — A person can answer from the notification
-**Status:** planned
+**Status:** covered
 
 - Where a notification asks something, the system shall let a person answer it
   directly and shall carry the answer back to whatever is waiting.

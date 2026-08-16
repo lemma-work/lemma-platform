@@ -58,7 +58,7 @@ worse than asking.
 **Contracts:** `auth.verify_token`, `user.current.get`
 
 ### PS-ONB-004 — A person sets a display name and preferences that follow them
-**Status:** planned
+**Status:** covered
 
 - When a person updates their profile, the system shall apply it to every
   organization they belong to, because a person has one profile and not one per
@@ -196,7 +196,7 @@ worse than asking.
 ## Capability: Join an organization that already exists
 
 ### PS-ONB-030 — A person is offered the organizations they could join
-**Status:** planned
+**Status:** covered
 
 - When a person with a work email asks for suggestions, the system shall list
   organizations that allow self-joining and match their email domain.
@@ -207,7 +207,7 @@ worse than asking.
 **Contracts:** `org.suggested`
 
 ### PS-ONB-031 — A person joins an organization that is open to them
-**Status:** planned
+**Status:** covered
 
 - When a person joins an organization that is open to everyone, the system shall
   make them a member with the least-privileged role.

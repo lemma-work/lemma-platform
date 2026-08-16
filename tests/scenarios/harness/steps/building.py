@@ -257,3 +257,17 @@ class BuildingSteps:
                 f"({response.status_code})"
             )
         return response.status_code
+
+    async def pauses_schedule(self, schedule: JSON, *, in_pod: JSON) -> JSON:
+        return await self.api.patch(
+            f"/pods/{in_pod['id']}/schedules/{schedule['id']}",
+            what=f"{self.label} pausing a schedule",
+            json={"is_active": False},
+        )
+
+    async def resumes_schedule(self, schedule: JSON, *, in_pod: JSON) -> JSON:
+        return await self.api.patch(
+            f"/pods/{in_pod['id']}/schedules/{schedule['id']}",
+            what=f"{self.label} resuming a schedule",
+            json={"is_active": True},
+        )

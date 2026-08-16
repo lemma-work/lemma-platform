@@ -339,38 +339,160 @@ this at the bump.
 
 ---
 
+## SURF — surfaces and notifications
+
+### DEV-SURF-001 — Notification reads have no pod-membership gate
+**Violates:** PS-SURF-030
+**Severity:** medium
+**Where:** `notification.list` and `notification.unread_count` on
+[`notification_controller.py`](lemma-backend/app/modules/agent_surfaces/api/controllers/notification_controller.py)
+
+**Required:** A person who does not belong to a pod is refused its
+notifications, as they are refused everything else in it.
+
+**Actual:** Both read endpoints answer `200` to a complete outsider:
+
+```
+GET /pods/{id}                          -> 403
+POST /pods/{id}/notifications           -> 403  (conversation.write)
+GET /pods/{id}/notifications            -> 200  {"items": [], ...}
+GET /pods/{id}/notifications/unread-count -> 200  {"unread": 0}
+```
+
+**Why it matters:** No content leaks today — the query filters to the caller's
+own notifications, so an outsider gets an empty list. The problem is that *is
+the only thing protecting it*. There is no membership check, so the safety
+depends entirely on a `WHERE` clause in a query nobody is currently thinking of
+as a security boundary. The neighbouring write endpoint on the same controller
+does check. That asymmetry is how a future change — a filter relaxed for an
+admin view, a new `status` parameter, a join added for grouping — turns a
+harmless empty list into a disclosure, with no test failing.
+
+It is also inconsistent for its own sake: every other pod-scoped read in the
+product refuses a non-member, so this one teaches the wrong lesson about what
+the boundary is.
+
+**Fix:** Put the same pod-membership dependency on both read endpoints that the
+send endpoint already has. The response for an outsider becomes 403, matching
+`pod.get`.
+
+---
+
+## PACK — bundles and apps
+
+### DEV-PACK-001 — Any signed-in person can read any pod's app record
+**Violates:** PS-PACK-031
+**Severity:** medium
+**Where:** [`app_controller.py:171`](lemma-backend/app/modules/apps/api/controllers/app_controller.py#L171)
+(`app.get`), against [`:141`](lemma-backend/app/modules/apps/api/controllers/app_controller.py#L141)
+(`app.list`)
+
+**Required:** Someone with no access to a pod is refused its apps, as they are
+refused everything else in it.
+
+**Actual:** `app.get` returns the full app record — `id`, `pod_id`, the
+creator's `user_id`, `name`, `public_slug` — to a person who is in neither the
+pod nor its organization. Its immediate neighbour in the same file refuses:
+
+```
+GET /pods/{id}                    -> 403  Missing permission pod.read on pod
+GET /pods/{id}/apps               -> 403  You need access to this pod to list apps
+GET /pods/{id}/apps/{name}        -> 200  {"id": …, "user_id": …, "public_slug": …}
+```
+
+`app.list` declares `dependencies=[require_pod_membership("list apps")]`.
+`app.get` declares no such dependency and performs no equivalent check.
+
+Auditing the whole controller, `app.list` is the **only** operation carrying the
+decorator. The write paths are nonetheless safe — `app.create`, `app.update` and
+`app.delete` all return 403 to an outsider because the service checks the
+permission itself. It is specifically the read that has neither guard.
+
+**Why it matters:** Real data crosses a tenant boundary, unlike `DEV-SURF-001`
+where the response was empty. An app name is often the product name of something
+unreleased; `user_id` identifies a person; `public_slug` is the address the app
+will be served at. It is also an existence oracle for app names in any pod whose
+id is known. Any signed-in Lemma account can do it — on a shared deployment that
+is every other customer.
+
+**Fix:** Add `require_pod_membership("read an app")` to `app.get`, matching
+`app.list`. While in the file, check `app.asset.root.get`, `app.asset.get`,
+`app.source.archive.get` and `app.dist.archive.get` — none carry the dependency
+either, and they serve content rather than metadata. (`app.source.archive.get`
+answered 404 for an outsider in testing, but that was "no archive uploaded",
+not a refusal.)
+
+---
+
+## SDK — the clients we ship
+
+### DEV-SDK-001 — The TypeScript SDK cannot be imported from Node at all
+**Violates:** *(the package is published as Node-loadable)*
+**Severity:** high
+**Where:** [`src/auth.ts:19`](lemma-typescript/src/auth.ts#L19) and
+[`src/supertokens.ts:2`](lemma-typescript/src/supertokens.ts#L2), via
+[`tsconfig.json`](lemma-typescript/tsconfig.json) `moduleResolution: "Bundler"`
+
+**Required:** `import { Lemma } from 'lemma-sdk'` works in Node. The package
+declares `"type": "module"`, `"main": "dist/index.js"` and an `exports` map with
+no `browser` restriction, so it presents itself as usable server-side.
+
+**Actual:** A clean `npm install && npm run build` produces a `dist` that Node
+refuses to load:
+
+```
+Error [ERR_UNSUPPORTED_DIR_IMPORT]: Directory import
+  '…/node_modules/supertokens-web-js/recipe/session' is not supported
+  resolving ES modules imported from …/dist/auth.js
+```
+
+Both sources import a bare directory:
+
+```ts
+import Session from "supertokens-web-js/recipe/session";
+```
+
+`tsconfig` sets `moduleResolution: "Bundler"`, which allows that — a bundler
+resolves the directory. TypeScript emits the specifier unchanged, and Node's ESM
+resolver does **not** do directory imports. `supertokens-web-js` has no
+`exports` map and is CommonJS, so there is nothing to redirect the subpath.
+
+Verified end to end: `npm ci && npm run build` succeeds, `require('./dist/index.js')`
+fails; rewriting the two specifiers to `…/recipe/session/index.js` makes the same
+build load and export the full surface (`AgentController`, `AgentHostService`, …).
+
+**Why it matters:** Every bundler-based consumer is fine, which is why this has
+survived — Vite, webpack and Next all resolve the directory. Every **non-bundled**
+consumer is broken: a Node script, a Lambda, an MCP server, any server-side
+integration. Those are exactly the cases an SDK exists for, and the failure is
+at import time, so nothing at all works. The package's own test suite does not
+catch it because tests run through the bundler-aware toolchain rather than
+against the published `dist`.
+
+**Fix:** Append `/index.js` to both specifiers. Then add a smoke check that
+loads the built `dist` in plain Node — the conformance scenario in
+`tests/scenarios/journeys/clients/` does exactly that and is marked
+`xfail(strict=True)`, so it turns the build red the moment this is fixed and the
+marker is not removed.
+
+---
+
 ## OPS — the platform and its own tooling
 
-### DEV-OPS-001 — The lemma-cli e2e suite cannot start, and has not been able to since #362
-**Violates:** *(no product promise; a broken safety net)*
-**Severity:** high
-**Where:** [`lemma-cli/tests/e2e/conftest.py:224`](lemma-cli/tests/e2e/conftest.py#L224)
+### DEV-OPS-002 — `app.version` still lists a deleted entrypoint
+**Violates:** *(documentation accuracy)*
+**Severity:** low
+**Where:** [`app/version.py:4`](lemma-backend/app/version.py#L4)
 
-**Required:** `make test-cli-e2e` runs the CLI end-to-end suite.
+**Required:** The docstring naming the application entrypoints names the ones
+that exist.
 
-**Actual:** The fixture boots a scheduler sidecar with
-`uvicorn app.scheduler:app`, waits for its `/health`, and fails the session if it
-does not come up. `lemma-backend/app/scheduler.py` was deleted in
-`0a98cea0` — *"Delete APScheduler, and close the connection-scope hazards behind
-it (108 → 1)" (#362)*. Uvicorn answers `Error loading ASGI app. Could not import
-module "app.scheduler"`, the health wait times out after 60s, and every test in
-the suite errors in setup before its first assertion.
+**Actual:** It still lists ``app.scheduler`` alongside ``app.app:create_app``
+and ``standalone_app``. `app/scheduler.py` was deleted in `0a98cea0` (#362) with
+the APScheduler removal.
 
-Confirmed directly: the scenario harness was generalised from this fixture and
-reproduced the failure exactly, then passed once the sidecar was removed.
+**Why it matters:** Small, but it is the file people read to find out how the
+application is started, and it sent this suite's harness down a dead path for an
+afternoon — the CLI e2e fixture was booting the same ghost.
 
-**Why it matters:** The CLI is one of the four ways the product is used, and its
-only end-to-end coverage has been dead for some time with nobody noticing.
-That is a consequence of the branch protection: only `lemma-backend unit` gates
-merges, so a red CLI e2e never blocked anything. The suite is not merely
-failing — it is failing in setup, so it reports no information at all about
-whether the CLI works.
-
-**Fix:** Delete the scheduler sidecar block from the fixture, exactly as
-`tests/scenarios/harness/stack.py` does. Then run the suite and deal with
-whatever it says once it can actually speak — it has not run since #362, so the
-first green is likely several fixes away.
-
-**Also stale from the same deletion:**
-[`app/version.py:4`](lemma-backend/app/version.py#L4) still lists
-``app.scheduler`` as one of the application entrypoints. One-line docstring fix.
+**Fix:** Delete the word from the docstring.

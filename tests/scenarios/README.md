@@ -101,20 +101,35 @@ Four things to hold to:
   it pass. If it does not pass, the finding is a `gap` in the specification and
   a fix to the code — not an edit to the assertion.
 
+## The clients we ship
+
+`journeys/clients/` runs the same core journey through the **CLI**, the
+**Python SDK** and the **TypeScript SDK**, each in its own environment as a
+subprocess — `uv run lemma pods list` is the product; importing the CLI's
+internals is not.
+
+This is where a client's own bugs surface. A green API suite says the server
+works; it says nothing about whether the CLI maps its arguments correctly or
+whether the TypeScript build is loadable. `DEV-SDK-001` — the built TS SDK
+cannot be imported from Node at all — was found here and by nothing else.
+
 ## What is not here yet
 
 Being honest about the edges, because a half-built harness that looks finished
 is worse than one that says where it stops:
 
-- **Only the HTTP driver exists.** The CLI and both SDK drivers are the point of
-  the driver seam, and are not written. The scenarios would not change.
 - **No event assertions.** `analytics_host` is configurable, so a capture server
   would let scenarios assert on the real product-analytics contract black-box.
   Until then, `@covers` naming an event records intent rather than proving
   delivery — which is how `DEV-ONB-004` went unnoticed until a worker log was
   read by hand.
-- **Surfaces, bundles and apps have no journeys yet.** Their steps are the next
-  increment; the promises are already written in `docs/product`.
+- **Nothing crosses a surface end to end.** Surface setup, webhook ingestion and
+  delivery need a platform fake per adapter. The inbox side is covered.
+- **Import is untested.** Export is; a full export → import round trip needs the
+  bundle staged and applied, which is the next increment.
+- **The client conformance is a subset**, not a mirror of every journey. A
+  process per call is too slow for that, and the point is that the clients
+  agree on the core path.
 
 ## The two lanes
 

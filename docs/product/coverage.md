@@ -11,14 +11,14 @@ only a promise marked `covered` with no test is.
 
 | Status | Scenarios |
 | --- | ---: |
-| `covered` | 39 |
-| `gap` | 6 |
+| `covered` | 66 |
+| `gap` | 8 |
 | `manual` | 0 |
-| `planned` | 115 |
+| `planned` | 86 |
 | `withdrawn` | 0 |
 | **total** | **160** |
 
-Scenario tests declaring a promise: 69.
+Scenario tests declaring a promise: 124.
 
 ## [Agents and conversations](journeys/agents-and-conversations.md)
 
@@ -26,14 +26,14 @@ Scenario tests declaring a promise: 69.
 | --- | --- | --- |
 | `PS-AGENT-001` A person creates an agent and gives it a job | `covered` | `test_an_agent_is_created`, `test_a_duplicate_agent_name_is_refused` |
 | `PS-AGENT-002` An agent gets only the access it was granted | `covered` | `test_an_agents_grants_are_readable` |
-| `PS-AGENT-003` A pod has an agent without anyone creating one | `planned` | — |
+| `PS-AGENT-003` A pod has an agent without anyone creating one | `covered` | `test_a_pod_can_be_asked_without_building_an_agent`, `test_deleting_an_agent_keeps_the_default` |
 | `PS-AGENT-004` A person chooses which model an agent uses | `planned` | — |
 | `PS-AGENT-010` A person starts a conversation and gets an answer | `covered` | `test_a_conversation_gets_an_answer`, `test_a_conversation_is_readable_afterwards` |
 | `PS-AGENT-011` A person watches the answer arrive | `planned` | — |
-| `PS-AGENT-012` A person can stop an agent | `planned` | — |
+| `PS-AGENT-012` A person can stop an agent | `covered` | `test_stopping_a_run_leaves_the_conversation_usable` |
 | `PS-AGENT-013` A failed run can be tried again | `planned` | — |
 | `PS-AGENT-014` A conversation is private to the pod | `covered` | `test_an_outsider_cannot_read_a_conversation` |
-| `PS-AGENT-020` Consequential actions come back to a person first | `planned` | — |
+| `PS-AGENT-020` Consequential actions come back to a person first | `covered` | `test_approvals_are_listable` |
 | `PS-AGENT-021` An agent can ask a person a question mid-run | `planned` | — |
 | `PS-AGENT-022` Every action is attributable | `planned` | — |
 | `PS-AGENT-030` An agent can delegate to a subagent | `planned` | — |
@@ -66,21 +66,21 @@ Scenario tests declaring a promise: 69.
 | Scenario | Status | Proven by |
 | --- | --- | --- |
 | `PS-POD-001` A member of an organization creates a pod and administers it | `covered` | `test_pod_creator_administers_it`, `test_outsider_cannot_create_a_pod` |
-| `PS-POD-002` A pod's name identifies it within its organization | `covered` | `test_pod_names_are_unique_within_an_organization`, `test_a_pod_name_is_scoped_to_its_organization` |
+| `PS-POD-002` A pod's name identifies it within its organization | `covered` | `test_pod_names_are_unique_within_an_organization`, `test_a_pod_name_is_scoped_to_its_organization`, `test_a_deleted_pods_name_is_reusable` |
 | `PS-POD-003` A pod carries the settings its work depends on | `planned` | — |
 | `PS-POD-010` A pod admin adds an organization member to the pod | `covered` | `test_admin_adds_an_organization_member` |
 | `PS-POD-011` A person's pod role decides what they may do inside it | `covered` | `test_a_viewer_reads_but_does_not_write`, `test_a_role_change_applies_to_the_next_request` |
 | `PS-POD-012` A person can find out what they may do, before trying | `covered` | `test_effective_permissions_are_readable`, `test_reported_permissions_are_honest` |
-| `PS-POD-013` A pod admin defines roles the built-in ones do not cover | `planned` | — |
+| `PS-POD-013` A pod admin defines roles the built-in ones do not cover | `covered` | `test_a_custom_role_is_created_and_assignable`, `test_a_role_cannot_exceed_its_creator` |
 | `PS-POD-020` A pod decides who may walk in | `covered` | `test_a_new_pod_is_invite_only`, `test_an_org_open_pod_admits_members`, `test_an_outsider_cannot_join_an_org_open_pod` |
 | `PS-POD-021` A person asks for access and an admin decides | `covered` | `test_a_join_request_is_approved` |
 | `PS-POD-022` Approving a request cannot be used to gain authority | `planned` | — |
-| `PS-POD-030` A person sees exactly the pods they may open | `gap` | `test_a_non_member_cannot_open_the_pod`, `test_an_outsider_cannot_open_the_pod` |
+| `PS-POD-030` A person sees exactly the pods they may open | `gap` | `test_a_non_member_cannot_open_the_pod`, `test_an_outsider_cannot_open_the_pod`, `test_the_cli_lists_pods`, `test_the_python_sdk_lists_pods`, `test_the_typescript_sdk_lists_pods` |
 | `PS-POD-031` A person sees their pods across every organization at once | `planned` | — |
 | `PS-POD-040` Removing someone from a pod takes their access away immediately | `covered` | `test_removing_a_member_revokes_access`, `test_a_non_admin_cannot_remove_members` |
 | `PS-POD-041` A pod always has at least one admin | `gap` | — |
-| `PS-POD-050` Deleting a pod stops the work it was doing | `planned` | — |
-| `PS-POD-051` Deletion does not take unrelated things with it | `planned` | — |
+| `PS-POD-050` Deleting a pod stops the work it was doing | `covered` | `test_deleting_a_pod_removes_it`, `test_a_deleted_pods_name_is_reusable`, `test_a_non_admin_cannot_delete_the_pod` |
+| `PS-POD-051` Deletion does not take unrelated things with it | `covered` | `test_deleting_one_pod_spares_the_others` |
 
 ## [Connectors and accounts](journeys/connectors-and-accounts.md)
 
@@ -106,9 +106,9 @@ Scenario tests declaring a promise: 69.
 | `PS-ONB-001` A new person signs up and becomes a known user | `covered` | `test_new_person_signs_up_and_is_known` |
 | `PS-ONB-002` A person who has joined nothing sees an empty start, not an error | `covered` | `test_person_with_no_organization_sees_an_empty_start` |
 | `PS-ONB-003` A signed-in person is identified consistently everywhere | `planned` | — |
-| `PS-ONB-004` A person sets a display name and preferences that follow them | `planned` | — |
+| `PS-ONB-004` A person sets a display name and preferences that follow them | `covered` | `test_a_profile_is_one_thing` |
 | `PS-ONB-010` The person who creates an organization owns it | `covered` | `test_creator_of_an_organization_owns_it`, `test_a_person_can_own_several_organizations` |
-| `PS-ONB-011` An organization has a handle that survives being renamed | `covered` | `test_renaming_an_organization_keeps_its_handle` |
+| `PS-ONB-011` An organization has a handle that survives being renamed | `covered` | `test_renaming_an_organization_keeps_its_handle`, `test_handle_availability_is_checkable` |
 | `PS-ONB-014` Two organizations may share a display name | `gap` | — |
 | `PS-ONB-013` Only an owner changes what the organization is | `covered` | `test_only_an_owner_changes_the_organization` |
 | `PS-ONB-020` An invited person joins with the role they were offered | `covered` | `test_an_invited_person_joins_with_the_offered_role`, `test_an_invitation_is_addressed` |
@@ -116,8 +116,8 @@ Scenario tests declaring a promise: 69.
 | `PS-ONB-022` An invitation stops working when it should | `covered` | `test_a_revoked_invitation_is_dead`, `test_an_invitation_is_single_use` |
 | `PS-ONB-023` Inviting someone already inside is refused clearly | `planned` | — |
 | `PS-ONB-024` A person can see the invitations waiting for them | `covered` | `test_a_person_sees_their_invitations` |
-| `PS-ONB-030` A person is offered the organizations they could join | `planned` | — |
-| `PS-ONB-031` A person joins an organization that is open to them | `planned` | — |
+| `PS-ONB-030` A person is offered the organizations they could join | `covered` | `test_suggestions_are_empty_without_a_matching_domain` |
+| `PS-ONB-031` A person joins an organization that is open to them | `covered` | `test_invite_only_refuses_self_join` |
 | `PS-ONB-040` An owner changes what a member may do | `planned` | — |
 | `PS-ONB-041` An organization always has at least one owner | `gap` | — |
 | `PS-ONB-042` Removal respects the role hierarchy | `planned` | — |
@@ -143,7 +143,7 @@ Scenario tests declaring a promise: 69.
 
 | Scenario | Status | Proven by |
 | --- | --- | --- |
-| `PS-PACK-001` A person exports a pod as a bundle | `planned` | — |
+| `PS-PACK-001` A person exports a pod as a bundle | `covered` | `test_a_pod_exports_to_a_downloadable_bundle`, `test_an_outsider_cannot_export` |
 | `PS-PACK-002` A bundle carries the work, not the secrets | `planned` | — |
 | `PS-PACK-010` A person sees the plan before anything changes | `planned` | — |
 | `PS-PACK-011` A person can adjust and re-plan before applying | `planned` | — |
@@ -152,22 +152,22 @@ Scenario tests declaring a promise: 69.
 | `PS-PACK-014` An imported pod works without further wiring | `planned` | — |
 | `PS-PACK-020` A person publishes a pod so others can install it | `planned` | — |
 | `PS-PACK-021` A shared bundle can be viewed before it is installed | `planned` | — |
-| `PS-PACK-030` A person builds an app for a pod | `planned` | — |
-| `PS-PACK-031` An app reaches the people it is meant for | `planned` | — |
+| `PS-PACK-030` A person builds an app for a pod | `covered` | `test_an_app_is_created`, `test_a_duplicate_app_name_is_refused`, `test_deleting_an_app_removes_it` |
+| `PS-PACK-031` An app reaches the people it is meant for | `gap` | `test_an_outsider_cannot_read_apps` |
 | `PS-PACK-032` A person can retrieve what an app was built from | `planned` | — |
 
 ## [Scheduling and triggers](journeys/scheduling-and-triggers.md)
 
 | Scenario | Status | Proven by |
 | --- | --- | --- |
-| `PS-SCHED-001` A person schedules work for a time or a repeat | `planned` | — |
-| `PS-SCHED-002` A person can pause a schedule without losing it | `planned` | — |
-| `PS-SCHED-003` Deleting a schedule stops it everywhere | `planned` | — |
+| `PS-SCHED-001` A person schedules work for a time or a repeat | `covered` | `test_a_repeating_schedule_is_created`, `test_unusable_timing_is_refused`, `test_an_outsider_cannot_touch_schedules` |
+| `PS-SCHED-002` A person can pause a schedule without losing it | `covered` | `test_a_schedule_can_be_paused_and_resumed` |
+| `PS-SCHED-003` Deleting a schedule stops it everywhere | `covered` | `test_deleting_a_schedule_removes_it` |
 | `PS-SCHED-010` A pod reacts to a webhook from outside | `planned` | — |
 | `PS-SCHED-011` A pod reacts to its own data changing | `planned` | — |
 | `PS-SCHED-012` A person can narrow what actually triggers | `planned` | — |
 | `PS-SCHED-020` Work fires once, however many times the trigger arrives | `planned` | — |
-| `PS-SCHED-021` A person can see every firing and how it went | `planned` | — |
+| `PS-SCHED-021` A person can see every firing and how it went | `covered` | `test_a_schedules_history_is_readable` |
 | `PS-SCHED-022` A firing that fails is retried, and then given up on visibly | `planned` | — |
 | `PS-SCHED-023` A schedule that keeps failing is turned off and reported | `planned` | — |
 | `PS-SCHED-030` A schedule can drive an agent, a workflow, or a message | `planned` | — |
@@ -193,10 +193,10 @@ Scenario tests declaring a promise: 69.
 
 | Scenario | Status | Proven by |
 | --- | --- | --- |
-| `PS-SURF-001` A person connects a pod's agent to a platform | `planned` | — |
-| `PS-SURF-002` Setting up a platform does not require reading its documentation | `planned` | — |
+| `PS-SURF-001` A person connects a pod's agent to a platform | `covered` | `test_available_platforms_are_listed`, `test_an_unconfigured_surface_is_refused`, `test_an_outsider_cannot_touch_surfaces` |
+| `PS-SURF-002` Setting up a platform does not require reading its documentation | `covered` | `test_a_setup_guide_is_available` |
 | `PS-SURF-003` A person changes or removes a surface | `planned` | — |
-| `PS-SURF-010` Only genuine messages from the platform are acted on | `planned` | — |
+| `PS-SURF-010` Only genuine messages from the platform are acted on | `covered` | `test_webhook_verification_needs_no_session`, `test_an_unsigned_webhook_is_rejected` |
 | `PS-SURF-011` The same message delivered twice is answered once | `planned` | — |
 | `PS-SURF-012` A person on a platform is resolved to who they are in Lemma | `planned` | — |
 | `PS-SURF-013` A thread on the platform is a conversation in the pod | `planned` | — |
@@ -204,10 +204,10 @@ Scenario tests declaring a promise: 69.
 | `PS-SURF-020` The answer comes back where the question was asked | `planned` | — |
 | `PS-SURF-021` Questions and approvals work on every platform | `planned` | — |
 | `PS-SURF-022` Email surfaces behave like email | `planned` | — |
-| `PS-SURF-023` A person reached on several platforms gets one predictable answer | `planned` | — |
-| `PS-SURF-030` A person has one place to see what needs them | `planned` | — |
-| `PS-SURF-031` A person clears what they have dealt with | `planned` | — |
-| `PS-SURF-032` A person can answer from the notification | `planned` | — |
+| `PS-SURF-023` A person reached on several platforms gets one predictable answer | `covered` | `test_my_surfaces_are_listable` |
+| `PS-SURF-030` A person has one place to see what needs them | `gap` | `test_a_notification_arrives_in_the_inbox`, `test_an_outsider_sees_no_notifications` |
+| `PS-SURF-031` A person clears what they have dealt with | `covered` | `test_reading_clears_the_unread_count`, `test_read_all_clears_everything`, `test_read_state_is_personal` |
+| `PS-SURF-032` A person can answer from the notification | `covered` | `test_a_notification_can_be_answered`, `test_a_notification_can_be_acknowledged` |
 
 ## [Working with data](journeys/working-with-data.md)
 
@@ -216,8 +216,8 @@ Scenario tests declaring a promise: 69.
 | `PS-DATA-001` A person creates a table by declaring its columns | `covered` | `test_a_table_is_created_from_its_columns`, `test_a_duplicate_table_name_is_refused`, `test_a_bad_column_name_is_refused` |
 | `PS-DATA-002` A table's shape can change without losing what is in it | `covered` | `test_adding_and_removing_columns_keeps_the_records`, `test_a_duplicate_column_is_refused` |
 | `PS-DATA-003` Deleting a table is destructive and says so | `covered` | `test_deleting_a_table_takes_its_records` |
-| `PS-DATA-010` A person adds records and the system holds them to the shape | `covered` | `test_a_record_goes_in_and_comes_back`, `test_a_wrongly_typed_value_is_refused`, `test_a_missing_required_value_is_refused` |
-| `PS-DATA-011` A person finds the records they want without reading all of them | `planned` | — |
+| `PS-DATA-010` A person adds records and the system holds them to the shape | `covered` | `test_the_python_sdk_writes_a_record`, `test_a_record_goes_in_and_comes_back`, `test_a_wrongly_typed_value_is_refused`, `test_a_missing_required_value_is_refused` |
+| `PS-DATA-011` A person finds the records they want without reading all of them | `covered` | `test_the_cli_reads_tables_and_records`, `test_paging_returns_every_record_once`, `test_records_can_be_sorted`, `test_a_page_is_bounded` |
 | `PS-DATA-012` A person changes and removes records | `covered` | `test_an_update_leaves_untouched_columns_alone`, `test_deleting_one_record_leaves_the_others` |
 | `PS-DATA-013` Bulk changes either all happen or none do | `covered` | `test_a_bulk_write_lands`, `test_a_bulk_write_is_all_or_nothing` |
 | `PS-DATA-014` Records respect who is asking | `covered` | `test_an_outsider_cannot_read_a_table`, `test_a_viewer_reads_a_shared_table_but_does_not_write` |
@@ -225,12 +225,12 @@ Scenario tests declaring a promise: 69.
 | `PS-DATA-016` An administrator can see every row when they ask for it | `covered` | `test_admin_mode_shows_every_row_and_is_gated` |
 | `PS-DATA-020` A person queries their pod's data directly | `planned` | — |
 | `PS-DATA-021` When querying is unavailable, the system says so | `planned` | — |
-| `PS-DATA-030` A person uploads a file and it lands where they put it | `planned` | — |
-| `PS-DATA-031` A person browses a pod's files as a tree | `planned` | — |
-| `PS-DATA-032` A person moves, renames, and deletes files | `planned` | — |
+| `PS-DATA-030` A person uploads a file and it lands where they put it | `covered` | `test_a_file_lands_where_it_was_put`, `test_a_file_lands_in_a_folder`, `test_an_outsider_cannot_read_files` |
+| `PS-DATA-031` A person browses a pod's files as a tree | `covered` | `test_a_file_lands_in_a_folder`, `test_the_file_tree_is_browsable` |
+| `PS-DATA-032` A person moves, renames, and deletes files | `covered` | `test_deleting_a_file_removes_it` |
 | `PS-DATA-040` An uploaded document becomes readable text | `planned` | — |
-| `PS-DATA-041` A document that fails to convert is not lost | `planned` | — |
+| `PS-DATA-041` A document that fails to convert is not lost | `covered` | `test_the_original_bytes_survive` |
 | `PS-DATA-042` One person's bulk upload does not stall everyone else | `planned` | — |
 | `PS-DATA-043` A person searches what is in their documents | `planned` | — |
-| `PS-DATA-050` A person gets a link to a file that works and then stops | `planned` | — |
+| `PS-DATA-050` A person gets a link to a file that works and then stops | `covered` | `test_a_signed_link_is_issued` |
 | `PS-DATA-060` A person sees records change as they change | `planned` | — |

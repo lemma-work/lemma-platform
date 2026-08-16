@@ -26,7 +26,15 @@ FORBIDDEN_ROOTS = {"app", "sandbox_runtime", "lemma_backend"}
 #: A scenario that patches something is asserting against a system that does not
 #: exist in production. The only substitutions permitted are the ones the stack
 #: itself is booted with, chosen in harness/stack.py and visible to everyone.
-FORBIDDEN_NAMES = {"monkeypatch", "MagicMock", "AsyncMock", "mock", "patch"}
+#:
+#: Deliberately *not* including a bare ``patch``: ``api.patch(...)`` is the HTTP
+#: verb, and flagging it made this guard cry wolf on an honest scenario. What
+#: actually indicates mocking is constructing a mock, taking the ``monkeypatch``
+#: fixture, or importing the module — all three are checked below.
+FORBIDDEN_NAMES = {"monkeypatch", "MagicMock", "AsyncMock", "Mock", "patch_object"}
+
+#: Importing any of these is mocking, whatever it is later called.
+FORBIDDEN_MOCK_MODULES = {"unittest.mock", "mock", "pytest_mock", "responses", "respx"}
 
 
 def _python_files() -> list[Path]:
@@ -72,12 +80,24 @@ def test_scenarios_do_not_mock():
     for path in _scenario_files():
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    if alias.name in FORBIDDEN_MOCK_MODULES:
+                        offenders.append(
+                            f"{path.relative_to(SUITE)}:{node.lineno} "
+                            f"imports {alias.name!r}"
+                        )
+            elif isinstance(node, ast.ImportFrom) and node.module in FORBIDDEN_MOCK_MODULES:
+                offenders.append(
+                    f"{path.relative_to(SUITE)}:{node.lineno} imports from "
+                    f"{node.module!r}"
+                )
+
             name = None
             if isinstance(node, ast.Name):
                 name = node.id
-            elif isinstance(node, ast.Attribute):
-                name = node.attr
             elif isinstance(node, ast.arg):
+                # The `monkeypatch` fixture, taken as a test argument.
                 name = node.arg
             if name in FORBIDDEN_NAMES:
                 offenders.append(

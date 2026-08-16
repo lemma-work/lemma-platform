@@ -80,6 +80,12 @@ jobs:
             path: journeys/automating_work
           - name: sharing and permissions
             path: journeys/sharing_and_permissions
+          - name: scheduling and triggers
+            path: journeys/scheduling_and_triggers
+          - name: surfaces and notifications
+            path: journeys/surfaces_and_notifications
+          - name: packaging and reuse
+            path: journeys/packaging_and_reuse
           - name: connectors and usage
             path: journeys/connectors_and_accounts journeys/operating_a_deployment
     steps:
@@ -110,3 +116,39 @@ jobs:
           name: scenarios-${{ strategy.job-index }}
           path: tests/scenarios/results.xml
           retention-days: 7
+
+  # The clients we ship, driven as a user drives them. Separate from the journey
+  # matrix because it needs node and the TypeScript build, and because a client
+  # being broken is a different fact from the platform being broken.
+  clients:
+    name: shipped clients conform
+    needs: [guards, traceability]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version-file: .python-version
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+      - name: Sync backend
+        working-directory: lemma-backend
+        run: uv sync
+      - name: Sync the CLI and the Python SDK
+        run: |
+          uv sync --project lemma-cli
+          uv sync --project lemma-python
+      # Without this the TypeScript scenario skips rather than failing, which
+      # would hide DEV-SDK-001 rather than proving it.
+      - name: Build the TypeScript SDK
+        working-directory: lemma-typescript
+        run: npm ci && npm run build
+      - name: Sync scenario suite
+        working-directory: tests/scenarios
+        run: uv sync
+      - name: Client conformance
+        working-directory: tests/scenarios
+        run: uv run pytest journeys/clients -q

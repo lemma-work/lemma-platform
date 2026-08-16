@@ -213,27 +213,14 @@ def backend_server(postgres_container, redis_container, supertokens_container):
     # alembic reads DATABASE_URL from `env` (overriding the backend's .env).
     _run_migrations(python_bin, env)
 
-    # The scheduler API (app.scheduler:app) is a separate FastAPI process that
-    # the backend calls to register cron jobs when creating TIME schedules. The
-    # backend's own e2e stubs it in-process; here we run it as a sibling uvicorn
-    # subprocess (Redis-backed, no streaq worker needed for CRUD-only flows).
-    sched_port = _free_port()
-    env["SCHEDULER_API_URL"] = f"http://127.0.0.1:{sched_port}"
+    # No scheduler sidecar: APScheduler and `app/scheduler.py` were deleted in
+    # #362 and time schedules are driven from the worker now. This fixture went
+    # on booting `app.scheduler:app` afterwards, so uvicorn answered "Could not
+    # import module", the health wait timed out, and every test in this suite
+    # errored in setup. See issues.md, DEV-OPS-001.
     server_log = tempfile.TemporaryFile(mode="w+", encoding="utf-8")
-    sched_proc = subprocess.Popen(
-        [python_bin, "-m", "uvicorn", "app.scheduler:app",
-         "--host", "127.0.0.1", "--port", str(sched_port), "--log-level", "warning"],
-        cwd=str(BACKEND_ROOT),
-        env=env,
-        stdout=server_log,
-        stderr=subprocess.STDOUT,
-        text=True,
-    )
-
-    procs = [sched_proc]
+    procs = []
     try:
-        _wait_http(f"http://127.0.0.1:{sched_port}/health", timeout=60)
-
         proc = subprocess.Popen(
             [python_bin, "-m", "uvicorn", "app.app:app",
              "--host", "127.0.0.1", "--port", str(port), "--log-level", "warning"],
@@ -243,7 +230,7 @@ def backend_server(postgres_container, redis_container, supertokens_container):
             stderr=subprocess.STDOUT,
             text=True,
         )
-        procs.insert(0, proc)
+        procs.append(proc)
 
         base_url = f"http://127.0.0.1:{port}"
         _wait_http(f"{base_url}/health", timeout=90)
@@ -262,7 +249,7 @@ def backend_server(postgres_container, redis_container, supertokens_container):
         out = server_log.read()
         server_log.close()
         pytest.fail(
-            f"Backend/scheduler server did not start in time.\n"
+            f"Backend server did not start in time.\n"
             f"Check that lemma-backend deps are installed (cd lemma-backend && uv sync).\n"
             f"Server output:\n{out}"
         )

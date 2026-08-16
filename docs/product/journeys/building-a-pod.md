@@ -114,7 +114,7 @@ over a single resource is [Sharing and permissions](sharing-and-permissions.md).
 **Contracts:** `pod.permissions.me`, `pod.permissions.catalog`
 
 ### PS-POD-013 — A pod admin defines roles the built-in ones do not cover
-**Status:** planned
+**Status:** covered
 
 - When a pod admin creates a custom role with a set of permissions, the system
   shall allow it to be assigned like a built-in one.
@@ -244,7 +244,7 @@ over a single resource is [Sharing and permissions](sharing-and-permissions.md).
 ## Capability: Delete a pod
 
 ### PS-POD-050 — Deleting a pod stops the work it was doing
-**Status:** planned
+**Status:** covered
 
 - When an organization owner or a pod admin deletes a pod, the system shall stop
   showing it and shall stop its schedules, surfaces, and other standing work.
@@ -258,7 +258,7 @@ over a single resource is [Sharing and permissions](sharing-and-permissions.md).
 **Contracts:** `pod.delete`, `pod.deleted`
 
 ### PS-POD-051 — Deletion does not take unrelated things with it
-**Status:** planned
+**Status:** covered
 
 - When a pod is deleted, the system shall leave the organization, its other
   pods, and their contents untouched.

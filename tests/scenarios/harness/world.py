@@ -30,6 +30,7 @@ from harness.steps.building import BuildingSteps
 from harness.steps.datastore import DatastoreSteps
 from harness.steps.identity import IdentitySteps
 from harness.steps.pod import PodSteps
+from harness.steps.surfaces import SurfaceSteps
 
 JSON = dict[str, Any]
 
@@ -42,7 +43,9 @@ EMAIL_DOMAIN = "example.com"
 
 
 @dataclass(eq=False)
-class Person(IdentitySteps, PodSteps, DatastoreSteps, AgentSteps, BuildingSteps):
+class Person(
+    IdentitySteps, PodSteps, DatastoreSteps, AgentSteps, BuildingSteps, SurfaceSteps
+):
     """Someone using Lemma, and everything they can do.
 
     The verbs live in the ``steps`` mixins, one module per product noun, so this

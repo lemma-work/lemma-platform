@@ -17,7 +17,7 @@ about it when it eventually cannot.
 ## Capability: Make work happen on a timer
 
 ### PS-SCHED-001 — A person schedules work for a time or a repeat
-**Status:** planned
+**Status:** covered
 
 - When a person creates a schedule for a repeating time, the system shall fire
   it at each occurrence.
@@ -33,7 +33,7 @@ about it when it eventually cannot.
 **Contracts:** `schedule.create`, `schedule.get`, `schedule.created`
 
 ### PS-SCHED-002 — A person can pause a schedule without losing it
-**Status:** planned
+**Status:** covered
 
 - When a person deactivates a schedule, the system shall stop firing it and
   shall keep its definition and history.
@@ -45,7 +45,7 @@ about it when it eventually cannot.
 **Contracts:** `schedule.update`, `schedule.get`, `schedule.list`
 
 ### PS-SCHED-003 — Deleting a schedule stops it everywhere
-**Status:** planned
+**Status:** covered
 
 - When a person deletes a schedule, the system shall stop firing it, including
   in whatever component actually holds the timer.
@@ -114,7 +114,7 @@ about it when it eventually cannot.
 **Contracts:** `schedule.run.list`, `schedule_run.completed`
 
 ### PS-SCHED-021 — A person can see every firing and how it went
-**Status:** planned
+**Status:** covered
 
 - When a person asks for a schedule's history, the system shall list each
   firing, when it happened, and how it ended.
