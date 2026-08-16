@@ -313,6 +313,46 @@ class SandboxRepository:
             .values(last_used_at=utcnow())
         )
 
+    async def mark_in_use(self, sandbox_id: UUID, instance_id: UUID | None) -> None:
+        """Record that this sandbox is serving again, not merely that it was used.
+
+        Adopting a sandbox is a state change, and the resume path treated it as
+        a read: only a full provision wrote `PRESENT` back, so after the first
+        release the row kept saying RELEASED however many times the sandbox was
+        resumed and used. `list_idle` selects on `desired_state == PRESENT`, so
+        the sandbox went invisible to idle release for the rest of its life --
+        nothing stopped its compute, it ran until the provider's own timeout,
+        and on E2B the action at that timeout was to delete it.
+
+        Folded into the same statement as the activity stamp because that write
+        already happens on this path, so correcting the state costs nothing
+        extra, and because doing it as one conditional UPDATE rather than
+        read-then-write leaves no window for a concurrent release to be undone
+        by a stale value.
+        """
+        await self.session.execute(
+            update(SandboxModel)
+            .where(SandboxModel.id == sandbox_id)
+            .values(
+                last_used_at=utcnow(),
+                desired_state=SandboxDesiredState.PRESENT.value,
+                updated_at=utcnow(),
+            )
+        )
+        if instance_id is None:
+            return
+        # Never resurrect an instance that is finished with. A destroyed row
+        # describes a provider object that is gone, and marking it ready would
+        # point the next ensure at nothing.
+        await self.session.execute(
+            update(SandboxInstanceModel)
+            .where(
+                SandboxInstanceModel.id == instance_id,
+                SandboxInstanceModel.state != SandboxInstanceState.DESTROYED.value,
+            )
+            .values(state=SandboxInstanceState.READY.value, last_error=None)
+        )
+
     async def list_idle(
         self, *, idle_before: datetime, limit: int = 100
     ) -> tuple[Sandbox, ...]:

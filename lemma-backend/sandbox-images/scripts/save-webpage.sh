@@ -117,7 +117,20 @@ if [[ "$OPEN_PAGE" == "1" ]]; then
   start-browser >/dev/null
   CAPTURE_TAB="lemma-capture-$$"
   agent-browser tab new --label "$CAPTURE_TAB" "$URL" >/dev/null
-  agent-browser wait --load networkidle >/dev/null 2>&1 || agent-browser wait "$WAIT_MS" >/dev/null 2>&1 || true
+  # Bounded, because networkidle is a condition an ad-funded page never
+  # reaches: something is always polling. Measured on the two news sites a user
+  # actually asked for, the unbounded wait cost 32.6s and 40.0s per capture and
+  # produced byte-for-byte the same markdown as a 5s cap did in 10.3s and
+  # 32.7s. A tool call fetching two such pages renders them one at a time, so
+  # that difference is most of the minute and a half the caller waits.
+  #
+  # The cap is not a page-load timeout: whatever has loaded by then is what
+  # gets captured, and the fallback wait below still gives a slow page its
+  # settle time. Pages that do go idle are unaffected -- they reach it in well
+  # under the cap and this returns immediately.
+  timeout "${NETWORKIDLE_TIMEOUT_S:-5}" \
+    agent-browser wait --load networkidle >/dev/null 2>&1 \
+    || agent-browser wait "$WAIT_MS" >/dev/null 2>&1 || true
 fi
 
 PAGE_URL="$(agent-browser get url)"

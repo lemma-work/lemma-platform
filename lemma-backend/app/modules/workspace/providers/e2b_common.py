@@ -34,10 +34,24 @@ def meta_profile_digest(namespace: str) -> str:
     return f"{namespace}-profile-digest"
 
 
+def meta_template(namespace: str) -> str:
+    """Which template this sandbox was actually built from.
+
+    Recorded because it is the only honest answer to "is this workspace running
+    the image we published?". The profile digest cannot answer it: it is a
+    hand-maintained environment variable, and while it sat unchanged at its
+    default every sandbox in the fleet stayed pinned to whatever template it was
+    first created on -- including through four template releases that were
+    supposed to fix the workspaces that were failing.
+    """
+    return f"{namespace}-template"
+
+
 META_SANDBOX_ID = meta_sandbox_id(DEFAULT_METADATA_NAMESPACE)
 META_SANDBOX_KIND = meta_sandbox_kind(DEFAULT_METADATA_NAMESPACE)
 META_EPOCH = meta_epoch(DEFAULT_METADATA_NAMESPACE)
 META_PROFILE_DIGEST = meta_profile_digest(DEFAULT_METADATA_NAMESPACE)
+META_TEMPLATE = meta_template(DEFAULT_METADATA_NAMESPACE)
 
 
 
@@ -114,3 +128,22 @@ def sdk_best_effort(path: str | None = None):
         SandboxUnavailable,
     ):
         return
+
+
+async def every_page(paginator) -> list:
+    """Drain a paginated listing.
+
+    Both listings here read `next_items()` once and treated it as the whole
+    answer. The sweep is where that bites: its query is filtered only by kind,
+    so it matches the whole fleet, and one page of it was all orphan reclamation
+    ever considered -- everything past that was never reclaimed and billed for
+    as long as it existed. The account this was found in held 249 sandboxes.
+
+    Adoption's query names a single sandbox id and normally matches one result,
+    so it was far less exposed; it is drained here because a listing that can
+    paginate should be read as one, not because a specific failure is known.
+    """
+    found: list = []
+    while paginator.has_next:
+        found.extend(await paginator.next_items())
+    return found

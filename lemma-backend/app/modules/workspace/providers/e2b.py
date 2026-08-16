@@ -56,8 +56,9 @@ from app.modules.workspace.providers.e2b_common import (
     meta_profile_digest,
     meta_sandbox_id,
     meta_sandbox_kind,
-    sdk_best_effort,
+    meta_template,
     sdk_errors,
+    every_page as _every_page,
 )
 from app.modules.workspace.providers.e2b_ops import E2BOpsMixin
 from app.modules.workspace.providers.e2b_output import E2BOutputBuffer
@@ -152,6 +153,7 @@ class E2BSandboxProvider(E2BOpsMixin):
             meta_sandbox_kind(namespace): spec.kind.value,
             meta_epoch(namespace): str(spec.epoch),
             meta_profile_digest(namespace): spec.profile_digest,
+            meta_template(namespace): self._template(spec.kind),
         }
 
     def _template(self, kind: SandboxKind) -> str:
@@ -160,6 +162,32 @@ class E2BSandboxProvider(E2BOpsMixin):
             if kind is SandboxKind.FUNCTION
             else self._config.workspace_template
         )
+
+    def _lifecycle(self, kind: SandboxKind) -> dict[str, object]:
+        """What E2B does to this sandbox when its timeout runs out.
+
+        The SDK defaults `on_timeout` to `"kill"`, and this call used to pass no
+        lifecycle at all -- so every workspace was created already scheduled for
+        deletion, thirty minutes out, and on this provider deleting the sandbox
+        deletes the user's files. Nothing in the row recorded it and nothing told
+        the user; the only reason it was not a daily event is that the idle sweep
+        usually paused the sandbox first, which stops the clock. A five-minute
+        cron was the only thing standing between a long session and data loss.
+
+        `keep_memory=False` matches what `release` already does, and for the same
+        reason: a memory-preserving snapshot restores whatever was running,
+        including a browser that had exhausted the sandbox, so the exhaustion
+        became permanent across every later resume. It also rules out
+        `auto_resume`, which E2B can only offer by restoring a memory snapshot in
+        place. That trade is worth revisiting once a leak is impossible, and not
+        before.
+
+        A function sandbox owns no durable disk, so killing it on timeout costs a
+        cold start and nothing else -- but pausing is no worse and keeps one rule
+        for both kinds.
+        """
+        del kind
+        return {"on_timeout": {"action": "pause", "keep_memory": False}}
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -180,8 +208,37 @@ class E2BSandboxProvider(E2BOpsMixin):
         replacement would destroy the disk, so identity alone decides, and the
         fence is the E2B sandbox id -- a genuinely new sandbox has a new id, so
         a stale operation fails rather than landing on it.
+
+        It does not ignore the template. Adopting a sandbox adopts the code
+        inside it, so a workspace that is never replaced is a workspace that can
+        never be fixed -- which is what happened, and is documented on the
+        branch below.
         """
         existing = await self._find_any(spec.sandbox_id)
+        if existing is not None and self._template_is_stale(existing, spec.kind):
+            # The sandbox is running an image we no longer publish, and on this
+            # provider the image cannot be changed underneath it: the sandbox is
+            # the disk, so adopting it means adopting its code too. Tolerating
+            # that is what pinned every workspace in the fleet to whatever
+            # template it was first created on -- 249 sandboxes across four
+            # older templates, and zero on the configured one -- so every fix
+            # shipped in the image reached nobody who already had a workspace.
+            # The workspaces that were failing were exactly the ones the fixes
+            # could never reach.
+            #
+            # Replacing costs the disk, which is why this is deliberately
+            # narrow: it fires on the template, the identity of the artifact
+            # that is running, and not on `profile_digest`, a hand-maintained
+            # environment variable whose drift is still tolerated below.
+            logger.info(
+                "workspace.e2b.template_drift_replacing",
+                sandbox_id=str(spec.sandbox_id),
+                kind=spec.kind.value,
+                recorded=existing.template or "<unstamped>",
+                configured=self._template(spec.kind),
+            )
+            await self._kill_quietly(existing.provider_id)
+            existing = None
         drifted = (
             existing is not None
             and existing.profile_digest != spec.profile_digest
@@ -189,23 +246,7 @@ class E2BSandboxProvider(E2BOpsMixin):
         if drifted and spec.kind is SandboxKind.FUNCTION:
             # A function sandbox owns no durable disk, so replacing it to adopt
             # a new digest costs a cold start and nothing else.
-            #
-            # Not best-effort: if the stale sandbox survives, the fresh one
-            # carries the same sandbox-id metadata and a later lookup could
-            # land on either. Failing the provision is better than leaving a
-            # duplicate behind.
-            #
-            # Already gone is the outcome this wanted, though, and it is a
-            # normal race -- the listing that found it can be stale, or E2B
-            # can reap it first. ProviderGone is a bare RuntimeError that
-            # `_provision` does not catch, so letting it escape would leave
-            # the instance row stuck in CREATING until the claim times out.
-            try:
-                sandbox = await self._connect(existing.provider_id)
-                with sdk_errors():
-                    await sandbox.kill(**self._api())
-            except ProviderGone:
-                pass
+            await self._kill_quietly(existing.provider_id)
             existing = None
         elif drifted:
             # A workspace tolerates drift, and this is the whole reason the
@@ -227,7 +268,11 @@ class E2BSandboxProvider(E2BOpsMixin):
                 sandbox_id=str(spec.sandbox_id),
             )
         if existing is not None:
-            await self._stamp(existing.provider_id, spec)
+            # Nothing is re-stamped onto the adopted sandbox. The metadata E2B
+            # holds is written once, at create, and is immutable thereafter --
+            # the SDK has no way to update it. So every reader must treat those
+            # values as "what this sandbox was created as", never as "what its
+            # row says now", and the epoch in particular is not a fence here.
             return ProviderInstance(
                 provider_id=existing.provider_id,
                 name=spec.name,
@@ -240,6 +285,7 @@ class E2BSandboxProvider(E2BOpsMixin):
             sandbox = await self._sdk.create(
                 template=self._template(spec.kind),
                 timeout=self._config.sandbox_timeout_seconds,
+                lifecycle=self._lifecycle(spec.kind),
                 metadata=self._identity_metadata(spec),
                 envs=dict(spec.env),
                 **self._api(),
@@ -252,17 +298,34 @@ class E2BSandboxProvider(E2BOpsMixin):
             storage_adopted=False,
         )
 
-    async def _stamp(self, provider_id: str, spec: ProviderCreateSpec) -> None:
-        """Best effort: record the current epoch on an adopted sandbox.
+    def _template_is_stale(self, existing: ProviderInstance, kind: SandboxKind) -> bool:
+        """Is this sandbox running something other than what we publish now?
 
-        Only bookkeeping -- identity and the fence come from the sandbox id, so
-        an SDK without metadata updates costs nothing but a stale epoch label.
+        An unstamped sandbox counts as stale. It was created before this fence
+        existed, which means it is at least one template behind by construction
+        -- and reading "unknown" as "fine" is the exact shape of the bug this
+        replaces, where the fleet's staleness was invisible because nothing
+        recorded what it was running.
         """
-        with sdk_best_effort():
+        return existing.template != self._template(kind)
+
+    async def _kill_quietly(self, provider_id: str) -> None:
+        """Kill a sandbox we have decided to replace.
+
+        Not best-effort: if the stale sandbox survives, the fresh one carries
+        the same sandbox-id metadata and a later lookup could land on either.
+        Already gone is the outcome this wanted, though, and it is a normal
+        race -- the listing that found it can be stale, or E2B can reap it
+        first. `ProviderGone` is a bare RuntimeError that `_provision` does not
+        catch, so letting it escape would leave the instance row stuck in
+        CREATING until the claim times out.
+        """
+        try:
             sandbox = await self._connect(provider_id)
-            setter = getattr(sandbox, "set_metadata", None)
-            if setter is not None:
-                await setter(self._identity_metadata(spec), **self._api())
+            with sdk_errors():
+                await sandbox.kill(**self._api())
+        except ProviderGone:
+            pass
 
     async def inspect(
         self, name: str, *, deadline_at: datetime
@@ -403,18 +466,25 @@ class E2BSandboxProvider(E2BOpsMixin):
         """
 
         found: list[ProviderObject] = []
-        with sdk_errors():
-            paginator = self._sdk.list(
-                query=self._query(
-                    metadata={
-                        meta_sandbox_kind(
-                            self._config.metadata_namespace
-                        ): SandboxKind.WORKSPACE.value
-                    }
-                ),
-                **self._api(),
-            )
-            pages = await paginator.next_items()
+        # Every kind, because the docstring above says "every sandbox carrying
+        # this platform's metadata" and this queried only workspaces -- so a
+        # function sandbox the control plane had forgotten was invisible to the
+        # sweep and billed forever, which is the one thing orphan reclamation
+        # exists to stop.
+        namespace = self._config.metadata_namespace
+        pages: list = []
+        for kind in SandboxKind:
+            with sdk_errors():
+                pages.extend(
+                    await _every_page(
+                        self._sdk.list(
+                            query=self._query(
+                                metadata={meta_sandbox_kind(namespace): kind.value}
+                            ),
+                            **self._api(),
+                        )
+                    )
+                )
 
         for info in pages:
             metadata = info.metadata or {}
@@ -470,10 +540,9 @@ class E2BSandboxProvider(E2BOpsMixin):
         self, metadata: dict[str, str]
     ) -> ProviderInstance | None:
         with sdk_errors():
-            paginator = self._sdk.list(
-                query=self._query(metadata=metadata), **self._api()
+            matches = await _every_page(
+                self._sdk.list(query=self._query(metadata=metadata), **self._api())
             )
-            matches = await paginator.next_items()
 
         # Prefer a running sandbox when several match, so a duplicate left by
         # an earlier failure does not shadow the one actually serving.
@@ -492,14 +561,32 @@ class E2BSandboxProvider(E2BOpsMixin):
                 profile_digest=metadata.get(
                     meta_profile_digest(self._config.metadata_namespace)
                 ),
+                template=metadata.get(
+                    meta_template(self._config.metadata_namespace)
+                ),
             )
         return None
 
     async def _connect(self, provider_id: str):
+        """Reach a sandbox, resuming it if it is paused.
+
+        The timeout is not optional. Connecting is what re-arms the lease, and
+        the SDK's own rule is that "the timeout will update only if the new
+        timeout is longer than the existing one" -- so passing nothing does not
+        mean "leave it alone", it means "five minutes", the SDK's default. A
+        workspace resumed after days therefore came back with a five-minute
+        lease, and every process inside it died together when that elapsed. That
+        is what a caller sees as three tool calls returning 502 at the same
+        instant, several minutes into a turn that was working.
+        """
         # Both arms of the old branch raised the same thing; sdk_errors is
         # what that code was spelling out by hand.
         with sdk_errors():
-            return await self._sdk.connect(provider_id, **self._api())
+            return await self._sdk.connect(
+                provider_id,
+                timeout=self._config.sandbox_timeout_seconds,
+                **self._api(),
+            )
 
 
 

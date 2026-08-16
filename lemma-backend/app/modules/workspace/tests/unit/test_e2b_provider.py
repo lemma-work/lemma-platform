@@ -31,6 +31,7 @@ from app.modules.workspace.providers.e2b_common import (
     META_EPOCH,
     META_PROFILE_DIGEST,
     META_SANDBOX_ID,
+    META_TEMPLATE,
 )
 from app.modules.workspace.testing.fake_e2b import (
     AuthenticationException,
@@ -278,6 +279,7 @@ async def test_a_sandbox_from_the_same_template_build_is_adopted(
         metadata={
             META_SANDBOX_ID: str(sandbox_id),
             META_PROFILE_DIGEST: spec.profile_digest,
+            META_TEMPLATE: "lemma-workspace",
         },
     )
 
@@ -287,6 +289,76 @@ async def test_a_sandbox_from_the_same_template_build_is_adopted(
     assert instance.storage_adopted is True
     assert world.created == [], "a second sandbox would strand the real one"
     assert world.killed == []
+
+
+async def test_a_workspace_on_a_different_template_is_replaced(
+    provider: E2BSandboxProvider, world: FakeE2B
+) -> None:
+    """Publishing a template has to reach the workspaces that already exist.
+
+    It did not. Adoption compared only `profile_digest`, a hand-maintained
+    environment variable sitting at its default, so a workspace stayed on
+    whatever template it was first created on for as long as it lived. Measured
+    against the real account: 249 sandboxes spread over four older templates and
+    zero on the configured one, through four releases that were each meant to
+    fix the workspaces that were failing.
+    """
+    from app.modules.workspace.testing.fake_e2b import FakeSandboxInfo
+
+    sandbox_id = uuid4()
+    spec = _spec(sandbox_id)
+    world.sandboxes["on-last-months-template"] = FakeSandboxInfo(
+        sandbox_id="on-last-months-template",
+        state="paused",
+        metadata={
+            META_SANDBOX_ID: str(sandbox_id),
+            META_PROFILE_DIGEST: spec.profile_digest,
+            META_TEMPLATE: "lemma-workspace-but-older",
+        },
+    )
+
+    instance = await provider.create(spec)
+
+    assert world.killed == ["on-last-months-template"]
+    assert instance.provider_id != "on-last-months-template"
+    assert instance.storage_adopted is False
+    assert world.created[0]["template"] == "lemma-workspace"
+
+
+async def test_a_workspace_with_no_recorded_template_is_replaced(
+    provider: E2BSandboxProvider, world: FakeE2B
+) -> None:
+    """Unstamped means "created before anything recorded this", which means at
+    least one template behind by construction. Reading the absence as "fine" is
+    the shape of the original bug: the fleet's staleness was invisible because
+    nothing wrote down what any of it was running."""
+    from app.modules.workspace.testing.fake_e2b import FakeSandboxInfo
+
+    sandbox_id = uuid4()
+    spec = _spec(sandbox_id)
+    world.sandboxes["unstamped"] = FakeSandboxInfo(
+        sandbox_id="unstamped",
+        state="paused",
+        metadata={
+            META_SANDBOX_ID: str(sandbox_id),
+            META_PROFILE_DIGEST: spec.profile_digest,
+        },
+    )
+
+    instance = await provider.create(spec)
+
+    assert world.killed == ["unstamped"]
+    assert instance.storage_adopted is False
+
+
+async def test_a_created_sandbox_records_the_template_it_was_built_from(
+    provider: E2BSandboxProvider, world: FakeE2B
+) -> None:
+    """Without the stamp there is nothing to compare on the next ensure, so the
+    fence would silently never fire again."""
+    await provider.create(_spec(uuid4()))
+
+    assert world.created[0]["metadata"][META_TEMPLATE] == "lemma-workspace"
 
 
 async def test_a_workspace_from_an_older_template_build_keeps_its_disk(
@@ -313,12 +385,15 @@ async def test_a_workspace_from_an_older_template_build_keeps_its_disk(
         metadata={
             META_SANDBOX_ID: str(sandbox_id),
             META_PROFILE_DIGEST: "sha256:" + "b" * 64,
+            # On the configured template, so this isolates the digest rule from
+            # the template fence, which does replace.
+            META_TEMPLATE: "lemma-workspace",
         },
     )
 
     instance = await provider.create(_spec(sandbox_id))
 
-    assert world.killed == [], "a workspace's files must survive a template bump"
+    assert world.killed == [], "a workspace's files must survive a digest bump"
     assert instance.provider_id == "older-build", "and it keeps serving them"
 
 
@@ -359,11 +434,12 @@ async def test_a_running_match_is_preferred_over_a_paused_duplicate(
         world.sandboxes[name] = FakeSandboxInfo(
             sandbox_id=name,
             state=state,
-            # Both carry the current profile digest, so the reuse fence is
-            # satisfied and this exercises the ordering rule on its own.
+            # Both satisfy the reuse fences -- current profile digest, current
+            # template -- so this exercises the ordering rule on its own.
             metadata={
                 META_SANDBOX_ID: str(sandbox_id),
                 META_PROFILE_DIGEST: spec.profile_digest,
+                META_TEMPLATE: "lemma-workspace",
             },
         )
 
@@ -775,3 +851,129 @@ async def test_a_container_name_that_resolves_to_nothing_is_left_alone(
     )
 
     assert world.killed == []
+
+
+# ---------------------------------------------------------------------------
+# The lease: what E2B does when a sandbox's timeout runs out
+# ---------------------------------------------------------------------------
+
+
+async def test_a_created_sandbox_pauses_on_timeout_rather_than_being_killed(
+    provider: E2BSandboxProvider, world: FakeE2B
+) -> None:
+    """The default is `kill`, and here killing the sandbox deletes the disk.
+
+    This call passed no lifecycle at all, so every workspace was created already
+    scheduled for deletion thirty minutes out. Nothing recorded it and nothing
+    told the user; the only reason it was not a daily event is that the idle
+    sweep usually paused the sandbox first, which stops the clock. A five-minute
+    cron was all that stood between a long session and losing every file.
+    """
+    await provider.create(_spec(uuid4()))
+
+    lifecycle = world.created[0]["lifecycle"]
+    assert lifecycle is not None, "no lifecycle means E2B kills it on timeout"
+    assert lifecycle["on_timeout"]["action"] == "pause"
+
+
+async def test_the_timeout_pause_keeps_only_the_filesystem(
+    provider: E2BSandboxProvider, world: FakeE2B
+) -> None:
+    """A memory-preserving snapshot restores whatever was running.
+
+    That is how a browser which had exhausted the sandbox became permanent: the
+    pause captured the exhaustion and every later resume restored it, so the
+    sandbox could never recover on its own. `release` already pauses this way and
+    the timeout has to agree with it, or the fleet gets both behaviours depending
+    on which one happened to fire.
+    """
+    await provider.create(_spec(uuid4()))
+
+    assert world.created[0]["lifecycle"]["on_timeout"]["keep_memory"] is False
+
+
+async def test_resuming_a_sandbox_re_arms_its_lease(
+    provider: E2BSandboxProvider, world: FakeE2B
+) -> None:
+    """Connecting is what extends the lease, and it must say by how much.
+
+    The SDK's rule is that the timeout updates "only if the new timeout is longer
+    than the existing one" -- so passing nothing is not "leave it alone", it is
+    "five minutes", the SDK's default. A workspace resumed after days came back
+    with a five-minute lease, and every process inside it died together when it
+    elapsed. From outside that looks like three tool calls returning 502 at the
+    same instant, minutes into a turn that was working.
+    """
+    from app.modules.workspace.testing.fake_e2b import FakeSandboxInfo
+
+    sandbox_id = uuid4()
+    spec = _spec(sandbox_id)
+    world.sandboxes["paused"] = FakeSandboxInfo(
+        sandbox_id="paused",
+        state="paused",
+        metadata={
+            META_SANDBOX_ID: str(sandbox_id),
+            META_PROFILE_DIGEST: spec.profile_digest,
+            META_TEMPLATE: "lemma-workspace",
+        },
+    )
+    instance = await provider.create(spec)
+
+    await provider.wait_ready(
+        instance, kind=SandboxKind.WORKSPACE, deadline_at=_deadline()
+    )
+
+    assert world.connect_timeouts, "wait_ready never connected"
+    assert all(timeout is not None for timeout in world.connect_timeouts), (
+        "a connect with no timeout hands the sandbox a five-minute lease"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Listings, which are paginated and which this module used to read once
+# ---------------------------------------------------------------------------
+
+
+async def test_the_sweep_sees_every_page_of_the_account(
+    provider: E2BSandboxProvider, world: FakeE2B
+) -> None:
+    """Orphan reclamation reads a listing that is filtered only by kind.
+
+    So unlike adoption -- whose query names one sandbox id and comes back with
+    one result -- this one matches the whole fleet, and reading `next_items()`
+    once meant the sweep only ever considered the first page of it. Everything
+    past that was invisible: never reclaimed, and billed for as long as it
+    existed. The account this was found in held 249 sandboxes.
+    """
+    made = [uuid4() for _ in range(world.list_page_size * 2 + 1)]
+    for sandbox_id in made:
+        await provider.create(_spec(sandbox_id))
+
+    objects = await provider.list_objects(deadline_at=_deadline())
+
+    assert {obj.sandbox_id for obj in objects} == set(made)
+
+
+async def test_the_sweep_lists_function_sandboxes_too(
+    provider: E2BSandboxProvider, world: FakeE2B
+) -> None:
+    """"Every sandbox carrying this platform's metadata" has to mean every kind.
+
+    The query was hardcoded to workspaces, so a function sandbox the control
+    plane had forgotten was invisible to orphan reclamation and billed forever
+    -- which is the single thing that sweep exists to stop.
+    """
+    workspace_id = uuid4()
+    function_id = uuid4()
+    await provider.create(_spec(workspace_id))
+    await provider.create(
+        _spec(
+            function_id,
+            kind=SandboxKind.FUNCTION,
+            name=naming.container_name(function_id, SandboxKind.FUNCTION, 1),
+        )
+    )
+
+    objects = await provider.list_objects(deadline_at=_deadline())
+
+    assert {obj.sandbox_id for obj in objects} == {workspace_id, function_id}

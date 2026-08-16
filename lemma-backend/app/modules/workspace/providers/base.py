@@ -115,6 +115,12 @@ class ProviderInstance:
     # for one made before the fence existed. Compared against the configured
     # digest to decide whether this instance may be reused.
     profile_digest: str | None = None
+    # The provider artifact this object was actually built from -- on E2B, the
+    # template. Distinct from `profile_digest`, which is a hand-maintained
+    # environment variable: this is the identity of the image that is running,
+    # so it is the only thing that can answer "is this sandbox running the code
+    # we published?". None means the object predates the stamp.
+    template: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

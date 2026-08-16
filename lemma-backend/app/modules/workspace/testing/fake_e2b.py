@@ -96,17 +96,54 @@ class FakeE2B:
     # so "the provider passed no timeout" is indistinguishable from "the
     # provider asked for a minute" unless a test can see the argument.
     process_timeouts: list[float | None] = field(default_factory=list)
+    # The lifecycle each sandbox was created with, and the timeout each connect
+    # asked for. Both are recorded for the same reason as `process_timeouts`:
+    # E2B defaults them to values that destroy things -- `on_timeout: "kill"`
+    # and a five-minute lease -- so a fake that quietly accepted whatever it was
+    # given could not tell "the provider asked for this" from "the provider
+    # passed nothing". It did accept them, into `**_kwargs`, for the whole time
+    # the provider was passing neither.
+    created_lifecycles: list[Any] = field(default_factory=list)
+    connect_timeouts: list[float | None] = field(default_factory=list)
+    # Small, so every listing test crosses a page boundary.
+    list_page_size: int = 2
     _next: int = 0
 
     def sandbox_class(self):
         world = self
 
         class _Paginator:
-            def __init__(self, items):
-                self._items = items
+            """Pages, like the real one.
+
+            It used to hand back everything in a single `next_items()` and had
+            no `has_next` at all, so a provider that read one page looked
+            complete against it and truncated against the real service. Two
+            listings did exactly that, and for adoption the consequence is a
+            second sandbox created for an identity that already has one --
+            stranding the user's files in the first. The page size is small on
+            purpose: pagination should be exercised by ordinary tests, not only
+            by ones written to think about it.
+            """
+
+            def __init__(self, items, page_size: int):
+                self._items = list(items)
+                self._page_size = max(1, page_size)
+                self._offset = 0
+                self._served_any = False
+
+            @property
+            def has_next(self) -> bool:
+                if self._offset < len(self._items):
+                    return True
+                # One empty page for an empty listing, so a caller that drains
+                # gets the same "nothing here" a first read would have given.
+                return not self._served_any
 
             async def next_items(self):
-                return self._items
+                page = self._items[self._offset : self._offset + self._page_size]
+                self._offset += self._page_size
+                self._served_any = True
+                return page
 
         class _Commands:
             def __init__(self, sandbox_id: str):
@@ -223,6 +260,7 @@ class FakeE2B:
                 metadata=None,
                 envs=None,
                 volume_mounts=None,
+                lifecycle=None,
                 **_kwargs,
             ):
                 world._next += 1
@@ -236,12 +274,16 @@ class FakeE2B:
                         "metadata": dict(metadata or {}),
                         "volume_mounts": volume_mounts,
                         "envs": envs,
+                        "lifecycle": lifecycle,
+                        "timeout": timeout,
                     }
                 )
+                world.created_lifecycles.append(lifecycle)
                 return FakeAsyncSandbox(sandbox_id)
 
             @staticmethod
-            async def connect(sandbox_id, **_kwargs):
+            async def connect(sandbox_id, timeout=None, **_kwargs):
+                world.connect_timeouts.append(timeout)
                 if sandbox_id not in world.sandboxes:
                     raise NotFoundException(f"sandbox {sandbox_id} not found")
                 # Reconnecting resumes a paused sandbox, as the real SDK does.
@@ -251,7 +293,7 @@ class FakeE2B:
             @staticmethod
             def list(query=None, **_kwargs):
                 wanted = dict(getattr(query, "metadata", None) or {})
-                return _Paginator(
+                return _Paginator(page_size=world.list_page_size, items=
                     [
                         info
                         for info in world.sandboxes.values()
