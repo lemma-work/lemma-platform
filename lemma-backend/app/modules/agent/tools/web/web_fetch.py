@@ -75,9 +75,20 @@ _BROWSER_TIMEOUT_SECONDS = 75
 _BATCH_BUDGET_SECONDS = 240
 
 # Browser renders are the serialised, expensive path, and the batch budget is
-# the only thing bounding them. Capping them keeps a list of JS-heavy URLs from
-# spending the entire budget before the cheap pages are even reported.
-_MAX_BROWSER_RENDERS = 3
+# the only thing bounding them.
+#
+# This is deliberately the same number as `WebFetchRequest.urls`' `max_length`,
+# and `test_web_fetch_limits_agree` fails if the two ever drift: the cap is
+# only honest when the tool cannot accept more pages than it will render. It
+# used to accept ten and render three, so a caller who sent ten JS-heavy pages
+# discovered seven were skipped only after paying for the call.
+#
+# Raising it does not endanger the cheap pages the old comment worried about --
+# the http path runs to completion first, concurrently, before any render
+# starts. What bounds the pathological case is the batch deadline, which
+# reports every page it did not reach. Measured, a real render is ~5s, so five
+# of them sit an order of magnitude inside that budget.
+_MAX_BROWSER_RENDERS = 5
 
 # Enough to saturate the network wait without opening twenty sockets to twenty
 # sites at once.

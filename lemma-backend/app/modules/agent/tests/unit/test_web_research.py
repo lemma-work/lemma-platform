@@ -24,6 +24,8 @@ from app.core.web_search.search_client import (
     apply_domain_operators,
 )
 from app.modules.agent.tools.web import web_fetch as web_fetch_module
+from pydantic import ValidationError
+
 from app.modules.agent.tools.web.models import WebFetchRequest
 
 pytestmark = pytest.mark.unit
@@ -641,26 +643,44 @@ class TestTheToolAlwaysReturns:
         assert result.success, "a partial capture is still a useful result"
         assert "time budget" in (result.message or "")
 
+    def test_web_fetch_limits_agree(self) -> None:
+        """The tool must not accept more pages than it will render.
+
+        These were 10 and 3. A caller who sent ten JS-heavy URLs got seven back
+        as "Skipped: this call renders at most 3" -- a limit the schema had no
+        way to express, discovered only after paying for the call. Holding them
+        equal is what makes the advertised cap the real one.
+        """
+        accepted = WebFetchRequest.model_fields["urls"].metadata
+        max_urls = next(
+            item.max_length for item in accepted if hasattr(item, "max_length")
+        )
+
+        assert max_urls == web_fetch_module._MAX_BROWSER_RENDERS
+
     @pytest.mark.asyncio
-    async def test_browser_renders_are_capped_per_call(self, monkeypatch) -> None:
-        """Four JS-heavy URLs must not become four serialised Chrome renders.
+    async def test_a_full_batch_of_js_pages_skips_nothing(self, monkeypatch) -> None:
+        """The largest batch the schema accepts, every page needing a browser.
 
         This is the shape that hung in production: a research batch where most
-        of the list refuses a plain fetch.
+        of the list refuses a plain fetch. It must now render all of them
+        rather than reporting some as skipped.
         """
         session = _FakeSession()
         _patch_session(monkeypatch, session)
         _patch_extraction(monkeypatch, markdown=None)  # everything needs a browser
+        urls = [
+            f"https://spa{index}.example/app"
+            for index in range(web_fetch_module._MAX_BROWSER_RENDERS)
+        ]
 
         result = await web_fetch_module.web_fetch_internal(
-            SimpleNamespace(),
-            WebFetchRequest(urls=[f"https://spa{i}.example/app" for i in range(6)]),
+            SimpleNamespace(), WebFetchRequest(urls=urls)
         )
 
         rendered = sum("save-webpage" in cmd for cmd in session.commands)
-        assert rendered == web_fetch_module._MAX_BROWSER_RENDERS, session.commands
-        skipped = [p for p in result.pages if p.error and "Skipped" in p.error]
-        assert len(skipped) == 6 - web_fetch_module._MAX_BROWSER_RENDERS
+        assert rendered == len(urls), session.commands
+        assert [p for p in result.pages if p.error and "Skipped" in p.error] == []
 
     @pytest.mark.asyncio
     async def test_an_unreachable_workspace_reports_every_url(
@@ -688,7 +708,8 @@ class TestTheToolAlwaysReturns:
         assert result.error and "workspace" in result.error.lower()
 
     def test_the_url_list_is_capped(self) -> None:
-        """Ten is already several minutes of browser work in the worst case."""
-        WebFetchRequest(urls=[f"https://e{i}.example/a" for i in range(10)])
-        with pytest.raises(Exception):
-            WebFetchRequest(urls=[f"https://e{i}.example/a" for i in range(11)])
+        """At exactly what the tool can render -- see test_web_fetch_limits_agree."""
+        limit = web_fetch_module._MAX_BROWSER_RENDERS
+        WebFetchRequest(urls=[f"https://e{i}.example/a" for i in range(limit)])
+        with pytest.raises(ValidationError):
+            WebFetchRequest(urls=[f"https://e{i}.example/a" for i in range(limit + 1)])
