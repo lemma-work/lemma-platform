@@ -290,8 +290,38 @@ class E2BSandboxProvider(E2BOpsMixin):
     ) -> None:
         """Pause, keeping the filesystem. The next ensure resumes this sandbox."""
         sandbox = await self._connect(instance.provider_id)
+        if kind is SandboxKind.WORKSPACE:
+            await self._shed_browser(sandbox)
         with sdk_errors():
             await sandbox.beta_pause(**self._api())
+
+    async def _shed_browser(self, sandbox) -> None:
+        """End the browser before the pause makes it permanent.
+
+        A pause here is a *memory snapshot*, which is the whole difference from
+        Docker: stopping a container throws its memory away, so the quiesce
+        Docker runs first is a tidy-up. Pausing preserves whatever is resident,
+        and resuming brings all of it back -- so a headed Chrome left running by
+        one conversation is restored into the next one, and the next, without
+        ever being started again. That is why a workspace measured after a
+        research session held 63 Chrome processes at 2123 MB on a 2048 MB
+        sandbox, and why killing them by hand did not help: the snapshot they
+        came from was taken before the kill and taken again after the restore.
+
+        Best effort, and deliberately so. A sandbox whose browser cannot be
+        reached is exactly the one most in need of being paused, and failing
+        the release would leave it running instead.
+        """
+        with sdk_best_effort("browser shutdown"):
+            await sandbox.commands.run(
+                "agent-browser close --all >/dev/null 2>&1; "
+                "pkill -f agent-browser >/dev/null 2>&1; "
+                "pkill -f workspace-chrome >/dev/null 2>&1; "
+                "pkill -f Xvfb >/dev/null 2>&1; "
+                'rm -rf /tmp/lemma-browser "$HOME/.agent-browser" '
+                ">/dev/null 2>&1; true",
+                timeout=20,
+            )
 
     async def destroy(self, name: str, *, deadline_at: datetime) -> None:
         instance = await self.inspect(name, deadline_at=deadline_at)

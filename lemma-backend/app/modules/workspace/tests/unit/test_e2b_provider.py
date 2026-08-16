@@ -666,3 +666,42 @@ async def test_the_sweep_only_claims_sandboxes_carrying_our_metadata(
     objects = await provider.list_objects(deadline_at=_deadline())
 
     assert {obj.sandbox_id for obj in objects} == {sandbox_id}
+
+
+async def test_the_browser_is_shed_before_the_pause_snapshots_it(
+    provider: E2BSandboxProvider, world: FakeE2B
+) -> None:
+    """A pause here preserves memory, so whatever is resident becomes permanent.
+
+    This is the one place E2B differs from Docker in a way that matters:
+    stopping a container throws its memory away, so quiescing first is tidiness.
+    Pausing keeps it, and resuming restores it -- so a headed Chrome left by one
+    conversation is handed to the next one, and the next, without ever being
+    started again. A workspace measured after a research session held 63 Chrome
+    processes at 2123 MB RSS on a 2048 MB sandbox, which is why unrelated shell
+    tool calls in it timed out: `python -c pass` took 61s and `lemma --version`
+    never returned.
+    """
+    instance = await provider.create(_spec(uuid4()))
+
+    await provider.release(
+        instance, kind=SandboxKind.WORKSPACE, deadline_at=_deadline()
+    )
+
+    shutdown = [cmd for cmd in world.commands if "agent-browser" in cmd]
+    assert shutdown, "the browser must be ended before the snapshot is taken"
+    assert world.paused == [instance.provider_id], "and it must still pause"
+
+
+async def test_a_function_sandbox_is_paused_without_a_browser_shutdown(
+    provider: E2BSandboxProvider, world: FakeE2B
+) -> None:
+    """Function sandboxes have no browser, so the release must not pay for one."""
+    instance = await provider.create(_spec(uuid4(), kind=SandboxKind.FUNCTION))
+
+    await provider.release(
+        instance, kind=SandboxKind.FUNCTION, deadline_at=_deadline()
+    )
+
+    assert [cmd for cmd in world.commands if "agent-browser" in cmd] == []
+    assert world.paused == [instance.provider_id]
