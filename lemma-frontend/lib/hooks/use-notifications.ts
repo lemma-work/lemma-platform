@@ -238,23 +238,31 @@ export const useAcknowledgeNotification = (podId: string | undefined) => {
  * answered that one — true of a single row in a group all the time — and
  * `Promise.all` would abandon the rest of the group over it. The failure that
  * matters is *all* of them failing, which is the only case this rejects on.
+ *
+ * Both counts come back rather than just the successes. Tolerating a partial
+ * failure is not the same as hiding one: "answered five of six" is a different
+ * sentence from "answered", and the card has to be able to say it.
  */
+export type SettleOutcome = { settled: number; failed: number };
+
 const settleEach = async (
     ids: string[],
     settle: (notificationId: string) => Promise<unknown>,
-) => {
+): Promise<SettleOutcome> => {
     let settled = 0;
+    let failed = 0;
     let lastError: unknown = null;
     for (const id of ids) {
         try {
             await settle(id);
             settled += 1;
         } catch (error) {
+            failed += 1;
             lastError = error;
         }
     }
     if (settled === 0 && lastError) throw lastError;
-    return settled;
+    return { settled, failed };
 };
 
 /**
@@ -298,5 +306,46 @@ export const useRespondToNotifications = (podId: string | undefined) => {
                 getLemmaClient(podId).notifications.respond(id, { summary }),
             ),
         onSuccess: refresh,
+    });
+};
+
+/**
+ * Answering a workflow form from the inbox.
+ *
+ * The submit endpoint is the workflow's, not the notification's — a form answer
+ * has to validate against the node's schema and resume the run, which is work
+ * only the engine can do. It closes the inbox entry in the same transaction, so
+ * nothing here needs to settle the notification as well; it only has to make
+ * both lists refetch, since the run this belongs to also just moved.
+ *
+ * Requires `workflow.execute`. That is a stricter gate than being the person who
+ * was asked, and there is nothing the frontend can do about it except say so.
+ */
+export const useSubmitNotificationForm = (podId: string | undefined) => {
+    const queryClient = useQueryClient();
+    const refresh = useNotificationRefresh(podId);
+    return useMutation({
+        mutationFn: ({
+            runId,
+            nodeId,
+            inputs,
+        }: {
+            runId: string;
+            nodeId: string;
+            inputs: Record<string, unknown>;
+        }) =>
+            getLemmaClient(podId).workflows.runs.submitForm(
+                runId,
+                { node_id: nodeId, inputs },
+                podId,
+            ),
+        // Spelled out rather than invalidated on a `workflow-run` prefix: query
+        // keys match element by element, so `['workflow-run']` matches neither
+        // of these and would have been a line that did nothing.
+        onSuccess: () => {
+            refresh();
+            void queryClient.invalidateQueries({ queryKey: ['workflow-run-waits'] });
+            void queryClient.invalidateQueries({ queryKey: ['workflow-run-snapshots'] });
+        },
     });
 };

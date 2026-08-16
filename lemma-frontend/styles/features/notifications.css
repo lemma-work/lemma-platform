@@ -135,6 +135,13 @@
   padding: var(--space-3-5) var(--space-4);
 }
 
+/* The card a link asked for. Same marking the ledger row uses, for the same
+   reason: arriving from home on a page of six cards, something has to say which
+   one you clicked. A border, not a fill — it marks, it does not select. */
+.notification-card[data-current='true'] {
+  border-color: var(--action-primary);
+}
+
 .notification-card-meta {
   display: flex;
   flex-wrap: wrap;
@@ -225,6 +232,18 @@
   min-height: 3.75rem;
   max-width: 34rem;
 }
+
+/* The workflow form, drawn on the card from the schema the executor resolved.
+   Ruled off rather than boxed: it is already inside a card, and a second border
+   around it would read as a separate thing to deal with rather than as the way
+   this particular ask is answered. */
+.notification-card-form {
+  margin-top: var(--space-3);
+  border-top: 1px solid var(--border-subtle);
+  padding-top: var(--space-3);
+  max-width: 34rem;
+}
+
 
 .notification-card-actions {
   margin-top: var(--space-2-5);

@@ -71,6 +71,11 @@ export function NotificationsView({ podId }: { podId: string }) {
     // list first and then set state from a render. A named row opens on
     // "Everything": the scope that contains every notification, so a permalink
     // to an answered one never lands on an empty list.
+    //
+    // It is found in one of two shapes, and both have to look for it. Home links
+    // open asks, which are cards up here; a permalink to something settled is a
+    // row in the ledger below. Wiring only the ledger meant the one link the app
+    // actually builds silently did nothing.
     const deepLinkedId = searchParams.get('n');
     const [scope, setScope] = useState<NotificationsScope>(deepLinkedId ? 'all' : 'open');
     const [expandedId, setExpandedId] = useState<string | null>(deepLinkedId);
@@ -119,7 +124,21 @@ export function NotificationsView({ podId }: { podId: string }) {
     );
 
     const asks = useMemo(() => groupIdenticalAsks(openItems), [openItems]);
-    const hoistedReason = useMemo(() => sharedUndeliverableReason(openItems), [openItems]);
+    const deepLinkedAskKey = useMemo(
+        () =>
+            deepLinkedId
+                ? asks.find((group) => group.items.some((item) => item.id === deepLinkedId))?.key
+                : undefined,
+        [asks, deepLinkedId],
+    );
+    // Withheld while there is another page: unanimity across the first forty
+    // open asks is not unanimity, and "nothing was delivered" is a claim one
+    // unloaded delivered row makes false. The cards carry their own reasons
+    // until the whole list is in hand.
+    const hoistedReason = useMemo(
+        () => (openQuery.hasNextPage ? null : sharedUndeliverableReason(openItems)),
+        [openItems, openQuery.hasNextPage],
+    );
     const [today, earlier] = useMemo(
         () => [
             historyItems.filter((item) => isFromToday(item.created_at)),
@@ -172,15 +191,20 @@ export function NotificationsView({ podId }: { podId: string }) {
             {hoistedReason ? (
                 <div className="notification-banner">
                     <AlertTriangle className="h-4 w-4 shrink-0" aria-hidden />
+                    {/* "Nothing reached a chat app" was too specific for the
+                        reason it prints: half of them are about email, and one
+                        of them is about an unset environment variable. The
+                        reason already ends with what to do about it, so the
+                        sentence around it only has to be true. */}
                     <p>
-                        Nothing reached a chat app: {hoistedReason} These are waiting here
+                        Nothing could be delivered: {hoistedReason} These are waiting here
                         instead.
                     </p>
                     <Link
                         href={`/pod/${encodeURIComponent(podId)}/surfaces`}
                         className="notification-banner-action custom-focus-ring"
                     >
-                        Connect a surface
+                        Check surfaces
                     </Link>
                 </div>
             ) : null}
@@ -195,6 +219,8 @@ export function NotificationsView({ podId }: { podId: string }) {
                             group={group}
                             podId={podId}
                             hoistedReason={hoistedReason}
+                            canSubmitForms={podAccess.can('workflow.execute')}
+                            highlighted={group.key === deepLinkedAskKey}
                             resolveAgentName={resolveAgentName}
                             resolveFlowName={resolveFlowName}
                         />

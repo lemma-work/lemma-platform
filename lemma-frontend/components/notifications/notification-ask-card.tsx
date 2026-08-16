@@ -1,21 +1,25 @@
 'use client';
 
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { ChevronDown } from '@/components/ui/icons';
+import { RunInputForm } from '@/components/flows/run-detail/run-input-form';
 import {
     useAcknowledgeNotifications,
     useMarkNotificationsRead,
     useRespondToNotifications,
+    useSubmitNotificationForm,
 } from '@/lib/hooks/use-notifications';
 import {
     buildNotificationDiscussionHref,
     canDismissNotification,
     describeNotificationSender,
     getNotificationActionHref,
+    getNotificationFormAction,
+    isUndelivered,
     shortRelativeTime,
     type NotificationAskGroup,
 } from '@/lib/notifications/notification-display';
@@ -34,6 +38,8 @@ export function NotificationAskCard({
     group,
     podId,
     hoistedReason,
+    canSubmitForms,
+    highlighted,
     resolveAgentName,
     resolveFlowName,
 }: {
@@ -41,6 +47,10 @@ export function NotificationAskCard({
     podId: string;
     /** The undeliverable reason already stated once at the top of the page. */
     hoistedReason: string | null;
+    /** `workflow.execute` — what the run endpoint asks of a form answer. */
+    canSubmitForms: boolean;
+    /** This is the ask a link asked for. Scroll to it and mark it. */
+    highlighted: boolean;
     resolveAgentName: (agentId: string) => string | undefined;
     resolveFlowName: (flowId: string) => string | undefined;
 }) {
@@ -49,16 +59,31 @@ export function NotificationAskCard({
     const respond = useRespondToNotifications(podId);
     const dismiss = useAcknowledgeNotifications(podId);
     const markRead = useMarkNotificationsRead(podId);
+    const submitForm = useSubmitNotificationForm(podId);
     const readRef = useRef(false);
+    const cardRef = useRef<HTMLElement>(null);
 
     const { latest, items } = group;
     const repeats = items.length;
     const sender = describeNotificationSender(latest, resolveAgentName);
     const when = formatRelativeTime(latest.created_at);
     const unread = items.some((item) => !item.read_at);
+    const formAction = getNotificationFormAction(latest);
     const actionHref = getNotificationActionHref(podId, latest, resolveFlowName);
     const discussHref = buildNotificationDiscussionHref(podId, latest);
     const dismissible = canDismissNotification(latest);
+    const answerable = latest.awaiting_response && !latest.responds_through_action;
+    // The form is drawn here when the schema is on the payload and the person
+    // may submit it. Neither is guaranteed, so the card has to have something to
+    // say when it cannot draw one.
+    const showForm = latest.awaiting_response && !!formAction && canSubmitForms;
+
+    // A link that lands on the right card and leaves it below the fold has not
+    // arrived anywhere. Once, on mount, and only for the card that was asked for.
+    useEffect(() => {
+        if (!highlighted) return;
+        cardRef.current?.scrollIntoView({ block: 'center' });
+    }, [highlighted]);
 
     /* Read on first touch, and the whole run at once.
        Marking every card read on mount would fire a mutation per card and
@@ -85,8 +110,10 @@ export function NotificationAskCard({
 
     return (
         <article
+            ref={cardRef}
             className="notification-card"
             data-unread={unread ? 'true' : undefined}
+            data-current={highlighted ? 'true' : undefined}
             onPointerDown={noteRead}
             onFocusCapture={noteRead}
         >
@@ -130,22 +157,27 @@ export function NotificationAskCard({
                 </ul>
             ) : null}
 
-            {/* Left on the card only when it disagrees with the banner — a reason
-                every row shares is a fact about the pod, stated once up there. */}
-            {latest.delivery_status === 'UNDELIVERABLE' &&
-            (latest.undeliverable_reason || null) !== hoistedReason ? (
+            {/* Left on the card only when the banner is not already carrying this
+                exact reason — a reason every row shares is a fact about the pod,
+                stated once up there. The comparison is against a *drawn* banner:
+                when `hoistedReason` is null nothing was hoisted, so the note has
+                to appear here even for a failure that came with no reason at all,
+                which is how an undelivered ask used to show nothing anywhere. */}
+            {isUndelivered(latest) &&
+            (hoistedReason === null || latest.undeliverable_reason !== hoistedReason) ? (
                 <p className="notification-card-note">
                     {latest.undeliverable_reason
-                        ? `Not sent to a chat app: ${latest.undeliverable_reason}`
-                        : 'Not sent to a chat app.'}
+                        ? `Not delivered: ${latest.undeliverable_reason}`
+                        : 'Not delivered anywhere — it is only here.'}
                 </p>
             ) : null}
 
-            {/* No capability gate anywhere here: a notification is addressed to
-                one person, every endpoint scopes to the caller's own, and a
+            {/* No capability gate on a text answer: a notification is addressed
+                to one person, every endpoint scopes to the caller's own, and a
                 read-only member who was asked something is still the person who
-                has to answer. */}
-            {latest.awaiting_response && !latest.responds_through_action ? (
+                has to answer. A form is the exception, and only because the run
+                endpoint says so — see below. */}
+            {answerable ? (
                 <Textarea
                     rows={2}
                     value={draft}
@@ -155,14 +187,47 @@ export function NotificationAskCard({
                 />
             ) : null}
 
-            {latest.responds_through_action ? (
+            {/* The form itself, on the card, from the resolved schema the
+                executor already put on the action payload. Sending somebody to
+                the run page to answer was the one ask on this page that could
+                not be answered where it sits — and when they could not read
+                workflows the link was not built at all, leaving a card that said
+                "fill in the form" and offered no form. */}
+            {showForm && formAction ? (
+                <div className="notification-card-form">
+                    <RunInputForm
+                        nodeId={formAction.nodeId}
+                        // No nodes to hand it, and none needed: `nodes` exists
+                        // only to fall back to the node's *template* schema, and
+                        // the resolved one is right here.
+                        nodes={[]}
+                        schema={formAction.schema}
+                        variant="flat"
+                        heading={false}
+                        onSubmitInput={async (nodeId, inputs) => {
+                            await submitForm.mutateAsync({
+                                runId: formAction.runId,
+                                nodeId,
+                                inputs,
+                            });
+                        }}
+                    />
+                </div>
+            ) : null}
+
+            {/* Why there is no form, when there is no form. Both cases are real:
+                a payload written before the schema rode along, and a member who
+                may be asked but may not resume a run. */}
+            {latest.awaiting_response && !showForm && latest.responds_through_action ? (
                 <p className="notification-card-note">
-                    Answered by filling in the form, so there is nothing to type here.
+                    {formAction
+                        ? 'Answering this needs permission to run workflows, which you do not have — ask somebody who does, or talk it through below.'
+                        : 'This one is answered by a workflow form, which has to be opened on its run.'}
                 </p>
             ) : null}
 
             <div className="notification-card-actions">
-                {latest.awaiting_response && !latest.responds_through_action ? (
+                {answerable ? (
                     <Button
                         type="button"
                         variant="secondary"
@@ -174,14 +239,18 @@ export function NotificationAskCard({
                     </Button>
                 ) : null}
                 {actionHref ? (
-                    <Button asChild variant={latest.responds_through_action ? 'secondary' : 'quiet'} size="sm">
-                        <Link href={actionHref}>Open the form</Link>
+                    <Button
+                        asChild
+                        variant={latest.responds_through_action && !showForm ? 'secondary' : 'quiet'}
+                        size="sm"
+                    >
+                        <Link href={actionHref}>{showForm ? 'Open the run' : 'Open the form'}</Link>
                     </Button>
                 ) : null}
                 <Button asChild variant="quiet" size="sm">
                     <Link href={discussHref}>Talk it through</Link>
                 </Button>
-                {repeats > 1 && latest.awaiting_response && !latest.responds_through_action ? (
+                {repeats > 1 && answerable ? (
                     <span className="notification-card-hint">Answers all {repeats}</span>
                 ) : null}
                 {/* Only where the domain allows it. `acknowledge` is refused for
@@ -207,6 +276,16 @@ export function NotificationAskCard({
             {respond.isError ? (
                 <p className="notification-card-error">
                     Could not record that — it may already have been answered elsewhere.
+                </p>
+            ) : null}
+
+            {/* Some of them failing is not the same as none, and it used to read
+                as success. The card keeps its identity while the group shrinks
+                under it, so this survives long enough to be read. */}
+            {respond.data && respond.data.failed > 0 ? (
+                <p className="notification-card-note">
+                    Answered {respond.data.settled} of {respond.data.settled + respond.data.failed} —
+                    the rest had already been closed.
                 </p>
             ) : null}
         </article>
