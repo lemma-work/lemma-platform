@@ -128,3 +128,22 @@ def sdk_best_effort(path: str | None = None):
         SandboxUnavailable,
     ):
         return
+
+
+async def every_page(paginator) -> list:
+    """Drain a paginated listing.
+
+    Both listings here read `next_items()` once and treated it as the whole
+    answer. The sweep is where that bites: its query is filtered only by kind,
+    so it matches the whole fleet, and one page of it was all orphan reclamation
+    ever considered -- everything past that was never reclaimed and billed for
+    as long as it existed. The account this was found in held 249 sandboxes.
+
+    Adoption's query names a single sandbox id and normally matches one result,
+    so it was far less exposed; it is drained here because a listing that can
+    paginate should be read as one, not because a specific failure is known.
+    """
+    found: list = []
+    while paginator.has_next:
+        found.extend(await paginator.next_items())
+    return found

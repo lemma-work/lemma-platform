@@ -927,3 +927,53 @@ async def test_resuming_a_sandbox_re_arms_its_lease(
     assert all(timeout is not None for timeout in world.connect_timeouts), (
         "a connect with no timeout hands the sandbox a five-minute lease"
     )
+
+
+# ---------------------------------------------------------------------------
+# Listings, which are paginated and which this module used to read once
+# ---------------------------------------------------------------------------
+
+
+async def test_the_sweep_sees_every_page_of_the_account(
+    provider: E2BSandboxProvider, world: FakeE2B
+) -> None:
+    """Orphan reclamation reads a listing that is filtered only by kind.
+
+    So unlike adoption -- whose query names one sandbox id and comes back with
+    one result -- this one matches the whole fleet, and reading `next_items()`
+    once meant the sweep only ever considered the first page of it. Everything
+    past that was invisible: never reclaimed, and billed for as long as it
+    existed. The account this was found in held 249 sandboxes.
+    """
+    made = [uuid4() for _ in range(world.list_page_size * 2 + 1)]
+    for sandbox_id in made:
+        await provider.create(_spec(sandbox_id))
+
+    objects = await provider.list_objects(deadline_at=_deadline())
+
+    assert {obj.sandbox_id for obj in objects} == set(made)
+
+
+async def test_the_sweep_lists_function_sandboxes_too(
+    provider: E2BSandboxProvider, world: FakeE2B
+) -> None:
+    """"Every sandbox carrying this platform's metadata" has to mean every kind.
+
+    The query was hardcoded to workspaces, so a function sandbox the control
+    plane had forgotten was invisible to orphan reclamation and billed forever
+    -- which is the single thing that sweep exists to stop.
+    """
+    workspace_id = uuid4()
+    function_id = uuid4()
+    await provider.create(_spec(workspace_id))
+    await provider.create(
+        _spec(
+            function_id,
+            kind=SandboxKind.FUNCTION,
+            name=naming.container_name(function_id, SandboxKind.FUNCTION, 1),
+        )
+    )
+
+    objects = await provider.list_objects(deadline_at=_deadline())
+
+    assert {obj.sandbox_id for obj in objects} == {workspace_id, function_id}

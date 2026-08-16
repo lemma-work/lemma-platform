@@ -58,6 +58,7 @@ from app.modules.workspace.providers.e2b_common import (
     meta_sandbox_kind,
     meta_template,
     sdk_errors,
+    every_page as _every_page,
 )
 from app.modules.workspace.providers.e2b_ops import E2BOpsMixin
 from app.modules.workspace.providers.e2b_output import E2BOutputBuffer
@@ -465,18 +466,25 @@ class E2BSandboxProvider(E2BOpsMixin):
         """
 
         found: list[ProviderObject] = []
-        with sdk_errors():
-            paginator = self._sdk.list(
-                query=self._query(
-                    metadata={
-                        meta_sandbox_kind(
-                            self._config.metadata_namespace
-                        ): SandboxKind.WORKSPACE.value
-                    }
-                ),
-                **self._api(),
-            )
-            pages = await paginator.next_items()
+        # Every kind, because the docstring above says "every sandbox carrying
+        # this platform's metadata" and this queried only workspaces -- so a
+        # function sandbox the control plane had forgotten was invisible to the
+        # sweep and billed forever, which is the one thing orphan reclamation
+        # exists to stop.
+        namespace = self._config.metadata_namespace
+        pages: list = []
+        for kind in SandboxKind:
+            with sdk_errors():
+                pages.extend(
+                    await _every_page(
+                        self._sdk.list(
+                            query=self._query(
+                                metadata={meta_sandbox_kind(namespace): kind.value}
+                            ),
+                            **self._api(),
+                        )
+                    )
+                )
 
         for info in pages:
             metadata = info.metadata or {}
@@ -532,10 +540,9 @@ class E2BSandboxProvider(E2BOpsMixin):
         self, metadata: dict[str, str]
     ) -> ProviderInstance | None:
         with sdk_errors():
-            paginator = self._sdk.list(
-                query=self._query(metadata=metadata), **self._api()
+            matches = await _every_page(
+                self._sdk.list(query=self._query(metadata=metadata), **self._api())
             )
-            matches = await paginator.next_items()
 
         # Prefer a running sandbox when several match, so a duplicate left by
         # an earlier failure does not shadow the one actually serving.
