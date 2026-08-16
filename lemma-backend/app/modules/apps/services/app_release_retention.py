@@ -46,7 +46,11 @@ class ReleasePrunePlan:
 
     @property
     def is_empty(self) -> bool:
-        return not self.dist_roots and not self.source_archives
+        # All three, not two. A release whose archive sits outside its own root
+        # -- an empty `dist_root_path`, which the column permits and the backfill
+        # can produce -- lands in `dist_archives` and nowhere else, so omitting
+        # it here made `execute` return early and leak exactly those bytes.
+        return not (self.dist_roots or self.dist_archives or self.source_archives)
 
 
 def _prunable_source_paths(

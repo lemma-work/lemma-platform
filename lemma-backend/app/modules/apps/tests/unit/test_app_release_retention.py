@@ -137,6 +137,34 @@ async def test_a_sweep_never_issues_a_bare_prefix_delete():
 
 
 @pytest.mark.asyncio
+async def test_a_release_whose_archive_sits_outside_its_root_is_not_treated_as_empty():
+    """The only thing standing between that archive and the delete was is_empty.
+
+    An empty `dist_root_path` keeps the release out of `dist_roots`, and a source
+    blob the live release still shares keeps it out of `source_archives` -- so the
+    plan's only content is `dist_archives`, which `is_empty` did not look at. It
+    returned early and the archive was never deleted.
+    """
+    app = _app()
+    old = _release(app.id, 1)
+    old.dist_root_path = ""
+    live = _release(app.id, 2)
+    app.current_release_id = live.id
+    app.source_archive_path = live.source_archive_path
+    retention, _repo, storage = _retention(app, [old, live])
+
+    plan = await retention.plan(app, policy=_TIGHT, now=NOW)
+    assert plan.dist_roots == ()
+    assert plan.source_archives == ()
+    assert plan.dist_archives == (old.dist_archive_path,)
+    assert plan.is_empty is False
+
+    await retention.execute(plan)
+    deleted = [call.args[0] for call in storage.delete_file.await_args_list]
+    assert old.dist_archive_path in deleted
+
+
+@pytest.mark.asyncio
 async def test_an_archive_inside_its_release_prefix_is_not_deleted_twice():
     app = _app()
     old, live = _release(app.id, 1), _release(app.id, 2)
