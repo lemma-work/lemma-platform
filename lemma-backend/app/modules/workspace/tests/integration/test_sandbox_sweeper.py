@@ -7,7 +7,11 @@ from uuid import UUID, uuid4
 
 import pytest
 
-from app.modules.workspace.domain.sandbox import SandboxKind, SandboxOwnerKind
+from app.modules.workspace.domain.sandbox import (
+    SandboxDesiredState,
+    SandboxKind,
+    SandboxOwnerKind,
+)
 from app.modules.workspace.providers.base import (
     ProcessDescriptor,
     ProviderGone,
@@ -435,6 +439,21 @@ class _SandboxIsTheDiskProvider(SweepableProvider):
 
     storage_kind: ProviderStorageKind = ProviderStorageKind.SANDBOX_NATIVE
 
+    async def release(self, instance, *, kind, deadline_at) -> None:
+        """Pause, keeping the object -- which is what release means here.
+
+        `FakeProvider.release` pops the container, so a released sandbox
+        vanishes and the next ensure provisions a new one. That models a
+        provider where releasing destroys the disk, which is the opposite of
+        this one, and it meant no test in this file had ever taken the resume
+        path: every "release then use again" went through `_provision`, which
+        writes the row back to PRESENT and hid the bug below.
+        """
+        self.released.append(instance.name)
+        self.containers[instance.name] = ProviderInstance(
+            provider_id=instance.provider_id, name=instance.name, running=False
+        )
+
 
 async def test_an_old_epoch_never_reclaims_a_sandbox_that_is_also_the_disk(
     sandbox_uow_factory,
@@ -491,3 +510,62 @@ async def test_an_old_epoch_still_reclaims_where_the_disk_is_separate(
 
     assert reclaimed == (name,)
     assert provider.destroyed == [name]
+
+
+async def test_a_resumed_sandbox_can_be_released_again(
+    sandbox_uow_factory,
+) -> None:
+    """Idle release has to keep working, not work once.
+
+    Adopting a sandbox is a state change, and the resume path treated it as a
+    read: only `_provision` wrote `PRESENT` back, so after the first release the
+    row kept saying RELEASED however many times the sandbox was resumed and
+    used. `list_idle` selects on `desired_state == PRESENT`, so the sandbox
+    became invisible to this sweep for the rest of its life.
+
+    Nothing then stopped its compute, so it ran until E2B's own timeout -- whose
+    action was `kill`. That is how a bookkeeping omission ends in deleting the
+    user's files.
+    """
+    SandboxService._inflight.clear()
+    SandboxService._recent.clear()
+    provider = _SandboxIsTheDiskProvider()
+    service = SandboxService(provider=provider, uow_factory=sandbox_uow_factory)
+    sweeper = SandboxSweeper(service=service, uow_factory=sandbox_uow_factory)
+    sandbox = await _workspace(service)
+    await service.ensure(sandbox.id)
+
+    assert await sweeper.release_idle(idle_after_seconds=0) == 1
+
+    # Resumed and used again, the way any tool call uses it. The sandbox is
+    # still there, paused -- so this is the resume path, not a fresh provision.
+    service.forget(sandbox.id)
+    await service.ensure(sandbox.id)
+    assert len(provider.created) == 1, "the test must resume, not re-provision"
+
+    assert await sweeper.release_idle(idle_after_seconds=0) == 1, (
+        "a sandbox that was resumed and used is idle-releasable like any other"
+    )
+
+
+async def test_the_warm_path_does_not_rewrite_a_row_that_is_already_right(
+    service: SandboxService, sandbox_uow_factory
+) -> None:
+    """The repair is for a row that is wrong, not a write on every tool call.
+
+    Both values are read at the top of the ensure that needs them, so the common
+    case costs nothing extra. A write here would land on every dispatch.
+    """
+    sandbox = await _workspace(service)
+    await service.ensure(sandbox.id)
+
+    async with sandbox_uow_factory() as uow:
+        before = await SandboxRepository(uow).get(sandbox.id)
+
+    service.forget(sandbox.id)
+    await service.ensure(sandbox.id)
+
+    async with sandbox_uow_factory() as uow:
+        after = await SandboxRepository(uow).get(sandbox.id)
+
+    assert before.desired_state is after.desired_state is SandboxDesiredState.PRESENT

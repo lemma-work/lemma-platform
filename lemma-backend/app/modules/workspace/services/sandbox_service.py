@@ -302,7 +302,7 @@ class SandboxService(SandboxVolumeMixin):
                         await self._start(sandbox, existing, deadline_at=deadline_at)
                 else:
                     span.set_attribute("lemma.ensure", "reuse")
-                await self._touch(sandbox_id)
+                await self._mark_in_use(sandbox, instance)
                 return self._handle(sandbox, existing)
 
             # No container, but a row claiming one. `begin_instance` writes the
@@ -552,6 +552,18 @@ class SandboxService(SandboxVolumeMixin):
     async def _touch(self, sandbox_id: UUID) -> None:
         async with self._uow_factory() as uow:
             await SandboxRepository(uow).touch(sandbox_id)
+            await uow.commit()
+
+    async def _mark_in_use(self, sandbox: Sandbox, instance) -> None:
+        """Adopting a sandbox is a state change; record it as one.
+
+        The reasoning, and the failure it comes from, is on
+        `SandboxRepository.mark_in_use`.
+        """
+        async with self._uow_factory() as uow:
+            await SandboxRepository(uow).mark_in_use(
+                sandbox.id, instance.id if instance is not None else None
+            )
             await uow.commit()
 
     async def _fail(self, instance_id: UUID, error: str) -> None:
