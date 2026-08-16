@@ -21,26 +21,28 @@ router = APIRouter(
 )
 
 _SLUG_HEADER = "X-App-Public-Slug"
-_RELEASE_HEADER = "X-App-Release"
 
 
 def _get_slug(request: Request) -> tuple[str, str | None]:
-    """Resolve ``(slug, release_ref)`` from the request headers.
+    """Resolve ``(slug, release_ref)`` from the one header that carries both.
 
-    The release can arrive two ways. Locally the host middleware has already
-    split ``orders--r7`` and set ``X-App-Release``. In cloud the nginx ingress
-    resolves the slug from the host and forwards the whole label, so the slug
-    header itself still carries the ``--r7`` -- splitting it here means previews
-    work on the existing ingress with no config change.
+    The label is the whole mechanism: ``orders`` serves what is live,
+    ``orders--r7`` previews release 7. Both deployments hand it over the same
+    way -- the cloud nginx ingress resolves the label from the host and forwards
+    it intact, and the local middleware sets it from the host itself -- so
+    previews work on the existing ingress with no config change.
+
+    There is deliberately no separate release header. One existed, nothing
+    upstream ever set it, and a client could therefore supply its own and pin
+    the canonical live host to a superseded build.
     """
     raw = request.headers.get(_SLUG_HEADER, "").strip().lower()
     if not raw:
         raise HTTPException(status_code=400, detail="Missing app slug")
-    release_ref = request.headers.get(_RELEASE_HEADER, "").strip().lower() or None
-    slug, label_release = split_release_label(raw)
+    slug, release_ref = split_release_label(raw)
     if not slug:
         raise HTTPException(status_code=400, detail="Missing app slug")
-    return slug, release_ref or label_release
+    return slug, release_ref
 
 
 @router.get(
