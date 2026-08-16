@@ -4,8 +4,11 @@ import asyncio
 from dataclasses import dataclass
 import os
 from pathlib import Path
+from collections.abc import Callable
 import shutil
 import signal
+
+from .browser_guard import shed_browser
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,7 +44,12 @@ class WorkspaceQuiescer:
         ephemeral_directories: tuple[Path, ...] | None = None,
         ephemeral_files: tuple[Path, ...] | None = None,
         isolated_process_namespace: bool | None = None,
+        # Injected so a test never signals a real process. The patterns this
+        # matches -- agent-browser, Xvfb -- are things a developer plausibly
+        # has running, and a unit test that kills their browser is not a test.
+        shed_browser_processes: Callable[[], int] = shed_browser,
     ) -> None:
+        self._shed_browser_processes = shed_browser_processes
         self._directories = (
             self._ephemeral_directories
             if ephemeral_directories is None
@@ -60,6 +68,19 @@ class WorkspaceQuiescer:
         terminated = 0
         if self._isolated_process_namespace:
             terminated = await self._terminate_unmanaged_processes()
+        else:
+            # The blanket sweep above is only safe where the PID namespace
+            # holds nothing but us, which is the Docker image -- it is the only
+            # runtime that sets the flag. On E2B the namespace also holds
+            # envd and E2B's own services, so signalling everything would take
+            # the sandbox down with the browser.
+            #
+            # That left the runtime carrying production with no process
+            # cleanup at all: deleting the profile directory does nothing to a
+            # Chrome that is still running and still holding 2 GB. Shedding the
+            # browser by name is the part that is safe everywhere, and it is
+            # the part that mattered.
+            terminated = self._shed_browser_processes()
         for path in self._directories:
             shutil.rmtree(path, ignore_errors=True)
         for path in self._files:
