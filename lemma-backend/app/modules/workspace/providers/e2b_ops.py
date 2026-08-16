@@ -44,56 +44,12 @@ from app.modules.workspace.providers.e2b_common import (
     sdk_errors,
 )
 from app.modules.workspace.providers.e2b_process_lifetime import seconds_until
+from app.modules.workspace.providers.e2b_python_runner import _PYTHON_RUNNER
 
 WORKSPACE_MOUNT = "/workspace"
 
 
-_PYTHON_RUNNER = """
-import ast, pickle, os, sys
 
-_STATE = {state_path!r}
-_CODE = {code_path!r}
-_RESULT = {result_path!r}
-
-_ns = {{"__name__": "__main__"}}
-if os.path.exists(_STATE):
-    try:
-        with open(_STATE, "rb") as handle:
-            _ns.update(pickle.load(handle))
-    except Exception:
-        pass
-
-with open(_CODE) as handle:
-    _source = handle.read()
-
-_tree = ast.parse(_source)
-_tail = None
-if _tree.body and isinstance(_tree.body[-1], ast.Expr):
-    _tail = ast.Expression(_tree.body.pop().value)
-
-try:
-    exec(compile(_tree, "<session>", "exec"), _ns)
-    if _tail is not None:
-        _value = eval(compile(_tail, "<session>", "eval"), _ns)
-        if _value is not None:
-            with open(_RESULT, "w") as handle:
-                handle.write(repr(_value) if not isinstance(_value, str) else _value)
-finally:
-    _keep = {{}}
-    for _name, _value in list(_ns.items()):
-        if _name.startswith("__"):
-            continue
-        try:
-            pickle.dumps(_value)
-        except Exception:
-            continue
-        _keep[_name] = _value
-    try:
-        with open(_STATE, "wb") as handle:
-            pickle.dump(_keep, handle)
-    except Exception:
-        pass
-"""
 
 
 class E2BOpsMixin:
@@ -516,7 +472,13 @@ class E2BOpsMixin:
             outcome = await sandbox.commands.run(
                 f"python3 {runner_path}",
                 envs={item.name: item.value for item in request.environment},
-                timeout=None,
+                # `None` here meant unbounded, so `execute_python`'s
+                # `timeout_seconds` bounded only how long the backend waited --
+                # nothing stopped the code itself. A runaway loop kept running
+                # in the sandbox after the tool had returned, holding CPU and
+                # memory on a box with one core, and the idle sweeper will not
+                # release a sandbox with live processes.
+                timeout=seconds_until(request.deadline_at),
             )
 
         # No trailing expression, or a run that failed before writing one,
