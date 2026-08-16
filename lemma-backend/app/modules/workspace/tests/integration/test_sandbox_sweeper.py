@@ -389,3 +389,27 @@ async def test_the_liveness_probe_addresses_the_sandbox_by_its_provider_id(
         "the probe must carry the provider id, not the container name"
     )
     assert released == 0, "a sandbox with live work must not be paused"
+
+
+async def test_a_killed_process_does_not_pin_its_sandbox_forever(
+    sweeper: SandboxSweeper, provider: SweepableProvider, service: SandboxService
+) -> None:
+    """Busy-ness is a state, not an absent exit code.
+
+    E2B records a cancelled process with `exit_code=None`
+    (`e2b_output.record_cancelled`), so reading busy-ness off the exit code made
+    every process an agent killed pin its sandbox as busy for the hour the
+    output buffer retains it, and the idle sweep never released it. Agents kill
+    processes exactly when a tool call looks stuck -- so the sandbox that had
+    just frustrated someone was then the one that could never be reclaimed.
+    """
+    sandbox = await _workspace(service)
+    handle = await service.ensure(sandbox.id)
+    provider.processes = [
+        ProcessDescriptor(process_id="op-1", state="cancelled", exit_code=None)
+    ]
+
+    released = await sweeper.release_idle(idle_after_seconds=0)
+
+    assert released == 1, "a sandbox whose only process was killed is idle"
+    assert handle.provider_id in provider.released

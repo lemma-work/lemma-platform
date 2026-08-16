@@ -22,6 +22,7 @@ from sandbox_runtime.protocol import (
     FileStat,
     ProcessOutputChannel,
     ProcessOutputSnapshot,
+    ProcessState,
     PythonExecutionState,
     PythonResult,
     PythonSessionRef,
@@ -47,6 +48,21 @@ from app.modules.workspace.providers.e2b_process_lifetime import seconds_until
 from app.modules.workspace.providers.e2b_python_runner import PYTHON_RUNNER
 
 WORKSPACE_MOUNT = "/workspace"
+
+# A process that has stopped will produce no further output, so a reader
+# waiting for more has nothing left to wait for.
+_FINISHED_PROCESS_STATES = frozenset(
+    {
+        ProcessState.SUCCEEDED,
+        ProcessState.FAILED,
+        ProcessState.CANCELLED,
+        ProcessState.TIMED_OUT,
+    }
+)
+
+
+def _has_finished(snapshot: ProcessOutputSnapshot) -> bool:
+    return snapshot.state in _FINISHED_PROCESS_STATES
 
 
 
@@ -234,18 +250,30 @@ class E2BOpsMixin:
         deadline_at: datetime,
     ) -> ProcessOutputSnapshot:
         snapshot = await self._output.read(process_id, after_sequence=after_sequence)
-        if snapshot.chunks or wait_seconds <= 0:
+        if snapshot.chunks or wait_seconds <= 0 or _has_finished(snapshot):
             return snapshot
 
         # Nothing new yet. Poll the buffer rather than holding an E2B stream
         # open, so a caller that goes away costs nothing.
+        #
+        # Waking on the exit as well as on output is what makes this bounded by
+        # the command instead of by the yield window. Exit is recorded by a
+        # separate watcher task, so it almost always lands *after* the last
+        # chunk: the collector's first poll took the output while the state was
+        # still RUNNING, came back, saw a non-terminal state and polled again --
+        # and this loop then had no new bytes to wait for and no reason to stop,
+        # so it slept out the whole remaining window. Every command that printed
+        # something and then exited paid that in full. Measured on a real
+        # workspace, `lemma tables list` ran in 771 ms and the tool call around
+        # it took 23-39 s, which agents read as a hang: they poll, give up, kill
+        # the process and start again.
         deadline = asyncio.get_running_loop().time() + wait_seconds
         while asyncio.get_running_loop().time() < deadline:
             await asyncio.sleep(0.1)
             snapshot = await self._output.read(
                 process_id, after_sequence=after_sequence
             )
-            if snapshot.chunks:
+            if snapshot.chunks or _has_finished(snapshot):
                 break
         return snapshot
 
