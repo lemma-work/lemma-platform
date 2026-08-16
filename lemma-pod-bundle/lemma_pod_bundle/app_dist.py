@@ -32,14 +32,40 @@ _SCANNED_SUFFIXES = frozenset(
 )
 
 
+# One member is read into memory at a time, so a crafted archive claiming a
+# petabyte for one entry cannot exhaust the importer. Well above any real built
+# asset; a bundle with a bigger one is simply rebuilt.
+_MAX_SCANNED_MEMBER_BYTES = 64 * 1024 * 1024
+
+
+def _pod_id_forms(pod_id: str) -> tuple[bytes, ...]:
+    """Every textual form the id could survive a build in.
+
+    A minifier or bundler can re-emit a UUID without its hyphens, and a build
+    that stores it in a URL path leaves the bare hex. Scanning only the
+    canonical form would call such a build portable and ship it pointed at the
+    pod it was exported from.
+    """
+    canonical = str(pod_id).strip().lower()
+    if not canonical:
+        return ()
+    forms = {canonical, canonical.replace("-", "")}
+    return tuple(form.encode() for form in forms if len(form) >= 8)
+
+
 def dist_is_portable(dist_archive: bytes | Path, *, pod_id: str) -> bool:
     """True when ``dist_archive`` bakes in nothing specific to ``pod_id``.
 
-    An unreadable archive is reported as NOT portable: the importer then
-    rebuilds, which is what it would have done before this check existed.
+    This can only ever prove NON-portability. A build that hardcodes something
+    else pod-specific -- a table id, an agent name, an API host it reaches
+    without the SDK -- passes, because nothing in the bytes identifies it as
+    belonging to the source pod. That is why the failure has to fall on the safe
+    side everywhere else: an unreadable archive, an oversized member, or an
+    absent pod id all report NOT portable, so the importer rebuilds, which is
+    what it did before this check existed.
     """
-    needle = str(pod_id).strip().lower()
-    if not needle:
+    needles = _pod_id_forms(pod_id)
+    if not needles:
         return False
     try:
         source = (
@@ -51,8 +77,10 @@ def dist_is_portable(dist_archive: bytes | Path, *, pod_id: str) -> bool:
                     continue
                 if Path(info.filename).suffix.lower() not in _SCANNED_SUFFIXES:
                     continue
-                content = archive.read(info)
-                if needle.encode() in content.lower():
+                if info.file_size > _MAX_SCANNED_MEMBER_BYTES:
+                    return False
+                content = archive.read(info).lower()
+                if any(needle in content for needle in needles):
                     return False
     except (zipfile.BadZipFile, OSError, KeyError):
         return False

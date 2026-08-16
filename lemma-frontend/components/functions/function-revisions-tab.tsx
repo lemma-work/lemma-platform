@@ -125,7 +125,11 @@ export function FunctionRevisionsTab({
                                 >
                                     {isExpanded ? 'Hide code' : 'View code'}
                                 </Button>
-                                {!revision.is_live && onRunRevision ? (
+                                {/* Gated on canUpdate like "Set live" beside it:
+                                    pinning a run to a superseded build requires
+                                    function.update, so an execute-only user was
+                                    being shown a button that 403s. */}
+                                {!revision.is_live && onRunRevision && canUpdate ? (
                                     <Button
                                         type="button"
                                         variant="quiet"

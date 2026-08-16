@@ -681,3 +681,121 @@ async def test_retention_prunes_surplus_releases_but_never_the_live_one(
     asset_res = await authenticated_client.get(f"/pods/{pod_id}/apps/{app_name}/assets")
     assert asset_res.status_code == status.HTTP_200_OK, asset_res.text
     assert markers[2] in asset_res.text
+
+
+async def test_redeploying_a_pruned_build_serves_it_again(
+    authenticated_client,
+    test_pod,
+    monkeypatch,
+):
+    """Redeploying a build retention already pruned must bring its bytes back.
+
+    The dedup keyed on the dist digest alone, and a pruned release keeps its
+    row -- so the upload decided the bytes were already on disk, skipped the
+    write, and pointed the app at a release whose bytes retention had deleted.
+    The app served nothing, and its live release rendered as "build removed".
+    """
+    from app.modules.apps.config import apps_settings
+
+    monkeypatch.setattr(apps_settings, "app_release_keep_last", 1)
+    monkeypatch.setattr(apps_settings, "app_release_max_keep", 1)
+    monkeypatch.setattr(apps_settings, "app_release_keep_days", 0)
+
+    pod_id = test_pod["id"]
+    app_name = f"app_revive_{uuid4().hex[:8]}"
+    first = f"FIRST_{uuid4().hex[:6]}"
+    second = f"SECOND_{uuid4().hex[:6]}"
+
+    create_res = await authenticated_client.post(
+        f"/pods/{pod_id}/apps",
+        json={"name": app_name, "public_slug": f"revive-{uuid4().hex[:8]}"},
+    )
+    assert create_res.status_code == status.HTTP_201_CREATED, create_res.text
+    app_id = create_res.json()["id"]
+
+    async def deploy(marker: str) -> None:
+        res = await authenticated_client.post(
+            f"/pods/{pod_id}/apps/{app_name}/bundle",
+            files={
+                "dist_archive": ("dist.zip", build_dist_archive(marker), "application/zip")
+            },
+        )
+        assert res.status_code == status.HTTP_200_OK, res.text
+
+    async def releases() -> dict:
+        res = await authenticated_client.get(f"/pods/{pod_id}/apps/{app_name}/releases")
+        assert res.status_code == status.HTTP_200_OK, res.text
+        return {item["release_number"]: item for item in res.json()["items"]}
+
+    # v1 is pruned the moment v2 lands under this policy.
+    await deploy(first)
+    await deploy(second)
+    assert (await releases())[1]["pruned_at"] is not None, "v1's bytes are gone"
+
+    # Now redeploy v1's exact bytes -- a revert, which is when anyone would.
+    await deploy(first)
+    items = await releases()
+    assert items[1]["is_live"] is True, "the revived release is what serves"
+    assert items[1]["pruned_at"] is None, "and it no longer reads as removed"
+
+    releases_root = (
+        Path(settings.local_file_storage_root) / "common" / "apps" / app_id / "releases"
+    )
+    versions_with_bytes = {
+        path.relative_to(releases_root).parts[0]
+        for path in releases_root.rglob("*")
+        if path.is_file()
+    }
+    assert items[1]["version"] in versions_with_bytes
+
+    # And the app actually serves them, which is the whole point.
+    asset_res = await authenticated_client.get(f"/pods/{pod_id}/apps/{app_name}/assets")
+    assert asset_res.status_code == status.HTTP_200_OK, asset_res.text
+    assert first in asset_res.text
+
+
+async def test_a_forged_release_header_cannot_serve_an_old_build_on_the_live_host(
+    authenticated_client,
+    test_pod,
+    monkeypatch,
+):
+    """Nothing upstream sets X-App-Release, so one from a client used to be
+    honoured verbatim -- any superseded build, served from the app\'s canonical
+    origin, by adding a line to a request."""
+    monkeypatch.setattr(settings, "app_base_domain", "apps.test")
+
+    pod_id = test_pod["id"]
+    app_name = f"app_forge_{uuid4().hex[:8]}"
+    slug = f"forge-{uuid4().hex[:8]}"
+    old = f"OLD_{uuid4().hex[:6]}"
+    live = f"LIVE_{uuid4().hex[:6]}"
+
+    create_res = await authenticated_client.post(
+        f"/pods/{pod_id}/apps",
+        json={"name": app_name, "public_slug": slug, "visibility": "PUBLIC"},
+    )
+    assert create_res.status_code == status.HTTP_201_CREATED, create_res.text
+
+    for marker in (old, live):
+        res = await authenticated_client.post(
+            f"/pods/{pod_id}/apps/{app_name}/bundle",
+            files={
+                "dist_archive": ("dist.zip", build_dist_archive(marker), "application/zip")
+            },
+        )
+        assert res.status_code == status.HTTP_200_OK, res.text
+
+    forged = await authenticated_client.get(
+        "/public/apps",
+        headers={"X-App-Public-Slug": slug, "X-App-Release": "r1"},
+    )
+    assert forged.status_code == status.HTTP_200_OK, forged.text
+    assert live in forged.text, "the live build, not the one the header asked for"
+    assert old not in forged.text
+
+    # The preview host still works -- the release rides the label, not a header.
+    preview = await authenticated_client.get(
+        "/public/apps", headers={"X-App-Public-Slug": f"{slug}--r1"}
+    )
+    assert preview.status_code == status.HTTP_200_OK, preview.text
+    assert old in preview.text
