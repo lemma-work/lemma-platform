@@ -1,0 +1,65 @@
+[project]
+name = "lemma-scenarios"
+version = "0.0.0"
+description = "Black-box product scenario suite for the Lemma platform"
+requires-python = ">=3.12"
+
+# Deliberately thin. This suite talks to Lemma over HTTP like any other client,
+# so it needs an HTTP client and a test runner and nothing else. It must never
+# depend on lemma-backend — `test_suite_is_black_box` in
+# journeys/test_harness_contract.py fails the run if an import creeps in.
+dependencies = [
+    "httpx>=0.27",
+    "psycopg[binary]>=3.2",
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "pytest-timeout>=2.3",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["journeys"]
+python_files = ["test_*.py"]
+asyncio_mode = "auto"
+# Both function-scoped, and they must match. A session-scoped fixture loop with
+# function-scoped tests tears the `world` fixture down on an already-closed
+# loop, which surfaces as "Event loop is closed" on every test that passed.
+# Nothing here needs a loop to outlive a scenario: `stack` is the only
+# session-scoped fixture and it is synchronous.
+asyncio_default_fixture_loop_scope = "function"
+asyncio_default_test_loop_scope = "function"
+
+# The suite root, so `from harness import ...` resolves without the harness
+# having to be an installed package. Keeping it uninstalled means an editor and
+# a CI run see exactly the files in the tree.
+pythonpath = ["."]
+
+# `-p no:cacheprovider` is deliberately absent: --lf across a slow suite is
+# worth the .pytest_cache directory.
+addopts = [
+    "-ra",
+    "--strict-markers",
+    "--durations=10",
+    "--import-mode=importlib",
+    # The fast lane. Everything here runs against containers the stack starts
+    # itself; `sandbox` needs workspace images built first, which costs minutes
+    # and is what keeps this suite off every pull request. Run those with
+    # `make scenarios-sandbox`.
+    "-m", "not sandbox",
+]
+
+# A scenario that hangs holds the whole shared stack, so the per-test cap is
+# tighter than the backend suite's. Raise it on a specific test with
+# @pytest.mark.timeout(...) rather than here.
+timeout = 180
+
+markers = [
+    "journey: the stretch of product this test belongs to",
+    "capability: the coherent thing a person can do",
+    "scenario: what this test proves, as a sentence a person would say",
+    "proves: PS- promises in docs/product this test proves",
+    "covers: OpenAPI operation ids and analytics events exercised",
+    "sandbox: needs a provisioned sandbox, so needs the workspace images built",
+]
+
+[tool.ruff]
+line-length = 90

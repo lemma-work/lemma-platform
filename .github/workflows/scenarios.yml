@@ -1,0 +1,112 @@
+name: Product scenarios
+
+# The black-box suite. It boots a real Lemma — Postgres, Redis, SuperTokens,
+# migrations, and the backend under uvicorn — and drives it over HTTP as an
+# external client. Nothing is mocked and nothing is imported from the backend.
+#
+# Job names are product journeys, not modules, so a red check on a pull request
+# says which promise to the user stopped being kept.
+#
+# Not a required check yet. It becomes one when the journeys cover enough ground
+# to be worth blocking on; until then it reports, and `make quality` enforces
+# the traceability that keeps the specification honest.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: scenarios-${{ github.event.pull_request.head.ref || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  # The guards on the suite itself: no backend imports, no mocking, no sleeping,
+  # every test declaring what it proves. No Docker, no stack, seconds — so it
+  # runs on every push and fails before anything expensive starts.
+  guards:
+    name: scenario suite guards
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+      - name: Sync scenario suite
+        working-directory: tests/scenarios
+        run: uv sync
+      - name: Suite guards
+        working-directory: tests/scenarios
+        run: uv run pytest journeys/test_harness_contract.py -q
+
+  # Traceability between docs/product and the suite. Pure text analysis — it
+  # reads the specification and parses the tests with `ast` rather than running
+  # them, so it needs neither the stack nor the backend's dependencies.
+  traceability:
+    name: spec traceability
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Scenario coverage gates
+        run: python3 scripts/check_scenario_coverage.py
+
+  journeys:
+    name: scenarios (${{ matrix.journey.name }})
+    needs: [guards, traceability]
+    runs-on: ubuntu-latest
+    strategy:
+      # One red journey must not hide another. Each is an independent statement
+      # about the product.
+      fail-fast: false
+      matrix:
+        # Add a row per journey directory as its scenarios land. `path` is what
+        # pytest is pointed at; `name` is what the check is called, and should
+        # read as the journey does in docs/product.
+        journey:
+          - name: getting started
+            path: journeys/getting_started
+          - name: building a pod
+            path: journeys/building_a_pod
+          - name: working with data
+            path: journeys/working_with_data
+          - name: agents and conversations
+            path: journeys/agents_and_conversations
+          - name: automating work
+            path: journeys/automating_work
+          - name: sharing and permissions
+            path: journeys/sharing_and_permissions
+          - name: connectors and usage
+            path: journeys/connectors_and_accounts journeys/operating_a_deployment
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version-file: .python-version
+      # The suite boots the backend with the backend's own interpreter, so its
+      # dependencies have to be installed even though the suite never imports it.
+      - name: Sync backend
+        working-directory: lemma-backend
+        run: uv sync
+      - name: Sync scenario suite
+        working-directory: tests/scenarios
+        run: uv sync
+      - name: Run journey
+        working-directory: tests/scenarios
+        run: uv run pytest ${{ matrix.journey.path }} -q --junitxml=results.xml
+      # The XML carries journey, capability, scenario and proven promises as
+      # properties on each case, so a CI front end can show the sentence without
+      # the reporting plugin being involved.
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scenarios-${{ strategy.job-index }}
+          path: tests/scenarios/results.xml
+          retention-days: 7

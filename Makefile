@@ -28,6 +28,7 @@ SHELL := /bin/bash
         test-dev-workflow \
         test test-backend test-backend-unit test-backend-e2e \
         test-frontend test-cli test-cli-unit test-cli-e2e test-python \
+        scenarios scenarios-guards scenarios-sandbox scenario-coverage \
         coverage coverage-backend coverage-backend-unit coverage-backend-e2e \
         coverage-backend-module coverage-cli coverage-cli-unit coverage-cli-e2e coverage-frontend \
         lint quality check codeql codeql-python codeql-javascript codeql-all migrate
@@ -49,6 +50,7 @@ CLI_DIR       := lemma-cli
 PYTHON_DIR    := lemma-python
 TS_DIR        := lemma-typescript
 DESKTOP_DIR   := desktop
+SCENARIOS_DIR := tests/scenarios
 
 # Desktop is one cargo workspace: the app shell, the durable daemon, the Agent
 # Host, and the runtime helpers share a lockfile and a target directory. That
@@ -322,6 +324,10 @@ help:
 	@echo "    make test-cli           lemma-cli unit + e2e tests"
 	@echo "    make test-cli-unit      lemma-cli unit tests only (no docker)"
 	@echo "    make test-cli-e2e       lemma-cli e2e (real backend + docker; needs docker)"
+	@echo "    make scenarios          product scenarios over real HTTP (needs docker)"
+	@echo "    make scenarios-guards   scenario suite guards only (fast, no docker)"
+	@echo "    make scenarios-sandbox  scenarios needing built workspace images"
+	@echo "    make scenario-coverage  regenerate docs/product/coverage.md"
 	@echo "    make test-python        lemma-python SDK tests (non-integration)"
 	@echo ""
 	@echo "  Coverage"
@@ -1188,6 +1194,35 @@ test-python:
 	@echo "→ lemma-python SDK tests (non-integration)…"
 	@cd $(PYTHON_DIR) && uv run --with pytest pytest tests/ -m "not integration" -q
 
+# ── Product scenarios ─────────────────────────────────────────────────────────
+# The black-box suite: it boots the real stack (postgres/redis/supertokens +
+# uvicorn) and drives it over HTTP as an external client, so it needs docker.
+# Output is grouped by product journey rather than by module — see
+# docs/product/README.md for what each scenario is proving, and
+# tests/scenarios/README.md for how the suite is put together.
+
+scenarios:
+	@echo "→ Product scenarios (real HTTP, needs docker)…"
+	@cd $(SCENARIOS_DIR) && uv run pytest -q
+
+# The sandbox lane. Creating a function provisions a sandbox and extracts its
+# schemas by loading the code in it, so these need the workspace/function images
+# built first — minutes, not seconds, which is why they are not in `scenarios`.
+scenarios-sandbox:
+	@echo "→ Product scenarios needing a sandbox…"
+	@cd $(SCENARIOS_DIR) && uv run pytest -q -m sandbox
+
+# The guards on the suite itself: no imports of the app under test, no mocking,
+# no sleeping, every test declaring what it proves. No docker, no stack, ~20ms —
+# so this is the one to run in a tight loop while writing scenarios.
+scenarios-guards:
+	@echo "→ Scenario suite guards…"
+	@cd $(SCENARIOS_DIR) && uv run pytest journeys/test_harness_contract.py -q
+
+# Regenerate docs/product/coverage.md. `make quality` checks it is current.
+scenario-coverage:
+	@python3 scripts/check_scenario_coverage.py --write
+
 # ── Coverage ──────────────────────────────────────────────────────────────────
 
 coverage: coverage-backend-unit coverage-backend-e2e coverage-cli coverage-frontend
@@ -1274,6 +1309,10 @@ quality:
 	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory architecture
 	@echo "→ OpenAPI spec freshness…"
 	@cd $(BACKEND_DIR) && uv run python scripts/dump_openapi_spec.py --check
+	@echo "→ Module contract coverage…"
+	@cd $(BACKEND_DIR) && uv run python scripts/check_contracts.py
+	@echo "→ Product scenario traceability…"
+	@python3 scripts/check_scenario_coverage.py
 	@echo "✓ quality gates pass"
 
 # CodeQL, the same suites CI runs. Reports only what this branch changed;

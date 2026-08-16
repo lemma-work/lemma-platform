@@ -1,0 +1,338 @@
+"""What a person does with pods and the people in them."""
+
+from __future__ import annotations
+
+from collections.abc import Callable
+from typing import Any
+from uuid import uuid4
+
+from harness.drivers.api import items_of
+from harness.waiting import eventually
+
+JSON = dict[str, Any]
+
+
+def _member_id(member: JSON) -> str:
+    """The identifier of a pod membership row.
+
+    The member list returns ``pod_member_id`` — the row also carries ``user_id``
+    and ``organization_member_id``, so a bare ``id`` would be ambiguous about
+    which of the three it meant. ``id`` is accepted as a fallback so a scenario
+    holding the create response works too.
+    """
+    identifier = member.get("pod_member_id") or member.get("id")
+    if not identifier:
+        raise AssertionError(
+            f"this does not look like a pod membership row: {sorted(member)}"
+        )
+    return str(identifier)
+
+
+class PodSteps:
+    """Mixed into :class:`harness.world.Person`."""
+
+    # --- pods ------------------------------------------------------------
+
+    async def creates_a_pod(
+        self,
+        *,
+        in_organization: JSON | None = None,
+        named: str | None = None,
+        pod_type: str = "HYBRID",
+    ) -> JSON:
+        organization = in_organization or self.organization
+        if organization is None:
+            raise AssertionError(
+                f"{self.label} has no organization to create a pod in; "
+                f"call creates_an_organization() first"
+            )
+        name = named or f"{self.label.title()} Pod {uuid4().hex[:8]}"
+        pod = await self.api.post(
+            "/pods",
+            what=f"{self.label} creating pod {name!r}",
+            json={
+                "organization_id": str(organization["id"]),
+                "name": name,
+                "type": pod_type,
+            },
+        )
+        self.pod = pod
+        return pod
+
+    async def opens_pod(self, pod: JSON) -> JSON:
+        return await self.api.get(
+            f"/pods/{pod['id']}", what=f"{self.label} opening pod {pod.get('name')!r}"
+        )
+
+    async def pods_in(self, organization: JSON) -> list[JSON]:
+        return items_of(
+            await self.api.get(f"/pods/organization/{organization['id']}")
+        )
+
+    async def sees_pod(self, pod: JSON) -> None:
+        listed = await self.pods_in({"id": pod["organization_id"]})
+        if not any(str(found["id"]) == str(pod["id"]) for found in listed):
+            raise AssertionError(
+                f"{self.label} cannot see pod {pod.get('name')!r} in their pod list; "
+                f"they see {[found.get('name') for found in listed]}"
+            )
+
+    async def does_not_see_pod(self, pod: JSON) -> None:
+        listed = await self.pods_in({"id": pod["organization_id"]})
+        if any(str(found["id"]) == str(pod["id"]) for found in listed):
+            raise AssertionError(
+                f"{self.label} can see pod {pod.get('name')!r} in their pod list, "
+                f"but should not"
+            )
+
+    async def is_refused_pod(self, pod: JSON) -> int:
+        response = await self.api.call("GET", f"/pods/{pod['id']}")
+        if response.status_code < 400:
+            raise AssertionError(
+                f"{self.label} was expected to be refused pod {pod.get('name')!r}, "
+                f"but it opened with {response.status_code}"
+            )
+        return response.status_code
+
+    async def deletes_pod(self, pod: JSON) -> None:
+        await self.api.delete(
+            f"/pods/{pod['id']}", what=f"{self.label} deleting pod {pod.get('name')!r}"
+        )
+
+    async def opens_pod_to(self, pod: JSON, *, who: str) -> JSON:
+        """Change who may walk into a pod: ``INVITE_ONLY``, ``ORG_MEMBERS``, ``PUBLIC``."""
+        return await self.api.put(
+            f"/pods/{pod['id']}",
+            what=f"{self.label} setting the join policy of {pod.get('name')!r}",
+            json={"config": {"join_policy": who}},
+        )
+
+    async def joins(self, pod: JSON) -> JSON:
+        return await self.api.post(
+            f"/pods/{pod['id']}/join", what=f"{self.label} joining {pod.get('name')!r}"
+        )
+
+    async def is_refused_joining(self, pod: JSON) -> int:
+        response = await self.api.call("POST", f"/pods/{pod['id']}/join")
+        if response.status_code < 400:
+            raise AssertionError(
+                f"{self.label} was expected to be refused joining "
+                f"{pod.get('name')!r}, but joined ({response.status_code})"
+            )
+        return response.status_code
+
+    async def requests_to_join(self, pod: JSON) -> JSON:
+        return await self.api.post(
+            f"/pods/{pod['id']}/join-requests",
+            what=f"{self.label} requesting access to {pod.get('name')!r}",
+        )
+
+    async def join_requests_for(self, pod: JSON) -> list[JSON]:
+        return items_of(await self.api.get(f"/pods/{pod['id']}/join-requests"))
+
+    async def approves(
+        self,
+        join_request: JSON,
+        *,
+        for_pod: JSON,
+        as_role: str = "POD_USER",
+        org_role: str = "ORG_MEMBER",
+    ) -> JSON:
+        return await self.api.post(
+            f"/pods/{for_pod['id']}/join-requests/{join_request['id']}/approve",
+            what=f"{self.label} approving a join request for {for_pod.get('name')!r}",
+            json={"pod_role": as_role, "org_role": org_role},
+        )
+
+    async def is_refused_approving(
+        self, join_request: JSON, *, for_pod: JSON, org_role: str = "ORG_OWNER"
+    ) -> int:
+        response = await self.api.call(
+            "POST",
+            f"/pods/{for_pod['id']}/join-requests/{join_request['id']}/approve",
+            json={"pod_role": "POD_USER", "org_role": org_role},
+        )
+        if response.status_code < 400:
+            raise AssertionError(
+                f"{self.label} was expected to be refused approving with org role "
+                f"{org_role}, but it succeeded ({response.status_code})"
+            )
+        return response.status_code
+
+    # --- custom roles ----------------------------------------------------
+
+    async def creates_a_role(
+        self, *, in_pod: JSON, named: str, permissions: list[str]
+    ) -> JSON:
+        return await self.api.post(
+            f"/pods/{in_pod['id']}/roles",
+            what=f"{self.label} creating role {named!r}",
+            json={"name": named, "permission_ids": permissions},
+        )
+
+    async def roles_in(self, pod: JSON) -> list[JSON]:
+        return items_of(await self.api.get(f"/pods/{pod['id']}/roles"))
+
+    async def permission_catalog_of(self, pod: JSON) -> list[JSON]:
+        return items_of(await self.api.get(f"/pods/{pod['id']}/permissions/catalog"))
+
+    async def is_refused_deleting_pod(self, pod: JSON) -> int:
+        response = await self.api.call("DELETE", f"/pods/{pod['id']}")
+        if response.status_code < 400:
+            raise AssertionError(
+                f"{self.label} was expected to be refused deleting pod "
+                f"{pod.get('name')!r}, but it succeeded ({response.status_code})"
+            )
+        return response.status_code
+
+    # --- pod membership --------------------------------------------------
+
+    async def adds(
+        self, person: Any, *, to_pod: JSON, as_role: str = "POD_VIEWER"
+    ) -> JSON:
+        """Add someone already in the organization to a pod.
+
+        Pod membership is keyed by *organization* membership, not by user, so
+        this resolves the organization member first. That indirection is the
+        product rule that an organization is the outer boundary a pod cannot
+        widen — worth keeping visible here rather than hiding it in a helper.
+        """
+        organization_id = to_pod["organization_id"]
+        members = items_of(
+            await self.api.get(f"/organizations/{organization_id}/members")
+        )
+        match = next(
+            (m for m in members if str(m.get("user_id")) == str(person.user_id)), None
+        )
+        if match is None:
+            raise AssertionError(
+                f"{person.label} is not a member of the organization owning pod "
+                f"{to_pod.get('name')!r}, so cannot be added to it"
+            )
+        return await self.api.post(
+            f"/pods/{to_pod['id']}/members",
+            what=f"{self.label} adding {person.label} to {to_pod.get('name')!r}",
+            # `roles` is a list: a member can hold several, including custom ones.
+            json={"organization_member_id": str(match["id"]), "roles": [as_role]},
+        )
+
+    async def is_refused_adding(
+        self, person: Any, *, to_pod: JSON, as_role: str = "POD_VIEWER"
+    ) -> int:
+        organization_id = to_pod["organization_id"]
+        members = items_of(
+            await self.api.get(f"/organizations/{organization_id}/members")
+        )
+        match = next(
+            (m for m in members if str(m.get("user_id")) == str(person.user_id)), None
+        )
+        if match is None:
+            raise AssertionError(
+                f"{person.label} is not in the organization, so this would be "
+                f"refused for the wrong reason"
+            )
+        response = await self.api.call(
+            "POST",
+            f"/pods/{to_pod['id']}/members",
+            json={"organization_member_id": str(match["id"]), "roles": [as_role]},
+        )
+        if response.status_code < 400:
+            raise AssertionError(
+                f"{self.label} was expected to be refused adding {person.label} "
+                f"to {to_pod.get('name')!r}, but it succeeded "
+                f"({response.status_code})"
+            )
+        return response.status_code
+
+    async def membership_of(self, person: Any, *, in_pod: JSON) -> JSON:
+        for member in await self.members_of_pod(in_pod):
+            if str(member.get("user_id")) == str(person.user_id):
+                return member
+        raise AssertionError(
+            f"{person.label} is not a member of pod {in_pod.get('name')!r}"
+        )
+
+    async def gives(self, person: Any, *, roles: list[str], in_pod: JSON) -> JSON:
+        membership = await self.membership_of(person, in_pod=in_pod)
+        return await self.api.patch(
+            f"/pods/{in_pod['id']}/members/{_member_id(membership)}/roles",
+            what=f"{self.label} re-roling {person.label} in {in_pod.get('name')!r}",
+            json={"roles": roles},
+        )
+
+    async def members_of_pod(self, pod: JSON) -> list[JSON]:
+        return items_of(await self.api.get(f"/pods/{pod['id']}/members"))
+
+    async def removes_member(self, member: JSON, *, from_pod: JSON) -> None:
+        await self.api.delete(
+            f"/pods/{from_pod['id']}/members/{_member_id(member)}",
+            what=f"{self.label} removing a member from {from_pod.get('name')!r}",
+        )
+
+    async def is_refused_removing(self, member: JSON, *, from_pod: JSON) -> int:
+        response = await self.api.call(
+            "DELETE", f"/pods/{from_pod['id']}/members/{_member_id(member)}"
+        )
+        if response.status_code < 400:
+            raise AssertionError(
+                f"{self.label} was expected to be refused removing a member from "
+                f"{from_pod.get('name')!r}, but it succeeded "
+                f"({response.status_code})"
+            )
+        return response.status_code
+
+    # --- what a person may do --------------------------------------------
+
+    async def permissions_in(self, pod: JSON) -> set[str]:
+        """Exactly what this person may do in this pod, as the API reports it.
+
+        The field is ``actions``. Reading a key that does not exist would return
+        an empty set, and every "holds no write permission" assertion would pass
+        against nothing — so this fails loudly instead of guessing.
+        """
+        payload = await self.api.get(f"/pods/{pod['id']}/permissions/me")
+        if "actions" not in payload:
+            raise AssertionError(
+                f"effective permissions for {self.label} carried no 'actions'; "
+                f"got keys {sorted(payload)}"
+            )
+        return set(payload["actions"])
+
+    async def may(self, permission: str, *, in_pod: JSON) -> bool:
+        return permission in await self.permissions_in(in_pod)
+
+    async def permissions_settle_to(
+        self, expected: Callable[[set[str]], bool], *, in_pod: JSON, describe: str
+    ) -> set[str]:
+        """Wait for effective permissions to reflect a change just made.
+
+        A role change invalidates the cached snapshot *after* the mutating
+        request commits, so the very next read can still be served from the old
+        snapshot — measured at exactly one stale read. Polling is what a real
+        client does, and it keeps the assertion about the product promise (the
+        change lands promptly, not on a five-minute TTL) rather than about the
+        ordering of two HTTP responses. See DEV-POD-003.
+        """
+        return await eventually(
+            lambda: self.permissions_in(in_pod),
+            expected,
+            describe=f"{self.label}'s permissions to {describe}",
+            timeout=15.0,
+        )
+
+    async def can_read(self, pod: JSON) -> None:
+        await self.opens_pod(pod)
+
+    async def cannot_write_to(self, pod: JSON) -> None:
+        held = await self.permissions_in(pod)
+        if not held:
+            raise AssertionError(
+                f"{self.label} holds no permissions at all in "
+                f"{pod.get('name')!r}, so this proves nothing about writing"
+            )
+        writes = {p for p in held if p.endswith((".create", ".update", ".delete"))}
+        if writes:
+            raise AssertionError(
+                f"{self.label} was expected to hold no write permissions in "
+                f"{pod.get('name')!r}, but holds {sorted(writes)}"
+            )
