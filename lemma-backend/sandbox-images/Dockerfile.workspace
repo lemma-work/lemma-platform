@@ -105,6 +105,15 @@ ENV PYTHONUNBUFFERED=1 \
     AGENT_BROWSER_PROFILE=/tmp/lemma-browser/profile \
     AGENT_BROWSER_SESSION=workspace \
     AGENT_BROWSER_HEADED=true \
+    # A browser nobody is using stops being one. The agent-browser daemon
+    # closes Chrome and exits after this long without a command, which is the
+    # only thing that reclaims the browser's whole footprint -- Chrome keeps a
+    # process per site-instance, and a headed session carries a GPU process and
+    # browser UI on top. Two minutes is well inside the 180s idle-release
+    # window that retires the sandbox itself, so a workspace that goes quiet
+    # sheds the browser before anything else decides what to do with it, and a
+    # research batch mid-flight never sees it: every capture is a command.
+    AGENT_BROWSER_IDLE_TIMEOUT_MS=120000 \
     LEMMA_RUNTIME_TOKEN_FILE=/run/lemma-bootstrap/token \
     LEMMA_SANDBOX_PROCESS_NAMESPACE=isolated \
     GH_CONFIG_DIR=/tmp/lemma-gh \

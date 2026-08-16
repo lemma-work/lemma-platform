@@ -289,13 +289,21 @@ async def test_a_sandbox_from_the_same_template_build_is_adopted(
     assert world.killed == []
 
 
-async def test_a_sandbox_from_an_older_template_build_is_destroyed(
+async def test_a_workspace_from_an_older_template_build_keeps_its_disk(
     provider: E2BSandboxProvider, world: FakeE2B
 ) -> None:
-    """Here the sandbox is the disk, so there is no replacing the compute and
-    keeping the files. Resuming it would leave the workspace on the old
-    template, speaking a protocol the backend no longer speaks; the caller is
-    told the disk is new through `storage_adopted`."""
+    """Drift is tolerated for workspaces, because here the sandbox is the disk.
+
+    This branch used to kill the sandbox to adopt the new digest -- and the
+    digest comes from `WORKSPACE_PROFILE_DIGEST`, an environment variable. So
+    editing one env var and deploying wiped every workspace in the fleet on the
+    first ensure after rollout, with nothing to restore from. `Sandbox fabric`
+    README section 6 already stated the intent: "While a workspace owns a disk
+    it keeps running the profile it was created with, no generation fence is
+    raised, and nothing is replaced." The accepted cost, stated there too, is
+    that a workspace may run an N-1 template until it is next created from
+    scratch.
+    """
     from app.modules.workspace.testing.fake_e2b import FakeSandboxInfo
 
     sandbox_id = uuid4()
@@ -309,6 +317,28 @@ async def test_a_sandbox_from_an_older_template_build_is_destroyed(
     )
 
     instance = await provider.create(_spec(sandbox_id))
+
+    assert world.killed == [], "a workspace's files must survive a template bump"
+    assert instance.provider_id == "older-build", "and it keeps serving them"
+
+
+async def test_a_function_from_an_older_template_build_is_replaced(
+    provider: E2BSandboxProvider, world: FakeE2B
+) -> None:
+    """Functions own no durable disk, so adopting a new digest costs a restart."""
+    from app.modules.workspace.testing.fake_e2b import FakeSandboxInfo
+
+    sandbox_id = uuid4()
+    world.sandboxes["older-build"] = FakeSandboxInfo(
+        sandbox_id="older-build",
+        state="paused",
+        metadata={
+            META_SANDBOX_ID: str(sandbox_id),
+            META_PROFILE_DIGEST: "sha256:" + "b" * 64,
+        },
+    )
+
+    instance = await provider.create(_spec(sandbox_id, kind=SandboxKind.FUNCTION))
 
     assert world.killed == ["older-build"]
     assert instance.provider_id != "older-build"
@@ -666,3 +696,82 @@ async def test_the_sweep_only_claims_sandboxes_carrying_our_metadata(
     objects = await provider.list_objects(deadline_at=_deadline())
 
     assert {obj.sandbox_id for obj in objects} == {sandbox_id}
+
+
+async def test_a_pause_discards_memory(
+    provider: E2BSandboxProvider, world: FakeE2B
+) -> None:
+    """The SDK default is `keep_memory=True`, and this call used to pass nothing.
+
+    So every workspace pause preserved resident memory while both architecture
+    documents said the opposite -- "running processes and interpreter state do
+    not [persist], and callers must not treat them as recoverable" -- and
+    auto-resume was already disabled here, which E2B only requires *because* of
+    filesystem-only snapshots. The design was built around a property the one
+    call that decides it never asked for.
+
+    That is what made a leaked browser invisible: a memory-preserving pause
+    snapshots whatever is running and restores it into the next conversation,
+    so a headed Chrome came back at 63 processes and 2123 MB without ever being
+    started again. The disk is the only thing a workspace promises to keep.
+    """
+    instance = await provider.create(_spec(uuid4()))
+
+    await provider.release(
+        instance, kind=SandboxKind.WORKSPACE, deadline_at=_deadline()
+    )
+
+    assert world.paused == [instance.provider_id]
+    assert world.pause_kept_memory == [False], (
+        "a workspace pause is filesystem-only; see lifecycle-state-model.md"
+    )
+
+
+async def test_a_function_sandbox_pause_also_discards_memory(
+    provider: E2BSandboxProvider, world: FakeE2B
+) -> None:
+    """Both kinds pause the same way; neither promises resident state."""
+    instance = await provider.create(_spec(uuid4(), kind=SandboxKind.FUNCTION))
+
+    await provider.release(
+        instance, kind=SandboxKind.FUNCTION, deadline_at=_deadline()
+    )
+
+    assert world.pause_kept_memory == [False]
+
+
+async def test_an_object_named_by_its_e2b_id_is_actually_destroyed(
+    provider: E2BSandboxProvider, world: FakeE2B
+) -> None:
+    """The sweep names objects the way E2B reports them, and must still kill them.
+
+    `list_objects` names every object by its E2B sandbox id, because that is
+    what E2B returns. `inspect` only understands container names -- it parses
+    one back into a metadata query -- so `destroy(obj.name)` parsed to nothing,
+    read that as "already gone", and returned having killed nothing. The orphan
+    sweep therefore logged eighteen reclaims every five minutes for hours
+    against the same eighteen ids while the account's count never moved: not
+    because paused sandboxes resist being killed, but because the destroy was a
+    no-op for exactly the objects the sweep discovers.
+    """
+    instance = await provider.create(_spec(uuid4()))
+    objects = await provider.list_objects(deadline_at=_deadline())
+    assert [obj.name for obj in objects] == [instance.provider_id], (
+        "the sweep sees E2B ids, not container names"
+    )
+
+    await provider.destroy(objects[0].name, deadline_at=_deadline())
+
+    assert world.killed == [instance.provider_id]
+
+
+async def test_a_container_name_that_resolves_to_nothing_is_left_alone(
+    provider: E2BSandboxProvider, world: FakeE2B
+) -> None:
+    """Parsing to an identity with no sandbox behind it really is already gone."""
+    await provider.destroy(
+        naming.container_name(uuid4(), SandboxKind.WORKSPACE, 1),
+        deadline_at=_deadline(),
+    )
+
+    assert world.killed == []

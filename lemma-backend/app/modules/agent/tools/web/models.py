@@ -13,9 +13,15 @@ class WebFetchRequest(BaseModel):
     urls: list[str] = Field(
         ...,
         min_length=1,
-        max_length=10,
+        # Must equal `_MAX_BROWSER_RENDERS`, and `test_web_fetch_limits_agree`
+        # holds the two together. Advertising ten while rendering three meant a
+        # caller who sent ten JS-heavy pages was told, only after paying for
+        # the call, that seven of them were skipped -- a limit the schema had
+        # no way to express and the agent had no way to plan around. Accepting
+        # exactly what can be delivered is what makes the cap honest.
+        max_length=5,
         description=(
-            "Pages to capture, in one call — up to 10. Batching is the point: "
+            "Pages to capture, in one call — up to 5. Batching is the point: "
             "research usually means reading several sources, not one. Static "
             "pages are fetched in parallel and are quick; pages that need the "
             "full browser render one at a time, so a call is capped at a few "

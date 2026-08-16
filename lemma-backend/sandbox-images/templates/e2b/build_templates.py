@@ -137,49 +137,6 @@ def workspace_template():
             f"{_install_gh_command()}",
             user="root",
         )
-        .copy("lemma-python", "/build/lemma-python")
-        .copy("lemma-pod-bundle", "/build/lemma-pod-bundle")
-        .copy("lemma-cli", "/build/lemma-cli")
-        .copy("lemma-skills", "/build/lemma-skills")
-        .copy(
-            "lemma-backend/sandbox-images/templates/workspace-python",
-            "/build/lemma-backend/sandbox-images/templates/workspace-python",
-        )
-        .run_cmd(
-            "UV_PYTHON_INSTALL_DIR=/opt/python uv python install 3.14 && "
-            "UV_PYTHON_INSTALL_DIR=/opt/python "
-            "UV_PROJECT_ENVIRONMENT=/opt/lemma-python "
-            "UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy "
-            "uv sync --project /build/lemma-backend/sandbox-images/templates/workspace-python "
-            "--python 3.14 "
-            "--locked --no-dev --no-editable && "
-            "printf '%s\\n' "
-            "'import sys; "
-            'p="/workspace/.python/lib/python3.14/site-packages"; '
-            "sys.path.insert(0, p) if p not in sys.path else None' "
-            "> /opt/lemma-python/lib/python3.14/site-packages/"
-            "lemma-workspace-overlay.pth && "
-            "test -x /opt/lemma-python/bin/python && "
-            'test "$(/opt/lemma-python/bin/python -c '
-            "'import sys; print(f\"{sys.version_info.major}.{sys.version_info.minor}\")'"
-            ')" = "3.14" && '
-            "/opt/lemma-python/bin/python -c "
-            '"import ipykernel, lemma_sdk, pydantic" && '
-            "test -x /opt/lemma-python/bin/lemma && "
-            "ln -sf /opt/lemma-python/bin/lemma /usr/local/bin/lemma && "
-            "/usr/local/bin/lemma --version && "
-            "mkdir -p /root/.local/share/jupyter/kernels/python3 && "
-            "printf '%s\\n' "
-            '\'{"argv":["/opt/lemma-python/bin/python","-m",'
-            '"ipykernel_launcher","-f","{connection_file}"],'
-            '"display_name":"Python 3.14","language":"python",'
-            '"metadata":{"debugger":true}}\' '
-            "> /root/.local/share/jupyter/kernels/python3/kernel.json && "
-            "uv cache clean && "
-            "rm -rf /build/lemma-python /build/lemma-pod-bundle "
-            "/build/lemma-cli /build/lemma-skills /build/lemma-backend",
-            user="root",
-        )
         .copy(
             "lemma-backend/sandbox-images/templates/workspace-node",
             "/opt/lemma-node",
@@ -260,6 +217,56 @@ def workspace_template():
             "chown -R user:user /workspace /tmp/lemma-browser",
             user="root",
         )
+        # Layer order is cache order, and these two blocks were the wrong way
+        # round. The first-party sources below -- lemma-cli above all -- change
+        # on almost every commit, and they sat in front of the Node layer,
+        # whose `pnpm install` fetches the Agent Browser and its Chromium. So a
+        # one-line CLI edit invalidated the most expensive layer in the image
+        # and rebuilt the browser from scratch. Node first, because its inputs
+        # are two lockfiles that move on a dependency bump and nothing else.
+        .copy("lemma-python", "/build/lemma-python")
+        .copy("lemma-pod-bundle", "/build/lemma-pod-bundle")
+        .copy("lemma-cli", "/build/lemma-cli")
+        .copy("lemma-skills", "/build/lemma-skills")
+        .copy(
+            "lemma-backend/sandbox-images/templates/workspace-python",
+            "/build/lemma-backend/sandbox-images/templates/workspace-python",
+        )
+        .run_cmd(
+            "UV_PYTHON_INSTALL_DIR=/opt/python uv python install 3.14 && "
+            "UV_PYTHON_INSTALL_DIR=/opt/python "
+            "UV_PROJECT_ENVIRONMENT=/opt/lemma-python "
+            "UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy "
+            "uv sync --project /build/lemma-backend/sandbox-images/templates/workspace-python "
+            "--python 3.14 "
+            "--locked --no-dev --no-editable && "
+            "printf '%s\\n' "
+            "'import sys; "
+            'p="/workspace/.python/lib/python3.14/site-packages"; '
+            "sys.path.insert(0, p) if p not in sys.path else None' "
+            "> /opt/lemma-python/lib/python3.14/site-packages/"
+            "lemma-workspace-overlay.pth && "
+            "test -x /opt/lemma-python/bin/python && "
+            'test "$(/opt/lemma-python/bin/python -c '
+            "'import sys; print(f\"{sys.version_info.major}.{sys.version_info.minor}\")'"
+            ')" = "3.14" && '
+            "/opt/lemma-python/bin/python -c "
+            '"import ipykernel, lemma_sdk, pydantic" && '
+            "test -x /opt/lemma-python/bin/lemma && "
+            "ln -sf /opt/lemma-python/bin/lemma /usr/local/bin/lemma && "
+            "/usr/local/bin/lemma --version && "
+            "mkdir -p /root/.local/share/jupyter/kernels/python3 && "
+            "printf '%s\\n' "
+            '\'{"argv":["/opt/lemma-python/bin/python","-m",'
+            '"ipykernel_launcher","-f","{connection_file}"],'
+            '"display_name":"Python 3.14","language":"python",'
+            '"metadata":{"debugger":true}}\' '
+            "> /root/.local/share/jupyter/kernels/python3/kernel.json && "
+            "uv cache clean && "
+            "rm -rf /build/lemma-python /build/lemma-pod-bundle "
+            "/build/lemma-cli /build/lemma-skills /build/lemma-backend",
+            user="root",
+        )
         .set_envs(
             {
                 "DISPLAY": ":99",
@@ -272,6 +279,10 @@ def workspace_template():
                 "AGENT_BROWSER_PROFILE": "/tmp/lemma-browser/profile",
                 "AGENT_BROWSER_SESSION": "workspace",
                 "AGENT_BROWSER_HEADED": "true",
+                # See Dockerfile.workspace: the daemon closes Chrome after this
+                # long idle, which is what keeps a finished research session
+                # from holding the sandbox's whole memory budget.
+                "AGENT_BROWSER_IDLE_TIMEOUT_MS": "120000",
                 "LEMMA_NODE_BINARY": "/opt/node24/bin/node",
                 # Where the credential bridge writes gh's config.
                 "GH_CONFIG_DIR": "/tmp/lemma-gh",

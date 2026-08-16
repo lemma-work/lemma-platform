@@ -90,6 +90,7 @@ class FakeE2B:
     paused: list[str] = field(default_factory=list)
     files: dict[str, bytes] = field(default_factory=dict)
     commands: list[str] = field(default_factory=list)
+    pause_kept_memory: list[bool] = field(default_factory=list)
     # The lifetime each started process was given, in the order they started.
     # Recorded because E2B kills a command at this value and defaults it to 60s,
     # so "the provider passed no timeout" is indistinguishable from "the
@@ -269,6 +270,10 @@ class FakeE2B:
                 return True
 
             async def beta_pause(self, keep_memory=True, **_kwargs):
+                # Recorded because the default is the bug: a workspace pause
+                # that keeps memory restores whatever was running into the
+                # next conversation.
+                world.pause_kept_memory.append(keep_memory)
                 world.paused.append(self.sandbox_id)
                 world.sandboxes[self.sandbox_id].state = "paused"
                 return True

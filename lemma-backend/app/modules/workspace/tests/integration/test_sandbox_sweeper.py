@@ -11,6 +11,7 @@ from app.modules.workspace.domain.sandbox import SandboxKind, SandboxOwnerKind
 from app.modules.workspace.providers.base import (
     ProcessDescriptor,
     ProviderGone,
+    ProviderInstance,
     ProviderObject,
 )
 from app.modules.workspace.services.sandbox_service import SandboxService
@@ -35,7 +36,13 @@ def provider() -> SweepableProvider:
 
 @pytest.fixture
 def service(provider: SweepableProvider, sandbox_uow_factory) -> SandboxService:
+    # Both caches are class attributes, so they outlive the instance and leak
+    # between tests. Only `_inflight` was being cleared, which left `_recent`
+    # to answer the second `ensure` of a test that had just emptied the
+    # provider -- so whether a test saw a re-provision depended on which tests
+    # ran before it.
     SandboxService._inflight.clear()
+    SandboxService._recent.clear()
     return SandboxService(provider=provider, uow_factory=sandbox_uow_factory)
 
 
@@ -110,7 +117,11 @@ async def test_a_superseded_epoch_is_reclaimed(
 ) -> None:
     sandbox = await _workspace(service)
     first = await service.ensure(sandbox.id)
+    # Losing the container is exactly what `forget` is for: `ensure` reuses a
+    # just-provisioned handle for a few seconds, so without this the second
+    # call answers from memory and no new epoch is ever minted.
     provider.containers.clear()
+    service.forget(sandbox.id)
     second = await service.ensure(sandbox.id)
     assert second.epoch > first.epoch
 
@@ -270,3 +281,111 @@ async def test_a_sandbox_that_cannot_be_probed_is_left_alone(
     provider.list_processes = _unreachable  # type: ignore[method-assign]
 
     assert await sweeper.release_idle(idle_after_seconds=0) == 0
+
+
+async def test_an_object_the_provider_cannot_reap_is_not_reported_as_reclaimed(
+    sweeper: SandboxSweeper, provider: SweepableProvider
+) -> None:
+    """A destroy that returns is not a destroy that happened.
+
+    On E2B a paused sandbox lists like any other but survives being killed, so
+    this loop logged eighteen reclaims every five minutes for hours -- the same
+    eighteen ids -- while the account held ninety-nine paused sandboxes and the
+    count never moved. Silence about that is worse than the leak: the sweep
+    looks like it is working.
+    """
+    orphan = uuid4()
+    name = f"lemma-ws-{orphan.hex}-1"
+    provider.objects = [_object(name=name, sandbox_id=orphan, epoch=1)]
+    # Accepts the call, keeps the object -- what killing a paused sandbox does.
+    provider.containers[name] = ProviderInstance(
+        provider_id=name, name=name, running=False
+    )
+
+    async def _destroy_that_does_nothing(destroyed_name: str, *, deadline_at) -> None:
+        del deadline_at
+        provider.destroyed.append(destroyed_name)
+
+    provider.destroy = _destroy_that_does_nothing  # type: ignore[method-assign]
+
+    reclaimed = await sweeper.reclaim_orphans()
+
+    assert provider.destroyed == [name], "the destroy must still be attempted"
+    assert reclaimed == (), "nothing was reclaimed, so nothing may be claimed"
+
+
+async def test_a_destroy_that_works_is_still_reported(
+    sweeper: SandboxSweeper, provider: SweepableProvider
+) -> None:
+    """The confirmation must not turn every real reclaim into a warning."""
+    orphan = uuid4()
+    name = f"lemma-ws-{orphan.hex}-1"
+    provider.objects = [_object(name=name, sandbox_id=orphan, epoch=1)]
+    provider.containers[name] = ProviderInstance(
+        provider_id=name, name=name, running=True
+    )
+
+    reclaimed = await sweeper.reclaim_orphans()
+
+    assert reclaimed == (name,)
+    assert provider.destroyed == [name]
+
+
+class _OpaqueIdProvider(SweepableProvider):
+    """A provider whose ids are nothing like its names, which E2B's are not.
+
+    `FakeProvider.create` returns `provider_id=spec.name`, so every other test
+    here has the two coincide and cannot see a caller that confuses them. E2B
+    mints its own (`i8fdef5eyd8zxnysl6bor`) against a name of
+    `lemma-ws-<hex>-<epoch>`, and the process index is written under the id.
+    """
+
+    async def create(self, spec):
+        instance = await super().create(spec)
+        opaque = ProviderInstance(
+            provider_id=f"i{abs(hash(spec.name)):x}",
+            name=spec.name,
+            volume_name=instance.volume_name,
+            running=True,
+            storage_adopted=instance.storage_adopted,
+            profile_digest=instance.profile_digest,
+        )
+        self.containers[instance.name] = instance
+        self.containers[opaque.provider_id] = opaque
+        self.probed_with = getattr(self, "probed_with", [])
+        return opaque
+
+    async def list_processes(self, instance, *, deadline_at):
+        self.probed_with = getattr(self, "probed_with", [])
+        self.probed_with.append(instance.provider_id)
+        return await super().list_processes(instance, deadline_at=deadline_at)
+
+
+async def test_the_liveness_probe_addresses_the_sandbox_by_its_provider_id(
+    sandbox_uow_factory,
+) -> None:
+    """The idle check has to reach the sandbox it is asking about.
+
+    E2B keys its process index by the real sandbox id, so a probe built from
+    the container name reads an index that is always empty -- an idle check
+    that returns is not an idle check that happened, and the sweep would pause
+    a sandbox mid-work. That is the exact harm the check exists to prevent, and
+    it is invisible wherever id and name coincide.
+    """
+    SandboxService._inflight.clear()
+    SandboxService._recent.clear()
+    provider = _OpaqueIdProvider()
+    service = SandboxService(provider=provider, uow_factory=sandbox_uow_factory)
+    sweeper = SandboxSweeper(service=service, uow_factory=sandbox_uow_factory)
+    sandbox = await _workspace(service)
+    handle = await service.ensure(sandbox.id)
+    provider.processes = [
+        ProcessDescriptor(process_id="op-1", state="running", exit_code=None)
+    ]
+
+    released = await sweeper.release_idle(idle_after_seconds=0)
+
+    assert provider.probed_with == [handle.provider_id], (
+        "the probe must carry the provider id, not the container name"
+    )
+    assert released == 0, "a sandbox with live work must not be paused"

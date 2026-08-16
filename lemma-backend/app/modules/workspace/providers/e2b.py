@@ -39,6 +39,7 @@ from datetime import datetime
 from uuid import UUID
 
 
+from app.core.log.log import get_logger
 from app.modules.workspace.domain.sandbox import SandboxKind
 from app.modules.workspace.providers.base import (
     ProviderCreateSpec,
@@ -60,6 +61,8 @@ from app.modules.workspace.providers.e2b_common import (
 )
 from app.modules.workspace.providers.e2b_ops import E2BOpsMixin
 from app.modules.workspace.providers.e2b_output import E2BOutputBuffer
+
+logger = get_logger(__name__)
 
 WORKSPACE_MOUNT = "/workspace"
 
@@ -179,13 +182,13 @@ class E2BSandboxProvider(E2BOpsMixin):
         a stale operation fails rather than landing on it.
         """
         existing = await self._find_any(spec.sandbox_id)
-        if existing is not None and existing.profile_digest != spec.profile_digest:
-            # Made from a different build of the template. Here the sandbox is
-            # the disk, so there is no way to keep the files and still move to
-            # the new image -- and leaving it would keep this workspace on the
-            # old template forever, talking a protocol the backend no longer
-            # speaks. Destroy it so the create below starts clean; the caller
-            # learns the disk is new from storage_adopted=False.
+        drifted = (
+            existing is not None
+            and existing.profile_digest != spec.profile_digest
+        )
+        if drifted and spec.kind is SandboxKind.FUNCTION:
+            # A function sandbox owns no durable disk, so replacing it to adopt
+            # a new digest costs a cold start and nothing else.
             #
             # Not best-effort: if the stale sandbox survives, the fresh one
             # carries the same sandbox-id metadata and a later lookup could
@@ -204,6 +207,25 @@ class E2BSandboxProvider(E2BOpsMixin):
             except ProviderGone:
                 pass
             existing = None
+        elif drifted:
+            # A workspace tolerates drift, and this is the whole reason the
+            # policy exists: here the sandbox *is* the disk, so killing it to
+            # adopt a new digest deletes the user's files. The digest is set by
+            # `WORKSPACE_PROFILE_DIGEST`, an environment variable -- so this
+            # branch used to mean that editing one env var and deploying wiped
+            # every workspace in the fleet, on the first ensure after rollout,
+            # with no confirmation and nothing to restore from.
+            #
+            # `Sandbox fabric` README §6 already states the intended behaviour:
+            # "While a workspace owns a disk it keeps running the profile it
+            # was created with, no generation fence is raised, and nothing is
+            # replaced", adopting the new profile only when it is next created
+            # from scratch. The accepted cost, stated there too, is that a
+            # workspace may run an N-1 template until then.
+            logger.info(
+                "workspace.e2b.profile_drift_tolerated",
+                sandbox_id=str(spec.sandbox_id),
+            )
         if existing is not None:
             await self._stamp(existing.provider_id, spec)
             return ProviderInstance(
@@ -288,17 +310,56 @@ class E2BSandboxProvider(E2BOpsMixin):
         kind: SandboxKind,
         deadline_at: datetime,
     ) -> None:
-        """Pause, keeping the filesystem. The next ensure resumes this sandbox."""
+        """Pause, keeping the filesystem. The next ensure resumes this sandbox.
+
+        `keep_memory=False` because the SDK's default is `True`, and this call
+        passed nothing -- so every workspace pause was preserving resident
+        memory, while both architecture documents said the opposite:
+        "A workspace pause is filesystem-only. Files persist; running processes
+        and interpreter state do not, and callers must not treat them as
+        recoverable." Auto-resume is already disabled here, which E2B only
+        requires *because* of filesystem-only snapshots, so the rest of the
+        design had been built around a property the one call that decides it
+        never asked for.
+
+        That gap is what made a leaked browser invisible. A memory-preserving
+        pause snapshots whatever is running and hands it to the next
+        conversation, so a headed Chrome survived every idle release without
+        ever being started again -- 63 processes and 2123 MB on a 2048 MB
+        sandbox, restored rather than respawned. Reading the docs told you it
+        could not happen.
+        """
+        del kind  # Both kinds pause the same way.
         sandbox = await self._connect(instance.provider_id)
         with sdk_errors():
-            await sandbox.beta_pause(**self._api())
+            await sandbox.beta_pause(keep_memory=False, **self._api())
 
     async def destroy(self, name: str, *, deadline_at: datetime) -> None:
+        """Kill a sandbox, addressed either by container name or by E2B id.
+
+        Both, because both are handed to this. `inspect` only understands
+        container names -- it parses one back into a metadata query -- but
+        `list_objects` names every object by its E2B sandbox id, since that is
+        what E2B reports. So the sweep's `destroy(obj.name)` parsed to nothing,
+        read as "already gone", and returned having killed nothing. That is why
+        the orphan sweep logged eighteen reclaims every five minutes for hours
+        against the same eighteen ids while the account's count never moved:
+        the destroy was a no-op for exactly the objects the sweep discovers.
+        """
+        from app.modules.workspace.providers import naming
+
         instance = await self.inspect(name, deadline_at=deadline_at)
-        if instance is None:
-            # Already gone is the outcome destroy was asking for.
+        provider_id = instance.provider_id if instance is not None else None
+        if provider_id is None and naming.parse_container_name(name) is None:
+            # Not one of our names, so it is an id -- which is the only other
+            # thing this is ever given, and `list_objects` has already
+            # established that it carries this platform's metadata.
+            provider_id = name
+        if provider_id is None:
+            # A name that parses but resolves to nothing really is gone, and
+            # that is the outcome destroy was asking for.
             return
-        sandbox = await self._connect(instance.provider_id)
+        sandbox = await self._connect(provider_id)
         with sdk_errors():
             await sandbox.kill(**self._api())
 
