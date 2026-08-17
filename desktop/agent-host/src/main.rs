@@ -429,6 +429,7 @@ async fn main() -> anyhow::Result<()> {
                 context: JsonMap::new(),
                 mcp: Value::Null,
                 run_deadline: chrono::Utc::now() + chrono::Duration::minutes(10),
+                system_prompt_delivery: None,
             };
             let outcome = AcpDriver
                 .run(

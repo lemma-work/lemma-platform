@@ -95,6 +95,63 @@ fn every_event_type_is_exhaustive() {
     }
 }
 
+/// The host must hand every field of a tool-call update through untouched.
+///
+/// This side owns only half the promise — the backend reads the arguments and
+/// the result back out of what lands here, and asserts that half against the
+/// same fixture. What the host has to guarantee is that nothing is dropped on
+/// the way: `rawInput` on a refining update is the only place a streamed call's
+/// arguments ever appear, so an update this normalizer declined to forward
+/// would leave them unrecoverable no matter what the backend did.
+#[test]
+fn tool_call_updates_survive_normalization() {
+    for case in contract()["tool_calls"]
+        .as_array()
+        .expect("tool_calls is a list")
+    {
+        let name = case["name"].as_str().unwrap_or("unnamed");
+        for update in case["updates"].as_array().expect("updates is a list") {
+            let parsed = serde_json::from_value(update.clone())
+                .unwrap_or_else(|error| panic!("case {name:?}: unparseable update: {error}"));
+            let (_, object_id, payload) = lemma_agent_host::acp::normalize_session_update(&parsed)
+                .unwrap_or_else(|| panic!("case {name:?}: {update} was dropped"));
+
+            assert_eq!(
+                object_id.as_deref(),
+                update["toolCallId"].as_str(),
+                "case {name:?}: the call's id did not survive"
+            );
+            for field in ["rawInput", "rawOutput", "title"] {
+                let Some(expected) = update.get(field) else {
+                    continue;
+                };
+                assert_eq!(
+                    payload.get(field),
+                    Some(expected),
+                    "case {name:?}: {field} did not survive normalization"
+                );
+            }
+            // `status` is the exception, and only in one direction. ACP makes
+            // `pending` the default and serde skips defaults, so an opening
+            // call arrives with no status at all — which is fine, because
+            // "pending" tells the backend nothing it does not already know from
+            // the call opening. A *terminal* status is the opposite: it is the
+            // only signal that the call is closed and its result is final, so
+            // losing one would leave the call open forever and the run would
+            // synthesize a return saying it never finished.
+            if let Some(status) = update["status"].as_str()
+                && status != "pending"
+            {
+                assert_eq!(
+                    payload.get("status").and_then(Value::as_str),
+                    Some(status),
+                    "case {name:?}: a terminal status did not survive normalization"
+                );
+            }
+        }
+    }
+}
+
 #[test]
 fn chunk_text_matches_the_contract() {
     for case in contract()["text_extraction"]

@@ -788,6 +788,7 @@ async fn poll(
             context: BTreeMap::new(),
             mcp: state.mcp.clone(),
             run_deadline: Utc::now() + chrono::Duration::minutes(3),
+            system_prompt_delivery: None,
         })
         .unwrap();
         commands.push(json!({

@@ -2,15 +2,19 @@
 
 Adapters vary in where they put a tool call's name, arguments, and result, so
 these probe several shapes rather than assuming one. ``bounded_tool_value`` is
-the guard that keeps a pathological payload — a megabyte of stdout, a deeply
+the guard that keeps a pathological *result* — a megabyte of stdout, a deeply
 nested object — from being persisted verbatim into a conversation message.
 
 That bounding is lossy on purpose, so anything that must survive intact (a
 structured final answer, say) has to be read from the raw payload *before* it
 passes through here.
+
+Arguments are deliberately exempt: see :func:`unbounded_tool_value`.
 """
 
 from __future__ import annotations
+
+import json
 
 from app.modules.agent.domain.value_objects import JsonObject, JsonValue
 from app.modules.agent.infrastructure.mcp import normalize_local_mcp_tool_name
@@ -95,15 +99,45 @@ def tool_metadata(metadata: JsonObject, payload: JsonObject) -> JsonObject:
     return result
 
 
+def raw_tool_args(payload: JsonObject) -> object:
+    """The arguments this payload reports, before any normalisation.
+
+    Separate from :func:`tool_args` because merging successive ACP updates has
+    to compare what each one *carried*, and cannot do that against a value that
+    has already been rewritten for one tool's spelling.
+    """
+    return first_present(payload, "arguments", "args", "rawInput")
+
+
 def tool_args(payload: JsonObject, tool_name: str) -> JsonValue:
-    value = first_present(payload, "arguments", "args", "rawInput")
+    value = raw_tool_args(payload)
     if tool_name == "exec_command" and isinstance(value, dict):
         normalized = dict(value)
         command = normalized.pop("command", None)
         if "cmd" not in normalized and isinstance(command, str):
             normalized["cmd"] = command
         value = normalized
-    return bounded_tool_value(value)
+    return unbounded_tool_value(value)
+
+
+def unbounded_tool_value(value: object) -> JsonValue:
+    """A tool's arguments, coerced to JSON-safe types but never truncated.
+
+    Bounding a *result* is a guard against a megabyte of stdout. Bounding the
+    *arguments* is data loss: they are what the conversation renders and what a
+    view is built from. ``display_resource(type="WIDGET")`` carries its whole
+    HTML document in ``content``, far past ``_MAX_TOOL_STRING_CHARACTERS``, so
+    the bound replaced the widget with a placeholder and left the card nothing
+    to render. The in-process harness stores arguments unbounded; this is the
+    same promise, so a conversation reads the same either way.
+    """
+    if isinstance(value, dict):
+        return {str(key): unbounded_tool_value(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [unbounded_tool_value(item) for item in value]
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    return str(value)
 
 
 def bounded_tool_value(value: object, *, depth: int = 0) -> JsonValue:
@@ -138,6 +172,37 @@ def bounded_tool_value(value: object, *, depth: int = 0) -> JsonValue:
     if value is None or isinstance(value, (bool, int, float)):
         return value
     return str(value)
+
+
+def unwrap_mcp_content(value: object) -> object:
+    """An MCP tool's own return value, out of the content blocks carrying it.
+
+    An adapter reports an MCP call's ``rawOutput`` as the MCP envelope — a list
+    of content blocks — while the in-process harness stores what the tool
+    actually returned. That difference is not cosmetic: the frontend reads a
+    result as an object, so an envelope arrives as ``{"output": [...]}`` and
+    every field the caller wanted (a served view's ``url``, a ``success`` flag)
+    is a level too deep to find.
+
+    Only the unambiguous case is unwrapped — a single text block whose text is
+    a JSON object. Anything else is the tool's answer as given: a genuinely
+    multi-part result is not an envelope around one value, and guessing which
+    part was meant would lose the rest.
+    """
+    blocks = value.get("content") if isinstance(value, dict) else value
+    if not isinstance(blocks, list) or len(blocks) != 1:
+        return value
+    block = blocks[0]
+    if not isinstance(block, dict) or block.get("type") != "text":
+        return value
+    text = block.get("text")
+    if not isinstance(text, str):
+        return value
+    try:
+        decoded = json.loads(text)
+    except (TypeError, ValueError):
+        return value
+    return decoded if isinstance(decoded, dict) else value
 
 
 def json_object(value: object) -> JsonObject:

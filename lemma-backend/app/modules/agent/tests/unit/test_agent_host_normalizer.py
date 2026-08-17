@@ -12,7 +12,7 @@ import json
 from uuid import uuid7
 
 from app.modules.agent.domain.agent_host import AgentHostEventType, AgentHostRunState
-from app.modules.agent.domain.value_objects import AgentEventType
+from app.modules.agent.domain.value_objects import AgentEventType, MessageKind
 from app.modules.agent.infrastructure.harnesses.agent_host_events import (
     AgentHostEventEnvelope,
     AgentHostEventNormalizer,
@@ -350,6 +350,192 @@ class TestToolCalls:
         assert len(_messages(opened)) == 1
         assert duplicate == []
         assert len(_messages(closed)) == 1
+
+    def test_a_streamed_call_keeps_the_arguments_that_arrive_after_it(self) -> None:
+        """The sequence a streaming adapter really sends, in order.
+
+        Claude Code surfaces the call at ``content_block_start``, before the
+        model has written its input, so the first ``tool_call`` carries
+        ``rawInput: {}``. The real arguments follow on a ``tool_call_update``
+        with no status at all — which the normalizer used to drop, because only
+        terminal statuses were treated as news. Every streamed tool call
+        therefore rendered with empty arguments for the life of the
+        conversation, and anything built from them had nothing to build from.
+        """
+        n = _normalizer()
+        request = {"type": "WIDGET", "content": "<div>hello</div>"}
+
+        opened = n.normalize(
+            _event(
+                1,
+                AgentHostEventType.TOOL_CALL_UPSERT,
+                {"rawInput": {}, "status": "pending", "title": "display_resource"},
+                object_id="call-1",
+            )
+        )
+        refined = n.normalize(
+            _event(
+                2,
+                AgentHostEventType.TOOL_CALL_UPDATE,
+                {"rawInput": {"request": request}, "title": "display_resource"},
+                object_id="call-1",
+            )
+        )
+
+        # Nothing durable while the arguments are still being written; a message
+        # is appended and never revised, so announcing `{}` would pin `{}`.
+        assert _messages(opened) == []
+        calls = _messages(refined)
+        assert len(calls) == 1
+        assert calls[0].data.tool_args == {"request": request}
+
+    def test_a_later_empty_update_does_not_erase_the_arguments(self) -> None:
+        """An adapter sends several refinements, and most of them carry nothing.
+
+        Observed on the wire: the update carrying ``rawInput`` is followed
+        immediately by one holding only the call's id. Folding that in
+        naively puts the empty value back and loses what was just learned.
+        """
+        n = _normalizer()
+        n.normalize(
+            _event(
+                1,
+                AgentHostEventType.TOOL_CALL_UPSERT,
+                {"rawInput": {}},
+                object_id="call-1",
+            )
+        )
+        n.normalize(
+            _event(
+                2,
+                AgentHostEventType.TOOL_CALL_UPDATE,
+                {"rawInput": {"path": "README.md"}},
+                object_id="call-1",
+            )
+        )
+        trailing = n.normalize(
+            _event(3, AgentHostEventType.TOOL_CALL_UPDATE, {}, object_id="call-1")
+        )
+        closed = n.normalize(
+            _event(
+                4,
+                AgentHostEventType.TOOL_CALL_UPDATE,
+                {"status": "COMPLETED", "rawOutput": "ok"},
+                object_id="call-1",
+            )
+        )
+
+        # The call was already announced with real arguments; the empty update
+        # adds nothing and must not produce a second card.
+        assert trailing == []
+        assert len(_messages(closed)) == 1
+
+    def test_a_call_whose_arguments_never_arrive_is_still_announced(self) -> None:
+        """Holding is for arguments in flight, never a way to lose a call.
+
+        If the turn ends while a call is still held — cancelled, adapter died,
+        or a tool genuinely invoked with nothing — the call happened and the
+        conversation still owes it a card, ahead of the return that closes it.
+        """
+        n = _normalizer()
+        n.normalize(
+            _event(
+                1,
+                AgentHostEventType.TOOL_CALL_UPSERT,
+                {"rawInput": {}, "title": "read_file"},
+                object_id="call-1",
+            )
+        )
+        finished = n.normalize(
+            _event(2, AgentHostEventType.TERMINAL, {"state": "FAILED"})
+        )
+
+        kinds = [m.data.kind for m in _messages(finished)]
+        assert MessageKind.TOOL_CALL in kinds
+        assert kinds.index(MessageKind.TOOL_CALL) < kinds.index(MessageKind.TOOL_RETURN)
+
+    def test_widget_arguments_are_not_truncated(self) -> None:
+        """Bounding a result guards against a megabyte of stdout. Bounding the
+        arguments is data loss: a WIDGET carries its whole document in
+        ``content``, and the 4096-character ceiling replaced it with a
+        placeholder, leaving the view nothing to render."""
+        n = _normalizer()
+        document = "<div>" + ("x" * 20_000) + "</div>"
+
+        n.normalize(
+            _event(
+                1,
+                AgentHostEventType.TOOL_CALL_UPSERT,
+                {"rawInput": {}},
+                object_id="call-1",
+            )
+        )
+        refined = n.normalize(
+            _event(
+                2,
+                AgentHostEventType.TOOL_CALL_UPDATE,
+                {"rawInput": {"request": {"type": "WIDGET", "content": document}}},
+                object_id="call-1",
+            )
+        )
+
+        assert _messages(refined)[0].data.tool_args["request"]["content"] == document
+
+    def test_an_mcp_result_is_the_value_the_tool_returned(self) -> None:
+        """An adapter reports an MCP call's output as the MCP envelope, while
+        the in-process harness stores what the tool returned. The frontend reads
+        a result as an object, so the envelope arrived as ``{"output": [...]}``
+        and the served view's ``url`` was a level too deep to find."""
+        n = _normalizer()
+        n.normalize(
+            _event(1, AgentHostEventType.TOOL_CALL_UPSERT, {}, object_id="call-1")
+        )
+        closed = n.normalize(
+            _event(
+                2,
+                AgentHostEventType.TOOL_CALL_UPDATE,
+                {
+                    "status": "COMPLETED",
+                    "rawOutput": {
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": '{"success": true, "url": "https://x/y"}',
+                            }
+                        ]
+                    },
+                },
+                object_id="call-1",
+            )
+        )
+
+        assert _messages(closed)[0].data.tool_result == {
+            "success": True,
+            "url": "https://x/y",
+        }
+
+    def test_a_multi_part_mcp_result_is_left_alone(self) -> None:
+        """Only the unambiguous envelope is unwrapped. A genuinely multi-part
+        result is not a wrapper around one value, and picking a part would lose
+        the rest."""
+        n = _normalizer()
+        blocks = [
+            {"type": "text", "text": '{"a": 1}'},
+            {"type": "text", "text": '{"b": 2}'},
+        ]
+        n.normalize(
+            _event(1, AgentHostEventType.TOOL_CALL_UPSERT, {}, object_id="call-1")
+        )
+        closed = n.normalize(
+            _event(
+                2,
+                AgentHostEventType.TOOL_CALL_UPDATE,
+                {"status": "COMPLETED", "rawOutput": {"content": blocks}},
+                object_id="call-1",
+            )
+        )
+
+        assert _messages(closed)[0].data.tool_result == {"content": blocks}
 
     def test_an_untagged_call_and_its_update_are_the_same_call(self) -> None:
         """ACP's ToolCall has no required id, so an adapter can report a call

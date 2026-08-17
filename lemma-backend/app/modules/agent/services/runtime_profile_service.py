@@ -19,6 +19,8 @@ from app.modules.agent.domain.agent_host import (
     AgentHostHarnessHealth,
     AgentHostStatus,
     effective_agent_host_status,
+)
+from app.modules.agent.domain.agent_host_selections import (
     validate_agent_host_model,
     validate_agent_host_selections,
 )

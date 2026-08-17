@@ -29,6 +29,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.log.log import get_logger
 from app.modules.agent.domain.agent_host import (
     AgentHostHarnessHealth,
+)
+from app.modules.agent.domain.agent_host_selections import (
     AgentHostSelectionRefused,
     carry_agent_host_model,
     carry_agent_host_selections,

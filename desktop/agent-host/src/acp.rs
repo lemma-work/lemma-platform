@@ -301,7 +301,7 @@ impl AgentDriver for AcpDriver {
                 // lets the agent answer "what did I just say" instead of meeting
                 // the user again every turn.
                 let mut established = None;
-                let resumed = resume_session_id.is_some();
+                let attempted_resume = resume_session_id.is_some();
                 if let Some(existing) = resume_session_id {
                     match connection
                         .send_request(
@@ -324,6 +324,18 @@ impl AgentDriver for AcpDriver {
                         ),
                     }
                 }
+                // Captured against the branch it describes, so the two cannot
+                // drift. `attempted_resume` is not the same fact: it says what
+                // this run meant to do, and is decided before the load. Only
+                // this says what the agent is actually holding — and a load
+                // that failed leaves a session that is new no matter what Lemma
+                // expected, which is exactly the case that has to keep its
+                // instructions.
+                let origin = if established.is_some() {
+                    SessionOrigin::Loaded
+                } else {
+                    SessionOrigin::New
+                };
                 let (session_id, config_options) = if let Some(established) = established {
                     established
                 } else {
@@ -352,7 +364,8 @@ impl AgentDriver for AcpDriver {
                         tracing::info!(
                             harness = %adapter_key,
                             published = published_config_options.len(),
-                            resumed,
+                            attempted_resume,
+                            origin = origin.as_str(),
                             "session reported no configuration; using the probed options"
                         );
                     }
@@ -468,7 +481,7 @@ impl AgentDriver for AcpDriver {
                 let turn = connection
                     .send_request(PromptRequest::new(
                         session_id.clone(),
-                        prompt_blocks(&run_spec),
+                        prompt_blocks(&run_spec, origin),
                     ))
                     .block_task();
                 tokio::pin!(turn);
@@ -647,8 +660,16 @@ fn build_agent(adapter: &ResolvedAdapter) -> AcpAgent {
 /// or an embedded resource means silently dropped: `PromptRequest` takes a
 /// `Vec<ContentBlock>` precisely so those can travel, and a block this build
 /// cannot parse falls back to its text rather than disappearing.
-fn prompt_blocks(spec: &RunSpec) -> Vec<ContentBlock> {
-    let mut blocks = vec![ContentBlock::Text(TextContent::new(render_prompt(spec)))];
+fn prompt_blocks(spec: &RunSpec, origin: SessionOrigin) -> Vec<ContentBlock> {
+    let mut blocks = Vec::new();
+    let text = render_prompt(spec, origin);
+    // Only when there is something to say. The system block used to guarantee
+    // this was non-empty, and now that it is conditional an image-only turn on
+    // a resumed session would otherwise open with an empty text block — which
+    // not every adapter accepts.
+    if !text.is_empty() {
+        blocks.push(ContentBlock::Text(TextContent::new(text)));
+    }
     blocks.extend(spec.prompt.iter().filter_map(structured_block));
     blocks
 }
@@ -672,9 +693,46 @@ fn structured_block(value: &Value) -> Option<ContentBlock> {
     }
 }
 
-fn render_prompt(spec: &RunSpec) -> String {
+/// Whether the session this turn is about to prompt was opened or resumed.
+///
+/// Not the same question as "did Lemma ask us to resume": a provider is free to
+/// forget a session, so a resume Lemma expected can still end in a new one.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum SessionOrigin {
+    New,
+    Loaded,
+}
+
+impl SessionOrigin {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::New => "new",
+            Self::Loaded => "loaded",
+        }
+    }
+}
+
+/// Whether this turn has to carry Lemma's instructions.
+///
+/// A conversation is one provider session, and the session keeps its own
+/// history — so instructions delivered on the turn that opened it are still
+/// there on every later turn. Re-sending them each time put another copy of a
+/// multi-kilobyte block into the provider's transcript per message, which the
+/// model then re-reads in full on every turn after.
+///
+/// Two independent reasons to send them anyway, and both matter. A new session
+/// has never seen them — including the case Lemma cannot predict, where a
+/// `session/load` it expected to succeed failed and left us with a fresh
+/// session that has neither history nor instructions. And Lemma asks outright
+/// when the instructions have changed since the session was told them, because
+/// a user can edit an agent mid-conversation.
+fn sends_instructions(spec: &RunSpec, origin: SessionOrigin) -> bool {
+    origin == SessionOrigin::New || spec.instructions_every_turn()
+}
+
+fn render_prompt(spec: &RunSpec, origin: SessionOrigin) -> String {
     let mut sections = Vec::new();
-    if !spec.system_prompt.trim().is_empty() {
+    if sends_instructions(spec, origin) && !spec.system_prompt.trim().is_empty() {
         sections.push(format!(
             "<system>\n{}\n</system>",
             spec.system_prompt.trim()
@@ -714,7 +772,15 @@ fn extract_text(value: &Value) -> Option<String> {
     }
 }
 
-fn normalize_session_update(
+/// One ACP session update as the event Lemma stores.
+///
+/// Public so `tests/wire_contract.rs` can hold it to the same shared fixture
+/// the backend's tool-call reader is held to. The two halves are separable and
+/// both load-bearing: this one promises that nothing an adapter reported is
+/// dropped on the way, and the backend's promises that it is read back out of
+/// the fields it landed in.
+#[must_use]
+pub fn normalize_session_update(
     update: &agent_client_protocol::schema::v1::SessionUpdate,
 ) -> Option<(EventType, Option<String>, JsonMap)> {
     let mut value = serde_json::to_value(update).ok()?;
@@ -1322,7 +1388,7 @@ mod tests {
             }),
         ];
 
-        let blocks = prompt_blocks(&spec);
+        let blocks = prompt_blocks(&spec, SessionOrigin::New);
 
         assert_eq!(blocks.len(), 2, "expected the text block and the image");
         assert!(matches!(blocks[0], ContentBlock::Text(_)));
@@ -1340,7 +1406,7 @@ mod tests {
         spec.system_prompt = "Be brief.".to_owned();
         spec.prompt = vec![serde_json::json!({"type": "text", "text": "Hello."})];
 
-        let blocks = prompt_blocks(&spec);
+        let blocks = prompt_blocks(&spec, SessionOrigin::New);
 
         assert_eq!(blocks.len(), 1);
         let ContentBlock::Text(text) = &blocks[0] else {
@@ -1348,6 +1414,71 @@ mod tests {
         };
         assert!(text.text.contains("Be brief."));
         assert!(text.text.contains("Hello."));
+    }
+
+    fn spec_delivered_once() -> RunSpec {
+        let mut spec = spec_resuming(Some("sess-1"));
+        spec.system_prompt_delivery = Some(crate::protocol::NEW_SESSION_ONLY.to_owned());
+        spec
+    }
+
+    /// A conversation is one provider session, and that session keeps its own
+    /// history — so instructions delivered when it opened are still there.
+    #[test]
+    fn a_resumed_turn_leaves_out_instructions_the_session_already_has() {
+        let rendered = render_prompt(&spec_delivered_once(), SessionOrigin::Loaded);
+
+        assert_eq!(rendered, "Hello");
+        assert!(!rendered.contains("<system>"));
+    }
+
+    /// The case Lemma cannot predict, and the reason this decision lives here.
+    ///
+    /// A provider is free to forget a session, so a `session/load` Lemma fully
+    /// expected to succeed can still leave us opening a fresh one. That session
+    /// has never seen the instructions, and Lemma has no way to know in
+    /// advance — deciding this at dispatch would produce a turn with neither
+    /// history nor instructions, which is the worst outcome available.
+    #[test]
+    fn a_session_that_had_to_be_recreated_still_gets_its_instructions() {
+        let rendered = render_prompt(&spec_delivered_once(), SessionOrigin::New);
+
+        assert!(
+            rendered.contains("<system>"),
+            "a session opened after a failed load has never seen them"
+        );
+    }
+
+    /// Absent or unrecognised means send them. An older Lemma does not set the
+    /// field at all, and a newer one may name a policy this build predates;
+    /// both have to degrade to the behaviour that is merely wasteful rather
+    /// than the one that silently un-instructs the agent.
+    #[test]
+    fn an_unknown_delivery_policy_still_sends_the_instructions() {
+        let mut absent = spec_resuming(Some("sess-1"));
+        absent.system_prompt_delivery = None;
+        assert!(render_prompt(&absent, SessionOrigin::Loaded).contains("<system>"));
+
+        let mut unknown = spec_resuming(Some("sess-1"));
+        unknown.system_prompt_delivery = Some("EVERY_THIRD_TUESDAY".to_owned());
+        assert!(render_prompt(&unknown, SessionOrigin::Loaded).contains("<system>"));
+    }
+
+    /// With the system block conditional, a turn can now render to nothing —
+    /// and an empty leading text block is not something every adapter accepts.
+    #[test]
+    fn a_resumed_image_only_turn_sends_no_empty_text_block() {
+        let mut spec = spec_delivered_once();
+        spec.prompt = vec![serde_json::json!({
+            "type": "image",
+            "data": "aGk=",
+            "mimeType": "image/png",
+        })];
+
+        let blocks = prompt_blocks(&spec, SessionOrigin::Loaded);
+
+        assert_eq!(blocks.len(), 1, "only the image should have been sent");
+        assert!(matches!(blocks[0], ContentBlock::Image(_)));
     }
 
     /// A block shape this build cannot parse must not take the turn down with
@@ -1360,7 +1491,7 @@ mod tests {
             serde_json::json!({"type": "something_new", "payload": 1}),
         ];
 
-        let blocks = prompt_blocks(&spec);
+        let blocks = prompt_blocks(&spec, SessionOrigin::New);
 
         assert_eq!(blocks.len(), 1);
     }
@@ -1390,13 +1521,14 @@ mod tests {
             context: JsonMap::new(),
             mcp: serde_json::Value::Null,
             run_deadline: chrono::Utc::now(),
+            system_prompt_delivery: None,
         }
     }
 
     #[test]
     fn prompt_rendering_keeps_system_and_text() {
         assert_eq!(
-            render_prompt(&spec_resuming(None)),
+            render_prompt(&spec_resuming(None), SessionOrigin::New),
             "<system>\nBe exact.\n</system>\n\nHello"
         );
     }
