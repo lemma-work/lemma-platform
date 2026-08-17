@@ -61,16 +61,16 @@ export function ConsentBanner() {
         >
             <h2
                 id="consent-banner-title"
-                className="text-[0.9375rem] leading-6 text-[var(--text-primary)]"
+                className="text-sm leading-6 text-[var(--text-primary)]"
             >
                 Can we remember this browser?
             </h2>
 
-            <p className="mt-2.5 text-sm leading-[1.65] text-[var(--text-secondary)]">
+            <p className="mt-2.5 text-sm leading-6 text-[var(--text-secondary)]">
                 We measure which parts of Lemma get used — never what is inside them. No records, no
                 files, no conversations, not even their names.
             </p>
-            <p className="mt-2.5 text-sm leading-[1.65] text-[var(--text-secondary)]">
+            <p className="mt-2.5 text-sm leading-6 text-[var(--text-secondary)]">
                 Yes keeps one identifier here, so your visits join up. No leaves nothing on your
                 device and every visit stays unlinked. Either way, we only ask once.
             </p>

@@ -56,7 +56,7 @@ export function AnalyticsPreference() {
                     <h2 className="mt-3 [font-family:var(--font-landing-serif)] text-2xl font-normal leading-tight text-[var(--text-primary)]">
                         Analytics in this browser
                     </h2>
-                    <p className="mt-3 text-[0.9375rem] leading-7 text-[var(--text-secondary)]">
+                    <p className="mt-3 text-sm leading-6 text-[var(--text-secondary)]">
                         <StatusCopy hydrated={hydrated} analyticsRuns={analyticsRuns} decision={decision} />
                     </p>
                 </div>

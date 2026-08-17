@@ -81,15 +81,15 @@ export function LegalPage({ document, action }: LegalPageProps) {
                 {/* ── Masthead */}
                 <section className="pb-12 pt-14 sm:pt-20 lg:pt-24">
                     <p className="type-eyebrow-mono">Legal</p>
-                    <h1 className="mt-6 max-w-[16ch] [font-family:var(--font-landing-serif)] text-[3.25rem] font-normal leading-[0.95] tracking-[-0.01em] text-[var(--text-primary)] sm:text-7xl">
+                    <h1 className="mt-6 max-w-[16ch] [font-family:var(--font-landing-serif)] text-5xl font-normal leading-none tracking-normal text-[var(--text-primary)] sm:text-7xl">
                         {document.title}
                     </h1>
-                    <p className="mt-7 max-w-[60ch] text-lg leading-[1.7] text-[var(--text-secondary)]">
+                    <p className="mt-7 max-w-[60ch] text-lg leading-8 text-[var(--text-secondary)]">
                         {document.description}
                     </p>
                     <div className="mt-8 flex flex-wrap items-center gap-x-5 gap-y-2 text-sm text-[var(--text-tertiary)]">
                         <span>Effective {document.effectiveDate}</span>
-                        <span aria-hidden="true" className="hidden h-1 w-1 rounded-full bg-[var(--border-default)] sm:inline-block" />
+                        <span aria-hidden="true" className="hidden h-1 w-1 rounded-full bg-[var(--row-border)] sm:inline-block" />
                         <Link
                             href={`mailto:${config.SUPPORT_EMAIL}`}
                             className="inline-flex items-center gap-1 transition-colors hover:text-[var(--text-primary)]"
@@ -107,7 +107,7 @@ export function LegalPage({ document, action }: LegalPageProps) {
                         {document.summary.map((item, index) => (
                             <p
                                 key={item}
-                                className="max-w-[38ch] text-[0.9375rem] leading-[1.7] text-[var(--text-secondary)]"
+                                className="max-w-[38ch] text-sm leading-6 text-[var(--text-secondary)]"
                             >
                                 <span
                                     aria-hidden="true"
@@ -131,13 +131,13 @@ export function LegalPage({ document, action }: LegalPageProps) {
                                     key={entry.question}
                                     className="border-t border-[var(--row-border)] py-7 sm:pr-10"
                                 >
-                                    <p className="text-[0.9375rem] leading-6 text-[var(--text-primary)]">
+                                    <p className="text-sm leading-6 text-[var(--text-primary)]">
                                         {entry.question}
                                     </p>
-                                    <p className="mt-3 [font-family:var(--font-landing-serif)] text-[1.75rem] font-normal leading-none text-[var(--action-primary)]">
+                                    <p className="mt-3 [font-family:var(--font-landing-serif)] text-2xl font-normal leading-none text-[var(--action-primary)]">
                                         {entry.answer}
                                     </p>
-                                    <p className="mt-4 max-w-[42ch] text-sm leading-[1.7] text-[var(--text-secondary)]">
+                                    <p className="mt-4 max-w-[42ch] text-sm leading-6 text-[var(--text-secondary)]">
                                         {entry.detail}
                                     </p>
                                 </div>
@@ -157,9 +157,9 @@ export function LegalPage({ document, action }: LegalPageProps) {
                                 <a
                                     key={section.title}
                                     href={`#${toSectionId(section.title)}`}
-                                    className="flex items-baseline gap-3 text-[0.8125rem] leading-6 text-[var(--text-secondary)] transition-colors hover:text-[var(--text-primary)]"
+                                    className="flex items-baseline gap-3 text-sm leading-6 text-[var(--text-secondary)] transition-colors hover:text-[var(--text-primary)]"
                                 >
-                                    <span className="font-mono text-[0.6875rem] text-[var(--text-soft)]">
+                                    <span className="font-mono text-xs text-[var(--text-soft)]">
                                         {ordinal(index)}
                                     </span>
                                     <span>{section.title}</span>
@@ -176,12 +176,12 @@ export function LegalPage({ document, action }: LegalPageProps) {
                                 className="scroll-mt-24 border-t border-[var(--row-border)] py-10 first:border-t-0 first:pt-0 sm:py-12 sm:first:pt-0"
                             >
                                 <p className="type-eyebrow-mono">{ordinal(index)}</p>
-                                <h2 className="mt-4 max-w-[22ch] [font-family:var(--font-landing-serif)] text-[1.75rem] font-normal leading-[1.15] tracking-[-0.005em] text-[var(--text-primary)] sm:text-[2rem]">
+                                <h2 className="mt-4 max-w-[22ch] [font-family:var(--font-landing-serif)] text-2xl font-normal leading-tight tracking-normal text-[var(--text-primary)]">
                                     {section.title}
                                 </h2>
 
                                 {section.body ? (
-                                    <p className="mt-6 max-w-[68ch] text-base leading-[1.75] text-[var(--text-secondary)]">
+                                    <p className="mt-6 max-w-[68ch] text-base leading-7 text-[var(--text-secondary)]">
                                         {section.body}
                                     </p>
                                 ) : null}
@@ -231,16 +231,16 @@ function ListItem({ item }: { item: LegalListItem }) {
         <li className="relative pl-6">
             <span
                 aria-hidden="true"
-                className="absolute left-0 top-[0.85em] h-px w-3.5 bg-[var(--border-default)]"
+                className="absolute left-0 top-[0.85em] h-px w-3.5 bg-[var(--row-border)]"
             />
-            <p className="text-base leading-[1.75] text-[var(--text-secondary)]">
+            <p className="text-base leading-7 text-[var(--text-secondary)]">
                 {item.label ? (
                     <span className="text-[var(--text-primary)]">{item.label}. </span>
                 ) : null}
                 {item.text}
             </p>
             {item.children?.length ? (
-                <ul className="mt-3 space-y-2 pl-4 text-[0.9375rem] leading-[1.7] text-[var(--text-tertiary)]">
+                <ul className="mt-3 space-y-2 pl-4 text-sm leading-6 text-[var(--text-tertiary)]">
                     {item.children.map((child) => (
                         <li key={child} className="list-disc">
                             {child}
