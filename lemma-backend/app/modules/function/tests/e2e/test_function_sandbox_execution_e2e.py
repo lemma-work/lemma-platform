@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid7
 
@@ -259,3 +260,109 @@ async def test_api_and_job_execute_through_one_per_pod_docker_sandbox(
         if "runtime_http_clients" in locals():
             await runtime_http_clients.close()
         settings.function_runtime_gateway_url = original_gateway_url
+
+
+@pytest.mark.asyncio
+async def test_a_destroyed_sandbox_behind_a_warm_endpoint_costs_no_failed_run(
+    local_sandbox_server,
+    backend_server,
+    configure_workspace_api_url,
+    db_manager,
+    db_session,
+    test_pod,
+    fixed_test_user,
+    e2e_settings,
+) -> None:
+    """The residual from the 2026-08-16 P0, closed.
+
+    Quarantine turned a permanent outage into a single failed run: the run that
+    discovered the dead endpoint still failed, because `InvocationOutcomeUnconfirmed`
+    is never replayed. That is the right default -- a replayed function can
+    write its side effects twice -- but it is too strict for one case. When the
+    connection is *refused*, the request was never delivered and nothing ran, so
+    re-resolving and retrying is provably safe.
+
+    Reproduced the way production reached it: a warm cached endpoint pointing at
+    a sandbox that no longer exists. The dispatcher keeps its endpoint cache
+    across runs and re-acquires warm, so the second run dials the dead address
+    rather than resolving a fresh one.
+    """
+    del e2e_settings
+    pod_id = UUID(test_pod["id"])
+    user_id = UUID(fixed_test_user["id"])
+    original_gateway_url = settings.function_runtime_gateway_url
+    settings.function_runtime_gateway_url = configure_workspace_api_url[
+        "workspace_callback_url"
+    ]
+
+    def client_factory() -> LocalSandboxClient:
+        from app.modules.workspace.services.sandbox_composition import (
+            build_local_client,
+        )
+
+        return build_local_client()
+
+    runtime_http_clients = FunctionRuntimeHttpClientPool()
+    try:
+        # One dispatcher for both runs: the endpoint cache is what makes the
+        # second run reuse the address of a sandbox that is already gone.
+        dispatcher = FunctionDispatcher(
+            uow_factory=SessionUnitOfWorkFactory(db_manager.session_factory),
+            sandbox_client_factory=client_factory,
+            token_minter=mint_function_session_token,
+            token_cache=FunctionSessionTokenCache(),
+            endpoint_cache=FunctionRuntimeEndpointCache(),
+            runtime_http_client_factory=runtime_http_clients.get,
+            organization_resolver=resolve_workspace_organization_id,
+            delegated_tokens_enabled=settings.authz_delegated_tokens_enabled,
+        )
+
+        warm_run_id = await _create_run(
+            db_session, pod_id=pod_id, user_id=user_id, kind=FunctionType.API, value=20
+        )
+        warm = await dispatcher.execute(
+            warm_run_id, mode=FunctionDispatchMode.SYNCHRONOUS
+        )
+        assert warm.status == FunctionRunStatus.COMPLETED, warm.error
+
+        async with client_factory() as client:
+            before = await client.inspect_sandbox(WorkloadKind.FUNCTION, pod_id)
+            assert before is not None and before.ready
+            await client.destroy_sandbox(
+                WorkloadKind.FUNCTION,
+                pod_id,
+                deadline_at=datetime.now(timezone.utc) + timedelta(seconds=15),
+            )
+
+        after_run_id = await _create_run(
+            db_session, pod_id=pod_id, user_id=user_id, kind=FunctionType.API, value=21
+        )
+        recovered = await dispatcher.execute(
+            after_run_id, mode=FunctionDispatchMode.SYNCHRONOUS
+        )
+
+        # Before this change the run above failed with "response was lost" and
+        # only the *next* one succeeded.
+        assert recovered.status == FunctionRunStatus.COMPLETED, recovered.error
+        assert recovered.output_data == {"result": 42}
+
+        async with client_factory() as client:
+            replacement = await client.inspect_sandbox(WorkloadKind.FUNCTION, pod_id)
+        assert replacement is not None and replacement.ready
+        # The sandbox is one-per-pod, so its logical id is stable across
+        # replacement and cannot show this. The epoch is the fence -- a name
+        # built from epoch 1 cannot resolve once the sandbox has moved to 2 --
+        # so a bumped epoch is what proves the retry ran somewhere new.
+        assert replacement.allocation_epoch > before.allocation_epoch, (
+            "the retry landed on the sandbox that was just destroyed"
+        )
+    finally:
+        await runtime_http_clients.close()
+        settings.function_runtime_gateway_url = original_gateway_url
+        async with client_factory() as client:
+            with contextlib.suppress(Exception):
+                await client.destroy_sandbox(
+                    WorkloadKind.FUNCTION,
+                    pod_id,
+                    deadline_at=datetime.now(timezone.utc) + timedelta(seconds=15),
+                )

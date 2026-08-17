@@ -11961,6 +11961,11 @@
             ],
             "title": "Connector Trigger Id"
           },
+          "consecutive_failures": {
+            "default": 0,
+            "title": "Consecutive Failures",
+            "type": "integer"
+          },
           "created_at": {
             "format": "date-time",
             "title": "Created At",
@@ -12057,6 +12062,12 @@
             ],
             "title": "Name"
           },
+          "paused_by_failures": {
+            "description": "True when the failure breaker paused this schedule, as opposed to a person pausing it. Reactivating resets the failure count.",
+            "readOnly": true,
+            "title": "Paused By Failures",
+            "type": "boolean"
+          },
           "pod_id": {
             "anyOf": [
               {
@@ -12127,7 +12138,8 @@
           "is_active",
           "is_internal",
           "created_at",
-          "updated_at"
+          "updated_at",
+          "paused_by_failures"
         ],
         "title": "ScheduleDetailResponse",
         "type": "object"

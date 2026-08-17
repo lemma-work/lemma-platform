@@ -902,6 +902,135 @@ async def test_function_record_write_honors_record_grants_for_all_table_types(
     assert payload["items"][0]["title"] == "granted"
 
 
+def _bulk_facade_function_code(function_name: str, table_name: str) -> str:
+    """A function that writes a realistic number of rows the way one should.
+
+    Every call here goes through ``pod.table(...)``, which until now had no
+    batch path at all -- ``list/create/get/update/delete`` and nothing else. A
+    caller holding a table handle therefore wrote N rows as N ``create`` calls,
+    and from inside a sandbox each one is a full round trip back to the API. A
+    benchmark probe did exactly that and spent 17 of its 17.3 seconds on them.
+    """
+    return f"""#input_type_name: BulkInput
+#output_type_name: BulkResult
+#function_name: {function_name}
+
+from pydantic import BaseModel
+from lemma_sdk import FunctionContext, Pod
+
+class BulkInput(BaseModel):
+    rows: int
+
+class BulkResult(BaseModel):
+    created: int
+    updated: int
+    deleted: int
+    upserted: int
+    first_id: str
+    retitled: str
+
+async def {function_name}(ctx: FunctionContext, data: BulkInput) -> BulkResult:
+    pod = Pod.from_env()
+    t = pod.table("{table_name}")
+
+    created = t.bulk_create(
+        [{{"title": f"row-{{index}}", "note": "seed"}} for index in range(data.rows)]
+    )
+    rows = t.list(limit=data.rows).to_dict()["items"]
+    ids = sorted(str(row["id"]) for row in rows)
+
+    updated = t.bulk_update([{{"id": ids[0], "title": "renamed"}}])
+    # An upsert on an existing primary key must update, not fail the request --
+    # this is what makes re-seeding idempotent.
+    upserted = t.bulk_create([{{"id": ids[1], "title": "upserted"}}], upsert=True)
+    deleted = t.bulk_delete(ids[-2:])
+
+    return BulkResult(
+        created=created,
+        updated=updated,
+        deleted=deleted,
+        upserted=upserted,
+        first_id=ids[0],
+        retitled=str(t.get(ids[0])["title"]),
+    )"""
+
+
+@pytest.mark.asyncio
+async def test_a_function_writes_many_rows_through_the_table_facade(
+    authenticated_client,
+    test_pod,
+    worker,
+):
+    """``pod.table(...).bulk_*`` reaches the real bulk endpoints and is correct.
+
+    The unit tests pin that each facade method delegates to the right endpoint
+    with the table bound and the body intact; they cannot show that the round
+    trip works. This runs the real SDK against the real API and Postgres.
+    """
+    pod_id = test_pod["id"]
+    suffix = uuid4().hex[:8]
+    function_name = f"bulk_writer_{suffix}"
+    table_name = f"bulk_rows_{suffix}"
+    rows = 50
+
+    await _create_table(authenticated_client, pod_id, table_name, enable_rls=False)
+    await _create_function(
+        authenticated_client,
+        pod_id,
+        {
+            "name": function_name,
+            "description": "Batch writes through the bound table helper",
+            "type": "API",
+            "code": _bulk_facade_function_code(function_name, table_name),
+        },
+    )
+    await _replace_function_resource_grants(
+        authenticated_client,
+        pod_id,
+        function_name,
+        [
+            {
+                "resource_type": "function",
+                "resource_name": function_name,
+                "permission_ids": ["function.read"],
+            },
+            {
+                "resource_type": "datastore_table",
+                "resource_name": table_name,
+                "permission_ids": [
+                    "datastore.table.read",
+                    "datastore.record.read",
+                    "datastore.record.write",
+                ],
+            },
+        ],
+    )
+
+    run = await _run_function(
+        authenticated_client, pod_id, function_name, {"rows": rows}
+    )
+    output = run["output_data"]
+
+    # Each bulk call reports the rows it affected, not a bare acknowledgement.
+    assert output["created"] == rows, output
+    assert output["updated"] == 1, output
+    assert output["upserted"] == 1, output
+    assert output["deleted"] == 2, output
+    assert output["retitled"] == "renamed", output
+
+    records_response = await authenticated_client.get(
+        f"/pods/{pod_id}/datastore/tables/{table_name}/records",
+        params={"limit": rows},
+    )
+    assert records_response.status_code == status.HTTP_200_OK, records_response.text
+    payload = records_response.json()
+    # The upsert landed on the existing row rather than inserting a duplicate,
+    # so the only rows missing are the two that were deleted.
+    assert payload["total"] == rows - 2, payload
+    titles = {item["title"] for item in payload["items"]}
+    assert "renamed" in titles and "upserted" in titles, titles
+
+
 @pytest.mark.asyncio
 async def test_function_record_write_requires_record_write_not_table_update(
     authenticated_client,

@@ -117,29 +117,28 @@ a healthy steady state, which is the failure these exist to catch.
 
 ### HTTP semantic conventions
 
-`OTEL_SEMCONV_STABILITY_OPT_IN=http/dup` is set in-process before the aiohttp
+`OTEL_SEMCONV_STABILITY_OPT_IN=http` is set in-process before the aiohttp
 and httpx instrumentations are installed. Those two default to the superseded
 conventions, which key outbound calls by `net.peer.name` — and that key is not
 on the metric allowlist, so every third party collapsed into one series. pyqwest
 (via `e2b` and `connectrpc`) already emits the stable conventions, so the
 process was describing the same calls two ways.
 
-**`dup`, not `http`, and the distinction matters.** This variable is
-process-global, and the ASGI/FastAPI **server** instrumentation reads it too.
-Setting it to `http` would also rename the inbound histogram —
-`http.server.duration` (ms) → `http.server.request.duration` (s) — silently
-breaking every dashboard on request latency, which is not a change anyone asked
-for by wanting a host label on outbound calls.
+**It was `http/dup` first, and the migration is now finished.** The variable is
+process-global and the ASGI/FastAPI **server** instrumentation reads it too, so
+`http` renames the inbound histogram as well — `http.server.duration` (ms) →
+`http.server.request.duration` (s). `dup` emitted both vocabularies at once so
+that rename could not break any dashboard on request latency:
 
-`dup` emits both vocabularies at once:
-
-| | old (still emitted) | new (also emitted) |
+| | superseded | stable |
 |---|---|---|
 | client | `http.client.duration` (ms) | `http.client.request.duration` (s), with `server.address` |
 | server | `http.server.duration` (ms) | `http.server.request.duration` (s) |
 
-Nothing breaks, the new dimensions are available immediately, and dashboards
-migrate on their own schedule. The cost is duplicate series while both are live.
+Every inbound-latency panel reads `http.server.request.duration` now, so the
+superseded series — 26 of them, still being paid for — have been switched off.
+A deployment that still needs them can set the variable to `http/dup` itself;
+the code only supplies a default.
 
 Flipping to plain `http` and dropping the old series is a deliberate follow-up —
 do it once the dashboards read the new names, not as a side effect of this. A

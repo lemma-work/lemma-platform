@@ -80,7 +80,10 @@ describe("declared events are emitted or named as gaps", () => {
         // Same ratchet as the backend's KNOWN_GAPS: a declared event nothing
         // raises is a permanently-zero dashboard, and the bad version is the one
         // nobody knows about.
-        const emitted = ["share_link.viewed", "import.started"];
+        // `client.error` is raised by app/global-error.tsx, the root error
+        // boundary — the only place that can see an error which escaped
+        // everything below it.
+        const emitted = ["share_link.viewed", "import.started", "client.error"];
         const accounted = new Set([...emitted, ...KNOWN_UNEMITTED]);
         const unaccounted = Object.keys(CLIENT_CATALOG).filter((n) => !accounted.has(n as never));
         expect(unaccounted).toEqual([]);

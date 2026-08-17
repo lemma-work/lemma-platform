@@ -102,7 +102,9 @@ class ConnectorOperationUseCases:
         # Only infrastructure and timeout failures feed the breaker; a rejected
         # request or a stale credential is the caller's problem and must not
         # disable the operation for everyone else.
-        scope_key = breaker_scope(resolved.connector_id, operation_name)
+        scope_key = breaker_scope(
+            resolved.connector_id, operation_name, resolved.organization_id
+        )
         await breaker_guard(scope_key)
         try:
             response = await self._attempt_with_credential_refresh(

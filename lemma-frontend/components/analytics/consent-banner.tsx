@@ -21,6 +21,13 @@ import { config, isLocalDeployment } from '@/lib/config';
  * persistence in place, which keeps the anonymous id established before the
  * answer, so a landing→signup funnel is not broken by the act of consenting.
  *
+ * The copy says what is actually being asked. "We use cookies to improve your
+ * experience" is not a question, and neither was the version of this that led
+ * with "we measure how Lemma is used so we can make it better" — that is a
+ * statement of our motives, and our motives are not the thing being consented
+ * to. What is being consented to is one identifier, in this browser, that makes
+ * two visits into one visitor. So that is the sentence.
+ *
  * Never rendered where analytics does not run at all: no key, or a Desktop-local
  * install. Asking for consent to something that is not happening is worse than
  * not asking.
@@ -47,28 +54,42 @@ export function ConsentBanner() {
     return (
         <div
             role="dialog"
+            aria-modal="false"
+            aria-labelledby="consent-banner-title"
             aria-live="polite"
-            aria-label="Analytics preferences"
-            className="lemma-pop-card fixed bottom-4 left-4 z-[1200] max-w-sm p-4"
+            className="lemma-pop-card animate-slide-up fixed bottom-4 left-4 right-4 z-[1200] p-5 sm:right-auto sm:max-w-[25rem]"
         >
-            <p className="text-sm text-[var(--text-primary)]">
-                We measure how Lemma is used so we can make it better. Nothing you build —
-                records, files or agent conversations — is ever sent.
+            <h2
+                id="consent-banner-title"
+                className="text-sm leading-6 text-[var(--text-primary)]"
+            >
+                Can we remember this browser?
+            </h2>
+
+            <p className="mt-2.5 text-sm leading-6 text-[var(--text-secondary)]">
+                We measure which parts of Lemma get used — never what is inside them. No records, no
+                files, no conversations, not even their names.
             </p>
-            <p className="mt-2 text-xs text-[var(--text-secondary)]">
-                Accepting stores a small identifier on this device.{' '}
-                <Link href="/privacy" className="underline underline-offset-2">
-                    How we handle data
-                </Link>
-                .
+            <p className="mt-2.5 text-sm leading-6 text-[var(--text-secondary)]">
+                Yes keeps one identifier here, so your visits join up. No leaves nothing on your
+                device and every visit stays unlinked. Either way, we only ask once.
             </p>
-            <div className="mt-3 flex gap-2">
-                <Button size="sm" onClick={() => decide('granted')}>
-                    Accept
+
+            <div className="mt-4 flex items-center gap-2">
+                <Button size="sm" variant="primary" onClick={() => decide('granted')}>
+                    Allow
                 </Button>
+                {/* Same size, same prominence. A decline styled as a whisper is
+                    an answer designed not to be given. */}
                 <Button size="sm" variant="secondary" onClick={() => decide('denied')}>
-                    Decline
+                    No thanks
                 </Button>
+                <Link
+                    href="/privacy#product-analytics"
+                    className="ml-auto text-xs text-[var(--text-tertiary)] underline underline-offset-4 transition-colors hover:text-[var(--text-primary)]"
+                >
+                    What we collect
+                </Link>
             </div>
         </div>
     );

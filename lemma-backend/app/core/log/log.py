@@ -426,9 +426,19 @@ class _SafeExceptionFilter(logging.Filter):
 # loud for everything else it says.
 _CLIENT_DISCONNECT_LOGGERS = ("asyncio", "uvicorn.error")
 _CLIENT_DISCONNECT_EXCEPTION = "ConnectionClosed"
-# Both markers must appear. `ConnectionClosed` alone is too broad -- it also
-# covers a socket that failed mid-write, which is worth seeing.
-_CLIENT_DISCONNECT_MARKERS = ("keepalive ping timeout", "no close frame received")
+# One marker, deliberately. This required both `keepalive ping timeout` *and*
+# `no close frame received`, which is only one of the four strings
+# `ConnectionClosed.__str__` can build. The other three still logged at ERROR:
+# 26 a day survived the filter in production, all of them the branch where the
+# client misses the pong deadline and *then* echoes a close frame -- a slow
+# client, which is exactly what this exists to ignore.
+#
+# The second marker was justified on the grounds that `ConnectionClosed` alone
+# is too broad, covering a socket that failed mid-write. That check is real but
+# it is the separate `_CLIENT_DISCONNECT_EXCEPTION` test below; the marker was
+# not carrying the weight it was credited with. A keepalive timeout is a
+# keepalive timeout however the peer chose to close.
+_CLIENT_DISCONNECT_MARKERS = ("keepalive ping timeout",)
 
 
 class _ClientDisconnectFilter(logging.Filter):
