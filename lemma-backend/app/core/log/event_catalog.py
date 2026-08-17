@@ -533,6 +533,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'workspace.local_sandbox_client.adopted_sandbox_not_serving': EventSpec('warning', frozenset({'sandbox_id', 'error_type'})),
     'function.runtime.sandbox_quarantined': EventSpec('info', frozenset({'pod_id'})),
     'function.runtime.quarantine_failed': EventSpec('warning', frozenset({'pod_id'})),
+    'function.runtime.reresolved_after_refused_connection': EventSpec('info', frozenset({'pod_id', 'run_id'})),
     'runtime.loop_stall.degraded': EventSpec('warning', frozenset({'service', 'stack_frames', 'other_thread_frames', 'stalled_ms', 'threshold_ms'})),
     'runtime.memory.degraded': EventSpec('warning', frozenset({'baseline_mib', 'growth_mib', 'parked_mcp_tasks', 'rss_mib', 'service', 'stack_frames', 'threshold_mib', 'total_tasks'})),
     'runtime.memory.recovered': EventSpec('info', frozenset({'degraded_duration_ms', 'peak_rss_mib', 'service'})),
