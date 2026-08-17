@@ -11,14 +11,14 @@ only a promise marked `covered` with no test is.
 
 | Status | Scenarios |
 | --- | ---: |
-| `covered` | 123 |
+| `covered` | 125 |
 | `gap` | 11 |
 | `manual` | 0 |
-| `planned` | 26 |
+| `planned` | 24 |
 | `withdrawn` | 0 |
 | **total** | **160** |
 
-Scenario tests declaring a promise: 272.
+Scenario tests declaring a promise: 275.
 
 ## Contract coverage
 
@@ -44,7 +44,7 @@ the module suites may cover it — but it is untested *as product*.
 | `PS-AGENT-012` A person can stop an agent | `covered` | `test_stopping_a_run_leaves_the_conversation_usable` |
 | `PS-AGENT-013` A failed run can be tried again | `covered` | `test_retrying_a_healthy_run_is_refused` |
 | `PS-AGENT-014` A conversation is private to the pod | `covered` | `test_an_outsider_cannot_read_a_conversation` |
-| `PS-AGENT-020` Consequential actions come back to a person first | `covered` | `test_deciding_an_unknown_approval_is_refused`, `test_approvals_are_listable`, `test_approving_runs_the_described_action`, `test_denying_leaves_the_action_undone`, `test_a_destructive_attempt_asks_rather_than_failing_silently` |
+| `PS-AGENT-020` Consequential actions come back to a person first | `covered` | `test_deciding_an_unknown_approval_is_refused`, `test_approvals_are_listable`, `test_approving_runs_the_described_action`, `test_denying_leaves_the_action_undone`, `test_a_destructive_attempt_asks_rather_than_failing_silently`, `test_an_approval_is_offered_with_native_controls` |
 | `PS-AGENT-021` An agent can ask a person a question mid-run | `planned` | — |
 | `PS-AGENT-022` Every action is attributable | `planned` | — |
 | `PS-AGENT-030` An agent can delegate to a subagent | `planned` | — |
@@ -177,7 +177,7 @@ the module suites may cover it — but it is untested *as product*.
 | `PS-SCHED-010` A pod reacts to a webhook from outside | `planned` | — |
 | `PS-SCHED-011` A pod reacts to its own data changing | `covered` | `test_a_record_change_fires_a_schedule`, `test_an_unwatched_operation_does_not_fire`, `test_another_table_does_not_fire` |
 | `PS-SCHED-012` A person can narrow what actually triggers | `planned` | — |
-| `PS-SCHED-020` Work fires once, however many times the trigger arrives | `planned` | — |
+| `PS-SCHED-020` Work fires once, however many times the trigger arrives | `covered` | `test_a_repeated_delivery_is_answered_once`, `test_a_raced_delivery_is_answered_once` |
 | `PS-SCHED-021` A person can see every firing and how it went | `covered` | `test_a_schedules_history_is_readable`, `test_a_record_change_fires_a_schedule`, `test_an_outsider_cannot_read_history` |
 | `PS-SCHED-022` A firing that fails is retried, and then given up on visibly | `covered` | `test_retrying_an_unknown_firing_is_refused` |
 | `PS-SCHED-023` A schedule that keeps failing is turned off and reported | `planned` | — |
@@ -208,12 +208,12 @@ the module suites may cover it — but it is untested *as product*.
 | `PS-SURF-002` Setting up a platform does not require reading its documentation | `covered` | `test_a_slack_manifest_is_generated`, `test_a_managed_bot_setup_says_what_is_missing`, `test_a_consent_callback_without_a_grant_is_refused`, `test_a_setup_guide_is_available` |
 | `PS-SURF-003` A person changes or removes a surface | `covered` | `test_a_surface_can_be_repointed`, `test_deleting_a_surface_stops_it` |
 | `PS-SURF-010` Only genuine messages from the platform are acted on | `covered` | `test_an_unknown_sender_is_told_how_to_get_access`, `test_an_unsigned_delivery_is_rejected`, `test_a_wrongly_signed_delivery_is_rejected`, `test_a_surface_webhook_can_be_verified`, `test_the_manager_webhook_rejects_unsigned`, `test_webhook_verification_needs_no_session`, `test_an_unsigned_webhook_is_rejected` |
-| `PS-SURF-011` The same message delivered twice is answered once | `covered` | `test_a_repeated_delivery_is_answered_once` |
+| `PS-SURF-011` The same message delivered twice is answered once | `covered` | `test_a_repeated_delivery_is_answered_once`, `test_a_raced_delivery_is_answered_once` |
 | `PS-SURF-012` A person on a platform is resolved to who they are in Lemma | `covered` | `test_an_unknown_sender_is_told_how_to_get_access` |
 | `PS-SURF-013` A thread on the platform is a conversation in the pod | `planned` | — |
 | `PS-SURF-014` A file sent to a surface reaches the pod | `planned` | — |
 | `PS-SURF-020` The answer comes back where the question was asked | `covered` | `test_an_unknown_sender_is_told_how_to_get_access` |
-| `PS-SURF-021` Questions and approvals work on every platform | `planned` | — |
+| `PS-SURF-021` Questions and approvals work on every platform | `covered` | `test_a_question_is_asked_with_native_controls`, `test_an_approval_is_offered_with_native_controls` |
 | `PS-SURF-022` Email surfaces behave like email | `planned` | — |
 | `PS-SURF-023` A person reached on several platforms gets one predictable answer | `covered` | `test_channels_are_listable`, `test_a_default_surface_can_be_chosen`, `test_my_surfaces_are_listable` |
 | `PS-SURF-030` A person has one place to see what needs them | `gap` | `test_a_notification_arrives_in_the_inbox`, `test_an_outsider_sees_no_notifications` |

@@ -140,7 +140,7 @@ dropped.
 **Contracts:** `agent.surface.send`, `surface.message_answered`
 
 ### PS-SURF-021 — Questions and approvals work on every platform
-**Status:** planned
+**Status:** covered
 
 - When an agent asks a person to choose, the system shall present the choices
   natively where the platform supports buttons, and as readable text where it

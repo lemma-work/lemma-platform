@@ -11,6 +11,8 @@ self-hosted Bot API servers. Lemma runs entirely for real.
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from harness import capability, covers, journey, proves, scenario
@@ -152,7 +154,7 @@ async def test_a_wrongly_signed_delivery_is_rejected(world, telegram):
 
 
 @scenario("The same delivery twice is answered once")
-@proves("PS-SURF-011")
+@proves("PS-SURF-011", "PS-SCHED-020")
 @covers("surface.webhook.handle_platform", "agent.surface.send")
 async def test_a_repeated_delivery_is_answered_once(world, telegram):
     alice, pod, fake = telegram
@@ -177,6 +179,43 @@ async def test_a_repeated_delivery_is_answered_once(world, telegram):
         describe="a second answer to the same delivery",
         within=6.0,
     )
+
+
+@scenario("Two deliveries of one trigger racing each other still do the work once")
+@proves("PS-SURF-011", "PS-SCHED-020")
+@covers("surface.webhook.handle_platform", "agent.surface.send")
+async def test_a_raced_delivery_is_answered_once(world, telegram):
+    alice, pod, fake = telegram
+    chat_id = 55505
+    update = _update(
+        chat_id=chat_id, text="exactly once", from_id=chat_id, update_id=9002
+    )
+    headers = {"X-Telegram-Bot-Api-Secret-Token": fake.webhook_secret}
+
+    # Sent together rather than one after the other. A platform retrying on
+    # timeout does not wait for the first attempt to finish, so sequential
+    # delivery tests the easy half — the second arriving when the first is
+    # already recorded. This tests the half that needs a lock.
+    await asyncio.gather(
+        alice.api.call("POST", fake.webhook_path, json=update, headers=headers),
+        alice.api.call("POST", fake.webhook_path, json=update, headers=headers),
+    )
+
+    await eventually(
+        lambda: _sent(fake, chat_id),
+        lambda messages: bool(messages),
+        describe="the agent to reply at least once",
+        timeout=60.0,
+    )
+    await never(
+        lambda: _sent(fake, chat_id),
+        lambda messages: len(messages) > 1,
+        describe="a second answer to two racing deliveries of one update",
+        within=6.0,
+    )
+    # PS-SCHED-020 also promises this holds across a restart of any component
+    # involved. That is not exercised here — restarting the worker mid-delivery
+    # does not belong in a suite that runs on every change.
 
 
 async def _sent(fake, chat_id: int):

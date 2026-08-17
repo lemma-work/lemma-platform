@@ -102,7 +102,7 @@ about it when it eventually cannot.
 ## Capability: Trust that it ran
 
 ### PS-SCHED-020 — Work fires once, however many times the trigger arrives
-**Status:** planned
+**Status:** covered
 
 - The system shall do the work once for a given trigger, even when the trigger
   is delivered more than once.

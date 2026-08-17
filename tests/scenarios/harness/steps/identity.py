@@ -72,6 +72,21 @@ class IdentitySteps:
             "/users/me/profile", json={"first_name": first, "last_name": last}
         )
 
+    async def is_known_on_telegram_as(self, username: str) -> JSON:
+        """Tell Lemma which Telegram account is this person.
+
+        This is how a message from outside becomes a message from *somebody*:
+        a sender whose `@username` matches a user's `telegram_username` resolves
+        to that user, with no contact-share or linking round trip. Without it
+        every inbound message is from a stranger, and a stranger is only ever
+        told how to get access.
+        """
+        return await self.api.post(
+            "/users/me/profile",
+            what=f"{self.label} declaring their Telegram username",
+            json={"telegram_username": username},
+        )
+
     # --- organizations ---------------------------------------------------
 
     async def creates_an_organization(self, *, named: str | None = None) -> JSON:

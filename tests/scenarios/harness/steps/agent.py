@@ -189,6 +189,22 @@ class AgentSteps:
             await self.says(saying, in_conversation=conversation, in_pod=in_pod)
         return conversation
 
+    async def tells_the_agent_to(
+        self, conversation: JSON, turns: list[JSON], *, in_pod: JSON
+    ) -> JSON:
+        """Script a conversation this scenario did not create.
+
+        A thread opened by a surface belongs to the surface, so there is no
+        create call to pass `metadata` to. `agent.conversation.update` takes
+        metadata, which is how a scenario reaches a conversation that arrived
+        from outside.
+        """
+        return await self.api.patch(
+            f"/pods/{in_pod['id']}/conversations/{conversation['id']}",
+            what=f"{self.label} deciding what the agent will attempt",
+            json={"metadata": {SCRIPT_KEY: turns}},
+        )
+
     async def conversations_in(self, pod: JSON) -> list[JSON]:
         return items_of(await self.api.get(f"/pods/{pod['id']}/conversations"))
 
