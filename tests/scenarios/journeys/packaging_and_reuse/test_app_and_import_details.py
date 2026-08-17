@@ -129,3 +129,49 @@ class TestPublishing:
             f"publishing with no connected account must fail clearly "
             f"({response.status_code})"
         )
+
+
+@scenario("An asset of an app with no release is not found")
+@proves("PS-PACK-031")
+@covers("app.asset.get")
+async def test_an_asset_without_a_release_is_not_found(pod):
+    alice, the_pod = pod
+    app = await alice.creates_an_app(in_pod=the_pod)
+
+    response = await alice.api.call(
+        "GET", f"/pods/{the_pod['id']}/apps/{app['name']}/assets/index.html"
+    )
+
+    assert response.status_code == 404, (
+        f"an app that has never been built serves nothing, and should say so "
+        f"rather than erroring: {response.status_code}"
+    )
+
+
+@scenario("A publication that has expired says so rather than looking alive")
+@proves("PS-PACK-020", "PS-PACK-011")
+@covers("pod.bundle.publish.get", "pod.bundle.publish.events")
+async def test_an_expired_publication_says_so(pod):
+    alice, the_pod = pod
+    # Bundle jobs are short-lived documents, so a job nobody started and a job
+    # that has aged out are the same thing to the platform. Saying "expired,
+    # start it again" is the honest answer to both — and much more useful than
+    # "not found" to someone whose publish was simply slow to come back to.
+    unknown = "00000000-0000-0000-0000-000000000001"
+
+    status = await alice.api.call(
+        "GET", f"/pods/{the_pod['id']}/bundle/publishes/{unknown}"
+    )
+    assert status.status_code == 410, (status.status_code, status.text[:200])
+    assert "again" in status.text.lower(), (
+        f"the message should tell the person what to do: {status.text[:200]}"
+    )
+
+    # The stream opens and reports the same thing, rather than hanging on a
+    # publication that will never send another event.
+    code, content_type, first = await alice.api.opens_stream(
+        f"/pods/{the_pod['id']}/bundle/publishes/{unknown}/events"
+    )
+    assert code == 200, code
+    assert "text/event-stream" in content_type, content_type
+    assert "expired" in first.lower(), first[:200]

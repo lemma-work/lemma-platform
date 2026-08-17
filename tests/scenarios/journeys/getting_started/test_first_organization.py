@@ -16,7 +16,7 @@ pytestmark = [
 
 @scenario("A new person signs up and becomes a known user")
 @proves("PS-ONB-001")
-@covers("user.current.get")
+@covers("user.current.get", "auth.signed_up")
 async def test_new_person_signs_up_and_is_known(world):
     alice = await world.new_person("alice")
 

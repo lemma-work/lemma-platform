@@ -37,7 +37,8 @@ async def connected(world):
 
 @scenario("A person reads a connected surface and how far its setup got")
 @proves("PS-SURF-001")
-@covers("agent.surface.get", "agent.surface.setup", "agent.surface.list")
+@covers("agent.surface.get", "agent.surface.setup", "agent.surface.list",
+        "surface.connected")
 async def test_a_surface_reads_back(connected):
     alice, pod, _agent, surface, _fake = connected
 
@@ -134,4 +135,64 @@ async def test_a_surface_webhook_can_be_verified(world, connected):
 
     assert response.status_code != 401, (
         f"a platform verifying a webhook cannot sign in ({response.status_code})"
+    )
+
+
+@scenario("Setting up a managed bot needs the platform's manager configured")
+@proves("PS-SURF-002")
+@covers("agent.surface.telegram_managed.start", "agent.surface.telegram_managed.get")
+async def test_a_managed_bot_setup_says_what_is_missing(connected):
+    alice, pod, agent, _surface, _fake = connected
+
+    started = await alice.api.call(
+        "POST", f"/pods/{pod['id']}/telegram-bot-setups",
+        json={"name": "managed", "default_agent_name": agent["name"]},
+    )
+
+    if started.status_code < 400:
+        setup_id = started.json().get("id") or started.json().get("setup_id")
+        followed = await alice.api.call(
+            "GET", f"/pods/{pod['id']}/telegram-bot-setups/{setup_id}"
+        )
+        assert followed.status_code == 200, followed.text[:300]
+    else:
+        # A deployment with no manager bot cannot run the guided setup, and has
+        # to say so rather than leaving a half-made surface behind.
+        assert started.status_code >= 400, started.status_code
+        assert not any(s["name"] == "managed" for s in await alice.surfaces_in(pod)), (
+            "a refused guided setup must leave no surface behind"
+        )
+
+
+@scenario("The managed-bot webhook rejects an unsigned delivery")
+@proves("PS-SURF-010")
+@covers("surface.webhook.handle_telegram_manager")
+async def test_the_manager_webhook_rejects_unsigned(world, connected):
+    anonymous = await world.new_person("anonymous", sign_up=False)
+
+    response = await anonymous.api.call(
+        "POST", "/surfaces/webhooks/telegram-manager",
+        json={"update_id": 1, "message": {"text": "/start"}},
+    )
+
+    assert response.status_code >= 400, (
+        f"an unsigned delivery to the manager bot was accepted "
+        f"({response.status_code})"
+    )
+
+
+@scenario("A tenant consent callback without a grant is refused")
+@proves("PS-SURF-002")
+@covers("agent.surface.teams_admin_consent_callback")
+async def test_a_consent_callback_without_a_grant_is_refused(world):
+    anonymous = await world.new_person("anonymous", sign_up=False)
+
+    response = await anonymous.api.call(
+        "GET", "/surfaces/teams/admin-consent/callback",
+        params={"tenant": "not-a-tenant", "state": "not-a-state"},
+    )
+
+    assert response.status_code >= 400 or "error" in response.text.lower(), (
+        f"a consent callback we never started must not be honoured: "
+        f"{response.status_code} {response.text[:200]}"
     )

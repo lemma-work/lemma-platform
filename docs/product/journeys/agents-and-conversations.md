@@ -199,7 +199,7 @@ it happens.
 **Contracts:** `agent.conversation.create`, `agent.conversation.get`
 
 ### PS-AGENT-031 — An agent can show a person something interactive
-**Status:** planned
+**Status:** covered
 
 - Where an agent produces an interactive result, the system shall render it in
   the conversation and shall let a person interact with it.
@@ -215,7 +215,7 @@ it happens.
 ## Capability: Run an agent on your own machine
 
 ### PS-AGENT-040 — A person pairs a local agent host with their account
-**Status:** planned
+**Status:** covered
 
 - When a person pairs an agent host, the system shall bind it to their account
   and shall let them see it in their list of hosts.
@@ -226,7 +226,7 @@ it happens.
 **Contracts:** `agent.host.pairing.create`, `agent.host.pairing.complete`, `agent.host.list`, `agent.host.revoke`, `agent.host.self_revoke`
 
 ### PS-AGENT-041 — Work dispatched to a host runs exactly once
-**Status:** planned
+**Status:** covered
 
 - The system shall dispatch a given run to exactly one host, even when a host
   reconnects while that run is in flight.

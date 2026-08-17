@@ -88,6 +88,8 @@ jobs:
             path: journeys/packaging_and_reuse
           - name: connectors and usage
             path: journeys/connectors_and_accounts journeys/operating_a_deployment
+          - name: platform services
+            path: journeys/platform
     steps:
       - uses: actions/checkout@v4
       - name: Install uv

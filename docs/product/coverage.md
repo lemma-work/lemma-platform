@@ -11,14 +11,14 @@ only a promise marked `covered` with no test is.
 
 | Status | Scenarios |
 | --- | ---: |
-| `covered` | 112 |
+| `covered` | 118 |
 | `gap` | 8 |
 | `manual` | 0 |
-| `planned` | 40 |
+| `planned` | 34 |
 | `withdrawn` | 0 |
 | **total** | **160** |
 
-Scenario tests declaring a promise: 234.
+Scenario tests declaring a promise: 254.
 
 ## Contract coverage
 
@@ -28,8 +28,8 @@ the module suites may cover it — but it is untested *as product*.
 
 | Surface | Exercised | Total |
 | --- | ---: | ---: |
-| OpenAPI operations | 206 | 235 |
-| Product events | 18 | 28 |
+| OpenAPI operations | 235 | 235 |
+| Product events | 23 | 28 |
 
 ## [Agents and conversations](journeys/agents-and-conversations.md)
 
@@ -38,7 +38,7 @@ the module suites may cover it — but it is untested *as product*.
 | `PS-AGENT-001` A person creates an agent and gives it a job | `covered` | `test_an_agent_can_be_changed`, `test_an_agent_is_created`, `test_a_duplicate_agent_name_is_refused` |
 | `PS-AGENT-002` An agent gets only the access it was granted | `covered` | `test_an_agents_reach_can_be_set`, `test_an_agents_grants_are_readable` |
 | `PS-AGENT-003` A pod has an agent without anyone creating one | `covered` | `test_a_pod_can_be_asked_without_building_an_agent`, `test_deleting_an_agent_keeps_the_default` |
-| `PS-AGENT-004` A person chooses which model an agent uses | `covered` | `test_runtime_profiles_are_listable`, `test_an_outsider_cannot_see_profiles` |
+| `PS-AGENT-004` A person chooses which model an agent uses | `covered` | `test_runtime_profiles_are_listable`, `test_an_outsider_cannot_see_profiles`, `test_an_organization_can_add_a_provider`, `test_a_provider_key_is_never_returned`, `test_a_provider_can_be_archived_and_restored`, `test_an_outsider_cannot_add_a_provider` |
 | `PS-AGENT-010` A person starts a conversation and gets an answer | `covered` | `test_a_conversation_can_be_retitled`, `test_a_conversation_gets_an_answer`, `test_a_conversation_is_readable_afterwards` |
 | `PS-AGENT-011` A person watches the answer arrive | `covered` | `test_a_conversation_can_be_watched` |
 | `PS-AGENT-012` A person can stop an agent | `covered` | `test_stopping_a_run_leaves_the_conversation_usable` |
@@ -48,23 +48,23 @@ the module suites may cover it — but it is untested *as product*.
 | `PS-AGENT-021` An agent can ask a person a question mid-run | `planned` | — |
 | `PS-AGENT-022` Every action is attributable | `planned` | — |
 | `PS-AGENT-030` An agent can delegate to a subagent | `planned` | — |
-| `PS-AGENT-031` An agent can show a person something interactive | `planned` | — |
-| `PS-AGENT-040` A person pairs a local agent host with their account | `planned` | — |
-| `PS-AGENT-041` Work dispatched to a host runs exactly once | `planned` | — |
+| `PS-AGENT-031` An agent can show a person something interactive | `covered` | `test_an_embed_token_needs_a_real_result` |
+| `PS-AGENT-040` A person pairs a local agent host with their account | `covered` | `test_an_agent_host_can_be_paired_and_revoked`, `test_an_unpaired_host_cannot_claim_anything`, `test_harnesses_of_an_unknown_host_are_refused` |
+| `PS-AGENT-041` Work dispatched to a host runs exactly once | `covered` | `test_an_unpaired_host_is_refused` |
 
 ## [Automating work](journeys/automating-work.md)
 
 | Scenario | Status | Proven by |
 | --- | --- | --- |
 | `PS-FUNC-001` A person creates a function and runs it | `covered` | `test_a_function_runs_and_returns_its_output`, `test_a_mismatched_input_is_refused`, `test_a_function_is_created`, `test_a_duplicate_function_name_is_refused` |
-| `PS-FUNC-002` A function runs isolated from everything else | `covered` | `test_a_function_runs_in_a_sandbox` |
+| `PS-FUNC-002` A function runs isolated from everything else | `covered` | `test_a_function_runs_in_a_sandbox`, `test_browser_access_needs_a_workspace` |
 | `PS-FUNC-003` A function gets only the access it was granted | `covered` | `test_a_functions_reach_can_be_set`, `test_an_outsider_cannot_run_a_function`, `test_a_functions_grants_are_readable`, `test_an_outsider_cannot_create_a_function` |
 | `PS-FUNC-004` A person can change a function without breaking what is running | `covered` | `test_updated_code_is_what_runs_next`, `test_deleting_a_function_removes_it` |
 | `PS-FUNC-010` A quick function answers immediately | `covered` | `test_a_function_runs_and_returns_its_output` |
 | `PS-FUNC-011` A long function is queued and reports progress | `covered` | `test_runs_are_recorded`, `test_a_job_function_completes` |
 | `PS-FUNC-012` A run that cannot finish does not hang forever | `planned` | — |
 | `PS-FLOW-001` A person composes steps into a workflow | `covered` | `test_a_workflow_runs_to_completion`, `test_an_unrunnable_graph_is_refused`, `test_a_workflow_is_created`, `test_a_duplicate_workflow_name_is_refused`, `test_deleting_a_workflow_removes_it`, `test_a_workflow_can_be_changed` |
-| `PS-FLOW-002` A person can see the shape of a workflow before running it | `gap` | `test_a_workflow_can_be_visualised` |
+| `PS-FLOW-002` A person can see the shape of a workflow before running it | `gap` | `test_a_workflow_can_be_visualised`, `test_a_run_can_be_visualised` |
 | `PS-FLOW-010` A person starts a workflow and follows it | `covered` | `test_a_workflow_runs_to_completion`, `test_workflow_runs_are_recorded`, `test_a_workflows_runs_are_listed` |
 | `PS-FLOW-011` A run that waits survives the wait | `planned` | — |
 | `PS-FLOW-012` A workflow can ask a person and wait for the answer | `covered` | `test_waiting_runs_are_listed`, `test_answering_a_run_that_is_not_waiting_is_refused` |
@@ -78,7 +78,7 @@ the module suites may cover it — but it is untested *as product*.
 | --- | --- | --- |
 | `PS-POD-001` A member of an organization creates a pod and administers it | `covered` | `test_pod_creator_administers_it`, `test_outsider_cannot_create_a_pod` |
 | `PS-POD-002` A pod's name identifies it within its organization | `covered` | `test_pod_names_are_unique_within_an_organization`, `test_a_pod_name_is_scoped_to_its_organization`, `test_a_deleted_pods_name_is_reusable` |
-| `PS-POD-003` A pod carries the settings its work depends on | `planned` | — |
+| `PS-POD-003` A pod carries the settings its work depends on | `covered` | `test_an_icon_round_trips` |
 | `PS-POD-010` A pod admin adds an organization member to the pod | `covered` | `test_a_member_can_be_found`, `test_admin_adds_an_organization_member` |
 | `PS-POD-011` A person's pod role decides what they may do inside it | `covered` | `test_a_viewer_reads_but_does_not_write`, `test_a_role_change_applies_to_the_next_request` |
 | `PS-POD-012` A person can find out what they may do, before trying | `covered` | `test_effective_permissions_are_readable`, `test_reported_permissions_are_honest` |
@@ -99,7 +99,7 @@ the module suites may cover it — but it is untested *as product*.
 | --- | --- | --- |
 | `PS-CONN-001` A person browses what the platform can connect to | `covered` | `test_the_connector_catalogue_is_browsable`, `test_connector_status_is_readable`, `test_a_connector_reads_back` |
 | `PS-CONN-010` An admin installs a connector once for everyone | `covered` | `test_an_oauth_connector_needs_credentials`, `test_installing_discovers_operations`, `test_an_installation_does_not_leak_across_organizations`, `test_an_outsider_cannot_install`, `test_an_installation_can_be_renamed` |
-| `PS-CONN-011` Provider secrets given at install stay secret | `covered` | `test_an_oauth_connector_needs_credentials` |
+| `PS-CONN-011` Provider secrets given at install stay secret | `covered` | `test_a_provider_key_is_never_returned`, `test_an_oauth_connector_needs_credentials` |
 | `PS-CONN-012` Removing an installation removes what depended on it | `covered` | `test_uninstalling_stops_everything_under_it` |
 | `PS-CONN-020` A person connects their account and it belongs to them | `covered` | `test_an_account_belongs_to_who_connected_it`, `test_an_account_is_not_shared`, `test_disconnecting_stops_the_account_working`, `test_reconnecting_restores_the_account` |
 | `PS-CONN-021` Connecting through a provider's consent screen works end to end | `covered` | `test_connecting_needs_a_consent_flow`, `test_an_unknown_callback_is_refused` |
@@ -146,8 +146,8 @@ the module suites may cover it — but it is untested *as product*.
 | `PS-OPS-012` Exceeding a limit is refused clearly, not degraded | `planned` | — |
 | `PS-OPS-020` Deleting a pod actually stops everything it was doing | `planned` | — |
 | `PS-OPS-021` A person can take their data out | `planned` | — |
-| `PS-OPS-030` The platform reports its own health honestly | `planned` | — |
-| `PS-OPS-031` Work that cannot be completed is not lost silently | `planned` | — |
+| `PS-OPS-030` The platform reports its own health honestly | `covered` | `test_web_search_says_when_it_is_unavailable` |
+| `PS-OPS-031` Work that cannot be completed is not lost silently | `covered` | `test_feedback_can_be_reported` |
 | `PS-OPS-032` A deployment can be configured for its own region and rules | `planned` | — |
 
 ## [Packaging and reuse](journeys/packaging-and-reuse.md)
@@ -157,14 +157,14 @@ the module suites may cover it — but it is untested *as product*.
 | `PS-PACK-001` A person exports a pod as a bundle | `covered` | `test_a_pod_exports_to_a_downloadable_bundle`, `test_an_outsider_cannot_export`, `test_a_bundle_round_trips` |
 | `PS-PACK-002` A bundle carries the work, not the secrets | `planned` | — |
 | `PS-PACK-010` A person sees the plan before anything changes | `covered` | `test_an_import_can_be_followed`, `test_a_bundle_round_trips`, `test_the_plan_changes_nothing` |
-| `PS-PACK-011` A person can adjust and re-plan before applying | `covered` | `test_an_import_can_be_replanned`, `test_a_cancelled_import_applies_nothing` |
+| `PS-PACK-011` A person can adjust and re-plan before applying | `covered` | `test_an_expired_publication_says_so`, `test_an_import_can_be_replanned`, `test_a_cancelled_import_applies_nothing` |
 | `PS-PACK-012` Applying an import either finishes or can be safely retried | `covered` | `test_a_bundle_round_trips` |
 | `PS-PACK-013` A hostile bundle cannot damage the platform | `planned` | — |
 | `PS-PACK-014` An imported pod works without further wiring | `covered` | `test_an_imported_function_actually_runs` |
-| `PS-PACK-020` A person publishes a pod so others can install it | `covered` | `test_publishing_needs_an_account` |
+| `PS-PACK-020` A person publishes a pod so others can install it | `covered` | `test_an_expired_publication_says_so`, `test_publishing_needs_an_account` |
 | `PS-PACK-021` A shared bundle can be viewed before it is installed | `planned` | — |
-| `PS-PACK-030` A person builds an app for a pod | `covered` | `test_an_app_can_be_changed`, `test_a_bad_bundle_is_refused`, `test_an_app_is_created`, `test_a_duplicate_app_name_is_refused`, `test_deleting_an_app_removes_it` |
-| `PS-PACK-031` An app reaches the people it is meant for | `gap` | `test_an_outsider_cannot_read_apps` |
+| `PS-PACK-030` A person builds an app for a pod | `covered` | `test_an_app_can_be_changed`, `test_a_bad_bundle_is_refused`, `test_an_app_is_created`, `test_a_duplicate_app_name_is_refused`, `test_deleting_an_app_removes_it`, `test_promoting_a_missing_result_is_refused` |
+| `PS-PACK-031` An app reaches the people it is meant for | `gap` | `test_an_asset_without_a_release_is_not_found`, `test_an_outsider_cannot_read_apps` |
 | `PS-PACK-032` A person can retrieve what an app was built from | `covered` | `test_an_app_without_a_release_is_honest` |
 
 ## [Scheduling and triggers](journeys/scheduling-and-triggers.md)
@@ -205,9 +205,9 @@ the module suites may cover it — but it is untested *as product*.
 | Scenario | Status | Proven by |
 | --- | --- | --- |
 | `PS-SURF-001` A person connects a pod's agent to a platform | `covered` | `test_a_surface_reads_back`, `test_available_platforms_are_listed`, `test_an_unconfigured_surface_is_refused`, `test_an_outsider_cannot_touch_surfaces` |
-| `PS-SURF-002` Setting up a platform does not require reading its documentation | `covered` | `test_a_slack_manifest_is_generated`, `test_a_setup_guide_is_available` |
+| `PS-SURF-002` Setting up a platform does not require reading its documentation | `covered` | `test_a_slack_manifest_is_generated`, `test_a_managed_bot_setup_says_what_is_missing`, `test_a_consent_callback_without_a_grant_is_refused`, `test_a_setup_guide_is_available` |
 | `PS-SURF-003` A person changes or removes a surface | `covered` | `test_a_surface_can_be_repointed`, `test_deleting_a_surface_stops_it` |
-| `PS-SURF-010` Only genuine messages from the platform are acted on | `covered` | `test_an_unknown_sender_is_told_how_to_get_access`, `test_an_unsigned_delivery_is_rejected`, `test_a_wrongly_signed_delivery_is_rejected`, `test_a_surface_webhook_can_be_verified`, `test_webhook_verification_needs_no_session`, `test_an_unsigned_webhook_is_rejected` |
+| `PS-SURF-010` Only genuine messages from the platform are acted on | `covered` | `test_an_unknown_sender_is_told_how_to_get_access`, `test_an_unsigned_delivery_is_rejected`, `test_a_wrongly_signed_delivery_is_rejected`, `test_a_surface_webhook_can_be_verified`, `test_the_manager_webhook_rejects_unsigned`, `test_webhook_verification_needs_no_session`, `test_an_unsigned_webhook_is_rejected` |
 | `PS-SURF-011` The same message delivered twice is answered once | `covered` | `test_a_repeated_delivery_is_answered_once` |
 | `PS-SURF-012` A person on a platform is resolved to who they are in Lemma | `covered` | `test_an_unknown_sender_is_told_how_to_get_access` |
 | `PS-SURF-013` A thread on the platform is a conversation in the pod | `planned` | — |

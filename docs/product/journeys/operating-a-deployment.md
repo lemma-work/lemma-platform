@@ -114,7 +114,7 @@ rather than degrading in a way that only shows up as confused users.
 ## Capability: Know when the platform itself is unwell
 
 ### PS-OPS-030 — The platform reports its own health honestly
-**Status:** planned
+**Status:** covered
 
 - The system shall expose whether it is alive and whether it is ready to serve,
   as separate answers, because a process that is running and a process that can
@@ -127,7 +127,7 @@ rather than degrading in a way that only shows up as confused users.
 **Contracts:** *(health endpoints are outside the documented API surface)*
 
 ### PS-OPS-031 — Work that cannot be completed is not lost silently
-**Status:** planned
+**Status:** covered
 
 - If a background job fails repeatedly, then the system shall stop retrying it
   and shall keep it somewhere an operator can find it.

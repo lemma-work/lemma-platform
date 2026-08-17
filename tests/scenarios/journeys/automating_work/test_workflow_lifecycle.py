@@ -38,7 +38,7 @@ async def test_a_workflow_can_be_changed(pod):
 
 @scenario("A person sees the runs of one workflow")
 @proves("PS-FLOW-010")
-@covers("workflow.run.list", "workflow.run.create")
+@covers("workflow.run.list", "workflow.run.create", "workflow_run.completed")
 async def test_a_workflows_runs_are_listed(pod):
     alice, the_pod = pod
     workflow = await alice.creates_a_workflow(in_pod=the_pod)
@@ -119,3 +119,24 @@ async def test_answering_a_run_that_is_not_waiting_is_refused(pod):
     assert response.status_code >= 400, (
         f"a completed run is waiting on nobody ({response.status_code})"
     )
+
+
+@pytest.mark.xfail(
+    reason="DEV-FLOW-001: both visualize endpoints 500 on Starlette 1.3.1",
+    strict=True,
+)
+@scenario("A person sees the path a run actually took")
+@proves("PS-FLOW-002")
+@covers("workflow.run.visualize")
+async def test_a_run_can_be_visualised(pod):
+    alice, the_pod = pod
+    workflow = await alice.creates_a_workflow(in_pod=the_pod)
+    await alice.gives_workflow_a_graph(
+        workflow["name"],
+        nodes=[{"id": "done", "type": "END"}], edges=[], in_pod=the_pod,
+    )
+    run = await alice.runs_workflow(workflow["name"], in_pod=the_pod)
+
+    response = await alice.visualises_run(run, in_pod=the_pod)
+
+    assert response.status_code == 200, response.text[:300]

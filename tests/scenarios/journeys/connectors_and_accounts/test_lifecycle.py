@@ -133,7 +133,8 @@ class TestConnectingAnAccount:
 
     @scenario("A person connects an account and it belongs to them")
     @proves("PS-CONN-020")
-    @covers("connector.account.create", "connector.account.list", "connector.account.get")
+    @covers("connector.account.create", "connector.account.list",
+            "connector.account.get", "connector.connected")
     async def test_an_account_belongs_to_who_connected_it(self, installed):
         alice, organization, _auth_config, account = installed
 

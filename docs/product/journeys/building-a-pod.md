@@ -53,7 +53,7 @@ over a single resource is [Sharing and permissions](sharing-and-permissions.md).
 **Contracts:** `pod.create`, `pod.update`, `pod.list`
 
 ### PS-POD-003 — A pod carries the settings its work depends on
-**Status:** planned
+**Status:** covered
 
 - When a pod admin updates part of a pod's settings, the system shall leave the
   parts they did not mention unchanged.
