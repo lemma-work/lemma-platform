@@ -421,3 +421,79 @@ def test_terminal_logs_redacts_a_secret_that_straddles_the_size_limit():
     assert redacted is not None
     assert "sk-livetokenvalue" not in redacted
     assert REDACTED in redacted
+
+
+# -- a runtime that has stopped serving must not be handed to the next run ----
+#
+# One slow cold start left an E2B sandbox whose runtime process had died: the
+# VM was still running, so adoption kept succeeding, and port 8090 answered 502.
+# Every later run was handed that same sandbox and failed, for 100 minutes,
+# until someone deleted it by hand. 13+ consecutive failures, and nothing
+# self-healed, because `InvocationOutcomeUnconfirmed` is deliberately never
+# retried -- so the only thing that could have recovered it was refusing to
+# hand the endpoint out again.
+
+
+async def _invoke_and_capture_quarantine(runtime, *, mode=FunctionDispatchMode.SYNCHRONOUS):
+    dispatch = _dispatch(mode=mode)
+    dispatcher = _dispatcher(runtime)
+    quarantined = AsyncMock()
+    invalidated = AsyncMock()
+    dispatcher._routes.quarantine = quarantined  # type: ignore[method-assign]
+    dispatcher._routes.invalidate = invalidated  # type: ignore[method-assign]
+    endpoint = _endpoint("https://sandbox.test/allocation/")
+    with pytest.raises(InvocationOutcomeUnconfirmed):
+        await dispatcher._invoke_runtime(
+            dispatch,
+            context=_context(dispatch),
+            endpoint=endpoint,
+            function_token="test-token",
+            organization_id=None,
+        )
+    return dispatch, endpoint, quarantined, invalidated
+
+
+@pytest.mark.asyncio
+async def test_a_runtime_answering_5xx_is_quarantined() -> None:
+    """502 is what a dead runtime process answers. It used to be the one case
+    that did *not* evict, while a healthy-but-routeless sandbox (404) did."""
+
+    class _Runtime:
+        async def post(self, url, **kwargs):
+            return httpx.Response(502, request=httpx.Request("POST", url))
+
+    dispatch, endpoint, quarantined, _ = await _invoke_and_capture_quarantine(_Runtime())
+
+    quarantined.assert_awaited_once_with(dispatch.pod_id, endpoint)
+
+
+@pytest.mark.asyncio
+async def test_a_runtime_that_will_not_connect_is_quarantined() -> None:
+    """Connection refused: nothing was served, so the run cannot have started."""
+
+    class _Runtime:
+        async def post(self, url, **kwargs):
+            raise httpx.ConnectError("connection refused")
+
+    dispatch, endpoint, quarantined, _ = await _invoke_and_capture_quarantine(_Runtime())
+
+    quarantined.assert_awaited_once_with(dispatch.pod_id, endpoint)
+
+
+@pytest.mark.asyncio
+async def test_our_own_deadline_does_not_quarantine_the_sandbox() -> None:
+    """The other half of the rule, and the one that must not regress.
+
+    A read timeout is *our* deadline expiring, not the sandbox failing. The run
+    may be executing user code right now, so the sandbox is still the right one
+    and destroying it would kill work in flight.
+    """
+
+    class _Runtime:
+        async def post(self, url, **kwargs):
+            raise httpx.ReadTimeout("deadline exceeded")
+
+    _, _, quarantined, invalidated = await _invoke_and_capture_quarantine(_Runtime())
+
+    quarantined.assert_not_awaited()
+    invalidated.assert_not_awaited()

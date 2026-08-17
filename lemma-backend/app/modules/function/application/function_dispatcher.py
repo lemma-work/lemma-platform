@@ -379,10 +379,21 @@ class FunctionDispatcher:
                 "function invocation exceeded its deadline"
             ) from exc
         except httpx.TransportError as exc:
+            # The connection failed, so nothing was served and the run cannot
+            # have started. Still unconfirmed -- we did not see a response -- but
+            # this endpoint has proved it is not answering, so it must not be
+            # handed to the next run.
+            await self._routes.quarantine(dispatch.pod_id, endpoint)
             raise InvocationOutcomeUnconfirmed(
                 "function invocation response was lost"
             ) from exc
         if response.status_code >= 500:
+            # A runtime that answers 5xx is reachable and broken. This was the
+            # one case that did *not* evict, while a healthy-but-routeless
+            # sandbox (404, below) did -- exactly inverted. A dead runtime
+            # process answers 502 here, so every later run was handed the same
+            # sandbox and failed the same way, indefinitely.
+            await self._routes.quarantine(dispatch.pod_id, endpoint)
             raise InvocationOutcomeUnconfirmed(
                 f"function runtime returned {response.status_code}"
             )
