@@ -783,8 +783,50 @@ fn validate_secret_changes(changes: &BTreeMap<String, Option<String>>) -> io::Re
         }
         if let Some(value) = value {
             validate_text(name, value, 16 * 1024)?;
+            validate_vault_capacity(name, value)?;
         }
     }
+    Ok(())
+}
+
+/// Refuse a secret the platform vault cannot hold, before it is offered one.
+///
+/// Windows Credential Manager caps a credential blob at
+/// CRED_MAX_CREDENTIAL_BLOB_SIZE -- 2560 bytes -- and the keyring backend
+/// writes the value as UTF-16, so the real ceiling is 1280 ASCII characters
+/// against the 16 KiB validated just above. macOS Keychain has no comparable
+/// limit, which is why nothing here noticed: a long bearer token (an Entra
+/// access token carrying group claims, a corporate LLM-gateway JWT) passed
+/// validation on both platforms and then failed at the vault on Windows only.
+/// What the user got was the backend's own words -- "longer than the platform
+/// limit of 2560 chars" -- a number that is off by a factor of two, because it
+/// counts bytes and calls them chars.
+///
+/// Checked here so the limit is refused up front and named in the units of the
+/// thing being pasted.
+#[cfg(windows)]
+fn validate_vault_capacity(name: &str, value: &str) -> io::Result<()> {
+    // Counted the way the vault counts it. `validate_text` measures UTF-8
+    // bytes, which is a different number for anything non-ASCII.
+    let blob_bytes = value.encode_utf16().count() * 2;
+    if blob_bytes > WINDOWS_MAX_VAULT_BLOB_BYTES {
+        return Err(invalid(format!(
+            "{name} is too long to store on Windows: the credential vault holds \
+             at most {} characters and this is {}",
+            WINDOWS_MAX_VAULT_BLOB_BYTES / 2,
+            value.chars().count()
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+const WINDOWS_MAX_VAULT_BLOB_BYTES: usize = 2560;
+
+/// Nothing to check. The macOS Keychain takes values far larger than anything
+/// a credential field can hold, so there is no limit here to fail early on.
+#[cfg(not(windows))]
+fn validate_vault_capacity(_name: &str, _value: &str) -> io::Result<()> {
     Ok(())
 }
 
@@ -1381,6 +1423,34 @@ mod tests {
                 secrets: BTreeMap::from([("surfaces.unknown".into(), Some("secret".into()))]),
             })
             .is_err());
+    }
+
+    /// A secret longer than Credential Manager can hold is refused up front,
+    /// in characters, rather than by the vault in mis-stated bytes.
+    ///
+    /// Windows-only because the limit is: the macOS Keychain would take all of
+    /// these. CI's Windows job runs the workspace suite, which is what makes
+    /// this an actual gate rather than documentation.
+    #[cfg(windows)]
+    #[test]
+    fn refuses_a_secret_the_windows_credential_vault_could_not_store() {
+        let at_limit = "k".repeat(WINDOWS_MAX_VAULT_BLOB_BYTES / 2);
+        let over_limit = "k".repeat(WINDOWS_MAX_VAULT_BLOB_BYTES / 2 + 1);
+        assert!(validate_vault_capacity("ai.api_key", &at_limit).is_ok());
+
+        let error = validate_vault_capacity("ai.api_key", &over_limit).unwrap_err();
+        let message = error.to_string();
+        // Names the field, the ceiling, and the actual size -- in characters.
+        assert!(message.contains("ai.api_key"), "{message}");
+        assert!(message.contains("1280"), "{message}");
+        assert!(message.contains("1281"), "{message}");
+
+        // Counted as the vault counts it: UTF-16 units, not UTF-8 bytes. Each
+        // of these is 3 bytes in UTF-8 and 2 in UTF-16, so a value that fits
+        // must not be rejected for its UTF-8 length.
+        let bmp = "\u{20ac}".repeat(WINDOWS_MAX_VAULT_BLOB_BYTES / 2);
+        assert!(bmp.len() > WINDOWS_MAX_VAULT_BLOB_BYTES);
+        assert!(validate_vault_capacity("ai.api_key", &bmp).is_ok());
     }
 
     #[test]

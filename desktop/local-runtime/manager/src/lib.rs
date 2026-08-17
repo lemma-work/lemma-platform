@@ -240,7 +240,12 @@ impl ManagedRuntime {
         }
         #[cfg(windows)]
         {
-            let output = self.wsl(
+            // Allowing failure on purpose. This runs *because* something has
+            // already gone wrong, so the guest is often exactly the kind of
+            // half-up that makes journalctl exit non-zero -- and whatever it
+            // managed to print before giving up is the reason anyone asked for
+            // diagnostics. Failing here would throw away the evidence.
+            let output = self.wsl_allowing_failure(
                 &[
                     "--distribution",
                     self.distribution(),
@@ -557,18 +562,55 @@ impl ManagedRuntime {
     ///
     /// `wsl()` turns a non-zero exit into an error, which is right for a command
     /// whose success is the point. It is wrong for a query whose failure is
-    /// itself an answer.
+    /// itself an answer -- `--terminate` on a distribution that is not running,
+    /// or `journalctl` in a guest that never came up.
+    ///
+    /// This is the real runner; `wsl()` is this plus the status check. It used
+    /// to be the other way round, and the wrapper's two match arms were both
+    /// `Err(error) => Err(error)` -- identical to calling `wsl()` directly,
+    /// which at the time did not check the status either. So the doc comment
+    /// above described a contract that neither function had.
     #[cfg(windows)]
     fn wsl_allowing_failure(
         &self,
         arguments: &[&str],
         input: Option<&[u8]>,
     ) -> io::Result<std::process::Output> {
-        match self.wsl(arguments, input) {
-            Ok(output) => Ok(output),
-            Err(error) if error.kind() == io::ErrorKind::Other => Err(error),
-            Err(error) => Err(error),
+        let log_path = self.config.local_root.join("logs/wsl.log");
+        rotate_log(&log_path, 5 * 1024 * 1024)?;
+        let mut command = Command::new(&self.config.wsl_executable);
+        command
+            .no_console_window()
+            .args(arguments)
+            .stdin(if input.is_some() {
+                Stdio::piped()
+            } else {
+                Stdio::null()
+            })
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let mut child = command.spawn()?;
+        if let Some(input) = input {
+            child
+                .stdin
+                .take()
+                .ok_or_else(|| io::Error::other("WSL stdin unavailable"))?
+                .write_all(input)?;
         }
+        let output = child.wait_with_output()?;
+        {
+            let mut log = private_appending_log(&log_path)?;
+            writeln!(
+                log,
+                "lemma-runtime: wsl.exe {} -> {}",
+                arguments.join(" "),
+                output.status
+            )?;
+            if !output.stderr.is_empty() {
+                writeln!(log, "{}", wsl_message(&output.stderr))?;
+            }
+        }
+        Ok(output)
     }
 
     /// Refuse to run this release's host against a guest from another one.
@@ -623,9 +665,40 @@ impl ManagedRuntime {
     #[cfg(windows)]
     pub fn unregister_windows_guest(&self) -> io::Result<()> {
         let _ = self.wsl_allowing_failure(&["--terminate", self.distribution()], None);
-        self.wsl(&["--unregister", self.distribution()], None)?;
+        // Asked for the end state, not for the command. A distribution that is
+        // already gone is the outcome this repair exists to reach, and
+        // `--unregister` exits non-zero on a name it cannot find -- so running
+        // it unconditionally would report failure for the one case that needs
+        // no work. Anything else that goes wrong is now a real error, which it
+        // was not before: this used to discard the exit code entirely and tell
+        // the user the runtime had been reset when nothing had happened.
+        if self.distribution_is_registered() {
+            self.wsl(&["--unregister", self.distribution()], None)?;
+        }
         let _ = fs::remove_file(self.guest_release_marker());
         Ok(())
+    }
+
+    /// Whether Lemma's private distribution exists right now.
+    ///
+    /// Deliberately not `?`. `wsl --list --quiet` exits non-zero when there are
+    /// no distributions at all -- which is exactly the state
+    /// prepare_windows_host engineers with `--install --no-distribution` -- so
+    /// treating that as fatal aborted the very first start before the import
+    /// could ever run, permanently.
+    ///
+    /// Listing is only ever asked whether *our* distribution is there. If the
+    /// question cannot be answered, assume it is not and let the caller's next
+    /// command report the real problem.
+    #[cfg(windows)]
+    fn distribution_is_registered(&self) -> bool {
+        self.wsl_allowing_failure(&["--list", "--quiet"], None)
+            .map(|output| {
+                decode_wsl_output(&output.stdout)
+                    .lines()
+                    .any(|line| line.trim() == self.distribution())
+            })
+            .unwrap_or(false)
     }
 
     #[cfg(windows)]
@@ -644,23 +717,7 @@ impl ManagedRuntime {
         let _ = fs::remove_file(self.wsl_setup_marker());
         let install = self.config.local_root.join("runtime/wsl");
         fs::create_dir_all(&install)?;
-        // Deliberately not `?`. `wsl --list --quiet` exits non-zero when there
-        // are no distributions at all -- which is exactly the state
-        // prepare_windows_host engineers with `--install --no-distribution` --
-        // so treating that as fatal aborted the very first start before the
-        // import below could ever run, permanently.
-        //
-        // Listing is only ever asked whether *our* distribution is there. If
-        // the question cannot be answered, assume it is not and let the import
-        // report the real problem.
-        let installed = self
-            .wsl_allowing_failure(&["--list", "--quiet"], None)
-            .map(|output| {
-                decode_wsl_output(&output.stdout)
-                    .lines()
-                    .any(|line| line.trim() == self.distribution())
-            })
-            .unwrap_or(false);
+        let installed = self.distribution_is_registered();
         let rootfs = self.config.artifact_root.join("windows-x86_64/rootfs.tar");
         if !installed {
             if !rootfs.is_file() {
@@ -795,41 +852,34 @@ impl ManagedRuntime {
         }))
     }
 
+    /// Run wsl.exe and fail unless it succeeded.
+    ///
+    /// The status check is the whole point of this wrapper, and for a long time
+    /// it was missing: every caller treated a non-zero `wsl.exe` exit as
+    /// success. A failed `--import` returned Ok, `start_windows` then wrote the
+    /// guest release marker recording a distribution that had never been
+    /// created, and the user waited out the 120s `wait_ready` timeout to be told
+    /// only that the runtime did not come up. The cause was in logs/wsl.log and
+    /// nowhere else.
+    ///
+    /// `wsl.exe` writes its diagnostics as UTF-16, so the message is decoded
+    /// rather than passed through as bytes.
     #[cfg(windows)]
     fn wsl(&self, arguments: &[&str], input: Option<&[u8]>) -> io::Result<std::process::Output> {
-        let log_path = self.config.local_root.join("logs/wsl.log");
-        rotate_log(&log_path, 5 * 1024 * 1024)?;
-        let mut command = Command::new(&self.config.wsl_executable);
-        command
-            .no_console_window()
-            .args(arguments)
-            .stdin(if input.is_some() {
-                Stdio::piped()
+        let output = self.wsl_allowing_failure(arguments, input)?;
+        if !output.status.success() {
+            let message = wsl_message(&output.stderr);
+            let detail = if message.trim().is_empty() {
+                format!("wsl.exe {} failed ({})", arguments.join(" "), output.status)
             } else {
-                Stdio::null()
-            })
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        let mut child = command.spawn()?;
-        if let Some(input) = input {
-            child
-                .stdin
-                .take()
-                .ok_or_else(|| io::Error::other("WSL stdin unavailable"))?
-                .write_all(input)?;
-        }
-        let output = child.wait_with_output()?;
-        {
-            let mut log = private_appending_log(&log_path)?;
-            writeln!(
-                log,
-                "lemma-runtime: wsl.exe {} -> {}",
-                arguments.join(" "),
-                output.status
-            )?;
-            if !output.stderr.is_empty() {
-                writeln!(log, "{}", wsl_message(&output.stderr))?;
-            }
+                format!(
+                    "wsl.exe {} failed ({}): {}",
+                    arguments.join(" "),
+                    output.status,
+                    message.trim()
+                )
+            };
+            return Err(io::Error::other(detail));
         }
         Ok(output)
     }
