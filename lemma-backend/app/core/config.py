@@ -890,6 +890,20 @@ class Settings(BaseSettings):
             "Amazon S3 (and S3-compatible endpoints), and Azure Blob Storage."
         ),
     )
+    storage_endpoint_url: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "storage_endpoint_url",
+            "STORAGE_ENDPOINT_URL",
+        ),
+        description=(
+            "S3-compatible endpoint to use instead of AWS S3 — MinIO, R2, "
+            "Wasabi. Only read when the backend is 's3'; leave unset for AWS, "
+            "which resolves its own region endpoint. Addressing is path-style, "
+            "and plain HTTP is permitted only for an explicit http:// URL. "
+            "Env: ``STORAGE_ENDPOINT_URL``."
+        ),
+    )
     storage_bucket: Optional[str] = Field(
         default=None,
         validation_alias=AliasChoices(

@@ -1090,6 +1090,27 @@ async def test_get_platform_setup_guide_raises_for_invalid_platform():
         service.get_platform_setup_guide("not-a-platform")
 
 
+@pytest.mark.parametrize("platform", list(SurfacePlatform), ids=lambda p: p.value)
+async def test_every_surface_platform_has_a_setup_guide(platform):
+    """A platform you can create a surface for must have a guide for it.
+
+    ``RESEND`` did not. It resolved as a valid enum member and then fell off the
+    end of the guide builder into a bare ``ValueError``, so asking for the setup
+    of an auto-provisioned mailbox — one every agent gets, without anyone
+    configuring anything — returned a 500. Parametrised over the enum so a
+    platform added without a guide fails here rather than in production.
+    """
+    service = AgentSurfaceService(
+        surface_repository=AsyncMock(),
+        account_binding_resolver=AsyncMock(),
+    )
+
+    guide = service.get_platform_setup_guide(platform.value)
+
+    assert guide.platform is platform
+    assert guide.connectors, f"{platform.value} has a guide with no connector modes"
+
+
 class _FakeNonceCache:
     """Stands in for the Redis nonce store, including compare-and-delete."""
 

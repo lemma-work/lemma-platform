@@ -30,7 +30,6 @@ class ObstoreDatastoreStorage:
             destination_blob_name,
             file_content,
             use_multipart=isinstance(file_content, Path),
-            chunk_size=1024 * 1024,
         )
         return True
 

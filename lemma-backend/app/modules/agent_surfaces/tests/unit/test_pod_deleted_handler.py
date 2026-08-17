@@ -16,7 +16,11 @@ from app.modules.agent_surfaces.domain.entities import (
     ParsedInboundSurfaceEvent,
     SurfacePlatform,
 )
-from app.modules.agent_surfaces.domain.events import SurfaceWebhookReceivedEvent
+from app.modules.agent_surfaces.domain.events import (
+    SurfaceConnectedEvent,
+    SurfaceMessageAnsweredEvent,
+    SurfaceWebhookReceivedEvent,
+)
 from app.modules.agent_surfaces.domain.ingress_context import SurfaceReplyContext
 from app.modules.agent_surfaces.events import handlers
 from app.modules.test_support.fakes import PassthroughEventInbox
@@ -30,6 +34,17 @@ from app.modules.schedule.domain.schedule import ScheduleType
 @asynccontextmanager
 async def _mock_uow_factory(uow_mock):
     yield uow_mock
+
+
+def _webhook_envelope(**kwargs) -> dict:
+    """A webhook event as it actually arrives: a plain dict off the stream.
+
+    The handler takes ``dict`` and filters on ``event_type`` because
+    ``surface_events`` is shared with the analytics projections. Building the
+    model here and dumping it keeps the test honest about the wire shape while
+    still failing if the event's own fields change.
+    """
+    return SurfaceWebhookReceivedEvent(**kwargs).model_dump(mode="json")
 
 
 @pytest.mark.asyncio
@@ -91,7 +106,7 @@ async def test_handle_surface_webhook_enqueues_prepared_context(monkeypatch):
     monkeypatch.setattr(handlers, "build_surface_event_handler", lambda uow: handler)
 
     await handlers.handle_surface_webhook(
-        SurfaceWebhookReceivedEvent(source="telegram", payload={"update_id": 1}),
+        _webhook_envelope(source="telegram", payload={"update_id": 1}),
         logging.getLogger("test"),
         uow_factory=partial(_mock_uow_factory, uow_mock),
         job_queue=job_queue,
@@ -117,7 +132,7 @@ async def test_handle_surface_webhook_skips_queue_when_interaction_was_handled(
     monkeypatch.setattr(handlers, "build_surface_event_handler", lambda uow: handler)
 
     await handlers.handle_surface_webhook(
-        SurfaceWebhookReceivedEvent(source="telegram", payload={"callback_query": {}}),
+        _webhook_envelope(source="telegram", payload={"callback_query": {}}),
         logging.getLogger("test"),
         uow_factory=partial(_mock_uow_factory, uow_mock),
         job_queue=job_queue,
@@ -140,7 +155,7 @@ async def test_handle_surface_webhook_skips_queue_when_no_context(monkeypatch):
     monkeypatch.setattr(handlers, "build_surface_event_handler", lambda uow: handler)
 
     await handlers.handle_surface_webhook(
-        SurfaceWebhookReceivedEvent(source="telegram", payload={"update_id": 2}),
+        _webhook_envelope(source="telegram", payload={"update_id": 2}),
         logging.getLogger("test"),
         uow_factory=partial(_mock_uow_factory, uow_mock),
         job_queue=job_queue,
@@ -163,7 +178,7 @@ async def test_direct_webhook_builds_direct_ingress(monkeypatch):
     surface_id = uuid4()
 
     await handlers.handle_surface_webhook(
-        SurfaceWebhookReceivedEvent(
+        _webhook_envelope(
             source="telegram",
             surface_id=surface_id,
             payload={"update_id": 3},
@@ -178,6 +193,61 @@ async def test_direct_webhook_builds_direct_ingress(monkeypatch):
     request = handler.prepare_ingress.await_args.args[0]
     assert isinstance(request, handlers.SurfaceDirectWebhookIngress)
     assert request.surface_id == surface_id
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "envelope",
+    [
+        pytest.param(
+            SurfaceConnectedEvent(
+                surface_id=uuid4(), pod_id=uuid4(), platform="RESEND"
+            ).model_dump(mode="json"),
+            id="surface.connected",
+        ),
+        pytest.param(
+            SurfaceMessageAnsweredEvent(
+                surface_id=uuid4(), pod_id=uuid4()
+            ).model_dump(mode="json"),
+            id="surface.message.answered",
+        ),
+    ],
+)
+async def test_handle_surface_webhook_ignores_the_other_events_on_its_stream(
+    monkeypatch, envelope
+):
+    """The analytics projections share ``surface_events``. They must not poison it.
+
+    This handler used to annotate its parameter as
+    ``SurfaceWebhookReceivedEvent``, which made fast-depends validate — and
+    fail — before the acknowledgement. An unackable message stays in the
+    pending-entries list and the reclaim subscriber hands it back every 60
+    seconds, forever. In development that ran at ~119 redeliveries an hour off
+    two stuck messages, and it grew by one permanently-stuck message per agent
+    created, because every agent is given an auto-provisioned Resend mailbox
+    whose creation publishes ``surface.connected``.
+
+    ``RESEND`` is the platform on purpose: it is the one that actually happened.
+    """
+    handler = AsyncMock()
+    job_queue = AsyncMock()
+    uow_mock = AsyncMock()
+    monkeypatch.setattr(handlers, "build_surface_event_handler", lambda uow: handler)
+
+    # Returning cleanly is the whole assertion: FastStream acknowledges only a
+    # handler that does not raise, and the ack is what lets the message leave
+    # the PEL. Anything escaping here is the poison loop reopening.
+    await handlers.handle_surface_webhook(
+        envelope,
+        logging.getLogger("test"),
+        uow_factory=partial(_mock_uow_factory, uow_mock),
+        job_queue=job_queue,
+        inbox=PassthroughEventInbox(),
+    )
+
+    handler.try_handle_channel_setup.assert_not_awaited()
+    handler.prepare_ingress.assert_not_awaited()
+    job_queue.enqueue.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -304,7 +374,7 @@ async def test_handle_surface_webhook_stops_at_a_lifecycle_event(monkeypatch):
     monkeypatch.setattr(handlers, "build_surface_event_handler", lambda uow: handler)
 
     await handlers.handle_surface_webhook(
-        SurfaceWebhookReceivedEvent(source="slack", payload={"type": "event_callback"}),
+        _webhook_envelope(source="slack", payload={"type": "event_callback"}),
         logging.getLogger("test"),
         uow_factory=partial(_mock_uow_factory, uow_mock),
         job_queue=job_queue,

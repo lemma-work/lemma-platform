@@ -359,7 +359,7 @@ async def process_conversation_title(
 _ORPHANED_RUN_CUTOFF_SECONDS = AGENT_RUN_JOB_TIMEOUT_SECONDS + 300
 
 
-@streaq_cron("*/10 * * * *", name="reconcile_orphaned_agent_runs")
+@streaq_cron("5-59/10 * * * *", name="reconcile_orphaned_agent_runs")
 async def reconcile_orphaned_agent_runs() -> None:
     """Self-heal agent runs stuck non-terminal after a worker crash/restart.
 
@@ -432,7 +432,7 @@ async def reconcile_orphaned_agent_runs() -> None:
         )
 
 
-@streaq_cron("*/5 * * * *", name="reconcile_agent_host_dispatch")
+@streaq_cron("1-59/5 * * * *", name="reconcile_agent_host_dispatch")
 async def reconcile_agent_host_dispatch() -> None:
     """Reconcile Agent Host leases against the runs they belong to.
 

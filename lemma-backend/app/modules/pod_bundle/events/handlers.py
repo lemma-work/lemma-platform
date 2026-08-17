@@ -926,7 +926,7 @@ def _now():
 _STUCK_AFTER_SECONDS = 40 * 60
 
 
-@streaq_cron("*/30 * * * *", name="sweep_pod_bundle_staging", lane=Lane.BULK)
+@streaq_cron("13-59/30 * * * *", name="sweep_pod_bundle_staging", lane=Lane.BULK)
 async def sweep_pod_bundle_staging() -> None:
     """Reclaim staged archives whose ephemeral state has expired, and mark
     crashed jobs FAILED so the UI stops showing them as in-progress. Durable

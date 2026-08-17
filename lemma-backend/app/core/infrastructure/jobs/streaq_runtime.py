@@ -37,6 +37,7 @@ from app.core.infrastructure.events.message_bus import (
     get_message_bus,
 )
 from app.core.infrastructure.events.outbox import outbox_dispatcher_lifespan
+from app.core.infrastructure.events.quarantine import StreamQuarantineMiddleware
 from app.core.infrastructure.events.stream_observability import (
     redis_stream_snapshot_loop,
 )
@@ -271,6 +272,11 @@ broker = RedisBroker(
     # it at INFO and let the supplied WARNING logger drop those records while
     # still forwarding explicitly actionable warning/error calls.
     log_level=logging.INFO,
+    # A message that can never be processed must be given up on, not redelivered
+    # until the end of the deployment. Registered on the broker rather than per
+    # handler because the failure it exists for happens during decoding, before
+    # any handler body runs.
+    middlewares=(StreamQuarantineMiddleware,),
 )
 
 
