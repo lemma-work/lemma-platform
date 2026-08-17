@@ -42,7 +42,7 @@ import pytest_asyncio
 
 from app.modules.workspace.domain.sandbox import SandboxKind
 from app.modules.workspace.providers import naming
-from app.modules.workspace.providers.base import ProviderCreateSpec
+from app.modules.workspace.providers.base import ProviderCreateSpec, ProviderFailed
 from app.modules.workspace.providers.e2b import (
     E2BProviderConfig,
     E2BSandboxProvider,
@@ -301,3 +301,77 @@ async def test_releasing_a_function_sandbox_leaves_it_serving_when_resumed(
         "whole P0 was made of -- keep_memory has regressed to filesystem-only "
         "for functions."
     )
+
+
+async def test_readiness_refuses_a_sandbox_whose_runtime_has_died(
+    provider: E2BSandboxProvider,
+) -> None:
+    """`wait_ready` now asks the runtime, not the VM.
+
+    This is what turns the outage into zero failed runs rather than one. The
+    reactive path -- quarantine on a 5xx dispatch -- recovers *after* a run has
+    already failed. Readiness refusing the sandbox means adoption never hands it
+    out, so the failure never reaches a user.
+
+    It used to check `is_running()` alone, which is true of a VM whose process
+    has died, so this sandbox passed readiness for 100 minutes.
+    """
+    sandbox_id = uuid4()
+    instance = await _create(provider, sandbox_id)
+    # Healthy first, or the assertion below proves nothing.
+    await provider.wait_ready(
+        instance, kind=SandboxKind.FUNCTION, deadline_at=_deadline()
+    )
+
+    sdk = await provider._connect(instance.provider_id)
+    await sdk.commands.run(_KILL_RUNTIME, timeout=30)
+    await asyncio.sleep(3)
+
+    with pytest.raises(ProviderFailed) as failure:
+        await provider.wait_ready(
+            instance, kind=SandboxKind.FUNCTION, deadline_at=_deadline()
+        )
+
+    # 502 from E2B's edge is the usual shape; a sandbox that stops answering
+    # entirely reads as never-answered. Either is a refusal, which is the claim.
+    assert "502" in str(failure.value) or "never answered" in str(failure.value), (
+        f"readiness failed for the wrong reason: {failure.value}"
+    )
+    # Still running, which is exactly why is_running() was not enough.
+    seen = await provider.inspect(instance.name, deadline_at=_deadline())
+    assert seen is not None and seen.running
+
+
+async def test_verify_ready_replaces_a_dead_sandbox_before_anyone_dispatches(
+    provider: E2BSandboxProvider,
+) -> None:
+    """`verify_ready=True` is what turns one failed run into none.
+
+    The function resolver passes it on an endpoint-cache miss. Before this it was
+    deleted on arrival -- `del ... verify_ready` -- and the client returned
+    `ready=True` unconditionally, on reasoning that only holds for a sandbox it
+    created rather than adopted.
+
+    Driven through the provider rather than the client because the client needs a
+    database; what is asserted is the property the client depends on: readiness
+    refuses the dead sandbox, and a replacement serves.
+    """
+    sandbox_id = uuid4()
+    first = await _create(provider, sandbox_id)
+    sdk = await provider._connect(first.provider_id)
+    await sdk.commands.run(_KILL_RUNTIME, timeout=30)
+    await asyncio.sleep(3)
+
+    # What the client now does: verify, and on failure destroy and re-ensure.
+    with pytest.raises(ProviderFailed):
+        await provider.wait_ready(
+            first, kind=SandboxKind.FUNCTION, deadline_at=_deadline()
+        )
+    await provider.destroy(first.provider_id, deadline_at=_deadline())
+    second = await _create(provider, sandbox_id, epoch=2)
+
+    await provider.wait_ready(
+        second, kind=SandboxKind.FUNCTION, deadline_at=_deadline()
+    )
+    assert second.provider_id != first.provider_id
+    assert await _runtime_status(provider, second.provider_id) == 404

@@ -530,6 +530,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'events.quarantine.message_dead_lettered': EventSpec('warning', frozenset({'original_stream', 'dead_letter_stream', 'consumer_groups', 'message_id', 'error_type', 'error_message'})),
     'events.quarantine.dead_letter_write_failed': EventSpec('error', frozenset({'original_stream', 'message_id', 'error_type'})),
     'events.quarantine.counter_unavailable': EventSpec('debug', frozenset()),
+    'workspace.local_sandbox_client.adopted_sandbox_not_serving': EventSpec('warning', frozenset({'sandbox_id', 'error_type'})),
     'function.runtime.sandbox_quarantined': EventSpec('info', frozenset({'pod_id'})),
     'function.runtime.quarantine_failed': EventSpec('warning', frozenset({'pod_id'})),
     'runtime.loop_stall.degraded': EventSpec('warning', frozenset({'service', 'stack_frames', 'other_thread_frames', 'stalled_ms', 'threshold_ms'})),

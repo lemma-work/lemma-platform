@@ -20,6 +20,7 @@ from app.modules.workspace.domain.sandbox import SandboxKind
 from app.modules.workspace.providers import naming
 from app.modules.workspace.providers.base import (
     ProviderCreateSpec,
+    ProviderFailed,
     ProviderGone,
     ProviderRejected,
 )
@@ -985,3 +986,38 @@ async def test_the_sweep_lists_function_sandboxes_too(
     objects = await provider.list_objects(deadline_at=_deadline())
 
     assert {obj.sandbox_id for obj in objects} == {workspace_id, function_id}
+
+
+async def test_a_sandbox_whose_runtime_died_is_not_ready(
+    provider: E2BSandboxProvider, world: FakeE2B
+) -> None:
+    """Readiness must ask the runtime, not the VM.
+
+    This is the 2026-08-16 P0 in miniature. A function sandbox whose runtime
+    process had died still reported `running`, so `wait_ready` passed, adoption
+    accepted it, and every dispatch got 502 for 100 minutes. Measured against
+    the real service: healthy answers 404 (route absent, port listening), dead
+    answers 502.
+    """
+    instance = await provider.create(_spec(uuid4(), kind=SandboxKind.FUNCTION))
+    world.runtime_status = 502
+
+    with pytest.raises(ProviderFailed) as failure:
+        await provider.wait_ready(
+            instance, kind=SandboxKind.FUNCTION, deadline_at=_deadline()
+        )
+
+    assert "502" in str(failure.value)
+    # The VM is still up -- that is the whole trap.
+    assert world.sandboxes[instance.provider_id].state == "running"
+
+
+async def test_a_serving_sandbox_is_ready(
+    provider: E2BSandboxProvider, world: FakeE2B
+) -> None:
+    """404 from the runtime port means serving, and must not read as failure."""
+    instance = await provider.create(_spec(uuid4(), kind=SandboxKind.FUNCTION))
+
+    await provider.wait_ready(
+        instance, kind=SandboxKind.FUNCTION, deadline_at=_deadline()
+    )
