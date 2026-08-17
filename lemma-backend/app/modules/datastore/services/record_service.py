@@ -325,26 +325,52 @@ class RecordService:
         admin_mode: bool = False,
     ):
         await self._require_record_write(user_id=user_id, ctx=ctx)
-
-        sanitized_data = RecordValidator(ctx).strip_system_write_overrides(data)
-        self._validate_update_payload(ctx, sanitized_data)
-        await self._validate_user_reference_columns(ctx, sanitized_data)
-
         enforce_user_scope = await self._should_enforce_user_scope(
             user_id=user_id,
             ctx=ctx,
             admin_mode=admin_mode,
         )
+        record = await self._write_update(
+            ctx,
+            record_id,
+            data,
+            user_id,
+            enforce_user_scope=enforce_user_scope,
+        )
         if ctx.events_enabled:
-            event_factory = partial(
+            await self.events.dispatch()
+        return record
+
+    async def _write_update(
+        self,
+        ctx: TableContext,
+        record_id: Any,
+        data: dict[str, Any],
+        user_id: UUID,
+        *,
+        enforce_user_scope: bool,
+    ):
+        """Validate and write one row, without the per-caller preamble.
+
+        Split so a bulk update pays the preamble once. Permission and row-scope
+        are decided by the caller and the table, neither of which changes inside
+        a loop, and re-asking cost a database round trip and a connection
+        release per record.
+        """
+        sanitized_data = RecordValidator(ctx).strip_system_write_overrides(data)
+        self._validate_update_payload(ctx, sanitized_data)
+        await self._validate_user_reference_columns(ctx, sanitized_data)
+        event_factory = (
+            partial(
                 self.events.required_for_record,
                 ctx=ctx,
                 operation=DatastoreRecordOperation.UPDATE,
                 user_id=user_id,
             )
-        else:
-            event_factory = None
-        record = await self.record_repository.update_record(
+            if ctx.events_enabled
+            else None
+        )
+        return await self.record_repository.update_record(
             ctx,
             record_id,
             sanitized_data,
@@ -352,9 +378,6 @@ class RecordService:
             enforce_user_scope=enforce_user_scope,
             event_factory=event_factory,
         )
-        if event_factory is not None:
-            await self.events.dispatch()
-        return record
 
     async def delete_record(
         self,
@@ -370,23 +393,10 @@ class RecordService:
             ctx=ctx,
             admin_mode=admin_mode,
         )
-        event_factory = None
-        if ctx.events_enabled:
-            event_factory = partial(
-                self.events.required_for_record,
-                ctx=ctx,
-                operation=DatastoreRecordOperation.DELETE,
-                user_id=user_id,
-            )
-
-        await self.record_repository.delete_record(
-            ctx,
-            record_id,
-            user_id,
-            enforce_user_scope=enforce_user_scope,
-            event_factory=event_factory,
+        await self._write_delete(
+            ctx, record_id, user_id, enforce_user_scope=enforce_user_scope
         )
-        if event_factory is not None:
+        if ctx.events_enabled:
             await self.events.dispatch()
         return True
 
@@ -459,6 +469,17 @@ class RecordService:
         if not updates:
             return 0
 
+        # Decided once, like `bulk_create_records` does with its permission
+        # check. Looping over `update_record` re-ran the whole single-record
+        # preamble per row -- a permission check against the database, a
+        # connection release, and a row-scope decision -- none of which can
+        # change inside the loop, because the caller, the table and the mode are
+        # all fixed. Production saw the cost as p50 8.6s on records/bulk/update.
+        enforce_user_scope = await self._should_enforce_user_scope(
+            user_id=user_id,
+            ctx=ctx,
+            admin_mode=admin_mode,
+        )
         pk = ctx.primary_key_column
         count = 0
 
@@ -473,10 +494,48 @@ class RecordService:
             payload.pop(pk, None)
             payload.pop("id", None)
 
-            await self.update_record(ctx, pk_val, payload, user_id, admin_mode=admin_mode)
+            await self._write_update(
+                ctx,
+                pk_val,
+                payload,
+                user_id,
+                enforce_user_scope=enforce_user_scope,
+            )
             count += 1
 
+        # One dispatch for the batch, not one per row. Each row still stages its
+        # own UPDATE event through the repository, so the event contract is
+        # unchanged -- only the number of flushes is.
+        if ctx.events_enabled:
+            await self.events.dispatch()
         return count
+
+    async def _write_delete(
+        self,
+        ctx: TableContext,
+        record_id: Any,
+        user_id: UUID,
+        *,
+        enforce_user_scope: bool,
+    ) -> None:
+        """Delete one row, without the per-caller preamble. See `_write_update`."""
+        event_factory = (
+            partial(
+                self.events.required_for_record,
+                ctx=ctx,
+                operation=DatastoreRecordOperation.DELETE,
+                user_id=user_id,
+            )
+            if ctx.events_enabled
+            else None
+        )
+        await self.record_repository.delete_record(
+            ctx,
+            record_id,
+            user_id,
+            enforce_user_scope=enforce_user_scope,
+            event_factory=event_factory,
+        )
 
     async def bulk_delete_records(
         self,
@@ -487,11 +546,23 @@ class RecordService:
         admin_mode: bool = False,
     ) -> int:
         await self._require_record_write(user_id=user_id, ctx=ctx)
+        # Decided once; see `bulk_update_records` for why.
+        enforce_user_scope = await self._should_enforce_user_scope(
+            user_id=user_id,
+            ctx=ctx,
+            admin_mode=admin_mode,
+        )
         count = 0
         for record_id in record_ids:
             try:
-                await self.delete_record(ctx, record_id, user_id, admin_mode=admin_mode)
+                await self._write_delete(
+                    ctx, record_id, user_id, enforce_user_scope=enforce_user_scope
+                )
                 count += 1
             except DatastoreRecordNotFoundError:
                 continue
+        # One dispatch for the batch. `_write_delete` stages per row but does
+        # not flush, so without this the DELETE events would never be published.
+        if ctx.events_enabled:
+            await self.events.dispatch()
         return count
