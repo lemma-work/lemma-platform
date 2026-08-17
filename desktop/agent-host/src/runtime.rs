@@ -2732,9 +2732,11 @@ mod target_worker_tests {
         // Exactly what a run task does the moment it journals an event.
         harness.worker.events_ready.notify_one();
 
-        within(Duration::from_secs(5), "the run's events to reach Lemma", || {
-            harness.accepted().get(&run_id) == Some(&3)
-        })
+        within(
+            Duration::from_secs(5),
+            "the run's events to reach Lemma",
+            || harness.accepted().get(&run_id) == Some(&3),
+        )
         .await;
         assert!(harness.pending(run_id).is_empty());
 
@@ -2756,9 +2758,11 @@ mod target_worker_tests {
         }
         harness.worker.events_ready.notify_one();
 
-        within(Duration::from_secs(5), "later events to reach Lemma", || {
-            harness.accepted().get(&run_id) == Some(&7)
-        })
+        within(
+            Duration::from_secs(5),
+            "later events to reach Lemma",
+            || harness.accepted().get(&run_id) == Some(&7),
+        )
         .await;
         assert!(harness.pending(run_id).is_empty());
 

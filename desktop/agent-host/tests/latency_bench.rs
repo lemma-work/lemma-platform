@@ -122,7 +122,10 @@ async fn publish(
                 }
                 *published = Some((
                     id,
-                    snapshot["config_revision"].as_str().unwrap_or("").to_owned(),
+                    snapshot["config_revision"]
+                        .as_str()
+                        .unwrap_or("")
+                        .to_owned(),
                 ));
             }
             json!({
@@ -207,7 +210,11 @@ async fn poll(
     let progressed = acknowledged || advanced;
 
     if let Some(command) = owed_start(&state) {
-        state.polls.lock().unwrap().push((opened, state.started.elapsed()));
+        state
+            .polls
+            .lock()
+            .unwrap()
+            .push((opened, state.started.elapsed()));
         return Ok(Json(json!({
             "protocol_version": 2,
             "host_status": "ONLINE",
@@ -217,7 +224,11 @@ async fn poll(
     }
 
     if state.mode == Mode::Real && progressed {
-        state.polls.lock().unwrap().push((opened, state.started.elapsed()));
+        state
+            .polls
+            .lock()
+            .unwrap()
+            .push((opened, state.started.elapsed()));
         return Ok(Json(json!({
             "protocol_version": 2,
             "host_status": "ONLINE",
@@ -231,7 +242,11 @@ async fn poll(
         let deadline = Instant::now() + POLL_HOLD;
         loop {
             if let Some(command) = owed_start(&state) {
-                state.polls.lock().unwrap().push((opened, state.started.elapsed()));
+                state
+                    .polls
+                    .lock()
+                    .unwrap()
+                    .push((opened, state.started.elapsed()));
                 return Ok(Json(json!({
                     "protocol_version": 2,
                     "host_status": "ONLINE",
@@ -246,7 +261,11 @@ async fn poll(
         }
     }
 
-    state.polls.lock().unwrap().push((opened, state.started.elapsed()));
+    state
+        .polls
+        .lock()
+        .unwrap()
+        .push((opened, state.started.elapsed()));
     Ok(Json(json!({
         "protocol_version": 2,
         "host_status": "ONLINE",
@@ -351,11 +370,18 @@ impl Bench {
             }
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
-        panic!("timed out waiting for {what}; hops={:?}", self.state.hops.lock().unwrap());
+        panic!(
+            "timed out waiting for {what}; hops={:?}",
+            self.state.hops.lock().unwrap()
+        );
     }
 }
 
-async fn start_host(root: &std::path::Path, bench: &Bench, adapters: &std::path::Path) -> tokio::task::JoinHandle<anyhow::Result<()>> {
+async fn start_host(
+    root: &std::path::Path,
+    bench: &Bench,
+    adapters: &std::path::Path,
+) -> tokio::task::JoinHandle<anyhow::Result<()>> {
     let paths = HostPaths::under(root);
     paths.ensure().unwrap();
     #[cfg(unix)]
@@ -416,7 +442,11 @@ async fn measure(mode: Mode, harness: &str, prompt: &str) {
     bench.state.mark("user sent the message (run dispatched)");
 
     bench
-        .wait_until("the run to finish", Duration::from_secs(240), Bench::saw_terminal)
+        .wait_until(
+            "the run to finish",
+            Duration::from_secs(240),
+            Bench::saw_terminal,
+        )
         .await;
     host.abort();
 
@@ -426,10 +456,13 @@ async fn measure(mode: Mode, harness: &str, prompt: &str) {
         .find(|hop| hop.what.starts_with("user sent"))
         .map(|hop| hop.at)
         .unwrap();
-    println!("\n=== mode={} harness={harness} ===", match mode {
-        Mode::Fast => "fast",
-        Mode::Real => "real",
-    });
+    println!(
+        "\n=== mode={} harness={harness} ===",
+        match mode {
+            Mode::Fast => "fast",
+            Mode::Real => "real",
+        }
+    );
     for hop in &hops {
         if hop.at < dispatch_at && !hop.what.starts_with("harness") {
             continue;
@@ -437,7 +470,11 @@ async fn measure(mode: Mode, harness: &str, prompt: &str) {
         let relative = hop.at.checked_sub(dispatch_at);
         match relative {
             Some(delta) => println!("  +{:7.3}s  {}", delta.as_secs_f64(), hop.what),
-            None => println!("  ({:7.3}s before dispatch)  {}", dispatch_at.saturating_sub(hop.at).as_secs_f64(), hop.what),
+            None => println!(
+                "  ({:7.3}s before dispatch)  {}",
+                dispatch_at.saturating_sub(hop.at).as_secs_f64(),
+                hop.what
+            ),
         }
     }
     let appends = hops
@@ -520,6 +557,5 @@ async fn turn_latency_with_a_realistic_control_plane() {
 /// The turn to measure. Short by default, so the number is startup overhead;
 /// `LEMMA_BENCH_PROMPT` swaps in a long one to measure streaming cadence.
 fn bench_prompt() -> String {
-    std::env::var("LEMMA_BENCH_PROMPT")
-        .unwrap_or_else(|_| "Reply with exactly: PONG".to_owned())
+    std::env::var("LEMMA_BENCH_PROMPT").unwrap_or_else(|_| "Reply with exactly: PONG".to_owned())
 }
