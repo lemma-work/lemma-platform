@@ -26,7 +26,6 @@ streaq runtime: started in the lifespan, cancelled on shutdown.
 from __future__ import annotations
 
 import asyncio
-import contextlib
 from dataclasses import dataclass
 import os
 from pathlib import Path
@@ -286,6 +285,9 @@ async def loop_lag_watchdog(
             _evaluate_lag(lag, warn, service_name=service_name)
     finally:
         ticker.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await ticker
+        # Joined before the sampler stops, so a last tick cannot land against a
+        # sampler that is already gone. `gather` rather than a suppressed await
+        # because the cancellation it raises is the expected outcome here, not
+        # an error being swallowed.
+        await asyncio.gather(ticker, return_exceptions=True)
         stop_loop_stall_sampler()

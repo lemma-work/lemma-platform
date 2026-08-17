@@ -282,6 +282,19 @@ def test_a_recovered_process_reports_healthy_again_well_before_a_probe_kills_it(
         loop_watchdog.reset_loop_watchdog_state()
 
 
+async def _stop(task: asyncio.Task) -> None:
+    """Cancel the watchdog and wait for it to actually be gone.
+
+    Awaiting matters: the watchdog's own ``finally`` joins its tick task, and a
+    test that only cancelled would go on to count ticks while that teardown was
+    still running.
+    """
+    task.cancel()
+    # The CancelledError this raises is the expected outcome, not a swallowed
+    # error, which is why it is collected rather than excepted away.
+    await asyncio.gather(task, return_exceptions=True)
+
+
 @pytest.mark.asyncio
 async def test_a_healthy_loop_is_ticked_far_faster_than_the_watchdog_interval(
     monkeypatch,
@@ -316,11 +329,7 @@ async def test_a_healthy_loop_is_ticked_far_faster_than_the_watchdog_interval(
     try:
         await asyncio.sleep(0.2)
     finally:
-        task.cancel()
-        try:
-            await task
-        except asyncio.CancelledError:
-            pass
+        await _stop(task)
 
     # Within one 0.5s watchdog interval the loop has been ticked many times.
     # Tying this to the watchdog interval rather than a raw count keeps it
@@ -354,11 +363,7 @@ async def test_the_tick_stops_when_the_watchdog_does(monkeypatch):
 
     task = asyncio.create_task(loop_watchdog.loop_lag_watchdog(service_name="test"))
     await asyncio.sleep(0.1)
-    task.cancel()
-    try:
-        await task
-    except asyncio.CancelledError:
-        pass
+    await _stop(task)
 
     settled = len(ticks)
     await asyncio.sleep(0.1)
