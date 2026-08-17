@@ -9,6 +9,8 @@ build/
 .env
 .env.*
 !.env.example
+# Templates naming which variables exist, never their values.
+!.env.*.example
 
 # Local runtime data (object storage, generated files, model caches)
 /.local/

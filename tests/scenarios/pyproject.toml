@@ -41,10 +41,10 @@ addopts = [
     "--durations=10",
     "--import-mode=importlib",
     # The fast lane. Everything here runs against containers the stack starts
-    # itself; `sandbox` needs workspace images built first, which costs minutes
-    # and is what keeps this suite off every pull request. Run those with
-    # `make scenarios-sandbox`.
-    "-m", "not sandbox",
+    # itself; `sandbox` needs workspace images built first, which costs minutes,
+    # and `live` needs credentials for real third parties. Run those with
+    # `make scenarios-sandbox` and `make scenarios-live`.
+    "-m", "not sandbox and not live",
 ]
 
 # A scenario that hangs holds the whole shared stack, so the per-test cap is
@@ -58,6 +58,7 @@ markers = [
     "scenario: what this test proves, as a sentence a person would say",
     "proves: PS- promises in docs/product this test proves",
     "covers: OpenAPI operation ids and analytics events exercised",
+    "live: drives a real third party (Google, GitHub, Telegram, Composio) and needs credentials",
     "sandbox: needs a provisioned sandbox, so needs the workspace images built",
 ]
 

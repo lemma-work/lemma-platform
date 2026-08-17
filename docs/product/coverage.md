@@ -18,7 +18,7 @@ only a promise marked `covered` with no test is.
 | `withdrawn` | 0 |
 | **total** | **160** |
 
-Scenario tests declaring a promise: 289.
+Scenario tests declaring a promise: 296.
 
 ## Contract coverage
 
@@ -36,7 +36,7 @@ the module suites may cover it — but it is untested *as product*.
 | Scenario | Status | Proven by |
 | --- | --- | --- |
 | `PS-AGENT-001` A person creates an agent and gives it a job | `covered` | `test_an_agent_can_be_changed`, `test_an_agent_is_created`, `test_a_duplicate_agent_name_is_refused` |
-| `PS-AGENT-002` An agent gets only the access it was granted | `covered` | `test_an_agents_reach_can_be_set`, `test_an_agents_grants_are_readable`, `test_an_agent_cannot_call_an_ungranted_connector` |
+| `PS-AGENT-002` An agent gets only the access it was granted | `covered` | `test_an_agents_reach_can_be_set`, `test_an_agents_grants_are_readable`, `test_an_agent_uses_github_only_when_granted`, `test_an_agent_cannot_call_an_ungranted_connector` |
 | `PS-AGENT-003` A pod has an agent without anyone creating one | `covered` | `test_a_pod_can_be_asked_without_building_an_agent`, `test_deleting_an_agent_keeps_the_default` |
 | `PS-AGENT-004` A person chooses which model an agent uses | `covered` | `test_runtime_profiles_are_listable`, `test_an_outsider_cannot_see_profiles`, `test_an_organization_can_add_a_provider`, `test_a_provider_key_is_never_returned`, `test_a_provider_can_be_archived_and_restored`, `test_an_outsider_cannot_add_a_provider` |
 | `PS-AGENT-010` A person starts a conversation and gets an answer | `covered` | `test_a_conversation_can_be_retitled`, `test_a_conversation_gets_an_answer`, `test_a_conversation_is_readable_afterwards` |
@@ -99,15 +99,15 @@ the module suites may cover it — but it is untested *as product*.
 | --- | --- | --- |
 | `PS-CONN-001` A person browses what the platform can connect to | `covered` | `test_the_connector_catalogue_is_browsable`, `test_connector_status_is_readable`, `test_a_connector_reads_back` |
 | `PS-CONN-010` An admin installs a connector once for everyone | `covered` | `test_an_oauth_connector_needs_credentials`, `test_installing_discovers_operations`, `test_an_installation_does_not_leak_across_organizations`, `test_an_outsider_cannot_install`, `test_an_installation_can_be_renamed` |
-| `PS-CONN-011` Provider secrets given at install stay secret | `covered` | `test_a_provider_key_is_never_returned`, `test_an_oauth_connector_needs_credentials` |
+| `PS-CONN-011` Provider secrets given at install stay secret | `covered` | `test_a_provider_key_is_never_returned`, `test_an_oauth_connector_needs_credentials`, `test_connecting_github_identifies_the_account`, `test_calendar_reads_with_a_refreshed_token`, `test_gmail_through_composio_is_the_same_identity` |
 | `PS-CONN-012` Removing an installation removes what depended on it | `covered` | `test_uninstalling_stops_everything_under_it` |
-| `PS-CONN-020` A person connects their account and it belongs to them | `covered` | `test_an_account_belongs_to_who_connected_it`, `test_an_account_is_not_shared`, `test_disconnecting_stops_the_account_working`, `test_reconnecting_restores_the_account` |
+| `PS-CONN-020` A person connects their account and it belongs to them | `covered` | `test_an_account_belongs_to_who_connected_it`, `test_an_account_is_not_shared`, `test_disconnecting_stops_the_account_working`, `test_reconnecting_restores_the_account`, `test_connecting_github_identifies_the_account`, `test_calendar_reads_with_a_refreshed_token` |
 | `PS-CONN-021` Connecting through a provider's consent screen works end to end | `covered` | `test_connecting_needs_a_consent_flow`, `test_an_unknown_callback_is_refused` |
 | `PS-CONN-022` An account that stops working says so | `covered` | `test_reconnecting_restores_the_account` |
-| `PS-CONN-030` A person finds the operation they need | `covered` | `test_operations_can_be_refreshed`, `test_operations_read_in_bulk`, `test_installing_discovers_operations`, `test_an_operation_is_readable` |
+| `PS-CONN-030` A person finds the operation they need | `covered` | `test_operations_can_be_refreshed`, `test_operations_read_in_bulk`, `test_installing_discovers_operations`, `test_an_operation_is_readable`, `test_an_issue_is_created_and_closed`, `test_an_event_is_created_and_removed` |
 | `PS-CONN-031` An operation runs as the person who owns the account | `covered` | `test_an_account_is_not_shared`, `test_an_operation_reaches_the_provider` |
 | `PS-CONN-032` A slow or failing provider does not damage the pod | `covered` | `test_a_failing_provider_is_reported_not_swallowed`, `test_a_failing_provider_does_not_take_the_pod_with_it`, `test_a_hanging_provider_is_given_up_on` |
-| `PS-CONN-033` An agent can only use the connectors it was granted | `covered` | `test_an_agent_cannot_call_an_ungranted_connector` |
+| `PS-CONN-033` An agent can only use the connectors it was granted | `covered` | `test_an_agent_uses_github_only_when_granted`, `test_an_agent_cannot_call_an_ungranted_connector` |
 | `PS-CONN-040` A person sees what a provider can notify them about | `covered` | `test_a_trigger_reads_back`, `test_triggers_are_listable` |
 
 ## [Getting started](journeys/getting-started.md)
@@ -207,12 +207,12 @@ the module suites may cover it — but it is untested *as product*.
 | `PS-SURF-001` A person connects a pod's agent to a platform | `covered` | `test_a_surface_reads_back`, `test_available_platforms_are_listed`, `test_an_unconfigured_surface_is_refused`, `test_an_outsider_cannot_touch_surfaces` |
 | `PS-SURF-002` Setting up a platform does not require reading its documentation | `covered` | `test_a_slack_manifest_is_generated`, `test_a_managed_bot_setup_says_what_is_missing`, `test_a_consent_callback_without_a_grant_is_refused`, `test_a_setup_guide_is_available` |
 | `PS-SURF-003` A person changes or removes a surface | `covered` | `test_a_surface_can_be_repointed`, `test_deleting_a_surface_stops_it` |
-| `PS-SURF-010` Only genuine messages from the platform are acted on | `covered` | `test_an_unknown_sender_is_told_how_to_get_access`, `test_an_unsigned_delivery_is_rejected`, `test_a_wrongly_signed_delivery_is_rejected`, `test_a_surface_webhook_can_be_verified`, `test_the_manager_webhook_rejects_unsigned`, `test_webhook_verification_needs_no_session`, `test_an_unsigned_webhook_is_rejected` |
+| `PS-SURF-010` Only genuine messages from the platform are acted on | `covered` | `test_a_real_bot_answers`, `test_an_unknown_sender_is_told_how_to_get_access`, `test_an_unsigned_delivery_is_rejected`, `test_a_wrongly_signed_delivery_is_rejected`, `test_a_surface_webhook_can_be_verified`, `test_the_manager_webhook_rejects_unsigned`, `test_webhook_verification_needs_no_session`, `test_an_unsigned_webhook_is_rejected` |
 | `PS-SURF-011` The same message delivered twice is answered once | `covered` | `test_a_repeated_delivery_is_answered_once`, `test_a_raced_delivery_is_answered_once` |
 | `PS-SURF-012` A person on a platform is resolved to who they are in Lemma | `covered` | `test_an_unknown_sender_is_told_how_to_get_access` |
 | `PS-SURF-013` A thread on the platform is a conversation in the pod | `planned` | — |
 | `PS-SURF-014` A file sent to a surface reaches the pod | `planned` | — |
-| `PS-SURF-020` The answer comes back where the question was asked | `covered` | `test_an_unknown_sender_is_told_how_to_get_access` |
+| `PS-SURF-020` The answer comes back where the question was asked | `covered` | `test_a_real_bot_answers`, `test_an_unknown_sender_is_told_how_to_get_access` |
 | `PS-SURF-021` Questions and approvals work on every platform | `covered` | `test_a_question_is_asked_with_native_controls`, `test_an_approval_is_offered_with_native_controls` |
 | `PS-SURF-022` Email surfaces behave like email | `planned` | — |
 | `PS-SURF-023` A person reached on several platforms gets one predictable answer | `covered` | `test_channels_are_listable`, `test_a_default_surface_can_be_chosen`, `test_my_surfaces_are_listable` |

@@ -28,7 +28,7 @@ SHELL := /bin/bash
         test-dev-workflow \
         test test-backend test-backend-unit test-backend-e2e \
         test-frontend test-cli test-cli-unit test-cli-e2e test-python \
-        scenarios scenarios-guards scenarios-sandbox scenarios-images \
+        scenarios scenarios-guards scenarios-sandbox scenarios-live scenarios-images \
         scenario-coverage scenarios-code-coverage \
         coverage coverage-backend coverage-backend-unit coverage-backend-e2e \
         coverage-backend-module coverage-cli coverage-cli-unit coverage-cli-e2e coverage-frontend \
@@ -329,6 +329,7 @@ help:
 	@echo "    make scenarios-guards   scenario suite guards only (fast, no docker)"
 	@echo "    make scenarios-images   build the sandbox images the lane below needs"
 	@echo "    make scenarios-sandbox  scenarios that execute functions and workflows"
+	@echo "    make scenarios-live     scenarios against real Google, GitHub, Telegram"
 	@echo "    make scenario-coverage  regenerate docs/product/coverage.md"
 	@echo "    make test-python        lemma-python SDK tests (non-integration)"
 	@echo ""
@@ -1229,6 +1230,15 @@ scenarios-images:
 scenarios-sandbox:
 	@echo "→ Product scenarios needing a sandbox…"
 	@cd $(SCENARIOS_DIR) && uv run pytest -q -m sandbox
+
+# The live lane: the same platform, driven against the real third parties people
+# connect — Google, GitHub, Telegram, Composio — and a real model. Credentials
+# come from tests/scenarios/.env.live, which is gitignored; providers you have
+# not configured are skipped with a reason naming what is missing. See
+# tests/scenarios/LIVE.md.
+scenarios-live:
+	@echo "→ Product scenarios against real providers…"
+	@cd $(SCENARIOS_DIR) && uv run pytest -q -m live journeys/live
 
 # The guards on the suite itself: no imports of the app under test, no mocking,
 # no sleeping, every test declaring what it proves. No docker, no stack, ~20ms —

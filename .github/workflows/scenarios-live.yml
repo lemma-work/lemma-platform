@@ -1,0 +1,92 @@
+name: Live scenarios
+
+# The scenario suite against the real third parties people connect: Google,
+# GitHub, Telegram, Composio, and a real model.
+#
+# Deliberately not on pull requests. This repository is public, so a fork must
+# never be able to read these secrets — and a Google outage must never block a
+# merge. It runs nightly, before a release, and whenever somebody asks for it.
+#
+# Providers without credentials are SKIPPED, with a reason naming what is
+# missing. A skip is not a pass: the Slack summary reports what was not run as
+# prominently as what failed, because a lane that goes green while testing
+# nothing is worse than no lane.
+
+on:
+  schedule:
+    # Nightly, after the working day in IST.
+    - cron: '0 20 * * *'
+  workflow_dispatch:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+concurrency:
+  # One at a time. These write to real accounts — two runs creating calendar
+  # events and GitHub issues in the same places would fight.
+  group: scenarios-live
+  cancel-in-progress: false
+
+jobs:
+  live:
+    name: live scenarios
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: live-scenarios
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version-file: .python-version
+      - name: Sync backend
+        working-directory: lemma-backend
+        run: uv sync
+      - name: Sync scenario suite
+        working-directory: tests/scenarios
+        run: uv sync
+
+      - name: Run the live lane
+        id: run
+        working-directory: tests/scenarios
+        continue-on-error: true
+        env:
+          LIVE_MODEL_API_KEY: ${{ secrets.LIVE_MODEL_API_KEY }}
+          LIVE_GITHUB_TOKEN: ${{ secrets.LIVE_GITHUB_TOKEN }}
+          LIVE_GITHUB_REPO: ${{ vars.LIVE_GITHUB_REPO }}
+          LIVE_GOOGLE_CLIENT_ID: ${{ secrets.LIVE_GOOGLE_CLIENT_ID }}
+          LIVE_GOOGLE_CLIENT_SECRET: ${{ secrets.LIVE_GOOGLE_CLIENT_SECRET }}
+          LIVE_GOOGLE_REFRESH_TOKEN: ${{ secrets.LIVE_GOOGLE_REFRESH_TOKEN }}
+          LIVE_TELEGRAM_BOT_TOKEN: ${{ secrets.LIVE_TELEGRAM_BOT_TOKEN }}
+          LIVE_TELEGRAM_CHAT_ID: ${{ secrets.LIVE_TELEGRAM_CHAT_ID }}
+          LIVE_COMPOSIO_API_KEY: ${{ secrets.LIVE_COMPOSIO_API_KEY }}
+        run: uv run pytest -m live journeys/live -q --junitxml=live-results.xml
+
+      - name: Say what happened
+        if: always()
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          python3 scripts/report_scenarios_to_slack.py \
+            tests/scenarios/live-results.xml \
+            --lane "live scenarios" \
+            --run-url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+
+      - name: Keep the results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: live-results
+          path: tests/scenarios/live-results.xml
+          retention-days: 30
+
+      # Reporting runs first so Slack hears about a failure even though the job
+      # is about to go red.
+      - name: Fail if anything failed
+        if: steps.run.outcome == 'failure'
+        run: |
+          echo "The live lane has failing scenarios — see the Slack summary above."
+          exit 1

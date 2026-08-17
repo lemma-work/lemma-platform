@@ -338,7 +338,42 @@ def _environment(*, port: int, database_url: str, redis_url: str, supertokens_ur
         "WORKSPACE_HOST_ALIAS": "host.docker.internal",
         "WORKSPACE_CALLBACK_API_URL": f"http://host.docker.internal:{port}",
         "FUNCTION_RUNTIME_GATEWAY_URL": f"http://host.docker.internal:{port}",
+        **_live_environment(),
     }
+
+
+def _live_environment() -> dict[str, str]:
+    """What the live lane needs, and only when it has the credentials for it.
+
+    Two settings change when real third parties are in play, and both are
+    ordinary product configuration rather than anything test-shaped:
+
+    * **A real model.** The deterministic model is right for a suite on every
+      push and wrong for a lane whose whole point is that nothing is stood in
+      for. With `LIVE_MODEL_API_KEY` set, agents use the real provider.
+    * **Telegram by polling.** A real bot needs Lemma to receive its updates,
+      and a webhook needs a public URL that a nightly runner does not have.
+      `enable_telegram_polling_mode` has the worker call `getUpdates` instead —
+      a supported deployment mode, and the one self-hosted installs behind a
+      firewall use.
+
+    Absent credentials change nothing, so the fast lane is byte-for-byte what it
+    was.
+    """
+    from harness.credentials import MODEL, TELEGRAM
+
+    live: dict[str, str] = {}
+    if MODEL.available:
+        key = MODEL.value("LIVE_MODEL_API_KEY")
+        live |= {
+            "E2E_LLM_MODE": "real",
+            "LEMMA_OPENAI_API_KEY": key,
+            "LEMMA_OPENAI_MODEL_NAMES": os.getenv("LIVE_MODEL_NAMES", "gpt-4o-mini"),
+            "LEMMA_OPENAI_DEFAULT_MODEL": os.getenv("LIVE_MODEL", "gpt-4o-mini"),
+        }
+    if TELEGRAM.available:
+        live["ENABLE_TELEGRAM_POLLING_MODE"] = "true"
+    return live
 
 
 def _seed_connectors(python_bin: str, env: dict[str, str]) -> None:
