@@ -212,7 +212,13 @@ function getPodScreenLabel(podId: string, pathname: string, searchParams: Search
 
     if (section === "forms" && detail === "view") return "Agent Needs Your Input";
 
-    if (section === "widgets" && detail === "view") return "Presented Widget";
+    // Widgets open one tab each, so the strip needs their names to tell them
+    // apart. The presenting card knows the name and passes it along; anything
+    // that arrives without one keeps the generic label.
+    if (section === "widgets" && detail === "view") {
+        const widgetTitle = searchParams.get("title")?.replace(/\s+/g, " ").trim();
+        return widgetTitle ? widgetTitle.slice(0, 200) : "Presented Widget";
+    }
 
     if (section === "files" || section === "docs") {
         const file = getPathBasename(searchParams.get("file"));
