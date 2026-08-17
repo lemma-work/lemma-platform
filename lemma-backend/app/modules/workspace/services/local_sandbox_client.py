@@ -36,8 +36,14 @@ from sandbox_runtime.protocol import (
 )
 
 from app.core.config import settings
+from app.core.log.log import get_logger
 from app.modules.workspace.config import workspace_settings
-from app.modules.workspace.providers.base import ProviderGone
+from app.modules.workspace.providers.base import (
+    ProviderFailed,
+    ProviderGone,
+    ProviderNotReady,
+    ProviderRejected,
+)
 from app.modules.workspace.domain.sandbox import (
     SandboxHandle,
     SandboxKind,
@@ -50,6 +56,9 @@ from app.modules.workspace.services.local_sandbox_files import (
     LocalSandboxFilesMixin,
 )
 from app.modules.workspace.services.sandbox_service import SandboxService
+
+
+logger = get_logger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -402,11 +411,13 @@ class LocalSandboxClient(LocalSandboxFilesMixin):
         # The profile and admission class are the manager's vocabulary. Here
         # the profile lives on the sandbox row and admission is a semaphore,
         # so both are accepted and ignored rather than reshaping every caller.
-        del profile, admission_class, deadline_at, verify_ready
+        del profile, admission_class
         sandbox_id = await self._ensure_row(logical_id, workload_kind)
         handle = await self._service.ensure(sandbox_id)
-        # `ensure` only returns once the sandbox is serving, so a handle here
-        # is by definition ready.
+        if verify_ready:
+            handle = await self._verified(
+                sandbox_id, handle, workload_kind, deadline_at=deadline_at
+            )
         return LocalSandboxHandle(
             sandbox_id=handle.sandbox_id,
             ready=True,
@@ -414,6 +425,48 @@ class LocalSandboxClient(LocalSandboxFilesMixin):
             allocation_epoch=handle.epoch,
             storage_generation=handle.storage_generation,
         )
+
+    async def _verified(self, sandbox_id, handle, workload_kind, *, deadline_at):
+        """Prove an adopted sandbox serves, and replace it once if it does not.
+
+        `ensure` returning a handle used to be treated as proof of readiness --
+        "`ensure` only returns once the sandbox is serving, so a handle here is
+        by definition ready". That holds for a sandbox it *created*. For one it
+        *adopted* it does not: adoption asks the provider whether the sandbox is
+        running, and on a VM the process inside can die without changing that
+        answer. A function sandbox in exactly that state served 502 to every
+        dispatch for 100 minutes while adoption kept accepting it.
+
+        Only reached when the caller asks (`verify_ready`), which today is the
+        function resolver on an endpoint-cache miss -- so this costs one probe
+        per reuse window, not one per dispatch.
+
+        Replaced once, not retried: the same dead sandbox would fail the same way
+        forever, and a function sandbox holds no files, so rebuilding it costs a
+        cold start and nothing else.
+        """
+        deadline = deadline_at or datetime.now(timezone.utc) + timedelta(seconds=30)
+        kind = (
+            SandboxKind.FUNCTION
+            if _is_function(workload_kind)
+            else SandboxKind.WORKSPACE
+        )
+        _, instance = await self._instance(sandbox_id)
+        try:
+            await self._provider.wait_ready(
+                instance, kind=kind, deadline_at=deadline
+            )
+            return handle
+        except (ProviderNotReady, ProviderRejected, ProviderFailed) as exc:
+            logger.warning(
+                "workspace.local_sandbox_client.adopted_sandbox_not_serving",
+                sandbox_id=str(sandbox_id),
+                error_type=type(exc).__name__,
+            )
+        self._service.forget(sandbox_id)
+        await self._service.destroy(sandbox_id)
+        await self._ensure_row(sandbox_id, workload_kind)
+        return await self._service.ensure(sandbox_id)
 
     async def inspect_sandbox(self, workload_kind, logical_id: UUID):
         """Report the sandbox without provisioning it.

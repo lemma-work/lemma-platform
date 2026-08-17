@@ -144,3 +144,62 @@ async def test_the_last_failure_survives_the_ensure_deadline() -> None:
         )
 
     assert "capacity is exhausted" in str(raised.value)
+
+
+@pytest.mark.asyncio
+async def test_quarantine_destroys_the_sandbox_not_just_the_cached_endpoint() -> None:
+    """Dropping the cache alone would re-adopt the same dead sandbox.
+
+    Adoption asks the provider whether the sandbox is running, and a sandbox
+    whose runtime process has died is still running. So the reload hands back
+    the same broken endpoint, which is why the development outage lasted 100
+    minutes instead of one failed run.
+    """
+    dispatch = _dispatch()
+    client = SimpleNamespace(
+        ensure_sandbox=AsyncMock(
+            return_value=SimpleNamespace(ready=True, retry_after_ms=None)
+        ),
+        lease_function_runtime=AsyncMock(return_value=_lease(dispatch.pod_id)),
+        destroy_sandbox=AsyncMock(),
+        close=AsyncMock(),
+    )
+    resolver = FunctionRuntimeRouteResolver(
+        sandbox_client_factory=lambda: client,
+        endpoint_cache=FunctionRuntimeEndpointCache(),
+    )
+    endpoint = await resolver.endpoint(dispatch)
+
+    await resolver.quarantine(dispatch.pod_id, endpoint)
+
+    client.destroy_sandbox.assert_awaited_once()
+    assert client.destroy_sandbox.await_args.args[1] == dispatch.pod_id
+    # And the next resolve provisions rather than reusing the cached entry.
+    client.lease_function_runtime.reset_mock()
+    await resolver.endpoint(dispatch)
+    client.lease_function_runtime.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_a_failed_destroy_still_leaves_the_endpoint_evicted() -> None:
+    """Quarantine is best effort on the sandbox and definite on the cache."""
+    dispatch = _dispatch()
+    client = SimpleNamespace(
+        ensure_sandbox=AsyncMock(
+            return_value=SimpleNamespace(ready=True, retry_after_ms=None)
+        ),
+        lease_function_runtime=AsyncMock(return_value=_lease(dispatch.pod_id)),
+        destroy_sandbox=AsyncMock(side_effect=SandboxUnavailable("provider unreachable")),
+        close=AsyncMock(),
+    )
+    resolver = FunctionRuntimeRouteResolver(
+        sandbox_client_factory=lambda: client,
+        endpoint_cache=FunctionRuntimeEndpointCache(),
+    )
+    endpoint = await resolver.endpoint(dispatch)
+
+    await resolver.quarantine(dispatch.pod_id, endpoint)
+
+    client.lease_function_runtime.reset_mock()
+    await resolver.endpoint(dispatch)
+    client.lease_function_runtime.assert_awaited_once()

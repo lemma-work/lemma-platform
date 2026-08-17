@@ -1020,3 +1020,93 @@ async def test_execute_readonly_query_requires_pod_read_when_no_table_referenced
     ctx.require.assert_awaited()
     table_service.get_table.assert_not_awaited()
     assert record_repository.execute_readonly_query.await_args.kwargs["is_pod_admin"] is False
+
+
+async def test_bulk_update_checks_permission_and_dispatches_events_once():
+    """Bulk work must cost one authorization check, not one per record.
+
+    `bulk_update_records` looped over `update_record`, which re-runs the whole
+    single-record preamble every time: a DATASTORE_RECORD_WRITE check against
+    the database and a connection release, a row-scope decision, and an event
+    dispatch. All of them are invariant across the loop -- same caller, same
+    table, same mode -- so a 100-record update paid for 100 of each.
+
+    `bulk_create_records` in the same service already hoists its permission
+    check and stages events for one dispatch. This is that shape, applied to
+    update. Production saw the difference as p50 8.6s and max 14.9s on
+    `records/bulk/update`.
+    """
+    ctx = _events_enabled_context()
+    user_id = uuid4()
+    record_repository = AsyncMock()
+    record_repository.update_record.return_value = {"id": "x"}
+
+    service = RecordService(record_repository=record_repository)
+    authz = AsyncMock()
+    authz.should_enforce_record_user_scope.return_value = False
+    service.authz = authz
+    service.events = AsyncMock()
+
+    updates = [{"id": str(uuid4()), "status": "done"} for _ in range(5)]
+    count = await service.bulk_update_records(ctx, updates, user_id)
+
+    assert count == 5
+    assert record_repository.update_record.await_count == 5, "every row is written"
+    assert authz.require_record_write.await_count == 1, (
+        f"{authz.require_record_write.await_count} permission checks for one bulk "
+        "call; the caller and table do not change inside the loop"
+    )
+    assert authz.should_enforce_record_user_scope.await_count == 1, (
+        f"{authz.should_enforce_record_user_scope.await_count} scope decisions "
+        "for one bulk call; the mode does not change inside the loop"
+    )
+    assert service.events.dispatch.await_count == 1, (
+        f"{service.events.dispatch.await_count} event dispatches for one bulk call"
+    )
+
+
+async def test_bulk_delete_checks_permission_once_and_still_publishes_events():
+    """Same preamble hoist as bulk update, and the events must still be flushed.
+
+    `_write_delete` stages a DELETE event per row but deliberately does not
+    dispatch, so the batch has to flush once at the end. Getting that wrong
+    would publish nothing at all, which is worse than the slowness this fixes.
+    """
+    ctx = _events_enabled_context()
+    user_id = uuid4()
+    record_repository = AsyncMock()
+    service = RecordService(record_repository=record_repository)
+    authz = AsyncMock()
+    authz.should_enforce_record_user_scope.return_value = False
+    service.authz = authz
+    service.events = AsyncMock()
+
+    count = await service.bulk_delete_records(ctx, [uuid4() for _ in range(4)], user_id)
+
+    assert count == 4
+    assert record_repository.delete_record.await_count == 4
+    assert authz.require_record_write.await_count == 1
+    assert authz.should_enforce_record_user_scope.await_count == 1
+    assert service.events.dispatch.await_count == 1, (
+        "staged DELETE events were never flushed"
+    )
+
+
+async def test_a_single_update_still_checks_permission_and_dispatches():
+    """The split must not weaken the single-record path it was extracted from."""
+    ctx = _events_enabled_context()
+    user_id = uuid4()
+    record_repository = AsyncMock()
+    record_repository.update_record.return_value = {"id": "x"}
+    service = RecordService(record_repository=record_repository)
+    authz = AsyncMock()
+    authz.should_enforce_record_user_scope.return_value = True
+    service.authz = authz
+    service.events = AsyncMock()
+
+    await service.update_record(ctx, "row-1", {"status": "done"}, user_id)
+
+    assert authz.require_record_write.await_count == 1
+    assert service.events.dispatch.await_count == 1
+    # The scope decision still reaches the repository.
+    assert record_repository.update_record.await_args.kwargs["enforce_user_scope"] is True

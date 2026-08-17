@@ -187,7 +187,7 @@ async def resume_workflow_run_for_agent(
         )
 
 
-@streaq_cron("*/5 * * * *", name="reconcile_workflow_waits")
+@streaq_cron("1-59/5 * * * *", name="reconcile_workflow_waits")
 async def reconcile_workflow_waits():
     """Self-heal runs whose agent/function completion events were lost."""
     worker_ctx: AppWorkerContext = streaq_worker.context
@@ -231,7 +231,7 @@ async def prune_workflow_run_waits() -> None:
         )
 
 
-@streaq_cron("*/5 * * * *", name="reconcile_agent_snoozes")
+@streaq_cron("2-59/5 * * * *", name="reconcile_agent_snoozes")
 async def reconcile_agent_snoozes():
     """Wake snoozed conversations whose scheduler event was lost.
 
@@ -249,7 +249,7 @@ async def reconcile_agent_snoozes():
     await SnoozeReconcileService().reconcile_due_waits()
 
 
-@streaq_cron("*/5 * * * *", name="expire_past_due_notifications")
+@streaq_cron("3-59/5 * * * *", name="expire_past_due_notifications")
 async def expire_past_due_notifications():
     """Close out notifications nobody answered before their deadline.
 
@@ -379,7 +379,7 @@ async def check_and_start_flows_for_schedule(
         )
 
 
-@streaq_cron("*/5 * * * *", name="recover_schedule_runs")
+@streaq_cron("4-59/5 * * * *", name="recover_schedule_runs")
 async def recover_schedule_runs() -> None:
     from app.composition.schedule_run_recovery import ScheduleRunRecoveryService
 

@@ -37,6 +37,7 @@ from app.modules.workspace.session_support import (
     canonical_runtime_path as _canonical_runtime_path,
     canonical_workspace_cwd,
     with_backpressure as _with_backpressure,
+    sandbox_is_responsive,
 )
 
 
@@ -45,6 +46,12 @@ logger = get_logger(__name__)
 # How long a pure output poll waits for new bytes. Bounded by write_stdin's own
 # 35s deadline.
 _POLL_YIELD_MS = 30_000
+
+# The whole budget for deciding whether a silent sandbox is still alive. Short
+# on purpose: this runs after a window that already spent 30 seconds telling the
+# caller nothing, and `echo` on a healthy sandbox answers in well under a
+# second, so anything approaching this bound is itself the answer.
+_LIVENESS_PROBE_SECONDS = 8.0
 
 # Stateful interpreters already created, by (sandbox, python session, epoch).
 #
@@ -576,6 +583,13 @@ class SandboxWorkspaceSession:
             operation_id,
             deadline_at=deadline_at,
             yield_time_ms=yield_time_ms,
+            probe_liveness=lambda: sandbox_is_responsive(
+                self.client,
+                self.logical_id,
+                cwd=self._cwd,
+                deadline=self._deadline(_LIVENESS_PROBE_SECONDS),
+                budget_seconds=_LIVENESS_PROBE_SECONDS,
+            ),
         )
 
     @staticmethod

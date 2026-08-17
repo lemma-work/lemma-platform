@@ -87,18 +87,35 @@ def build_surface_event_handler(uow):
     consumer="surface-webhook-events-consumer",
 )
 async def handle_surface_webhook(
-    event: SurfaceWebhookReceivedEvent,
+    event: dict,
     fs_logger: Logger,
     uow_factory: UnitOfWorkFactory = Depends(provide_uow_factory),
     job_queue: SharedStreaqJobQueue = Depends(provide_job_queue),
     inbox: EventInboxPort = Depends(provide_domain_event_inbox),
 ) -> None:
+    # ``surface_events`` also carries ``surface.connected`` and
+    # ``surface.message.answered``, which exist for the analytics projections.
+    # Only the webhook belongs here, so the parameter stays untyped and the
+    # event is parsed after the tag check -- declaring
+    # ``SurfaceWebhookReceivedEvent`` here instead moves validation ahead of the
+    # acknowledgement, which turns every other event on the stream into a poison
+    # message: never acked, and reclaimed by XAUTOCLAIM forever. That is not
+    # hypothetical; it ran at ~119 redeliveries an hour until this was fixed,
+    # and it grew by one permanently-stuck message per agent created, because
+    # every agent is given an auto-provisioned Resend mailbox whose creation
+    # publishes ``surface.connected``. ``handle_surface_schedule_event`` below
+    # carries the same warning for ``schedule_events``.
+    if event.get("event_type") != SurfaceWebhookReceivedEvent.get_event_type():
+        return
+
+    received = SurfaceWebhookReceivedEvent.model_validate(event)
+
     async def process() -> None:
         await _process_surface_webhook(
-            event, fs_logger, uow_factory=uow_factory, job_queue=job_queue
+            received, fs_logger, uow_factory=uow_factory, job_queue=job_queue
         )
 
-    await inbox.process("agent-surfaces.webhook", event, process)
+    await inbox.process("agent-surfaces.webhook", received, process)
 
 
 async def _process_surface_webhook(

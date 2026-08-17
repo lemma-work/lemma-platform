@@ -58,7 +58,28 @@ def _gcs_store(*, bucket: str, prefix: str | None) -> GCSStore:
 
 
 def _s3_store(*, bucket: str, prefix: str | None) -> S3Store:
-    return S3Store(bucket=bucket, prefix=prefix)
+    """The S3 store, optionally against an S3-compatible endpoint.
+
+    With no endpoint configured this is AWS S3 and obstore resolves the region
+    endpoint itself. ``STORAGE_ENDPOINT_URL`` points it somewhere else — MinIO,
+    R2, Wasabi — which also gives the e2e suite a real multipart implementation
+    to test against. That matters here specifically: part-size rules are
+    enforced by the server, so a local filesystem store cannot catch a chunk
+    size the real API would reject, and one did reach production.
+
+    Path-style addressing because a self-hosted endpoint rarely has per-bucket
+    DNS, and plain HTTP is allowed only for an explicitly ``http://`` endpoint.
+    """
+    endpoint = (settings.storage_endpoint_url or "").strip()
+    if not endpoint:
+        return S3Store(bucket=bucket, prefix=prefix)
+    return S3Store(
+        bucket=bucket,
+        prefix=prefix,
+        endpoint=endpoint,
+        virtual_hosted_style_request=False,
+        client_options={"allow_http": endpoint.startswith("http://")},
+    )
 
 
 def _azure_store(*, container: str, prefix: str | None) -> AzureStore:
