@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any
@@ -354,7 +355,35 @@ def _spec_for(base_url: str) -> JSON:
                         }
                     },
                 },
-            }
+            },
+            "/broken": {
+                "get": {
+                    "operationId": "brokenOperation",
+                    "summary": "An operation the provider cannot serve",
+                    "responses": {
+                        "200": {
+                            "description": "Never happens",
+                            "content": {
+                                "application/json": {"schema": {"type": "object"}}
+                            },
+                        }
+                    },
+                }
+            },
+            "/slow": {
+                "get": {
+                    "operationId": "slowOperation",
+                    "summary": "An operation that takes far too long",
+                    "responses": {
+                        "200": {
+                            "description": "Eventually",
+                            "content": {
+                                "application/json": {"schema": {"type": "object"}}
+                            },
+                        }
+                    },
+                }
+            },
         },
         }
 
@@ -400,6 +429,17 @@ def start_fake_provider() -> FakeProvider:
                 self._reply(200, _spec_for(f"http://{self.headers.get('Host')}"))
                 return
             self._record()
+            if path == "/broken":
+                # A provider having a bad day. Lemma has to report this as the
+                # provider failing, not as the pod failing.
+                self._reply(500, {"error": "the provider is having a bad day"})
+                return
+            if path == "/slow":
+                # Longer than any sensible outbound timeout, so the scenario is
+                # about Lemma giving up rather than about this server.
+                time.sleep(30)
+                self._reply(200, {"widgets": []})
+                return
             self._reply(200, {"widgets": widgets})
 
         def do_POST(self) -> None:  # noqa: N802

@@ -45,7 +45,7 @@ rights than the person who asked.
 **Contracts:** `pod.resource_access.get`, `pod.resource_access.grant.replace`
 
 ### PS-ACCESS-003 — Changing reach does not silently disarm the pod's software
-**Status:** planned
+**Status:** covered
 
 - When a person changes a resource's reach, the system shall keep the grants
   held by agents and functions on that resource.
@@ -76,7 +76,7 @@ rights than the person who asked.
 **Contracts:** `pod.resource_access.grant.replace`, `pod.resource_access.get`, `pod.resource_access.grant.delete`
 
 ### PS-ACCESS-011 — A person grants access to a role rather than a name
-**Status:** planned
+**Status:** covered
 
 - When a person grants a role permissions on a resource, the system shall apply
   it to everyone holding that role, including people who receive it later.

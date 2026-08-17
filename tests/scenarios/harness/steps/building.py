@@ -668,11 +668,19 @@ class BuildingSteps:
             )
         )
 
-    async def answers_form(self, run: JSON, *, data: JSON, in_pod: JSON) -> Any:
+    async def answers_form(
+        self, run: JSON, *, node: str, inputs: JSON, in_pod: JSON
+    ) -> Any:
+        """Submit the answer a waiting run is asking for.
+
+        ``node`` names the FORM node being answered and is required — the run
+        checks it against its active wait, so an answer to the wrong step is
+        refused rather than applied to whichever step happens to be waiting.
+        """
         return await self.api.call(
             "POST",
             f"/pods/{in_pod['id']}/workflow-runs/{run['id']}/form",
-            json={"data": data},
+            json={"node_id": node, "inputs": inputs},
         )
 
     async def watches_run(self, run: JSON, *, in_pod: JSON) -> tuple[int, str]:

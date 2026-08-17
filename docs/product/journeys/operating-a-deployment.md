@@ -104,7 +104,7 @@ rather than degrading in a way that only shows up as confused users.
 **Contracts:** `pod.delete`, `pod.deleted`
 
 ### PS-OPS-021 — A person can take their data out
-**Status:** planned
+**Status:** covered
 
 - When someone entitled to it exports a pod, the system shall include the pod's
   data as well as its definitions.

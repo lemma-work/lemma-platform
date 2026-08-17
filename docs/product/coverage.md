@@ -11,14 +11,14 @@ only a promise marked `covered` with no test is.
 
 | Status | Scenarios |
 | --- | ---: |
-| `covered` | 128 |
+| `covered` | 133 |
 | `gap` | 11 |
 | `manual` | 0 |
-| `planned` | 21 |
+| `planned` | 16 |
 | `withdrawn` | 0 |
 | **total** | **160** |
 
-Scenario tests declaring a promise: 280.
+Scenario tests declaring a promise: 289.
 
 ## Contract coverage
 
@@ -66,8 +66,8 @@ the module suites may cover it — but it is untested *as product*.
 | `PS-FLOW-001` A person composes steps into a workflow | `covered` | `test_a_workflow_runs_to_completion`, `test_an_unrunnable_graph_is_refused`, `test_a_workflow_is_created`, `test_a_duplicate_workflow_name_is_refused`, `test_deleting_a_workflow_removes_it`, `test_a_workflow_can_be_changed` |
 | `PS-FLOW-002` A person can see the shape of a workflow before running it | `gap` | `test_a_workflow_can_be_visualised`, `test_a_run_can_be_visualised` |
 | `PS-FLOW-010` A person starts a workflow and follows it | `covered` | `test_a_workflow_runs_to_completion`, `test_workflow_runs_are_recorded`, `test_a_workflows_runs_are_listed` |
-| `PS-FLOW-011` A run that waits survives the wait | `planned` | — |
-| `PS-FLOW-012` A workflow can ask a person and wait for the answer | `covered` | `test_waiting_runs_are_listed`, `test_answering_a_run_that_is_not_waiting_is_refused` |
+| `PS-FLOW-011` A run that waits survives the wait | `covered` | `test_a_waiting_run_is_held`, `test_answering_resumes_the_run`, `test_a_repeated_answer_resumes_once` |
+| `PS-FLOW-012` A workflow can ask a person and wait for the answer | `covered` | `test_a_waiting_run_is_held`, `test_waiting_runs_are_listed`, `test_answering_a_run_that_is_not_waiting_is_refused` |
 | `PS-FLOW-013` A person can stop a run | `covered` | `test_cancelling_a_finished_run_is_refused` |
 | `PS-FLOW-014` A workflow run carries the authority of whoever started it | `covered` | `test_an_outsider_cannot_create_a_workflow` |
 | `PS-FLOW-020` A person follows a run as it goes | `covered` | `test_a_run_can_be_watched` |
@@ -106,7 +106,7 @@ the module suites may cover it — but it is untested *as product*.
 | `PS-CONN-022` An account that stops working says so | `covered` | `test_reconnecting_restores_the_account` |
 | `PS-CONN-030` A person finds the operation they need | `covered` | `test_operations_can_be_refreshed`, `test_operations_read_in_bulk`, `test_installing_discovers_operations`, `test_an_operation_is_readable` |
 | `PS-CONN-031` An operation runs as the person who owns the account | `covered` | `test_an_account_is_not_shared`, `test_an_operation_reaches_the_provider` |
-| `PS-CONN-032` A slow or failing provider does not damage the pod | `planned` | — |
+| `PS-CONN-032` A slow or failing provider does not damage the pod | `covered` | `test_a_failing_provider_is_reported_not_swallowed`, `test_a_failing_provider_does_not_take_the_pod_with_it`, `test_a_hanging_provider_is_given_up_on` |
 | `PS-CONN-033` An agent can only use the connectors it was granted | `covered` | `test_an_agent_cannot_call_an_ungranted_connector` |
 | `PS-CONN-040` A person sees what a provider can notify them about | `covered` | `test_a_trigger_reads_back`, `test_triggers_are_listable` |
 
@@ -145,7 +145,7 @@ the module suites may cover it — but it is untested *as product*.
 | `PS-OPS-011` A missing price never blocks work | `planned` | — |
 | `PS-OPS-012` Exceeding a limit is refused clearly, not degraded | `planned` | — |
 | `PS-OPS-020` Deleting a pod actually stops everything it was doing | `gap` | `test_a_deleted_pod_stops_answering_its_surfaces`, `test_a_deleted_pod_runs_nothing_further`, `test_deleting_one_pod_leaves_the_others_working` |
-| `PS-OPS-021` A person can take their data out | `planned` | `test_an_exported_bundle_is_readable_without_lemma` |
+| `PS-OPS-021` A person can take their data out | `covered` | `test_an_exported_bundle_is_readable_without_lemma` |
 | `PS-OPS-030` The platform reports its own health honestly | `covered` | `test_web_search_says_when_it_is_unavailable` |
 | `PS-OPS-031` Work that cannot be completed is not lost silently | `covered` | `test_feedback_can_be_reported` |
 | `PS-OPS-032` A deployment can be configured for its own region and rules | `planned` | — |
@@ -189,9 +189,9 @@ the module suites may cover it — but it is untested *as product*.
 | --- | --- | --- |
 | `PS-ACCESS-001` Every resource has a stated reach | `covered` | `test_the_default_reach_is_the_pod`, `test_a_personal_resource_stays_personal`, `test_public_never_means_anonymous` |
 | `PS-ACCESS-002` Narrowing a resource's reach takes access away immediately | `covered` | `test_revoking_closes_it_again` |
-| `PS-ACCESS-003` Changing reach does not silently disarm the pod's software | `planned` | — |
+| `PS-ACCESS-003` Changing reach does not silently disarm the pod's software | `covered` | `test_narrowing_reach_keeps_workload_grants` |
 | `PS-ACCESS-010` A person grants one other person access to one resource | `covered` | `test_approving_cannot_confer_unheld_pod_permissions`, `test_a_grant_is_narrow`, `test_revoking_closes_it_again`, `test_a_grant_is_scoped_to_its_pod`, `test_nobody_confers_more_than_they_have` |
-| `PS-ACCESS-011` A person grants access to a role rather than a name | `planned` | — |
+| `PS-ACCESS-011` A person grants access to a role rather than a name | `covered` | `test_a_role_grant_follows_the_role`, `test_losing_a_role_takes_back_its_grant` |
 | `PS-ACCESS-012` A person can see what they may do before trying | `covered` | `test_effective_permissions_are_readable`, `test_reported_permissions_are_honest` |
 | `PS-ACCESS-020` An agent or function never exceeds the person it acts for | `covered` | `test_an_agents_reach_can_be_set`, `test_a_functions_reach_can_be_set`, `test_a_new_agent_holds_nothing`, `test_a_new_function_holds_nothing`, `test_a_member_cannot_widen_an_agent` |
 | `PS-ACCESS-021` No software does anything destructive by default | `covered` | `test_an_ungranted_agent_cannot_delete_a_record`, `test_a_destructive_attempt_asks_rather_than_failing_silently` |

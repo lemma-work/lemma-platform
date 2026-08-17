@@ -139,7 +139,7 @@ behalf.
 **Contracts:** `connector.operation.execute`, `connector.operation_executed`
 
 ### PS-CONN-032 — A slow or failing provider does not damage the pod
-**Status:** planned
+**Status:** covered
 
 - The system shall bound how long it waits for a provider, and shall report a
   timeout as a failed operation.

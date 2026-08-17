@@ -114,7 +114,9 @@ async def test_answering_a_run_that_is_not_waiting_is_refused(pod):
     )
     run = await alice.runs_workflow(workflow["name"], in_pod=the_pod)
 
-    response = await alice.answers_form(run, data={"approved": True}, in_pod=the_pod)
+    response = await alice.answers_form(
+        run, node="done", inputs={"approved": True}, in_pod=the_pod
+    )
 
     assert response.status_code >= 400, (
         f"a completed run is waiting on nobody ({response.status_code})"

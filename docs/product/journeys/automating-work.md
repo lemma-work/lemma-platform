@@ -160,7 +160,7 @@ always reaches a conclusion a person can see.
 **Contracts:** `workflow.run.create`, `workflow.run.get`, `workflow.run.list`, `workflow_run.completed`
 
 ### PS-FLOW-011 — A run that waits survives the wait
-**Status:** planned
+**Status:** covered
 
 - While a run waits on a function, an agent, a timer, or a person, the system
   shall hold its state durably, so that a restart of the platform does not lose
