@@ -17,6 +17,7 @@ from app.modules.agent.contracts import (
 )
 from app.modules.agent_surfaces.platforms.rendering import (
     sanitize_user_visible_text,
+    strip_leaked_tool_calls,
     strip_thinking_tokens,
 )
 
@@ -128,18 +129,25 @@ def _assistant_text_from_event(event: AgentEvent) -> str | None:
     # OpenAI-compatible models emit inside the text content. Without this the
     # thinking block would be buffered as assistant text and delivered to the
     # surface as a normal message.
-    text = strip_thinking_tokens(data.text or "")
+    # Also drops a tool-call envelope the model wrote as text instead of
+    # calling: QA saw `{"tool_name":"pod_query","args":{...}}6` reach a user,
+    # where the trailing `6` was the real answer.
+    text = strip_leaked_tool_calls(strip_thinking_tokens(data.text or ""))
     return text or None
 
 
 def _assistant_text_was_all_reasoning(event: AgentEvent) -> bool:
-    """True when the model's answer was reasoning and nothing else.
+    """True when the model's answer survived none of the stripping.
 
     ``_assistant_text_from_event`` returns None both for "this event carries no
-    answer" and for "it carried one, and stripping the reasoning left nothing".
-    Only the second is a lost answer: the model wrote `<think>` and stopped
-    there, so the turn ends with the surface holding an empty string. Telling
-    those apart is what lets delivery say something rather than nothing.
+    answer" and for "it carried one, and stripping left nothing". Only the second
+    is a lost answer: the model wrote `<think>`, or a tool-call envelope, and
+    stopped there -- so the turn ends with the surface holding an empty string.
+    Telling those apart is what lets delivery say something rather than nothing.
+
+    A leaked tool call counts for the same reason reasoning does. Before it was
+    stripped the user at least saw *something*, wrong as it was; silence reads as
+    the agent ignoring them.
     """
     if event.type != AgentEventType.MESSAGE:
         return False
@@ -150,7 +158,7 @@ def _assistant_text_was_all_reasoning(event: AgentEvent) -> bool:
     if role != MessageRole.ASSISTANT.value or data.kind != MessageKind.TEXT:
         return False
     raw = (data.text or "").strip()
-    return bool(raw) and not strip_thinking_tokens(raw)
+    return bool(raw) and not strip_leaked_tool_calls(strip_thinking_tokens(raw))
 
 
 def _find_comment(value: object) -> str | None:
