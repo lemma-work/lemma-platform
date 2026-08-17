@@ -37,6 +37,8 @@ import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 
+from harness.credentials import load_deployment_env
+
 ROOT = Path(__file__).resolve().parents[3]
 BACKEND_ROOT = ROOT / "lemma-backend"
 
@@ -266,6 +268,19 @@ def _environment(*, port: int, database_url: str, redis_url: str, supertokens_ur
     scratch = Path(tempfile.gettempdir()) / f"lemma-scenarios-{port}"
     return {
         **_coverage_environment(),
+        # The deployment's own configuration, underneath everything. This is
+        # what makes the live lane possible without inventing a second set of
+        # credential names: a server configured for GitHub, Composio, Telegram
+        # or a real model is configured for those here too, through exactly the
+        # settings `app/core/config.py` reads.
+        #
+        # Underneath is load-bearing. Every setting that decides *where the
+        # stack's state lives* — the two database URLs, Redis, SuperTokens, both
+        # storage roots, the mail transport — is set explicitly below and
+        # therefore wins. A disposable stack must never be handed a developer's
+        # real DATABASE_URL, and `test_stack_never_inherits_real_infrastructure`
+        # fails the build if that ordering is ever broken.
+        **load_deployment_env(),
         **os.environ,
         "PYTHONPATH": str(BACKEND_ROOT),
         "ENVIRONMENT": "testing",
@@ -305,7 +320,11 @@ def _environment(*, port: int, database_url: str, redis_url: str, supertokens_ur
         # path under test is the production one all the way to the model boundary.
         # Without it every agent scenario needs an API key and returns something
         # different each run.
-        "E2E_LLM_MODE": "mock",
+        # `real` runs agents on the provider the deployment is configured with,
+        # which is what the live lane wants and what `make scenarios-live` sets.
+        # The default stays deterministic: a suite on every push must not depend
+        # on a model answering the same way twice.
+        "E2E_LLM_MODE": os.getenv("SCENARIOS_LLM_MODE", "mock"),
         # The self-hosted posture. Off in production so an org admin cannot
         # point a connector at the cloud metadata service; on here so a
         # connector can target the fake provider this suite runs on loopback.
@@ -314,14 +333,21 @@ def _environment(*, port: int, database_url: str, redis_url: str, supertokens_ur
         # asserts the refusal reason for loopback, private and link-local
         # addresses. What this suite adds is the lifecycle *around* it.
         "CONNECTOR_ALLOW_PRIVATE_NETWORK_TARGETS": "true",
-        # None of these three are ever used to reach a provider — in mock mode
-        # the model is swapped for a scripted one before any call is made. They
-        # have to be *present* because building the system runtime profile
-        # refuses up front when the server has no key and no model names, which
-        # is the right behaviour and happens before the swap.
-        "LEMMA_OPENAI_API_KEY": "scenarios-mock-key-not-used",
-        "LEMMA_OPENAI_MODEL_NAMES": "gpt-4o-mini",
-        "LEMMA_OPENAI_DEFAULT_MODEL": "gpt-4o-mini",
+        # Placeholders, and only where the deployment configured nothing. In
+        # mock mode none of them reaches a provider — the model is swapped for a
+        # scripted one before any call is made — but they have to be *present*,
+        # because building the system runtime profile refuses up front when the
+        # server has no key and no model names. A deployment with real settings
+        # keeps them, which is what lets the live lane use the real model.
+        "LEMMA_OPENAI_API_KEY": _configured_or(
+            "LEMMA_OPENAI_API_KEY", "scenarios-mock-key-not-used"
+        ),
+        "LEMMA_OPENAI_MODEL_NAMES": _configured_or(
+            "LEMMA_OPENAI_MODEL_NAMES", "gpt-4o-mini"
+        ),
+        "LEMMA_OPENAI_DEFAULT_MODEL": _configured_or(
+            "LEMMA_OPENAI_DEFAULT_MODEL", "gpt-4o-mini"
+        ),
         # Needed before a sandbox can be provisioned at all.
         "WORKSPACE_RUNTIME_CREDENTIAL_KEY": "scenarios-runtime-credential-key-32b",
         # Sandboxes run as local Docker containers. The images are built by
@@ -338,42 +364,13 @@ def _environment(*, port: int, database_url: str, redis_url: str, supertokens_ur
         "WORKSPACE_HOST_ALIAS": "host.docker.internal",
         "WORKSPACE_CALLBACK_API_URL": f"http://host.docker.internal:{port}",
         "FUNCTION_RUNTIME_GATEWAY_URL": f"http://host.docker.internal:{port}",
-        **_live_environment(),
     }
 
 
-def _live_environment() -> dict[str, str]:
-    """What the live lane needs, and only when it has the credentials for it.
-
-    Two settings change when real third parties are in play, and both are
-    ordinary product configuration rather than anything test-shaped:
-
-    * **A real model.** The deterministic model is right for a suite on every
-      push and wrong for a lane whose whole point is that nothing is stood in
-      for. With `LIVE_MODEL_API_KEY` set, agents use the real provider.
-    * **Telegram by polling.** A real bot needs Lemma to receive its updates,
-      and a webhook needs a public URL that a nightly runner does not have.
-      `enable_telegram_polling_mode` has the worker call `getUpdates` instead —
-      a supported deployment mode, and the one self-hosted installs behind a
-      firewall use.
-
-    Absent credentials change nothing, so the fast lane is byte-for-byte what it
-    was.
-    """
-    from harness.credentials import MODEL, TELEGRAM
-
-    live: dict[str, str] = {}
-    if MODEL.available:
-        key = MODEL.value("LIVE_MODEL_API_KEY")
-        live |= {
-            "E2E_LLM_MODE": "real",
-            "LEMMA_OPENAI_API_KEY": key,
-            "LEMMA_OPENAI_MODEL_NAMES": os.getenv("LIVE_MODEL_NAMES", "gpt-4o-mini"),
-            "LEMMA_OPENAI_DEFAULT_MODEL": os.getenv("LIVE_MODEL", "gpt-4o-mini"),
-        }
-    if TELEGRAM.available:
-        live["ENABLE_TELEGRAM_POLLING_MODE"] = "true"
-    return live
+def _configured_or(name: str, fallback: str) -> str:
+    """What the deployment set, or a placeholder that keeps the stack bootable."""
+    settings = {**load_deployment_env(), **os.environ}
+    return settings.get(name) or fallback
 
 
 def _seed_connectors(python_bin: str, env: dict[str, str]) -> None:
@@ -388,8 +385,14 @@ def _seed_connectors(python_bin: str, env: dict[str, str]) -> None:
     journey that does not touch connectors, and failing the whole boot for that
     would be worse than the scenarios that need it failing on their own terms.
     """
+    # Native only by default: importing Composio's toolkits costs a network
+    # round trip and minutes, which is the wrong trade for a lane that runs on
+    # every push. The live lane sets `all`, because a catalogue missing half its
+    # connectors is one of the things that lane exists to notice.
+    catalogue = os.getenv("SCENARIOS_CONNECTOR_CATALOGUE", "native")
     result = subprocess.run(
-        [python_bin, "scripts/import_connector_catalog.py", "--provider", "native"],
+        [python_bin, "scripts/import_connector_catalog.py"]
+        + ([] if catalogue == "all" else ["--provider", "native"]),
         cwd=str(BACKEND_ROOT), env=env, capture_output=True, text=True, timeout=300,
     )
     if result.returncode != 0:

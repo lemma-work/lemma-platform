@@ -54,16 +54,26 @@ jobs:
         working-directory: tests/scenarios
         continue-on-error: true
         env:
-          LIVE_MODEL_API_KEY: ${{ secrets.LIVE_MODEL_API_KEY }}
-          LIVE_GITHUB_TOKEN: ${{ secrets.LIVE_GITHUB_TOKEN }}
-          LIVE_GITHUB_REPO: ${{ vars.LIVE_GITHUB_REPO }}
-          LIVE_GOOGLE_CLIENT_ID: ${{ secrets.LIVE_GOOGLE_CLIENT_ID }}
-          LIVE_GOOGLE_CLIENT_SECRET: ${{ secrets.LIVE_GOOGLE_CLIENT_SECRET }}
-          LIVE_GOOGLE_REFRESH_TOKEN: ${{ secrets.LIVE_GOOGLE_REFRESH_TOKEN }}
-          LIVE_TELEGRAM_BOT_TOKEN: ${{ secrets.LIVE_TELEGRAM_BOT_TOKEN }}
-          LIVE_TELEGRAM_CHAT_ID: ${{ secrets.LIVE_TELEGRAM_CHAT_ID }}
-          LIVE_COMPOSIO_API_KEY: ${{ secrets.LIVE_COMPOSIO_API_KEY }}
-        run: uv run pytest -m live journeys/live -q --junitxml=live-results.xml
+          # The deployment's own configuration — the same names the backend
+          # reads, so a configured server is a configured lane. No parallel
+          # namespace of test-only credentials exists.
+          LEMMA_OPENAI_API_KEY: ${{ secrets.LEMMA_OPENAI_API_KEY }}
+          LEMMA_OPENAI_DEFAULT_MODEL: ${{ vars.LEMMA_OPENAI_DEFAULT_MODEL }}
+          LEMMA_OPENAI_MODEL_NAMES: ${{ vars.LEMMA_OPENAI_MODEL_NAMES }}
+          COMPOSIO_API_KEY: ${{ secrets.COMPOSIO_API_KEY }}
+          CONNECTOR_GITHUB_CLIENT_ID: ${{ secrets.CONNECTOR_GITHUB_CLIENT_ID }}
+          CONNECTOR_GITHUB_CLIENT_SECRET: ${{ secrets.CONNECTOR_GITHUB_CLIENT_SECRET }}
+          CONNECTOR_GOOGLE_CLIENT_ID: ${{ secrets.CONNECTOR_GOOGLE_CLIENT_ID }}
+          CONNECTOR_GOOGLE_CLIENT_SECRET: ${{ secrets.CONNECTOR_GOOGLE_CLIENT_SECRET }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          # Which real resources this run may write to.
+          SCENARIOS_GITHUB_TOKEN: ${{ secrets.SCENARIOS_GITHUB_TOKEN }}
+          SCENARIOS_GITHUB_REPO: ${{ vars.SCENARIOS_GITHUB_REPO }}
+          SCENARIOS_TELEGRAM_CHAT_ID: ${{ vars.SCENARIOS_TELEGRAM_CHAT_ID }}
+          SCENARIOS_LLM_MODE: real
+          SCENARIOS_CONNECTOR_CATALOGUE: all
+        run: uv run pytest -m live journeys/live -q --timeout=900 --junitxml=live-results.xml
 
       - name: Say what happened
         if: always()

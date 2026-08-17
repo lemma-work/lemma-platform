@@ -1238,7 +1238,8 @@ scenarios-sandbox:
 # tests/scenarios/LIVE.md.
 scenarios-live:
 	@echo "→ Product scenarios against real providers…"
-	@cd $(SCENARIOS_DIR) && uv run pytest -q -m live journeys/live
+	@cd $(SCENARIOS_DIR) && SCENARIOS_LLM_MODE=real SCENARIOS_CONNECTOR_CATALOGUE=all \
+		uv run pytest -q -m live --timeout=900 journeys/live
 
 # The guards on the suite itself: no imports of the app under test, no mocking,
 # no sleeping, every test declaring what it proves. No docker, no stack, ~20ms —

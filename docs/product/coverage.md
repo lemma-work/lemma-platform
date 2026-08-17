@@ -18,7 +18,7 @@ only a promise marked `covered` with no test is.
 | `withdrawn` | 0 |
 | **total** | **160** |
 
-Scenario tests declaring a promise: 296.
+Scenario tests declaring a promise: 295.
 
 ## Contract coverage
 
@@ -97,14 +97,14 @@ the module suites may cover it — but it is untested *as product*.
 
 | Scenario | Status | Proven by |
 | --- | --- | --- |
-| `PS-CONN-001` A person browses what the platform can connect to | `covered` | `test_the_connector_catalogue_is_browsable`, `test_connector_status_is_readable`, `test_a_connector_reads_back` |
+| `PS-CONN-001` A person browses what the platform can connect to | `covered` | `test_the_connector_catalogue_is_browsable`, `test_connector_status_is_readable`, `test_a_connector_reads_back`, `test_the_catalogue_matches_what_is_configured` |
 | `PS-CONN-010` An admin installs a connector once for everyone | `covered` | `test_an_oauth_connector_needs_credentials`, `test_installing_discovers_operations`, `test_an_installation_does_not_leak_across_organizations`, `test_an_outsider_cannot_install`, `test_an_installation_can_be_renamed` |
-| `PS-CONN-011` Provider secrets given at install stay secret | `covered` | `test_a_provider_key_is_never_returned`, `test_an_oauth_connector_needs_credentials`, `test_connecting_github_identifies_the_account`, `test_calendar_reads_with_a_refreshed_token`, `test_gmail_through_composio_is_the_same_identity` |
+| `PS-CONN-011` Provider secrets given at install stay secret | `covered` | `test_a_provider_key_is_never_returned`, `test_an_oauth_connector_needs_credentials`, `test_connecting_github_identifies_the_account`, `test_the_google_connect_flow_is_configured` |
 | `PS-CONN-012` Removing an installation removes what depended on it | `covered` | `test_uninstalling_stops_everything_under_it` |
-| `PS-CONN-020` A person connects their account and it belongs to them | `covered` | `test_an_account_belongs_to_who_connected_it`, `test_an_account_is_not_shared`, `test_disconnecting_stops_the_account_working`, `test_reconnecting_restores_the_account`, `test_connecting_github_identifies_the_account`, `test_calendar_reads_with_a_refreshed_token` |
+| `PS-CONN-020` A person connects their account and it belongs to them | `covered` | `test_an_account_belongs_to_who_connected_it`, `test_an_account_is_not_shared`, `test_disconnecting_stops_the_account_working`, `test_reconnecting_restores_the_account`, `test_connecting_github_identifies_the_account` |
 | `PS-CONN-021` Connecting through a provider's consent screen works end to end | `covered` | `test_connecting_needs_a_consent_flow`, `test_an_unknown_callback_is_refused` |
 | `PS-CONN-022` An account that stops working says so | `covered` | `test_reconnecting_restores_the_account` |
-| `PS-CONN-030` A person finds the operation they need | `covered` | `test_operations_can_be_refreshed`, `test_operations_read_in_bulk`, `test_installing_discovers_operations`, `test_an_operation_is_readable`, `test_an_issue_is_created_and_closed`, `test_an_event_is_created_and_removed` |
+| `PS-CONN-030` A person finds the operation they need | `covered` | `test_operations_can_be_refreshed`, `test_operations_read_in_bulk`, `test_installing_discovers_operations`, `test_an_operation_is_readable`, `test_an_issue_is_created_and_closed` |
 | `PS-CONN-031` An operation runs as the person who owns the account | `covered` | `test_an_account_is_not_shared`, `test_an_operation_reaches_the_provider` |
 | `PS-CONN-032` A slow or failing provider does not damage the pod | `covered` | `test_a_failing_provider_is_reported_not_swallowed`, `test_a_failing_provider_does_not_take_the_pod_with_it`, `test_a_hanging_provider_is_given_up_on` |
 | `PS-CONN-033` An agent can only use the connectors it was granted | `covered` | `test_an_agent_uses_github_only_when_granted`, `test_an_agent_cannot_call_an_ungranted_connector` |

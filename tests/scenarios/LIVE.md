@@ -1,13 +1,13 @@
 # The live lane
 
-The scenario suite has two lanes, and they answer different questions.
+Two lanes, answering different questions.
 
 | | Fast lane | Live lane |
 |---|---|---|
 | **Question** | Does Lemma work? | Does Lemma work *against the real providers people connect*? |
 | **Runs** | every push, ~6 minutes | nightly, and before every release |
 | **Third parties** | stood in for on localhost | real Google, GitHub, Telegram, Composio |
-| **Model** | deterministic | the real one |
+| **Model** | deterministic | the one the deployment is configured with |
 | **A red run means** | Lemma broke | Lemma broke, **or** a provider did |
 | **Selected by** | default | `-m live` |
 
@@ -15,11 +15,49 @@ Lemma itself is real in both. Postgres, Redis, SuperTokens, the API, the worker
 and the function sandboxes all run for real on every push — what the fast lane
 stands in for is the far end of an integration, never Lemma.
 
-The live lane exists because that far end is where integrations actually break:
-token refresh, consent, scopes, pagination, rate limits, and the shapes real
-APIs return. None of those exist on localhost.
+## There are no test-only credentials
 
----
+The lane is configured the way a **deployment** is configured. It reads
+`lemma-backend/.env` — the same file `make dev` uses, and the same variable
+names `app/core/config.py` and the connector module read:
+
+| Setting | Lights up |
+|---|---|
+| `LEMMA_OPENAI_API_KEY`, `LEMMA_OPENAI_DEFAULT_MODEL` | agents on a real model |
+| `CONNECTOR_GITHUB_CLIENT_ID` / `_SECRET` | the GitHub connect flow |
+| `CONNECTOR_GOOGLE_CLIENT_ID` / `_SECRET` | the Google connect flow |
+| `COMPOSIO_API_KEY` | Composio's toolkits in the catalogue |
+| `TELEGRAM_BOT_TOKEN` | a real Telegram surface |
+| `SLACK_BOT_TOKEN` | a real Slack surface |
+
+Configure the server and the lane lights up. That is the whole mechanism —
+there is no parallel namespace to keep in step.
+
+Running from a git worktree works: `.env` is gitignored, so a worktree has none,
+and the lane falls back to the main checkout's. `LEMMA_ENV_FILE` overrides both.
+
+**The stack never inherits where your data lives.** The deployment's settings go
+*underneath* the stack's own, and every setting that decides where state lives —
+both database URLs, Redis, SuperTokens, both storage roots, the mail transport —
+is set explicitly by the stack and therefore wins.
+`test_stack_never_inherits_real_infrastructure` fails the build if that ordering
+is ever broken. Without it a scenario run would create and delete records in
+your real dev database.
+
+## Which real resources a run may write to
+
+Distinct from configuration: these say *what this run is allowed to touch*, and
+they have no business in a server's config.
+
+| Setting | Meaning |
+|---|---|
+| `SCENARIOS_GITHUB_REPO` | `owner/name` of a throwaway repository |
+| `SCENARIOS_GITHUB_TOKEN` | a fine-grained PAT for it, with issues read/write |
+| `SCENARIOS_TELEGRAM_CHAT_ID` | a chat with the bot; message it once, then read `getUpdates` |
+
+Use throwaway resources. Scenarios create and delete real things — issues,
+messages, calendar events — and a lane pointed at something you care about will
+eventually delete something you wanted.
 
 ## Running it
 
@@ -27,104 +65,67 @@ APIs return. None of those exist on localhost.
 make scenarios-live
 ```
 
-Providers you have not configured are **skipped, with a reason naming what is
-missing**. A skip is not a pass, and the report says so — a lane that goes green
-because it tested nothing is worse than no lane at all.
+Anything the deployment is not configured for is **skipped, with a reason naming
+the setting**. A skip is not a pass, and the Slack summary reports skips as
+prominently as failures — a lane that goes green because it tested nothing is
+worse than no lane.
 
-To run one provider's scenarios:
+It is slower than the fast lane, deliberately: importing Composio's full
+catalogue is minutes on its own, so the per-test bound is 15 rather than 3.
+
+## Consent, and what cannot be automated
+
+Connecting Google means consenting in a browser, and Google **deliberately
+blocks automated sign-in**. A scenario driving the consent screen would be
+fighting a defence Google maintains on purpose, and would be the flakiest thing
+in the suite. So the lane does not pretend, and splits in two:
+
+**What a fresh stack can prove** — the connect flow the deployment hands a
+person: the right client id, the scopes an operation will need, `access_type=
+offline` so a refresh token is issued at all. A rotated client, a dropped scope
+or a stale redirect is silent until somebody tries to connect, and this is what
+catches them.
+
+**What needs an account somebody already connected** — actually executing
+Calendar or Gmail operations. Consent once, by hand, through the real interface
+on a persistent environment, and point the lane at it:
 
 ```bash
-cd tests/scenarios && uv run pytest -m live journeys/live/test_github.py
+cd tests/scenarios && uv run pytest -m live --base-url https://your-lemma
 ```
 
----
-
-## Credentials
-
-Put them in `tests/scenarios/.env.live`, which is gitignored. **Never commit
-them, and never paste them into an issue, a pull request, or a chat** — this is
-a public repository.
-
-```
-# copy to tests/scenarios/.env.live and fill in
-LIVE_MODEL_API_KEY=
-
-LIVE_GITHUB_TOKEN=
-LIVE_GITHUB_REPO=your-name/lemma-live-scenarios
-
-LIVE_GOOGLE_CLIENT_ID=
-LIVE_GOOGLE_CLIENT_SECRET=
-LIVE_GOOGLE_REFRESH_TOKEN=
-
-LIVE_TELEGRAM_BOT_TOKEN=
-LIVE_TELEGRAM_CHAT_ID=
-
-LIVE_COMPOSIO_API_KEY=
-```
-
-In CI the same names are repository secrets. They are available to the nightly
-workflow and to a manual run, and **never to a pull request** — this repository
-is public, and a fork must not be able to read them.
-
-### What to create
-
-**GitHub** — the cheapest to set up, and the one to start with. A fine-grained
-personal access token scoped to a single throwaway repository, with read/write
-on issues. No OAuth round trip. Scenarios create issues and close them; point it
-at a repository you do not mind being written to.
-
-**Google** — an OAuth client in the Google Cloud console with the Calendar and
-Gmail scopes. Authorise it once by hand; keep the **refresh token**. Consent
-needs a browser, so this step cannot be automated, and it is the only manual
-step. Calendar is reached through Lemma's native connector; Gmail through
-Composio on the same account, which is also what proves the two paths agree
-about who the account belongs to.
-
-**Telegram** — a bot from `@BotFather`. Message it once and read `getUpdates` to
-find the chat id. The runner needs no public URL: the worker can receive by
-polling (`enable_telegram_polling_mode`), which the live lane turns on.
-
-**Composio** — an API key with the Gmail app connected to the same Google
-account as above.
-
-### What the credentials can reach
-
-Use throwaway resources. A dedicated Google account, a repository created for
-this, a bot that is in no real group. Scenarios create and delete real things —
-calendar events, issues, messages — and a suite pointed at anything you care
-about will eventually delete something you wanted.
-
----
+GitHub sidesteps the problem: a fine-grained PAT is a bearer token and is a real
+way to connect GitHub, so those scenarios run on a fresh stack with no browser
+involved.
 
 ## Reporting
 
-The nightly workflow posts to Slack: how many scenarios passed, which providers
-were skipped and why, and a link to the run. A release build posts the same
-summary, so "did the integrations still work" is answered before a release goes
-out rather than after.
+The nightly workflow posts to Slack: how many scenarios passed, what was not run
+and why, and a link. Releases post the same summary, so "did the integrations
+still work" is answered before a release rather than after.
 
 Set `SLACK_WEBHOOK_URL` as a repository secret. Without it the workflow still
 runs and still fails on a real failure; it just says nothing to Slack.
 
----
+In CI the same variable names are repository secrets. They are available to the
+nightly and manual runs and **never to a pull request** — this repository is
+public, and a fork must not be able to read them.
 
 ## Writing a live scenario
 
 ```python
-@scenario("A person connects Calendar and the agent reads their week")
-@proves("PS-CONN-020")
+@scenario("A person connects GitHub and Lemma knows whose account it is")
+@proves("PS-CONN-011")
 @covers("connector.account.create", "connector.operation.execute")
-@pytest.mark.live
-async def test_calendar_is_readable(world):
-    needs(GOOGLE, MODEL)
+async def test_connecting_github_identifies_the_account(github):
+    needs(GITHUB_REPO, REAL_MODEL)
     ...
 ```
 
-`needs(...)` skips with a reason naming the missing variables. `@pytest.mark.live`
-keeps it out of the fast lane.
+`needs(...)` skips with a reason naming the missing settings.
+`pytest.mark.live` on the module keeps it out of the fast lane.
 
 The rest of the suite's rules still apply, and matter more here: no mocking, no
-sleeping, product language in the steps, and every scenario declaring what it
+sleeping, product language in the steps, every scenario declaring what it
 proves. A live scenario that leaves rubbish behind in a real account is a bug in
-the scenario — clean up in a fixture's teardown, and make the cleanup
-unconditional.
+the scenario — clean up in a `finally`, and make the cleanup unconditional.

@@ -190,3 +190,49 @@ def test_step_names_do_not_collide():
     assert not clashes, (
         "step verbs must be unique across mixins:\n  " + "\n  ".join(clashes)
     )
+
+
+#: Settings that decide where the stack's state lives. If a disposable stack
+#: ever inherited one of these from a developer's `.env`, the suite would run
+#: against their real database — creating, and deleting, real things.
+STATE_LIVES_HERE = (
+    "DATABASE_URL",
+    "DATASTORE_DATABASE_URL",
+    "REDIS_URL",
+    "SUPERTOKENS_CORE_URL",
+    "LOCAL_FILE_STORAGE_ROOT",
+    "LOCAL_OBJECT_STORAGE_ROOT",
+    "EMAIL_OUTPUT_DIR",
+)
+
+
+def test_stack_never_inherits_real_infrastructure():
+    """The deployment's `.env` configures providers, never storage.
+
+    The stack layers the backend's own `.env` underneath its settings so that a
+    server configured for GitHub or Composio is configured for the live lane
+    too. That ordering is what keeps it safe, and it is one careless edit from
+    being wrong — so this asserts the outcome rather than the ordering.
+    """
+    from harness.stack import _environment
+
+    stack = _environment(
+        port=12345,
+        database_url="postgresql://scenarios/disposable",
+        redis_url="redis://scenarios/9",
+        supertokens_url="http://scenarios:3567",
+    )
+    deployment = {
+        name: f"postgresql://a-developers-real-machine/{name.lower()}"
+        for name in STATE_LIVES_HERE
+    }
+
+    for name in STATE_LIVES_HERE:
+        assert stack[name] != deployment[name], (
+            f"the stack would use the deployment's {name}. A scenario run would "
+            f"then create and delete records in somebody's real environment."
+        )
+        assert "a-developers-real-machine" not in stack[name], stack[name]
+
+    # And the settings the live lane exists for do come through.
+    assert stack["ENVIRONMENT"] == "testing"

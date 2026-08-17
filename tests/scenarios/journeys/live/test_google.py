@@ -1,18 +1,26 @@
-"""Live → Google, through both paths that reach it.
+"""Live → Google, as far as a machine can honestly go.
 
-Calendar goes through Lemma's own native connector; Gmail goes through Composio
-against the *same* Google account. Running both matters more than running
-either: the two paths have different auth, different operation naming and
-different error shapes, and a person connecting one and then the other has to
-end up with one identity rather than two.
+Connecting Google means consenting in a browser. Google deliberately blocks
+automated sign-in, so a scenario that drove the consent screen would be fighting
+a defence Google maintains on purpose — and would be the flakiest thing in the
+suite. This does not pretend otherwise.
 
-Everything created here is deleted, unconditionally. Use a throwaway account.
+What it does instead is test the half that *is* the deployment's responsibility
+and the half that actually breaks: the connect flow it hands a person. A rotated
+client, a missing scope, a redirect that no longer matches — those are silent
+until somebody tries to connect, and they are exactly what this catches.
+
+Using a connected Google account is the tier above, and it needs an environment
+where somebody has already consented once. Point the lane at one:
+
+    cd tests/scenarios && uv run pytest -m live --base-url https://your-lemma
+
+See `LIVE.md`.
 """
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
-from uuid import uuid4
+from urllib.parse import parse_qs, urlparse
 
 import pytest
 
@@ -25,128 +33,77 @@ pytestmark = [
     pytest.mark.live,
 ]
 
-
-def _google_credentials() -> dict:
-    """What Lemma stores for an OAuth2 account.
-
-    The refresh token is the durable half — an access token expires in an hour,
-    so a nightly lane holding one would work on the day it was created and never
-    again. Handing Lemma the refresh token is also what puts refresh itself
-    under test, which is the part most likely to be broken.
-    """
-    return {
-        "refresh_token": GOOGLE.value("LIVE_GOOGLE_REFRESH_TOKEN"),
-        "client_id": GOOGLE.value("LIVE_GOOGLE_CLIENT_ID"),
-        "client_secret": GOOGLE.value("LIVE_GOOGLE_CLIENT_SECRET"),
-    }
+#: What a Calendar connection is useless without. A deployment that has dropped
+#: these still starts a flow, and the person finds out only when an operation
+#: is refused for a scope they were never asked for.
+CALENDAR_SCOPES = ("calendar", "userinfo.email")
 
 
-@pytest.fixture
-async def calendar(world):
+@scenario("A person is sent to Google with this deployment's own client and scopes")
+@proves("PS-CONN-011")
+@covers("connector.auth_config.create", "connector.connect_request.create")
+async def test_the_google_connect_flow_is_configured(world):
     needs(GOOGLE)
     alice = await world.new_person("alice")
     organization = await alice.creates_an_organization()
     auth_config = await alice.installs_connector(
         "google_calendar", in_organization=organization
     )
-    account = await alice.connects_account(
-        in_organization=organization,
-        auth_config=auth_config,
-        credentials=_google_credentials(),
+
+    started = await alice.starts_connecting(
+        in_organization=organization, auth_config=auth_config
     )
-    return alice, organization, auth_config, account
-
-
-@scenario("A person connects Calendar and Lemma refreshes the token itself")
-@proves("PS-CONN-011", "PS-CONN-020")
-@covers("connector.account.create", "connector.operation.execute")
-async def test_calendar_reads_with_a_refreshed_token(calendar):
-    alice, organization, auth_config, _account = calendar
-
-    listed = await alice.runs_operation(
-        "calendar_list_list",
-        auth_config=auth_config,
-        in_organization=organization,
-        payload={},
+    assert started.status_code < 400, (
+        f"a configured deployment could not start a Google connect flow: "
+        f"{started.status_code} {started.text[:400]}"
     )
 
-    # Only a refresh token was stored, so answering at all means Lemma
-    # exchanged it for an access token on its own.
-    body = listed.get("data") or listed.get("result") or listed
-    assert "items" in str(body) or "calendar" in str(body).lower(), (
-        f"Calendar did not answer: {str(body)[:600]}"
+    where = started.json().get("redirect_url") or started.json().get("url") or ""
+    assert "accounts.google.com" in where, (
+        f"the person is not being sent to Google: {where[:200]}"
     )
 
+    query = parse_qs(urlparse(where).query)
+    sent_client = (query.get("client_id") or [""])[0]
+    assert sent_client == GOOGLE.value("CONNECTOR_GOOGLE_CLIENT_ID"), (
+        "the flow uses a different client from the one this deployment is "
+        "configured with, so consent would be granted to the wrong application"
+    )
 
-@scenario("A person creates a calendar event through Lemma and removes it")
-@proves("PS-CONN-030")
-@covers("connector.operation.execute")
-async def test_an_event_is_created_and_removed(calendar):
-    alice, organization, auth_config, _account = calendar
-    summary = f"lemma scenarios {uuid4().hex[:8]}"
-    starts = datetime.now(timezone.utc) + timedelta(days=1)
-    event_id = None
-
-    try:
-        created = await alice.runs_operation(
-            "events_insert",
-            auth_config=auth_config,
-            in_organization=organization,
-            payload={
-                "calendarId": "primary",
-                "body": {
-                    "summary": summary,
-                    "start": {"dateTime": starts.isoformat()},
-                    "end": {"dateTime": (starts + timedelta(hours=1)).isoformat()},
-                },
-            },
+    scopes = " ".join(query.get("scope") or [])
+    for scope in CALENDAR_SCOPES:
+        assert scope in scopes, (
+            f"the consent screen would not ask for {scope!r}, so the connection "
+            f"succeeds and every operation needing it is then refused. Asked "
+            f"for: {scopes}"
         )
-        body = created.get("data") or created.get("result") or created
-        event_id = body.get("id") if isinstance(body, dict) else None
-        assert event_id, f"Calendar did not return the event: {str(body)[:600]}"
-    finally:
-        if event_id:
-            await alice.runs_operation(
-                "events_delete",
-                auth_config=auth_config,
-                in_organization=organization,
-                payload={"calendarId": "primary", "eventId": event_id},
-            )
+
+    # Without this Google issues no refresh token, and the connection works for
+    # an hour and then silently stops.
+    assert (query.get("access_type") or [""])[0] == "offline", (
+        "the flow does not ask for offline access, so Google returns no refresh "
+        "token and the account expires within the hour"
+    )
 
 
-@scenario("The same Google account reached through Composio is the same account")
-@proves("PS-CONN-011")
-@covers("connector.account.create", "connector.account.list")
-async def test_gmail_through_composio_is_the_same_identity(world):
-    needs(GOOGLE, COMPOSIO)
+@scenario("A deployment without Composio does not offer its toolkits")
+@proves("PS-CONN-001")
+@covers("connector.list")
+async def test_the_catalogue_matches_what_is_configured(world):
+    needs(COMPOSIO)
     alice = await world.new_person("alice")
-    organization = await alice.creates_an_organization()
+    await alice.creates_an_organization()
 
-    native = await alice.installs_connector(
-        "google_calendar", in_organization=organization
-    )
-    await alice.connects_account(
-        in_organization=organization,
-        auth_config=native,
-        credentials=_google_credentials(),
-    )
-    through_composio = await alice.installs_connector(
-        "gmail", in_organization=organization
-    )
-    await alice.connects_account(
-        in_organization=organization,
-        auth_config=through_composio,
-        credentials=_google_credentials(),
-    )
+    # `id` is the connector's stable handle — `github`, `gmail`. There is no
+    # `name`: reading one gives a set of "None" that satisfies any count.
+    catalogue = {str(connector["id"]) for connector in await alice.available_connectors()}
 
-    accounts = await alice.accounts_in(organization)
-    identities = {
-        str(account.get("account_identifier") or account.get("identity") or "")
-        for account in accounts
-    }
-    identities.discard("")
-
-    assert len(identities) <= 1, (
-        "the same Google account connected two ways produced two identities, so "
-        f"a person sees themselves twice: {identities}"
+    # Composio's key is set, so its toolkits are in the catalogue alongside the
+    # native ones. A catalogue that lists only natives means the import ran
+    # without the key and every Composio connector is missing — visible here,
+    # and otherwise only when somebody tries to install one.
+    assert catalogue, "the connector catalogue is empty"
+    assert len(catalogue) > 10, (
+        f"only {len(catalogue)} connectors are installable, which looks like "
+        f"the Composio half of the catalogue did not import: {sorted(catalogue)}"
     )

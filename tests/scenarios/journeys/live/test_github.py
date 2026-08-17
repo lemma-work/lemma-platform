@@ -4,8 +4,12 @@ The fast lane proves the connector machinery against a provider on localhost.
 This proves it against GitHub: their auth, their headers, their pagination,
 their error shapes, and their idea of what a valid request looks like.
 
-Everything created here is cleaned up, unconditionally. Point `LIVE_GITHUB_REPO`
-at a repository you do not mind being written to.
+The deployment's own `CONNECTOR_GITHUB_CLIENT_ID` is what a person would
+consent through; a fine-grained PAT is the other real way to connect GitHub and
+is what this uses, because it needs no browser.
+
+Everything created here is cleaned up, unconditionally. Point
+`SCENARIOS_GITHUB_REPO` at a repository you do not mind being written to.
 """
 
 from __future__ import annotations
@@ -15,7 +19,7 @@ from uuid import uuid4
 import pytest
 
 from harness import capability, covers, journey, proves, scenario
-from harness.credentials import GITHUB, needs
+from harness.credentials import GITHUB_REPO, needs
 from harness.steps.agent import answers, attempts, result_of
 
 pytestmark = [
@@ -28,7 +32,7 @@ pytestmark = [
 @pytest.fixture
 async def github(world):
     """An organization with GitHub connected, using a real token."""
-    needs(GITHUB)
+    needs(GITHUB_REPO)
     alice = await world.new_person("alice")
     organization = await alice.creates_an_organization()
     auth_config = await alice.installs_connector("github", in_organization=organization)
@@ -38,7 +42,7 @@ async def github(world):
         # A fine-grained PAT is a bearer token, which is exactly what the HTTP
         # executor sends. So this exercises the real auth path without the
         # browser round trip an OAuth grant would need.
-        credentials={"access_token": GITHUB.value("LIVE_GITHUB_TOKEN")},
+        credentials={"access_token": GITHUB_REPO.value("SCENARIOS_GITHUB_TOKEN")},
     )
     return alice, organization, auth_config, account
 
@@ -70,7 +74,7 @@ async def test_connecting_github_identifies_the_account(github):
 @covers("connector.operation.execute")
 async def test_an_issue_is_created_and_closed(github):
     alice, organization, auth_config, _account = github
-    owner, _, repo = GITHUB.value("LIVE_GITHUB_REPO").partition("/")
+    owner, _, repo = GITHUB_REPO.value("SCENARIOS_GITHUB_REPO").partition("/")
     title = f"lemma scenarios {uuid4().hex[:8]}"
     number = None
 

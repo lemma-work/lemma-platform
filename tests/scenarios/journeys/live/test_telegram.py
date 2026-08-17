@@ -8,8 +8,9 @@ No public URL is needed. The worker receives by polling (`getUpdates`), which is
 a supported deployment mode and the one a self-hosted install behind a firewall
 uses — the stack turns it on when a live bot token is present.
 
-Messages are sent to `LIVE_TELEGRAM_CHAT_ID`, so point it at a chat with the
-bot that you do not mind being written to.
+The bot is the deployment's own `TELEGRAM_BOT_TOKEN`. Messages go to
+`SCENARIOS_TELEGRAM_CHAT_ID`, so point that at a chat you do not mind being
+written to.
 """
 
 from __future__ import annotations
@@ -18,7 +19,7 @@ import httpx
 import pytest
 
 from harness import capability, covers, journey, proves, scenario
-from harness.credentials import MODEL, TELEGRAM, needs
+from harness.credentials import REAL_MODEL, TELEGRAM, TELEGRAM_CHAT, needs
 from harness.waiting import eventually
 
 pytestmark = [
@@ -29,7 +30,7 @@ pytestmark = [
 
 
 def _bot(path: str) -> str:
-    return f"https://api.telegram.org/bot{TELEGRAM.value('LIVE_TELEGRAM_BOT_TOKEN')}/{path}"
+    return f"https://api.telegram.org/bot{TELEGRAM.value('TELEGRAM_BOT_TOKEN')}/{path}"
 
 
 async def _latest_message_id() -> int:
@@ -49,7 +50,7 @@ async def _latest_message_id() -> int:
 @pytest.fixture
 async def bot_pod(world):
     """A pod reachable on a real Telegram bot."""
-    needs(TELEGRAM, MODEL)
+    needs(TELEGRAM, TELEGRAM_CHAT, REAL_MODEL)
     alice = await world.new_person("alice")
     organization = await alice.creates_an_organization()
     pod = await alice.creates_a_pod()
@@ -65,7 +66,7 @@ async def bot_pod(world):
     account = await alice.connects_account(
         in_organization=organization,
         auth_config=auth_config,
-        credentials={"bot_token": TELEGRAM.value("LIVE_TELEGRAM_BOT_TOKEN")},
+        credentials={"bot_token": TELEGRAM.value("TELEGRAM_BOT_TOKEN")},
     )
     surface = await alice.connects_a_surface(
         in_pod=pod,
@@ -87,7 +88,7 @@ async def bot_pod(world):
 @covers("agent.surface.create", "agent.surface.send", "surface.message_answered")
 async def test_a_real_bot_answers(bot_pod):
     alice, pod, _agent = bot_pod
-    chat_id = TELEGRAM.value("LIVE_TELEGRAM_CHAT_ID")
+    chat_id = TELEGRAM_CHAT.value("SCENARIOS_TELEGRAM_CHAT_ID")
     del alice, pod
 
     before = await _latest_message_id()
