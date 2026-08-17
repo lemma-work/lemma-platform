@@ -268,19 +268,9 @@ def _environment(*, port: int, database_url: str, redis_url: str, supertokens_ur
     scratch = Path(tempfile.gettempdir()) / f"lemma-scenarios-{port}"
     return {
         **_coverage_environment(),
-        # The deployment's own configuration, underneath everything. This is
-        # what makes the live lane possible without inventing a second set of
-        # credential names: a server configured for GitHub, Composio, Telegram
-        # or a real model is configured for those here too, through exactly the
-        # settings `app/core/config.py` reads.
-        #
-        # Underneath is load-bearing. Every setting that decides *where the
-        # stack's state lives* — the two database URLs, Redis, SuperTokens, both
-        # storage roots, the mail transport — is set explicitly below and
-        # therefore wins. A disposable stack must never be handed a developer's
-        # real DATABASE_URL, and `test_stack_never_inherits_real_infrastructure`
-        # fails the build if that ordering is ever broken.
-        **load_deployment_env(),
+        # The deployment's own configuration — but only when the live lane asks
+        # for it. See `_deployment_settings`.
+        **_deployment_settings(),
         **os.environ,
         "PYTHONPATH": str(BACKEND_ROOT),
         "ENVIRONMENT": "testing",
@@ -325,6 +315,13 @@ def _environment(*, port: int, database_url: str, redis_url: str, supertokens_ur
         # The default stays deterministic: a suite on every push must not depend
         # on a model answering the same way twice.
         "E2E_LLM_MODE": os.getenv("SCENARIOS_LLM_MODE", "mock"),
+        # Off, so surface scenarios can deliver webhooks and see them arrive.
+        # The live lane sets it: a real bot on a runner with no public address
+        # has no other way to receive, and there is no webhook to deliver.
+        "ENABLE_TELEGRAM_POLLING_MODE": os.getenv(
+            "SCENARIOS_TELEGRAM_POLLING", "false"
+        ),
+        "ENABLE_SLACK_SOCKET_MODE": "false",
         # The self-hosted posture. Off in production so an org admin cannot
         # point a connector at the cloud metadata service; on here so a
         # connector can target the fake provider this suite runs on loopback.
@@ -367,9 +364,78 @@ def _environment(*, port: int, database_url: str, redis_url: str, supertokens_ur
     }
 
 
+#: Settings a deployment may hold that would change *how the product behaves*,
+#: as opposed to *what it can reach*. The stack decides these, always.
+#:
+#: The distinction is the whole basis for reading a developer's `.env` at all. A
+#: key that lets Lemma talk to GitHub is worth inheriting — it is the point. A
+#: switch that changes which code path runs is not: inherit it and the suite
+#: passes or fails depending on whose machine it is running on, which is the one
+#: property a test suite must never have.
+#:
+#: Every entry here was earned. `ENABLE_TELEGRAM_POLLING_MODE` is on in at least
+#: one developer's config, and with it on Lemma registers no webhook — so every
+#: surface scenario failed with "the surface never connected", on that machine
+#: only. The live lane turns polling back on deliberately, because a real bot on
+#: a runner with no public address has no other way to receive.
+DECIDED_BY_THE_STACK = (
+    # How surfaces receive. Scenarios deliver webhooks themselves.
+    "ENABLE_TELEGRAM_POLLING_MODE",
+    "ENABLE_TELEGRAM_MANAGER_POLLING_MODE",
+    "ENABLE_SLACK_SOCKET_MODE",
+    # Where sandboxes run. `WORKSPACE_PROVIDER` is pinned to docker below, and a
+    # stray hosted-provider key would send function runs somewhere else.
+    "AGENTBOX_API_KEY",
+    "AGENTBOX_API_URL",
+    "E2B_API_KEY",
+    # Whether documents are converted. PS-DATA-041 is specifically about what a
+    # deployment does when conversion is unavailable, so it has to be.
+    "DOCUMENT_PROCESSOR",
+    "KREUZBERG_URL",
+    # Where the product thinks it lives. The stack claims a public HTTPS address
+    # so surfaces can be created at all; a real one here breaks its own URLs.
+    "APP_BASE_DOMAIN",
+    "CLI_API_URL",
+    "CLI_AUTH_FRONTEND_URL",
+)
+
+
+def _inheritable(deployment: dict[str, str]) -> dict[str, str]:
+    """The deployment's settings, minus the ones the stack must decide itself."""
+    return {
+        name: value
+        for name, value in deployment.items()
+        if name not in DECIDED_BY_THE_STACK
+    }
+
+
+def _deployment_settings() -> dict[str, str]:
+    """The operator's own configuration, for the lane that wants it.
+
+    Off by default, and that default is not a precaution — it is the fast lane's
+    whole value. A suite that reads whatever a developer happens to have
+    configured gives different answers on different machines, and two scenarios
+    proved it before this switch existed: "installing an OAuth connector with no
+    credentials is refused" passed in CI and failed on a laptop whose `.env` had
+    Slack credentials, and the product was right both times.
+
+    The live lane wants the opposite, because its question is whether Lemma
+    works against what this deployment is actually configured for. So it opts
+    in, and gets the settings the backend itself reads — no parallel namespace
+    of test-only credentials.
+
+    Even opted in, `DECIDED_BY_THE_STACK` still applies, and every setting that
+    decides where state lives is set explicitly afterwards and wins.
+    `test_stack_never_inherits_real_infrastructure` fails the build otherwise.
+    """
+    if os.getenv("SCENARIOS_USE_DEPLOYMENT_ENV", "").lower() not in {"1", "true", "yes"}:
+        return {}
+    return _inheritable(load_deployment_env())
+
+
 def _configured_or(name: str, fallback: str) -> str:
     """What the deployment set, or a placeholder that keeps the stack bootable."""
-    settings = {**load_deployment_env(), **os.environ}
+    settings = {**_deployment_settings(), **os.environ}
     return settings.get(name) or fallback
 
 

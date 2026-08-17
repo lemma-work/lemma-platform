@@ -71,6 +71,8 @@ jobs:
           SCENARIOS_GITHUB_TOKEN: ${{ secrets.SCENARIOS_GITHUB_TOKEN }}
           SCENARIOS_GITHUB_REPO: ${{ vars.SCENARIOS_GITHUB_REPO }}
           SCENARIOS_TELEGRAM_CHAT_ID: ${{ vars.SCENARIOS_TELEGRAM_CHAT_ID }}
+          SCENARIOS_USE_DEPLOYMENT_ENV: '1'
+          SCENARIOS_TELEGRAM_POLLING: 'true'
           SCENARIOS_LLM_MODE: real
           SCENARIOS_CONNECTOR_CATALOGUE: all
         run: uv run pytest -m live journeys/live -q --timeout=900 --junitxml=live-results.xml

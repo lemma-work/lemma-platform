@@ -83,3 +83,32 @@ async def test_only_an_owner_changes_the_organization(world, owner):
     await bob.accepts(await owner.invites(bob, to=owner.organization, as_role="ORG_MEMBER"))
 
     await bob.is_refused_renaming(owner.organization, to="Bob's Organization Now")
+
+
+@scenario("Inviting somebody who is already inside is refused, not duplicated")
+@proves("PS-ONB-023")
+@covers("org.invitation.invite", "org.member.list")
+async def test_inviting_an_existing_member_is_refused(world):
+    alice = await world.new_person("alice")
+    organization = await alice.creates_an_organization()
+    bob = await world.new_person("bob")
+    await bob.accepts(await alice.invites(bob, to=organization))
+
+    response = await alice.api.call(
+        "POST",
+        f"/organizations/{organization['id']}/invitations",
+        json={"email": bob.email, "role": "ORG_MEMBER"},
+    )
+
+    assert response.status_code >= 400, (
+        f"inviting a member who is already in the organization was accepted "
+        f"({response.status_code}), which leaves an invitation that can only "
+        f"confuse whoever receives it"
+    )
+    # And the refusal changed nothing: bob is still a member, exactly once.
+    members = [
+        member
+        for member in await alice.members_of(organization)
+        if str(member.get("user_id")) == str(bob.user_id)
+    ]
+    assert len(members) == 1, f"bob's membership was disturbed: {members}"

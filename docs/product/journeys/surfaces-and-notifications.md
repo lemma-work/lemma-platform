@@ -98,7 +98,7 @@ dropped.
 **Contracts:** `surface.webhook.handle_platform`, `agent.surface.list_mine`
 
 ### PS-SURF-013 — A thread on the platform is a conversation in the pod
-**Status:** planned
+**Status:** covered
 
 - When a person replies in a thread, the system shall continue the same
   conversation rather than starting a new one.
@@ -109,7 +109,7 @@ dropped.
 **Contracts:** `agent.conversation.get`, `agent.conversation.list`
 
 ### PS-SURF-014 — A file sent to a surface reaches the pod
-**Status:** planned
+**Status:** covered
 
 - When a person attaches a file to a message, the system shall make it available
   to the agent handling that message.

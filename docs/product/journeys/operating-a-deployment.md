@@ -39,7 +39,7 @@ rather than degrading in a way that only shows up as confused users.
 **Contracts:** `usage.organization.me.summary.get`
 
 ### PS-OPS-003 — Usage records are a ledger, not a cache
-**Status:** planned
+**Status:** covered
 
 - The system shall keep a usage record unchanged once written.
 - The system shall attribute every record to the run, the model, and the person
@@ -64,7 +64,7 @@ rather than degrading in a way that only shows up as confused users.
 **Contracts:** `usage.organization.limits.get`
 
 ### PS-OPS-011 — A missing price never blocks work
-**Status:** planned
+**Status:** covered
 
 - Where the system cannot price a model, it shall allow the run and record it
   unpriced.

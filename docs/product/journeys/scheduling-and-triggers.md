@@ -59,7 +59,7 @@ about it when it eventually cannot.
 ## Capability: React to something happening
 
 ### PS-SCHED-010 — A pod reacts to a webhook from outside
-**Status:** planned
+**Status:** covered
 
 - When a webhook arrives for a source a pod is listening to, the system shall
   match it to the schedules waiting for it and fire them.
@@ -86,7 +86,7 @@ about it when it eventually cannot.
 **Contracts:** `schedule.create`, `record.create`, `record.update`, `record.delete`
 
 ### PS-SCHED-012 — A person can narrow what actually triggers
-**Status:** planned
+**Status:** covered
 
 - Where a schedule carries a condition, the system shall evaluate it before
   triggering the work and shall skip the trigger when it does not hold.

@@ -11,14 +11,14 @@ only a promise marked `covered` with no test is.
 
 | Status | Scenarios |
 | --- | ---: |
-| `covered` | 133 |
+| `covered` | 140 |
 | `gap` | 11 |
 | `manual` | 0 |
-| `planned` | 16 |
+| `planned` | 9 |
 | `withdrawn` | 0 |
 | **total** | **160** |
 
-Scenario tests declaring a promise: 295.
+Scenario tests declaring a promise: 311.
 
 ## Contract coverage
 
@@ -29,7 +29,7 @@ the module suites may cover it — but it is untested *as product*.
 | Surface | Exercised | Total |
 | --- | ---: | ---: |
 | OpenAPI operations | 235 | 235 |
-| Product events | 23 | 28 |
+| Product events | 24 | 28 |
 
 ## [Agents and conversations](journeys/agents-and-conversations.md)
 
@@ -125,7 +125,7 @@ the module suites may cover it — but it is untested *as product*.
 | `PS-ONB-020` An invited person joins with the role they were offered | `covered` | `test_an_invited_person_joins_with_the_offered_role`, `test_an_invitation_is_addressed` |
 | `PS-ONB-021` An invitation can carry a pod, and accepting it grants both | `gap` | — |
 | `PS-ONB-022` An invitation stops working when it should | `covered` | `test_a_revoked_invitation_is_dead`, `test_an_invitation_is_single_use` |
-| `PS-ONB-023` Inviting someone already inside is refused clearly | `planned` | — |
+| `PS-ONB-023` Inviting someone already inside is refused clearly | `covered` | `test_inviting_an_existing_member_is_refused` |
 | `PS-ONB-024` A person can see the invitations waiting for them | `covered` | `test_a_person_sees_their_invitations`, `test_an_owner_sees_sent_invitations` |
 | `PS-ONB-030` A person is offered the organizations they could join | `covered` | `test_suggestions_are_empty_without_a_matching_domain` |
 | `PS-ONB-031` A person joins an organization that is open to them | `covered` | `test_invite_only_refuses_self_join` |
@@ -140,9 +140,9 @@ the module suites may cover it — but it is untested *as product*.
 | --- | --- | --- |
 | `PS-OPS-001` An organization can see what its model work cost | `covered` | `test_usage_can_be_broken_down`, `test_usage_is_readable_by_a_member`, `test_an_outsider_cannot_read_usage` |
 | `PS-OPS-002` A person can see their own usage | `covered` | `test_own_usage_is_readable` |
-| `PS-OPS-003` Usage records are a ledger, not a cache | `planned` | — |
+| `PS-OPS-003` Usage records are a ledger, not a cache | `covered` | `test_a_run_is_always_recorded`, `test_a_usage_record_is_attributed`, `test_a_failed_run_is_recorded_too` |
 | `PS-OPS-010` Limits are visible before they are hit | `covered` | `test_limits_are_visible` |
-| `PS-OPS-011` A missing price never blocks work | `planned` | — |
+| `PS-OPS-011` A missing price never blocks work | `covered` | `test_a_run_is_always_recorded`, `test_an_unknown_price_never_blocks_a_run` |
 | `PS-OPS-012` Exceeding a limit is refused clearly, not degraded | `planned` | — |
 | `PS-OPS-020` Deleting a pod actually stops everything it was doing | `gap` | `test_a_deleted_pod_stops_answering_its_surfaces`, `test_a_deleted_pod_runs_nothing_further`, `test_deleting_one_pod_leaves_the_others_working` |
 | `PS-OPS-021` A person can take their data out | `covered` | `test_an_exported_bundle_is_readable_without_lemma` |
@@ -174,9 +174,9 @@ the module suites may cover it — but it is untested *as product*.
 | `PS-SCHED-001` A person schedules work for a time or a repeat | `covered` | `test_a_repeating_schedule_is_created`, `test_unusable_timing_is_refused`, `test_an_outsider_cannot_touch_schedules` |
 | `PS-SCHED-002` A person can pause a schedule without losing it | `covered` | `test_a_schedule_can_be_paused_and_resumed`, `test_a_paused_schedule_does_not_fire` |
 | `PS-SCHED-003` Deleting a schedule stops it everywhere | `covered` | `test_deleting_a_schedule_removes_it`, `test_a_deleted_schedule_does_not_fire` |
-| `PS-SCHED-010` A pod reacts to a webhook from outside | `planned` | — |
-| `PS-SCHED-011` A pod reacts to its own data changing | `covered` | `test_a_record_change_fires_a_schedule`, `test_an_unwatched_operation_does_not_fire`, `test_another_table_does_not_fire` |
-| `PS-SCHED-012` A person can narrow what actually triggers | `planned` | — |
+| `PS-SCHED-010` A pod reacts to a webhook from outside | `covered` | `test_verification_needs_no_session`, `test_a_bad_verification_token_is_refused`, `test_a_delivery_to_an_unknown_surface_is_refused` |
+| `PS-SCHED-011` A pod reacts to its own data changing | `covered` | `test_a_change_meeting_the_condition_fires`, `test_a_record_change_fires_a_schedule`, `test_an_unwatched_operation_does_not_fire`, `test_another_table_does_not_fire` |
+| `PS-SCHED-012` A person can narrow what actually triggers | `covered` | `test_a_change_below_the_condition_is_skipped`, `test_a_change_meeting_the_condition_fires`, `test_skipped_and_fired_are_distinguishable`, `test_an_unsatisfiable_condition_is_refused` |
 | `PS-SCHED-020` Work fires once, however many times the trigger arrives | `covered` | `test_a_repeated_delivery_is_answered_once`, `test_a_raced_delivery_is_answered_once` |
 | `PS-SCHED-021` A person can see every firing and how it went | `covered` | `test_a_schedules_history_is_readable`, `test_a_record_change_fires_a_schedule`, `test_an_outsider_cannot_read_history` |
 | `PS-SCHED-022` A firing that fails is retried, and then given up on visibly | `covered` | `test_retrying_an_unknown_firing_is_refused` |
@@ -207,11 +207,11 @@ the module suites may cover it — but it is untested *as product*.
 | `PS-SURF-001` A person connects a pod's agent to a platform | `covered` | `test_a_surface_reads_back`, `test_available_platforms_are_listed`, `test_an_unconfigured_surface_is_refused`, `test_an_outsider_cannot_touch_surfaces` |
 | `PS-SURF-002` Setting up a platform does not require reading its documentation | `covered` | `test_a_slack_manifest_is_generated`, `test_a_managed_bot_setup_says_what_is_missing`, `test_a_consent_callback_without_a_grant_is_refused`, `test_a_setup_guide_is_available` |
 | `PS-SURF-003` A person changes or removes a surface | `covered` | `test_a_surface_can_be_repointed`, `test_deleting_a_surface_stops_it` |
-| `PS-SURF-010` Only genuine messages from the platform are acted on | `covered` | `test_a_real_bot_answers`, `test_an_unknown_sender_is_told_how_to_get_access`, `test_an_unsigned_delivery_is_rejected`, `test_a_wrongly_signed_delivery_is_rejected`, `test_a_surface_webhook_can_be_verified`, `test_the_manager_webhook_rejects_unsigned`, `test_webhook_verification_needs_no_session`, `test_an_unsigned_webhook_is_rejected` |
+| `PS-SURF-010` Only genuine messages from the platform are acted on | `covered` | `test_a_real_bot_answers`, `test_verification_needs_no_session`, `test_a_bad_verification_token_is_refused`, `test_an_unknown_sender_is_told_how_to_get_access`, `test_an_unsigned_delivery_is_rejected`, `test_a_wrongly_signed_delivery_is_rejected`, `test_a_surface_webhook_can_be_verified`, `test_the_manager_webhook_rejects_unsigned`, `test_webhook_verification_needs_no_session`, `test_an_unsigned_webhook_is_rejected` |
 | `PS-SURF-011` The same message delivered twice is answered once | `covered` | `test_a_repeated_delivery_is_answered_once`, `test_a_raced_delivery_is_answered_once` |
 | `PS-SURF-012` A person on a platform is resolved to who they are in Lemma | `covered` | `test_an_unknown_sender_is_told_how_to_get_access` |
-| `PS-SURF-013` A thread on the platform is a conversation in the pod | `planned` | — |
-| `PS-SURF-014` A file sent to a surface reaches the pod | `planned` | — |
+| `PS-SURF-013` A thread on the platform is a conversation in the pod | `covered` | `test_a_chat_is_one_conversation`, `test_a_separate_chat_is_a_separate_conversation`, `test_a_surface_conversation_records_its_origin` |
+| `PS-SURF-014` A file sent to a surface reaches the pod | `covered` | `test_an_attachment_reaches_the_pod` |
 | `PS-SURF-020` The answer comes back where the question was asked | `covered` | `test_a_real_bot_answers`, `test_an_unknown_sender_is_told_how_to_get_access` |
 | `PS-SURF-021` Questions and approvals work on every platform | `covered` | `test_a_question_is_asked_with_native_controls`, `test_an_approval_is_offered_with_native_controls` |
 | `PS-SURF-022` Email surfaces behave like email | `planned` | — |

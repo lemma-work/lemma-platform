@@ -1238,7 +1238,8 @@ scenarios-sandbox:
 # tests/scenarios/LIVE.md.
 scenarios-live:
 	@echo "→ Product scenarios against real providers…"
-	@cd $(SCENARIOS_DIR) && SCENARIOS_LLM_MODE=real SCENARIOS_CONNECTOR_CATALOGUE=all \
+	@cd $(SCENARIOS_DIR) && SCENARIOS_USE_DEPLOYMENT_ENV=1 SCENARIOS_LLM_MODE=real \
+		SCENARIOS_CONNECTOR_CATALOGUE=all SCENARIOS_TELEGRAM_POLLING=true \
 		uv run pytest -q -m live --timeout=900 journeys/live
 
 # The guards on the suite itself: no imports of the app under test, no mocking,

@@ -169,7 +169,7 @@ worse than asking.
 **Contracts:** `org.invitation.accept`, `org.invitation.revoke`, `org.invitation.get`
 
 ### PS-ONB-023 — Inviting someone already inside is refused clearly
-**Status:** planned
+**Status:** covered
 
 - If an owner or editor invites an email that already belongs to a member of the
   organization, then the system shall refuse and shall say they are already a

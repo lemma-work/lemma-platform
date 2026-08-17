@@ -34,6 +34,11 @@ from urllib.parse import urlparse
 
 JSON = dict[str, Any]
 
+#: What every attachment this fake serves contains. Small, and recognisable in
+#: an assertion — a scenario checking the pod received the file can check it
+#: received *this*.
+FILE_CONTENTS = b"name,amount\nwidgets,42\n"
+
 
 @dataclass
 class SentMessage:
@@ -160,7 +165,20 @@ def start_fake_telegram(*, bot_username: str = "lemma_scenarios_bot") -> FakeTel
             self.end_headers()
             self.wfile.write(encoded)
 
+        def _serve_file(self) -> None:
+            """The bytes behind an attachment, at Telegram's own download path."""
+            self.send_response(200)
+            self.send_header("Content-Type", "application/octet-stream")
+            self.send_header("Content-Length", str(len(FILE_CONTENTS)))
+            self.end_headers()
+            self.wfile.write(FILE_CONTENTS)
+
         def _handle(self) -> None:
+            # Downloads live under /file/bot<token>/<path>, not under the method
+            # namespace, so they are routed before anything is parsed as a call.
+            if "/file/bot" in self.path:
+                self._serve_file()
+                return
             # Telegram's shape is /bot<token>/<method>.
             method = urlparse(self.path).path.rsplit("/", 1)[-1]
             length = int(self.headers.get("Content-Length") or 0)
@@ -174,7 +192,23 @@ def start_fake_telegram(*, bot_username: str = "lemma_scenarios_bot") -> FakeTel
 
             recorded.append(SentMessage(method=method, payload=payload))
 
-            if method == "getMe":
+            if method == "getFile":
+                # Telegram hands back where the bytes live, and the client then
+                # fetches them from the /file/bot<token>/ prefix. A fake that
+                # answers getFile and serves nothing leaves an attachment
+                # "received" and empty, which is the failure this exists to
+                # rule out.
+                file_id = str(payload.get("file_id") or "file")
+                self._reply({
+                    "ok": True,
+                    "result": {
+                        "file_id": file_id,
+                        "file_unique_id": file_id,
+                        "file_size": len(FILE_CONTENTS),
+                        "file_path": f"documents/{file_id}",
+                    },
+                })
+            elif method == "getMe":
                 self._reply({
                     "ok": True,
                     "result": {

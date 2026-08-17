@@ -214,14 +214,21 @@ def test_stack_never_inherits_real_infrastructure():
     too. That ordering is what keeps it safe, and it is one careless edit from
     being wrong — so this asserts the outcome rather than the ordering.
     """
+    import os
+
     from harness.stack import _environment
 
-    stack = _environment(
-        port=12345,
-        database_url="postgresql://scenarios/disposable",
-        redis_url="redis://scenarios/9",
-        supertokens_url="http://scenarios:3567",
-    )
+    # With inheritance on, which is when the danger exists at all.
+    os.environ["SCENARIOS_USE_DEPLOYMENT_ENV"] = "1"
+    try:
+            stack = _environment(
+            port=12345,
+            database_url="postgresql://scenarios/disposable",
+            redis_url="redis://scenarios/9",
+            supertokens_url="http://scenarios:3567",
+        )
+    finally:
+        os.environ.pop("SCENARIOS_USE_DEPLOYMENT_ENV", None)
     deployment = {
         name: f"postgresql://a-developers-real-machine/{name.lower()}"
         for name in STATE_LIVES_HERE
@@ -236,3 +243,42 @@ def test_stack_never_inherits_real_infrastructure():
 
     # And the settings the live lane exists for do come through.
     assert stack["ENVIRONMENT"] == "testing"
+
+
+def test_the_fast_lane_ignores_a_developers_configuration():
+    """The default run is the same on every machine.
+
+    Reading a deployment's `.env` is what the live lane needs and what the fast
+    lane must not have: two scenarios about connectors and surfaces gave
+    different answers on a laptop whose `.env` had Slack and Telegram
+    configured, and the product was behaving correctly in both cases. A suite
+    whose result depends on whose machine it runs on cannot be trusted either
+    way.
+    """
+    from harness.stack import _deployment_settings
+
+    assert _deployment_settings() == {}, (
+        "the fast lane is reading the deployment's configuration; its results "
+        "now depend on how the machine running it happens to be set up"
+    )
+
+
+def test_stack_decides_how_the_product_behaves():
+    """A developer's `.env` cannot change which code path the suite exercises.
+
+    Reading the deployment's configuration is what makes the live lane possible
+    without a parallel set of credential names. The line it must not cross is
+    behaviour: a key that lets Lemma reach GitHub is worth inheriting, a switch
+    that changes how surfaces receive is not. Inherit one of those and the suite
+    passes or fails depending on whose machine it runs on.
+    """
+    from harness.stack import DECIDED_BY_THE_STACK, _inheritable
+
+    pretend = {name: "inherited-from-a-developer" for name in DECIDED_BY_THE_STACK}
+    pretend["COMPOSIO_API_KEY"] = "worth-inheriting"
+
+    kept = _inheritable(pretend)
+
+    assert kept == {"COMPOSIO_API_KEY": "worth-inheriting"}, (
+        f"these would be inherited and must not be: {sorted(kept)}"
+    )
