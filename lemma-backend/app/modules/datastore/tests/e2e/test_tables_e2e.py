@@ -161,6 +161,11 @@ class TestDatastoreTableLifecycle:
         assert columns["updated_at"]["system"] is True
         assert columns["owner_user"]["type"] == "USER"
         assert columns["artifact_path"]["type"] == "FILE_PATH"
+        # An ENUM without its options is unwritable: the caller has to guess
+        # which values the check constraint will accept. This table already had
+        # an ENUM column and nothing asserted the options came back, which is
+        # how `tables get` came to be reported as never showing them.
+        assert columns["status"]["options"] == ["planned", "active", "done"]
 
     @pytest.mark.asyncio
     async def test_table_config_and_columns_can_be_updated_but_system_columns_are_protected(
