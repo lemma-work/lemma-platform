@@ -161,7 +161,7 @@ it happens.
 **Contracts:** `agent.conversation.approval.list`, `agent.conversation.approval.resolve`, `agent.conversation.get`
 
 ### PS-AGENT-021 — An agent can ask a person a question mid-run
-**Status:** planned
+**Status:** covered
 
 - When an agent needs something only a person can supply, the system shall pause
   the run and present the question.
@@ -172,7 +172,7 @@ it happens.
 **Contracts:** `agent.conversation.message.send`, `agent.conversation.get`
 
 ### PS-AGENT-022 — Every action is attributable
-**Status:** planned
+**Status:** covered
 
 - The system shall record, for every action an agent takes, which agent took it
   and on whose behalf.
@@ -188,7 +188,7 @@ it happens.
 ## Capability: Give an agent more than one thing to do
 
 ### PS-AGENT-030 — An agent can delegate to a subagent
-**Status:** planned
+**Status:** covered
 
 - Where an agent starts a subagent, the system shall run it as a child of the
   original conversation and shall return its result to the parent.

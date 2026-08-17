@@ -11,14 +11,14 @@ only a promise marked `covered` with no test is.
 
 | Status | Scenarios |
 | --- | ---: |
-| `covered` | 125 |
+| `covered` | 128 |
 | `gap` | 11 |
 | `manual` | 0 |
-| `planned` | 24 |
+| `planned` | 21 |
 | `withdrawn` | 0 |
 | **total** | **160** |
 
-Scenario tests declaring a promise: 275.
+Scenario tests declaring a promise: 280.
 
 ## Contract coverage
 
@@ -45,9 +45,9 @@ the module suites may cover it — but it is untested *as product*.
 | `PS-AGENT-013` A failed run can be tried again | `covered` | `test_retrying_a_healthy_run_is_refused` |
 | `PS-AGENT-014` A conversation is private to the pod | `covered` | `test_an_outsider_cannot_read_a_conversation` |
 | `PS-AGENT-020` Consequential actions come back to a person first | `covered` | `test_deciding_an_unknown_approval_is_refused`, `test_approvals_are_listable`, `test_approving_runs_the_described_action`, `test_denying_leaves_the_action_undone`, `test_a_destructive_attempt_asks_rather_than_failing_silently`, `test_an_approval_is_offered_with_native_controls` |
-| `PS-AGENT-021` An agent can ask a person a question mid-run | `planned` | — |
-| `PS-AGENT-022` Every action is attributable | `planned` | — |
-| `PS-AGENT-030` An agent can delegate to a subagent | `planned` | — |
+| `PS-AGENT-021` An agent can ask a person a question mid-run | `covered` | `test_an_agent_asks_and_resumes_with_the_answer`, `test_an_unanswered_question_keeps_waiting` |
+| `PS-AGENT-022` Every action is attributable | `covered` | `test_agent_actions_are_attributable`, `test_decisions_are_a_durable_record` |
+| `PS-AGENT-030` An agent can delegate to a subagent | `covered` | `test_an_agent_delegates_to_a_subagent` |
 | `PS-AGENT-031` An agent can show a person something interactive | `covered` | `test_an_embed_token_needs_a_real_result` |
 | `PS-AGENT-040` A person pairs a local agent host with their account | `covered` | `test_an_agent_host_can_be_paired_and_revoked`, `test_an_unpaired_host_cannot_claim_anything`, `test_harnesses_of_an_unknown_host_are_refused` |
 | `PS-AGENT-041` Work dispatched to a host runs exactly once | `covered` | `test_an_unpaired_host_is_refused` |
