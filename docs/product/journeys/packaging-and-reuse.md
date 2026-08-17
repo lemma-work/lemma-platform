@@ -113,7 +113,7 @@ their credentials do not travel with it.
 ## Capability: Publish and share a pod
 
 ### PS-PACK-020 — A person publishes a pod so others can install it
-**Status:** planned
+**Status:** covered
 
 - When a person publishes a pod to a repository through their connected account,
   the system shall export it and put it there.
@@ -171,7 +171,7 @@ their credentials do not travel with it.
 **Contracts:** `app.get`, `app.asset.get`, `app.published`, `app.session_started`
 
 ### PS-PACK-032 — A person can retrieve what an app was built from
-**Status:** planned
+**Status:** covered
 
 - When a person with pod access downloads an app's source or build, the system
   shall give them the exact archive that was uploaded.

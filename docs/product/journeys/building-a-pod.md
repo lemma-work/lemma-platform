@@ -198,7 +198,7 @@ over a single resource is [Sharing and permissions](sharing-and-permissions.md).
 **Contracts:** `pod.list`, `pod.get`
 
 ### PS-POD-031 — A person sees their pods across every organization at once
-**Status:** planned
+**Status:** covered
 
 - When a person asks for their navigation, the system shall return the
   organizations they belong to and the pods they may open in each, in one

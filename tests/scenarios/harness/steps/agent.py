@@ -161,3 +161,70 @@ class AgentSteps:
             describe=f"conversation {conversation['id']} to reach a terminal state",
             timeout=timeout,
         )
+
+    async def changes_agent(self, name: str, *, in_pod: JSON, **changes: Any) -> JSON:
+        return await self.api.patch(
+            f"/pods/{in_pod['id']}/agents/{name}",
+            what=f"{self.label} updating agent {name!r}",
+            json=changes,
+        )
+
+    async def replaces_agent_grants(
+        self, name: str, *, grants: list[JSON], in_pod: JSON
+    ) -> JSON:
+        return await self.api.put(
+            f"/pods/{in_pod['id']}/agents/{name}/permissions",
+            what=f"{self.label} replacing what agent {name!r} may reach",
+            json={"grants": grants},
+        )
+
+    async def renames_conversation(
+        self, conversation: JSON, *, to: str, in_pod: JSON
+    ) -> JSON:
+        return await self.api.patch(
+            f"/pods/{in_pod['id']}/conversations/{conversation['id']}",
+            what=f"{self.label} retitling a conversation",
+            json={"title": to},
+        )
+
+    async def retries(self, conversation: JSON, *, in_pod: JSON) -> Any:
+        return await self.api.call(
+            "POST", f"/pods/{in_pod['id']}/conversations/{conversation['id']}/retry"
+        )
+
+    async def approvals_in(self, conversation: JSON, *, in_pod: JSON) -> list[JSON]:
+        return items_of(
+            await self.api.get(
+                f"/pods/{in_pod['id']}/conversations/{conversation['id']}/approvals"
+            )
+        )
+
+    async def decides(
+        self, approval: JSON, *, allow: bool, conversation: JSON, in_pod: JSON
+    ) -> Any:
+        return await self.api.call(
+            "POST",
+            f"/pods/{in_pod['id']}/conversations/{conversation['id']}"
+            f"/approvals/{approval['id']}/decision",
+            json={"decision": "APPROVE" if allow else "DENY"},
+        )
+
+    async def watches(self, conversation: JSON, *, in_pod: JSON) -> tuple[int, str]:
+        """Open the conversation stream and take what it says first."""
+        return await self.api.opens_stream(
+            f"/pods/{in_pod['id']}/conversations/{conversation['id']}/stream"
+        )
+
+    # --- runtime profiles -------------------------------------------------
+
+    async def runtime_profiles_in(self, organization: JSON) -> list[JSON]:
+        return items_of(
+            await self.api.get(
+                f"/organizations/{organization['id']}/agent-runtime/profiles"
+            )
+        )
+
+    async def opens_runtime_profile(self, profile_id: str, *, in_organization: JSON) -> JSON:
+        return await self.api.get(
+            f"/organizations/{in_organization['id']}/agent-runtime/profiles/{profile_id}"
+        )

@@ -180,3 +180,48 @@ class IdentitySteps:
             f"/organizations/invitations/{invitation['id']}",
             what=f"{self.label} revoking an invitation",
         )
+
+    async def home_of(self, organization: JSON) -> JSON:
+        return await self.api.get(f"/organizations/{organization['id']}/home")
+
+    async def opens_invitation(self, invitation: JSON) -> JSON:
+        return await self.api.get(f"/organizations/invitations/{invitation['id']}")
+
+    async def invitations_for(self, organization: JSON) -> list[JSON]:
+        return items_of(
+            await self.api.get(f"/organizations/{organization['id']}/invitations")
+        )
+
+    async def changes_role(self, person: Any, *, to: str, in_organization: JSON) -> JSON:
+        member = await self.org_membership_of(person, in_organization=in_organization)
+        return await self.api.patch(
+            f"/organizations/{in_organization['id']}/members/{member['id']}/role",
+            what=f"{self.label} making {person.label} a {to}",
+            json={"role": to},
+        )
+
+    async def org_membership_of(self, person: Any, *, in_organization: JSON) -> JSON:
+        """Someone's membership row in an organization.
+
+        Named apart from `PodSteps.membership_of` deliberately: both mixins land
+        on the same `Person`, so a shared name silently shadows one of them.
+        `test_step_names_do_not_collide` in the suite guards against it.
+        """
+        for member in await self.members_of(in_organization):
+            if str(member.get("user_id")) == str(person.user_id):
+                return member
+        raise AssertionError(
+            f"{person.label} is not a member of {in_organization.get('name')!r}"
+        )
+
+
+    async def removes_from_organization(self, person: Any, *, organization: JSON) -> None:
+        member = await self.org_membership_of(person, in_organization=organization)
+        await self.api.delete(
+            f"/organizations/{organization['id']}/members/{member['id']}",
+            what=f"{self.label} removing {person.label} from the organization",
+        )
+
+    async def whoami(self) -> JSON:
+        """Resolve the current credential to who it says the caller is."""
+        return await self.api.get("/auth/verify-token")

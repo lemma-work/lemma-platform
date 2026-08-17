@@ -175,7 +175,7 @@ always reaches a conclusion a person can see.
 **Contracts:** `workflow.run.get`, `workflow.run.stream`
 
 ### PS-FLOW-012 — A workflow can ask a person and wait for the answer
-**Status:** planned
+**Status:** covered
 
 - When a run reaches a step that needs a person, the system shall record who is
   being asked and what is being asked of them.
@@ -190,7 +190,7 @@ always reaches a conclusion a person can see.
 **Contracts:** `workflow.run.form.submit`, `workflow.run.waiting_assigned_to_me`
 
 ### PS-FLOW-013 — A person can stop a run
-**Status:** planned
+**Status:** covered
 
 - When a person cancels a run, the system shall stop it and shall mark it
   cancelled.
@@ -220,7 +220,7 @@ always reaches a conclusion a person can see.
 ## Capability: Watch a run happen
 
 ### PS-FLOW-020 — A person follows a run as it goes
-**Status:** planned
+**Status:** covered
 
 - While a run is in progress, the system shall stream its steps to a person
   watching, as they happen.

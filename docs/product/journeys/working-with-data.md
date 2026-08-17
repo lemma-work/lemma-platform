@@ -170,7 +170,7 @@ put it there having to think about it on every operation.
 ## Capability: Ask questions across tables
 
 ### PS-DATA-020 — A person queries their pod's data directly
-**Status:** planned
+**Status:** covered
 
 - When a person runs a query against their pod, the system shall return the rows
   they are entitled to see and no others.
@@ -239,7 +239,7 @@ put it there having to think about it on every operation.
 ## Capability: Make documents readable and searchable
 
 ### PS-DATA-040 — An uploaded document becomes readable text
-**Status:** planned
+**Status:** covered
 
 - When a person uploads a document, the system shall convert it to Markdown and
   attach that to the file, so a person or an agent can read it without handling
@@ -281,7 +281,7 @@ put it there having to think about it on every operation.
 **Contracts:** `file.upload`, `file.get`
 
 ### PS-DATA-043 — A person searches what is in their documents
-**Status:** planned
+**Status:** covered
 
 - When a person searches, the system shall return matches from inside document
   contents, not only from file names.

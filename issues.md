@@ -282,6 +282,44 @@ window.
 
 ---
 
+## DATA — tables, records, files
+
+### DEV-DATA-001 — Supplying markdown for an un-indexed document is accepted and discarded
+**Violates:** PS-DATA-040
+**Severity:** medium
+**Where:** `file.markdown.attach` —
+[`file_controller.py`](lemma-backend/app/modules/datastore/api/controllers/file_controller.py)
+
+**Required:** Where a person supplies their own markdown for a document, the
+system uses it in place of what it would have extracted. If it cannot, it says
+so.
+
+**Actual:** Whether the supplied text is kept depends on a flag set at upload
+time, and the response does not distinguish the two:
+
+| upload `search_enabled` | attach | file status | children stored |
+|---|---|---|---|
+| `true` | 200 | `COMPLETED` | 1 (`document.md`) |
+| `false` | **200** | `NOT_REQUIRED` | **0** |
+
+With indexing off the call answers success and nothing is stored — no child, no
+retrievable content, no error, no changed status.
+
+**Why it matters:** Supplying markdown is the escape hatch for a document the
+platform cannot extract — a scanned PDF, an unusual format, or a deployment with
+no extraction service at all (which is what this suite's stack is, and how the
+behaviour was found). It is exactly the path a person reaches for when
+extraction has already let them down, and it fails silently. They get a 200,
+believe the document is readable, and discover otherwise when an agent cannot
+answer questions about it.
+
+**Fix:** Either refuse the attach when the file is not indexed, naming the
+reason, or accept it and store the child regardless — supplied markdown does not
+need an extraction pipeline to be worth keeping. Refusing is the smaller change;
+accepting is the better product. What must not remain is 200 with nothing kept.
+
+---
+
 ## FLOW — workflows
 
 ### DEV-FLOW-001 — Both workflow visualisation endpoints return 500, always

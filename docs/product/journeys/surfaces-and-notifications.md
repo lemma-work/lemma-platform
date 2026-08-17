@@ -45,7 +45,7 @@ dropped.
 **Contracts:** `agent.surface.slack_manifest`, `agent.surface.telegram_managed.start`, `agent.surface.telegram_managed.get`, `agent.surface.teams_admin_consent_callback`
 
 ### PS-SURF-003 — A person changes or removes a surface
-**Status:** planned
+**Status:** covered
 
 - When a person points a surface at a different agent, the system shall route
   later messages to the new agent and shall leave existing threads readable.

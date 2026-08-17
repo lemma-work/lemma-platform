@@ -41,6 +41,9 @@ JSON = dict[str, Any]
 #: passes syntax and, with deliverability off, never leaves the machine.
 EMAIL_DOMAIN = "example.com"
 
+#: How long any single request may take before the suite calls it a hang.
+REQUEST_TIMEOUT = 150.0
+
 
 @dataclass(eq=False)
 class Person(
@@ -85,7 +88,11 @@ class World:
                 f"this scenario already has a person called {label!r}; "
                 f"give the second one a different label"
             )
-        client = httpx.AsyncClient(base_url=self.base_url, timeout=60.0)
+        # Generous, because a client timeout that fires before the product
+        # gives up reports a hang the product never had. Provisioning a sandbox
+        # under load is the slow case, and it is slower than sixty seconds when
+        # several scenarios ask at once.
+        client = httpx.AsyncClient(base_url=self.base_url, timeout=REQUEST_TIMEOUT)
         self._clients.append(client)
         person = Person(
             label=label,

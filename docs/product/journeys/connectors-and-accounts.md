@@ -46,7 +46,7 @@ behalf.
 **Contracts:** `connector.auth_config.create`, `connector.auth_config.list`, `connector.auth_config.get`, `connector.auth_config.update`
 
 ### PS-CONN-011 — Provider secrets given at install stay secret
-**Status:** planned
+**Status:** covered
 
 - The system shall encrypt any provider secret supplied at installation.
 - The system shall never return a provider secret to any client, in any
@@ -84,7 +84,7 @@ behalf.
 **Contracts:** `connector.account.create`, `connector.account.list`, `connector.account.get`, `connector.account.delete`, `connector.connected`
 
 ### PS-CONN-021 — Connecting through a provider's consent screen works end to end
-**Status:** planned
+**Status:** covered
 
 - When a person starts connecting, the system shall send them to the provider's
   own consent screen and shall never ask them for their provider password.

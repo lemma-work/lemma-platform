@@ -336,3 +336,67 @@ class PodSteps:
                 f"{self.label} was expected to hold no write permissions in "
                 f"{pod.get('name')!r}, but holds {sorted(writes)}"
             )
+
+    async def opens_membership(self, member: JSON, *, in_pod: JSON) -> JSON:
+        return await self.api.get(
+            f"/pods/{in_pod['id']}/members/{_member_id(member)}"
+        )
+
+    async def finds_member_by_email(self, email: str, *, in_pod: JSON) -> JSON:
+        return await self.api.get(
+            f"/pods/{in_pod['id']}/members/lookup/by-email", params={"email": email}
+        )
+
+    async def finds_member_by_user(self, user_id: str, *, in_pod: JSON) -> JSON:
+        return await self.api.get(
+            f"/pods/{in_pod['id']}/members/lookup/by-user-id/{user_id}"
+        )
+
+    async def permissions_of_role(self, name: str, *, in_pod: JSON) -> JSON:
+        return await self.api.get(f"/pods/{in_pod['id']}/roles/{name}/permissions")
+
+    async def replaces_role_permissions(
+        self, name: str, *, grants: list[JSON], in_pod: JSON
+    ) -> JSON:
+        """Replace what a role may do on named resources.
+
+        A grant here is resource-scoped —
+        ``{"resource_type", "resource_name", "permission_ids"}`` — not a flat
+        list of permissions. A role's *general* permissions are set with
+        `pod.roles.update`; this is the per-resource layer on top.
+        """
+        return await self.api.put(
+            f"/pods/{in_pod['id']}/roles/{name}/permissions",
+            what=f"{self.label} replacing what {name!r} may reach",
+            json={"grants": grants},
+        )
+
+    async def changes_role_definition(
+        self, name: str, *, in_pod: JSON, **changes: Any
+    ) -> JSON:
+        """Change a custom role — its description, or what it may generally do.
+
+        ``name`` is required by the API even when it is not changing, because it
+        identifies the role being described rather than requesting a rename.
+        """
+        return await self.api.patch(
+            f"/pods/{in_pod['id']}/roles/{name}",
+            what=f"{self.label} updating role {name!r}",
+            json={"name": name, **changes},
+        )
+
+    async def deletes_role(self, name: str, *, in_pod: JSON) -> None:
+        await self.api.delete(
+            f"/pods/{in_pod['id']}/roles/{name}",
+            what=f"{self.label} deleting role {name!r}",
+        )
+
+    async def my_join_request_for(self, pod: JSON) -> Any:
+        response = await self.api.call("GET", f"/pods/{pod['id']}/join-requests/me")
+        return response.json() if response.status_code == 200 else None
+
+    async def previews(self, resource_type: str, *, named: str, in_pod: JSON) -> JSON:
+        return await self.api.get(
+            f"/pods/{in_pod['id']}/resources/{resource_type}/preview",
+            params={"name": named},
+        )

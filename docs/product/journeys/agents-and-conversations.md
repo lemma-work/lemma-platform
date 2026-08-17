@@ -59,7 +59,7 @@ it happens.
 **Contracts:** `agent.conversation.create`, `agent.list`
 
 ### PS-AGENT-004 — A person chooses which model an agent uses
-**Status:** planned
+**Status:** covered
 
 - Where an organization configures its own model provider, the system shall let
   its agents use it.
@@ -92,7 +92,7 @@ it happens.
 **Contracts:** `agent.conversation.create`, `agent.conversation.message.send`, `agent.conversation.message.list`, `conversation.started`, `agent_run.completed`
 
 ### PS-AGENT-011 — A person watches the answer arrive
-**Status:** planned
+**Status:** covered
 
 - While an agent is working, the system shall stream its output to a person
   watching, as it is produced.
@@ -119,7 +119,7 @@ it happens.
 **Contracts:** `agent.conversation.stop`, `agent.conversation.get`
 
 ### PS-AGENT-013 — A failed run can be tried again
-**Status:** planned
+**Status:** covered
 
 - When a person retries a failed run, the system shall run it again from the
   last message rather than from the beginning of the conversation.

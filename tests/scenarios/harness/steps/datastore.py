@@ -341,3 +341,106 @@ class DatastoreSteps:
                 f"  body: {response.text[:500]}"
             )
         return response.content
+
+    async def changes_table(self, name: str, *, in_pod: JSON, **changes: Any) -> JSON:
+        return await self.api.patch(
+            f"/pods/{in_pod['id']}/datastore/tables/{name}",
+            what=f"{self.label} updating table {name!r}",
+            json=changes,
+        )
+
+    async def updates_records(
+        self, rows: list[JSON], *, in_table: str, in_pod: JSON
+    ) -> JSON:
+        return await self.api.post(
+            f"/pods/{in_pod['id']}/datastore/tables/{in_table}/records/bulk/update",
+            what=f"{self.label} updating {len(rows)} records in {in_table!r}",
+            json={"records": rows},
+        )
+
+    async def deletes_records(
+        self, record_ids: list[str], *, in_table: str, in_pod: JSON
+    ) -> JSON:
+        return await self.api.post(
+            f"/pods/{in_pod['id']}/datastore/tables/{in_table}/records/bulk/delete",
+            what=f"{self.label} deleting {len(record_ids)} records from {in_table!r}",
+            json={"record_ids": [str(r) for r in record_ids]},
+        )
+
+    async def asks(self, query: str, *, in_pod: JSON, everyones: bool = False) -> JSON:
+        """Run a read-only query against the pod's own data."""
+        return await self.api.post(
+            f"/pods/{in_pod['id']}/datastore/query",
+            what=f"{self.label} querying {in_pod.get('name')!r}",
+            params={"mode": "ADMIN"} if everyones else None,
+            json={"query": query},
+        )
+
+    async def is_refused_query(self, query: str, *, in_pod: JSON) -> int:
+        response = await self.api.call(
+            "POST", f"/pods/{in_pod['id']}/datastore/query", json={"query": query}
+        )
+        if response.status_code < 400:
+            raise AssertionError(
+                f"{self.label} was expected to be refused the query {query!r}, "
+                f"but it ran ({response.status_code})"
+            )
+        return response.status_code
+
+    async def moves_file(self, path: str, *, to: str, in_pod: JSON) -> JSON:
+        # Multipart, not JSON: the same endpoint can replace the bytes, so it
+        # takes a form whether or not this call carries any.
+        # Every field goes through `files` with a `None` filename: that is how
+        # httpx is told to send multipart at all. Passing `data=` alone sends
+        # form-urlencoded, which this endpoint rejects.
+        return await self.api.patch(
+            f"/pods/{in_pod['id']}/datastore/files/by-path",
+            what=f"{self.label} moving {path!r} to {to!r}",
+            files={"path": (None, path), "new_path": (None, to)},
+        )
+
+    async def link_to(self, path: str, *, in_pod: JSON) -> JSON:
+        return await self.api.get(
+            f"/pods/{in_pod['id']}/datastore/files/url", params={"path": path}
+        )
+
+    async def opens_file_by_id(self, file_id: str, *, in_pod: JSON) -> JSON:
+        return await self.api.get(f"/pods/{in_pod['id']}/datastore/files/{file_id}")
+
+    async def children_of(self, path: str, *, in_pod: JSON) -> list[JSON]:
+        return items_of(
+            await self.api.get(
+                f"/pods/{in_pod['id']}/datastore/files/children", params={"path": path}
+            )
+        )
+
+    async def attaches_markdown(self, text: str, *, to_path: str, in_pod: JSON) -> JSON:
+        return await self.api.put(
+            f"/pods/{in_pod['id']}/datastore/files/by-path/markdown",
+            what=f"{self.label} attaching markdown to {to_path!r}",
+            files={
+                "path": (None, to_path),
+                "data": ("content.md", text.encode(), "text/markdown"),
+            },
+        )
+
+    async def detaches_markdown(self, *, from_path: str, in_pod: JSON) -> None:
+        await self.api.delete(
+            f"/pods/{in_pod['id']}/datastore/files/by-path/markdown",
+            params={"path": from_path},
+            # Detaching removes the derived text; the original file stays.
+            what=f"{self.label} detaching markdown from {from_path!r}",
+        )
+
+    async def reads_derived_markdown(self, path: str, *, in_pod: JSON) -> Any:
+        """The extracted or supplied markdown for a document.
+
+        Takes the *child's* path — `/report.pdf/document.md` — not the parent's.
+        Asking for the parent answers "no document child at /report.pdf", which
+        reads like the markdown is missing when it is simply somewhere else.
+        """
+        return await self.api.call(
+            "GET",
+            f"/pods/{in_pod['id']}/datastore/files/children/content",
+            params={"path": f"{path.rstrip('/')}/document.md"},
+        )

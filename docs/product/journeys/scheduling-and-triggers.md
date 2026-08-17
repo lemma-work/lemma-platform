@@ -127,7 +127,7 @@ about it when it eventually cannot.
 **Contracts:** `schedule.run.list`, `schedule.get`, `schedule_run.completed`
 
 ### PS-SCHED-022 — A firing that fails is retried, and then given up on visibly
-**Status:** planned
+**Status:** covered
 
 - If a firing fails for a reason that might pass, then the system shall retry it.
 - If a firing keeps failing, then the system shall stop retrying and shall mark

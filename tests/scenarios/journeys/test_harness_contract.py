@@ -155,3 +155,38 @@ def test_every_scenario_declares_what_it_proves(path: Path):
         if absent:
             missing.append(f"{node.name} is missing {', '.join(sorted(absent))}")
     assert not missing, f"{path.name}:\n  " + "\n  ".join(missing)
+
+
+def test_step_names_do_not_collide():
+    """No two step mixins define the same verb.
+
+    Every `steps` module is mixed into one `Person`, so a name defined twice
+    silently resolves to whichever mixin comes first in the MRO — and the other
+    one is simply gone, with no error at import or at call time until an
+    argument happens not to match. That is a bad afternoon, so it is a guard.
+    """
+    import ast as _ast
+
+    seen: dict[str, str] = {}
+    clashes: list[str] = []
+    for path in sorted((SUITE / "harness" / "steps").glob("*.py")):
+        if path.name == "__init__.py":
+            continue
+        tree = _ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in _ast.walk(tree):
+            if not isinstance(node, _ast.ClassDef):
+                continue
+            for item in node.body:
+                if not isinstance(item, (_ast.FunctionDef, _ast.AsyncFunctionDef)):
+                    continue
+                if item.name.startswith("_"):
+                    continue
+                if item.name in seen and seen[item.name] != path.name:
+                    clashes.append(
+                        f"{item.name!r} defined in both {seen[item.name]} and "
+                        f"{path.name}"
+                    )
+                seen[item.name] = path.name
+    assert not clashes, (
+        "step verbs must be unique across mixins:\n  " + "\n  ".join(clashes)
+    )

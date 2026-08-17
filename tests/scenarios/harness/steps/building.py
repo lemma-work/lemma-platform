@@ -643,3 +643,127 @@ class BuildingSteps:
                 f"{auth_config['name']}/triggers"
             )
         )
+
+    async def changes_workflow(self, name: str, *, in_pod: JSON, **changes: Any) -> JSON:
+        return await self.api.patch(
+            f"/pods/{in_pod['id']}/workflows/{name}",
+            what=f"{self.label} updating workflow {name!r}",
+            json=changes,
+        )
+
+    async def runs_of_workflow(self, name: str, *, in_pod: JSON) -> list[JSON]:
+        return items_of(
+            await self.api.get(f"/pods/{in_pod['id']}/workflows/{name}/runs")
+        )
+
+    async def cancels_run(self, run: JSON, *, in_pod: JSON) -> Any:
+        return await self.api.call(
+            "POST", f"/pods/{in_pod['id']}/workflow-runs/{run['id']}/cancel"
+        )
+
+    async def waits_assigned_to_me_in(self, pod: JSON) -> list[JSON]:
+        return items_of(
+            await self.api.get(
+                f"/pods/{pod['id']}/workflow-runs/waiting/assigned-to-me"
+            )
+        )
+
+    async def answers_form(self, run: JSON, *, data: JSON, in_pod: JSON) -> Any:
+        return await self.api.call(
+            "POST",
+            f"/pods/{in_pod['id']}/workflow-runs/{run['id']}/form",
+            json={"data": data},
+        )
+
+    async def watches_run(self, run: JSON, *, in_pod: JSON) -> tuple[int, str]:
+        return await self.api.opens_stream(
+            f"/pods/{in_pod['id']}/workflow-runs/{run['id']}/stream"
+        )
+
+    async def visualises_run(self, run: JSON, *, in_pod: JSON) -> Any:
+        return await self.api.call(
+            "GET", f"/pods/{in_pod['id']}/workflow-runs/{run['id']}/visualize"
+        )
+
+    async def replaces_function_grants(
+        self, name: str, *, grants: list[JSON], in_pod: JSON
+    ) -> JSON:
+        return await self.api.put(
+            f"/pods/{in_pod['id']}/functions/{name}/permissions",
+            what=f"{self.label} replacing what function {name!r} may reach",
+            json={"grants": grants},
+        )
+
+    async def retries_firing(self, run: JSON, *, schedule: JSON, in_pod: JSON) -> Any:
+        return await self.api.call(
+            "POST",
+            f"/pods/{in_pod['id']}/schedules/{schedule['id']}/runs/{run['id']}/retry",
+        )
+
+    async def usage_stats_of(self, organization: JSON) -> JSON:
+        return await self.api.get(f"/usage/organizations/{organization['id']}/stats")
+
+    async def changes_app(self, name: str, *, in_pod: JSON, **changes: Any) -> JSON:
+        return await self.api.patch(
+            f"/pods/{in_pod['id']}/apps/{name}",
+            what=f"{self.label} updating app {name!r}",
+            json=changes,
+        )
+
+    async def app_source_archive(self, name: str, *, in_pod: JSON) -> Any:
+        return await self.api.call(
+            "GET", f"/pods/{in_pod['id']}/apps/{name}/source/archive"
+        )
+
+    async def app_dist_archive(self, name: str, *, in_pod: JSON) -> Any:
+        return await self.api.call(
+            "GET", f"/pods/{in_pod['id']}/apps/{name}/dist/archive"
+        )
+
+    async def app_assets(self, name: str, *, in_pod: JSON) -> Any:
+        return await self.api.call("GET", f"/pods/{in_pod['id']}/apps/{name}/assets")
+
+    async def opens_connector(self, connector_id: str) -> JSON:
+        return await self.api.get(f"/connectors/{connector_id}")
+
+    async def skill_for(self, connector_id: str) -> Any:
+        return await self.api.call("GET", f"/connectors/{connector_id}/skill")
+
+    async def refreshes_operations(self, auth_config: JSON, *, in_organization: JSON) -> Any:
+        return await self.api.call(
+            "POST",
+            f"/organizations/{in_organization['id']}/connectors/auth-configs/"
+            f"{auth_config['name']}/operations/refresh",
+        )
+
+    async def operation_details(
+        self, names: list[str], *, auth_config: JSON, in_organization: JSON
+    ) -> Any:
+        return await self.api.call(
+            "POST",
+            f"/organizations/{in_organization['id']}/connectors/"
+            f"{auth_config['name']}/operations/details",
+            json={"operation_names": names},
+        )
+
+    async def starts_connecting(self, *, in_organization: JSON, auth_config: JSON) -> Any:
+        return await self.api.call(
+            "POST",
+            f"/organizations/{in_organization['id']}/connectors/connect-requests",
+            json={"auth_config_id": str(auth_config["id"])},
+        )
+
+    async def import_status(self, import_id: str, *, in_pod: JSON) -> JSON:
+        return await self.api.get(f"/pods/{in_pod['id']}/bundle/imports/{import_id}")
+
+    async def import_events(self, import_id: str, *, in_pod: JSON) -> tuple[int, str]:
+        return await self.api.opens_stream(
+            f"/pods/{in_pod['id']}/bundle/imports/{import_id}/events"
+        )
+
+    async def replans_import(self, import_id: str, *, in_pod: JSON, variables: JSON | None = None) -> Any:
+        return await self.api.call(
+            "POST",
+            f"/pods/{in_pod['id']}/bundle/imports/{import_id}/replan",
+            json={"variables": variables or {}},
+        )

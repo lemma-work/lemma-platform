@@ -100,6 +100,45 @@ class ApiDriver:
         except ValueError:
             return response.text
 
+    async def opens_stream(
+        self, path: str, *, timeout: float = 15.0, **kwargs: Any
+    ) -> tuple[int, str, str]:
+        """Open a server-sent event stream, take what it says first, and close.
+
+        Reading a stream with an ordinary request waits for the body to end —
+        and a live stream does not end, so the request times out and the
+        scenario reports a hang where the product is working exactly as
+        intended. This takes the headers and the first chunk, which is what a
+        watcher actually sees, and then lets go.
+
+        Returns ``(status, content_type, first_chunk)``. The chunk may be empty
+        and that is not a failure: a stream opened after its run has already
+        finished has nothing left to say. What a scenario can rely on is that
+        the stream *opened*, and opened as an event stream.
+        """
+        headers = {
+            "Accept": "text/event-stream",
+            **self._headers,
+            **kwargs.pop("headers", {}),
+        }
+        request = self._client.build_request(
+            "GET", _reachable(path), headers=headers, timeout=timeout, **kwargs
+        )
+        response = await self._client.send(request, stream=True)
+        try:
+            first = ""
+            async for chunk in response.aiter_text():
+                first = chunk
+                if chunk.strip():
+                    break
+            return (
+                response.status_code,
+                response.headers.get("content-type", ""),
+                first,
+            )
+        finally:
+            await response.aclose()
+
     # Convenience wrappers; every step goes through one of these.
     async def get(self, path: str, **kwargs: Any) -> Any:
         return await self.expect("GET", path, status=200, **kwargs)

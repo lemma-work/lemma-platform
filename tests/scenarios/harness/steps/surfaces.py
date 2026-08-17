@@ -160,3 +160,25 @@ class SurfaceSteps:
                 f"notification, but it was accepted ({response.status_code})"
             )
         return response.status_code
+
+    async def changes_surface(self, name: str, *, in_pod: JSON, **changes: Any) -> JSON:
+        return await self.api.patch(
+            f"/pods/{in_pod['id']}/surfaces/{name}",
+            what=f"{self.label} updating surface {name!r}",
+            json=changes,
+        )
+
+    async def channels_of(self, name: str, *, in_pod: JSON) -> Any:
+        return await self.api.call(
+            "GET", f"/pods/{in_pod['id']}/surfaces/{name}/channels"
+        )
+
+    async def slack_manifest(self) -> Any:
+        return await self.api.call("GET", "/surface-setup/slack/manifest")
+
+    async def makes_default_surface(self, surface: JSON, *, platform: str) -> Any:
+        return await self.api.call(
+            "PUT",
+            "/surfaces/me/default",
+            json={"platform": platform, "surface_id": str(surface["id"])},
+        )

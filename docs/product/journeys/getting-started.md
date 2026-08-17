@@ -48,7 +48,7 @@ worse than asking.
 **Contracts:** `org.list`, `org.navigation`, `user.current.get`, `user.profile.get`
 
 ### PS-ONB-003 — A signed-in person is identified consistently everywhere
-**Status:** planned
+**Status:** covered
 
 - While a person holds a valid session, the system shall resolve that session to
   the same user across every API, the CLI, and both SDKs.
@@ -228,7 +228,7 @@ worse than asking.
 ## Capability: Change and remove membership
 
 ### PS-ONB-040 — An owner changes what a member may do
-**Status:** planned
+**Status:** covered
 
 - When an owner changes a member's role, the system shall apply it immediately
   to every later request that member makes.
@@ -259,7 +259,7 @@ worse than asking.
 **Contracts:** `org.member.remove`, `org.member.update_role`
 
 ### PS-ONB-042 — Removal respects the role hierarchy
-**Status:** planned
+**Status:** covered
 
 - When an owner removes any member, the system shall remove them.
 - When an editor removes a member who is not an owner, the system shall remove
@@ -271,7 +271,7 @@ worse than asking.
 **Contracts:** `org.member.remove`, `org.member.list`
 
 ### PS-ONB-043 — A person can leave on their own
-**Status:** planned
+**Status:** covered
 
 - When a person removes their own membership, the system shall remove it without
   requiring a role, subject to PS-ONB-041.
