@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+import time
 from typing import Any
 from uuid import uuid4
 
@@ -30,27 +32,62 @@ SETTLED = {"COMPLETED", "FAILED", "STOPPED", "CANCELLED", "WAITING_FOR_INPUT"}
 SCRIPT_KEY = "mock_llm_script"
 
 
-def attempts(tool: str, /, **arguments: Any) -> JSON:
+def attempts(
+    tool: str, /, *, remembered_as: str | None = None, **arguments: Any
+) -> JSON:
     """One turn in which the agent tries to call ``tool``.
 
     Tool names are the agent's real ones — `pod_write_record`, `pod_query`,
-    `connector_execute`. A name no toolset exposes fails the run, which is the
-    honest outcome rather than a silent no-op.
+    `run_connector_operation`. A name no toolset exposes fails the run, which is
+    the honest outcome rather than a silent no-op.
+
+    ``remembered_as`` names this call so a later turn can quote part of its
+    result with :func:`result_of`.
     """
     return {
         "tool_calls": [
             {
                 "tool_name": tool,
                 "args": arguments,
-                "tool_call_id": f"call_{uuid4().hex[:8]}",
+                "tool_call_id": remembered_as or f"call_{uuid4().hex[:8]}",
             }
         ]
     }
 
 
+def result_of(call: str, path: str) -> str:
+    """Quote part of an earlier tool's result inside a later turn's arguments.
+
+    A script is static JSON, so it cannot contain a value the run only produces
+    at runtime — and the interesting arguments are exactly those. The
+    deterministic model resolves ``${call.dotted.path}`` against the result of
+    the named earlier call.
+
+    This is what makes an approval scenario honest. A real agent learns which
+    permissions it was denied from the failed call's own `approval` envelope and
+    quotes them back; a scenario that hard-codes them instead would prove the
+    plumbing works on values no agent could have known.
+    """
+    return f"${{{call}.{path}}}"
+
+
 def answers(text: str) -> JSON:
     """One turn in which the agent simply says something and stops."""
     return {"text": text}
+
+
+def _approval_id(approval: JSON) -> str:
+    """How an approval is addressed when deciding it.
+
+    An approval is a tool call awaiting an answer, and the decision endpoint
+    keys it by ``tool_call_id`` — not by the id of the message carrying it.
+    Sending the message id is accepted and matches nothing, so the run stays
+    paused and the scenario times out somewhere else entirely.
+    """
+    identifier = approval.get("tool_call_id") or approval.get("id")
+    if not identifier:
+        raise AssertionError(f"this does not look like an approval: {sorted(approval)}")
+    return str(identifier)
 
 
 class AgentSteps:
@@ -274,9 +311,39 @@ class AgentSteps:
         return await self.api.call(
             "POST",
             f"/pods/{in_pod['id']}/conversations/{conversation['id']}"
-            f"/approvals/{approval['id']}/decision",
+            f"/approvals/{_approval_id(approval)}/decision",
             json={"decision": decision, "response": {}},
         )
+
+    async def answers_approval(
+        self,
+        approval: JSON,
+        *,
+        allow: bool,
+        conversation: JSON,
+        in_pod: JSON,
+        for_the_session: bool = False,
+    ) -> JSON:
+        """Answer an approval and insist it was accepted.
+
+        :meth:`decides` returns the raw response so a scenario can assert on a
+        refusal. This one is for the ordinary path, where a decision that
+        quietly failed would leave the run paused and every later assertion
+        would be about a run that never resumed rather than about the product.
+        """
+        response = await self.decides(
+            approval,
+            allow=allow,
+            conversation=conversation,
+            in_pod=in_pod,
+            for_the_session=for_the_session,
+        )
+        if response.status_code >= 400:
+            raise AssertionError(
+                f"{self.label} could not answer the approval "
+                f"({response.status_code}): {response.text[:500]}"
+            )
+        return response.json() if response.content else {}
 
     async def waits_for_an_approval_in(
         self, conversation: JSON, *, in_pod: JSON, after: int = 0, timeout: float = 60.0
@@ -287,6 +354,52 @@ class AgentSteps:
             lambda requests: len(requests) > after,
             describe=f"an approval request in conversation {conversation['id']}",
             timeout=timeout,
+        )
+
+    async def answers_every_approval(
+        self,
+        conversation: JSON,
+        *,
+        allow: bool,
+        in_pod: JSON,
+        for_the_session: bool = False,
+        timeout: float = 90.0,
+    ) -> int:
+        """Stay with a run, answering each thing it asks, until it finishes.
+
+        A run can stop more than once: each denied permission is a separate
+        question, and a person watching answers them as they arrive. Deciding a
+        single approval and then waiting for the run to settle would hang on the
+        second question — which looks like the product being broken and is only
+        the scenario having walked away.
+
+        Returns how many times it was asked.
+        """
+        deadline = time.monotonic() + timeout
+        # A decision is not instantly reflected in the pending list, so without
+        # remembering what has been answered this answers the same request
+        # several times and reports a count nobody asked for.
+        answered: set[str] = set()
+        while time.monotonic() < deadline:
+            state = await self.opens_conversation(conversation, in_pod=in_pod)
+            if str(state.get("status") or "").upper() in SETTLED:
+                return len(answered)
+            for request in await self.approvals_in(conversation, in_pod=in_pod):
+                identifier = _approval_id(request)
+                if identifier in answered:
+                    continue
+                await self.answers_approval(
+                    request,
+                    allow=allow,
+                    conversation=conversation,
+                    in_pod=in_pod,
+                    for_the_session=for_the_session,
+                )
+                answered.add(identifier)
+            await asyncio.sleep(0.1)
+        raise AssertionError(
+            f"conversation {conversation['id']} never finished; "
+            f"{self.label} answered {len(answered)} approvals in {timeout:.0f}s"
         )
 
     async def transcript_of(self, conversation: JSON, *, in_pod: JSON) -> str:
