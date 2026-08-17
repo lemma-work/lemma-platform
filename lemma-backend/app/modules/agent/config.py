@@ -119,5 +119,18 @@ class AgentSettings(BaseSettings):
         description="Deepgram API key for the speech toolset (listen/say).",
     )
 
+    # Web research
+    web_fetch_impersonate_browser: bool = Field(
+        default=True,
+        description=(
+            "Read pages for `web_fetch` through a client that replays a real "
+            "Chrome TLS fingerprint. On, because sites fingerprint the handshake "
+            "before reading User-Agent, and a refusal costs a browser render in "
+            "the sandbox. Turn it off to fall back to the plain HTTP client "
+            "without redeploying — the SSRF guard applies either way. Env: "
+            "``WEB_FETCH_IMPERSONATE_BROWSER``."
+        ),
+    )
+
 
 agent_settings = AgentSettings()
