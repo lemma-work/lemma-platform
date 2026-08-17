@@ -13,6 +13,8 @@ followed inside libcurl would never reach `assert_safe_url` at all.
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
+
 import pytest
 
 from app.core.net import impersonating_client
@@ -53,18 +55,16 @@ class _FakeSession:
         self.last_response: _FakeResponse | None = None
 
     def stream(self, method: str, url: str, **kwargs):
+        # Sync call returning an async context manager, like the real
+        # `AsyncSession.stream` — so the caller can `async with` it directly.
         self.requested.append(url)
         response = self._responses.get(url) or _FakeResponse(200, {}, [b"<html/>"])
         self.last_response = response
+        return self._hold(response)
 
-        class _Ctx:
-            async def __aenter__(self_inner):
-                return response
-
-            async def __aexit__(self_inner, *exc):
-                return False
-
-        return _Ctx()
+    @asynccontextmanager
+    async def _hold(self, response: _FakeResponse):
+        yield response
 
 
 def _install(monkeypatch, session: _FakeSession) -> None:
