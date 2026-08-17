@@ -31,7 +31,7 @@ their credentials do not travel with it.
 **Contracts:** `pod.bundle.export.start`, `pod.bundle.export.get`, `pod.bundle.download`, `bundle.exported`
 
 ### PS-PACK-002 — A bundle carries the work, not the secrets
-**Status:** planned
+**Status:** covered
 
 - The system shall never include a credential, provider secret, or connected
   account in an exported bundle.
@@ -84,7 +84,7 @@ their credentials do not travel with it.
 **Contracts:** `pod.bundle.import.apply`, `pod.bundle.import.get`, `pod.bundle.import.events`, `import.completed`
 
 ### PS-PACK-013 — A hostile bundle cannot damage the platform
-**Status:** planned
+**Status:** covered
 
 - If an archive attempts to write outside the place it is being unpacked into,
   then the system shall reject it.

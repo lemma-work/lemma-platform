@@ -12,6 +12,7 @@ from collections.abc import AsyncIterator, Iterator
 import pytest
 import pytest_asyncio
 
+from harness.fake_platform import start_fake_provider
 from harness.stack import Stack, start_stack
 from harness.world import World
 
@@ -49,3 +50,18 @@ async def world(stack: Stack) -> AsyncIterator[World]:
         yield world
     finally:
         await world.aclose()
+
+
+@pytest.fixture
+def provider() -> Iterator[object]:
+    """A third-party HTTP API a connector can be pointed at.
+
+    Per-scenario rather than session-scoped: scenarios assert on exactly which
+    calls arrived, and a shared recorder would make that depend on what ran
+    before it.
+    """
+    fake = start_fake_provider()
+    try:
+        yield fake
+    finally:
+        fake.stop()

@@ -151,7 +151,7 @@ behalf.
 **Contracts:** `connector.operation.execute`
 
 ### PS-CONN-033 — An agent can only use the connectors it was granted
-**Status:** planned
+**Status:** covered
 
 - When a person grants an agent or a function access to a connector, the system
   shall allow exactly that connector and refuse the rest.

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
 from uuid import uuid4
 
@@ -13,6 +14,43 @@ JSON = dict[str, Any]
 #: A run has finished when it reaches one of these. Anything else means it is
 #: still going, and a scenario asserting on the answer has to keep waiting.
 SETTLED = {"COMPLETED", "FAILED", "STOPPED", "CANCELLED", "WAITING_FOR_INPUT"}
+
+#: Where the deterministic model reads its turns from. The stack boots with
+#: `E2E_LLM_MODE=mock` (chosen at boot, like the sandbox provider), and that
+#: model takes its script from the conversation's own `metadata` — a documented
+#: field on `agent.conversation.create`.
+#:
+#: So a scenario decides what an agent *attempts* by passing product data
+#: through the public API, not by patching a model. This is the same posture as
+#: pointing a surface at a self-hosted Bot API server with `api_base_url`: the
+#: seam is a supported product capability, and Lemma's own authorization, tool
+#: dispatch, approval and persistence all run for real. Without it, an agent
+#: scenario can only prove that *something* was answered — never that a
+#: destructive action was refused, because an unscripted model never tries one.
+SCRIPT_KEY = "mock_llm_script"
+
+
+def attempts(tool: str, /, **arguments: Any) -> JSON:
+    """One turn in which the agent tries to call ``tool``.
+
+    Tool names are the agent's real ones — `pod_write_record`, `pod_query`,
+    `connector_execute`. A name no toolset exposes fails the run, which is the
+    honest outcome rather than a silent no-op.
+    """
+    return {
+        "tool_calls": [
+            {
+                "tool_name": tool,
+                "args": arguments,
+                "tool_call_id": f"call_{uuid4().hex[:8]}",
+            }
+        ]
+    }
+
+
+def answers(text: str) -> JSON:
+    """One turn in which the agent simply says something and stops."""
+    return {"text": text}
 
 
 class AgentSteps:
@@ -77,7 +115,13 @@ class AgentSteps:
     # --- conversations ---------------------------------------------------
 
     async def starts_a_conversation(
-        self, *, in_pod: JSON, with_agent: str | None = None, saying: str | None = None
+        self,
+        *,
+        in_pod: JSON,
+        with_agent: str | None = None,
+        saying: str | None = None,
+        where_the_agent: list[JSON] | None = None,
+        under: JSON | None = None,
     ) -> JSON:
         """Open a thread, and optionally say the first thing.
 
@@ -85,10 +129,19 @@ class AgentSteps:
         body has no message field, so passing one is silently ignored and the
         agent is never asked anything. Bundling them here means a scenario says
         "starts a conversation saying X" and gets what it asked for.
+
+        ``where_the_agent`` is what the agent will try, turn by turn — see
+        :func:`attempts` and :data:`SCRIPT_KEY`. ``under`` makes this thread a
+        child of another, which is how a subagent's work stays attached to the
+        conversation that delegated it.
         """
         body: JSON = {}
         if with_agent:
             body["agent_name"] = with_agent
+        if where_the_agent is not None:
+            body["metadata"] = {SCRIPT_KEY: where_the_agent}
+        if under is not None:
+            body["parent_id"] = str(under["id"])
         conversation = await self.api.post(
             f"/pods/{in_pod['id']}/conversations",
             what=f"{self.label} starting a conversation in {in_pod.get('name')!r}",
@@ -200,13 +253,51 @@ class AgentSteps:
         )
 
     async def decides(
-        self, approval: JSON, *, allow: bool, conversation: JSON, in_pod: JSON
+        self,
+        approval: JSON,
+        *,
+        allow: bool,
+        conversation: JSON,
+        in_pod: JSON,
+        for_the_session: bool = False,
     ) -> Any:
+        """Answer an approval request.
+
+        ``for_the_session`` is the "stop asking me this" answer. It is a
+        different decision, not a flag on the same one, and the product scopes
+        it to this conversation — which is the whole of PS-ACCESS-022.
+        """
+        if allow:
+            decision = "APPROVE_FOR_SESSION" if for_the_session else "APPROVE_ONCE"
+        else:
+            decision = "DENY"
         return await self.api.call(
             "POST",
             f"/pods/{in_pod['id']}/conversations/{conversation['id']}"
             f"/approvals/{approval['id']}/decision",
-            json={"decision": "APPROVE" if allow else "DENY"},
+            json={"decision": decision, "response": {}},
+        )
+
+    async def waits_for_an_approval_in(
+        self, conversation: JSON, *, in_pod: JSON, after: int = 0, timeout: float = 60.0
+    ) -> list[JSON]:
+        """Wait until the run has asked a person for permission."""
+        return await eventually(
+            lambda: self.approvals_in(conversation, in_pod=in_pod),
+            lambda requests: len(requests) > after,
+            describe=f"an approval request in conversation {conversation['id']}",
+            timeout=timeout,
+        )
+
+    async def transcript_of(self, conversation: JSON, *, in_pod: JSON) -> str:
+        """The whole thread flattened to text, for asserting on what happened.
+
+        Tool calls and their results are carried in message parts whose shape
+        differs by role, so a scenario that wants to know "did the agent get
+        told no" reads the transcript rather than guessing at the envelope.
+        """
+        return json.dumps(
+            await self.messages_in(conversation, in_pod=in_pod), default=str
         )
 
     async def watches(self, conversation: JSON, *, in_pod: JSON) -> tuple[int, str]:

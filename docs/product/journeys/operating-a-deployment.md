@@ -89,13 +89,17 @@ rather than degrading in a way that only shows up as confused users.
 ## Capability: Delete cleanly
 
 ### PS-OPS-020 — Deleting a pod actually stops everything it was doing
-**Status:** planned
+**Status:** gap
 
 - When a pod is deleted, the system shall stop its schedules, its surfaces, and
   its standing work, and shall keep them stopped.
 - The system shall not leave a timer, a webhook registration, or a sandbox
   running for a pod that no longer exists.
 - The system shall leave every other pod's data and running work untouched.
+
+> **Gap:** surfaces stop, schedules do not. Deleting a pod touches only the
+> pod row, leaving its schedules reachable and reporting `is_active: true`.
+> See `DEV-OPS-003`. Covered by a scenario marked `xfail(strict=True)`.
 
 **Contracts:** `pod.delete`, `pod.deleted`
 

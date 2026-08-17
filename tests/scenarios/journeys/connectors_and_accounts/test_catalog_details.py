@@ -2,24 +2,12 @@
 
 from __future__ import annotations
 
-import pytest
-
 from harness import capability, covers, journey, proves, scenario
-from harness.fake_platform import start_fake_provider
 
 pytestmark = [
     journey("Connectors and accounts"),
     capability("Find what can be connected"),
 ]
-
-
-@pytest.fixture
-async def provider():
-    fake = start_fake_provider()
-    try:
-        yield fake
-    finally:
-        fake.stop()
 
 
 @scenario("A person opens a connector and reads what it can do")

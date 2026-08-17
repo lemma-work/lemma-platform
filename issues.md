@@ -241,6 +241,46 @@ a replacement first.
 
 ---
 
+### DEV-POD-004 — A typo in a permission id answers 500 with a stack trace
+**Violates:** PS-POD-013
+**Severity:** medium
+**Where:** [`service.py:242`](lemma-backend/app/core/authorization/service.py#L242)
+raises; [`pod_role_controller.py:103`](lemma-backend/app/modules/pod/api/controllers/pod_role_controller.py#L103)
+calls it without translating.
+
+**Required:** Naming a permission that does not exist is a mistake in the
+request, so the system says which id was wrong and answers 4xx.
+
+**Actual:** `POST /pods/{id}/roles` with `permission_ids: ["pod.member.remove"]`
+— a plausible near-miss for the real `pod.member.manage` — answers **500** with
+a Starlette traceback in the body.
+
+The validation itself is already right, and the message it produces is exactly
+what the caller needs:
+
+```python
+unknown = set(permission_ids) - set(PERMISSION_BY_ID)
+raise ValueError(f"Unknown permission id(s): {', '.join(sorted(unknown))}")
+```
+
+Nothing maps that `ValueError` to a status, so it escapes the controller as an
+unhandled exception and the good message is thrown away with it.
+
+**Why it matters:** Building a custom role means typing permission ids by hand,
+so this is on the ordinary path rather than an edge — and a 500 tells the person
+the platform is broken when what actually happened is that they made a typo the
+platform had already diagnosed. It also leaks a stack trace to the client, which
+the logging contract says API responses never do.
+
+**Fix:** Catch `ValueError` in the two controller paths that call
+`create_or_update_role` and re-raise as a 400 carrying the message. The same
+escape exists on `pod.roles.update`.
+
+**Covered by:** `test_an_unknown_permission_is_refused_clearly`, marked
+`xfail(strict=True)`.
+
+---
+
 ### DEV-POD-003 — A role change is invisible to the member's very next request
 **Violates:** PS-POD-011
 **Severity:** low
@@ -374,6 +414,56 @@ return templates.TemplateResponse(
 
 Then add a scenario for each — they are one line apiece and would have caught
 this at the bump.
+
+---
+
+## ACCESS — grants and delegation
+
+### DEV-ACCESS-001 — A removed pod member keeps full control of their agent conversations
+**Violates:** PS-ACCESS-023, PS-POD-040
+**Severity:** high
+**Where:** `ConversationService.get_conversation` →
+[`conversation_service.py:285`](lemma-backend/app/modules/agent/services/conversation_service.py#L285)
+(`_validate_conversation_access`) and the `AGENT_READ` grant check at
+[`:294`](lemma-backend/app/modules/agent/services/conversation_service.py#L294)
+
+**Required:** When a person is removed from a pod, everything in that pod
+closes to them on their next request — including the conversations they
+started and the agents they were driving.
+
+**Actual:** The pod closes; the conversation does not. Removal is applied
+correctly at the pod level and then ignored one layer down:
+
+```
+DELETE /pods/{pod}/members/{member}                 -> 204
+GET    /pods/{pod}                                  -> 403   (correct)
+GET    /pods/{pod}/conversations/{id}               -> 200   (leaks)
+POST   /pods/{pod}/conversations/{id}/messages      -> 200   (acts)
+```
+
+**Why it matters:** This is the departing-employee case, and it is the worst
+shape it could take. Reading the old thread is a disclosure; the second line is
+worse — the removed person can still *send the agent new instructions*, and the
+agent executes them with the grants it holds in a pod its operator has already
+been thrown out of. Removing someone is the one control an admin has when
+access must stop now, and for agent work it does not stop it at all.
+
+The cause is that conversation access is decided by ownership plus an
+`AGENT_READ` grant, and both survive the membership that produced them. The
+creator's grant on the agent they made is never dropped, so
+`_require_agent_action` keeps saying yes. `PS-POD-040` promises exactly this
+does not happen ("shall also drop the resource grants they held through that
+membership"), and the existing scenario for it only checks `pod.get` — which is
+why nothing caught it.
+
+**Fix:** Make pod membership a precondition of conversation access rather than
+a thing inferred from grants: check it in `_validate_conversation_access`, where
+`pod_id` is already in hand. Dropping creator grants on removal is the deeper
+fix and is worth doing as well, but the membership check is what closes the hole
+in every module at once rather than one resource type at a time.
+
+**Covered by:** `test_removing_a_person_stops_their_delegations`, marked
+`xfail(strict=True)` — it turns the build red the moment this is fixed.
 
 ---
 
@@ -516,6 +606,61 @@ marker is not removed.
 ---
 
 ## OPS — the platform and its own tooling
+
+### DEV-OPS-003 — Deleting a pod leaves its schedules armed and running
+**Violates:** PS-OPS-020, PS-POD-050
+**Severity:** high
+**Where:** [`pod_service.py:157`](lemma-backend/app/modules/pod/services/pod_service.py#L157)
+
+**Required:** Deleting a pod stops its schedules, its surfaces, and its other
+standing work, and keeps them stopped.
+
+**Actual:** `delete_pod` renames the pod, marks it deleted, and deletes its
+icon. That is the whole of it — no schedule, surface, or timer is touched. After
+deleting the pod:
+
+```
+GET /pods/{pod}                                   -> 404
+GET /pods/{pod}/schedules                         -> 200
+GET /pods/{pod}/schedules/{id}                    -> 200   {"is_active": true}
+GET /pods/{pod}/schedules/{id}/runs               -> 200
+```
+
+The schedule does not merely survive as a row: it reports itself **active**, and
+nothing in `app/modules/schedule/` refers to `deleted_at` or `is_deleted` at
+all, so the due-schedule claimer selects on `is_active` alone and has no way to
+know the pod is gone.
+
+**Why it matters:** A deleted pod keeps waking up. Every fire starts an agent
+run against a pod its operator believes no longer exists — consuming model
+budget, writing to storage, and possibly messaging people through surfaces —
+with no interface anywhere that will show it, because the pod is deleted. It is
+the worst kind of runaway: invisible by construction, and billed.
+
+Deletion is also what a person reaches for when a pod must stop *now* — after a
+mistake, or a departure. Answering "deleted" while leaving the automation armed
+makes the one emergency control in the product untrustworthy.
+
+Surfaces do stop: the covering scenario delivers a real webhook after deletion
+and nothing replies. So the teardown is not entirely absent — schedules were
+missed.
+
+**Not yet observed:** an actual post-deletion firing. The product enforces a
+15-minute minimum on cron schedules, so waiting for one does not belong in a
+suite that runs on every change. What is proven is that the schedule is active,
+reachable, and unknown to any deletion path; the firing follows from the
+claimer's query.
+
+**Fix:** Deactivate the pod's schedules inside `delete_pod`, in the same unit of
+work as `mark_deleted` — a pod that is half-deleted because a second call failed
+is the state this is trying to avoid. Then make the claimer's query exclude
+schedules whose pod is deleted, as the belt to that braces: the two together
+mean neither a missed cleanup nor a new standing-work type can reintroduce this.
+
+**Covered by:** `test_a_deleted_pod_runs_nothing_further`, marked
+`xfail(strict=True)`.
+
+---
 
 ### DEV-OPS-002 — `app.version` still lists a deleted entrypoint
 **Violates:** *(documentation accuracy)*

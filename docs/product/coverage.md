@@ -11,14 +11,14 @@ only a promise marked `covered` with no test is.
 
 | Status | Scenarios |
 | --- | ---: |
-| `covered` | 118 |
-| `gap` | 8 |
+| `covered` | 123 |
+| `gap` | 10 |
 | `manual` | 0 |
-| `planned` | 34 |
+| `planned` | 27 |
 | `withdrawn` | 0 |
 | **total** | **160** |
 
-Scenario tests declaring a promise: 254.
+Scenario tests declaring a promise: 268.
 
 ## Contract coverage
 
@@ -36,7 +36,7 @@ the module suites may cover it — but it is untested *as product*.
 | Scenario | Status | Proven by |
 | --- | --- | --- |
 | `PS-AGENT-001` A person creates an agent and gives it a job | `covered` | `test_an_agent_can_be_changed`, `test_an_agent_is_created`, `test_a_duplicate_agent_name_is_refused` |
-| `PS-AGENT-002` An agent gets only the access it was granted | `covered` | `test_an_agents_reach_can_be_set`, `test_an_agents_grants_are_readable` |
+| `PS-AGENT-002` An agent gets only the access it was granted | `covered` | `test_an_agents_reach_can_be_set`, `test_an_agents_grants_are_readable`, `test_an_agent_cannot_call_an_ungranted_connector` |
 | `PS-AGENT-003` A pod has an agent without anyone creating one | `covered` | `test_a_pod_can_be_asked_without_building_an_agent`, `test_deleting_an_agent_keeps_the_default` |
 | `PS-AGENT-004` A person chooses which model an agent uses | `covered` | `test_runtime_profiles_are_listable`, `test_an_outsider_cannot_see_profiles`, `test_an_organization_can_add_a_provider`, `test_a_provider_key_is_never_returned`, `test_a_provider_can_be_archived_and_restored`, `test_an_outsider_cannot_add_a_provider` |
 | `PS-AGENT-010` A person starts a conversation and gets an answer | `covered` | `test_a_conversation_can_be_retitled`, `test_a_conversation_gets_an_answer`, `test_a_conversation_is_readable_afterwards` |
@@ -44,7 +44,7 @@ the module suites may cover it — but it is untested *as product*.
 | `PS-AGENT-012` A person can stop an agent | `covered` | `test_stopping_a_run_leaves_the_conversation_usable` |
 | `PS-AGENT-013` A failed run can be tried again | `covered` | `test_retrying_a_healthy_run_is_refused` |
 | `PS-AGENT-014` A conversation is private to the pod | `covered` | `test_an_outsider_cannot_read_a_conversation` |
-| `PS-AGENT-020` Consequential actions come back to a person first | `covered` | `test_deciding_an_unknown_approval_is_refused`, `test_approvals_are_listable` |
+| `PS-AGENT-020` Consequential actions come back to a person first | `covered` | `test_deciding_an_unknown_approval_is_refused`, `test_approvals_are_listable`, `test_a_destructive_attempt_asks_rather_than_failing_silently` |
 | `PS-AGENT-021` An agent can ask a person a question mid-run | `planned` | — |
 | `PS-AGENT-022` Every action is attributable | `planned` | — |
 | `PS-AGENT-030` An agent can delegate to a subagent | `planned` | — |
@@ -82,16 +82,16 @@ the module suites may cover it — but it is untested *as product*.
 | `PS-POD-010` A pod admin adds an organization member to the pod | `covered` | `test_a_member_can_be_found`, `test_admin_adds_an_organization_member` |
 | `PS-POD-011` A person's pod role decides what they may do inside it | `covered` | `test_a_viewer_reads_but_does_not_write`, `test_a_role_change_applies_to_the_next_request` |
 | `PS-POD-012` A person can find out what they may do, before trying | `covered` | `test_effective_permissions_are_readable`, `test_reported_permissions_are_honest` |
-| `PS-POD-013` A pod admin defines roles the built-in ones do not cover | `covered` | `test_a_roles_permissions_can_change`, `test_a_role_can_be_described_and_removed`, `test_a_custom_role_is_created_and_assignable`, `test_a_role_cannot_exceed_its_creator` |
+| `PS-POD-013` A pod admin defines roles the built-in ones do not cover | `covered` | `test_a_roles_permissions_can_change`, `test_a_role_can_be_described_and_removed`, `test_a_custom_role_is_created_and_assignable`, `test_a_role_cannot_exceed_its_creator`, `test_an_unknown_permission_is_refused_clearly` |
 | `PS-POD-020` A pod decides who may walk in | `covered` | `test_a_new_pod_is_invite_only`, `test_an_org_open_pod_admits_members`, `test_an_outsider_cannot_join_an_org_open_pod` |
 | `PS-POD-021` A person asks for access and an admin decides | `covered` | `test_a_person_sees_their_own_request`, `test_a_join_request_is_approved` |
-| `PS-POD-022` Approving a request cannot be used to gain authority | `planned` | — |
+| `PS-POD-022` Approving a request cannot be used to gain authority | `covered` | `test_approving_cannot_confer_a_higher_organization_role`, `test_approving_within_your_own_authority_is_allowed`, `test_approving_cannot_confer_unheld_pod_permissions` |
 | `PS-POD-030` A person sees exactly the pods they may open | `gap` | `test_a_non_member_cannot_open_the_pod`, `test_an_outsider_cannot_open_the_pod`, `test_the_cli_lists_pods`, `test_the_python_sdk_lists_pods`, `test_the_typescript_sdk_lists_pods` |
 | `PS-POD-031` A person sees their pods across every organization at once | `covered` | `test_an_organization_has_a_home` |
 | `PS-POD-040` Removing someone from a pod takes their access away immediately | `covered` | `test_removing_a_member_revokes_access`, `test_a_non_admin_cannot_remove_members` |
 | `PS-POD-041` A pod always has at least one admin | `gap` | — |
 | `PS-POD-050` Deleting a pod stops the work it was doing | `covered` | `test_deleting_a_pod_removes_it`, `test_a_deleted_pods_name_is_reusable`, `test_a_non_admin_cannot_delete_the_pod` |
-| `PS-POD-051` Deletion does not take unrelated things with it | `covered` | `test_deleting_one_pod_spares_the_others` |
+| `PS-POD-051` Deletion does not take unrelated things with it | `covered` | `test_deleting_one_pod_spares_the_others`, `test_deleting_one_pod_leaves_the_others_working` |
 
 ## [Connectors and accounts](journeys/connectors-and-accounts.md)
 
@@ -107,7 +107,7 @@ the module suites may cover it — but it is untested *as product*.
 | `PS-CONN-030` A person finds the operation they need | `covered` | `test_operations_can_be_refreshed`, `test_operations_read_in_bulk`, `test_installing_discovers_operations`, `test_an_operation_is_readable` |
 | `PS-CONN-031` An operation runs as the person who owns the account | `covered` | `test_an_account_is_not_shared`, `test_an_operation_reaches_the_provider` |
 | `PS-CONN-032` A slow or failing provider does not damage the pod | `planned` | — |
-| `PS-CONN-033` An agent can only use the connectors it was granted | `planned` | — |
+| `PS-CONN-033` An agent can only use the connectors it was granted | `covered` | `test_an_agent_cannot_call_an_ungranted_connector` |
 | `PS-CONN-040` A person sees what a provider can notify them about | `covered` | `test_a_trigger_reads_back`, `test_triggers_are_listable` |
 
 ## [Getting started](journeys/getting-started.md)
@@ -144,8 +144,8 @@ the module suites may cover it — but it is untested *as product*.
 | `PS-OPS-010` Limits are visible before they are hit | `covered` | `test_limits_are_visible` |
 | `PS-OPS-011` A missing price never blocks work | `planned` | — |
 | `PS-OPS-012` Exceeding a limit is refused clearly, not degraded | `planned` | — |
-| `PS-OPS-020` Deleting a pod actually stops everything it was doing | `planned` | — |
-| `PS-OPS-021` A person can take their data out | `planned` | — |
+| `PS-OPS-020` Deleting a pod actually stops everything it was doing | `gap` | `test_a_deleted_pod_stops_answering_its_surfaces`, `test_a_deleted_pod_runs_nothing_further`, `test_deleting_one_pod_leaves_the_others_working` |
+| `PS-OPS-021` A person can take their data out | `planned` | `test_an_exported_bundle_is_readable_without_lemma` |
 | `PS-OPS-030` The platform reports its own health honestly | `covered` | `test_web_search_says_when_it_is_unavailable` |
 | `PS-OPS-031` Work that cannot be completed is not lost silently | `covered` | `test_feedback_can_be_reported` |
 | `PS-OPS-032` A deployment can be configured for its own region and rules | `planned` | — |
@@ -155,11 +155,11 @@ the module suites may cover it — but it is untested *as product*.
 | Scenario | Status | Proven by |
 | --- | --- | --- |
 | `PS-PACK-001` A person exports a pod as a bundle | `covered` | `test_a_pod_exports_to_a_downloadable_bundle`, `test_an_outsider_cannot_export`, `test_a_bundle_round_trips` |
-| `PS-PACK-002` A bundle carries the work, not the secrets | `planned` | — |
+| `PS-PACK-002` A bundle carries the work, not the secrets | `covered` | `test_an_exported_bundle_contains_no_credentials`, `test_an_exported_bundle_is_readable_without_lemma` |
 | `PS-PACK-010` A person sees the plan before anything changes | `covered` | `test_an_import_can_be_followed`, `test_a_bundle_round_trips`, `test_the_plan_changes_nothing` |
 | `PS-PACK-011` A person can adjust and re-plan before applying | `covered` | `test_an_expired_publication_says_so`, `test_an_import_can_be_replanned`, `test_a_cancelled_import_applies_nothing` |
 | `PS-PACK-012` Applying an import either finishes or can be safely retried | `covered` | `test_a_bundle_round_trips` |
-| `PS-PACK-013` A hostile bundle cannot damage the platform | `planned` | — |
+| `PS-PACK-013` A hostile bundle cannot damage the platform | `covered` | `test_a_hostile_bundle_cannot_reach_outside_the_pod` |
 | `PS-PACK-014` An imported pod works without further wiring | `covered` | `test_an_imported_function_actually_runs` |
 | `PS-PACK-020` A person publishes a pod so others can install it | `covered` | `test_an_expired_publication_says_so`, `test_publishing_needs_an_account` |
 | `PS-PACK-021` A shared bundle can be viewed before it is installed | `planned` | — |
@@ -190,13 +190,13 @@ the module suites may cover it — but it is untested *as product*.
 | `PS-ACCESS-001` Every resource has a stated reach | `covered` | `test_the_default_reach_is_the_pod`, `test_a_personal_resource_stays_personal`, `test_public_never_means_anonymous` |
 | `PS-ACCESS-002` Narrowing a resource's reach takes access away immediately | `covered` | `test_revoking_closes_it_again` |
 | `PS-ACCESS-003` Changing reach does not silently disarm the pod's software | `planned` | — |
-| `PS-ACCESS-010` A person grants one other person access to one resource | `covered` | `test_a_grant_is_narrow`, `test_revoking_closes_it_again`, `test_a_grant_is_scoped_to_its_pod`, `test_nobody_confers_more_than_they_have` |
+| `PS-ACCESS-010` A person grants one other person access to one resource | `covered` | `test_approving_cannot_confer_unheld_pod_permissions`, `test_a_grant_is_narrow`, `test_revoking_closes_it_again`, `test_a_grant_is_scoped_to_its_pod`, `test_nobody_confers_more_than_they_have` |
 | `PS-ACCESS-011` A person grants access to a role rather than a name | `planned` | — |
 | `PS-ACCESS-012` A person can see what they may do before trying | `covered` | `test_effective_permissions_are_readable`, `test_reported_permissions_are_honest` |
 | `PS-ACCESS-020` An agent or function never exceeds the person it acts for | `covered` | `test_an_agents_reach_can_be_set`, `test_a_functions_reach_can_be_set`, `test_a_new_agent_holds_nothing`, `test_a_new_function_holds_nothing`, `test_a_member_cannot_widen_an_agent` |
-| `PS-ACCESS-021` No software does anything destructive by default | `planned` | — |
+| `PS-ACCESS-021` No software does anything destructive by default | `covered` | `test_an_ungranted_agent_cannot_delete_a_record`, `test_a_destructive_attempt_asks_rather_than_failing_silently` |
 | `PS-ACCESS-022` Approving for a session means that session only | `planned` | — |
-| `PS-ACCESS-023` Revoking a person's access revokes their software's too | `planned` | — |
+| `PS-ACCESS-023` Revoking a person's access revokes their software's too | `gap` | `test_removing_a_person_stops_their_delegations` |
 | `PS-ACCESS-030` A person can see who can reach a resource | `covered` | `test_a_resource_can_be_previewed`, `test_a_grant_is_auditable`, `test_resource_access_is_readable` |
 | `PS-ACCESS-031` Refusals are informative without leaking | `covered` | `test_a_refusal_is_informative`, `test_a_refusal_does_not_leak` |
 

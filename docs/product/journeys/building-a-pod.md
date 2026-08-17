@@ -160,7 +160,7 @@ over a single resource is [Sharing and permissions](sharing-and-permissions.md).
 **Contracts:** `pod.join_request.create`, `pod.join_request.approve`, `pod.join_request.list`, `pod.join_request.me`
 
 ### PS-POD-022 — Approving a request cannot be used to gain authority
-**Status:** planned
+**Status:** covered
 
 - If an approver attempts to grant an organization role above their own, then
   the system shall refuse — approving a join request shall not become a side
