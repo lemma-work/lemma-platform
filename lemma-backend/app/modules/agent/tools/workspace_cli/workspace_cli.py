@@ -9,6 +9,7 @@ from app.core.errors.describe import describe_exception
 from app.core.log.log import get_logger
 from app.modules.agent.domain.vision import AgentVisionMode
 from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.tools.image_payload import downscale_for_vision
 from app.modules.agent.tools.vision_delegation import describe_single_image
 from app.modules.agent.tools.file_access import (
     read_pod_file_bytes,
@@ -557,14 +558,19 @@ async def view_image_internal(
             source=source,
         )
 
-    if len(content) > MAX_VIEW_IMAGE_BYTES:
+    # Sized for the model before it is measured against the limit. A phone
+    # photo is several megabytes of pixels the model shrinks on arrival and
+    # never looks at — so refusing it and telling the agent to go and compress
+    # it was work nobody needed to do, on an image we were about to shrink
+    # ourselves. What is left after this is what a limit should be judging.
+    payload, payload_media_type = downscale_for_vision(content, media_type)
+    if len(payload) > MAX_VIEW_IMAGE_BYTES:
         return ViewImageResponse(
             success=False,
             error=(
-                f"Image is {len(content) // 1024} KB, over the "
-                f"{MAX_VIEW_IMAGE_BYTES // (1024 * 1024)} MB limit. Downscale or "
-                "compress it first (e.g. with `execute_python` in the workspace) "
-                "before viewing."
+                f"Image is {len(payload) // 1024} KB even after downscaling, "
+                f"over the {MAX_VIEW_IMAGE_BYTES // (1024 * 1024)} MB limit. "
+                "Crop it or split it up before viewing."
             ),
             file_path=file_path,
             media_type=media_type,
@@ -578,10 +584,12 @@ async def view_image_internal(
     if getattr(ctx, "vision_mode", AgentVisionMode.UNAVAILABLE) is not (
         AgentVisionMode.DIRECT
     ):
+        # The delegate is a vision model too, and pays the same way for pixels
+        # past its own ceiling.
         return await describe_single_image(
             ctx,
-            data=content,
-            media_type=media_type,
+            data=payload,
+            media_type=payload_media_type,
             file_path=file_path,
             source=source,
             instructions=request.instructions,
@@ -597,7 +605,7 @@ async def view_image_internal(
             size_bytes=len(content),
         ),
         content=[
-            BinaryContent(data=content, media_type=media_type),
+            BinaryContent(data=payload, media_type=payload_media_type),
         ],
     )
 
