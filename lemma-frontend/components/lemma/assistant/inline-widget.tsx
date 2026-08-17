@@ -16,6 +16,7 @@ import { useQuery } from "@tanstack/react-query";
 import { ArrowUpRight, Maximize2, MoreHorizontal } from "@/components/ui/icons";
 import { useTheme } from "next-themes";
 
+import { Button } from "@/components/ui/button";
 import {
     DropdownMenu,
     DropdownMenuContent,
@@ -302,13 +303,17 @@ export function InlineWidget({
                 // stays out of the way until the reader goes looking for it.
                 <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
                     <DropdownMenuTrigger asChild>
-                        <button
+                        <Button
                             type="button"
+                            variant="quiet"
+                            size="icon"
                             aria-label={`${title} actions`}
                             className={cn(
-                                "absolute right-2 top-2 z-10 inline-flex size-7 items-center justify-center rounded-full",
-                                "border border-[var(--border-subtle)] bg-[var(--bg-canvas)] text-[var(--text-secondary)]",
-                                "shadow-[var(--shadow-xs)] transition-gentle hover:bg-[var(--bg-subtle)] hover:text-[var(--text-primary)] focus-ring",
+                                "absolute right-2 top-2 z-10 h-7 w-7 rounded-full",
+                                // Opaque, unlike a plain quiet button: this floats
+                                // over whatever the widget drew underneath it.
+                                "border border-[var(--border-subtle)] bg-[var(--bg-canvas)]",
+                                "shadow-[var(--shadow-xs)] hover:bg-[var(--bg-subtle)]",
                                 // Inert while hidden: the widget owns this corner
                                 // too, and an invisible button would eat its clicks.
                                 "pointer-events-none opacity-0",
@@ -317,7 +322,7 @@ export function InlineWidget({
                             )}
                         >
                             <MoreHorizontal className="size-4" />
-                        </button>
+                        </Button>
                     </DropdownMenuTrigger>
                     <DropdownMenuContent align="end" className="w-52">
                         {podTabHref ? (
