@@ -17,7 +17,7 @@ always reaches a conclusion a person can see.
 ## Capability: Write a function
 
 ### PS-FUNC-001 — A person creates a function and runs it
-**Status:** planned
+**Status:** covered
 
 - When a person creates a function with code and a declared input, the system
   shall make it runnable in that pod.
@@ -31,7 +31,7 @@ always reaches a conclusion a person can see.
 **Contracts:** `function.create`, `function.run`, `function.get`, `function.created`
 
 ### PS-FUNC-002 — A function runs isolated from everything else
-**Status:** planned
+**Status:** covered
 
 - The system shall run every function in an isolated sandbox, so that code in
   one pod cannot read another pod's data, reach another pod's sandbox, or affect
@@ -59,7 +59,7 @@ always reaches a conclusion a person can see.
 **Contracts:** `function.permissions.replace`, `function.permissions.get`, `function.run`
 
 ### PS-FUNC-004 — A person can change a function without breaking what is running
-**Status:** planned
+**Status:** covered
 
 - When a person updates a function's code, the system shall keep every earlier
   version, so a run can be traced to the exact code that produced it.
@@ -75,7 +75,7 @@ always reaches a conclusion a person can see.
 ## Capability: Run a function and see what happened
 
 ### PS-FUNC-010 — A quick function answers immediately
-**Status:** planned
+**Status:** covered
 
 - Where a function is meant to answer in the moment, the system shall run it and
   return its result in the same request.
@@ -85,7 +85,7 @@ always reaches a conclusion a person can see.
 **Contracts:** `function.run`, `function.run.get`
 
 ### PS-FUNC-011 — A long function is queued and reports progress
-**Status:** planned
+**Status:** covered
 
 - Where a function is meant to take a while, the system shall accept the request,
   return a run to follow, and execute it in the background.
@@ -147,7 +147,7 @@ always reaches a conclusion a person can see.
 ## Capability: Run a workflow
 
 ### PS-FLOW-010 — A person starts a workflow and follows it
-**Status:** planned
+**Status:** covered
 
 - When a person starts a workflow, the system shall create a run and begin it.
 - The system shall report a run as running, waiting on a person, completed,

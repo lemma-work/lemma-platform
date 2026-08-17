@@ -30,6 +30,27 @@ class UnexpectedResponse(AssertionError):
     """The API answered something the scenario was not prepared for."""
 
 
+def _reachable(path: str) -> str:
+    """Route an absolute URL back to the server actually listening.
+
+    The stack tells the backend its public address is
+    `harness.stack.PUBLIC_API_URL`, because surfaces will not connect without a
+    public HTTPS one. Absolute URLs the product generates — a signed bundle
+    download, a share link — therefore point at a host that does not resolve.
+
+    Rewriting to a path lets httpx resolve against the real base URL. What is
+    being tested is unaffected: the product built the URL, and the same request
+    reaches the same handler. Only the hostname is a fiction, and it is *our*
+    fiction.
+    """
+    from harness.stack import PUBLIC_API_URL
+
+    if path.startswith(PUBLIC_API_URL):
+        remainder = path[len(PUBLIC_API_URL) :]
+        return remainder if remainder.startswith("/") else f"/{remainder}"
+    return path
+
+
 class ApiDriver:
     """An authenticated HTTP client for one person."""
 
@@ -50,7 +71,9 @@ class ApiDriver:
 
     async def call(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
         headers = {**self._headers, **kwargs.pop("headers", {})}
-        return await self._client.request(method, path, headers=headers, **kwargs)
+        return await self._client.request(
+            method, _reachable(path), headers=headers, **kwargs
+        )
 
     async def expect(
         self,

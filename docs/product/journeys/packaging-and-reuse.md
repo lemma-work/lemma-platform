@@ -47,7 +47,7 @@ their credentials do not travel with it.
 ## Capability: Bring someone else's pod in
 
 ### PS-PACK-010 — A person sees the plan before anything changes
-**Status:** planned
+**Status:** covered
 
 - When a person starts an import, the system shall compare the bundle to their
   pod and shall present a plan of what it would create, change, and remove.
@@ -59,7 +59,7 @@ their credentials do not travel with it.
 **Contracts:** `pod.bundle.import.start`, `pod.bundle.import.get`, `pod.bundle.upload`, `import.started`
 
 ### PS-PACK-011 — A person can adjust and re-plan before applying
-**Status:** planned
+**Status:** covered
 
 - When a person changes the values an import asks for, the system shall produce
   a fresh plan against those values.
@@ -71,7 +71,7 @@ their credentials do not travel with it.
 **Contracts:** `pod.bundle.import.replan`, `pod.bundle.import.cancel`, `pod.bundle.import.get`
 
 ### PS-PACK-012 — Applying an import either finishes or can be safely retried
-**Status:** planned
+**Status:** covered
 
 - When a person approves a plan, the system shall apply its steps and shall
   report progress as it goes.
@@ -97,7 +97,7 @@ their credentials do not travel with it.
 **Contracts:** `pod.bundle.import.start`, `pod.bundle.upload`
 
 ### PS-PACK-014 — An imported pod works without further wiring
-**Status:** planned
+**Status:** covered
 
 - When an import creates a function or an agent, the system shall apply the
   grants it came with, so it runs rather than failing on its first use.

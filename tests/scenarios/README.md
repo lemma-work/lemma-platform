@@ -113,20 +113,38 @@ works; it says nothing about whether the CLI maps its arguments correctly or
 whether the TypeScript build is loadable. `DEV-SDK-001` — the built TS SDK
 cannot be imported from Node at all — was found here and by nothing else.
 
+## Standing in for other people's servers
+
+Two things are not Lemma and cannot be run for real on every change: the model
+behind an agent, and the messaging platform behind a surface. Both are stood in
+for, and in both cases through a **supported product setting** rather than a
+patch:
+
+- **The model** — `E2E_LLM_MODE=mock` swaps in a deterministic scripted model.
+  The production code path runs to the model boundary.
+- **The platform** — `harness/fake_platform.py` is a small HTTP server that
+  answers as Telegram. A scenario points a surface at it with `api_base_url` on
+  the connected account, which exists so a deployment can use a self-hosted Bot
+  API server. Lemma itself runs entirely for real: it registers the webhook,
+  verifies the secret on delivery, resolves the sender, runs the agent, and
+  sends the reply — and the fake records what it said.
+
+Everything else is real, including the Docker sandboxes that functions execute
+in.
+
 ## What is not here yet
 
 Being honest about the edges, because a half-built harness that looks finished
 is worse than one that says where it stops:
 
-- **No event assertions.** `analytics_host` is configurable, so a capture server
-  would let scenarios assert on the real product-analytics contract black-box.
-  Until then, `@covers` naming an event records intent rather than proving
-  delivery — which is how `DEV-ONB-004` went unnoticed until a worker log was
-  read by hand.
-- **Nothing crosses a surface end to end.** Surface setup, webhook ingestion and
-  delivery need a platform fake per adapter. The inbox side is covered.
-- **Import is untested.** Export is; a full export → import round trip needs the
-  bundle staged and applied, which is the next increment.
+- **No event assertions.** `@covers` naming an event records intent rather than
+  proving delivery. `analytics_host` is configurable, so a capture server would
+  close this — it is how `DEV-ONB-004` should have been caught rather than by
+  reading a worker log.
+- **Only Telegram is stood in for.** Slack, Teams, WhatsApp and the email
+  surfaces each need their own fake; the shape is there to copy.
+- **Publishing a bundle to GitHub** needs a connected account at a real
+  provider. Export and import are covered end to end.
 - **The client conformance is a subset**, not a mirror of every journey. A
   process per call is too slow for that, and the point is that the clients
   agree on the core path.

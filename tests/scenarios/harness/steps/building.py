@@ -12,8 +12,17 @@ from typing import Any
 from uuid import uuid4
 
 from harness.drivers.api import items_of
+from harness.waiting import eventually
 
 JSON = dict[str, Any]
+
+#: A function run has stopped moving when it reaches one of these.
+TERMINAL_RUN = {"COMPLETED", "FAILED", "CANCELLED"}
+
+#: A workflow run has stopped moving when it reaches one of these. `WAITING` is
+#: terminal *for a scenario's purposes*: the run is parked on a person and will
+#: not move until someone answers, so continuing to poll is waiting forever.
+TERMINAL_WORKFLOW = {"COMPLETED", "FAILED", "CANCELLED", "WAITING"}
 
 
 def function_source(name: str = "increment") -> str:
@@ -270,4 +279,249 @@ class BuildingSteps:
             f"/pods/{in_pod['id']}/schedules/{schedule['id']}",
             what=f"{self.label} resuming a schedule",
             json={"is_active": True},
+        )
+
+    # --- running functions ------------------------------------------------
+
+    async def runs_function(
+        self, name: str, *, with_input: JSON, in_pod: JSON, timeout: float = 120.0
+    ) -> JSON:
+        """Run a function and wait for it to reach a terminal state.
+
+        An API function answers in the request; a JOB function is queued and the
+        response is a run to follow. Waiting for both here means a scenario says
+        "runs the function" and gets the outcome either way — which is the level
+        a person thinks at.
+        """
+        started = await self.api.post(
+            f"/pods/{in_pod['id']}/functions/{name}/runs",
+            status=(200, 201, 202),
+            what=f"{self.label} running function {name!r}",
+            json={"input_data": with_input},
+        )
+        if str(started.get("status")) in TERMINAL_RUN:
+            return started
+        return await eventually(
+            lambda: self.api.get(
+                f"/pods/{in_pod['id']}/functions/{name}/runs/{started['id']}"
+            ),
+            lambda run: str(run.get("status")) in TERMINAL_RUN,
+            describe=f"function {name!r} to finish",
+            timeout=timeout,
+        )
+
+    async def is_refused_running_function(
+        self, name: str, *, with_input: JSON, in_pod: JSON
+    ) -> int:
+        response = await self.api.call(
+            "POST",
+            f"/pods/{in_pod['id']}/functions/{name}/runs",
+            json={"input_data": with_input},
+        )
+        if response.status_code < 400:
+            raise AssertionError(
+                f"{self.label} was expected to be refused running {name!r}, "
+                f"but it was accepted ({response.status_code})"
+            )
+        return response.status_code
+
+    async def runs_of_function(self, name: str, *, in_pod: JSON) -> list[JSON]:
+        return items_of(await self.api.get(f"/pods/{in_pod['id']}/functions/{name}/runs"))
+
+    async def changes_function_code(self, name: str, *, to: str, in_pod: JSON) -> JSON:
+        return await self.api.patch(
+            f"/pods/{in_pod['id']}/functions/{name}",
+            what=f"{self.label} updating function {name!r}",
+            json={"code": to},
+        )
+
+    # --- running workflows -------------------------------------------------
+
+    async def gives_workflow_a_graph(
+        self,
+        name: str,
+        *,
+        nodes: list[JSON],
+        edges: list[JSON],
+        in_pod: JSON,
+        start: JSON | None = None,
+    ) -> JSON:
+        # `start` describes how the workflow is triggered — `{"type": "MANUAL"}`
+        # for one a person runs — not which node comes first. Entry is decided
+        # by the graph.
+        body: JSON = {"nodes": nodes, "edges": edges, "start": start or {"type": "MANUAL"}}
+        return await self.api.put(
+            f"/pods/{in_pod['id']}/workflows/{name}/graph",
+            what=f"{self.label} giving {name!r} a graph",
+            json=body,
+        )
+
+    async def is_refused_graph(
+        self, name: str, *, nodes: list[JSON], edges: list[JSON], in_pod: JSON
+    ) -> int:
+        response = await self.api.call(
+            "PUT",
+            f"/pods/{in_pod['id']}/workflows/{name}/graph",
+            json={"nodes": nodes, "edges": edges},
+        )
+        if response.status_code < 400:
+            raise AssertionError(
+                f"{self.label} was expected to be refused an unrunnable graph "
+                f"for {name!r}, but it was accepted ({response.status_code})"
+            )
+        return response.status_code
+
+    async def runs_workflow(
+        self, name: str, *, in_pod: JSON, timeout: float = 120.0
+    ) -> JSON:
+        started = await self.api.post(
+            f"/pods/{in_pod['id']}/workflows/{name}/runs",
+            status=(200, 201, 202),
+            what=f"{self.label} running workflow {name!r}",
+            json={},
+        )
+        return await eventually(
+            lambda: self.api.get(
+                f"/pods/{in_pod['id']}/workflow-runs/{started['id']}"
+            ),
+            lambda run: str(run.get("status")) in TERMINAL_WORKFLOW,
+            describe=f"workflow run {started['id']} to settle",
+            timeout=timeout,
+        )
+
+    async def workflow_runs_in(self, pod: JSON) -> list[JSON]:
+        return items_of(await self.api.get(f"/pods/{pod['id']}/workflow-runs"))
+
+    # --- bundles -----------------------------------------------------------
+
+    async def exports_pod(self, pod: JSON, *, timeout: float = 120.0) -> JSON:
+        started = await self.api.expect(
+            "POST",
+            f"/pods/{pod['id']}/bundle/exports",
+            status=202,
+            what=f"{self.label} exporting {pod.get('name')!r}",
+            json={},
+        )
+        return await eventually(
+            lambda: self.api.get(
+                f"/pods/{pod['id']}/bundle/exports/{started['export_id']}"
+            ),
+            lambda job: str(job.get("status")) in {"READY", "FAILED"},
+            describe=f"the export of {pod.get('name')!r} to finish",
+            timeout=timeout,
+        )
+
+    async def downloads_bundle(self, export: JSON) -> bytes:
+        """Fetch the exported archive.
+
+        The download URL is signed *and* needs a signed-in caller, so this goes
+        through the authenticated client rather than a bare fetch — which is the
+        promise being checked as much as it is plumbing.
+        """
+        url = export.get("download_url") or export.get("url")
+        if not url:
+            raise AssertionError(f"export carries nothing to download: {export}")
+        response = await self.api.call("GET", url)
+        if response.status_code != 200:
+            raise AssertionError(
+                f"{self.label} could not download the bundle: "
+                f"{response.status_code}\n  body: {response.text[:500]}"
+            )
+        return response.content
+
+    async def uploads_bundle(self, archive: bytes, *, into_pod: JSON) -> str:
+        staged = await self.api.post(
+            f"/pods/{into_pod['id']}/bundle/uploads",
+            what=f"{self.label} staging a bundle",
+            files={"data": ("bundle.zip", archive, "application/zip")},
+        )
+        return staged["url"]
+
+    async def plans_import(
+        self, url: str, *, into_pod: JSON, timeout: float = 120.0
+    ) -> JSON:
+        started = await self.api.expect(
+            "POST",
+            f"/pods/{into_pod['id']}/bundle/imports",
+            status=202,
+            what=f"{self.label} starting an import",
+            json={"kind": "URL", "url": url},
+        )
+        return await eventually(
+            lambda: self.api.get(
+                f"/pods/{into_pod['id']}/bundle/imports/{started['import_id']}"
+            ),
+            lambda job: str(job.get("status"))
+            in {"AWAITING_CONFIRMATION", "FAILED", "COMPLETED"},
+            describe="the import plan",
+            timeout=timeout,
+        )
+
+    async def applies_import(
+        self,
+        plan: JSON,
+        *,
+        into_pod: JSON,
+        variables: JSON | None = None,
+        timeout: float = 180.0,
+    ) -> JSON:
+        import_id = plan.get("import_id") or plan.get("id")
+        await self.api.expect(
+            "POST",
+            f"/pods/{into_pod['id']}/bundle/imports/{import_id}/apply",
+            status=202,
+            what=f"{self.label} applying an import",
+            json={"variables": variables or {}},
+        )
+        return await eventually(
+            lambda: self.api.get(
+                f"/pods/{into_pod['id']}/bundle/imports/{import_id}"
+            ),
+            lambda job: str(job.get("status")) in {"COMPLETED", "FAILED", "CANCELLED"},
+            describe="the import to finish applying",
+            timeout=timeout,
+        )
+
+    # --- connector installs and accounts -----------------------------------
+
+    async def installs_connector(
+        self, connector_id: str, *, in_organization: JSON, named: str | None = None
+    ) -> JSON:
+        return await self.api.post(
+            f"/organizations/{in_organization['id']}/connectors/auth-configs",
+            what=f"{self.label} installing {connector_id!r}",
+            json={
+                "connector_id": connector_id,
+                "name": named or f"{connector_id}_{uuid4().hex[:8]}",
+            },
+        )
+
+    async def connects_account(
+        self,
+        *,
+        in_organization: JSON,
+        auth_config: JSON,
+        credentials: JSON,
+        provider_account_id: str | None = None,
+    ) -> JSON:
+        body: JSON = {
+            "auth_config_id": str(auth_config["id"]),
+            "credentials": credentials,
+        }
+        if provider_account_id:
+            body["provider_account_id"] = provider_account_id
+        return await self.api.post(
+            f"/organizations/{in_organization['id']}/connectors/accounts",
+            what=f"{self.label} connecting an account",
+            json=body,
+        )
+
+    async def accounts_in(self, organization: JSON) -> list[JSON]:
+        return items_of(
+            await self.api.get(f"/organizations/{organization['id']}/connectors/accounts")
+        )
+
+    async def deletes_account(self, account: JSON, *, in_organization: JSON) -> None:
+        await self.api.delete(
+            f"/organizations/{in_organization['id']}/connectors/accounts/{account['id']}"
         )

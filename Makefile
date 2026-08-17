@@ -28,7 +28,7 @@ SHELL := /bin/bash
         test-dev-workflow \
         test test-backend test-backend-unit test-backend-e2e \
         test-frontend test-cli test-cli-unit test-cli-e2e test-python \
-        scenarios scenarios-guards scenarios-sandbox scenario-coverage \
+        scenarios scenarios-guards scenarios-sandbox scenarios-images scenario-coverage \
         coverage coverage-backend coverage-backend-unit coverage-backend-e2e \
         coverage-backend-module coverage-cli coverage-cli-unit coverage-cli-e2e coverage-frontend \
         lint quality check codeql codeql-python codeql-javascript codeql-all migrate
@@ -326,7 +326,8 @@ help:
 	@echo "    make test-cli-e2e       lemma-cli e2e (real backend + docker; needs docker)"
 	@echo "    make scenarios          product scenarios over real HTTP (needs docker)"
 	@echo "    make scenarios-guards   scenario suite guards only (fast, no docker)"
-	@echo "    make scenarios-sandbox  scenarios needing built workspace images"
+	@echo "    make scenarios-images   build the sandbox images the lane below needs"
+	@echo "    make scenarios-sandbox  scenarios that execute functions and workflows"
 	@echo "    make scenario-coverage  regenerate docs/product/coverage.md"
 	@echo "    make test-python        lemma-python SDK tests (non-integration)"
 	@echo ""
@@ -1205,9 +1206,25 @@ scenarios:
 	@echo "→ Product scenarios (real HTTP, needs docker)…"
 	@cd $(SCENARIOS_DIR) && uv run pytest -q
 
-# The sandbox lane. Creating a function provisions a sandbox and extracts its
-# schemas by loading the code in it, so these need the workspace/function images
-# built first — minutes, not seconds, which is why they are not in `scenarios`.
+# Build the sandbox images the `sandbox` lane needs. Local tags rather than the
+# content-addressed names the backend's own e2e uses: those rebuild whenever
+# anything in the repo changes, which is right for a release gate and wrong for
+# a suite meant to be run constantly. Rebuild when sandbox-images/ changes.
+SCENARIOS_PLATFORM ?= linux/$(shell uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
+
+scenarios-images:
+	@echo "→ Building sandbox images ($(SCENARIOS_PLATFORM))…"
+	@docker build --platform $(SCENARIOS_PLATFORM) \
+		-f $(BACKEND_DIR)/sandbox-images/Dockerfile.function \
+		-t lemma-function:scenarios .
+	@docker build --platform $(SCENARIOS_PLATFORM) \
+		-f $(BACKEND_DIR)/sandbox-images/Dockerfile.workspace \
+		-t lemma-workspace:scenarios .
+	@echo "✓ sandbox images ready; run `make scenarios-sandbox`"
+
+# The sandbox lane: functions executing, workflows running their graphs, and
+# bundle imports that build what they import. Needs `make scenarios-images`
+# first — minutes, not seconds, which is why they are not in `scenarios`.
 scenarios-sandbox:
 	@echo "→ Product scenarios needing a sandbox…"
 	@cd $(SCENARIOS_DIR) && uv run pytest -q -m sandbox

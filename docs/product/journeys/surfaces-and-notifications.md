@@ -74,7 +74,7 @@ dropped.
 **Contracts:** `surface.webhook.handle_platform`, `surface.webhook.handle_surface`, `surface.webhook.verify`, `surface.webhook.verify_surface`
 
 ### PS-SURF-011 — The same message delivered twice is answered once
-**Status:** planned
+**Status:** covered
 
 - If a platform delivers the same message more than once, then the system shall
   act on it once.
@@ -83,7 +83,7 @@ dropped.
 **Contracts:** `surface.webhook.handle_platform`, `surface.webhook.handle_surface`
 
 ### PS-SURF-012 — A person on a platform is resolved to who they are in Lemma
-**Status:** planned
+**Status:** covered
 
 - When a message arrives from an external identity, the system shall resolve it
   to a Lemma user where one exists, and shall keep that resolution stable across
@@ -125,7 +125,7 @@ dropped.
 ## Capability: Answer on the platform
 
 ### PS-SURF-020 — The answer comes back where the question was asked
-**Status:** planned
+**Status:** covered
 
 - When an agent answers a message from a surface, the system shall deliver the
   answer in the same channel and thread.

@@ -50,6 +50,40 @@ POSTGRES_DB = "test"
 
 CONTAINER_LABEL = "lemma.scenarios=true"
 
+#: Sandbox images, built by `make scenarios-images`. Plain tags rather than the
+#: content-addressed names the backend's own e2e uses: those are rebuilt
+#: whenever anything under the repo changes, which is right for a release gate
+#: and wrong for a suite meant to be run constantly.
+WORKSPACE_IMAGE = "lemma-workspace:scenarios"
+FUNCTION_IMAGE = "lemma-function:scenarios"
+
+#: What the stack claims its public address is.
+#:
+#: Surfaces refuse to be created unless `API_URL` is public HTTPS, because that
+#: is where a platform would deliver webhooks. Nothing in this suite waits for a
+#: platform to call in — scenarios deliver webhooks themselves — so the value
+#: only has to *look* public.
+#:
+#: The cost is that any absolute URL the product hands back (a signed bundle
+#: download, for one) points here rather than at the port the server is really
+#: on. `ApiDriver` rewrites those back; see `drivers/api.py`.
+PUBLIC_API_URL = "https://scenarios.lemma.example"
+
+
+def sandbox_images_present() -> bool:
+    """Whether the sandbox images have been built.
+
+    Used to skip the sandbox lane with a message that says what to run, rather
+    than failing deep inside a provisioning call.
+    """
+    for image in (WORKSPACE_IMAGE, FUNCTION_IMAGE):
+        result = subprocess.run(
+            ["docker", "image", "inspect", image], capture_output=True, text=True
+        )
+        if result.returncode != 0:
+            return False
+    return True
+
 
 class StackError(RuntimeError):
     """The system under test could not be started."""
@@ -216,7 +250,14 @@ def _environment(*, port: int, database_url: str, redis_url: str, supertokens_ur
         "PYTHONPATH": str(BACKEND_ROOT),
         "ENVIRONMENT": "testing",
         "DEBUG": "true",
-        "API_URL": f"http://127.0.0.1:{port}",
+        # Deliberately a public-looking HTTPS URL rather than the loopback one
+        # the server actually listens on. Surfaces refuse to be created unless
+        # `API_URL` is public HTTPS, because that is where a platform would
+        # deliver webhooks — and nothing in this suite waits for a platform to
+        # call us: scenarios deliver the webhook themselves. Everything that
+        # genuinely has to reach the running server (sandbox callbacks, the
+        # function gateway) is pointed at the real host separately, below.
+        "API_URL": PUBLIC_API_URL,
         "FRONTEND_URL": f"http://127.0.0.1:{port}",
         "AUTH_FRONTEND_URL": f"http://127.0.0.1:{port}",
         "DATABASE_URL": database_url,
@@ -253,11 +294,46 @@ def _environment(*, port: int, database_url: str, redis_url: str, supertokens_ur
         "LEMMA_OPENAI_API_KEY": "scenarios-mock-key-not-used",
         "LEMMA_OPENAI_MODEL_NAMES": "gpt-4o-mini",
         "LEMMA_OPENAI_DEFAULT_MODEL": "gpt-4o-mini",
-        # Needed before a sandbox can be provisioned at all. Provisioning
-        # itself also needs the workspace and function images, which the fast
-        # lane does not build — see the `sandbox` marker in pyproject.toml.
+        # Needed before a sandbox can be provisioned at all.
         "WORKSPACE_RUNTIME_CREDENTIAL_KEY": "scenarios-runtime-credential-key-32b",
+        # Sandboxes run as local Docker containers. The images are built by
+        # `make scenarios-images`; the `sandbox` marker keeps the scenarios that
+        # need them out of the fast lane, but the configuration is always
+        # present so nothing has to be re-plumbed to run that lane.
+        "WORKSPACE_PROVIDER": "docker",
+        "WORKSPACE_IMAGE": os.getenv("SCENARIOS_WORKSPACE_IMAGE", WORKSPACE_IMAGE),
+        "FUNCTION_IMAGE": os.getenv("SCENARIOS_FUNCTION_IMAGE", FUNCTION_IMAGE),
+        # The images are tags we build locally, not digests.
+        "WORKSPACE_DOCKER_ALLOW_MUTABLE_IMAGES": "true",
+        # A sandbox is a container; the backend it calls back to is on the host.
+        "WORKSPACE_ADD_HOST_GATEWAY": "true",
+        "WORKSPACE_HOST_ALIAS": "host.docker.internal",
+        "WORKSPACE_CALLBACK_API_URL": f"http://host.docker.internal:{port}",
+        "FUNCTION_RUNTIME_GATEWAY_URL": f"http://host.docker.internal:{port}",
     }
+
+
+def _seed_connectors(python_bin: str, env: dict[str, str]) -> None:
+    """Import the native connector catalogue.
+
+    Without it the `connectors` table is empty, so installing Slack or Telegram
+    answers "connector not found" — and a surface cannot be connected at all,
+    because a surface binds to an account of an installed connector. Native apps
+    only; the Composio half is skipped when no key is set.
+
+    Best-effort: a stack that cannot seed the catalogue still serves every
+    journey that does not touch connectors, and failing the whole boot for that
+    would be worse than the scenarios that need it failing on their own terms.
+    """
+    result = subprocess.run(
+        [python_bin, "scripts/import_connector_catalog.py", "--provider", "native"],
+        cwd=str(BACKEND_ROOT), env=env, capture_output=True, text=True, timeout=300,
+    )
+    if result.returncode != 0:
+        print(
+            "warning: connector catalogue not seeded; connector and surface "
+            f"scenarios will fail.\n{(result.stderr or result.stdout)[-800:]}"
+        )
 
 
 def _migrate(python_bin: str, env: dict[str, str]) -> None:
@@ -323,6 +399,7 @@ def start_stack():
 
         python_bin = _backend_python()
         _migrate(python_bin, env)
+        _seed_connectors(python_bin, env)
 
         # No scheduler sidecar. APScheduler and `app/scheduler.py` were deleted
         # in #362; time schedules are driven from the worker now. Booting one

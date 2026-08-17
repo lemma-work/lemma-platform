@@ -28,6 +28,7 @@ class SurfaceSteps:
         platform: str,
         named: str | None = None,
         agent: str | None = None,
+        account: JSON | None = None,
         config: JSON | None = None,
     ) -> JSON:
         body: JSON = {
@@ -36,6 +37,10 @@ class SurfaceSteps:
         }
         if agent:
             body["default_agent_name"] = agent
+        if account is not None:
+            # Where the bot's credentials come from. Without it the platform has
+            # nothing to authenticate as, and creation is refused.
+            body["account_id"] = str(account["id"])
         if config is not None:
             body["config"] = config
         return await self.api.post(

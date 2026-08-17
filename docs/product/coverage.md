@@ -11,14 +11,14 @@ only a promise marked `covered` with no test is.
 
 | Status | Scenarios |
 | --- | ---: |
-| `covered` | 66 |
+| `covered` | 79 |
 | `gap` | 8 |
 | `manual` | 0 |
-| `planned` | 86 |
+| `planned` | 73 |
 | `withdrawn` | 0 |
 | **total** | **160** |
 
-Scenario tests declaring a promise: 124.
+Scenario tests declaring a promise: 142.
 
 ## [Agents and conversations](journeys/agents-and-conversations.md)
 
@@ -45,16 +45,16 @@ Scenario tests declaring a promise: 124.
 
 | Scenario | Status | Proven by |
 | --- | --- | --- |
-| `PS-FUNC-001` A person creates a function and runs it | `planned` | `test_a_function_is_created`, `test_a_duplicate_function_name_is_refused` |
-| `PS-FUNC-002` A function runs isolated from everything else | `planned` | — |
-| `PS-FUNC-003` A function gets only the access it was granted | `covered` | `test_a_functions_grants_are_readable`, `test_an_outsider_cannot_create_a_function` |
-| `PS-FUNC-004` A person can change a function without breaking what is running | `planned` | `test_deleting_a_function_removes_it` |
-| `PS-FUNC-010` A quick function answers immediately | `planned` | — |
-| `PS-FUNC-011` A long function is queued and reports progress | `planned` | — |
+| `PS-FUNC-001` A person creates a function and runs it | `covered` | `test_a_function_runs_and_returns_its_output`, `test_a_mismatched_input_is_refused`, `test_a_function_is_created`, `test_a_duplicate_function_name_is_refused` |
+| `PS-FUNC-002` A function runs isolated from everything else | `covered` | `test_a_function_runs_in_a_sandbox` |
+| `PS-FUNC-003` A function gets only the access it was granted | `covered` | `test_an_outsider_cannot_run_a_function`, `test_a_functions_grants_are_readable`, `test_an_outsider_cannot_create_a_function` |
+| `PS-FUNC-004` A person can change a function without breaking what is running | `covered` | `test_updated_code_is_what_runs_next`, `test_deleting_a_function_removes_it` |
+| `PS-FUNC-010` A quick function answers immediately | `covered` | `test_a_function_runs_and_returns_its_output` |
+| `PS-FUNC-011` A long function is queued and reports progress | `covered` | `test_runs_are_recorded`, `test_a_job_function_completes` |
 | `PS-FUNC-012` A run that cannot finish does not hang forever | `planned` | — |
-| `PS-FLOW-001` A person composes steps into a workflow | `covered` | `test_a_workflow_is_created`, `test_a_duplicate_workflow_name_is_refused`, `test_deleting_a_workflow_removes_it` |
+| `PS-FLOW-001` A person composes steps into a workflow | `covered` | `test_a_workflow_runs_to_completion`, `test_an_unrunnable_graph_is_refused`, `test_a_workflow_is_created`, `test_a_duplicate_workflow_name_is_refused`, `test_deleting_a_workflow_removes_it` |
 | `PS-FLOW-002` A person can see the shape of a workflow before running it | `gap` | `test_a_workflow_can_be_visualised` |
-| `PS-FLOW-010` A person starts a workflow and follows it | `planned` | — |
+| `PS-FLOW-010` A person starts a workflow and follows it | `covered` | `test_a_workflow_runs_to_completion`, `test_workflow_runs_are_recorded` |
 | `PS-FLOW-011` A run that waits survives the wait | `planned` | — |
 | `PS-FLOW-012` A workflow can ask a person and wait for the answer | `planned` | — |
 | `PS-FLOW-013` A person can stop a run | `planned` | — |
@@ -143,13 +143,13 @@ Scenario tests declaring a promise: 124.
 
 | Scenario | Status | Proven by |
 | --- | --- | --- |
-| `PS-PACK-001` A person exports a pod as a bundle | `covered` | `test_a_pod_exports_to_a_downloadable_bundle`, `test_an_outsider_cannot_export` |
+| `PS-PACK-001` A person exports a pod as a bundle | `covered` | `test_a_pod_exports_to_a_downloadable_bundle`, `test_an_outsider_cannot_export`, `test_a_bundle_round_trips` |
 | `PS-PACK-002` A bundle carries the work, not the secrets | `planned` | — |
-| `PS-PACK-010` A person sees the plan before anything changes | `planned` | — |
-| `PS-PACK-011` A person can adjust and re-plan before applying | `planned` | — |
-| `PS-PACK-012` Applying an import either finishes or can be safely retried | `planned` | — |
+| `PS-PACK-010` A person sees the plan before anything changes | `covered` | `test_a_bundle_round_trips`, `test_the_plan_changes_nothing` |
+| `PS-PACK-011` A person can adjust and re-plan before applying | `covered` | `test_a_cancelled_import_applies_nothing` |
+| `PS-PACK-012` Applying an import either finishes or can be safely retried | `covered` | `test_a_bundle_round_trips` |
 | `PS-PACK-013` A hostile bundle cannot damage the platform | `planned` | — |
-| `PS-PACK-014` An imported pod works without further wiring | `planned` | — |
+| `PS-PACK-014` An imported pod works without further wiring | `covered` | `test_an_imported_function_actually_runs` |
 | `PS-PACK-020` A person publishes a pod so others can install it | `planned` | — |
 | `PS-PACK-021` A shared bundle can be viewed before it is installed | `planned` | — |
 | `PS-PACK-030` A person builds an app for a pod | `covered` | `test_an_app_is_created`, `test_a_duplicate_app_name_is_refused`, `test_deleting_an_app_removes_it` |
@@ -196,12 +196,12 @@ Scenario tests declaring a promise: 124.
 | `PS-SURF-001` A person connects a pod's agent to a platform | `covered` | `test_available_platforms_are_listed`, `test_an_unconfigured_surface_is_refused`, `test_an_outsider_cannot_touch_surfaces` |
 | `PS-SURF-002` Setting up a platform does not require reading its documentation | `covered` | `test_a_setup_guide_is_available` |
 | `PS-SURF-003` A person changes or removes a surface | `planned` | — |
-| `PS-SURF-010` Only genuine messages from the platform are acted on | `covered` | `test_webhook_verification_needs_no_session`, `test_an_unsigned_webhook_is_rejected` |
-| `PS-SURF-011` The same message delivered twice is answered once | `planned` | — |
-| `PS-SURF-012` A person on a platform is resolved to who they are in Lemma | `planned` | — |
+| `PS-SURF-010` Only genuine messages from the platform are acted on | `covered` | `test_an_unknown_sender_is_told_how_to_get_access`, `test_an_unsigned_delivery_is_rejected`, `test_a_wrongly_signed_delivery_is_rejected`, `test_webhook_verification_needs_no_session`, `test_an_unsigned_webhook_is_rejected` |
+| `PS-SURF-011` The same message delivered twice is answered once | `covered` | `test_a_repeated_delivery_is_answered_once` |
+| `PS-SURF-012` A person on a platform is resolved to who they are in Lemma | `covered` | `test_an_unknown_sender_is_told_how_to_get_access` |
 | `PS-SURF-013` A thread on the platform is a conversation in the pod | `planned` | — |
 | `PS-SURF-014` A file sent to a surface reaches the pod | `planned` | — |
-| `PS-SURF-020` The answer comes back where the question was asked | `planned` | — |
+| `PS-SURF-020` The answer comes back where the question was asked | `covered` | `test_an_unknown_sender_is_told_how_to_get_access` |
 | `PS-SURF-021` Questions and approvals work on every platform | `planned` | — |
 | `PS-SURF-022` Email surfaces behave like email | `planned` | — |
 | `PS-SURF-023` A person reached on several platforms gets one predictable answer | `covered` | `test_my_surfaces_are_listable` |
