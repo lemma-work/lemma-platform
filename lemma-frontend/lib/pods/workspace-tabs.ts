@@ -107,6 +107,24 @@ function safeWorkspaceHref(value: string) {
     return buildConversationStandaloneResourceHref(value) ?? '/';
 }
 
+const WIDGET_VIEW_SUFFIX = '/widgets/view';
+
+/**
+ * Route tabs are keyed by section, so a section opens one tab and navigating
+ * within it moves that tab along — one Data tab, one Files tab. A presented
+ * widget is not a section: each one is its own artifact, and two of them are
+ * two things to hold open. Key those by the tool call that produced them so
+ * opening a second widget adds a tab instead of overwriting the first.
+ */
+export function widgetWorkspaceRouteKey(toolCallId: string) {
+    const cleaned = toolCallId.replace(/[^a-z0-9_-]+/gi, '-').replace(/^-+|-+$/g, '');
+    return cleaned ? `widget-${cleaned}` : 'widgets';
+}
+
+export function isWidgetWorkspaceRouteKey(routeKey: string) {
+    return routeKey.startsWith('widget-');
+}
+
 export function routeWorkspaceTab(
     routeKey: string,
     title: string,
@@ -369,6 +387,7 @@ export function getActiveWorkspaceTabId(
     podId: string,
     pathname: string,
     appSlug?: string | null,
+    searchParams?: URLSearchParams | null,
 ): string | null {
     if (pathname === `/pod/${podId}` || pathname === `/pod/${podId}/`) return HOME_WORKSPACE_TAB.id;
 
@@ -389,6 +408,11 @@ export function getActiveWorkspaceTabId(
     }
 
     const base = `/pod/${podId}`;
+    if (pathname === `${base}${WIDGET_VIEW_SUFFIX}`) {
+        const toolCallId = searchParams?.get('toolCallId')?.trim();
+        if (toolCallId) return `route:${widgetWorkspaceRouteKey(toolCallId)}`;
+    }
+
     const section = pathname.slice(base.length).split('/').filter(Boolean)[0];
     if (!section) return HOME_WORKSPACE_TAB.id;
     return `route:${getWorkspaceRouteKey(section)}`;

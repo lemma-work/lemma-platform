@@ -554,6 +554,122 @@ class TestWebFetch:
         assert result.pages[0].files == {}
 
 
+class TestTheBatchDoesNotRepeatItself:
+    """Sandbox round trips are the expensive part of an otherwise cheap path.
+
+    Measured at ~80ms each against a real container, so five pages doing the
+    same setup five times was half of all the chatter in a call.
+    """
+
+    @pytest.mark.asyncio
+    async def test_the_output_directory_is_created_once_per_batch(
+        self, monkeypatch
+    ) -> None:
+        session = _FakeSession()
+        _patch_session(monkeypatch, session)
+        _patch_extraction(monkeypatch, markdown="Real article body. " * 40)
+
+        result = await web_fetch_module.web_fetch_internal(
+            SimpleNamespace(),
+            WebFetchRequest(
+                urls=[
+                    "https://example.com/a",
+                    "https://example.com/b",
+                    "https://example.com/c",
+                ],
+                formats=["markdown"],
+            ),
+        )
+
+        assert result.success
+        assert len(session.writes) == 3
+        # One directory, one `mkdir` — not one per page.
+        mkdirs = [cmd for cmd in session.commands if cmd.startswith("mkdir -p")]
+        assert len(mkdirs) == 1
+
+
+class TestUrlsWeWillNotRequestAtAll:
+    """`web_fetch` takes a URL the model chose and fetches it from the backend,
+    which makes it a server-side fetcher aimed by its input. The guard itself is
+    covered in `app/core/tests/unit/test_url_guard.py`; what matters here is
+    that *both* paths go through it."""
+
+    @staticmethod
+    def _refuse(monkeypatch, reason: str = "private_address") -> None:
+        from app.core.net.url_guard import UnsafeUrlError
+
+        async def fake_assert(url, *, policy=None):
+            raise UnsafeUrlError("nope", reason=reason)
+
+        monkeypatch.setattr(web_fetch_module, "assert_safe_url", fake_assert)
+
+    @pytest.mark.asyncio
+    async def test_a_url_resolving_into_the_private_network_is_refused(
+        self, monkeypatch
+    ) -> None:
+        session = _FakeSession()
+        _patch_session(monkeypatch, session)
+        _patch_extraction(monkeypatch, markdown="Real article body. " * 40)
+        self._refuse(monkeypatch)
+
+        result = await web_fetch_module.web_fetch_internal(
+            SimpleNamespace(),
+            WebFetchRequest(urls=["https://internal.example.com/"]),
+        )
+
+        assert not result.success
+        assert not result.pages[0].success
+        assert "private_address" in (result.pages[0].error or "")
+        # Nothing was written, and the sandbox was never asked to do anything.
+        assert session.writes == {}
+
+    @pytest.mark.asyncio
+    async def test_the_browser_path_is_guarded_too(self, monkeypatch) -> None:
+        """The regression this exists for: the in-process fetch reaches the
+        network from the backend and `save-webpage` reaches it from inside the
+        sandbox, so guarding only the cheap path would leave the browser as an
+        unguarded way to the same address."""
+        session = _FakeSession()
+        _patch_session(monkeypatch, session)
+        self._refuse(monkeypatch, reason="link_local_address")
+
+        result = await web_fetch_module.web_fetch_internal(
+            SimpleNamespace(),
+            WebFetchRequest(
+                urls=["http://169.254.169.254/latest/meta-data/"], render=True
+            ),
+        )
+
+        assert not result.success
+        assert "link_local_address" in (result.pages[0].error or "")
+        assert not any("save-webpage" in cmd for cmd in session.commands)
+
+    @pytest.mark.asyncio
+    async def test_one_refused_url_does_not_sink_the_others(self, monkeypatch) -> None:
+        from app.core.net.url_guard import UnsafeUrlError
+
+        async def fake_assert(url, *, policy=None):
+            if "internal" in url:
+                raise UnsafeUrlError("nope", reason="private_address")
+            return url
+
+        session = _FakeSession()
+        _patch_session(monkeypatch, session)
+        _patch_extraction(monkeypatch, markdown="Real article body. " * 40)
+        monkeypatch.setattr(web_fetch_module, "assert_safe_url", fake_assert)
+
+        result = await web_fetch_module.web_fetch_internal(
+            SimpleNamespace(),
+            WebFetchRequest(
+                urls=["https://internal.example.com/", "https://example.com/a"]
+            ),
+        )
+
+        assert result.success
+        assert not result.pages[0].success
+        assert result.pages[1].success
+
+
 class TestTheToolAlwaysReturns:
     """A tool that blocks takes its whole agent run with it.
 
