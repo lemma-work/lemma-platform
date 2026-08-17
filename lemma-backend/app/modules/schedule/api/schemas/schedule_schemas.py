@@ -3,8 +3,9 @@
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, computed_field, model_validator
 
+from app.modules.schedule.config import schedule_settings
 from app.modules.schedule.domain.schedule import (
     ScheduleRunStatus,
     ScheduleFireStatus,
@@ -127,10 +128,34 @@ class ScheduleResponse(BaseModel):
     last_run_id: str | None = None
     last_fire_status: ScheduleFireStatus | None = None
     last_error: str | None = None
+    consecutive_failures: int = 0
     created_at: datetime
     updated_at: datetime
 
     model_config = {"from_attributes": True}
+
+    # A breaker pause and a deliberate one were indistinguishable on the wire:
+    # ``is_active`` goes false either way, and the pod overview drops inactive
+    # schedules entirely. "The user never sees why their schedules stopped" was
+    # that, not a missing signal — the failures have been recorded, emailed and
+    # served all along, with nothing tying them to the pause.
+    #
+    # Derived rather than stored so it cannot drift from the breaker's own rule,
+    # and so it needs no migration: both halves are already persisted.
+    @computed_field(  # type: ignore[prop-decorator]
+        description=(
+            "True when the failure breaker paused this schedule, as opposed to "
+            "a person pausing it. Reactivating resets the failure count."
+        )
+    )
+    @property
+    def paused_by_failures(self) -> bool:
+        threshold = schedule_settings.schedule_max_consecutive_failures
+        return (
+            not self.is_active
+            and threshold > 0
+            and self.consecutive_failures >= threshold
+        )
 
 
 class ScheduleDetailResponse(ScheduleResponse):
