@@ -156,10 +156,28 @@ export function startAnalytics(): Promise<void> {
     return starting;
 }
 
-/** Called by the consent banner. Upgrades an already-running client in place so
- *  the anonymous id established before consent survives the transition. */
+/**
+ * Called by the consent banner and by the switch on the privacy page.
+ *
+ * Granting upgrades an already-running client in place, so the anonymous id
+ * established before consent survives the transition — a landing→signup funnel
+ * is not broken by the act of consenting.
+ *
+ * Withdrawing has to *remove* what consent wrote, not merely stop writing more.
+ * Order carries that: changing the persistence type makes posthog-js empty the
+ * store it was using, so the identifier actually leaves localStorage and the
+ * cookie jar, and only then does `reset()` mint a fresh anonymous id — into
+ * memory, where it stays. Resetting first would write that fresh id straight
+ * back to the device we were trying to clear.
+ */
 export function applyAnalyticsPersistence(granted: boolean): void {
-    ph?.set_config({ persistence: granted ? "localStorage+cookie" : "memory" });
+    if (!ph) return;
+    if (granted) {
+        ph.set_config({ persistence: "localStorage+cookie" });
+        return;
+    }
+    ph.set_config({ persistence: "memory" });
+    ph.reset();
 }
 
 export function captureEvent(
