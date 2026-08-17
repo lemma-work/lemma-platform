@@ -39,6 +39,8 @@ class ScheduleDetailResponse:
         is_active (bool):
         is_internal (bool):
         name (None | str):
+        paused_by_failures (bool): True when the failure breaker paused this schedule, as opposed to a person pausing
+            it. Reactivating resets the failure count.
         pod_id (None | UUID):
         schedule_type (ScheduleType): Type of schedule source.
         updated_at (datetime.datetime):
@@ -47,6 +49,7 @@ class ScheduleDetailResponse:
         workflow_id (None | UUID):
         agent_name (None | str | Unset):
         allowed_actions (list[str] | Unset):
+        consecutive_failures (int | Unset):  Default: 0.
         last_error (None | str | Unset):
         last_fire_status (None | ScheduleFireStatus | Unset):
         last_fired_at (datetime.datetime | None | Unset):
@@ -65,6 +68,7 @@ class ScheduleDetailResponse:
     is_active: bool
     is_internal: bool
     name: None | str
+    paused_by_failures: bool
     pod_id: None | UUID
     schedule_type: ScheduleType
     updated_at: datetime.datetime
@@ -73,6 +77,7 @@ class ScheduleDetailResponse:
     workflow_id: None | UUID
     agent_name: None | str | Unset = UNSET
     allowed_actions: list[str] | Unset = UNSET
+    consecutive_failures: int | Unset = 0
     last_error: None | str | Unset = UNSET
     last_fire_status: None | ScheduleFireStatus | Unset = UNSET
     last_fired_at: datetime.datetime | None | Unset = UNSET
@@ -124,6 +129,8 @@ class ScheduleDetailResponse:
         name: None | str
         name = self.name
 
+        paused_by_failures = self.paused_by_failures
+
         pod_id: None | str
         if isinstance(self.pod_id, UUID):
             pod_id = str(self.pod_id)
@@ -153,6 +160,8 @@ class ScheduleDetailResponse:
         allowed_actions: list[str] | Unset = UNSET
         if not isinstance(self.allowed_actions, Unset):
             allowed_actions = self.allowed_actions
+
+        consecutive_failures = self.consecutive_failures
 
         last_error: None | str | Unset
         if isinstance(self.last_error, Unset):
@@ -203,6 +212,7 @@ class ScheduleDetailResponse:
                 "is_active": is_active,
                 "is_internal": is_internal,
                 "name": name,
+                "paused_by_failures": paused_by_failures,
                 "pod_id": pod_id,
                 "schedule_type": schedule_type,
                 "updated_at": updated_at,
@@ -215,6 +225,8 @@ class ScheduleDetailResponse:
             field_dict["agent_name"] = agent_name
         if allowed_actions is not UNSET:
             field_dict["allowed_actions"] = allowed_actions
+        if consecutive_failures is not UNSET:
+            field_dict["consecutive_failures"] = consecutive_failures
         if last_error is not UNSET:
             field_dict["last_error"] = last_error
         if last_fire_status is not UNSET:
@@ -323,6 +335,8 @@ class ScheduleDetailResponse:
 
         name = _parse_name(d.pop("name"))
 
+        paused_by_failures = d.pop("paused_by_failures")
+
         def _parse_pod_id(data: object) -> None | UUID:
             if data is None:
                 return data
@@ -371,6 +385,8 @@ class ScheduleDetailResponse:
         agent_name = _parse_agent_name(d.pop("agent_name", UNSET))
 
         allowed_actions = cast(list[str], d.pop("allowed_actions", UNSET))
+
+        consecutive_failures = d.pop("consecutive_failures", UNSET)
 
         def _parse_last_error(data: object) -> None | str | Unset:
             if data is None:
@@ -445,6 +461,7 @@ class ScheduleDetailResponse:
             is_active=is_active,
             is_internal=is_internal,
             name=name,
+            paused_by_failures=paused_by_failures,
             pod_id=pod_id,
             schedule_type=schedule_type,
             updated_at=updated_at,
@@ -453,6 +470,7 @@ class ScheduleDetailResponse:
             workflow_id=workflow_id,
             agent_name=agent_name,
             allowed_actions=allowed_actions,
+            consecutive_failures=consecutive_failures,
             last_error=last_error,
             last_fire_status=last_fire_status,
             last_fired_at=last_fired_at,

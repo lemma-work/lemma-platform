@@ -664,17 +664,7 @@ def _instrument_libraries() -> None:
     # the stable conventions, so the process was describing the same calls under
     # two names and two schemas.
     #
-    # ``http/dup`` rather than ``http``, deliberately. This variable is
-    # process-global and the ASGI/FastAPI *server* instrumentation reads it
-    # too, so ``http`` would also rename ``http.server.duration`` (ms) to
-    # ``http.server.request.duration`` (s) -- a silent break of every dashboard
-    # on inbound latency, which is not a change this was meant to make. ``dup``
-    # emits both vocabularies: the old series keep working, the new ones appear
-    # with ``server.address``, and whoever owns the dashboards migrates on their
-    # own schedule. Flipping to ``http`` and dropping the duplicates is a
-    # deliberate follow-up, not a side effect of wanting a host label.
-    #
-    # ``http``, not ``http/dup``, as of this change. ``dup`` was the migration
+    # ``http``, not ``http/dup``. ``dup`` was the migration
     # step: it emitted both vocabularies so the dashboards could move at their
     # own pace. They have — every inbound-latency panel reads
     # ``http.server.request.duration`` now — so the superseded

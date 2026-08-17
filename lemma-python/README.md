@@ -133,6 +133,10 @@ row = t.get(ticket_id)                            # bare record dict, no envelop
 t.update(ticket_id, {"status": "resolved"})       # only passed fields change
 t.delete(ticket_id)
 
+# Writing more than a row or two? Use the batch form -- one round trip instead
+# of N. A loop of t.create(...) pays a full request per row.
+t.bulk_create([{"title": f"Refund {i}", "status": "new"} for i in range(50)])
+
 rows = pod.records.list(
     "tickets", limit=50,
     filter=[
@@ -168,6 +172,11 @@ change the permission a write needs: writing any table requires the
 read-only `query` endpoint can join across tables only when they are non-RLS.
 
 ### Bulk record operations
+
+Reach for these whenever you write more than a couple of rows: each one is a
+single request, where a loop of `create` is one request per row. The same three
+methods exist on the bound helper — `pod.table("tickets").bulk_create(rows)` —
+so you never have to leave the table handle to get a batch.
 
 ```python
 # create: row dicts (ids generated)

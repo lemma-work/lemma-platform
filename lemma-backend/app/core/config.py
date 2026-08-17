@@ -275,6 +275,17 @@ class Settings(BaseSettings):
             "``LOOP_STALL_SAMPLE_SECONDS``."
         ),
     )
+    loop_stall_tick_seconds: float = Field(
+        default=0.05,
+        description=(
+            "How often the loop publishes liveness for the stall sampler to "
+            "watch. This is the sampler's resolution: it can only report a "
+            "stall as 'time since the last tick', so the tick interval is a "
+            "floor under every stall it measures. Kept far below "
+            "``LOOP_STALL_SAMPLE_SECONDS`` so the threshold means what it "
+            "says. Env: ``LOOP_STALL_TICK_SECONDS``."
+        ),
+    )
     loop_lag_unhealthy_seconds: float = Field(
         default=5.0,
         description=(

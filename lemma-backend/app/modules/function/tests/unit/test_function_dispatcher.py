@@ -497,3 +497,128 @@ async def test_our_own_deadline_does_not_quarantine_the_sandbox() -> None:
 
     quarantined.assert_not_awaited()
     invalidated.assert_not_awaited()
+
+
+# -- the run that trips the quarantine should not have to be the casualty -----
+#
+# Quarantine turned a permanent outage into one failed run. That last run is
+# avoidable in exactly one case: the connection was refused, so the request was
+# never delivered and nothing executed. Retrying anything less certain would
+# risk running a function twice, which is the whole reason
+# `InvocationOutcomeUnconfirmed` is never replayed.
+
+
+async def _recover(runtime, *, endpoints):
+    dispatch = _dispatch()
+    dispatcher = _dispatcher(runtime)
+    dispatcher._routes.quarantine = AsyncMock()  # type: ignore[method-assign]
+    dispatcher._routes.invalidate = AsyncMock()  # type: ignore[method-assign]
+    resolved = iter(endpoints)
+    dispatcher._runtime_endpoint = AsyncMock(  # type: ignore[method-assign]
+        side_effect=lambda *_a, **_k: next(resolved)
+    )
+    return dispatcher, await dispatcher._invoke_runtime_with_recovery(
+        dispatch,
+        context=_context(dispatch),
+        endpoint=_endpoint("https://dead.test/allocation/"),
+        function_token="test-token",
+        organization_id=None,
+    )
+
+
+def _terminal_response(url):
+    return httpx.Response(
+        200,
+        request=httpx.Request("POST", url),
+        json={
+            "status": "completed",
+            "output_data": {"answer": 42},
+            "error": None,
+            "stdout": "",
+            "stderr": "",
+            "output_truncated": False,
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_refused_connection_is_retried_on_a_fresh_endpoint() -> None:
+    """The dead sandbox costs zero failed runs, not one."""
+    attempts = []
+
+    class _Runtime:
+        async def post(self, url, **kwargs):
+            attempts.append(url)
+            if len(attempts) == 1:
+                raise httpx.ConnectError("connection refused")
+            return _terminal_response(url)
+
+    dispatcher, result = await _recover(
+        _Runtime(), endpoints=[_endpoint("https://fresh.test/allocation/")]
+    )
+
+    assert result.output_data == {"answer": 42}
+    assert len(attempts) == 2
+    # The retry must go somewhere else; re-running against the sandbox that
+    # just refused us would fail identically.
+    assert attempts[0].startswith("https://dead.test/")
+    assert attempts[1].startswith("https://fresh.test/")
+    dispatcher._routes.quarantine.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_a_refused_connection_is_retried_once_and_not_forever() -> None:
+    attempts = []
+
+    class _Runtime:
+        async def post(self, url, **kwargs):
+            attempts.append(url)
+            raise httpx.ConnectError("connection refused")
+
+    with pytest.raises(InvocationOutcomeUnconfirmed):
+        await _recover(
+            _Runtime(), endpoints=[_endpoint("https://fresh.test/allocation/")]
+        )
+
+    assert len(attempts) == 2, "one retry, then the failure is reported"
+
+
+@pytest.mark.asyncio
+async def test_a_broken_read_is_not_retried_even_though_it_is_a_transport_error() -> None:
+    """The half that keeps the no-replay guarantee honest.
+
+    ``httpx.TransportError`` covers ReadError, WriteError and
+    RemoteProtocolError as well as ConnectError. Those mean bytes crossed the
+    wire: the run may be executing right now with only the response lost, so
+    replaying it would run the function twice.
+    """
+    attempts = []
+
+    class _Runtime:
+        async def post(self, url, **kwargs):
+            attempts.append(url)
+            raise httpx.ReadError("server hung up mid-response")
+
+    with pytest.raises(InvocationOutcomeUnconfirmed):
+        await _recover(
+            _Runtime(), endpoints=[_endpoint("https://fresh.test/allocation/")]
+        )
+
+    assert len(attempts) == 1, "a half-served request must never be replayed"
+
+
+@pytest.mark.asyncio
+async def test_our_own_deadline_is_not_retried() -> None:
+    attempts = []
+
+    class _Runtime:
+        async def post(self, url, **kwargs):
+            attempts.append(url)
+            raise httpx.ReadTimeout("deadline exceeded")
+
+    with pytest.raises(InvocationOutcomeUnconfirmed):
+        await _recover(
+            _Runtime(), endpoints=[_endpoint("https://fresh.test/allocation/")]
+        )
+
+    assert len(attempts) == 1
