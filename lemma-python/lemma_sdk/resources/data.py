@@ -305,3 +305,30 @@ class Table:
 
     def delete(self, record_id: str) -> None:
         self._records.delete(self.name, record_id)
+
+    # The batch trio exists on this facade and not only on ``PodRecords``
+    # because a caller holding a table handle would otherwise have no batch
+    # path at all, and the shortest way to write N rows would be a loop of
+    # ``create`` -- N round trips from wherever the code runs back to the API.
+    # Inside a function sandbox that is the dominant cost of the whole call:
+    # a 200-row batch is one round trip against 200.
+
+    def bulk_create(
+        self, records: list[RecordData], *, upsert: bool = False
+    ) -> int:
+        """Create many records in one round trip; returns the count affected.
+
+        See :meth:`PodRecords.bulk_create` for the ``upsert`` semantics.
+        """
+        return self._records.bulk_create(self.name, records, upsert=upsert)
+
+    def bulk_update(self, records: list[dict[str, Any]]) -> int:
+        """Update many records in one round trip; returns the count updated.
+
+        Each item must include this table's primary-key value.
+        """
+        return self._records.bulk_update(self.name, records)
+
+    def bulk_delete(self, record_ids: list[str]) -> int:
+        """Delete many records by primary-key value; returns the count deleted."""
+        return self._records.bulk_delete(self.name, record_ids)

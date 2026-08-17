@@ -78,8 +78,12 @@ export class RecordsNamespace {
   }
 
   readonly bulk = {
-    create: (table: string, records: Record<string, unknown>[]) => {
-      const payload: BulkCreateRecordsRequest = { records };
+    // `upsert` is what makes a bulk create idempotent: rows that conflict on
+    // the table's primary key are updated rather than failing the request,
+    // which is what re-seeding needs. The endpoint and the Python SDK have
+    // always accepted it; only this wrapper dropped it.
+    create: (table: string, records: Record<string, unknown>[], options: { upsert?: boolean } = {}) => {
+      const payload: BulkCreateRecordsRequest = { records, upsert: options.upsert ?? false };
       return this.client.request(() => RecordsService.recordBulkCreate(this.podId(), table, payload));
     },
 

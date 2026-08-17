@@ -15541,8 +15541,13 @@ var LemmaClient = (() => {
       __publicField(this, "client", client);
       __publicField(this, "podId", podId);
       __publicField(this, "bulk", {
-        create: (table, records) => {
-          const payload = { records };
+        // `upsert` is what makes a bulk create idempotent: rows that conflict on
+        // the table's primary key are updated rather than failing the request,
+        // which is what re-seeding needs. The endpoint and the Python SDK have
+        // always accepted it; only this wrapper dropped it.
+        create: (table, records, options = {}) => {
+          var _a;
+          const payload = { records, upsert: (_a = options.upsert) != null ? _a : false };
           return this.client.request(() => RecordsService.recordBulkCreate(this.podId(), table, payload));
         },
         update: (table, records) => {

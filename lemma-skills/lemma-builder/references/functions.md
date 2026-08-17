@@ -203,7 +203,7 @@ Response shapes differ by operation:
 | --- | --- | --- |
 | `records.create / get / update`, `table.create / get / update` | bare record dict | `record["id"]`, `record["status"]` |
 | `records.list`, `table.list` | `RecordListResponse` | `.to_dict()["items"]` |
-| `records.bulk_create / bulk_update / bulk_delete` | integer affected-row count | use directly |
+| `records.bulk_create / bulk_update / bulk_delete`, `table.bulk_*` | integer affected-row count | use directly |
 | `pod.query(sql)` | `DatastoreQueryResponse` | `.to_dict()["items"]` |
 | `connectors.execute(...)` | `OperationExecutionResponse` | `.to_dict()["result"]` |
 
@@ -229,6 +229,11 @@ t.update(ticket_id, {"status": "resolved"})
 # delete
 t.delete(ticket_id)
 
+# write many rows -- ONE request. Never loop t.create(): from inside a sandbox
+# every call is a round trip back to the API, so 50 rows in a loop costs 50 of
+# them and dominates the whole function's runtime.
+t.bulk_create([{"title": f"Refund {i}", "status": "new"} for i in range(50)])
+
 # list with filters + sort
 rows = pod.records.list(
     "tickets", limit=50,
@@ -248,6 +253,9 @@ totals = pod.query(
 ### Bulk record operations
 
 Use these whenever you touch more than a couple of rows — one round-trip instead of N.
+All three also exist on the bound helper (`t.bulk_create(rows)`,
+`t.bulk_update(rows)`, `t.bulk_delete(ids)`), so holding a `pod.table(...)`
+handle is never a reason to fall back to a per-row loop.
 
 ```python
 # bulk create: list of row dicts (no id; ids are generated)
