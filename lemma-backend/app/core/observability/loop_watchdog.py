@@ -26,6 +26,7 @@ streaq runtime: started in the lifespan, cancelled on shutdown.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from dataclasses import dataclass
 import os
 from pathlib import Path
@@ -36,6 +37,7 @@ from app.core.concurrency.offload import run_blocking
 from app.core.config import settings
 from app.core.log.log import get_logger
 from app.core.observability.stall_sampler import (
+    keep_loop_tick_fresh,
     start_loop_stall_sampler,
     stop_loop_stall_sampler,
 )
@@ -246,6 +248,17 @@ async def loop_lag_watchdog(
         stall_seconds=max(warn, settings.loop_stall_sample_seconds),
         service_name=service_name,
     )
+    # The sampler reports a stall as "time since the loop last said it was
+    # alive", so whatever publishes that tick sets the floor under every stall
+    # it can measure. This loop is the wrong publisher on both counts: it ticks
+    # once per `interval` (0.5s), and it does so *after* awaiting an offloaded
+    # heartbeat write that queues behind the `cpu_bound` limiter. Ticking from
+    # here added up to half a second to every stall, and on the worker could
+    # report a stall with the loop perfectly healthy and merely eight offloads
+    # deep. That is why loop lag improved and the stall count did not move.
+    ticker = asyncio.create_task(
+        keep_loop_tick_fresh(sampler, max(0.001, settings.loop_stall_tick_seconds))
+    )
     try:
         while True:
             scheduled_at = time.perf_counter()
@@ -253,7 +266,6 @@ async def loop_lag_watchdog(
             lag = time.perf_counter() - scheduled_at - interval
             lag = max(0.0, lag)
             _lag.seconds = lag
-            sampler.note_loop_alive()
 
             if heartbeat_path:
                 try:
@@ -271,4 +283,7 @@ async def loop_lag_watchdog(
 
             _evaluate_lag(lag, warn, service_name=service_name)
     finally:
+        ticker.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await ticker
         stop_loop_stall_sampler()
