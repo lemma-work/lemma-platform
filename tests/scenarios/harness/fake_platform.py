@@ -234,3 +234,187 @@ def start_fake_telegram(*, bot_username: str = "lemma_scenarios_bot") -> FakeTel
         sent=recorded,
         _state=state,
     )
+
+
+# --- a generic HTTP provider ------------------------------------------------
+
+
+@dataclass
+class ReceivedCall:
+    """One request the fake provider received."""
+
+    method: str
+    path: str
+    body: JSON
+    headers: dict[str, str]
+
+    @property
+    def authorization(self) -> str:
+        return self.headers.get("authorization", "")
+
+
+@dataclass
+class FakeProvider:
+    """A third-party HTTP API, so connector operations can execute for real.
+
+    Lemma supports connectors of kind ``http`` configured with a ``server_url``
+    and an inline OpenAPI spec. That is a first-class product feature — it is
+    how anyone connects an internal API — so pointing one at this server is a
+    scenario using the product, not a hole cut for testing.
+
+    Records every call, so a scenario can assert that executing an operation
+    actually reached the provider, with the caller's credential on it.
+    """
+
+    base_url: str
+    _server: HTTPServer
+    _thread: threading.Thread
+    received: list[ReceivedCall] = field(default_factory=list)
+
+    @property
+    def spec_url(self) -> str:
+        """Where this server publishes its own OpenAPI description.
+
+        Lemma fetches the spec rather than taking it inline, which is the right
+        way round — an API that describes itself stays described as it changes.
+        """
+        return f"{self.base_url}/openapi.json"
+
+    def calls_to(self, path: str) -> list[ReceivedCall]:
+        return [call for call in self.received if call.path == path]
+
+    def clear(self) -> None:
+        self.received.clear()
+
+    def stop(self) -> None:
+        self._server.shutdown()
+        self._server.server_close()
+        self._thread.join(timeout=5)
+
+    def openapi_spec(self) -> JSON:
+        """The spec this server publishes, for a scenario that wants to read it."""
+        return _spec_for(self.base_url)
+
+
+def _spec_for(base_url: str) -> JSON:
+    """A two-operation OpenAPI description of the fake provider."""
+    return {
+        "openapi": "3.0.0",
+        "info": {"title": "Scenarios Provider", "version": "1.0.0"},
+        "servers": [{"url": base_url}],
+        # Declared so the connector has an auth scheme to apply. Without one,
+        # no credential is sent — correctly — and a scenario asserting the
+        # caller's token arrives would be asserting against a spec that never
+        # asked for it.
+        "components": {
+            "securitySchemes": {
+                "bearerAuth": {"type": "http", "scheme": "bearer"}
+            }
+        },
+        "security": [{"bearerAuth": []}],
+        "paths": {
+            "/widgets": {
+                "get": {
+                    "operationId": "listWidgets",
+                    "summary": "List widgets",
+                    "responses": {
+                        "200": {
+                            "description": "Widgets",
+                            "content": {
+                                "application/json": {
+                                    "schema": {"type": "object"}
+                                }
+                            },
+                        }
+                    },
+                },
+                "post": {
+                    "operationId": "createWidget",
+                    "summary": "Create a widget",
+                    "requestBody": {
+                        "required": True,
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {"name": {"type": "string"}},
+                                    "required": ["name"],
+                                }
+                            }
+                        },
+                    },
+                    "responses": {
+                        "201": {
+                            "description": "Created",
+                            "content": {
+                                "application/json": {
+                                    "schema": {"type": "object"}
+                                }
+                            },
+                        }
+                    },
+                },
+            }
+        },
+        }
+
+
+def start_fake_provider() -> FakeProvider:
+    received: list[ReceivedCall] = []
+    widgets: list[JSON] = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *_args: Any) -> None:
+            """Quiet."""
+
+        def _reply(self, status: int, body: JSON) -> None:
+            encoded = json.dumps(body).encode()
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(encoded)))
+            self.end_headers()
+            self.wfile.write(encoded)
+
+        def _record(self) -> JSON:
+            length = int(self.headers.get("Content-Length") or 0)
+            raw = self.rfile.read(length) if length else b""
+            try:
+                body = json.loads(raw) if raw else {}
+            except ValueError:
+                body = {}
+            received.append(
+                ReceivedCall(
+                    method=self.command,
+                    path=urlparse(self.path).path,
+                    body=body if isinstance(body, dict) else {},
+                    headers={k.lower(): v for k, v in self.headers.items()},
+                )
+            )
+            return received[-1].body
+
+        def do_GET(self) -> None:  # noqa: N802
+            path = urlparse(self.path).path
+            if path == "/openapi.json":
+                # Not recorded: fetching the description is Lemma discovering
+                # the provider, not a scenario calling an operation.
+                self._reply(200, _spec_for(f"http://{self.headers.get('Host')}"))
+                return
+            self._record()
+            self._reply(200, {"widgets": widgets})
+
+        def do_POST(self) -> None:  # noqa: N802
+            body = self._record()
+            widget = {"id": len(widgets) + 1, "name": body.get("name", "")}
+            widgets.append(widget)
+            self._reply(201, widget)
+
+    server = HTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    host, port = server.server_address[:2]
+    return FakeProvider(
+        base_url=f"http://{host}:{port}",
+        _server=server,
+        _thread=thread,
+        received=received,
+    )

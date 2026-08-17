@@ -228,6 +228,12 @@ def load_known_contracts() -> tuple[set[str], set[str], list[str]]:
     return operations, events, errors
 
 
+#: Filled in by `main` before rendering, so `render_coverage` stays a pure
+#: function of what it is handed plus the live surface.
+OPERATIONS: set[str] = set()
+EVENTS: set[str] = set()
+
+
 def render_coverage(
     scenarios: list[Scenario], tests: list[ScenarioTest]
 ) -> str:
@@ -263,6 +269,26 @@ def render_coverage(
         f"Scenario tests declaring a promise: {len(tests)}.",
         "",
     ]
+
+    # Which API operations and events the suite actually exercises. Distinct
+    # from scenario coverage: a promise can be covered while operations it does
+    # not name go untouched, and that gap is worth seeing.
+    exercised: set[str] = {name for test in tests for name in test.covers}
+    lines += [
+        "## Contract coverage",
+        "",
+        "How much of the API and event surface the scenarios touch, counted from",
+        "`@covers`. An operation with no scenario is not necessarily untested —",
+        "the module suites may cover it — but it is untested *as product*.",
+        "",
+        "| Surface | Exercised | Total |",
+        "| --- | ---: | ---: |",
+    ]
+    lines.append(
+        f"| OpenAPI operations | {len(exercised & OPERATIONS)} | {len(OPERATIONS)} |"
+    )
+    lines.append(f"| Product events | {len(exercised & EVENTS)} | {len(EVENTS)} |")
+    lines.append("")
 
     by_journey: dict[str, list[Scenario]] = defaultdict(list)
     for scenario in scenarios:
@@ -309,6 +335,9 @@ def main() -> int:
     operations, events, contract_errors = load_known_contracts()
     errors += contract_errors
     known = operations | events
+
+    global OPERATIONS, EVENTS
+    OPERATIONS, EVENTS = operations, events
 
     by_id = {scenario.id: scenario for scenario in scenarios}
 
@@ -377,9 +406,12 @@ def main() -> int:
 
     covered = sum(1 for s in scenarios if s.status == "covered")
     gaps = sum(1 for s in scenarios if s.status == "gap")
+    exercised = {name for test in tests for name in test.covers}
     print(
         f"✓ scenario coverage: {len(scenarios)} scenarios "
-        f"({covered} covered, {gaps} gap), {len(tests)} scenario tests"
+        f"({covered} covered, {gaps} gap), {len(tests)} scenario tests\n"
+        f"  contract coverage: {len(exercised & operations)}/{len(operations)} "
+        f"operations, {len(exercised & events)}/{len(events)} events"
     )
     return 0
 

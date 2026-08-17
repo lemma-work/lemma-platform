@@ -525,3 +525,121 @@ class BuildingSteps:
         await self.api.delete(
             f"/organizations/{in_organization['id']}/connectors/accounts/{account['id']}"
         )
+
+    async def installs_http_connector(
+        self, *, in_organization: JSON, server_url: str, spec_url: str, named: str | None = None
+    ) -> JSON:
+        """Install a connector for an API described by its own OpenAPI spec.
+
+        The `http` kind is how anyone connects an internal or bespoke API, and
+        it is the one connector kind a scenario can drive end to end without a
+        third party — the provider is a server the suite runs itself.
+        """
+        return await self.api.post(
+            f"/organizations/{in_organization['id']}/connectors/auth-configs",
+            what=f"{self.label} installing an HTTP connector",
+            json={
+                "connector_id": "openapi",
+                "kind": "http",
+                "name": named or f"provider_{uuid4().hex[:8]}",
+                "config": {"server_url": server_url, "spec_url": spec_url},
+            },
+        )
+
+    async def auth_configs_in(self, organization: JSON) -> list[JSON]:
+        return items_of(
+            await self.api.get(
+                f"/organizations/{organization['id']}/connectors/auth-configs"
+            )
+        )
+
+    async def opens_auth_config(self, auth_config: JSON, *, in_organization: JSON) -> JSON:
+        return await self.api.get(
+            f"/organizations/{in_organization['id']}/connectors/auth-configs/"
+            f"{auth_config['name']}"
+        )
+
+    async def renames_auth_config(
+        self, auth_config: JSON, *, to: str, in_organization: JSON
+    ) -> JSON:
+        return await self.api.patch(
+            f"/organizations/{in_organization['id']}/connectors/auth-configs/"
+            f"{auth_config['name']}",
+            what=f"{self.label} renaming an installation",
+            json={"name": to},
+        )
+
+    async def uninstalls_connector(self, auth_config: JSON, *, in_organization: JSON) -> None:
+        await self.api.delete(
+            f"/organizations/{in_organization['id']}/connectors/auth-configs/"
+            f"{auth_config['name']}",
+            what=f"{self.label} uninstalling a connector",
+        )
+
+    async def operations_of(self, auth_config: JSON, *, in_organization: JSON) -> list[JSON]:
+        return items_of(
+            await self.api.get(
+                f"/organizations/{in_organization['id']}/connectors/"
+                f"{auth_config['name']}/operations"
+            )
+        )
+
+    async def operation_detail(
+        self, name: str, *, auth_config: JSON, in_organization: JSON
+    ) -> JSON:
+        return await self.api.get(
+            f"/organizations/{in_organization['id']}/connectors/"
+            f"{auth_config['name']}/operations/{name}"
+        )
+
+    async def runs_operation(
+        self,
+        name: str,
+        *,
+        auth_config: JSON,
+        in_organization: JSON,
+        payload: JSON,
+        account: JSON | None = None,
+    ) -> JSON:
+        body: JSON = {"payload": payload}
+        if account is not None:
+            body["account_id"] = str(account["id"])
+        return await self.api.post(
+            f"/organizations/{in_organization['id']}/connectors/"
+            f"{auth_config['name']}/operations/{name}/execute",
+            what=f"{self.label} running operation {name!r}",
+            json=body,
+        )
+
+    async def is_refused_running_operation(
+        self,
+        name: str,
+        *,
+        auth_config: JSON,
+        in_organization: JSON,
+        payload: JSON,
+        account: JSON | None = None,
+    ) -> int:
+        body: JSON = {"payload": payload}
+        if account is not None:
+            body["account_id"] = str(account["id"])
+        response = await self.api.call(
+            "POST",
+            f"/organizations/{in_organization['id']}/connectors/"
+            f"{auth_config['name']}/operations/{name}/execute",
+            json=body,
+        )
+        if response.status_code < 400:
+            raise AssertionError(
+                f"{self.label} was expected to be refused running {name!r}, "
+                f"but it succeeded ({response.status_code})"
+            )
+        return response.status_code
+
+    async def triggers_of(self, auth_config: JSON, *, in_organization: JSON) -> list[JSON]:
+        return items_of(
+            await self.api.get(
+                f"/organizations/{in_organization['id']}/connectors/"
+                f"{auth_config['name']}/triggers"
+            )
+        )

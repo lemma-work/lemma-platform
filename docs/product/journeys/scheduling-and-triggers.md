@@ -73,7 +73,7 @@ about it when it eventually cannot.
 **Contracts:** `schedule.create`, `surface.webhook.verify`
 
 ### PS-SCHED-011 — A pod reacts to its own data changing
-**Status:** planned
+**Status:** covered
 
 - When a record is added, changed, or removed in a table a schedule is watching,
   the system shall fire that schedule.
@@ -153,7 +153,7 @@ about it when it eventually cannot.
 ## Capability: Choose what the trigger does
 
 ### PS-SCHED-030 — A schedule can drive an agent, a workflow, or a message
-**Status:** planned
+**Status:** covered
 
 - When a schedule fires at an agent, the system shall start a conversation with
   it carrying whatever triggered the schedule.

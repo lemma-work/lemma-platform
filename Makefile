@@ -28,7 +28,8 @@ SHELL := /bin/bash
         test-dev-workflow \
         test test-backend test-backend-unit test-backend-e2e \
         test-frontend test-cli test-cli-unit test-cli-e2e test-python \
-        scenarios scenarios-guards scenarios-sandbox scenarios-images scenario-coverage \
+        scenarios scenarios-guards scenarios-sandbox scenarios-images \
+        scenario-coverage scenarios-code-coverage \
         coverage coverage-backend coverage-backend-unit coverage-backend-e2e \
         coverage-backend-module coverage-cli coverage-cli-unit coverage-cli-e2e coverage-frontend \
         lint quality check codeql codeql-python codeql-javascript codeql-all migrate
@@ -1235,6 +1236,15 @@ scenarios-sandbox:
 scenarios-guards:
 	@echo "→ Scenario suite guards…"
 	@cd $(SCENARIOS_DIR) && uv run pytest journeys/test_harness_contract.py -q
+
+# What the scenario suite actually executes in the backend. Instruments the
+# uvicorn and worker subprocesses, so this measures the product being driven
+# over HTTP rather than functions being called directly.
+scenarios-code-coverage:
+	@echo "→ Product scenarios under coverage…"
+	@cd $(BACKEND_DIR) && uv run coverage erase
+	@cd $(SCENARIOS_DIR) && SCENARIOS_COVERAGE=1 uv run pytest -q || true
+	@cd $(BACKEND_DIR) && uv run coverage combine && uv run coverage report | tail -30
 
 # Regenerate docs/product/coverage.md. `make quality` checks it is current.
 scenario-coverage:

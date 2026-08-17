@@ -132,6 +132,22 @@ patch:
 Everything else is real, including the Docker sandboxes that functions execute
 in.
 
+## Measuring it
+
+Three different numbers, and they answer three different questions:
+
+```bash
+make quality                    # promises covered, and API/event surface touched
+```
+```bash
+make scenarios-code-coverage    # what the backend actually executes
+```
+
+The last one instruments the uvicorn and worker subprocesses, so it measures
+the product being driven over HTTP rather than functions being called directly.
+It is off by default because measuring costs runtime and this suite is meant to
+be run constantly.
+
 ## What is not here yet
 
 Being honest about the edges, because a half-built harness that looks finished

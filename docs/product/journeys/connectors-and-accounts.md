@@ -34,7 +34,7 @@ behalf.
 ## Capability: Install a connector for the organization
 
 ### PS-CONN-010 — An admin installs a connector once for everyone
-**Status:** planned
+**Status:** covered
 
 - When an organization admin installs a connector, the system shall make it
   available for members of that organization to connect their own accounts to.
@@ -57,7 +57,7 @@ behalf.
 **Contracts:** `connector.auth_config.get`, `connector.auth_config.list`
 
 ### PS-CONN-012 — Removing an installation removes what depended on it
-**Status:** planned
+**Status:** covered
 
 - When an admin deletes an installation, the system shall stop every account
   connected through it from being usable.
@@ -71,7 +71,7 @@ behalf.
 ## Capability: Connect your own account
 
 ### PS-CONN-020 — A person connects their account and it belongs to them
-**Status:** planned
+**Status:** covered
 
 - When a person connects their account for an installed connector, the system
   shall bind it to them and shall record `connector.connected`.
@@ -98,7 +98,7 @@ behalf.
 **Contracts:** `connector.connect_request.create`, `connector.oauth.callback`
 
 ### PS-CONN-022 — An account that stops working says so
-**Status:** planned
+**Status:** covered
 
 - If a provider rejects a credential as no longer valid, then the system shall
   mark that account as needing reconnection.
@@ -114,7 +114,7 @@ behalf.
 ## Capability: Do something at the provider
 
 ### PS-CONN-030 — A person finds the operation they need
-**Status:** planned
+**Status:** covered
 
 - When a person searches the operations of an installed connector, the system
   shall return matching ones with what they take and what they return.
@@ -125,7 +125,7 @@ behalf.
 **Contracts:** `connector.operation.search`, `connector.operation.discover`, `connector.operation.detail`, `connector.operation.details.batch`, `connector.auth_config.refresh_operations`
 
 ### PS-CONN-031 — An operation runs as the person who owns the account
-**Status:** planned
+**Status:** covered
 
 - When a person runs an operation, the system shall run it using their own
   connected account.
@@ -168,7 +168,7 @@ behalf.
 ## Capability: React to the provider
 
 ### PS-CONN-040 — A person sees what a provider can notify them about
-**Status:** planned
+**Status:** covered
 
 - When a person asks what triggers a connector offers, the system shall list
   them with what each one carries.

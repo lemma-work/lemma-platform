@@ -19,7 +19,7 @@ rights than the person who asked.
 ## Capability: Decide how widely a resource is shared
 
 ### PS-ACCESS-001 — Every resource has a stated reach
-**Status:** planned
+**Status:** covered
 
 - The system shall give every table, file, agent, function, workflow, schedule,
   and app one of four reaches: **personal** to its creator, **pod**-wide,
@@ -34,7 +34,7 @@ rights than the person who asked.
 **Contracts:** `table.create`, `agent.create`, `function.create`, `workflow.create`, `pod.resource.preview`
 
 ### PS-ACCESS-002 — Narrowing a resource's reach takes access away immediately
-**Status:** planned
+**Status:** covered
 
 - When a person narrows a resource from pod-wide to restricted, the system shall
   refuse the next request from anyone not named on it.
@@ -102,7 +102,7 @@ rights than the person who asked.
 ## Capability: Give software exactly what it needs
 
 ### PS-ACCESS-020 — An agent or function never exceeds the person it acts for
-**Status:** planned
+**Status:** covered
 
 - While an agent or function acts on a person's behalf, the system shall grant
   it the intersection of that person's access and its own grants, and never the
@@ -164,7 +164,7 @@ rights than the person who asked.
 **Contracts:** `pod.resource_access.get`, `pod.resource.preview`
 
 ### PS-ACCESS-031 — Refusals are informative without leaking
-**Status:** planned
+**Status:** covered
 
 - If a person is refused access to a resource, then the system shall say they
   are not permitted.

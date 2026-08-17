@@ -243,9 +243,29 @@ def _backend_python() -> str:
     return sys.executable
 
 
+def _coverage_environment() -> dict[str, str]:
+    """Instrument the backend and worker subprocesses, when asked.
+
+    Off by default — measuring costs runtime and this suite is meant to be run
+    constantly. `SCENARIOS_COVERAGE=1` turns it on, and `make scenarios-coverage`
+    does the whole cycle: erase, run, combine, report.
+
+    The backend's own `sitecustomize.py` calls `coverage.process_startup()` when
+    it sees `COVERAGE_PROCESS_START`, and `PYTHONPATH` already points at the
+    backend root, so nothing else has to be arranged.
+    """
+    if os.getenv("SCENARIOS_COVERAGE") != "1":
+        return {}
+    return {
+        "COVERAGE_PROCESS_START": str(BACKEND_ROOT / ".coveragerc"),
+        "COVERAGE_FILE": str(BACKEND_ROOT / ".coverage"),
+    }
+
+
 def _environment(*, port: int, database_url: str, redis_url: str, supertokens_url: str) -> dict[str, str]:
     scratch = Path(tempfile.gettempdir()) / f"lemma-scenarios-{port}"
     return {
+        **_coverage_environment(),
         **os.environ,
         "PYTHONPATH": str(BACKEND_ROOT),
         "ENVIRONMENT": "testing",
@@ -286,6 +306,14 @@ def _environment(*, port: int, database_url: str, redis_url: str, supertokens_ur
         # Without it every agent scenario needs an API key and returns something
         # different each run.
         "E2E_LLM_MODE": "mock",
+        # The self-hosted posture. Off in production so an org admin cannot
+        # point a connector at the cloud metadata service; on here so a
+        # connector can target the fake provider this suite runs on loopback.
+        # Nothing is lost by flipping it: the guard's default-off behaviour is
+        # covered directly by `app/core/tests/unit/test_url_guard.py`, which
+        # asserts the refusal reason for loopback, private and link-local
+        # addresses. What this suite adds is the lifecycle *around* it.
+        "CONNECTOR_ALLOW_PRIVATE_NETWORK_TARGETS": "true",
         # None of these three are ever used to reach a provider — in mock mode
         # the model is swapped for a scripted one before any call is made. They
         # have to be *present* because building the system runtime profile

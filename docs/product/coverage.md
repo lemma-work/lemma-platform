@@ -11,14 +11,25 @@ only a promise marked `covered` with no test is.
 
 | Status | Scenarios |
 | --- | ---: |
-| `covered` | 79 |
+| `covered` | 92 |
 | `gap` | 8 |
 | `manual` | 0 |
-| `planned` | 73 |
+| `planned` | 60 |
 | `withdrawn` | 0 |
 | **total** | **160** |
 
-Scenario tests declaring a promise: 142.
+Scenario tests declaring a promise: 173.
+
+## Contract coverage
+
+How much of the API and event surface the scenarios touch, counted from
+`@covers`. An operation with no scenario is not necessarily untested —
+the module suites may cover it — but it is untested *as product*.
+
+| Surface | Exercised | Total |
+| --- | ---: | ---: |
+| OpenAPI operations | 140 | 235 |
+| Product events | 18 | 28 |
 
 ## [Agents and conversations](journeys/agents-and-conversations.md)
 
@@ -87,17 +98,17 @@ Scenario tests declaring a promise: 142.
 | Scenario | Status | Proven by |
 | --- | --- | --- |
 | `PS-CONN-001` A person browses what the platform can connect to | `covered` | `test_the_connector_catalogue_is_browsable`, `test_connector_status_is_readable` |
-| `PS-CONN-010` An admin installs a connector once for everyone | `planned` | — |
+| `PS-CONN-010` An admin installs a connector once for everyone | `covered` | `test_installing_discovers_operations`, `test_an_installation_does_not_leak_across_organizations`, `test_an_outsider_cannot_install`, `test_an_installation_can_be_renamed` |
 | `PS-CONN-011` Provider secrets given at install stay secret | `planned` | — |
-| `PS-CONN-012` Removing an installation removes what depended on it | `planned` | — |
-| `PS-CONN-020` A person connects their account and it belongs to them | `planned` | — |
+| `PS-CONN-012` Removing an installation removes what depended on it | `covered` | `test_uninstalling_stops_everything_under_it` |
+| `PS-CONN-020` A person connects their account and it belongs to them | `covered` | `test_an_account_belongs_to_who_connected_it`, `test_an_account_is_not_shared`, `test_disconnecting_stops_the_account_working`, `test_reconnecting_restores_the_account` |
 | `PS-CONN-021` Connecting through a provider's consent screen works end to end | `planned` | — |
-| `PS-CONN-022` An account that stops working says so | `planned` | — |
-| `PS-CONN-030` A person finds the operation they need | `planned` | — |
-| `PS-CONN-031` An operation runs as the person who owns the account | `planned` | — |
+| `PS-CONN-022` An account that stops working says so | `covered` | `test_reconnecting_restores_the_account` |
+| `PS-CONN-030` A person finds the operation they need | `covered` | `test_installing_discovers_operations`, `test_an_operation_is_readable` |
+| `PS-CONN-031` An operation runs as the person who owns the account | `covered` | `test_an_account_is_not_shared`, `test_an_operation_reaches_the_provider` |
 | `PS-CONN-032` A slow or failing provider does not damage the pod | `planned` | — |
 | `PS-CONN-033` An agent can only use the connectors it was granted | `planned` | — |
-| `PS-CONN-040` A person sees what a provider can notify them about | `planned` | — |
+| `PS-CONN-040` A person sees what a provider can notify them about | `covered` | `test_triggers_are_listable` |
 
 ## [Getting started](journeys/getting-started.md)
 
@@ -161,33 +172,33 @@ Scenario tests declaring a promise: 142.
 | Scenario | Status | Proven by |
 | --- | --- | --- |
 | `PS-SCHED-001` A person schedules work for a time or a repeat | `covered` | `test_a_repeating_schedule_is_created`, `test_unusable_timing_is_refused`, `test_an_outsider_cannot_touch_schedules` |
-| `PS-SCHED-002` A person can pause a schedule without losing it | `covered` | `test_a_schedule_can_be_paused_and_resumed` |
-| `PS-SCHED-003` Deleting a schedule stops it everywhere | `covered` | `test_deleting_a_schedule_removes_it` |
+| `PS-SCHED-002` A person can pause a schedule without losing it | `covered` | `test_a_schedule_can_be_paused_and_resumed`, `test_a_paused_schedule_does_not_fire` |
+| `PS-SCHED-003` Deleting a schedule stops it everywhere | `covered` | `test_deleting_a_schedule_removes_it`, `test_a_deleted_schedule_does_not_fire` |
 | `PS-SCHED-010` A pod reacts to a webhook from outside | `planned` | — |
-| `PS-SCHED-011` A pod reacts to its own data changing | `planned` | — |
+| `PS-SCHED-011` A pod reacts to its own data changing | `covered` | `test_a_record_change_fires_a_schedule`, `test_an_unwatched_operation_does_not_fire`, `test_another_table_does_not_fire` |
 | `PS-SCHED-012` A person can narrow what actually triggers | `planned` | — |
 | `PS-SCHED-020` Work fires once, however many times the trigger arrives | `planned` | — |
-| `PS-SCHED-021` A person can see every firing and how it went | `covered` | `test_a_schedules_history_is_readable` |
+| `PS-SCHED-021` A person can see every firing and how it went | `covered` | `test_a_schedules_history_is_readable`, `test_a_record_change_fires_a_schedule`, `test_an_outsider_cannot_read_history` |
 | `PS-SCHED-022` A firing that fails is retried, and then given up on visibly | `planned` | — |
 | `PS-SCHED-023` A schedule that keeps failing is turned off and reported | `planned` | — |
-| `PS-SCHED-030` A schedule can drive an agent, a workflow, or a message | `planned` | — |
+| `PS-SCHED-030` A schedule can drive an agent, a workflow, or a message | `covered` | `test_a_schedule_can_target_a_workflow` |
 
 ## [Sharing and permissions](journeys/sharing-and-permissions.md)
 
 | Scenario | Status | Proven by |
 | --- | --- | --- |
-| `PS-ACCESS-001` Every resource has a stated reach | `planned` | — |
-| `PS-ACCESS-002` Narrowing a resource's reach takes access away immediately | `planned` | — |
+| `PS-ACCESS-001` Every resource has a stated reach | `covered` | `test_the_default_reach_is_the_pod`, `test_a_personal_resource_stays_personal`, `test_public_never_means_anonymous` |
+| `PS-ACCESS-002` Narrowing a resource's reach takes access away immediately | `covered` | `test_revoking_closes_it_again` |
 | `PS-ACCESS-003` Changing reach does not silently disarm the pod's software | `planned` | — |
-| `PS-ACCESS-010` A person grants one other person access to one resource | `covered` | `test_nobody_confers_more_than_they_have` |
+| `PS-ACCESS-010` A person grants one other person access to one resource | `covered` | `test_a_grant_is_narrow`, `test_revoking_closes_it_again`, `test_a_grant_is_scoped_to_its_pod`, `test_nobody_confers_more_than_they_have` |
 | `PS-ACCESS-011` A person grants access to a role rather than a name | `planned` | — |
 | `PS-ACCESS-012` A person can see what they may do before trying | `covered` | `test_effective_permissions_are_readable`, `test_reported_permissions_are_honest` |
-| `PS-ACCESS-020` An agent or function never exceeds the person it acts for | `planned` | — |
+| `PS-ACCESS-020` An agent or function never exceeds the person it acts for | `covered` | `test_a_new_agent_holds_nothing`, `test_a_new_function_holds_nothing`, `test_a_member_cannot_widen_an_agent` |
 | `PS-ACCESS-021` No software does anything destructive by default | `planned` | — |
 | `PS-ACCESS-022` Approving for a session means that session only | `planned` | — |
 | `PS-ACCESS-023` Revoking a person's access revokes their software's too | `planned` | — |
-| `PS-ACCESS-030` A person can see who can reach a resource | `covered` | `test_resource_access_is_readable` |
-| `PS-ACCESS-031` Refusals are informative without leaking | `planned` | — |
+| `PS-ACCESS-030` A person can see who can reach a resource | `covered` | `test_a_grant_is_auditable`, `test_resource_access_is_readable` |
+| `PS-ACCESS-031` Refusals are informative without leaking | `covered` | `test_a_refusal_is_informative`, `test_a_refusal_does_not_leak` |
 
 ## [Surfaces and notifications](journeys/surfaces-and-notifications.md)
 
