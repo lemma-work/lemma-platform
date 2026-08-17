@@ -353,13 +353,19 @@ class AgentHostEventNormalizer:
             )
         if object_id in self.tool_calls.closed:
             return []
+        # A call still holding its arguments has to be announced before its
+        # return, or the conversation gets a result for something it never saw
+        # start. It is handed this payload because for a call that was never
+        # refined, the closing update is the only thing that ever named the tool
+        # or carried its input.
+        opening = self._announce_tool_call(
+            self.tool_calls.release(object_id, payload, metadata)
+        )
+        # Read after the release, so the return is named whatever the call was
+        # finally announced as rather than the placeholder it opened with.
         tool_name = self.tool_calls.open_calls.get(
             object_id, tool_name_from_payload(payload)
         )
-        # A call still holding its arguments has to be announced before its
-        # return, or the conversation gets a result for something it never saw
-        # start.
-        opening = self._announce_tool_call(self.tool_calls.release(object_id))
         self.tool_calls.close(object_id)
         raw_result = first_present(payload, "result", "rawOutput")
         if status == "COMPLETED":

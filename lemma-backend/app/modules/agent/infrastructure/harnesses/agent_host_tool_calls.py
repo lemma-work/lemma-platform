@@ -169,16 +169,33 @@ class ToolCallLedger:
             return None
         return self._announce(object_id, held)
 
-    def release(self, object_id: str) -> tuple[MessageDraft, int] | None:
+    def release(
+        self,
+        object_id: str,
+        payload: JsonObject | None = None,
+        metadata: JsonObject | None = None,
+    ) -> tuple[MessageDraft, int] | None:
         """Announce a call whose arguments never arrived, so it is not lost.
 
         A call is held only while its arguments are still being written. If the
         turn ends first — the agent was cancelled, the adapter died, the tool
         genuinely takes no arguments — the call still happened and still owes
         the conversation a card.
+
+        ``payload`` is the update doing the releasing, and is folded in first.
+        The closing update is frequently the only one that ever named the tool
+        or carried its input: releasing without reading it announced the call as
+        an anonymous ``tool`` with ``{}`` for arguments while the answer to both
+        sat in the very event that triggered the release. Only the fields a call
+        reads are used; a result on the same payload is ignored here and handled
+        by the caller.
         """
         held = self.held.get(object_id)
-        return self._announce(object_id, held) if held is not None else None
+        if held is None:
+            return None
+        if payload is not None:
+            held.absorb(payload, metadata or {})
+        return self._announce(object_id, held)
 
     def release_all(self) -> list[tuple[MessageDraft, int]]:
         return [

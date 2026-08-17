@@ -430,6 +430,45 @@ class TestToolCalls:
         assert trailing == []
         assert len(_messages(closed)) == 1
 
+    def test_a_call_released_at_its_close_reads_the_closing_update(self) -> None:
+        """The closing update is often the first thing that names a tool.
+
+        A call held for arguments that never came was announced from its
+        opening alone — an anonymous ``tool`` with ``{}`` — while the name and
+        the input sat in the very event that triggered the release. Both cards
+        then disagreed with what actually ran.
+        """
+        n = _normalizer()
+        n.normalize(
+            _event(
+                1,
+                AgentHostEventType.TOOL_CALL_UPSERT,
+                {"rawInput": {}},
+                object_id="call-1",
+            )
+        )
+        closed = n.normalize(
+            _event(
+                2,
+                AgentHostEventType.TOOL_CALL_UPDATE,
+                {
+                    "status": "COMPLETED",
+                    "_meta": {"claudeCode": {"toolName": "read_file"}},
+                    "rawInput": {"path": "README.md"},
+                    "rawOutput": "# Lemma",
+                },
+                object_id="call-1",
+            )
+        )
+
+        call, result = (m.data for m in _messages(closed))
+        assert call.kind is MessageKind.TOOL_CALL
+        assert call.tool_name == "read_file"
+        assert call.tool_args == {"path": "README.md"}
+        # And the return agrees with it, rather than with the placeholder the
+        # call opened under.
+        assert result.tool_name == "read_file"
+
     def test_a_call_whose_arguments_never_arrive_is_still_announced(self) -> None:
         """Holding is for arguments in flight, never a way to lose a call.
 
