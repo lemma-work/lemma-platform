@@ -377,6 +377,10 @@ impl Bench {
     }
 }
 
+#[cfg_attr(
+    windows,
+    expect(unused_variables, reason = "adapter reuse is a unix symlink")
+)]
 async fn start_host(
     root: &std::path::Path,
     bench: &Bench,
