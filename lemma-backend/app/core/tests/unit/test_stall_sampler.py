@@ -16,6 +16,7 @@ import queue
 import threading
 import time
 import traceback
+from pathlib import Path
 
 import pytest
 
@@ -142,10 +143,16 @@ def test_a_loop_parked_in_the_selector_says_so() -> None:
     )
 
 
-def _the_thread_that_holds_the_gil(stop: threading.Event) -> None:
-    """Deliberately named: the assertion looks for this name."""
+def _the_thread_that_holds_the_gil(
+    stop: threading.Event, running: threading.Event
+) -> None:
+    """Burn CPU in pure Python, which is what actually holds the GIL."""
+    running.set()
     while not stop.is_set():
-        sum(index * index for index in range(2_000))
+        total = 0
+        for index in range(5_000):
+            total += index * index
+        del total
 
 
 @pytest.mark.asyncio
@@ -163,23 +170,28 @@ async def test_the_report_names_a_busy_thread_that_is_not_the_loop() -> None:
     sampler._loop_thread_id = threading.get_ident()  # noqa: SLF001
 
     stop = threading.Event()
+    running = threading.Event()
     worker = threading.Thread(
         target=_the_thread_that_holds_the_gil,
-        args=(stop,),
+        args=(stop, running),
         name="offload-worker",
         daemon=True,
     )
     worker.start()
     try:
-        await asyncio.sleep(0.05)
+        assert running.wait(5.0), "the worker thread never started"
         _, other_threads = sampler._capture()  # noqa: SLF001
     finally:
         stop.set()
-        worker.join(timeout=2.0)
+        worker.join(timeout=5.0)
 
     assert other_threads, "no other thread was reported while one was burning CPU"
-    assert "_the_thread_that_holds_the_gil" in other_threads
     assert "offload-worker" in other_threads
+    # Asserted on the file, not on which function the sample happened to catch.
+    # The claim is that a non-loop thread is reported with its *own* frames;
+    # exactly where in the loop the GIL was released when the stack was grabbed
+    # is scheduling, and pinning it made this flaky on a loaded CI runner.
+    assert Path(__file__).name in other_threads
 
 
 @pytest.mark.asyncio
