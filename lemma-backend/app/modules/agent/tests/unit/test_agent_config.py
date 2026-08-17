@@ -38,6 +38,7 @@ EXPECTED = [
     ("widget_url_expiry_seconds", "WIDGET_URL_EXPIRY_SECONDS", 1800),
     ("speech_provider", "SPEECH_PROVIDER", "auto"),
     ("deepgram_api_key", "DEEPGRAM_API_KEY", None),
+    ("web_fetch_impersonate_browser", "WEB_FETCH_IMPERSONATE_BROWSER", True),
 ]
 FACTORY_FIELDS = {"local_agent_runtime_config_path"}
 
@@ -68,17 +69,26 @@ def test_agent_runtime_config_path_default_and_env(monkeypatch):
     assert AgentSettings().local_agent_runtime_config_path == "/tmp/runtime.json"
 
 
+def _override_for(default, field) -> tuple[str, object]:
+    """An env value that differs from the declared default.
+
+    Differing is the point: if the override matched the default, the assertion
+    would pass just as well when the variable was never consulted at all.
+    """
+    # Before the numeric case, because `isinstance(True, int)` is True in
+    # Python — a flag would otherwise be handed "123" to parse.
+    if isinstance(default, bool):
+        return "false", False
+    if isinstance(default, (int, float)):
+        return "123", float(123) if isinstance(default, float) else 123
+    if field == "speech_provider":
+        return "deepgram", "deepgram"
+    return "sentinel", "sentinel"
+
+
 @pytest.mark.parametrize("field,env,default", EXPECTED)
 def test_agent_settings_reads_legacy_env_var(monkeypatch, field, env, default):
     _clear(monkeypatch)
-    raw, expected = (
-        ("123", float(123) if isinstance(default, float) else 123)
-        if isinstance(default, (int, float))
-        else (
-            ("deepgram", "deepgram")
-            if field == "speech_provider"
-            else ("sentinel", "sentinel")
-        )
-    )
+    raw, expected = _override_for(default, field)
     monkeypatch.setenv(env, raw)
     assert getattr(AgentSettings(), field) == expected
