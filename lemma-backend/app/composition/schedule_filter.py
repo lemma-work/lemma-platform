@@ -48,6 +48,17 @@ FILTER_USAGE_LIMITS = UsageLimits(
     count_tokens_before_request=True,
 )
 
+#: Characters of rendered event kept in the filter prompt.
+#:
+#: A budget, not a guess: it sits well inside ``input_tokens_limit`` above at
+#: the conservative ~3 characters per token, leaving room for the system prompt
+#: and the instruction. It exists because ``count_tokens_before_request`` is
+#: silently dropped for models that cannot pre-count (see ``usage_limits_for``),
+#: so without a bound here the limit is only enforced *after* the provider has
+#: been called and billed -- which is exactly what production was doing, up to
+#: three times per event with retries.
+_MAX_EVENT_CHARS = 60_000
+
 
 def filter_usage_limits_for(model: Model) -> UsageLimits:
     """Pick usage limits the model can actually honor."""
@@ -150,9 +161,28 @@ class SystemModelScheduleFilter:
 
     @staticmethod
     def _user_message(event_payload: dict[str, Any]) -> str:
-        return "Analyze this event:\n" + json.dumps(
-            event_payload, indent=2, default=str
-        )
+        """Render the event, bounded, because the filter's input is not ours.
+
+        This embedded the whole trigger payload with ``indent=2``. A webhook
+        body is whatever the provider chose to send, so the prompt had no upper
+        size at all -- production ran 32,653 to 100,883 tokens against a 32,000
+        limit, and every one of those runs failed *after* the model had been
+        called and billed, because the resolved system model cannot count
+        tokens before a request.
+
+        Truncating degrades the filter's judgement on a huge event. Failing
+        outright removes it entirely, silently, on every fire. The first is the
+        better trade, and the caller is told it happened.
+        """
+        rendered = json.dumps(event_payload, default=str, separators=(",", ":"))
+        if len(rendered) > _MAX_EVENT_CHARS:
+            kept = rendered[:_MAX_EVENT_CHARS]
+            dropped = len(rendered) - _MAX_EVENT_CHARS
+            rendered = (
+                f"{kept}\n\n[event truncated: {dropped} of {len(rendered)} "
+                f"characters omitted. Judge from what is shown.]"
+            )
+        return "Analyze this event:\n" + rendered
 
 
 def create_schedule_processor() -> ScheduleProcessor:

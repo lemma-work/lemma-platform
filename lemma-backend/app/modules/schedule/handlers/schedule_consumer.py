@@ -14,6 +14,8 @@ from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.core.infrastructure.jobs.streaq_runtime import streaq_task
 from app.modules.schedule.repositories.schedule_repository import ScheduleRepository
 from app.modules.schedule.services.run_outcome_service import ScheduleRunOutcomeService
+from pydantic_ai.exceptions import UsageLimitExceeded as PydanticAIUsageLimitExceeded
+
 from app.modules.usage.contracts import UsageLimitExceededError
 from app.core.log.log import get_logger
 from app.composition.schedule_filter import create_schedule_processor
@@ -70,7 +72,17 @@ async def handle_llm_filter_task(
             metadata=metadata,
             source_event_id=source_event_id,
         )
-    except UsageLimitExceededError:
+    except (UsageLimitExceededError, PydanticAIUsageLimitExceeded) as exc:
+        # Two unrelated classes with nearly the same name, and only one of them
+        # was caught. `UsageLimitExceededError` is ours -- the pod's billing
+        # budget. `UsageLimitExceeded` is pydantic-ai's, raised when a run
+        # exceeds `input_tokens_limit`, and it is the one production actually
+        # hits: 21 a day, every one of them an event too large for the filter's
+        # token budget. It matched nothing here, so it escaped unhandled, no
+        # ledger row was written, the breaker counted nothing, the schedule was
+        # never deactivated and the owner was never emailed. The safety net
+        # below was real and simply never applied to the failure that occurs.
+        #
         # Policy lives here, at the task boundary, not in the processor. The
         # processor raises every filter failure alike and is right to — a
         # provider blip should still reach streaq and be retried. Only this one
@@ -87,7 +99,14 @@ async def handle_llm_filter_task(
             recorded = await ScheduleRunOutcomeService(uow).record_pre_dispatch_failure(
                 schedule,
                 source_event_id=source_event_id,
-                error_type="ScheduleFilterQuotaExhausted",
+                # Distinguished, because they need different fixes: one means
+                # the pod is out of budget, the other means the triggering
+                # event was too large for the filter to read.
+                error_type=(
+                    "ScheduleFilterQuotaExhausted"
+                    if isinstance(exc, UsageLimitExceededError)
+                    else "ScheduleFilterEventTooLarge"
+                ),
             )
         logger.warning(
             "schedule.filter.quota_exhausted.degraded",
