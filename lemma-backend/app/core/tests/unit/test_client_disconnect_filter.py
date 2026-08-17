@@ -19,7 +19,10 @@ import pytest
 from app.core.log import log as log_module
 from app.core.log.log import _ClientDisconnectFilter
 
-# The record production actually emits, verbatim.
+# One of four records production emits. `ConnectionClosed.__str__` builds a
+# different string depending on who closed and whether a close frame came back,
+# and only this branch happens to contain "no close frame received" -- which is
+# why a filter requiring that phrase let the other three through, 26 a day.
 _DISCONNECT = (
     "ConnectionClosedError exception in shielded future\n"
     "future: <Future finished exception=ConnectionClosedError(None, "
@@ -98,3 +101,52 @@ def test_the_filter_is_installed_ahead_of_the_exception_scrubber() -> None:
 
     kinds = [type(f).__name__ for f in handler.filters]
     assert kinds.index("_ClientDisconnectFilter") < kinds.index("_SafeExceptionFilter")
+
+
+# `websockets` renders a closed connection four ways (see
+# `websockets/exceptions.py`, `ConnectionClosed.__str__`). All four are the same
+# event -- a client that stopped answering pings -- and all four must be dropped.
+_SENT_THEN_RECEIVED = (
+    "ConnectionClosedError exception in shielded future\n"
+    "future: <Future finished exception=ConnectionClosedError(None, "
+    "Close(code=<CloseCode.INTERNAL_ERROR: 1011>, reason='keepalive ping "
+    "timeout'), None)>; then received Close(code=<CloseCode.ABNORMAL_CLOSURE: "
+    "1006>, reason='')"
+)
+_RECEIVED_NO_CLOSE_SENT = (
+    "ConnectionClosedError exception in shielded future\n"
+    "future: <Future finished exception=ConnectionClosedError(Close("
+    "code=<CloseCode.INTERNAL_ERROR: 1011>, reason='keepalive ping timeout'), "
+    "None, None)>; no close frame sent"
+)
+_RECEIVED_THEN_SENT = (
+    "ConnectionClosedError exception in shielded future\n"
+    "future: <Future finished exception=ConnectionClosedError(Close("
+    "code=<CloseCode.INTERNAL_ERROR: 1011>, reason='keepalive ping timeout'), "
+    "None, None)>; then sent Close(code=<CloseCode.NORMAL_CLOSURE: 1000>, reason='')"
+)
+
+
+@pytest.mark.parametrize(
+    "message",
+    [_SENT_THEN_RECEIVED, _RECEIVED_NO_CLOSE_SENT, _RECEIVED_THEN_SENT],
+    ids=["sent-then-received", "received-no-close-sent", "received-then-sent"],
+)
+def test_every_keepalive_timeout_phrasing_is_dropped(message):
+    """The residual. These three were reaching production error dashboards at
+    ERROR while the fourth was filtered, because the filter demanded a phrase
+    only the fourth contains."""
+    assert _ClientDisconnectFilter().filter(_record(message)) is False
+
+
+def test_a_socket_that_failed_mid_write_is_still_reported():
+    """The reason the filter is narrow at all: a ConnectionClosed that is *not*
+    a keepalive timeout is a real fault and must survive."""
+    message = (
+        "ConnectionClosedError exception in shielded future\n"
+        "future: <Future finished exception=ConnectionClosedError(None, "
+        "Close(code=<CloseCode.ABNORMAL_CLOSURE: 1006>, reason=''), None)>; "
+        "no close frame received"
+    )
+
+    assert _ClientDisconnectFilter().filter(_record(message)) is True
