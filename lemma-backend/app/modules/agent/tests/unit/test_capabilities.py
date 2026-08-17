@@ -113,6 +113,32 @@ def test_web_search_capability_bundles_tool_and_prompt():
     assert "Web research" in cap.get_instructions()
 
 
+def test_showing_your_work_is_taught_on_both_paths():
+    """`display_resource` needs prose, not only a tool schema.
+
+    In-process runs get this fragment through a capability and remote harnesses
+    get it through ``FRAGMENT_BY_TOOLSET``; the two lists are maintained
+    separately, and for a long time ``USER_INTERACTION`` was in neither. The
+    tool's own description was the whole of its guidance, which is enough when
+    it is a first-class tool definition and nothing competes with it — and not
+    enough for a coding agent that meets it as one MCP tool underneath its own
+    system prompt. It answered in prose and never displayed anything.
+    """
+    from app.modules.agent.capabilities.assembler import _instructions_for
+    from app.modules.agent.domain.prompts import FRAGMENT_BY_TOOLSET
+    from app.modules.agent.tools.user_interaction.pydantic_adapter import (
+        user_interaction_toolset,
+    )
+
+    guidance = _instructions_for(user_interaction_toolset)
+    assert guidance is not None, "the in-process path lost the fragment"
+    assert "display_resource" in guidance[1]()
+
+    remote = FRAGMENT_BY_TOOLSET.get(AgentToolset.USER_INTERACTION)
+    assert remote is not None, "the remote-harness path lost the fragment"
+    assert "display_resource" in remote.read_text()
+
+
 @pytest.mark.anyio
 async def test_assembler_returns_capabilities_for_every_visible_toolset():
     from app.modules.agent.capabilities.assembler import build_lemma_harness_tooling

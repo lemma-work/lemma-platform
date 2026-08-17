@@ -36,7 +36,7 @@ class EventTransportSettings(BaseSettings):
         ),
     )
     outbox_listen_enabled: bool = Field(
-        default=False,
+        default=True,
         description=(
             "Wake the outbox dispatcher with PostgreSQL LISTEN/NOTIFY instead "
             "of waiting out the idle backoff. The notification is only a hint: "
@@ -44,18 +44,26 @@ class EventTransportSettings(BaseSettings):
             "turning this off restores timer-driven behaviour exactly. "
             "Requires a direct connection -- a transaction-mode pooler in "
             "front of PostgreSQL silently swallows session-scoped LISTEN, "
-            "which degrades to fallback latency rather than breaking."
+            "which degrades to fallback latency rather than breaking. "
+            "On by default because the backoff it replaces is the dominant "
+            "term in how long a chat message waits before anything happens: "
+            "an idle dispatcher sits at outbox_idle_poll_max_seconds, and a "
+            "message landing mid-sleep waits out the remainder. Measured "
+            "against a local stack, that was 1.4-4.1s per message."
         ),
     )
     outbox_listen_fallback_poll_seconds: float = Field(
-        default=30.0,
+        default=5.0,
         ge=0.5,
         description=(
             "Idle wait when a wake listener is attached. This is the worst-case "
             "delivery latency if every notification is lost -- a dropped "
             "listener, or a pooler that ate the LISTEN -- so it is a recovery "
             "bound, not a performance number. Ignored while "
-            "outbox_listen_enabled is false."
+            "outbox_listen_enabled is false. Deliberately no higher than "
+            "outbox_idle_poll_max_seconds: attaching a listener must never "
+            "make a deployment whose LISTEN is silently swallowed slower than "
+            "the backoff ladder it replaced."
         ),
     )
     # Whole seconds: asyncpg's connect() types its timeout as an int.

@@ -15,7 +15,7 @@ from uuid import UUID
 from app.core.crypto import get_secret_cipher
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
-from app.modules.agent.domain.agent_host import AgentHostRunSpec
+from app.modules.agent.domain.agent_host import NEW_SESSION_ONLY, AgentHostRunSpec
 from app.modules.agent.domain.context import AgentContext
 from app.modules.agent.domain.entities import Agent, Conversation, Message
 from app.modules.agent.domain.prompts import load_agent_host_runtime_prompt
@@ -170,6 +170,27 @@ agent: Agent,
     encrypted_mcp = await get_secret_cipher().encrypt_json_async(mcp)
     if encrypted_mcp is None:
         raise RuntimeError("could not encrypt MCP configuration")
+    # A conversation is one provider session, and a session keeps its own
+    # history — so instructions delivered when it opened are still there on
+    # every later turn. Re-sending them each time put another copy of a
+    # multi-kilobyte block into the provider's transcript per message, which it
+    # then re-read in full on every turn after that. Skipped only when this
+    # exact text is already known to have reached this session; the host still
+    # sends it if it ends up opening a new one.
+    system_prompt = str(
+        prompt.get("system_prompt") or prompt.get("recovery_system_prompt") or ""
+    )
+    digest = agent_host_session_memory.instructions_digest(system_prompt)
+    system_prompt_delivery: str | None = None
+    if resume_session_id is not None:
+        async with uow_factory() as uow:
+            if await agent_host_session_memory.instructions_already_delivered(
+                uow,
+                conversation_id=conversation.id,
+                harness_id=harness_id,
+                digest=digest,
+            ):
+                system_prompt_delivery = NEW_SESSION_ONLY
     dispatched_at = datetime.now(timezone.utc)
     timeout_seconds, credential_bounded = credential_bounded_timeout(
         configured_seconds=event_timeout_seconds,
@@ -185,11 +206,8 @@ agent: Agent,
             profile_revision=config_revision,
             model_name=run_config.model_name,
             config_selections=run_config.config_selections,
-            system_prompt=str(
-                prompt.get("system_prompt")
-                or prompt.get("recovery_system_prompt")
-                or ""
-            ),
+            system_prompt=system_prompt,
+            system_prompt_delivery=system_prompt_delivery,
             prompt=[{"type": "text", "text": str(prompt.get("user_prompt") or "")}],
             resume_session_id=resume_session_id,
             context={
@@ -207,6 +225,16 @@ agent: Agent,
             run_spec=run_spec,
             encrypted_mcp_payload=encrypted_mcp,
             command_ttl_seconds=run_config.wait_timeout_seconds,
+        )
+        # A promise, committed with the command it belongs to. It becomes a
+        # record only when the host reports that it prompted, so a run that
+        # dies on the way out does not leave these instructions marked
+        # delivered and skipped for the rest of the conversation.
+        await agent_host_session_memory.record_pending_instructions(
+            uow,
+            conversation_id=conversation.id,
+            run_id=agent_run_id,
+            digest=digest,
         )
         await uow.commit()
     await poke_host(host_id)

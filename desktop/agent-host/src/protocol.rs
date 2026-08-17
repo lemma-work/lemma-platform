@@ -253,6 +253,27 @@ pub struct RunSpec {
     #[serde(default)]
     pub mcp: Value,
     pub run_deadline: DateTime<Utc>,
+    /// Whether Lemma still needs this turn to carry `system_prompt`.
+    ///
+    /// `NEW_SESSION_ONLY` means the session Lemma expects to resume has already
+    /// been told these exact instructions, so a resumed turn can leave them
+    /// out; anything else, including absent, means send them. Deliberately a
+    /// loose string rather than a typed enum: an unrecognised value has to
+    /// degrade to "send them", and a run spec that fails to deserialize is a
+    /// run that never happens at all.
+    #[serde(default)]
+    pub system_prompt_delivery: Option<String>,
+}
+
+/// The one value that lets a turn leave the instructions out.
+pub const NEW_SESSION_ONLY: &str = "NEW_SESSION_ONLY";
+
+impl RunSpec {
+    /// Whether Lemma wants the instructions on this turn regardless of session.
+    #[must_use]
+    pub fn instructions_every_turn(&self) -> bool {
+        self.system_prompt_delivery.as_deref() != Some(NEW_SESSION_ONLY)
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

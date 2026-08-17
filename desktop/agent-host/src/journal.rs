@@ -1241,6 +1241,7 @@ mod tests {
                 "authorization": "Bearer test"
             }),
             run_deadline: Utc::now() + ChronoDuration::minutes(5),
+            system_prompt_delivery: None,
         };
         let payload = serde_json::to_value(&spec).unwrap();
         let command = Command {

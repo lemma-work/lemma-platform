@@ -327,6 +327,13 @@ class RequestObserverMiddleware:
     QUIET_PATHS = frozenset(
         {"/health", "/health/live", "/health/ready", "/health/capabilities", "/livez"}
     )
+    # Routes that are supposed to take a long time. A long poll answers when it
+    # has news or when its hold expires, so a slow one is the design working:
+    # every completed idle poll logged a warning, and on one local stack 311 of
+    # 314 slow-request warnings were healthy 25-second polls. A warning that
+    # fires on the normal case is not a signal, and it buried the three that
+    # meant something.
+    HELD_ROUTES = frozenset({"/agent-host/poll"})
 
     def __init__(self, app):
         self.app = app
@@ -484,7 +491,10 @@ class RequestObserverMiddleware:
                             if streaming and response_started_at is not None
                             else (finished_at - started_at)
                         )
-                        if elapsed >= self.SLOW_SECONDS:
+                        if (
+                            elapsed >= self.SLOW_SECONDS
+                            and fields["route"] not in self.HELD_ROUTES
+                        ):
                             fields["duration_ms"] = round(elapsed * 1000, 1)
                             fields["latency_kind"] = (
                                 "time_to_first_byte" if streaming else "total"

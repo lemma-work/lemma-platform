@@ -13,7 +13,7 @@ import contextlib
 from typing import Annotated
 from uuid import UUID, uuid7
 
-from fastapi import APIRouter, Header, HTTPException, status
+from fastapi import APIRouter, Header, HTTPException, Request, status
 
 from app.core.api.dependencies import CurrentUser, UoWDep
 from app.core.infrastructure.channels.channel_service import get_channel_service
@@ -30,6 +30,7 @@ from app.modules.agent.api.agent_host_schemas import (
 )
 from app.modules.agent.domain.agent_host import (
     AGENT_HOST_PROTOCOL_VERSION,
+    AgentHostCommand,
     AgentHostEventAck,
     AgentHostEventBatch,
     AgentHostPairingComplete,
@@ -324,6 +325,7 @@ async def self_revoke_agent_host(
 )
 async def poll_agent_host_commands(
     request: AgentHostPollRequest,
+    http_request: Request,
     authorization: Annotated[str | None, Header()] = None,
 ) -> AgentHostPollResponse:
     """Long-poll for commands, carrying the host's control updates up.
@@ -380,8 +382,40 @@ async def poll_agent_host_commands(
             ),
         )
 
-    # Idle path: wait for a poke, falling back to a slow re-query so a missed
-    # poke only delays delivery by a few seconds.
+    return AgentHostPollResponse(
+        protocol_version=negotiated_protocol,
+        host_status=host_status,
+        commands=await _await_commands(
+            host_id=host_id,
+            deadline=deadline,
+            loop=loop,
+            available_run_slots=request.capacity.available_runs,
+            http_request=http_request,
+        ),
+    )
+
+
+async def _await_commands(
+    *,
+    host_id: UUID,
+    deadline: float,
+    loop: asyncio.AbstractEventLoop,
+    available_run_slots: int,
+    http_request: Request,
+) -> list[AgentHostCommand]:
+    """Hold the poll until there is something to say, or the hold expires.
+
+    Waits for a poke, falling back to a slow re-query so a missed poke only
+    delays delivery by a few seconds rather than a whole hold.
+
+    It also watches for the host going away. A host abandons a poll whenever it
+    has something else to do, and nothing here used to notice — so each
+    abandoned poll went on holding a task and a Redis subscription for the rest
+    of its 25 seconds. One host streaming a single answer was measured stacking
+    26 of them, against exactly one while idle. Noticing keeps that cost
+    proportional to how many hosts there are rather than to how talkative their
+    agents are.
+    """
     channel_service = await get_channel_service()
     async with channel_service.subscribe([host_poke_channel(host_id)]) as pokes:
         poke = aiter(pokes)
@@ -396,11 +430,7 @@ async def poll_agent_host_commands(
             while True:
                 remaining = deadline - loop.time()
                 if remaining <= 0:
-                    return AgentHostPollResponse(
-                        protocol_version=negotiated_protocol,
-                        host_status=host_status,
-                        commands=[],
-                    )
+                    return []
                 if waiting is None:
                     waiting = asyncio.ensure_future(anext(poke))
                 done, _ = await asyncio.wait(
@@ -414,11 +444,14 @@ async def poll_agent_host_commands(
                     try:
                         finished.result()
                     except StopAsyncIteration:
-                        return AgentHostPollResponse(
-                            protocol_version=negotiated_protocol,
-                            host_status=host_status,
-                            commands=[],
-                        )
+                        return []
+                elif await http_request.is_disconnected():
+                    # Nobody is left to answer. Checked only on a quiet round,
+                    # so it costs nothing on the path that matters and cannot
+                    # discard a poke already in hand: a command handed out here
+                    # would be marked DELIVERED to a host that will never read
+                    # it, and wait out its lease before anyone tried again.
+                    return []
                 if loop.time() >= deadline:
                     continue
                 async with _uow_factory() as uow:
@@ -428,15 +461,11 @@ async def poll_agent_host_commands(
                         acknowledged_command_ids=[],
                         checkpoints=[],
                         rejections=[],
-                        available_run_slots=request.capacity.available_runs,
+                        available_run_slots=available_run_slots,
                     )
                     await uow.commit()
                 if commands:
-                    return AgentHostPollResponse(
-                        protocol_version=negotiated_protocol,
-                        host_status=host_status,
-                        commands=commands,
-                    )
+                    return list(commands)
         finally:
             # The response is on its way out; nothing will read the poke now.
             if waiting is not None:

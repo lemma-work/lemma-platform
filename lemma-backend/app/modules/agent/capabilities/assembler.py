@@ -49,6 +49,7 @@ from app.modules.agent.domain.prompts import (
     load_messaging_prompt,
     load_skills_prompt,
     load_speech_prompt,
+    load_user_interaction_prompt,
     load_workspace_cli_prompt,
 )
 from app.modules.agent.domain.value_objects import AgentToolset
@@ -56,6 +57,9 @@ from app.modules.agent.services.run_phase_spans import run_phase
 from app.modules.agent.tools.graceful_toolset import GracefulToolset
 from app.modules.agent.tools.registry import EXTRA_TOOLSET_OBJECTS
 from app.modules.agent.tools.skills.pydantic_adapter import skills_toolset
+from app.modules.agent.tools.user_interaction.pydantic_adapter import (
+    user_interaction_toolset,
+)
 from app.modules.agent.tools.speech.pydantic_adapter import speech_toolset
 from app.modules.agent.tools.messaging.pydantic_adapter import messaging_toolset
 from app.modules.agent.tools.web.pydantic_adapter import web_search_toolset
@@ -88,6 +92,7 @@ _INSTRUCTED_TOOLSETS: tuple[tuple[object, str, Callable[[], str]], ...] = (
     (skills_toolset, "skills", load_skills_prompt),
     (speech_toolset, "speech", load_speech_prompt),
     (messaging_toolset, "messaging", load_messaging_prompt),
+    (user_interaction_toolset, "user_interaction", load_user_interaction_prompt),
 )
 
 

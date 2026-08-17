@@ -116,6 +116,7 @@ async fn authenticated_harnesses_stream_real_answers_over_acp() {
                             context: BTreeMap::new(),
                             mcp: Value::Null,
                             run_deadline: chrono::Utc::now() + chrono::Duration::minutes(5),
+                            system_prompt_delivery: None,
                         },
                         scratch_directory: paths
                             .root
@@ -218,6 +219,7 @@ async fn one_turn(
                     context: BTreeMap::new(),
                     mcp: Value::Null,
                     run_deadline: Utc::now() + chrono::Duration::minutes(5),
+                    system_prompt_delivery: None,
                 },
                 // The caller's directory, not one invented here. A provider
                 // is entitled to refuse to load a session into a different cwd
@@ -389,6 +391,7 @@ async fn codex_native_image_generation_creates_a_publishable_artifact() {
                 context: JsonMap::new(),
                 mcp: Value::Null,
                 run_deadline: Utc::now() + chrono::Duration::minutes(10),
+                system_prompt_delivery: None,
             },
             scratch_directory: scratch.path().to_path_buf(),
             mcp_server: None,
@@ -751,6 +754,7 @@ async fn poll(
                 "authorization": "Bearer unused-real-control-e2e-secret",
             }),
             run_deadline: Utc::now() + chrono::Duration::minutes(5),
+            system_prompt_delivery: None,
         })
         .unwrap();
         vec![json!({
@@ -1002,6 +1006,7 @@ async fn a_real_agent_stops_on_session_cancel_and_keeps_its_session() {
                         context: BTreeMap::new(),
                         mcp: Value::Null,
                         run_deadline: Utc::now() + chrono::Duration::minutes(5),
+                        system_prompt_delivery: None,
                     },
                     scratch_directory: scratch.clone(),
                     mcp_server: None,

@@ -12,6 +12,7 @@ Both halves live here so the read and the write cannot drift apart.
 
 from __future__ import annotations
 
+import hashlib
 from uuid import UUID
 
 from sqlalchemy import select
@@ -62,15 +63,43 @@ async def remember_provider_session(
     if binding is None:
         return False
     conversation_id, harness_id = binding
-    # Stored with the harness that opened it. A Codex rollout id means nothing
-    # to Claude Code, so a conversation moved to another harness starts a fresh
-    # session there instead of failing a load every turn.
-    binding_value = {"harness_id": str(harness_id), "session_id": session_id}
     repository = ConversationRepository(uow)
     stored = await repository.get_conversation_metadata_key(
         conversation_id,
         AGENT_HOST_SESSION_METADATA_KEY,
     )
+    stored = stored if isinstance(stored, dict) else {}
+    # Stored with the harness that opened it. A Codex rollout id means nothing
+    # to Claude Code, so a conversation moved to another harness starts a fresh
+    # session there instead of failing a load every turn.
+    binding_value: JsonObject = {
+        "harness_id": str(harness_id),
+        "session_id": session_id,
+    }
+    # This checkpoint is the host reporting that it prompted, so it is also the
+    # proof that the instructions dispatched with the run reached the session.
+    # Promoted here rather than recorded at dispatch: a run that died before it
+    # prompted — host offline, expired command, adapter that would not start —
+    # delivered nothing, and marking those instructions delivered would keep
+    # every later turn skipping them, silently losing a user's edit for the rest
+    # of the conversation.
+    pending = stored.get("pending_instructions")
+    delivered = stored.get("instructions_digest")
+    promoted = (
+        isinstance(pending, dict)
+        and pending.get("run_id") == str(checkpoint.run_id)
+        and isinstance(pending.get("digest"), str)
+    )
+    if promoted:
+        delivered = pending["digest"]
+    elif pending is not None:
+        # Someone else's promise, still owed. This value is rebuilt from
+        # scratch on every checkpoint, so anything not carried forward here is
+        # silently dropped — and dropping a pending promise would leave the run
+        # that made it unable to record what it delivered.
+        binding_value["pending_instructions"] = pending
+    if isinstance(delivered, str) and delivered:
+        binding_value["instructions_digest"] = delivered
     if stored == binding_value:
         return False
     await repository.set_conversation_metadata_key(
@@ -79,6 +108,65 @@ async def remember_provider_session(
         binding_value,
     )
     return True
+
+
+def instructions_digest(system_prompt: str) -> str:
+    """A stable fingerprint of the instructions a run is dispatching.
+
+    Taken over the exact string that lands on the run spec, not over the pieces
+    it was assembled from, so any change a user can make — agent instructions,
+    conversation instructions, the granted-resource brief — moves it.
+    """
+    return hashlib.sha256(system_prompt.encode("utf-8")).hexdigest()
+
+
+async def record_pending_instructions(
+    uow: SqlAlchemyUnitOfWork,
+    *,
+    conversation_id: UUID,
+    run_id: UUID,
+    digest: str,
+) -> None:
+    """Note which run is carrying which instructions, pending its delivery.
+
+    A promise, not a record: :func:`remember_provider_session` turns it into one
+    when the host reports that it actually prompted.
+    """
+    repository = ConversationRepository(uow)
+    stored = await repository.get_conversation_metadata_key(
+        conversation_id,
+        AGENT_HOST_SESSION_METADATA_KEY,
+    )
+    binding = dict(stored) if isinstance(stored, dict) else {}
+    binding["pending_instructions"] = {"run_id": str(run_id), "digest": digest}
+    await repository.set_conversation_metadata_key(
+        conversation_id,
+        AGENT_HOST_SESSION_METADATA_KEY,
+        binding,
+    )
+
+
+async def instructions_already_delivered(
+    uow: SqlAlchemyUnitOfWork,
+    *,
+    conversation_id: UUID,
+    harness_id: UUID,
+    digest: str,
+) -> bool:
+    """Whether this session has already been told exactly these instructions.
+
+    False for anything uncertain — no binding, another harness, no digest
+    recorded, or a digest that has moved. The failure this guards against is
+    an agent quietly running without its instructions, so every ambiguous case
+    resolves toward sending them again.
+    """
+    stored = await ConversationRepository(uow).get_conversation_metadata_key(
+        conversation_id,
+        AGENT_HOST_SESSION_METADATA_KEY,
+    )
+    if not isinstance(stored, dict) or stored.get("harness_id") != str(harness_id):
+        return False
+    return stored.get("instructions_digest") == digest
 
 
 async def resume_session_id(
