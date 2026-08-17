@@ -5,6 +5,7 @@ from enum import Enum
 from pydantic import BaseModel, Field
 
 from app.modules.agent_surfaces.domain.entities import SurfacePlatform
+from app.modules.agent_surfaces.domain.errors import AgentSurfaceValidationError
 
 
 class SurfaceSetupMode(str, Enum):
@@ -298,7 +299,16 @@ def build_surface_setup_guide(platform: SurfacePlatform) -> SurfacePlatformSetup
             account_label="Connected Outlook account",
             account_description="Existing Lemma connector account for the Outlook mailbox.",
         )
-    raise ValueError(f"Unsupported surface platform: {platform}")
+    if platform is SurfacePlatform.RESEND:
+        return _system_email_guide()
+    # Every ``SurfacePlatform`` member is answered above, and
+    # ``test_every_surface_platform_has_a_setup_guide`` keeps it that way. This
+    # remains for a member added without a guide: a typed error the API maps to
+    # a clean response, not the bare ``ValueError`` that used to reach callers
+    # as a 500 for RESEND -- a platform that was always valid and always
+    # auto-provisioned, so the 500 was reachable without anyone configuring
+    # anything.
+    raise AgentSurfaceValidationError(f"Unsupported surface platform: {platform}")
 
 
 def _common_fields(
@@ -504,6 +514,72 @@ def _email_account_guide(
                         title="Verify reply flow",
                         description="Send an inbound email and confirm Lemma creates or reuses the mapped conversation thread.",
                     ),
+                ],
+            )
+        ],
+    )
+
+
+def _system_email_guide() -> SurfacePlatformSetupGuide:
+    """Resend: the one surface nobody connects.
+
+    Every agent is given a Resend mailbox at creation, on Lemma's own
+    credentials, so there is no connector account and no account_id. The guide
+    exists to say that -- and to say what the operator must configure once, at
+    deployment level, for the surface to work at all.
+    """
+    return SurfacePlatformSetupGuide(
+        platform=SurfacePlatform.RESEND,
+        title="Resend Surface Setup",
+        summary="Provisioned automatically with every agent on Lemma-managed credentials; nothing to connect.",
+        docs_path="docs/surfaces/resend.md",
+        connectors=[
+            SurfaceConnectorSetupGuide(
+                mode=SurfaceSetupMode.PLATFORM_BUILT_IN,
+                title="Lemma-managed Resend mailbox",
+                summary="Created with the agent. The address is derived, not chosen, and routing matches inbound mail on it.",
+                docs_path="docs/surfaces/resend.md",
+                fields=[
+                    SurfaceSetupField(
+                        name="surface_identity_email",
+                        label="Provisioned address",
+                        source=SurfaceSetupFieldSource.CREATE_RESPONSE,
+                        description=(
+                            "The inbound address, and the From on replies. Derived per agent; the "
+                            "pod-level fallback is pod-<pod id hex>@<RESEND_INBOUND_DOMAIN>."
+                        ),
+                        required=False,
+                        example="pod-0199f1c4a2b7712e9d3f5a6b8c0d1e2f@mail.example.com",
+                    ),
+                ],
+                steps=[
+                    SurfaceSetupStep(
+                        phase=SurfaceSetupPhase.PREPARE,
+                        title="Verify the catch-all domain",
+                        description=(
+                            "Set RESEND_INBOUND_DOMAIN to a domain verified in Resend and configured "
+                            "as a catch-all, so *@domain reaches one webhook and no address needs "
+                            "registering. Surface creation fails without it."
+                        ),
+                    ),
+                    SurfaceSetupStep(
+                        phase=SurfaceSetupPhase.CONFIGURE_PROVIDER,
+                        title="Point Resend at Lemma",
+                        description=(
+                            "Add the inbound webhook in Resend and set RESEND_WEBHOOK_SECRET to its "
+                            "Svix signing secret. Lemma rejects unsigned or missigned deliveries."
+                        ),
+                    ),
+                    SurfaceSetupStep(
+                        phase=SurfaceSetupPhase.VERIFY,
+                        title="Verify reply flow",
+                        description="Email the provisioned address and confirm the agent replies on the same thread.",
+                    ),
+                ],
+                notes=[
+                    "There is no account_id: this surface runs on system credentials, not a connector account.",
+                    "Created automatically with the agent, so it is excluded from adoption metrics — an auto-provisioned mailbox is not somebody connecting a surface.",
+                    "The address uses the full 32-char pod id hex, not a prefix, so two pods can never collide and misroute each other's inbound mail.",
                 ],
             )
         ],

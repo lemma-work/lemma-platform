@@ -44,7 +44,6 @@ from app.modules.workspace.domain.sandbox import SandboxKind
 from app.modules.workspace.providers.base import (
     ProviderCreateSpec,
     ProviderGone,
-    ProviderFailed,
     ProviderInstance,
     ProviderObject,
     ProviderRejected,
@@ -52,6 +51,7 @@ from app.modules.workspace.providers.base import (
 )
 from app.modules.workspace.providers.e2b_common import (
     DEFAULT_METADATA_NAMESPACE,
+    ensure_runtime_serving,
     meta_epoch,
     meta_profile_digest,
     meta_sandbox_id,
@@ -60,6 +60,7 @@ from app.modules.workspace.providers.e2b_common import (
     sdk_errors,
     every_page as _every_page,
 )
+from app.modules.workspace.providers.profiles import profile_for
 from app.modules.workspace.providers.e2b_ops import E2BOpsMixin
 from app.modules.workspace.providers.e2b_output import E2BOutputBuffer
 
@@ -182,12 +183,17 @@ class E2BSandboxProvider(E2BOpsMixin):
         place. That trade is worth revisiting once a leak is impossible, and not
         before.
 
-        A function sandbox owns no durable disk, so killing it on timeout costs a
-        cold start and nothing else -- but pausing is no worse and keeps one rule
-        for both kinds.
+        Functions invert this: the leak was a *workspace* browser, while
+        `lemma-function` runs function code and nothing else. Filesystem-only
+        resumes a function sandbox *without* its runtime -- nothing re-runs the
+        image CMD -- so it comes back answering 502, which is the P0.
+        `test_e2b_function_liveness_real` measures both modes.
         """
-        del kind
-        return {"on_timeout": {"action": "pause", "keep_memory": False}}
+        keep_memory = kind is SandboxKind.FUNCTION
+        return {
+            "on_timeout": {"action": "pause", "keep_memory": keep_memory},
+            **({"auto_resume": True} if keep_memory else {}),
+        }
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -353,18 +359,17 @@ class E2BSandboxProvider(E2BOpsMixin):
         kind: SandboxKind,
         deadline_at: datetime,
     ) -> None:
-        """E2B returns a sandbox that is already serving.
+        """Ready means the runtime answers, not merely that the VM exists.
 
-        `create` does not resolve until the sandbox accepts commands, and a
-        resumed sandbox is reachable as soon as `connect` returns, so there is
-        no readiness loop to run. A paused sandbox is resumed here rather than
-        being reported not-ready, because resuming is what the caller wants.
+        `is_running()` alone passed a sandbox whose runtime had died, because a
+        VM outlives its process. See `ensure_runtime_serving`.
         """
         sandbox = await self._connect(instance.provider_id)
-        with sdk_errors():
-            running = await sandbox.is_running()
-        if not running:
-            raise ProviderFailed(f"e2b sandbox {instance.provider_id} is not running")
+        await ensure_runtime_serving(
+            sandbox,
+            instance.provider_id,
+            runtime_port=profile_for(kind).runtime_port,
+        )
 
     async def release(
         self,
@@ -391,11 +396,13 @@ class E2BSandboxProvider(E2BOpsMixin):
         ever being started again -- 63 processes and 2123 MB on a 2048 MB
         sandbox, restored rather than respawned. Reading the docs told you it
         could not happen.
+
         """
-        del kind  # Both kinds pause the same way.
+        # Functions keep memory -- same rule as `_lifecycle` uses for timeouts.
+        keep_memory = kind is SandboxKind.FUNCTION
         sandbox = await self._connect(instance.provider_id)
         with sdk_errors():
-            await sandbox.beta_pause(keep_memory=False, **self._api())
+            await sandbox.beta_pause(keep_memory=keep_memory, **self._api())
 
     async def destroy(self, name: str, *, deadline_at: datetime) -> None:
         """Kill a sandbox, addressed either by container name or by E2B id.

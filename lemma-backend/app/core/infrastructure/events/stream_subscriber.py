@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import inspect
+from dataclasses import dataclass
+
 from faststream.redis import StreamSub
 
 from app.core.infrastructure.events.config import event_transport_settings
@@ -12,6 +15,63 @@ logger = get_logger(__name__)
 # Redis consumer groups alive — see ensure_consumer_groups below.
 _REGISTERED_STREAM_GROUPS: set[tuple[str, str]] = set()
 _DECLARED_STREAM_GROUPS: set[tuple[str, str]] = set()
+
+
+@dataclass(frozen=True, slots=True)
+class SubscriberEventBinding:
+    """How one stream subscriber declared the event it receives.
+
+    Recorded so a test can assert the whole population takes ``dict``. A Redis
+    Stream has no server-side type filter, so every consumer group on a shared
+    stream receives every event published to it and must sort them out itself.
+    Annotating the parameter with a concrete event model instead moves
+    validation into fast-depends, ahead of the acknowledgement — and a message
+    that cannot validate can never be acked, so it stays in the pending-entries
+    list and the reclaim subscriber hands it back every minute, forever.
+
+    That is not a hypothetical failure mode. It ran in development at ~119
+    redeliveries an hour, and it grew by one permanently-stuck message per agent
+    created. See ``test_stream_subscriber_contract``.
+    """
+
+    stream: str
+    group: str
+    handler: str
+    annotation: str
+
+
+_SUBSCRIBER_EVENT_BINDINGS: list[SubscriberEventBinding] = []
+
+
+def _record_event_binding(handler, *, stream: str, group: str) -> None:
+    """Capture the first parameter's annotation for the convention gate."""
+    try:
+        parameters = list(inspect.signature(handler).parameters.values())
+    except (TypeError, ValueError):  # pragma: no cover - not a plain function
+        return
+    if not parameters:
+        return
+    annotation = parameters[0].annotation
+    _SUBSCRIBER_EVENT_BINDINGS.append(
+        SubscriberEventBinding(
+            stream=stream,
+            group=group,
+            handler=f"{getattr(handler, '__module__', '?')}.{getattr(handler, '__qualname__', handler)}",
+            # ``from __future__ import annotations`` makes these strings in the
+            # handler modules; normalise the rare non-string case so the gate
+            # compares like with like.
+            annotation=(
+                annotation
+                if isinstance(annotation, str)
+                else getattr(annotation, "__name__", repr(annotation))
+            ),
+        )
+    )
+
+
+def registered_subscriber_event_bindings() -> list[SubscriberEventBinding]:
+    """Every (stream, group, handler, annotation) seen at decoration time."""
+    return list(_SUBSCRIBER_EVENT_BINDINGS)
 
 
 class ConsumerGroupTopologyError(RuntimeError):
@@ -72,6 +132,7 @@ def reliable_redis_stream_subscriber(
     """Register normal delivery plus 60-second abandoned-message reclaim."""
 
     def decorator(handler):
+        _record_event_binding(handler, stream=stream, group=group)
         normal = router.subscriber(
             stream=redis_stream_sub(stream, group=group, consumer=consumer)
         )(handler)

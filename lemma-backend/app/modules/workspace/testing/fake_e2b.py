@@ -91,6 +91,10 @@ class FakeE2B:
     files: dict[str, bytes] = field(default_factory=dict)
     commands: list[str] = field(default_factory=list)
     pause_kept_memory: list[bool] = field(default_factory=list)
+    #: What the runtime port answers. 404 is a healthy runtime -- route absent,
+    #: port listening -- and 502 is the sandbox whose runtime process has died
+    #: while the VM keeps running, which is the state readiness must now catch.
+    runtime_status: int = 404
     # The lifetime each started process was given, in the order they started.
     # Recorded because E2B kills a command at this value and defaults it to 60s,
     # so "the provider passed no timeout" is indistinguishable from "the
@@ -322,6 +326,19 @@ class FakeE2B:
 
             def get_host(self, port):
                 return f"{port}-{self.sandbox_id}.e2b.test"
+
+            def runtime_status(self, port):
+                """What the runtime port would answer, without serving HTTP.
+
+                Readiness now probes the runtime rather than trusting
+                `is_running()`, because a VM outlives the process it was started
+                for. A fake sandbox has no port to probe, so it declares the
+                answer: 404 is what a healthy runtime gives (route absent, port
+                listening) and what `world.runtime_status` can be set away from
+                to model the sandbox whose runtime has died.
+                """
+                del port
+                return world.runtime_status
 
         return FakeAsyncSandbox
 

@@ -49,8 +49,38 @@ _UNINTERESTING = (
 _MAX_STACK_CHARS = 7_000
 
 
+# A thread parked here is waiting to be given work, not holding the GIL doing
+# it. Reporting every idle pool thread on each stall would bury the one that
+# matters.
+_PARKED = (
+    "threading.py",
+    "queue.py",
+    "concurrent/futures/thread.py",
+    "socketserver.py",
+)
+
+#: Enough to name the culprit without turning one incident into a thread dump.
+_MAX_REPORTED_THREADS = 4
+
+
 def _is_interesting(frame_summary: traceback.FrameSummary) -> bool:
     return not any(part in frame_summary.filename for part in _UNINTERESTING)
+
+
+def _is_doing_work(frames: Iterable[traceback.FrameSummary]) -> bool:
+    """True when a non-loop thread is running code rather than waiting for some.
+
+    Judged on the innermost frame: a worker blocked in ``queue.get`` is idle no
+    matter how much application code sits below it on the stack, while a worker
+    inside application code is exactly what a GIL-contention stall looks like.
+    """
+    frames = list(frames)
+    if not frames:
+        return False
+    innermost = frames[-1]
+    if any(part in innermost.filename for part in _PARKED):
+        return False
+    return any(_is_interesting(frame) for frame in frames)
 
 
 def format_stall_stack(frames: Iterable[traceback.FrameSummary]) -> str:
@@ -59,10 +89,25 @@ def format_stall_stack(frames: Iterable[traceback.FrameSummary]) -> str:
     Trimmed to the tail because the head is always the same lifespan/task-runner
     scaffolding, and an untrimmed 60-frame dump per incident is how a useful
     signal becomes something people filter out.
+
+    The trim has one exception, and it is the case that made this report useless
+    in production. When the *innermost* frame is itself uninteresting, the loop
+    is sitting in the selector rather than in any code of ours — which is what
+    GIL contention from another thread, or the process not being scheduled at
+    all, looks like from here. Filtering that away left only
+    ``runpy``/``asyncio.run``/``run_until_complete`` scaffolding, so every single
+    report read the same and named nothing. Keeping the raw tail in that case
+    turns a blank answer into a real one: *the loop was parked, not blocked*.
     """
 
+    frames = list(frames)
+    if not frames:
+        return ""
     interesting = [frame for frame in frames if _is_interesting(frame)]
-    selected = (interesting or list(frames))[-12:]
+    if not interesting or interesting[-1] is not frames[-1]:
+        selected = frames[-12:]
+    else:
+        selected = interesting[-12:]
     return "".join(traceback.format_list(selected)).rstrip()[-_MAX_STACK_CHARS:]
 
 
@@ -125,7 +170,7 @@ class LoopStallSampler:
             self._report(stalled_for)
 
     def _report(self, stalled_for: float) -> None:
-        stack = self._capture()
+        stack, other_threads = self._capture()
         if stack is None:
             return
         self.reports += 1
@@ -134,17 +179,47 @@ class LoopStallSampler:
             service=self._service_name,
             stalled_ms=round(stalled_for * 1000, 1),
             threshold_ms=round(self._stall_seconds * 1000, 1),
+            # Not `stack`: structlog reserves that key and drops the value.
             stack_frames=stack,
+            other_thread_frames=other_threads,
         )
 
-    def _capture(self) -> str | None:
+    def _capture(self) -> tuple[str | None, str | None]:
+        """The loop thread's stack, plus any other thread that is doing work.
+
+        Sampling only the loop thread cannot explain a stall it did not cause.
+        A CPU-bound call on a ``run_blocking`` offload thread holds the GIL; the
+        loop is then runnable but unable to proceed, and its own stack shows it
+        parked in the selector — true, and useless on its own. The thread
+        actually responsible was never looked at.
+        """
         thread_id = self._loop_thread_id
         if thread_id is None:
-            return None
-        frame = sys._current_frames().get(thread_id)  # noqa: SLF001 — the only way in
-        if frame is None:
-            return None
-        return format_stall_stack(traceback.extract_stack(frame))
+            return None, None
+        frames = sys._current_frames()  # noqa: SLF001 — the only way in
+        loop_frame = frames.get(thread_id)
+        if loop_frame is None:
+            return None, None
+
+        loop_stack = format_stall_stack(traceback.extract_stack(loop_frame))
+        names = {thread.ident: thread.name for thread in threading.enumerate()}
+        sampler_id = threading.get_ident()
+
+        others: list[str] = []
+        for other_id, frame in frames.items():
+            if other_id in (thread_id, sampler_id):
+                continue
+            summaries = traceback.extract_stack(frame)
+            if not _is_doing_work(summaries):
+                continue
+            label = names.get(other_id) or str(other_id)
+            others.append(
+                f"--- thread {label} ---\n" + format_stall_stack(summaries)
+            )
+            if len(others) >= _MAX_REPORTED_THREADS:
+                break
+
+        return loop_stack, ("\n".join(others) or None)
 
 
 _sampler: LoopStallSampler | None = None

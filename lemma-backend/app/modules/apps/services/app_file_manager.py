@@ -73,7 +73,6 @@ class AppFileManager:
             self._key(path),
             content,
             use_multipart=isinstance(content, Path),
-            chunk_size=1024 * 1024,
         )
         size = content.stat().st_size if isinstance(content, Path) else len(content)
         return {

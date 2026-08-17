@@ -235,7 +235,7 @@ async def dispatch_pending_datastore_files() -> None:
         )
 
 
-@streaq_cron("*/15 * * * *", name="recover_stuck_processing_files", lane=Lane.BULK)
+@streaq_cron("8-59/15 * * * *", name="recover_stuck_processing_files", lane=Lane.BULK)
 async def recover_stuck_processing_files() -> None:
     """
     Find files stuck in PENDING or PROCESSING and make sure they get queued.
