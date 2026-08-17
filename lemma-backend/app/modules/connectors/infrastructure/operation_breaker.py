@@ -55,16 +55,31 @@ def _keys(scope: str) -> tuple[str, str]:
     return f"{_PREFIX}:open:{scope}", f"{_PREFIX}:fail:{scope}"
 
 
-def breaker_scope(connector_id: str, operation_name: str) -> str:
+def breaker_scope(
+    connector_id: str, operation_name: str, organization_id: object | None = None
+) -> str:
     """Identity of the thing that can be broken.
 
     Per operation, not per connector: a provider whose ``send_email`` is down
     usually still lists messages, and blocking the healthy half would turn a
-    partial outage into a total one. Not per account either — an infrastructure
-    failure is a property of the provider, and every account would otherwise
-    have to discover it separately.
+    partial outage into a total one.
+
+    **Per organization, though.** This used to be keyed on the catalog
+    connector id alone, on the reasoning that an infrastructure failure is a
+    property of the provider and every account would otherwise have to discover
+    it separately. That reasoning holds only for a single shared SaaS endpoint,
+    and it is false for the kinds where each install points somewhere different
+    — an MCP server URL comes from the install's own ``connection_config``, and
+    SQL and HTTP are the same. Two organizations pointing at two unrelated
+    servers were sharing one breaker, so one of them going down stopped the
+    other.
+
+    It is still not per account. An account-level failure is a credential
+    problem, which is classified as Unauthorized and never reaches the breaker.
     """
-    return f"{connector_id}:{operation_name}"
+    if organization_id is None:
+        return f"{connector_id}:{operation_name}"
+    return f"{organization_id}:{connector_id}:{operation_name}"
 
 
 async def guard(scope: str) -> None:
