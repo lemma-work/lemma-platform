@@ -36,6 +36,7 @@ import time
 from app.core.concurrency.offload import run_blocking
 from app.core.config import settings
 from app.core.log.log import get_logger
+from app.core.request_context import create_background_task
 from app.core.observability.stall_sampler import (
     keep_loop_tick_fresh,
     start_loop_stall_sampler,
@@ -256,8 +257,9 @@ async def loop_lag_watchdog(
     # here added up to half a second to every stall, and on the worker could
     # report a stall with the loop perfectly healthy and merely eight offloads
     # deep. That is why loop lag improved and the stall count did not move.
-    ticker = asyncio.create_task(
-        keep_loop_tick_fresh(sampler, max(0.001, settings.loop_stall_tick_seconds))
+    ticker = create_background_task(
+        keep_loop_tick_fresh(sampler, max(0.001, settings.loop_stall_tick_seconds)),
+        name="loop-stall-tick",
     )
     try:
         while True:
