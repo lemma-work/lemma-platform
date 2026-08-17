@@ -220,6 +220,43 @@ describe('pod workspace tabs', () => {
         expect(getActiveWorkspaceTabId('pod-1', '/pod/pod-1/settings')).toBe('route:settings');
     });
 
+    it('gives every presented widget its own tab', () => {
+        const widgetPath = '/pod/pod-1/widgets/view';
+        const first = getActiveWorkspaceTabId(
+            'pod-1',
+            widgetPath,
+            null,
+            new URLSearchParams('toolCallId=toolu_01AAA&standalone=1'),
+        );
+        const second = getActiveWorkspaceTabId(
+            'pod-1',
+            widgetPath,
+            null,
+            new URLSearchParams('toolCallId=toolu_01BBB&standalone=1'),
+        );
+
+        expect(first).toBe('route:widget-toolu_01AAA');
+        // Two widgets are two things to hold open, not one tab that gets
+        // overwritten the second time you open one.
+        expect(second).not.toBe(first);
+
+        // Without a tool call there is no widget to key on, so it stays the
+        // plain section tab rather than inventing an identity.
+        expect(getActiveWorkspaceTabId('pod-1', widgetPath)).toBe('route:widgets');
+    });
+
+    it('keeps a widget tab pointing at its own widget', () => {
+        const tab = routeWorkspaceTab(
+            'widget-toolu_01AAA',
+            'Revenue by region',
+            '/pod/pod-1/widgets/view?toolCallId=toolu_01AAA&title=Revenue+by+region',
+        );
+
+        expect(tab.id).toBe('route:widget-toolu_01AAA');
+        expect(tab.title).toBe('Revenue by region');
+        expect(parseWorkspaceTabs(serializeWorkspaceTabs([HOME_WORKSPACE_TAB, tab]))[1]).toEqual(tab);
+    });
+
     it('does not persist stale conversation activity', () => {
         const tabs: PodWorkspaceTab[] = [
             HOME_WORKSPACE_TAB,

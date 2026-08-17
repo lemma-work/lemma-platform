@@ -46,7 +46,9 @@ export default function DisplayResourceWidgetPage({
     const [savedAppUrl, setSavedAppUrl] = useState<string | null>(null);
     const [saveError, setSaveError] = useState<string | null>(null);
 
-    const title = 'Widget';
+    // The presenting card passes the widget's name through, so this route and
+    // its workspace tab carry the same label the conversation used.
+    const title = searchParams.get('title')?.replace(/\s+/g, ' ').trim().slice(0, 200) || 'Widget';
     const isContentWidget = !externalSrc;
 
     const openedConversationId = assistant.openedConversationId;

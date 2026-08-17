@@ -6,13 +6,22 @@
 // on the API origin (isolated from this app) so its SDK works.
 //
 // Two variants:
-//   - "inline": embedded in the chat thread, height-capped with a fade + Expand.
+//   - "inline": embedded in the chat thread, rendered at its own reported height
+//               up to a viewport-relative ceiling, with a fade + Expand past it.
 //   - "full":   the standalone widgets/view page, full reported height, no cap.
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
-import { Maximize2 } from "@/components/ui/icons";
+import { ArrowUpRight, Maximize2, MoreHorizontal } from "@/components/ui/icons";
 import { useTheme } from "next-themes";
+
+import {
+    DropdownMenu,
+    DropdownMenuContent,
+    DropdownMenuItem,
+    DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 
 import { getLemmaClient } from "@/lib/sdk/lemma-client";
 import {
@@ -71,12 +80,42 @@ export interface InlineWidgetProps {
     title?: string;
     loadingMessages?: string[];
     variant?: "inline" | "full";
-    /** Max rendered height for the inline variant before the fade + Expand kicks in. */
+    /**
+     * Max rendered height for the inline variant. Defaults to a share of the
+     * viewport, so the widget shows in full unless it would swallow the thread.
+     */
     maxHeight?: number;
+    /**
+     * The widget's own pod route. Opening it adds a tab to the pod's workspace
+     * strip, because that strip is derived from the URL.
+     */
+    podTabHref?: string | null;
     onExpand?: () => void;
 }
 
-const INLINE_MAX_HEIGHT = 480;
+/**
+ * A widget is the answer, not a preview of one, so the ceiling exists only to
+ * keep one card from taking the whole transcript: tall enough that anything
+ * shaped like a normal widget renders whole, short enough that the next message
+ * is still reachable by scrolling rather than by paging through an iframe.
+ */
+const INLINE_VIEWPORT_SHARE = 0.85;
+const INLINE_MIN_MAX_HEIGHT = 480;
+
+function useInlineMaxHeight(explicitMaxHeight?: number): number {
+    const [viewportHeight, setViewportHeight] = useState(0);
+
+    useEffect(() => {
+        const update = () => setViewportHeight(window.innerHeight);
+        update();
+        window.addEventListener("resize", update);
+        return () => window.removeEventListener("resize", update);
+    }, []);
+
+    if (explicitMaxHeight) return explicitMaxHeight;
+    if (!viewportHeight) return INLINE_MIN_MAX_HEIGHT;
+    return Math.max(INLINE_MIN_MAX_HEIGHT, Math.round(viewportHeight * INLINE_VIEWPORT_SHARE));
+}
 
 export function InlineWidget({
     podId,
@@ -86,7 +125,8 @@ export function InlineWidget({
     title = "Widget",
     loadingMessages = [],
     variant = "inline",
-    maxHeight = INLINE_MAX_HEIGHT,
+    maxHeight,
+    podTabHref,
     onExpand,
 }: InlineWidgetProps) {
     const { resolvedTheme } = useTheme();
@@ -95,6 +135,8 @@ export function InlineWidget({
     const [heightReported, setHeightReported] = useState(false);
     const [loadedIframeSrc, setLoadedIframeSrc] = useState<string | null>(null);
     const [loadingProgress, setLoadingProgress] = useState({ key: "", index: 0 });
+    const [menuOpen, setMenuOpen] = useState(false);
+    const resolvedMaxHeight = useInlineMaxHeight(maxHeight);
 
     const resolvedExternalSrc = isHttpUrl(externalSrc);
     // An inline-content widget is served (and config-injected) by the backend; we
@@ -164,8 +206,8 @@ export function InlineWidget({
 
     const isInline = variant === "inline";
     const fullHeight = !heightReported ? 360 : reportedHeight;
-    const overflows = isInline && heightReported && reportedHeight > maxHeight;
-    const renderedHeight = isInline ? Math.min(fullHeight, maxHeight) : fullHeight;
+    const overflows = isInline && heightReported && reportedHeight > resolvedMaxHeight;
+    const renderedHeight = isInline ? Math.min(fullHeight, resolvedMaxHeight) : fullHeight;
 
     const handleIframeLoad = () => {
         if (!iframeSrc) return;
@@ -230,8 +272,10 @@ export function InlineWidget({
         );
     }
 
+    const hasMenuActions = !!podTabHref || !!onExpand;
+
     return (
-        <div className="relative overflow-hidden">
+        <div className="group relative overflow-hidden">
             <iframe
                 key={iframeSrc}
                 ref={iframeRef}
@@ -252,6 +296,52 @@ export function InlineWidget({
                     <StepLoader size="sm" />
                     {loadingMessage}
                 </div>
+            ) : null}
+            {hasMenuActions && !loading ? (
+                // Widgets draw edge to edge and own their own chrome, so this
+                // stays out of the way until the reader goes looking for it.
+                <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
+                    <DropdownMenuTrigger asChild>
+                        <button
+                            type="button"
+                            aria-label={`${title} actions`}
+                            className={cn(
+                                "absolute right-2 top-2 z-10 inline-flex size-7 items-center justify-center rounded-full",
+                                "border border-[var(--border-subtle)] bg-[var(--bg-canvas)] text-[var(--text-secondary)]",
+                                "shadow-[var(--shadow-xs)] transition-gentle hover:bg-[var(--bg-subtle)] hover:text-[var(--text-primary)] focus-ring",
+                                // Inert while hidden: the widget owns this corner
+                                // too, and an invisible button would eat its clicks.
+                                "pointer-events-none opacity-0",
+                                "group-hover:pointer-events-auto group-hover:opacity-100 focus-visible:opacity-100",
+                                menuOpen && "pointer-events-auto opacity-100",
+                            )}
+                        >
+                            <MoreHorizontal className="size-4" />
+                        </button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" className="w-52">
+                        {podTabHref ? (
+                            <DropdownMenuItem asChild>
+                                <Link
+                                    href={podTabHref}
+                                    className="flex cursor-pointer items-center gap-2"
+                                >
+                                    <ArrowUpRight className="size-4 text-[var(--text-tertiary)]" />
+                                    Open in new tab
+                                </Link>
+                            </DropdownMenuItem>
+                        ) : null}
+                        {onExpand ? (
+                            <DropdownMenuItem
+                                onClick={onExpand}
+                                className="flex cursor-pointer items-center gap-2"
+                            >
+                                <Maximize2 className="size-4 text-[var(--text-tertiary)]" />
+                                Open full view
+                            </DropdownMenuItem>
+                        ) : null}
+                    </DropdownMenuContent>
+                </DropdownMenu>
             ) : null}
             {overflows ? (
                 <div className="pointer-events-none absolute inset-x-0 bottom-0 flex h-20 items-end justify-center bg-gradient-to-t from-[var(--pod-main-bg)] via-[color:color-mix(in_srgb,var(--pod-main-bg)_70%,transparent)] to-transparent pb-2">
