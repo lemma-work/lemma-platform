@@ -158,14 +158,31 @@ class ToolCallLedger:
     def refine(
         self, object_id: str, payload: JsonObject, metadata: JsonObject
     ) -> tuple[MessageDraft, int] | None:
-        """Fold a status-less update into the call it refines."""
+        """Fold a status-less update into the call it refines.
+
+        Announces only once the arguments have stopped arriving, which is the
+        same shape the in-process harness has: a tool call is one part, streamed
+        in deltas and emitted whole when the model finishes writing it.
+
+        An adapter streams a call's input in pieces, and each piece is a
+        *complete prefix of the fields written so far* rather than the whole
+        thing — a `write_file` was observed arriving as `{path}` and only then
+        as `{path, content}`, 1126 characters later. Announcing on the first
+        non-empty piece therefore published a call missing most of its input,
+        and a conversation message is appended, never revised. So an update that
+        carries arguments only folds them in; the one that carries *none* is the
+        signal that the input is final, and is what releases the call. It still
+        arrives before the tool runs, so the card is not delayed behind
+        execution. If an adapter never sends one, the close releases it anyway.
+        """
         held = self.held.get(object_id)
         if held is None:
             # Already announced; nothing left to correct, because the message is
             # on the durable record.
             return None
+        still_writing = raw_tool_args(payload) is not None
         held.absorb(payload, metadata)
-        if not held.arguments_settled():
+        if still_writing or not held.arguments_settled():
             return None
         return self._announce(object_id, held)
 

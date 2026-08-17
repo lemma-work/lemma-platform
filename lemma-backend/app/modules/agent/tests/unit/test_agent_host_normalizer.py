@@ -381,13 +381,62 @@ class TestToolCalls:
                 object_id="call-1",
             )
         )
+        # The update that carries no arguments is the input's full stop.
+        settled = n.normalize(
+            _event(3, AgentHostEventType.TOOL_CALL_UPDATE, {}, object_id="call-1")
+        )
 
         # Nothing durable while the arguments are still being written; a message
         # is appended and never revised, so announcing `{}` would pin `{}`.
         assert _messages(opened) == []
-        calls = _messages(refined)
+        assert _messages(refined) == []
+        calls = _messages(settled)
         assert len(calls) == 1
         assert calls[0].data.tool_args == {"request": request}
+
+    def test_a_call_is_announced_only_once_its_input_stops_growing(self) -> None:
+        """An adapter streams a call's input as a growing prefix of its fields.
+
+        Observed on the wire for a real `write_file`: `{path}` first, then
+        `{path, content}` with 1126 more characters. Announcing on the first
+        non-empty piece published a call missing most of its input, and a
+        conversation message is appended rather than revised, so that was
+        final. The update carrying no arguments at all is what says the input
+        is done — and it still arrives before the tool runs.
+        """
+        n = _normalizer()
+        document = "# Report\n" + ("detail " * 200)
+
+        def feed(sequence: int, payload: dict) -> list:
+            return _messages(
+                n.normalize(
+                    _event(
+                        sequence,
+                        AgentHostEventType.TOOL_CALL_UPDATE,
+                        payload,
+                        object_id="call-1",
+                    )
+                )
+            )
+
+        n.normalize(
+            _event(
+                1,
+                AgentHostEventType.TOOL_CALL_UPSERT,
+                {"rawInput": {}},
+                object_id="call-1",
+            )
+        )
+        assert feed(2, {"rawInput": {"path": "report.md"}}) == []
+        assert feed(3, {"rawInput": {"path": "report.md", "content": document}}) == []
+        # The input has stopped arriving; now the call is worth writing down.
+        announced = feed(4, {})
+
+        assert len(announced) == 1
+        assert announced[0].data.tool_args == {
+            "path": "report.md",
+            "content": document,
+        }
 
     def test_a_later_empty_update_does_not_erase_the_arguments(self) -> None:
         """An adapter sends several refinements, and most of them carry nothing.
@@ -413,8 +462,11 @@ class TestToolCalls:
                 object_id="call-1",
             )
         )
-        trailing = n.normalize(
-            _event(3, AgentHostEventType.TOOL_CALL_UPDATE, {}, object_id="call-1")
+        # The argument-less update ends the input and releases the call.
+        trailing = _messages(
+            n.normalize(
+                _event(3, AgentHostEventType.TOOL_CALL_UPDATE, {}, object_id="call-1")
+            )
         )
         closed = n.normalize(
             _event(
@@ -425,10 +477,10 @@ class TestToolCalls:
             )
         )
 
-        # The call was already announced with real arguments; the empty update
-        # adds nothing and must not produce a second card.
-        assert trailing == []
-        assert len(_messages(closed)) == 1
+        assert len(trailing) == 1
+        assert trailing[0].data.tool_args == {"path": "README.md"}
+        # And the close adds only the return, never a second call card.
+        assert [m.data.kind for m in _messages(closed)] == [MessageKind.TOOL_RETURN]
 
     def test_a_call_released_at_its_close_reads_the_closing_update(self) -> None:
         """The closing update is often the first thing that names a tool.
@@ -509,7 +561,7 @@ class TestToolCalls:
                 object_id="call-1",
             )
         )
-        refined = n.normalize(
+        n.normalize(
             _event(
                 2,
                 AgentHostEventType.TOOL_CALL_UPDATE,
@@ -517,8 +569,11 @@ class TestToolCalls:
                 object_id="call-1",
             )
         )
+        settled = n.normalize(
+            _event(3, AgentHostEventType.TOOL_CALL_UPDATE, {}, object_id="call-1")
+        )
 
-        assert _messages(refined)[0].data.tool_args["request"]["content"] == document
+        assert _messages(settled)[0].data.tool_args["request"]["content"] == document
 
     def test_an_mcp_result_is_the_value_the_tool_returned(self) -> None:
         """An adapter reports an MCP call's output as the MCP envelope, while
