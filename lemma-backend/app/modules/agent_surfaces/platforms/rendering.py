@@ -14,7 +14,6 @@ parse mode), so it can never hard-fail a delivery.
 
 from __future__ import annotations
 
-import json
 import re
 
 # Characters MarkdownV2 reserves in normal text; each must be backslash-escaped.
@@ -173,99 +172,15 @@ def strip_thinking_tokens(text: str) -> str:
     return stripped.strip()
 
 
-#: Key pairs that identify a tool-call envelope rather than content. Each is a
-#: (name, arguments) spelling some model emits; all of them have been seen in
-#: the wild from OpenAI-compatible endpoints.
-_TOOL_CALL_KEY_PAIRS = (
-    ("tool_name", "args"),
-    ("tool_name", "arguments"),
-    ("name", "arguments"),
-    ("tool", "parameters"),
-    ("function", "arguments"),
-)
-
-
-def strip_leaked_tool_calls(text: str) -> str:
-    """Remove a tool-call envelope a model wrote as *text* instead of calling.
-
-    A model that decides to emit its tool call on the content channel gets it
-    delivered verbatim, because nothing downstream knows the difference between
-    that and an answer. QA saw exactly this reach a user::
-
-        {"tool_name":"pod_query","args":{...}}6
-
-    The trailing ``6`` is the real answer. The envelope in front of it is the
-    model narrating a call the harness had already executed.
-
-    Deliberately narrow. It only strips a JSON object at the *start* of the
-    text, and only when its keys are exactly a known name/arguments pair -- so
-    an answer that legitimately contains or discusses JSON is untouched, and an
-    agent asked to *return* a tool-call-shaped object still can as long as it is
-    not the leading value. Being conservative matters more than catching every
-    spelling: deleting a real answer is worse than leaking a malformed one.
-    """
-    if not text:
-        return ""
-    remaining = text.lstrip()
-    while remaining.startswith("{"):
-        envelope, rest = _split_leading_json_object(remaining)
-        if envelope is None or not _is_tool_call_envelope(envelope):
-            break
-        remaining = rest.lstrip()
-    return remaining.strip()
-
-
-def _split_leading_json_object(text: str) -> tuple[object | None, str]:
-    """The JSON object the text starts with, and whatever follows it.
-
-    Scanned by brace depth rather than by regex because the arguments object
-    nests, and outside strings so a brace inside a value cannot end it early.
-    """
-    depth = 0
-    in_string = False
-    escaped = False
-    for index, char in enumerate(text):
-        if in_string:
-            if escaped:
-                escaped = False
-            elif char == "\\":
-                escaped = True
-            elif char == '"':
-                in_string = False
-            continue
-        if char == '"':
-            in_string = True
-        elif char == "{":
-            depth += 1
-        elif char == "}":
-            depth -= 1
-            if depth == 0:
-                try:
-                    return json.loads(text[: index + 1]), text[index + 1 :]
-                except ValueError:
-                    return None, text
-    return None, text
-
-
-def _is_tool_call_envelope(value: object) -> bool:
-    if not isinstance(value, dict):
-        return False
-    keys = set(value)
-    return any(
-        keys == set(pair) or keys == set(pair) | {"id"}
-        for pair in _TOOL_CALL_KEY_PAIRS
-    )
-
-
 def sanitize_user_visible_text(text: str | None) -> str:
     """The single boundary every model-authored string passes through before it
     leaves the backend for a surface.
 
-    Strips ``<think>…</think>`` reasoning and any tool-call envelope the model
-    wrote as text, so neither can reach a user on any path — progress updates,
-    questions, approvals, captions, final answers. Safe on ``None``/empty input.
+    Strips ``<think>…</think>`` reasoning so it can never reach a user on any
+    path — progress updates, questions, approvals, captions, final answers.
+    Safe on ``None``/empty input.
     """
-    return strip_leaked_tool_calls(strip_thinking_tokens(text or ""))
+    return strip_thinking_tokens(text or "")
 
 
 # Longest tag we must never emit half of: ``</thinking>``.
