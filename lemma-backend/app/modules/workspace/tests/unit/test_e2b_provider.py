@@ -803,17 +803,25 @@ async def test_a_pause_discards_memory(
     )
 
 
-async def test_a_function_sandbox_pause_also_discards_memory(
+async def test_a_function_sandbox_pause_keeps_memory(
     provider: E2BSandboxProvider, world: FakeE2B
 ) -> None:
-    """Both kinds pause the same way; neither promises resident state."""
+    """Functions must resume with their runtime; workspaces must not.
+
+    This used to assert the opposite, on the reasoning that both kinds should
+    pause the same way. Measured against the real service, filesystem-only is
+    what produced the P0: a resumed function sandbox came back with zero runtime
+    processes and answered 502, because nothing re-runs the image CMD on resume.
+    A workspace has a user session worth dropping; a function has only the
+    runtime a cold start would rebuild.
+    """
     instance = await provider.create(_spec(uuid4(), kind=SandboxKind.FUNCTION))
 
     await provider.release(
         instance, kind=SandboxKind.FUNCTION, deadline_at=_deadline()
     )
 
-    assert world.pause_kept_memory == [False]
+    assert world.pause_kept_memory == [True]
 
 
 async def test_an_object_named_by_its_e2b_id_is_actually_destroyed(

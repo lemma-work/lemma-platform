@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import time
 from collections.abc import AsyncIterator
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
@@ -193,3 +194,110 @@ async def test_replacing_the_sandbox_restores_service(
         "one and the outage would continue"
     )
     assert await _runtime_status(provider, second.provider_id) == 404
+
+
+# ---------------------------------------------------------------------------
+# Pause and resume: functions keep memory, workspaces do not
+# ---------------------------------------------------------------------------
+#
+# `test_e2b_lifecycle_real.py` asserts the opposite for a WORKSPACE, and both
+# assertions have to hold at once. The workspace rule exists because a headed
+# Chrome was snapshotted and restored on every idle release until the sandbox
+# was permanently exhausted. A function sandbox has no such process to preserve
+# -- `lemma-function` runs function code and nothing else -- so the only thing
+# the snapshot carries is the runtime a cold start would otherwise rebuild.
+
+
+async def test_a_function_sandbox_keeps_its_memory_across_pause_and_resume(
+    provider: E2BSandboxProvider,
+) -> None:
+    """The whole point of the change: resume restores, rather than rebuilds."""
+    sandbox_id = uuid4()
+    instance = await _create(provider, sandbox_id)
+    sdk = await provider._connect(instance.provider_id)
+
+    # A process that only resident memory can carry across the pause. Detached,
+    # so it is not tied to the command channel that started it.
+    tag = f"lemma-memory-marker-{uuid4().hex[:12]}"
+    await sdk.commands.run(
+        f"setsid nohup sleep 600 --{tag} >/dev/null 2>&1 < /dev/null & echo started",
+        timeout=30,
+    )
+    await asyncio.sleep(1.0)
+    before = await sdk.commands.run(f"pgrep -c -f '{tag}' || true", timeout=30)
+    assert int((before.stdout or "0").strip() or 0) >= 1, "the marker never started"
+
+    await provider.release(
+        instance, kind=SandboxKind.FUNCTION, deadline_at=_deadline()
+    )
+
+    resumed_at = time.monotonic()
+    resumed = await provider.create(_spec(sandbox_id, epoch=2))
+    provider._liveness_created.append(resumed.provider_id)  # type: ignore[attr-defined]
+    await provider.wait_ready(
+        resumed, kind=SandboxKind.FUNCTION, deadline_at=_deadline()
+    )
+    resume_ms = (time.monotonic() - resumed_at) * 1000
+
+    resumed_sdk = await provider._connect(resumed.provider_id)
+    after = await resumed_sdk.commands.run(f"pgrep -c -f '{tag}' || true", timeout=30)
+    survived = int((after.stdout or "0").strip() or 0)
+
+    print(f"\n[bench] function resume-from-pause: {resume_ms:.0f}ms")
+    assert survived >= 1, (
+        "the marker process did not survive the pause, so `keep_memory` is "
+        "still False for functions and resume is still a cold boot"
+    )
+    # And it is genuinely serving afterwards, not merely restored.
+    assert await _runtime_status(provider, resumed.provider_id) == 404
+
+
+# The workspace counterpart -- that a workspace pause drops resident memory --
+# is guarded by `test_a_pause_does_not_carry_running_processes_across` in
+# `test_e2b_lifecycle_real.py`, which owns the real `lemma-workspace` template.
+# It cannot be asserted from this file: the fixture here points both templates
+# at `lemma-function`, so a sandbox created as WORKSPACE would still be running
+# the function template and the assertion would mean nothing.
+
+
+async def test_releasing_a_function_sandbox_leaves_it_serving_when_resumed(
+    provider: E2BSandboxProvider,
+) -> None:
+    """The root cause of the P0, and the reason functions keep memory.
+
+    A filesystem-only pause resumes the sandbox *without its runtime process*.
+    Nothing re-runs the image's CMD on resume, so the VM comes back, E2B reports
+    it ``running``, adoption accepts it -- and port 8090 answers 502 forever.
+    Measured directly against the service:
+
+        keep_memory=True   fresh 404 / runtime 1  ->  resumed 404 / runtime 1
+        keep_memory=False  fresh 404 / runtime 1  ->  resumed 502 / runtime 0
+
+    So the 100-minute outage did not need a slow cold start to explain it. Idle
+    release pauses an idle function sandbox, the next ensure resumes it, and it
+    comes back dead. The quarantine path recovers from that after one failure;
+    this is what stops it happening.
+
+    Goes through ``release``/``create`` rather than the SDK, because the point is
+    that the provider's own idle-release path is safe now.
+    """
+    sandbox_id = uuid4()
+    instance = await _create(provider, sandbox_id)
+    assert await _runtime_status(provider, instance.provider_id) == 404
+
+    await provider.release(
+        instance, kind=SandboxKind.FUNCTION, deadline_at=_deadline()
+    )
+    resumed = await provider.create(_spec(sandbox_id, epoch=2))
+    provider._liveness_created.append(resumed.provider_id)  # type: ignore[attr-defined]
+    await provider.wait_ready(
+        resumed, kind=SandboxKind.FUNCTION, deadline_at=_deadline()
+    )
+
+    served = await _runtime_status(provider, resumed.provider_id)
+    assert served == 404, (
+        f"a released-then-resumed function sandbox answered {served}. 502 means "
+        "the runtime process did not come back, which is the poisoned state the "
+        "whole P0 was made of -- keep_memory has regressed to filesystem-only "
+        "for functions."
+    )
