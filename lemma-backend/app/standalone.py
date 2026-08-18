@@ -12,7 +12,8 @@ from collections.abc import Sequence
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
 
-from anyio import create_task_group, sleep_forever
+from anyio import TASK_STATUS_IGNORED, create_task_group, sleep_forever
+from anyio.abc import TaskStatus
 from fastapi import FastAPI
 
 
@@ -30,12 +31,43 @@ async def _embedded_worker_signal_handler(scope) -> None:
     await sleep_forever()
 
 
+class _EmbeddedLanes:
+    """Runs every worker lane inside this process.
+
+    Deliberately `list(Lane)` rather than `enabled_lanes()`. The embedded app
+    *is* the whole deployment — desktop, the Docker local stack and `make dev`
+    all launch `uvicorn local_app:app` and nothing else — so there is no second
+    process a lane could be delegated to, and honouring `WORKER_LANES` here
+    would let one env var silently leave a queue unconsumed.
+
+    Which is what used to happen without the env var. This embedded exactly one
+    Worker, the interactive one, so nothing anywhere consumed `default-bulk`.
+    Document processing lives on that lane, so every uploaded file sat at
+    PENDING with `processing_attempts` 0 forever — no consumer, no retries, and
+    the two recovery crons that would have noticed are on the same lane.
+    """
+
+    async def run_async(self, *, task_status: TaskStatus[None] = TASK_STATUS_IGNORED) -> None:
+        from app.core.infrastructure.jobs.streaq_runtime import Lane, run_worker_lanes
+
+        await run_worker_lanes(list(Lane), task_status=task_status)
+
+
 def _prepare_embedded_worker(worker):
-    worker.handle_signals = False
-    # streaq 6.3 still schedules signal_handler unconditionally. In local
-    # standalone mode, uvicorn owns process signals and cancels this task group.
-    worker.signal_handler = _embedded_worker_signal_handler
-    return worker
+    """Silence signals on every lane this process runs, and return its runner.
+
+    uvicorn owns process signals here, and streaq 6.3 schedules
+    `signal_handler` regardless of `handle_signals`. Non-primary lanes are
+    already silenced where they are constructed; doing it for all of them keeps
+    this correct if a lane is ever added.
+    """
+    from app.core.infrastructure.jobs.streaq_runtime import LANE_WORKERS
+
+    for lane_worker in LANE_WORKERS.values():
+        lane_worker.handle_signals = False
+        lane_worker.signal_handler = _embedded_worker_signal_handler
+    del worker
+    return _EmbeddedLanes()
 
 
 def build_standalone_app(

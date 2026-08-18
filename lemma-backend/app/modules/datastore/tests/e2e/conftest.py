@@ -85,7 +85,7 @@ authenticated_client = e2e_fixtures.authenticated_client
 fixed_test_org = e2e_fixtures.fixed_test_org
 scenario = e2e_fixtures.scenario
 
-DocumentProcessorName = Literal["kreuzberg", "docling", "markitdown"]
+DocumentProcessorName = Literal["kreuzberg", "docling", "xberg"]
 
 
 @pytest_asyncio.fixture
@@ -137,7 +137,7 @@ def document_worker(
             "DOCLING_REQUEST_TIMEOUT_SECONDS": "2",
             "DOCUMENT_PROCESSING_DEBOUNCE_SECONDS": "0",
         }
-        if processor == "markitdown":
+        if processor == "xberg":
             fake_dependencies = Path(__file__).parent / "fake_processor_deps"
             extra_env["PYTHONPATH"] = f"{fake_dependencies}:."
         async with production_worker_process(

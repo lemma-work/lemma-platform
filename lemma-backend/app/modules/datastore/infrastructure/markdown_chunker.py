@@ -2,7 +2,7 @@
 
 Chunking is normally delegated to the Kreuzberg service (its ``/extract`` inline
 chunking or ``/chunk`` endpoint). Adapters that run in-process (e.g. the
-``markitdown`` document processor) and the bring-your-own-markdown path have no
+``xberg`` document processor) and the bring-your-own-markdown path have no
 Kreuzberg to call, so they chunk here instead.
 
 The splitter is boundary-aware (paragraph > line > sentence > word) with a

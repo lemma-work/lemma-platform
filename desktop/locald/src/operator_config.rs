@@ -13,8 +13,9 @@ use crate::provider_probe::{HttpModelProviderProbe, ModelProviderProbe};
 const CONFIG_SCHEMA_VERSION: u64 = 1;
 const VAULT_SERVICE: &str = "work.lemma.local";
 
-const SECRET_NAMES: [&str; 18] = [
+const SECRET_NAMES: [&str; 19] = [
     "ai.api_key",
+    "integrations.deepgram_api_key",
     "integrations.composio_api_key",
     "integrations.composio_webhook_secret",
     "integrations.google_client_secret",
@@ -890,8 +891,9 @@ fn readiness(config: &OperatorConfig, secrets: &BTreeMap<String, bool>) -> Value
     })
 }
 
-fn secret_environment() -> [(&'static str, &'static str); 17] {
+fn secret_environment() -> [(&'static str, &'static str); 18] {
     [
+        ("integrations.deepgram_api_key", "DEEPGRAM_API_KEY"),
         ("integrations.composio_api_key", "COMPOSIO_API_KEY"),
         (
             "integrations.composio_webhook_secret",
@@ -1314,6 +1316,46 @@ mod tests {
         assert!(!fs::read_to_string(root.path().join("operator.json"))
             .unwrap()
             .contains("secret-key"));
+    }
+
+    /// Every secret that can be set has somewhere to go.
+    ///
+    /// Two hand-maintained arrays with hand-maintained lengths describe one
+    /// thing: SECRET_NAMES says what may be stored, secret_environment() says
+    /// what the backend is told. Adding a name to the first and forgetting the
+    /// second gives a field in Local settings that saves happily and changes
+    /// nothing -- the exact shape of the Deepgram gap, where the key had no
+    /// mapping at all and `say` and `listen` could only fail.
+    ///
+    /// `ai.api_key` is the one deliberate exclusion: it is rendered per
+    /// protocol above rather than copied through verbatim.
+    #[test]
+    fn every_settable_secret_reaches_the_backend_environment() {
+        let mapped: std::collections::HashSet<&str> = secret_environment()
+            .into_iter()
+            .map(|(name, _)| name)
+            .collect();
+        for name in SECRET_NAMES {
+            if name == "ai.api_key" {
+                continue;
+            }
+            assert!(
+                mapped.contains(name),
+                "{name} can be stored but is never passed to the backend; \
+                 add it to secret_environment()"
+            );
+        }
+    }
+
+    /// Speech needs its key under the name the backend actually reads.
+    #[test]
+    fn the_deepgram_key_is_exported_as_deepgram_api_key() {
+        let mapping: std::collections::HashMap<&str, &str> =
+            secret_environment().into_iter().collect();
+        assert_eq!(
+            mapping.get("integrations.deepgram_api_key"),
+            Some(&"DEEPGRAM_API_KEY")
+        );
     }
 
     #[test]

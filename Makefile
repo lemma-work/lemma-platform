@@ -226,7 +226,7 @@ BACKEND_DEV_ENV := \
 	DATASTORE_DATABASE_URL=$(DEV_DATASTORE_DATABASE_URL) \
 	REDIS_URL=$(DEV_REDIS_URL) \
 	KREUZBERG_URL= \
-	DOCUMENT_PROCESSOR=markitdown \
+	DOCUMENT_PROCESSOR=xberg \
 	STORAGE_BACKEND=local \
 	LOCAL_OBJECT_STORAGE_ROOT=$(abspath .local/object-storage) \
 	LOCAL_FILE_STORAGE_ROOT=$(abspath .local/files) \
@@ -417,7 +417,7 @@ _init-backend-env:
 			echo "DATASTORE_DATABASE_URL=$(DEV_DATASTORE_DATABASE_URL)"; \
 			echo "REDIS_URL=$(DEV_REDIS_URL)"; \
 			echo "KREUZBERG_URL="; \
-			echo "DOCUMENT_PROCESSOR=markitdown"; \
+			echo "DOCUMENT_PROCESSOR=xberg"; \
 			echo "STORAGE_BACKEND=local"; \
 			echo "LOCAL_OBJECT_STORAGE_ROOT=$(abspath .local/object-storage)"; \
 			echo "LOCAL_FILE_STORAGE_ROOT=$(abspath .local/files)"; \
@@ -475,7 +475,7 @@ _ensure-backend-env-keys:
 		append DATABASE_URL '$(DEV_DATABASE_URL)'; \
 		append DATASTORE_DATABASE_URL '$(DEV_DATASTORE_DATABASE_URL)'; \
 		append REDIS_URL '$(DEV_REDIS_URL)'; \
-		append DOCUMENT_PROCESSOR markitdown; \
+		append DOCUMENT_PROCESSOR xberg; \
 		append STORAGE_BACKEND local; \
 		append LOCAL_OBJECT_STORAGE_ROOT '$(abspath .local/object-storage)'; \
 		append LOCAL_FILE_STORAGE_ROOT '$(abspath .local/files)'; \
@@ -645,7 +645,7 @@ _ensure-init:
 	@test -f $(TS_DIR)/dist/index.js || { echo "  ! $(TS_DIR)/dist missing — run 'make init' (or cd $(TS_DIR) && npm run build)"; exit 1; }
 	@$(MAKE) --no-print-directory _ensure-backend-env-keys
 	@$(MAKE) --no-print-directory _ensure-frontend-env-keys
-	@cd $(BACKEND_DIR) && uv run --extra local python -c 'import markitdown, psycopg, psycopg_pool' >/dev/null || { echo "  ! Local backend dependencies missing — run 'make init'"; exit 1; }
+	@cd $(BACKEND_DIR) && uv run --extra local python -c 'import xberg, psycopg, psycopg_pool' >/dev/null || { echo "  ! Local backend dependencies missing — run 'make init'"; exit 1; }
 	@echo "  Using $(BACKEND_DIR)/.env + $(FRONTEND_DIR)/.env.local"
 
 _infra-up:

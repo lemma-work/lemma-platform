@@ -51,7 +51,7 @@ Installs, builds and test suites routinely outlive a single `exec_command` call,
 
 ```
 exec_command(cmd="npm ci && npm run build", timeout_seconds=300)
-manage_process(action="input", process_id="<id>", chars="")   # repeat until completed: true
+manage_process(action="input", process_id="<id>")   # repeat until completed: true
 ```
 
 Each poll returns only the output produced since the last one, so polling a quiet build is cheap. Read `exit_code` to know whether it actually succeeded — `completed: true` only means it stopped.

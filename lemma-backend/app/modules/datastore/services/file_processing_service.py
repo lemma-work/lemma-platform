@@ -385,7 +385,7 @@ class DatastoreFileProcessingService:
 
         # Stream the source to a temp file instead of buffering the whole file in
         # memory. The processor extracts from the path (Kreuzberg streams it to
-        # its multipart body; markitdown/docling read it off the loop), so peak
+        # its multipart body; xberg/docling read it off the loop), so peak
         # memory stays ~one chunk rather than the file plus a BytesIO copy.
         storage_key = build_datastore_file_storage_key(self.pod_id, file_entity.path)
         tmp_path = await stream_to_tempfile(self.storage.iter_download(storage_key))

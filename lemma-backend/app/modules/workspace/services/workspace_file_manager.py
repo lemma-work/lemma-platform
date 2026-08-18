@@ -31,10 +31,30 @@ class WorkspaceFileManager:
         return "" if root == "/workspace" else posixpath.relpath(root, "/workspace")
 
     def _workspace_path(self, path: str) -> str:
+        """Resolve a caller's path against this session's root.
+
+        An absolute ``/workspace/...`` path is taken as already rooted, rather
+        than being joined onto the root a second time. ``lstrip("/")`` alone
+        leaves ``workspace/...``, which joined onto a root that already ends in
+        it produced
+        ``/workspace/conversations/<id>/workspace/conversations/<id>/file`` --
+        so every tool documented as accepting "a pod datastore path or a
+        workspace path" rejected the absolute form of its own root, while the
+        relative form worked. `listen` is where it was noticed; `view_image` and
+        every other method here had it too.
+
+        Rooted paths are also *checked* rather than silently re-homed. The guard
+        below only ever saw the doubled path, so a path belonging to another
+        conversation was quietly rewritten under the caller's own root and read
+        from there, instead of being refused.
+        """
         root = posixpath.normpath(
             posixpath.join("/workspace", self.cwd) if self.cwd else "/workspace"
         )
-        candidate = posixpath.normpath(posixpath.join(root, path.lstrip("/")))
+        if path.startswith("/workspace/") or path == "/workspace":
+            candidate = posixpath.normpath(path)
+        else:
+            candidate = posixpath.normpath(posixpath.join(root, path.lstrip("/")))
         if candidate != root and not candidate.startswith(f"{root}/"):
             raise ValueError("workspace file path escapes its configured root")
         return candidate

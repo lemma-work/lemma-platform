@@ -14,6 +14,8 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import TYPE_CHECKING
 
+from anyio import TASK_STATUS_IGNORED
+from anyio.abc import TaskStatus
 from faststream.redis import RedisBroker
 from opentelemetry import context as otel_context
 from opentelemetry import metrics, trace
@@ -138,8 +140,18 @@ def _install_task_dump_handler() -> None:
     what an idle loop always looks like. The question is always *which awaited
     coroutine is not finishing*, and only the task list answers it. SIGQUIT is
     free — neither streaq nor anything else here uses it.
+
+    Windows has no SIGQUIT at all, so `signal.SIGQUIT` raises `AttributeError`
+    there rather than the errors the guard below anticipates. That was harmless
+    while only `python -m app.worker` reached here, because Desktop never ran
+    it; the moment the embedded app runs its lanes, this is the first thing a
+    Windows backend would execute, and it would fail before serving anything.
     """
     import signal
+
+    sigquit = getattr(signal, "SIGQUIT", None)
+    if sigquit is None:  # pragma: no cover - platform
+        return
 
     def _dump(*_args: object) -> None:
         for task in asyncio.all_tasks():
@@ -155,7 +167,7 @@ def _install_task_dump_handler() -> None:
             )
 
     try:
-        asyncio.get_running_loop().add_signal_handler(signal.SIGQUIT, _dump)
+        asyncio.get_running_loop().add_signal_handler(sigquit, _dump)
     except (NotImplementedError, RuntimeError):  # pragma: no cover - platform
         pass
 
@@ -779,12 +791,22 @@ def enabled_lanes() -> list[Lane]:
     return seen
 
 
-async def run_worker_lanes(lanes: Sequence[Lane] | None = None) -> None:
+async def run_worker_lanes(
+    lanes: Sequence[Lane] | None = None,
+    *,
+    task_status: TaskStatus[None] = TASK_STATUS_IGNORED,
+) -> None:
     """Run the selected lanes concurrently in this process.
 
     Each lane is an independent streaq Worker on its own Redis queue with its own
     concurrency budget, which is the whole point: a burst of bulk ingestion can
     no longer occupy the slots that agent runs and surface messages need.
+
+    `task_status` is reported by the primary lane only, so an embedded caller can
+    `await task_group.start(...)` and have a worker that cannot reach Redis fail
+    its host's startup rather than dying quietly in the background. The secondary
+    lanes need no handshake of their own: `secondary_lane_lifespan` already waits
+    on the primary before touching anything shared.
     """
     selected = list(lanes) if lanes is not None else enabled_lanes()
     if _PRIMARY_LANE not in selected:
@@ -800,7 +822,7 @@ async def run_worker_lanes(lanes: Sequence[Lane] | None = None) -> None:
     _install_task_dump_handler()
     primary, *secondary = selected
     if not secondary:
-        await LANE_WORKERS[primary].run_async()
+        await LANE_WORKERS[primary].run_async(task_status=task_status)
         return
 
     # The primary lane owns signal handling and the shared lifespan, so its
@@ -824,7 +846,7 @@ async def run_worker_lanes(lanes: Sequence[Lane] | None = None) -> None:
         for lane in secondary
     )
     try:
-        await LANE_WORKERS[primary].run_async()
+        await LANE_WORKERS[primary].run_async(task_status=task_status)
     finally:
         # Normally already done, from inside the primary's lifespan teardown.
         # Repeated here for the paths that never reach it — a primary that
