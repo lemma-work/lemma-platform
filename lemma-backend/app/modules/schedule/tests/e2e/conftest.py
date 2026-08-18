@@ -9,7 +9,6 @@ from app.modules.test_support.e2e import fixtures as e2e_fixtures
 
 pytestmark = pytest.mark.e2e
 
-test_network = e2e_fixtures.test_network
 postgres_container = e2e_fixtures.postgres_container
 supertokens_container = e2e_fixtures.supertokens_container
 redis_container = e2e_fixtures.redis_container
@@ -72,7 +71,6 @@ __all__ = [
     "supertokens_container",
     "test_app",
     "test_database_url",
-    "test_network",
     "test_redis_url",
     "sandbox_reachable_backend",
     "worker",

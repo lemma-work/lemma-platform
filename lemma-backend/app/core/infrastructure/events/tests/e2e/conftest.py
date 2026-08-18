@@ -7,12 +7,10 @@ pulling in postgres/supertokens would only make them slower and more fragile.
 
 from app.modules.test_support.e2e import fixtures as e2e_fixtures
 
-test_network = e2e_fixtures.test_network
 redis_container = e2e_fixtures.redis_container
 test_redis_url = e2e_fixtures.test_redis_url
 
 __all__ = [
     "redis_container",
-    "test_network",
     "test_redis_url",
 ]

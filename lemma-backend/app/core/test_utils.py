@@ -3,9 +3,7 @@ import socket
 import subprocess
 import time
 from contextlib import contextmanager
-from dataclasses import dataclass, field
 from typing import Generator, Optional
-from uuid import uuid4
 
 import psycopg
 
@@ -32,32 +30,11 @@ POSTGRES_DB = "test"
 DOCKER_LABEL = "lemma.e2e=true"
 
 
-@dataclass
-class LemmaDockerNetwork:
-    name: str = field(default_factory=lambda: f"lemma-e2e-{uuid4().hex[:12]}")
-
-    def __enter__(self) -> "LemmaDockerNetwork":
-        subprocess.run(
-            ["docker", "network", "create", self.name],
-            check=True,
-            capture_output=True,
-        )
-        return self
-
-    def __exit__(self, exc_type, exc, tb) -> None:
-        subprocess.run(
-            ["docker", "network", "rm", self.name],
-            check=False,
-            capture_output=True,
-        )
-
-
 class LemmaDockerContainer:
     def __init__(self, image: str, internal_port: int) -> None:
         self.image = image
         self.internal_port = internal_port
         self.container_id: str | None = None
-        self._network: LemmaDockerNetwork | None = None
         self._env: dict[str, str] = {}
         self._extra_run_args: list[str] = []
         self._command: list[str] = []
@@ -76,10 +53,6 @@ class LemmaDockerContainer:
         self._command.extend(args)
         return self
 
-    def with_network(self, network: LemmaDockerNetwork) -> "LemmaDockerContainer":
-        self._network = network
-        return self
-
     def __enter__(self) -> "LemmaDockerContainer":
         command = [
             "docker",
@@ -90,8 +63,6 @@ class LemmaDockerContainer:
             "-p",
             f"127.0.0.1::{self.internal_port}",
         ]
-        if self._network is not None:
-            command.extend(["--network", self._network.name])
         for name, value in self._env.items():
             command.extend(["-e", f"{name}={value}"])
         command.extend(self._extra_run_args)
@@ -159,34 +130,6 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
-def _prune_e2e_containers() -> None:
-    """Best-effort cleanup for stale E2E containers."""
-    if os.getenv("TESTCONTAINERS_PRUNE_ENABLED", "").lower() not in {
-        "1",
-        "true",
-        "yes",
-    }:
-        return
-
-    container_ids = []
-    list_result = subprocess.run(
-        ["docker", "ps", "-aq", "--filter", f"label={DOCKER_LABEL}"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if list_result.returncode != 0:
-        return
-    container_ids.extend(cid for cid in list_result.stdout.splitlines() if cid.strip())
-
-    if not container_ids:
-        return
-
-    subprocess.run(
-        ["docker", "rm", "-f", *container_ids], check=False, capture_output=True
-    )
-
-
 def _wait_for_tcp(
     container: LemmaDockerContainer, port: int, timeout_seconds: int
 ) -> None:
@@ -222,22 +165,7 @@ def _wait_for_postgres(container: LemmaPostgresContainer) -> None:
 
 
 @contextmanager
-def get_test_network() -> Generator[LemmaDockerNetwork, None, None]:
-    """
-    Creates a Docker network for test containers to communicate.
-    """
-    _prune_e2e_containers()
-    with LemmaDockerNetwork() as network:
-        try:
-            yield network
-        finally:
-            _prune_e2e_containers()
-
-
-@contextmanager
-def get_postgres_container(
-    network: Optional[LemmaDockerNetwork] = None,
-) -> Generator[LemmaPostgresContainer, None, None]:
+def get_postgres_container() -> Generator[LemmaPostgresContainer, None, None]:
     """
     Starts a PostgreSQL container and yields it.
     Can be used in pytest fixtures with scope="session".
@@ -248,8 +176,6 @@ def get_postgres_container(
         .with_env("POSTGRES_PASSWORD", POSTGRES_PASSWORD)
         .with_env("POSTGRES_DB", POSTGRES_DB)
     )
-    if network:
-        container.with_network(network)
 
     with container as postgres:
         _wait_for_postgres(postgres)
@@ -491,13 +417,96 @@ def shared_kreuzberg(basetemp_parent, worker_id: str) -> Generator[str, None, No
                 refs_file.unlink(missing_ok=True)
 
 
-def get_postgres_url(container: LemmaPostgresContainer) -> str:
-    """Helper to extract async database URL from container."""
+def start_shared_postgres(name: str) -> LemmaPostgresContainer:
+    """Start ONE named Postgres container and return a reference to it.
+
+    Mirrors ``start_shared_kreuzberg``: one Postgres *server process* shared
+    across all xdist workers (each worker still gets its own logical
+    database inside it via ``create_postgres_database``), instead of one
+    full container per worker. Not auto-stopped; the last worker out calls
+    ``remove_named_container`` (and the label-based prune sweeps any
+    straggler).
+    """
+    # Clear any straggler with this name from a previously crashed run.
+    subprocess.run(["docker", "rm", "-f", name], check=False, capture_output=True)
+    container = (
+        LemmaPostgresContainer()
+        .with_env("POSTGRES_USER", POSTGRES_USER)
+        .with_env("POSTGRES_PASSWORD", POSTGRES_PASSWORD)
+        .with_env("POSTGRES_DB", POSTGRES_DB)
+        .with_run_args("--name", name)
+    )
+    container.__enter__()  # start detached; intentionally no matching __exit__
+    _wait_for_postgres(container)
+    return container
+
+
+SHARED_POSTGRES_NAME = "lemma-e2e-postgres-shared"
+
+
+@contextmanager
+def shared_postgres(
+    basetemp_parent, worker_id: str
+) -> Generator[LemmaPostgresContainer, None, None]:
+    """Yield a ``LemmaPostgresContainer`` pointed at a SINGLE Postgres server
+    shared across all xdist workers.
+
+    Refcounted via a file lock in the xdist-shared temp root, same pattern as
+    ``shared_kreuzberg``: the first worker in starts a named container; later
+    workers reconstruct a lightweight reference to it (docker accepts a
+    container NAME anywhere it accepts an ID, so ``get_exposed_port``/
+    ``get_logs`` -- which just shell out to ``docker port``/``docker logs`` --
+    work identically); the last worker out removes it. Without xdist
+    (``worker_id == 'master'``) it falls back to a plain per-session
+    container.
+    """
+    if worker_id == "master":
+        with get_postgres_container() as postgres:
+            yield postgres
+        return
+
+    from pathlib import Path
+
+    from filelock import FileLock
+
+    root = Path(basetemp_parent)
+    lock = FileLock(str(root / "postgres.lock"))
+    refs_file = root / "postgres_refs.txt"
+
+    with lock:
+        refs = int(refs_file.read_text()) if refs_file.exists() else 0
+        if refs == 0:
+            start_shared_postgres(SHARED_POSTGRES_NAME)
+        refs_file.write_text(str(refs + 1))
+
+    container = LemmaPostgresContainer()
+    container.container_id = SHARED_POSTGRES_NAME
+
+    try:
+        yield container
+    finally:
+        with lock:
+            refs = (int(refs_file.read_text()) if refs_file.exists() else 1) - 1
+            refs_file.write_text(str(refs))
+            if refs <= 0:
+                remove_named_container(SHARED_POSTGRES_NAME)
+                refs_file.unlink(missing_ok=True)
+
+
+def get_postgres_url(
+    container: LemmaPostgresContainer, database_name: Optional[str] = None
+) -> str:
+    """Helper to extract async database URL from container.
+
+    ``database_name`` overrides the container's default database (used by the
+    shared-Postgres model, where multiple xdist workers share one container
+    but each connects to its own logical database).
+    """
     host = container.get_container_host_ip()
     port = container.get_exposed_port(5432)
     user = container.username
     password = container.password
-    dbname = container.dbname
+    dbname = database_name or container.dbname
     return f"postgresql+asyncpg://{user}:{password}@{host}:{port}/{dbname}"
 
 

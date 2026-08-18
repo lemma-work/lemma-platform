@@ -24,13 +24,12 @@ from sqlalchemy import text
 from app.core.infrastructure.db.manager import DatabaseManager
 from app.core.test_utils import (
     create_postgres_database,
-    get_postgres_container,
     get_postgres_url,
     get_redis_container,
     get_redis_url,
     get_supertokens_container,
     get_supertokens_url,
-    get_test_network,
+    shared_postgres,
 )
 
 if TYPE_CHECKING:
@@ -117,11 +116,12 @@ def _cleanup_e2e_workspace_containers(*, sandboxes_only: bool = False) -> None:
     if sandboxes_only:
         return
     # At session boundaries also prune orphaned ``lemma-e2e-*`` networks left by
-    # interrupted runs (each LemmaDockerNetwork is a separate Docker network and
-    # consumes a subnet from the default address pool — accumulating them
-    # eventually exhausts the pool: "all predefined address pools have been fully
-    # subnetted", and every later run fails at ``docker network create``). In-use
-    # networks (the live session's) can't be removed and fail harmlessly.
+    # interrupted runs from before the shared-Postgres model (each was its own
+    # Docker network and consumed a subnet from the default address pool —
+    # accumulating them eventually exhausts the pool: "all predefined address
+    # pools have been fully subnetted", and every later run fails at ``docker
+    # network create``). Nothing creates these anymore, so this is a no-op once
+    # any stragglers are gone; kept as a cheap defensive sweep.
     nets = subprocess.run(
         ["docker", "network", "ls", "-q", "--filter", "name=lemma-e2e"],
         capture_output=True,
@@ -282,19 +282,44 @@ async def verify_emailpassword_for_tests(user_id: str, email: str) -> None:
     assert verified.status == "OK"
 
 
-def _start_postgres() -> None:
-    network = _shared_context_resource("network", get_test_network)
+def _sanitize_worker_id(worker_id: str) -> str:
+    import re
+
+    return re.sub(r"[^0-9a-zA-Z_]", "_", worker_id)
+
+
+def _postgres_worker_db_name(worker_id: str) -> str:
+    return f"lemma_e2e_{_sanitize_worker_id(worker_id)}"
+
+
+def _postgres_worker_datastore_db_name(worker_id: str) -> str:
+    return f"datastore_{_sanitize_worker_id(worker_id)}"
+
+
+def _start_postgres(worker_id: str, tmp_path_factory) -> None:
+    """Connect to the ONE Postgres server shared across all xdist workers.
+
+    Each worker gets its own logical database inside it (created via
+    ``create_postgres_database``), rather than its own full container -- one
+    `docker run postgres` and one idle Postgres server process for the whole
+    run instead of N. See ``shared_postgres`` in test_utils for the
+    coordination mechanism (mirrors ``shared_kreuzberg``).
+    """
+    basetemp_parent = tmp_path_factory.getbasetemp().parent
 
     def _factory():
-        return get_postgres_container(network=network)
+        return shared_postgres(basetemp_parent, worker_id)
 
     postgres = _shared_context_resource("postgres", _factory)
-    if not getattr(postgres, "_lemma_datastore_database_created", False):
-        create_postgres_database(postgres, "datastore")
-        setattr(postgres, "_lemma_datastore_database_created", True)
+    if not getattr(postgres, "_lemma_worker_databases_created", False):
+        create_postgres_database(postgres, _postgres_worker_db_name(worker_id))
+        create_postgres_database(
+            postgres, _postgres_worker_datastore_db_name(worker_id)
+        )
+        setattr(postgres, "_lemma_worker_databases_created", True)
 
 
-def _warm_shared_containers() -> None:
+def _warm_shared_containers(worker_id: str, tmp_path_factory) -> None:
     """Boot postgres/redis/supertokens concurrently on first use.
 
     These are three independent Docker containers -- nothing about starting
@@ -315,7 +340,7 @@ def _warm_shared_containers() -> None:
 
     jobs: list[Callable[[], Any]] = []
     if "postgres" not in _SHARED_RESOURCES:
-        jobs.append(_start_postgres)
+        jobs.append(lambda: _start_postgres(worker_id, tmp_path_factory))
     if "redis" not in _SHARED_RESOURCES:
         jobs.append(lambda: _shared_context_resource("redis", get_redis_container))
     if "supertokens" not in _SHARED_RESOURCES:
@@ -329,31 +354,26 @@ def _warm_shared_containers() -> None:
 
 
 @pytest.fixture(scope="session")
-def test_network():
-    yield _shared_context_resource("network", get_test_network)
-
-
-@pytest.fixture(scope="session")
-def postgres_container(test_network):
-    _warm_shared_containers()
+def postgres_container(worker_id, tmp_path_factory):
+    _warm_shared_containers(worker_id, tmp_path_factory)
     yield _SHARED_RESOURCES["postgres"]
 
 
 @pytest.fixture(scope="session")
-def supertokens_container():
-    _warm_shared_containers()
+def supertokens_container(worker_id, tmp_path_factory):
+    _warm_shared_containers(worker_id, tmp_path_factory)
     yield _SHARED_RESOURCES["supertokens"]
 
 
 @pytest.fixture(scope="session")
-def redis_container():
-    _warm_shared_containers()
+def redis_container(worker_id, tmp_path_factory):
+    _warm_shared_containers(worker_id, tmp_path_factory)
     yield _SHARED_RESOURCES["redis"]
 
 
 @pytest.fixture(scope="session")
-def test_database_url(postgres_container) -> str:
-    return get_postgres_url(postgres_container)
+def test_database_url(postgres_container, worker_id) -> str:
+    return get_postgres_url(postgres_container, _postgres_worker_db_name(worker_id))
 
 
 @pytest.fixture(scope="session")
@@ -408,13 +428,15 @@ def _seed_system_model_pricing() -> None:
     )
 
 @pytest.fixture(scope="session")
-def e2e_settings(test_database_url, test_redis_url, supertokens_container):
+def e2e_settings(test_database_url, test_redis_url, supertokens_container, worker_id):
     from app.core.config import settings
 
     os.environ["SUPERTOKENS_ENV"] = "testing"
     settings.database_url = test_database_url
     base_url = test_database_url.rsplit("/", 1)[0]
-    settings.datastore_database_url = f"{base_url}/datastore"
+    settings.datastore_database_url = (
+        f"{base_url}/{_postgres_worker_datastore_db_name(worker_id)}"
+    )
     settings.redis_url = test_redis_url
     settings.supertokens_core_url = get_supertokens_url(supertokens_container)
     settings.environment = "testing"
