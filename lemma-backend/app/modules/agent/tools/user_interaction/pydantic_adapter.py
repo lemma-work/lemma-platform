@@ -200,15 +200,23 @@ async def request_approval(
         # Remote harnesses (Codex/Claude-Code/OpenCode) run tools over MCP and own
         # their session, so the run can't pause mid tool-call. Guide the model to
         # the conversational fallback instead of hanging or aborting the run.
+        # Parked rather than refused -- see the note on `ask_user` below. The
+        # decision reaches this call through the same approvals endpoint every
+        # other surface already resolves, and the bridge waits for it.
+        if not ctx.tool_call_id:
+            return RequestApprovalResponse(
+                success=False,
+                error="request_approval requires a durable tool call id.",
+            )
+        auto_approved = await _run_if_exact_match_already_approved(
+            deps=deps, tool_name=tool_name, args=args
+        )
+        if auto_approved is not None:
+            return auto_approved
         return RequestApprovalResponse(
-            success=False,
-            interaction_fallback=True,
-            message=(
-                "This runtime can't run a tool with the user's approval mid-turn. "
-                f"Explain what you need to do ({tool_name}) and why it needs their "
-                "authority, ask the user to confirm or run it themselves, and "
-                "continue once they reply."
-            ),
+            success=True,
+            parked_tool_call_id=ctx.tool_call_id,
+            message=f"Waiting for the user's decision on {tool_name}.",
         )
     # Email surfaces are non-interactive — they can't pause for an approve/deny
     # reply, and pausing would strand the run in WAITING with nothing delivered.
@@ -347,14 +355,25 @@ async def ask_user(
         # Remote harnesses (Codex/Claude-Code/OpenCode) run tools over MCP and own
         # their session, so the run can't pause mid tool-call to collect answers.
         # Guide the model to ask conversationally instead of hanging/aborting.
+        # Parked, not refused. A remote harness reaches this tool over MCP and
+        # cannot end its own turn from inside a tool call -- but it does not
+        # need to. Its bridge holds the MCP response open and waits, which is
+        # exactly what the host already does for its own native ACP permission
+        # requests, so the model sits inside its turn and the person answers on
+        # whichever surface they are already using.
+        #
+        # Falling back to prose was worse than it looked: the questions stopped
+        # rendering as an interaction card, so the choices, the recommended
+        # option and the native buttons on Slack/Teams/Telegram all became a
+        # paragraph the person had to read and answer in their own words.
+        if not ctx.tool_call_id:
+            return AskUserResponse(
+                success=False, error="ask_user requires a durable tool call id."
+            )
         return AskUserResponse(
-            success=False,
-            interaction_fallback=True,
-            message=(
-                "This runtime can't pause to collect a multiple-choice answer. Ask "
-                "the user your question(s) directly in your reply and end your turn; "
-                "their next message will continue this conversation with the answer."
-            ),
+            success=True,
+            parked_tool_call_id=ctx.tool_call_id,
+            message="Waiting for the user's answer.",
         )
     # Email surfaces are non-interactive — they can't pause for an answer, and
     # pausing would strand the run in WAITING with nothing delivered. Fail fast so
