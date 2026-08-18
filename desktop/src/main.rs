@@ -1006,15 +1006,32 @@ fn enriched_path() -> String {
 
 fn ensure_locald(app: &AppHandle) -> Result<(), String> {
     let shell: State<Shell> = app.state();
-    if shell.locald_writer.lock().unwrap().is_some() {
-        return Ok(());
-    }
-    // Deliberately before the connect guard, under a lock of its own. This can
-    // take minutes on a first run, and holding `locald_connect` across it turned
+    // The runtime comes first, and before the "already connected" check rather
+    // than after it.
+    //
+    // Both modes run this same daemon: hosted brings it up through
+    // `ensure_locald_without_host_pack` so the Agent Host has a supervisor, and
+    // only local needs the runtime artifacts. So by the time someone switches
+    // hosted -> local, the writer is already `Some` -- and this returned `Ok`
+    // having installed nothing at all. `start` then reached a daemon with no
+    // private runtime and came back "private runtime is not ready for host
+    // processes", the splash sat on "Lemma is starting", and the only cure was
+    // relaunching the app, because a fresh process is the one thing that makes
+    // the writer `None` again and lets this run properly.
+    //
+    // Cheap when there is nothing to do: an installed runtime is self-contained
+    // and is recognised from its own recorded identity, without consulting an
+    // artifact host.
+    //
+    // Still before the connect guard, under a lock of its own. This can take
+    // minutes on a first run, and holding `locald_connect` across it turned
     // every unrelated caller into a hang of the same length.
     {
         let _install_guard = shell.runtime_install.lock().unwrap();
         ensure_runtime_artifacts(app)?;
+    }
+    if shell.locald_writer.lock().unwrap().is_some() {
+        return Ok(());
     }
 
     let _connect_guard = shell.locald_connect.lock().unwrap();
