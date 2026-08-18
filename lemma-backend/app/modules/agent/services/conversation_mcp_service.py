@@ -28,9 +28,17 @@ from app.modules.agent.infrastructure.mcp import (
     exported_tool_name,
     normalize_local_mcp_tool_name,
 )
+from app.core.crypto import get_secret_cipher
+from app.modules.agent.infrastructure.agent_host_repository import (
+    AgentHostRepository,
+)
 from app.modules.agent.infrastructure.repositories import (
     AgentRepository,
+    AgentRuntimeProfileRepository,
     ConversationRepository,
+)
+from app.modules.agent.services.runtime_profile_service import (
+    AgentRuntimeProfileService,
 )
 from app.modules.agent.tools.callable_tool_factory import inline_tool_schema_refs
 from app.modules.agent.tools.context import BaseAgentContext
@@ -179,8 +187,11 @@ class ConversationMCPService:
                 run = await conversation_repo.get_active_agent_run(conversation_id)
             agent_id = conversation.agent_id or (run.agent_id if run else None)
             agent = await agent_repo.get(agent_id) if agent_id is not None else None
-            runtime_profile = (
-                run.agent_runtime.model_dump(mode="json") if run else None
+            runtime_profile = await self._resolved_runtime_profile(
+                run=run,
+                uow=uow,
+                organization_id=conversation.organization_id,
+                user_id=conversation.user_id,
             )
             ctx = BaseAgentContext(
                 user_id=conversation.user_id,
@@ -197,6 +208,58 @@ class ConversationMCPService:
                 **_surface_context_from_conversation(conversation),
             )
             return agent, conversation, ctx
+
+    async def _resolved_runtime_profile(
+        self,
+        *,
+        run: object | None,
+        uow: object,
+        organization_id: UUID | None,
+        user_id: UUID,
+    ) -> JsonObject | None:
+        """The run's runtime, resolved, so its capabilities are actually present.
+
+        `run.agent_runtime` is an `AgentRuntimeConfig` -- a profile id and a
+        model name, and nothing else. It has no `model_capabilities`, so
+        deriving the vision mode from it answered "this model cannot see" for
+        every remote harness, whatever it was: a Claude Code or Codex host that
+        reads images natively was told to delegate to a VISION_MODEL, and when
+        none was configured, that PDF pages could not be viewed at all.
+
+        Resolving is what produces capabilities, and `public_snapshot()` carries
+        them precisely so the MCP bridges can rebuild a context. It costs one
+        indexed lookup inside a unit of work this method already holds open, and
+        no network call -- the model catalog lives on the profile.
+
+        Falls back to the unresolved config on failure. A tool call must not
+        fail because a profile was archived between the run starting and the
+        model reaching for a file; the old behaviour was to delegate or refuse
+        images, which is exactly what this returns to.
+        """
+        if run is None:
+            return None
+        stored = run.agent_runtime.model_dump(mode="json")
+        try:
+            service = AgentRuntimeProfileService(
+                AgentRuntimeProfileRepository(uow, encryption=get_secret_cipher()),
+                # Passed so a harness that has since reported it reads images is
+                # believed, rather than the catalog copied from it before its
+                # probe landed. Without this the resolve below is accurate about
+                # a stale answer.
+                AgentHostRepository(uow),
+            )
+            resolved = await service.resolve(
+                runtime=run.agent_runtime,
+                organization_id=organization_id,
+                user_id=user_id,
+            )
+        except Exception:  # noqa: BLE001 - a tool call must survive this
+            logger.debug(
+                "agent.conversation_mcp.runtime_resolve_failed.diagnostic",
+                exc_info=True,
+            )
+            return stored
+        return resolved.public_snapshot()
 
     def _mcp_result(self, result: object) -> CallToolResult:
         # Images ride alongside the text. Remote harnesses (Codex, Claude Code)

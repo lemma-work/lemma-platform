@@ -566,6 +566,7 @@ class AgentRuntimeProfileService:
             raise RuntimeError(
                 f"Agent runtime profile {profile_id!r} has no selectable model"
             )
+        model = await self._with_live_harness_vision(profile, model)
         credentials = reveal_credentials(profile.credentials)
         return ResolvedAgentRuntime(
             profile=profile,
@@ -573,6 +574,53 @@ class AgentRuntimeProfileService:
             model=model,
             provider_model_name=model.provider_model_name if model else None,
             credentials=credentials,
+        )
+
+    async def _with_live_harness_vision(
+        self,
+        profile: AgentRuntimeProfile,
+        model: RuntimeModelCatalogEntry | None,
+    ) -> RuntimeModelCatalogEntry | None:
+        """Let a harness that has learned to see say so, without a profile edit.
+
+        A harness profile's catalog is built once, at create time, from whatever
+        ``capabilities["images"]`` said then -- and a harness registers before
+        its ACP probe lands, so that is very often ``false``. The probe updates
+        the harness moments later, but the catalog it was copied into is only
+        rebuilt when somebody edits the profile in Models settings. Until then a
+        Claude Code or Codex host that reads images natively is described as
+        text-only, and `pod_view_document_pages` refuses.
+
+        So the harness is asked rather than the copy. Only ever additive: a
+        harness that reports images gains VISION, one that does not is left
+        exactly as stored, because the stored catalog is what an operator may
+        have deliberately edited.
+        """
+        if (
+            model is None
+            or profile.kind is not RuntimeProfileKind.HARNESS
+            or profile.harness_id is None
+            or self.host_repository is None
+            or RuntimeModelCapability.VISION in model.capabilities
+        ):
+            return model
+        try:
+            harnesses = await self.host_repository.get_harnesses({profile.harness_id})
+        except Exception:  # noqa: BLE001 - never fail a run over a capability hint
+            logger.debug(
+                "agent.runtime_profile.harness_vision_lookup_failed.diagnostic",
+                exc_info=True,
+            )
+            return model
+        harness = harnesses.get(profile.harness_id)
+        if harness is None or (getattr(harness, "capabilities", None) or {}).get(
+            "images"
+        ) is not True:
+            return model
+        return model.model_copy(
+            update={
+                "capabilities": [*model.capabilities, RuntimeModelCapability.VISION]
+            }
         )
 
     async def _archived_profile(

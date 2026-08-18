@@ -27,6 +27,7 @@ from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.modules.agent.services.mcp_content import image_contents, text_content
+from app.modules.agent.domain.vision import AgentVisionMode
 from app.modules.agent.domain.value_objects import to_json_value
 from app.modules.agent.infrastructure.mcp import (
     exported_tool_name,
@@ -140,6 +141,18 @@ class PodMCPService:
             workload_type="agent" if workload_id is not None else None,
             workload_id=workload_id,
             agent_name=agent_name,
+            # There is no run here, and so no runtime profile to ask -- this
+            # bridge serves an MCP client holding a pod token, not a Lemma agent
+            # run. DIRECT rather than the UNAVAILABLE default, because MCP has a
+            # first-class image content type and `_mcp_result` already attaches
+            # images: the client decides what to do with them, and one that
+            # cannot read them still gets the same JSON answer beside them.
+            #
+            # Left as the default, every image tool told every MCP client that
+            # its model could not read images -- including the ones that can --
+            # and `_mcp_result`'s image handling could never fire, because no
+            # image was ever produced to attach.
+            vision_mode=AgentVisionMode.DIRECT,
         )
 
     def _mcp_result(self, result: object) -> CallToolResult:
