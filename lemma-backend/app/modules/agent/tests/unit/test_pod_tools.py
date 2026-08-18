@@ -826,10 +826,10 @@ def test_a_durable_workspace_fault_does_not_invite_a_retry():
     """
     from sandbox_runtime.errors import SandboxUnavailable
 
-    from app.modules.agent.tools.workspace_cli.workspace_cli import _retry_advice
+    from app.modules.workspace.session_support import retry_advice
 
-    assert "retry" in _retry_advice(SandboxUnavailable("no capacity")).lower()
+    assert "retry" in retry_advice(SandboxUnavailable("no capacity")).lower()
 
-    durable = _retry_advice(RuntimeError("managed workspace runtime is gone"))
+    durable = retry_advice(RuntimeError("managed workspace runtime is gone"))
     assert "not expected to succeed on retry" in durable
     assert "recoverable tool failure" not in durable

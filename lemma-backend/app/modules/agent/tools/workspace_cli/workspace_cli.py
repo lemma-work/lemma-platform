@@ -44,6 +44,7 @@ from app.modules.agent.tools.workspace_cli.helper import (
     trim_python_result,
 )
 from app.modules.agent.tools.workspace_entities import PythonExecutionResult
+from app.modules.workspace.session_support import retry_advice
 from app.composition.agent_workspace import (
     get_workspace_tool_runtime,
 )
@@ -103,32 +104,8 @@ def _workspace_tool_failure(
         process_id=process_id,
         error=(
             f"Workspace {operation} failed before the tool could complete: "
-            f"{describe_exception(exc)}." + _retry_advice(exc)
+            f"{describe_exception(exc)}." + retry_advice(exc)
         ),
-    )
-
-
-def _retry_advice(exc: Exception) -> str:
-    """Whether this failure is actually worth another go.
-
-    The sentence used to be unconditional -- appended to everything a bare
-    `except Exception` caught, asserting recoverability that no code had
-    evaluated. A stopped workspace container reaches here as
-    `SandboxUnavailable` only after the provider says so; anything else is a
-    durable fault, and inviting a retry on one sends an agent round a loop with
-    no exit. That is exactly what happened: four identical failures over several
-    minutes, each one advertising itself as recoverable.
-
-    `SandboxUnavailable` is how the platform already spells "transient" --
-    `session_support.sandbox_command_failure` classifies the same way.
-    """
-    from sandbox_runtime.errors import SandboxUnavailable
-
-    if isinstance(exc, SandboxUnavailable):
-        return " Treat this as a recoverable tool failure and retry if the operation is still needed."
-    return (
-        " This is not expected to succeed on retry; report it rather than "
-        "repeating the call."
     )
 
 
@@ -149,7 +126,7 @@ def _python_workspace_tool_failure(
             "ename": "WorkspaceToolError",
             "evalue": (
                 f"Workspace {operation} failed before Python execution completed: "
-                f"{describe_exception(exc)}." + _retry_advice(exc)
+                f"{describe_exception(exc)}." + retry_advice(exc)
             ),
             "traceback": [],
         },
