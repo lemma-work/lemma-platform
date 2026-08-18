@@ -1425,7 +1425,18 @@ async def test_five_row_owner_workflow_failures_deactivate_schedule_owner_schedu
     while asyncio.get_running_loop().time() < email_deadline:
         matching_emails = []
         for path in Path(e2e_settings.email_output_dir).glob("*.json"):
-            message = json.loads(path.read_text(encoding="utf-8"))
+            # The filesystem mail spool is written by a separate worker
+            # process: ``glob`` can list a file whose ``os.open(O_CREAT)``
+            # has landed but whose ``json.dump`` body hasn't been flushed
+            # yet, or one the retention sweep deleted between the listing
+            # and the read. Either shows up here as an empty/partial read,
+            # not a real message -- skip it and let the next poll pick up
+            # the finished file, the same guard identity's e2e mailbox
+            # helper (``_filesystem_emails``) already applies.
+            try:
+                message = json.loads(path.read_text(encoding="utf-8"))
+            except OSError, json.JSONDecodeError:
+                continue
             # The subject leads with the schedule's humanized display name, so
             # match the stable tail rather than pinning the whole string.
             if message.get("to_email") == fixed_test_user["email"] and str(
