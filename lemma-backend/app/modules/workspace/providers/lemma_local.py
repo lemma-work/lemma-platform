@@ -65,8 +65,13 @@ _MAX_RESPONSE_BYTES = 4 * 1024 * 1024
 
 
 class LocalBridgeError(RuntimeError):
-    def __init__(self, message: str, *, code: str = "local_runtime_failed",
-                 retryable: bool = True) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str = "local_runtime_failed",
+        retryable: bool = True,
+    ) -> None:
         super().__init__(message)
         self.code = code
         self.retryable = retryable
@@ -180,9 +185,7 @@ class LemmaLocalSandboxProvider(LemmaLocalOpsMixin):
                         "lemma-epoch": str(spec.epoch),
                     },
                     "runtime_token": (
-                        self._runtime_credentials.token(guest_id)
-                        if workspace
-                        else None
+                        self._runtime_credentials.token(guest_id) if workspace else None
                     ),
                     "apps": apps,
                     "resources": {
@@ -209,9 +212,7 @@ class LemmaLocalSandboxProvider(LemmaLocalOpsMixin):
         except asyncio.TimeoutError as exc:
             # The bridge may have completed the ensure after the timeout. It is
             # idempotent, so the next attempt resolves this by asking again.
-            raise ProviderCreateAmbiguous(
-                "managed runtime create timed out"
-            ) from exc
+            raise ProviderCreateAmbiguous("managed runtime create timed out") from exc
         except LocalBridgeError as exc:
             if exc.retryable:
                 raise ProviderCreateAmbiguous(str(exc)) from exc
@@ -253,13 +254,29 @@ class LemmaLocalSandboxProvider(LemmaLocalOpsMixin):
         """
         if kind is not SandboxKind.WORKSPACE:
             return
-        client = await self._runtime_client(
-            instance.provider_id, deadline_at=deadline_at
-        )
+        # Converted here, not only in `runtime_scope`. `SandboxUnavailable` is
+        # how this codebase spells "worth another go", and every retry the
+        # platform has keys on it: the ensure loop's backoff, `with_backpressure`,
+        # and the directory-ensure loop that sets `force_reconcile=True` and
+        # rebuilds the container. A raw `WorkspaceRuntimeError` slips past all of
+        # them and past `_fail()`, so the sandbox row stays PRESENT and the next
+        # ensure takes the identical branch -- which is why a stopped container
+        # produced four byte-identical failures in a row instead of being
+        # rebuilt on the second.
+        from sandbox_runtime.errors import SandboxUnavailable
+
         try:
-            await client.health(deadline_at=deadline_at)
-        finally:
-            await client.close()
+            client = await self._runtime_client(
+                instance.provider_id, deadline_at=deadline_at
+            )
+            try:
+                await client.health(deadline_at=deadline_at)
+            finally:
+                await client.close()
+        except ProviderGone:
+            raise
+        except (WorkspaceRuntimeError, LocalBridgeError) as exc:
+            raise SandboxUnavailable(str(exc)) from exc
 
     async def release(
         self,
@@ -309,9 +326,7 @@ class LemmaLocalSandboxProvider(LemmaLocalOpsMixin):
         self, *, deadline_at: datetime
     ) -> tuple[ProviderObject, ...]:
         try:
-            listing = await self._request(
-                "sandbox.list", {}, deadline_at=deadline_at
-            )
+            listing = await self._request("sandbox.list", {}, deadline_at=deadline_at)
         except LocalBridgeError as exc:
             raise ProviderRejected(str(exc)) from exc
 
@@ -428,9 +443,7 @@ class LemmaLocalSandboxProvider(LemmaLocalOpsMixin):
         except LocalBridgeError:
             return None
 
-    async def _status(
-        self, guest_id: str, *, deadline_at: datetime
-    ) -> dict[str, Any]:
+    async def _status(self, guest_id: str, *, deadline_at: datetime) -> dict[str, Any]:
         try:
             return await self._request(
                 "sandbox.status", {"sandbox_id": guest_id}, deadline_at=deadline_at
@@ -508,9 +521,7 @@ class LemmaLocalSandboxProvider(LemmaLocalOpsMixin):
             error = response.get("error")
             details = error if isinstance(error, dict) else {}
             code = str(details.get("code") or "local_runtime_failed")
-            failure = (
-                LocalBridgeNotFound if code == "not_found" else LocalBridgeError
-            )
+            failure = LocalBridgeNotFound if code == "not_found" else LocalBridgeError
             raise failure(
                 str(details.get("message") or "managed runtime request failed"),
                 code=code,

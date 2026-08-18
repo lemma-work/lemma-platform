@@ -814,3 +814,22 @@ async def test_queued_and_failed_files_are_reported_as_the_different_things(
     assert result["files_failed_processing"] == 1
     assert "still being processed" in result["note"]
     assert "could not be processed" in result["note"]
+
+
+def test_a_durable_workspace_fault_does_not_invite_a_retry():
+    """The sweep retried four times over minutes, told each time it was recoverable.
+
+    The advice was a string literal appended to everything a bare
+    `except Exception` caught, so it asserted recoverability no code had
+    evaluated -- while the underlying condition (a stopped container, surfaced as
+    `runtime_url: null`) is one of the most durable failures the system has.
+    """
+    from sandbox_runtime.errors import SandboxUnavailable
+
+    from app.modules.agent.tools.workspace_cli.workspace_cli import _retry_advice
+
+    assert "retry" in _retry_advice(SandboxUnavailable("no capacity")).lower()
+
+    durable = _retry_advice(RuntimeError("managed workspace runtime is gone"))
+    assert "not expected to succeed on retry" in durable
+    assert "recoverable tool failure" not in durable
