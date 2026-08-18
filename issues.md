@@ -663,6 +663,44 @@ marker is not removed.
 
 ## OPS — the platform and its own tooling
 
+### DEV-OPS-005 — Web search with no provider reports success and finds nothing
+**Violates:** PS-OPS-030
+**Severity:** medium
+**Where:** `agent.tool.web_search` → `POST /tools/web-search`
+
+**Required:** Where a facility is unavailable, the system says so. A deployment
+with no search provider reports the facility unavailable rather than answering
+as though the search ran.
+
+**Actual:** It answers `200` and claims it worked:
+
+```json
+{"success": true, "results": [], "message": "Web search completed successfully",
+ "note": null, "error": null}
+```
+
+Found on a CI runner, which is an ordinary deployment with no search provider
+configured — the same state any self-hosted install starts in.
+
+**Why it matters:** The caller cannot tell "nothing exists" from "nothing was
+looked at", and the two lead to opposite decisions. An agent handed this
+concludes the web has nothing on the subject and says so to the person who
+asked, with `success: true` and an explicit "completed successfully" backing it
+up. A refusal would have made it re-plan or ask.
+
+It is the shape that makes this bad rather than the emptiness. `success: false`
+with a reason, or a 503, would both be fine. Reporting success is the part that
+misleads.
+
+**Fix:** Answer `503` when no provider is configured, or keep the 200 and set
+`success: false` with `error` naming the missing configuration. Either way the
+`message` must stop claiming the search completed.
+
+**Covered by:** `test_web_search_says_when_it_is_unavailable`, marked
+`xfail(strict=True)`.
+
+---
+
 ### DEV-OPS-004 — No deployment built from this repository can set a spend limit
 **Violates:** PS-OPS-012
 **Severity:** medium

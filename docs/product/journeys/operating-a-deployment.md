@@ -125,7 +125,7 @@ rather than degrading in a way that only shows up as confused users.
 ## Capability: Know when the platform itself is unwell
 
 ### PS-OPS-030 — The platform reports its own health honestly
-**Status:** covered
+**Status:** gap
 
 - The system shall expose whether it is alive and whether it is ready to serve,
   as separate answers, because a process that is running and a process that can
@@ -134,6 +134,12 @@ rather than degrading in a way that only shows up as confused users.
   report itself unready rather than accepting work it cannot complete.
 - The system shall not report itself healthy while its background workers are
   wedged.
+
+> **Gap:** one facility does not report itself honestly. Web search with no
+> provider configured answers `200` with `"Web search completed
+> successfully"` and no results, so a caller cannot tell "nothing exists"
+> from "nothing was looked at". The health endpoints themselves are proven.
+> See `DEV-OPS-005`.
 
 **Contracts:** *(health endpoints are outside the documented API surface)*
 

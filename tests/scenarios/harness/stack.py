@@ -201,7 +201,14 @@ def _mapped_port(container_id: str, internal_port: int) -> int:
 
 
 def _remove(container_id: str) -> None:
-    subprocess.run(["docker", "rm", "-f", container_id], check=False, capture_output=True)
+    # -v also removes the container's anonymous data volume (postgres/redis/
+    # supertokens all declare VOLUME in their image) — without it every
+    # teardown, even a clean one, leaked one volume forever. Found via three
+    # random-named containers (docker's default naming for a container run
+    # without --name) sitting exited on a dev machine for 21+ hours.
+    subprocess.run(
+        ["docker", "rm", "-f", "-v", container_id], check=False, capture_output=True
+    )
 
 
 def _wait_tcp(host: str, port: int, timeout: float = 60) -> None:
@@ -331,6 +338,27 @@ def _environment(*, port: int, database_url: str, redis_url: str, supertokens_ur
         # The default stays deterministic: a suite on every push must not depend
         # on a model answering the same way twice.
         "E2E_LLM_MODE": os.getenv("SCENARIOS_LLM_MODE", "mock"),
+        # Caches, pinned short.
+        #
+        # Every one of these is Redis-backed with a long production TTL — the
+        # user cache is half an hour, the authorization role snapshot five
+        # minutes — and every one is invalidated on write. A test that creates
+        # something and immediately reads it back is racing that invalidation,
+        # and on a two-core runner it loses: five journey shards were failing
+        # with 403 on creating an agent and "carol is not a member of pod"
+        # moments after she was added.
+        #
+        # Short rather than zero, deliberately. At zero the caching path stops
+        # existing and the suite would no longer run the code a deployment runs.
+        # At one second it is still exercised, staleness closes inside the time
+        # any scenario takes to make its next call, and `PS-POD-011` — which
+        # polls for a role change on purpose — keeps meaning what it says.
+        "USER_CACHE_TTL_SECONDS": "1",
+        "AUTHORIZATION_ROLE_CACHE_TTL_SECONDS": "1",
+        "ORGANIZATION_HOME_CACHE_TTL_SECONDS": "1",
+        "AUTH_STATE_CACHE_TTL_SECONDS": "1",
+        # Not the function session token cache: its setting refuses anything
+        # below 30, and it caches a token rather than a read a scenario races.
         # Off, so surface scenarios can deliver webhooks and see them arrive.
         # The live lane sets it: a real bot on a runner with no public address
         # has no other way to receive, and there is no webhook to deliver.

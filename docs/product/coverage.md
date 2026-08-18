@@ -11,8 +11,8 @@ only a promise marked `covered` with no test is.
 
 | Status | Scenarios |
 | --- | ---: |
-| `covered` | 145 |
-| `gap` | 12 |
+| `covered` | 144 |
+| `gap` | 13 |
 | `manual` | 3 |
 | `planned` | 0 |
 | `withdrawn` | 0 |
@@ -146,7 +146,7 @@ the module suites may cover it — but it is untested *as product*.
 | `PS-OPS-012` Exceeding a limit is refused clearly, not degraded | `gap` | — |
 | `PS-OPS-020` Deleting a pod actually stops everything it was doing | `gap` | `test_a_deleted_pod_stops_answering_its_surfaces`, `test_a_deleted_pod_runs_nothing_further`, `test_deleting_one_pod_leaves_the_others_working` |
 | `PS-OPS-021` A person can take their data out | `covered` | `test_an_exported_bundle_is_readable_without_lemma` |
-| `PS-OPS-030` The platform reports its own health honestly | `covered` | `test_web_search_says_when_it_is_unavailable` |
+| `PS-OPS-030` The platform reports its own health honestly | `gap` | `test_web_search_says_when_it_is_unavailable` |
 | `PS-OPS-031` Work that cannot be completed is not lost silently | `covered` | `test_feedback_can_be_reported` |
 | `PS-OPS-032` A deployment can be configured for its own region and rules | `manual` | — |
 
