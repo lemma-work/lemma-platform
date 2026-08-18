@@ -315,9 +315,7 @@ class ConversationService(PauseResumeMixin):
         latest = conversation.agent_runs[-1] if conversation.agent_runs else None
         if latest is None or latest.status != AgentRunStatus.FAILED:
             return False
-        return await self.conversation_repository.run_has_only_user_messages(
-            latest.id
-        )
+        return await self.conversation_repository.run_has_only_user_messages(latest.id)
 
     async def update_conversation(
         self,
@@ -701,6 +699,9 @@ class ConversationService(PauseResumeMixin):
             # duplicate host run for the same turn.
             return
 
+        if await self.resume_would_duplicate_a_live_turn(paused_run_id):
+            return
+
         await self.start_resume_run_if_ready(
             conversation=conversation,
             paused_run_id=paused_run_id,
@@ -896,9 +897,7 @@ class ConversationService(PauseResumeMixin):
         )
         async with uow_factory() as uow:
             profile_service = AgentRuntimeProfileService(
-                AgentRuntimeProfileRepository(
-                    uow, encryption=get_secret_cipher()
-                )
+                AgentRuntimeProfileRepository(uow, encryption=get_secret_cipher())
             )
             resolved = await profile_service.resolve(
                 runtime=selected_runtime,
@@ -1130,9 +1129,7 @@ class ConversationService(PauseResumeMixin):
                     "tool_call_id": message.tool_call_id,
                     "kind": message.tool_name,
                     "tool_args": (
-                        message.tool_args
-                        if isinstance(message.tool_args, dict)
-                        else {}
+                        message.tool_args if isinstance(message.tool_args, dict) else {}
                     ),
                     "agent_run_id": message.agent_run_id,
                 }
@@ -1202,9 +1199,7 @@ class ConversationService(PauseResumeMixin):
             selected_agent_runtime = (
                 conversation.agent_runtime
                 or agent.agent_runtime
-                or await self._default_agent_runtime_for_pod(
-                    pod_id=conversation.pod_id
-                )
+                or await self._default_agent_runtime_for_pod(pod_id=conversation.pod_id)
             )
             await self._assert_usage_preflight_allowed(
                 organization_id=conversation.organization_id,
