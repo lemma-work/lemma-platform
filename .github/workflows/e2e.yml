@@ -185,6 +185,21 @@ jobs:
       contents: read
       pull-requests: write
       issues: write
+    # Only "Produce unit coverage for direct runs" below needs this -- it re-runs
+    # the whole unit suite from scratch for workflow_dispatch/labeled triggers
+    # (the normal workflow_run cascade instead downloads the already-validated
+    # unit coverage artifact from the upstream CI run, so it never hits this).
+    # Mirrors ci.yml's "lemma-backend unit" job service exactly.
+    services:
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     defaults:
       run:
         working-directory: lemma-backend
@@ -197,7 +212,10 @@ jobs:
         with:
           enable-cache: true
       - name: Sync dependencies
-        run: uv sync
+        # ci.yml's canonical "lemma-backend unit" job uses --extra local too --
+        # match it, since "Produce unit coverage for direct runs" below runs
+        # the identical `make coverage-backend-unit` target.
+        run: uv sync --extra local
       - name: Download E2E coverage shards
         uses: actions/download-artifact@v8
         with:
@@ -239,6 +257,8 @@ jobs:
           make coverage-backend-unit
           mkdir -p coverage-artifacts/unit
           cp .coverage.backend coverage-artifacts/unit/.coverage.backend
+        env:
+          REDIS_URL: redis://localhost:6379
       - name: Prepare unit-only coverage
         shell: bash
         run: |
