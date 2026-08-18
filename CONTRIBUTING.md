@@ -69,6 +69,9 @@ make typecheck-critical
 make architecture
 ```
 
+[Testing strategy](docs/testing.md) covers which of the three suites a change
+needs — unit, module e2e, or a product scenario — and what each one gates.
+
 Use `make test-e2e-fast E2E_WORKERS=1` for the deterministic container-backed
 suite. Real providers, model calls, and Docker sandbox tests are protected and
 must never use personal or production credentials.

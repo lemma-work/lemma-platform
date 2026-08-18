@@ -50,7 +50,9 @@ cd tests/scenarios && uv run pytest --base-url http://localhost:8000
 ## The four rules
 
 Enforced by `journeys/test_harness_contract.py`, which runs first and needs
-nothing booted.
+nothing booted. [CONVENTIONS.md](CONVENTIONS.md) is the full standard — why each
+rule exists, the review checklist, and a catalogue of the ways a scenario can
+pass while proving nothing.
 
 **Nothing imports the backend.** The suite reaches Lemma only over HTTP. An
 import of `app.*` would make this a unit test in a black-box costume — able to
