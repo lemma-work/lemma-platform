@@ -455,15 +455,27 @@ class DatastoreRecordRepository(DatastoreRecordRepositoryPort):
                 clauses.append(f'"{field}" {order_dir}')
             list_sql += " ORDER BY " + ", ".join(clauses)
         else:
+            # The primary key breaks ties, and it is not decoration. Sorting on
+            # `created_at` alone is non-deterministic whenever two rows share a
+            # timestamp -- and they routinely do, because a bulk insert writes
+            # them in the same transaction with the same `now()`. Postgres is
+            # free to order those rows differently between the page-1 query and
+            # the page-2 query, so paging a table with tied timestamps could
+            # silently repeat a row on one page and drop another entirely.
             default_sort_uses_created_at = any(c.name == "created_at" for c in ctx.columns)
             list_sql += (
-                ' ORDER BY "created_at" DESC'
+                f' ORDER BY "created_at" DESC, "{ctx.primary_key_column}" DESC'
                 if default_sort_uses_created_at
                 else f' ORDER BY "{ctx.primary_key_column}" DESC'
             )
 
+        # One more row than asked for. If it does not come back, this page is
+        # the last one and `total` is arithmetic -- offset plus what we hold --
+        # so the COUNT below can be skipped entirely. That COUNT is a full scan
+        # of the user's table, unindexed and unbounded, run on *every* page
+        # request purely to decide whether to emit a next-page token.
         list_sql += " LIMIT :limit OFFSET :offset"
-        params["limit"] = limit
+        params["limit"] = limit + 1
         params["offset"] = offset
 
         try:
@@ -475,14 +487,27 @@ class DatastoreRecordRepository(DatastoreRecordRepositoryPort):
                         is_pod_admin=not enforce_user_scope,
                     )
 
-                count_result = await session.execute(text(count_sql), params)
-                total = count_result.scalar() or 0
-
                 # The ORDER BY only references created_at when it is present in
                 # ctx.columns (see above), which mirrors the physical schema, so
                 # no defensive retry is needed.
                 list_result = await session.execute(text(list_sql), params)
                 rows = list_result.fetchall()
+
+                if len(rows) <= limit:
+                    # Exact, not an estimate: we asked for limit+1 and the table
+                    # gave us fewer, so there is nothing past this page.
+                    total = offset + len(rows)
+                else:
+                    rows = rows[:limit]
+                    count_params = {
+                        key: value
+                        for key, value in params.items()
+                        if key not in ("limit", "offset")
+                    }
+                    count_result = await session.execute(
+                        text(count_sql), count_params
+                    )
+                    total = count_result.scalar() or 0
 
                 return [self._row_to_entity(dict(row._mapping), ctx) for row in rows], total
         except DBAPIError as exc:
