@@ -1084,3 +1084,176 @@ jobs:
       - name: Remove temporary signing keychain
         if: always() && steps.apple-signing.outcome == 'success'
         run: security delete-keychain "${{ steps.apple-signing.outputs.keychain-path }}"
+
+  # Same run, same manifest, the other platform -- and deliberately a lesser
+  # citizen than the macOS job above. Windows is not supported yet; the point of
+  # this is to find out whether it runs at all, which nobody could do before,
+  # because there was no way to get an installable Windows build.
+  #
+  # It looked like there was. CI's "Windows desktop build check" bundles an NSIS
+  # installer on every desktop change -- but it uploads nothing, and it builds
+  # against the committed placeholder manifest whose URLs are unresolvable by
+  # design, so even a kept copy would refuse to install a runtime and say so.
+  # That job proves the bundler runs. It cannot produce something installable.
+  #
+  # Nothing here is load-bearing: the job cannot fail the nightly, its output is
+  # an artifact rather than a release asset, and it is unsigned. Each of those is
+  # a decision to keep Windows out of the supported surface until it has been
+  # tested end to end, not an oversight to tidy up later. Authenticode signing
+  # already exists in release-desktop.yml for the day that changes.
+  share-desktop-exe:
+    name: Build nightly Windows installer
+    if: github.event_name == 'workflow_dispatch' && inputs.share && !inputs.publish
+    runs-on: windows-latest
+    needs: manifest
+    # Windows is not a supported platform yet, so it does not get a vote on
+    # whether a nightly succeeded. A build that cannot produce an installer must
+    # leave the macOS one -- the build people actually install -- green and
+    # attached, and say so in the run rather than in the run's status.
+    continue-on-error: true
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Cache cargo and desktop target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            desktop/target
+          key: desktop-share-cargo-${{ runner.os }}-${{ hashFiles('desktop/Cargo.lock') }}
+          restore-keys: desktop-share-cargo-${{ runner.os }}-
+
+      - name: Resolve nightly tag
+        id: tag
+        shell: bash
+        run: echo "release_tag=desktop-nightly-${GITHUB_SHA:0:8}" >> "$GITHUB_OUTPUT"
+
+      # The same verification the macOS job does, for the same reason: the app
+      # trusts this manifest to fetch its runtime, so the digests it names are
+      # checked against the bytes actually published before anything is built.
+      - name: Download and verify the published runtime manifest
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.tag.outputs.release_tag }}
+          TARGET: x86_64-pc-windows-msvc
+          GUEST_TARGET: windows-x86_64
+        run: |
+          New-Item -ItemType Directory -Force desktop/runtime/download | Out-Null
+          gh release download "$env:TAG" `
+            --pattern lemma-local.json `
+            --pattern "lemma-host-pack-$env:TARGET.zip" `
+            --pattern "lemma-guest-runtime-$env:GUEST_TARGET.zip" `
+            --dir desktop/runtime/download `
+            --clobber
+          if ($LASTEXITCODE -ne 0) { throw "Could not download the nightly runtime for $env:TAG" }
+          @'
+          import hashlib, json, os
+          from pathlib import Path
+          root = Path("desktop/runtime/download")
+          manifest = json.loads((root / "lemma-local.json").read_text())
+          for kind, key, name in (
+              ("host_packs", os.environ["TARGET"], "lemma-host-pack-{}.zip"),
+              ("guest_runtimes", os.environ["GUEST_TARGET"], "lemma-guest-runtime-{}.zip"),
+          ):
+              archive = root / name.format(key)
+              expected = manifest[kind][key]
+              if hashlib.sha256(archive.read_bytes()).hexdigest() != expected["sha256"]:
+                  raise SystemExit(f"{archive.name} digest mismatch")
+              if archive.stat().st_size != expected["size"]:
+                  raise SystemExit(f"{archive.name} size mismatch")
+              if not expected["url"].endswith(f"/{archive.name}"):
+                  raise SystemExit(f"{archive.name} URL does not name the asset")
+          '@ | python -
+          if ($LASTEXITCODE -ne 0) { throw "Published runtime did not match its manifest" }
+          Copy-Item desktop/runtime/download/lemma-local.json desktop/runtime/lemma-local.json -Force
+
+      - name: Bake splash concepts
+        run: node desktop/scripts/extract-concepts.mjs
+
+      - name: Verify baked splash concepts are committed
+        run: git diff --exit-code desktop/ui/concepts.gen.json
+
+      - name: Build Windows sidecars
+        shell: pwsh
+        run: desktop/scripts/build-sidecar.ps1
+
+      - name: Read the pinned Tauri CLI
+        shell: pwsh
+        run: |
+          $v = (Get-Content desktop/scripts/tauri-cli-version.txt).Trim()
+          "TAURI_CLI=@tauri-apps/cli@$v" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+
+      - name: Build online NSIS installer
+        working-directory: desktop
+        shell: pwsh
+        env:
+          SHA: ${{ github.sha }}
+        run: |
+          npx -y $env:TAURI_CLI build --config tauri.online.conf.json --bundles nsis
+          if ($LASTEXITCODE -ne 0) { throw "Online NSIS build failed" }
+          New-Item -ItemType Directory -Force target/release/release-artifacts | Out-Null
+          $installers = @(Get-ChildItem target/release/bundle/nsis/Lemma_*_x64-setup.exe)
+          if ($installers.Count -ne 1) { throw "Expected one online NSIS installer" }
+          $short = $env:SHA.Substring(0, 8)
+          Move-Item $installers[0].FullName `
+            "target/release/release-artifacts/Lemma-nightly-${short}_x64-setup.exe"
+
+      # The same ceiling the release build holds the online payload to. A
+      # nightly that quietly shipped the whole runtime inside the installer
+      # would not be testing the thing this is meant to test.
+      - name: Enforce small online application payload
+        shell: pwsh
+        run: |
+          $paths = @(
+            "desktop/target/release/lemma-desktop.exe",
+            "desktop/binaries/lemma-locald-x86_64-pc-windows-msvc.exe",
+            "desktop/binaries/lemma-runtime-x86_64-pc-windows-msvc.exe",
+            "desktop/runtime/lemma-local.json"
+          )
+          $bytes = ($paths | ForEach-Object {
+            if (-not (Test-Path $_)) { throw "Online payload is missing: $_" }
+            (Get-Item $_).Length
+          } | Measure-Object -Sum).Sum
+          if ($bytes -gt 25MB) {
+            throw "Expanded online application payload is $bytes bytes; limit is 25 MiB"
+          }
+
+      # Kept as a workflow artifact, never attached to the prerelease. Same
+      # rule release-desktop.yml follows and for the same reason: an installer
+      # sitting on a release page is an offer to support the platform, and
+      # Windows is not supported yet. Whoever is testing it downloads it from
+      # the run, which is exactly the audience it is for.
+      - name: Keep the installer as a workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: lemma-desktop-windows-nightly-${{ github.sha }}
+          path: desktop/target/release/release-artifacts/Lemma-nightly-*_x64-setup.exe
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Say where it is
+        shell: pwsh
+        env:
+          SHA: ${{ github.sha }}
+        run: |
+          $short = $env:SHA.Substring(0, 8)
+          @(
+            "### Lemma Desktop nightly (Windows) -- experimental",
+            "",
+            "Not attached to the release: Windows is not a supported platform yet.",
+            "Download ``lemma-desktop-windows-nightly-$env:SHA`` from this run's",
+            "artifacts. Unsigned, so SmartScreen will interrupt the first launch."
+          ) | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
