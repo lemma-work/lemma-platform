@@ -74,21 +74,27 @@ jobs:
             workers: 2
           - name: agent
             args: app/modules/agent/tests/e2e
-            workers: 1
+            workers: 2
           - name: function
+            # Only 6 tests: container boot dominates wall-clock either way, so
+            # a second worker (a second full container trio) isn't worth it.
             args: app/modules/function/tests/e2e
             workers: 1
           - name: pod
+            # 94 tests ran fully serially and were the single biggest chunk of
+            # fast-lane wall-clock (~200s of test execution alone). Kreuzberg
+            # (the RAM-heavy container that motivated -n1 elsewhere) isn't in
+            # this lane, so there's no known reason this needs to stay serial.
             args: app/modules/pod/tests/e2e
-            workers: 1
+            workers: 3
           - name: datastore
             args: app/modules/datastore/tests/e2e app/modules/apps/tests/e2e
-            workers: 1
+            workers: 2
           - name: connectors
             args: app/modules/connectors/tests/e2e app/modules/schedule/tests/e2e
-            workers: 1
+            workers: 2
           - name: rest
-            workers: 1
+            workers: 2
             args: >-
               app/modules app/core
               --ignore=app/modules/agent/tests/e2e
@@ -112,7 +118,37 @@ jobs:
         with:
           enable-cache: true
       - name: Sync deps
-        run: uv sync
+        # `local` pulls in xberg: the datastore shard's real-wheel journey
+        # (test_desktop_local_journey_converts_and_indexes_with_the_real_xberg_wheel)
+        # needs it installed, same as the unit-test CI job (ci.yml).
+        run: uv sync --extra local
+      # Postgres/Redis/SuperTokens images are pinned in test_utils.py and never
+      # change between runs, but GH-hosted runners are fresh VMs with nothing
+      # pre-pulled, so every shard was cold-pulling ~1.3GB from Docker Hub on
+      # every single run. Cache the pulled layers keyed on the file that pins
+      # the versions, so a version bump there is the only thing that busts it.
+      - name: Cache e2e container images
+        id: cache-e2e-images
+        uses: actions/cache@v4
+        with:
+          path: /tmp/e2e-docker-images.tar
+          key: e2e-docker-images-${{ hashFiles('lemma-backend/app/core/test_utils.py') }}
+      - name: Load cached e2e container images
+        if: steps.cache-e2e-images.outputs.cache-hit == 'true'
+        run: docker load -i /tmp/e2e-docker-images.tar
+      - name: Pull e2e container images
+        if: steps.cache-e2e-images.outputs.cache-hit != 'true'
+        run: |
+          docker pull docker.io/pgvector/pgvector:0.8.3-pg15
+          docker pull redis:7.4-alpine
+          docker pull docker.io/supertokens/supertokens-postgresql:11.4.5
+      - name: Save e2e container images to cache
+        if: steps.cache-e2e-images.outputs.cache-hit != 'true'
+        run: |
+          docker save -o /tmp/e2e-docker-images.tar \
+            docker.io/pgvector/pgvector:0.8.3-pg15 \
+            redis:7.4-alpine \
+            docker.io/supertokens/supertokens-postgresql:11.4.5
       # Shards run in parallel, so wall-clock is the slowest shard, not their sum.
       # E2E_ARGS scopes each shard; matrix workers keeps surfaces below ten minutes.
       - name: E2E tests (deterministic LLM + in-process sandbox, real services)

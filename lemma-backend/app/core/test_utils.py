@@ -293,7 +293,16 @@ def get_supertokens_container() -> Generator[LemmaDockerContainer, None, None]:
     """
     Starts a SuperTokens container with in-memory SQLite (default).
     """
-    container = LemmaDockerContainer(SUPERTOKENS_IMAGE, 3567)
+    # Every user signup/signin in the suite pays real bcrypt cost against the
+    # default work factor (2^11 rounds). This container is thrown away at the
+    # end of the run and never holds anything worth protecting, so drop the
+    # rounds to the minimum SuperTokens accepts -- tests that create several
+    # actors (e.g. visibility-matrix fixtures signing up 3+ users) see that
+    # multiplied per signup.
+    container = LemmaDockerContainer(SUPERTOKENS_IMAGE, 3567).with_env(
+        "BCRYPT_LOG_ROUNDS",
+        os.getenv("E2E_SUPERTOKENS_BCRYPT_LOG_ROUNDS", "4"),
+    )
 
     with container as st:
         # Wait for SuperTokens to be ready by polling the health endpoint
