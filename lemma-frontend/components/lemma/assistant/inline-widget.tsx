@@ -92,6 +92,15 @@ export interface InlineWidgetProps {
      */
     podTabHref?: string | null;
     onExpand?: () => void;
+    /**
+     * Answers posted up by an interactive widget (an `ask_user` rendered as one).
+     *
+     * The widget is model-authored HTML, so this is an untrusted message: the
+     * caller is responsible for accepting only answers that name a question and
+     * option it declared. Absent this prop the widget stays display-only, which
+     * is what a `display_resource` widget is.
+     */
+    onAnswer?: (answers: Record<string, unknown>) => void;
 }
 
 /**
@@ -129,10 +138,11 @@ export function InlineWidget({
     maxHeight,
     podTabHref,
     onExpand,
+    onAnswer,
 }: InlineWidgetProps) {
     const { resolvedTheme } = useTheme();
     const iframeRef = useRef<HTMLIFrameElement | null>(null);
-    const [reportedHeight, setReportedHeight] = useState(variant === "full" ? 520 : 320);
+    const [reportedHeight, setReportedHeight] = useState(variant === "full" ? 520 : 180);
     const [heightReported, setHeightReported] = useState(false);
     const [loadedIframeSrc, setLoadedIframeSrc] = useState<string | null>(null);
     const [loadingProgress, setLoadingProgress] = useState({ key: "", index: 0 });
@@ -191,22 +201,41 @@ export function InlineWidget({
         return () => window.clearInterval(intervalId);
     }, [loading, loadingKey, normalizedLoadingMessages.length]);
 
+    // Held in a ref so the listener below subscribes once: `onAnswer` is a fresh
+    // closure on most renders, and re-subscribing on each one would drop a
+    // message posted mid-render.
+    const onAnswerRef = useRef(onAnswer);
+    useEffect(() => {
+        onAnswerRef.current = onAnswer;
+    }, [onAnswer]);
+
     useEffect(() => {
         const handleMessage = (event: MessageEvent) => {
             if (!iframeRef.current || event.source !== iframeRef.current.contentWindow) return;
             const data = event.data && typeof event.data === "object" ? event.data as Record<string, unknown> : {};
+            if (data.type === "lemma-widget-answer") {
+                // Height is cosmetic; an answer resolves a paused agent run, so
+                // it is checked against the frame's own origin as well as its
+                // window before it is passed on. The receiver still validates
+                // the payload -- the widget's HTML is model-authored.
+                if (!iframeSrc || event.origin !== new URL(iframeSrc).origin) return;
+                const answers = data.answers;
+                if (!answers || typeof answers !== "object" || Array.isArray(answers)) return;
+                onAnswerRef.current?.(answers as Record<string, unknown>);
+                return;
+            }
             if (data.type !== "lemma-widget-height") return;
             const nextHeight = typeof data.height === "number" ? data.height : Number(data.height);
             if (!Number.isFinite(nextHeight)) return;
-            setReportedHeight(Math.max(120, Math.min(2400, Math.round(nextHeight))));
+            setReportedHeight(Math.max(64, Math.min(2400, Math.round(nextHeight))));
             setHeightReported(true);
         };
         window.addEventListener("message", handleMessage);
         return () => window.removeEventListener("message", handleMessage);
-    }, []);
+    }, [iframeSrc]);
 
     const isInline = variant === "inline";
-    const fullHeight = !heightReported ? 360 : reportedHeight;
+    const fullHeight = !heightReported ? (isInline ? 180 : 360) : reportedHeight;
     const overflows = isInline && heightReported && reportedHeight > resolvedMaxHeight;
     const renderedHeight = isInline ? Math.min(fullHeight, resolvedMaxHeight) : fullHeight;
 

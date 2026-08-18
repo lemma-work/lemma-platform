@@ -2,7 +2,7 @@
   {
     "tool_name": "ask_user",
     "toolset": "USER_INTERACTION",
-    "description": "Ask the user one or more multiple-choice questions and wait for their answers.\n\nUse it for a decision you genuinely cannot infer. Each question carries 2-4\nconcrete options; mark the one you recommend. The run pauses, and answers come\nback in `answers` keyed by each question's `header`.\n\nPrefer this over a prose question whenever the answer is a choice among known\noptions. For free-form input, ask in prose and end your turn. Only ask when it\nchanges what you do next \u2014 otherwise take the obvious default and proceed.",
+    "description": "Ask the user one or more multiple-choice questions and wait for their answers.\n\nUse it for a decision you genuinely cannot infer. Each question carries 2-4\nconcrete options; mark the one you recommend. The run pauses, and answers come\nback in `answers` keyed by each question's `header`.\n\nPrefer this over a prose question whenever the answer is a choice among known\noptions. For free-form input, ask in prose and end your turn. Only ask when it\nchanges what you do next \u2014 otherwise take the obvious default and proceed.\n\n`content` optionally replaces the choice chips with your own inline HTML, for\na question worth showing rather than listing. It does not change the answer\nshape: the widget posts back the same headers and option labels, anything\nelse is rejected, and a client that cannot render it shows the chips. So fill\n`questions` properly either way.",
     "input_schema": {
       "$defs": {
         "AskUserOption": {
@@ -66,6 +66,26 @@
           "items": {
             "$ref": "#/$defs/AskUserQuestion"
           },
+          "type": "array"
+        },
+        "content": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional inline HTML/SVG rendered in place of the default choice chips. No DOCTYPE/<html>/<head>/<body>; same contract as a WIDGET, so load the `lemma-widget` skill before writing one. The widget answers the questions above rather than replacing them: it posts back the same headers and option labels, and anything else is rejected. Always fill `questions` -- a client that cannot render the widget falls back to the chips, and the answer shape is identical either way."
+        },
+        "loading_messages": {
+          "description": "Messages shown while `content` renders.",
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 4,
           "type": "array"
         }
       },
