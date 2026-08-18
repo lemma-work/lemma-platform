@@ -38,9 +38,9 @@ from app.modules.agent.tools.pod.pod_data_access import (
     pod_services,
 )
 from app.modules.agent.tools.tool_errors import approval_error_result
+from app.modules.agent.tools.pod.file_reads import read_file_text, search_files
 from app.modules.datastore.contracts import (
     DatastoreConflictError,
-    DatastoreFileNotFoundError,
     DatastoreFileUpdateEntity,
     TableContext,
 )
@@ -428,65 +428,9 @@ async def pod_read_file(
     """
 
     async def op(services: PodServices) -> JsonObject:
-        resolved_path = _resolve_pod_path(ctx.deps, request.path)
-        entity, content = await services.file.download_file_content_by_path(
-            services.ctx.pod_id, resolved_path, services.ctx
+        return await read_file_text(
+            services, request, _resolve_pod_path(ctx.deps, request.path)
         )
-        try:
-            text = content.decode("utf-8")
-        except UnicodeDecodeError:
-            pass
-        else:
-            # It has text of its own, so that text is the answer. Converting it
-            # would replace the real thing with a rendering of it -- HTML would
-            # come back as prose with its markup discarded, a CSV as a table
-            # someone else laid out.
-            return {
-                "success": True,
-                "path": entity.path,
-                "format": "text",
-                "mime_type": entity.mime_type,
-                "size_bytes": entity.size_bytes,
-                "truncated": len(text) > request.max_chars,
-                "text": text[: request.max_chars],
-            }
-
-        # No text of its own. Documents are converted at upload precisely so
-        # they can still be read, and that conversion is what the caller wanted:
-        # asking for a PDF's contents and being handed `binary: true` and an
-        # instruction to call again is a round trip that answers itself.
-        try:
-            document, markdown, page_count = await services.file.get_document_markdown(
-                services.ctx.pod_id,
-                resolved_path,
-                services.ctx,
-                page_start=request.page_start,
-                page_end=request.page_end,
-            )
-        except DatastoreFileNotFoundError as missing:
-            # Nothing to read, now or ever, or not yet -- the reader's message
-            # already distinguishes those, so carry it rather than flatten it
-            # into "binary file".
-            return {
-                "success": True,
-                "path": entity.path,
-                "mime_type": entity.mime_type,
-                "size_bytes": entity.size_bytes,
-                "binary": True,
-                "hint": str(missing),
-            }
-        return {
-            "success": True,
-            "path": document.path,
-            "format": "markdown",
-            "converted": True,
-            "mime_type": entity.mime_type,
-            "page_count": page_count,
-            "page_start": request.page_start,
-            "page_end": request.page_end,
-            "truncated": len(markdown) > request.max_chars,
-            "markdown": markdown[: request.max_chars],
-        }
 
     return await _run(
         ctx.deps, tool_name="pod_read_file", args=request.model_dump(), op=op
@@ -624,38 +568,7 @@ async def pod_search_files(
     """Semantic/keyword search across indexed pod files."""
 
     async def op(services: PodServices) -> JsonObject:
-        results = await services.file.search_files(
-            services.ctx.pod_id,
-            request.query,
-            services.ctx,
-            limit=request.limit,
-            search_method=request.method,
-            scope_path=request.scope_path,
-        )
-        payload: JsonObject = {"success": True, "results": to_json_value(results)}
-        if results:
-            return payload
-        # An empty result is two different answers wearing the same clothes:
-        # "nothing in this pod matches" and "this pod is not indexed yet". Only
-        # the first is an answer. Reporting the second as the first is how an
-        # agent states with confidence that a pod holds nothing on a topic it
-        # holds plenty on -- and it cannot tell, because a pod with no chunks
-        # searches cleanly and returns [].
-        #
-        # Said only when the list is empty: a search that found something has
-        # already answered the question, and a count on every call would be a
-        # query per search for a caveat nobody needs.
-        awaiting = await services.file.count_files_awaiting_processing(
-            services.ctx.pod_id
-        )
-        if awaiting:
-            payload["files_awaiting_processing"] = awaiting
-            payload["note"] = (
-                f"No matches, but {awaiting} file(s) in this pod are still being "
-                "processed and are not searchable yet. Results may be incomplete; "
-                "retry once processing finishes."
-            )
-        return payload
+        return await search_files(services, request)
 
     return await _run(
         ctx.deps,

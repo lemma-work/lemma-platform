@@ -28,7 +28,10 @@ from app.modules.agent.infrastructure.mcp import (
     exported_tool_name,
     normalize_local_mcp_tool_name,
 )
+from sqlalchemy.exc import SQLAlchemyError
+
 from app.core.crypto import get_secret_cipher
+from app.core.domain.errors import DomainError
 from app.modules.agent.infrastructure.agent_host_repository import (
     AgentHostRepository,
 )
@@ -253,7 +256,11 @@ class ConversationMCPService:
                 organization_id=organization_id,
                 user_id=user_id,
             )
-        except Exception:  # noqa: BLE001 - a tool call must survive this
+        except (DomainError, RuntimeError, SQLAlchemyError):
+            # Named rather than bare: these are what resolution actually fails
+            # with -- an archived or deleted profile, a missing repository, a
+            # database that will not answer. Anything else is a bug and should
+            # surface as one rather than be absorbed into a silent fallback.
             logger.debug(
                 "agent.conversation_mcp.runtime_resolve_failed.diagnostic",
                 exc_info=True,

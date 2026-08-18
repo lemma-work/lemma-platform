@@ -12,6 +12,8 @@ from uuid import UUID, uuid4
 from dotenv import load_dotenv
 from pydantic import HttpUrl
 
+from sqlalchemy.exc import SQLAlchemyError
+
 from app.core.config import reveal_secret, settings
 from app.core.domain.errors import DomainError
 from app.core.log.log import get_logger
@@ -606,7 +608,10 @@ class AgentRuntimeProfileService:
             return model
         try:
             harnesses = await self.host_repository.get_harnesses({profile.harness_id})
-        except Exception:  # noqa: BLE001 - never fail a run over a capability hint
+        except SQLAlchemyError:
+            # A capability hint is not worth losing a run over, but only a
+            # database failure is expected here; anything else is a bug and
+            # should surface as one.
             logger.debug(
                 "agent.runtime_profile.harness_vision_lookup_failed.diagnostic",
                 exc_info=True,

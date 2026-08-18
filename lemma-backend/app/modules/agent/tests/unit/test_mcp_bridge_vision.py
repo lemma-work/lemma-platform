@@ -18,6 +18,7 @@ from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.modules.agent.domain.vision import (
     AgentVisionMode,
@@ -62,7 +63,7 @@ async def test_the_bridge_resolves_the_runtime_so_capabilities_are_present(monke
     monkeypatch.setattr(bridge, "AgentRuntimeProfileService", _Service)
     monkeypatch.setattr(bridge, "AgentRuntimeProfileRepository", lambda *a, **k: object())
     monkeypatch.setattr(bridge, "AgentHostRepository", lambda *a, **k: object())
-    monkeypatch.setattr(bridge, "get_secret_cipher", lambda: object())
+    monkeypatch.setattr(bridge, "get_secret_cipher", object)
 
     service = bridge.ConversationMCPService.__new__(bridge.ConversationMCPService)
     run = SimpleNamespace(
@@ -98,7 +99,7 @@ async def test_a_failed_resolve_falls_back_instead_of_failing_the_tool_call(monk
     monkeypatch.setattr(bridge, "AgentRuntimeProfileService", _Service)
     monkeypatch.setattr(bridge, "AgentRuntimeProfileRepository", lambda *a, **k: object())
     monkeypatch.setattr(bridge, "AgentHostRepository", lambda *a, **k: object())
-    monkeypatch.setattr(bridge, "get_secret_cipher", lambda: object())
+    monkeypatch.setattr(bridge, "get_secret_cipher", object)
 
     service = bridge.ConversationMCPService.__new__(bridge.ConversationMCPService)
     run = SimpleNamespace(
@@ -233,7 +234,9 @@ async def test_a_harness_lookup_failure_never_fails_the_run():
 
     class _Hosts:
         async def get_harnesses(self, ids):
-            raise RuntimeError("host database is down")
+            # What a failed harness lookup actually raises now that the catch
+            # names its exception instead of swallowing everything.
+            raise SQLAlchemyError("host database is down")
 
     service = AgentRuntimeProfileService(None, _Hosts())
     result = await service._with_live_harness_vision(profile, stored)

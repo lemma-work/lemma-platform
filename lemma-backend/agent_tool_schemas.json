@@ -596,7 +596,7 @@
             }
           ],
           "default": null,
-          "description": "How long to wait for the command before returning, instead of the default 30s. This is THIS CALL'S patience, not a limit on the command: if the command is still running when the wait is up you get `completed: false` and a `process_id`, and the command keeps running in the background. Poll it with `manage_process(action='input', process_id=..., chars='')` until `completed: true` \u2014 never re-run the command."
+          "description": "How long to wait for the command before returning, instead of the default 30s. This is THIS CALL'S patience, not a limit on the command: if the command is still running when the wait is up you get `completed: false` and a `process_id`, and the command keeps running in the background. Poll it with `manage_process(action='input', process_id=...)` until `completed: true` \u2014 never re-run the command."
         }
       },
       "required": [
@@ -687,7 +687,7 @@
             }
           ],
           "default": null,
-          "description": "Handle for a process that is still running. Poll it with `manage_process(action='input', process_id=..., chars='')` to collect more output, or send input the same way. Present whenever `completed` is false."
+          "description": "Handle for a process that is still running. Poll it with `manage_process(action='input', process_id=...)` to collect more output, or send input the same way. Present whenever `completed` is false."
         }
       },
       "title": "ExecCommandResult",

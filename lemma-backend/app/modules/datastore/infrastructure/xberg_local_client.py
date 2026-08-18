@@ -131,29 +131,38 @@ class XbergLocalClient:
             return KreuzbergExtractionResult({"content": "", "mime_type": mime_type})
         result = results[0]
 
-        text = getattr(result, "content", "") or ""
-        pages = list(getattr(result, "pages", None) or [])
-        boundaries = _page_boundaries(text, pages)
-        return KreuzbergExtractionResult(
-            {
-                "content": text,
-                "mime_type": getattr(result, "mime_type", None) or mime_type,
-                "detected_languages": list(
-                    getattr(result, "detected_languages", None) or []
-                ),
-                "chunks": [
-                    {"text": getattr(chunk, "content", "") or "", "metadata": {}}
-                    for chunk in (getattr(result, "chunks", None) or [])
-                ],
-                "pages": [
-                    {
-                        "page_number": getattr(page, "page_number", None),
-                        "content": getattr(page, "content", "") or "",
-                    }
-                    for page in pages
-                ],
-                # Only ``pages`` is filled in: the normalizer reads boundaries
-                # from here, and nothing else in this dict is consulted.
-                "metadata": {"pages": {"boundaries": boundaries}} if boundaries else {},
-            }
-        )
+        return _as_extraction_result(result, mime_type)
+
+
+def _as_extraction_result(result: Any, mime_type: str | None) -> KreuzbergExtractionResult:
+    """Shape one xberg result the way the shared normalizer reads it.
+
+    Separate from the call above so the transport stays legible: everything here
+    is renaming, and none of it decides anything.
+    """
+    text = getattr(result, "content", "") or ""
+    pages = list(getattr(result, "pages", None) or [])
+    boundaries = _page_boundaries(text, pages)
+    return KreuzbergExtractionResult(
+        {
+            "content": text,
+            "mime_type": getattr(result, "mime_type", None) or mime_type,
+            "detected_languages": list(
+                getattr(result, "detected_languages", None) or []
+            ),
+            "chunks": [
+                {"text": getattr(chunk, "content", "") or "", "metadata": {}}
+                for chunk in (getattr(result, "chunks", None) or [])
+            ],
+            "pages": [
+                {
+                    "page_number": getattr(page, "page_number", None),
+                    "content": getattr(page, "content", "") or "",
+                }
+                for page in pages
+            ],
+            # Only ``pages`` is filled in: the normalizer reads boundaries from
+            # here, and nothing else in this dict is consulted.
+            "metadata": {"pages": {"boundaries": boundaries}} if boundaries else {},
+        }
+    )
