@@ -97,7 +97,7 @@ always reaches a conclusion a person can see.
 **Contracts:** `function.run`, `function.run.get`, `function.run.list`
 
 ### PS-FUNC-012 — A run that cannot finish does not hang forever
-**Status:** planned
+**Status:** covered
 
 - If the sandbox running a function disappears, then the system shall mark the
   run failed and shall say the run was lost rather than leaving it running.

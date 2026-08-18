@@ -74,13 +74,20 @@ rather than degrading in a way that only shows up as confused users.
 **Contracts:** `usage.organization.limits.get`, `agent_run.completed`
 
 ### PS-OPS-012 — Exceeding a limit is refused clearly, not degraded
-**Status:** planned
+**Status:** gap
 
 - If work would exceed a configured limit, then the system shall refuse it and
   shall say which limit was reached.
 - The system shall not silently downgrade a model, shorten a run, or drop work
   to stay inside a limit.
 - When a limit resets, the system shall allow work again without intervention.
+
+> **Gap:** no limit can be exceeded here, because none can be set. Limits
+> come from a `UsageLimitPort` that `usage_limit_provider` leaves as an
+> extension point, and this repository ships no implementation — so every
+> deployment built from it is unlimited, and the refusal path has never run.
+> The promise stands for a deployment that plugs one in; nothing here can
+> reach it. See `DEV-OPS-004`.
 
 **Contracts:** `usage.organization.limits.get`
 
@@ -143,7 +150,7 @@ rather than degrading in a way that only shows up as confused users.
 **Contracts:** *(operational; see [Reliability](../../../lemma-backend/docs/operators/reliability.md))*
 
 ### PS-OPS-032 — A deployment can be configured for its own region and rules
-**Status:** planned
+**Status:** manual
 
 - Where a deployment is subject to particular data-residency rules, the system
   shall let its operator point outbound telemetry and analytics at their own
@@ -152,6 +159,12 @@ rather than degrading in a way that only shows up as confused users.
   shall keep working when they do.
 - The system shall never send a person's content, prompts, or model
   input and output to analytics.
+
+> **Verified by:** an operator, at deployment time. Both halves are
+> configuration rather than API — where telemetry is sent, and whether
+> product analytics run at all — so what a scenario could check is that the
+> platform works with analytics off, which is how this suite already runs.
+> See [Configuration](../../configuration.md).
 
 **Contracts:** *(configuration; see [Configuration](../../configuration.md) and [Product analytics](../../design/product-analytics.md))*
 

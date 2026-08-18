@@ -118,6 +118,12 @@ async def test_an_unpaired_host_is_refused(world):
     assert appended.status_code >= 400, appended.status_code
 
 
+# Asking for browser access provisions a workspace when it can, so this needs
+# the sandbox images the way a function scenario does. It sat in the fast lane
+# for a while and passed — on machines that happened to have the images built,
+# and nowhere else. A suite whose result depends on what is in the local Docker
+# cache is exactly what the sandbox marker exists to prevent.
+@pytest.mark.sandbox
 @scenario("Browser access is refused without a workspace to open")
 @proves("PS-FUNC-002")
 @covers("workspace.browser.access")

@@ -183,13 +183,22 @@ put it there having to think about it on every operation.
 **Contracts:** `query.execute`
 
 ### PS-DATA-021 — When querying is unavailable, the system says so
-**Status:** planned
+**Status:** manual
 
 - If the deployment cannot support direct querying, then the system shall report
   that the facility is unavailable, rather than failing each query as though it
   were the person's mistake.
 - The system shall keep every query failing closed while it is in that state,
   never falling back to an unfiltered read.
+
+> **Verified by:** an operator, on a deployment without the datastore query
+> role. Direct querying runs as a dedicated Postgres role
+> (`datastore_query_role`); where that role is absent the facility is
+> unavailable, and that is the only way the state exists. A suite that
+> induced it would have to drop the role from the running database, which
+> breaks it for every other scenario sharing the stack. The fail-closed half
+> is covered by `PS-DATA-020`: a query from outside the pod is refused rather
+> than answered unfiltered.
 
 **Contracts:** `query.execute`
 
@@ -269,7 +278,7 @@ put it there having to think about it on every operation.
 **Contracts:** `file.upload`, `file.get`, `file.download`
 
 ### PS-DATA-042 — One person's bulk upload does not stall everyone else
-**Status:** planned
+**Status:** covered
 
 - While a pod is processing many documents, the system shall keep serving
   conversations, surface messages, and workflow runs at their normal pace.

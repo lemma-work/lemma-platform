@@ -73,6 +73,7 @@ def _update(*, chat_id: int, text: str, from_id: int, update_id: int = 1) -> dic
     }
 
 
+@pytest.mark.timeout(360)
 @scenario("A message from an unrecognised sender is answered with how to get access")
 @proves("PS-SURF-010", "PS-SURF-012", "PS-SURF-020")
 @covers("surface.webhook.handle_platform", "agent.surface.send", "surface.message_answered")
@@ -95,7 +96,11 @@ async def test_an_unknown_sender_is_told_how_to_get_access(world, telegram):
         lambda: _sent(fake, chat_id),
         lambda messages: bool(messages),
         describe="the agent to reply in the Telegram chat",
-        timeout=60.0,
+        # This waits on a queued agent run, and the whole suite shares one
+        # worker. CI shards by journey so the worker is never this loaded there;
+        # a local run of all 350 at once is the harsh case, and a wait costs
+        # nothing when things are fast. 60s and 120s both timed out under it.
+        timeout=240.0,
     )
 
     answer = replies[0].text

@@ -282,3 +282,38 @@ def test_stack_decides_how_the_product_behaves():
     assert kept == {"COMPOSIO_API_KEY": "worth-inheriting"}, (
         f"these would be inherited and must not be: {sorted(kept)}"
     )
+
+
+def test_every_journey_runs_in_ci():
+    """A journey directory nobody added to the matrix runs nowhere.
+
+    The failure is silent and permanent: the scenarios pass locally, the CI
+    check is green because it never selected them, and the promises they cover
+    are reported as covered by the traceability gate — which reads the source,
+    not the run. Adding a directory is the easy half; this is the half that gets
+    forgotten.
+    """
+    import re
+
+    workflow = (
+        Path(__file__).resolve().parents[3]
+        / ".github"
+        / "workflows"
+        / "scenarios.yml"
+    )
+    named = set(re.findall(r"journeys/([a-z_]+)", workflow.read_text()))
+
+    on_disk = {
+        directory.name
+        for directory in (Path(__file__).resolve().parent).iterdir()
+        if directory.is_dir() and not directory.name.startswith(("_", "."))
+        # The live lane is deliberately elsewhere: it needs real providers and
+        # runs nightly, never on a pull request.
+        and directory.name != "live"
+    }
+
+    missing = on_disk - named
+    assert not missing, (
+        f"these journeys exist and CI never runs them: {sorted(missing)}. "
+        f"Add a matrix row in .github/workflows/scenarios.yml."
+    )

@@ -119,6 +119,41 @@ jobs:
           path: tests/scenarios/results.xml
           retention-days: 7
 
+  # Functions and workflows executing for real, in Docker sandboxes. Separate
+  # from the journey matrix because it has to build the two workspace images
+  # first, which is minutes — and because "the platform works" and "code runs
+  # inside it" are different failures worth telling apart at a glance.
+  sandbox:
+    name: scenarios in a sandbox
+    needs: [guards, traceability]
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version-file: .python-version
+      - name: Sync backend
+        working-directory: lemma-backend
+        run: uv sync
+      - name: Sync scenario suite
+        working-directory: tests/scenarios
+        run: uv sync
+      - name: Build the sandbox images
+        run: make scenarios-images
+      - name: Run the sandbox lane
+        working-directory: tests/scenarios
+        run: uv run pytest -m sandbox -q --junitxml=sandbox-results.xml
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scenarios-sandbox
+          path: tests/scenarios/sandbox-results.xml
+          retention-days: 7
+
   # The clients we ship, driven as a user drives them. Separate from the journey
   # matrix because it needs node and the TypeScript build, and because a client
   # being broken is a different fact from the platform being broken.

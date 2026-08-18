@@ -656,6 +656,36 @@ marker is not removed.
 
 ## OPS — the platform and its own tooling
 
+### DEV-OPS-004 — No deployment built from this repository can set a spend limit
+**Violates:** PS-OPS-012
+**Severity:** medium
+**Where:** [`usage_limit_provider.py`](lemma-backend/app/modules/usage/services/usage_limit_provider.py)
+
+**Required:** Work that would exceed a configured limit is refused, saying which
+limit was reached.
+
+**Actual:** There is no way to configure one. Limits are resolved through a
+`UsageLimitPort`, and `usage_limit_provider` is an empty extension point —
+`configure_usage_limit_provider` is never called anywhere in this repository, so
+`build_usage_limit_port` returns `None` and every organization is unlimited.
+`usage.organization.limits.get` is read-only and there is no write counterpart.
+
+**Why it matters:** The refusal path has therefore never run in any deployment
+built from this source. That is not the same as it being broken — it is that
+nobody knows, and the first time it matters is the first time somebody's bill
+depends on it. It also makes `PS-OPS-010` ("limits are visible before they are
+hit") a report that can only ever say "no limit".
+
+For the open-source deployment this may be the intended posture: no billing
+module, no limits. If so the promise should say that, rather than describing a
+refusal nothing can produce.
+
+**Fix:** Either ship a configuration-backed `UsageLimitPort` — the values are
+already modelled in `UsageLimitValues` — or narrow `PS-OPS-012` to the
+deployments that supply one, and say so in the promise.
+
+---
+
 ### DEV-OPS-003 — Deleting a pod leaves its schedules armed and running
 **Violates:** PS-OPS-020, PS-POD-050
 **Severity:** high

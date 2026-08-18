@@ -11,14 +11,14 @@ only a promise marked `covered` with no test is.
 
 | Status | Scenarios |
 | --- | ---: |
-| `covered` | 143 |
-| `gap` | 11 |
-| `manual` | 0 |
-| `planned` | 6 |
+| `covered` | 145 |
+| `gap` | 12 |
+| `manual` | 3 |
+| `planned` | 0 |
 | `withdrawn` | 0 |
 | **total** | **160** |
 
-Scenario tests declaring a promise: 321.
+Scenario tests declaring a promise: 331.
 
 ## Contract coverage
 
@@ -62,7 +62,7 @@ the module suites may cover it — but it is untested *as product*.
 | `PS-FUNC-004` A person can change a function without breaking what is running | `covered` | `test_updated_code_is_what_runs_next`, `test_deleting_a_function_removes_it` |
 | `PS-FUNC-010` A quick function answers immediately | `covered` | `test_a_function_runs_and_returns_its_output` |
 | `PS-FUNC-011` A long function is queued and reports progress | `covered` | `test_runs_are_recorded`, `test_a_job_function_completes` |
-| `PS-FUNC-012` A run that cannot finish does not hang forever | `planned` | — |
+| `PS-FUNC-012` A run that cannot finish does not hang forever | `covered` | `test_a_sleeping_function_is_stopped`, `test_a_spinning_function_is_stopped` |
 | `PS-FLOW-001` A person composes steps into a workflow | `covered` | `test_a_workflow_runs_to_completion`, `test_an_unrunnable_graph_is_refused`, `test_a_workflow_is_created`, `test_a_duplicate_workflow_name_is_refused`, `test_deleting_a_workflow_removes_it`, `test_a_workflow_can_be_changed` |
 | `PS-FLOW-002` A person can see the shape of a workflow before running it | `gap` | `test_a_workflow_can_be_visualised`, `test_a_run_can_be_visualised` |
 | `PS-FLOW-010` A person starts a workflow and follows it | `covered` | `test_a_workflow_runs_to_completion`, `test_workflow_runs_are_recorded`, `test_a_workflows_runs_are_listed` |
@@ -143,12 +143,12 @@ the module suites may cover it — but it is untested *as product*.
 | `PS-OPS-003` Usage records are a ledger, not a cache | `covered` | `test_a_run_is_always_recorded`, `test_a_usage_record_is_attributed`, `test_a_failed_run_is_recorded_too` |
 | `PS-OPS-010` Limits are visible before they are hit | `covered` | `test_limits_are_visible` |
 | `PS-OPS-011` A missing price never blocks work | `covered` | `test_a_run_is_always_recorded`, `test_an_unknown_price_never_blocks_a_run` |
-| `PS-OPS-012` Exceeding a limit is refused clearly, not degraded | `planned` | — |
+| `PS-OPS-012` Exceeding a limit is refused clearly, not degraded | `gap` | — |
 | `PS-OPS-020` Deleting a pod actually stops everything it was doing | `gap` | `test_a_deleted_pod_stops_answering_its_surfaces`, `test_a_deleted_pod_runs_nothing_further`, `test_deleting_one_pod_leaves_the_others_working` |
 | `PS-OPS-021` A person can take their data out | `covered` | `test_an_exported_bundle_is_readable_without_lemma` |
 | `PS-OPS-030` The platform reports its own health honestly | `covered` | `test_web_search_says_when_it_is_unavailable` |
 | `PS-OPS-031` Work that cannot be completed is not lost silently | `covered` | `test_feedback_can_be_reported` |
-| `PS-OPS-032` A deployment can be configured for its own region and rules | `planned` | — |
+| `PS-OPS-032` A deployment can be configured for its own region and rules | `manual` | — |
 
 ## [Packaging and reuse](journeys/packaging-and-reuse.md)
 
@@ -207,14 +207,14 @@ the module suites may cover it — but it is untested *as product*.
 | `PS-SURF-001` A person connects a pod's agent to a platform | `covered` | `test_a_surface_reads_back`, `test_available_platforms_are_listed`, `test_an_unconfigured_surface_is_refused`, `test_an_outsider_cannot_touch_surfaces` |
 | `PS-SURF-002` Setting up a platform does not require reading its documentation | `covered` | `test_a_slack_manifest_is_generated`, `test_a_managed_bot_setup_says_what_is_missing`, `test_a_consent_callback_without_a_grant_is_refused`, `test_a_setup_guide_is_available` |
 | `PS-SURF-003` A person changes or removes a surface | `covered` | `test_a_surface_can_be_repointed`, `test_deleting_a_surface_stops_it` |
-| `PS-SURF-010` Only genuine messages from the platform are acted on | `covered` | `test_a_real_bot_answers`, `test_verification_needs_no_session`, `test_a_bad_verification_token_is_refused`, `test_an_unknown_sender_is_told_how_to_get_access`, `test_an_unsigned_delivery_is_rejected`, `test_a_wrongly_signed_delivery_is_rejected`, `test_a_surface_webhook_can_be_verified`, `test_the_manager_webhook_rejects_unsigned`, `test_webhook_verification_needs_no_session`, `test_an_unsigned_webhook_is_rejected` |
+| `PS-SURF-010` Only genuine messages from the platform are acted on | `covered` | `test_a_real_bot_answers`, `test_verification_needs_no_session`, `test_a_bad_verification_token_is_refused`, `test_an_unsigned_email_is_refused`, `test_an_unknown_sender_is_told_how_to_get_access`, `test_an_unsigned_delivery_is_rejected`, `test_a_wrongly_signed_delivery_is_rejected`, `test_a_surface_webhook_can_be_verified`, `test_the_manager_webhook_rejects_unsigned`, `test_webhook_verification_needs_no_session`, `test_an_unsigned_webhook_is_rejected` |
 | `PS-SURF-011` The same message delivered twice is answered once | `covered` | `test_a_repeated_delivery_is_answered_once`, `test_a_raced_delivery_is_answered_once` |
 | `PS-SURF-012` A person on a platform is resolved to who they are in Lemma | `covered` | `test_an_unknown_sender_is_told_how_to_get_access` |
 | `PS-SURF-013` A thread on the platform is a conversation in the pod | `covered` | `test_a_chat_is_one_conversation`, `test_a_separate_chat_is_a_separate_conversation`, `test_a_surface_conversation_records_its_origin` |
 | `PS-SURF-014` A file sent to a surface reaches the pod | `covered` | `test_an_attachment_reaches_the_pod` |
 | `PS-SURF-020` The answer comes back where the question was asked | `covered` | `test_a_real_bot_answers`, `test_an_unknown_sender_is_told_how_to_get_access` |
 | `PS-SURF-021` Questions and approvals work on every platform | `covered` | `test_a_question_is_asked_with_native_controls`, `test_an_approval_is_offered_with_native_controls` |
-| `PS-SURF-022` Email surfaces behave like email | `planned` | — |
+| `PS-SURF-022` Email surfaces behave like email | `manual` | `test_an_email_surface_has_an_address`, `test_mail_reaches_the_pod_that_owns_the_address`, `test_mail_to_an_unknown_address_starts_nothing`, `test_an_unsigned_email_is_refused` |
 | `PS-SURF-023` A person reached on several platforms gets one predictable answer | `covered` | `test_channels_are_listable`, `test_a_default_surface_can_be_chosen`, `test_my_surfaces_are_listable` |
 | `PS-SURF-030` A person has one place to see what needs them | `gap` | `test_a_notification_arrives_in_the_inbox`, `test_an_outsider_sees_no_notifications` |
 | `PS-SURF-031` A person clears what they have dealt with | `covered` | `test_reading_clears_the_unread_count`, `test_read_all_clears_everything`, `test_read_state_is_personal` |
@@ -235,13 +235,13 @@ the module suites may cover it — but it is untested *as product*.
 | `PS-DATA-015` A table's rows belong to whoever wrote them, unless it is shared | `covered` | `test_per_owner_rows_stay_with_their_owner` |
 | `PS-DATA-016` An administrator can see every row when they ask for it | `covered` | `test_admin_mode_shows_every_row_and_is_gated` |
 | `PS-DATA-020` A person queries their pod's data directly | `covered` | `test_a_query_returns_rows`, `test_a_writing_query_is_refused`, `test_an_outsider_cannot_query` |
-| `PS-DATA-021` When querying is unavailable, the system says so | `planned` | — |
+| `PS-DATA-021` When querying is unavailable, the system says so | `manual` | — |
 | `PS-DATA-030` A person uploads a file and it lands where they put it | `covered` | `test_a_file_lands_where_it_was_put`, `test_a_file_lands_in_a_folder`, `test_an_outsider_cannot_read_files` |
 | `PS-DATA-031` A person browses a pod's files as a tree | `covered` | `test_a_folder_lists_its_contents`, `test_a_file_lands_in_a_folder`, `test_the_file_tree_is_browsable` |
 | `PS-DATA-032` A person moves, renames, and deletes files | `covered` | `test_moving_a_file_keeps_its_identity`, `test_deleting_a_file_removes_it` |
 | `PS-DATA-040` An uploaded document becomes readable text | `covered` | `test_supplied_markdown_is_used`, `test_attaching_to_an_unindexed_file_is_refused` |
 | `PS-DATA-041` A document that fails to convert is not lost | `covered` | `test_an_unavailable_converter_does_not_burn_attempts`, `test_the_original_bytes_survive` |
-| `PS-DATA-042` One person's bulk upload does not stall everyone else | `planned` | — |
+| `PS-DATA-042` One person's bulk upload does not stall everyone else | `covered` | `test_backpressure_is_legible`, `test_a_declined_upload_can_be_retried`, `test_a_burst_does_not_starve_another_pod`, `test_every_accepted_upload_survives` |
 | `PS-DATA-043` A person searches what is in their documents | `covered` | `test_documents_are_searchable` |
 | `PS-DATA-050` A person gets a link to a file that works and then stops | `covered` | `test_a_file_has_a_link`, `test_a_signed_link_is_issued` |
 | `PS-DATA-060` A person sees records change as they change | `covered` | `test_a_new_record_arrives_live`, `test_updates_and_deletions_arrive`, `test_a_stranger_is_sent_nothing`, `test_a_reconnecting_watcher_resumes` |

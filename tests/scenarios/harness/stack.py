@@ -71,6 +71,12 @@ FUNCTION_IMAGE = "lemma-function:scenarios"
 #: on. `ApiDriver` rewrites those back; see `drivers/api.py`.
 PUBLIC_API_URL = "https://scenarios.lemma.example"
 
+#: The Svix signing secret the stack runs with, and the domain its email
+#: surfaces get their addresses under. Base64 after the `whsec_` prefix, which
+#: is the shape Svix issues and the verifier decodes.
+RESEND_WEBHOOK_SECRET = "whsec_c2NlbmFyaW9zLXJlc2VuZC1zaWduaW5nLXNlY3JldA=="
+RESEND_INBOUND_DOMAIN = "scenarios.lemma.example"
+
 
 def sandbox_images_present() -> bool:
     """Whether the sandbox images have been built.
@@ -322,6 +328,13 @@ def _environment(*, port: int, database_url: str, redis_url: str, supertokens_ur
             "SCENARIOS_TELEGRAM_POLLING", "false"
         ),
         "ENABLE_SLACK_SOCKET_MODE": "false",
+        # Email surfaces. A Resend inbound webhook is Svix-signed, so without a
+        # secret the endpoint answers 503 and no email scenario can run at all;
+        # this is a well-formed throwaway, and scenarios sign with it exactly as
+        # Resend would. The domain is what gives each surface its own address.
+        "RESEND_WEBHOOK_SECRET": RESEND_WEBHOOK_SECRET,
+        "RESEND_INBOUND_DOMAIN": RESEND_INBOUND_DOMAIN,
+        "RESEND_API_KEY": "re_scenarios_not_a_real_key",
         # The self-hosted posture. Off in production so an org admin cannot
         # point a connector at the cloud metadata service; on here so a
         # connector can target the fake provider this suite runs on loopback.

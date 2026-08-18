@@ -156,7 +156,7 @@ dropped.
 **Contracts:** `agent.surface.send`, `agent.conversation.approval.resolve`
 
 ### PS-SURF-022 — Email surfaces behave like email
-**Status:** planned
+**Status:** manual
 
 - Where a surface is email, the system shall reply to the sender in the same
   email thread, with a subject a person recognises.
@@ -164,6 +164,15 @@ dropped.
   to exactly the pod that address belongs to.
 - If an inbound email cannot be read completely, then the system shall drop it
   rather than starting an agent on a partial message.
+
+> **Verified by:** scenarios for everything except the reply. Addressing,
+> routing to the pod that owns the address, refusing mail no surface owns,
+> and refusing an unsigned delivery all run in the suite. What a reply looks
+> like — same thread, recognisable subject — cannot be: a Resend surface
+> authenticates with the deployment's own API key and has no `api_base_url`
+> override, so outbound mail can only go to Resend itself. There is nothing
+> to point at a local server the way the Telegram scenarios do. That half
+> belongs to the live lane, against a real key.
 
 **Contracts:** `agent.surface.create`, `surface.webhook.handle_platform`, `agent.surface.send`
 
