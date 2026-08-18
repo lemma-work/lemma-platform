@@ -82,6 +82,34 @@ class ConversationMCPService:
             )
         return conversation is not None and conversation.user_id == token_user_id
 
+    async def parked_tool_return(
+        self,
+        *,
+        conversation_id: UUID,
+        tool_call_id: str,
+    ) -> JsonObject | None:
+        """The answer to a parked interaction, or ``None`` while it is pending.
+
+        The host's MCP bridge polls this after `ask_user` or `request_approval`
+        hands it a parked id, and hands the result back as that tool's return so
+        the model never leaves its turn.
+
+        Nothing new is stored to make this work. Deciding an interaction already
+        writes a synthesized tool RETURN under the same durable id -- that is how
+        the in-process resume replays the answer, and how re-running an approved
+        tool is prevented -- so the pending/decided question is just "has that
+        return been written yet".
+        """
+        async with self.uow_factory() as uow:
+            message = await ConversationRepository(uow).get_tool_return(
+                conversation_id=conversation_id,
+                tool_call_id=tool_call_id,
+            )
+        if message is None:
+            return None
+        result = getattr(message, "tool_result", None)
+        return result if isinstance(result, dict) else {"result": to_json_value(result)}
+
     async def list_tools(
         self,
         *,
