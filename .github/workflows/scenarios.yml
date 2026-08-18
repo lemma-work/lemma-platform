@@ -7,14 +7,26 @@ name: Product scenarios
 # Job names are product journeys, not modules, so a red check on a pull request
 # says which promise to the user stopped being kept.
 #
-# Not a required check yet. It becomes one when the journeys cover enough ground
-# to be worth blocking on; until then it reports, and `make quality` enforces
-# the traceability that keeps the specification honest.
+# Two speeds, and they are triggered differently on purpose.
+#
+# The two gate jobs cost seconds, need no Docker, and run on every pull request.
+# They are also the only place the specification-honesty gates run at all: CI's
+# `lemma-backend quality gates` job runs the individual gate targets rather than
+# `make quality`, so without them here a promise could be marked covered with no
+# test and nothing would notice.
+#
+# The lanes that boot a stack take minutes and run nightly, or on request. They
+# are not a required check. Putting them on every pull request would mean a
+# ten-minute wait for a signal that is about the product rather than about the
+# change, and the slowest shards are not yet reliable on a two-core runner.
 
 on:
   workflow_dispatch:
   pull_request:
     types: [opened, synchronize, reopened, labeled]
+  schedule:
+    # Nightly, after the working day in IST.
+    - cron: '0 19 * * *'
 
 permissions:
   contents: read
@@ -59,6 +71,12 @@ jobs:
     name: scenarios (${{ matrix.journey.name }})
     needs: [guards, traceability]
     runs-on: ubuntu-latest
+    # Nightly, on request, or when a pull request explicitly asks by label.
+    # Booting a stack per shard is minutes of runner time; a change that wants
+    # that signal says so.
+    if: >-
+      github.event_name != 'pull_request'
+      || contains(github.event.pull_request.labels.*.name, 'run-scenarios')
     strategy:
       # One red journey must not hide another. Each is an independent statement
       # about the product.
@@ -108,6 +126,18 @@ jobs:
       - name: Run journey
         working-directory: tests/scenarios
         run: uv run pytest ${{ matrix.journey.path }} -q --junitxml=results.xml
+      # The stack writes the server and worker to one file. Without it a
+      # CI-only failure is undiagnosable from CI: the scenario says what it
+      # waited for, and the reason it never happened is in the worker's log.
+      - name: Keep the stack log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: stack-log-${{ github.job }}-${{ strategy.job-index || '0' }}
+          path: /tmp/lemma-scenarios-*.log
+          retention-days: 7
+          if-no-files-found: ignore
+
       # The XML carries journey, capability, scenario and proven promises as
       # properties on each case, so a CI front end can show the sentence without
       # the reporting plugin being involved.
@@ -128,6 +158,12 @@ jobs:
     needs: [guards, traceability]
     runs-on: ubuntu-latest
     timeout-minutes: 40
+    # Nightly, on request, or when a pull request explicitly asks by label.
+    # Booting a stack per shard is minutes of runner time; a change that wants
+    # that signal says so.
+    if: >-
+      github.event_name != 'pull_request'
+      || contains(github.event.pull_request.labels.*.name, 'run-scenarios')
     steps:
       - uses: actions/checkout@v4
       - name: Install uv
@@ -146,6 +182,18 @@ jobs:
       - name: Run the sandbox lane
         working-directory: tests/scenarios
         run: uv run pytest -m sandbox -q --junitxml=sandbox-results.xml
+      # The stack writes the server and worker to one file. Without it a
+      # CI-only failure is undiagnosable from CI: the scenario says what it
+      # waited for, and the reason it never happened is in the worker's log.
+      - name: Keep the stack log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: stack-log-${{ github.job }}-${{ strategy.job-index || '0' }}
+          path: /tmp/lemma-scenarios-*.log
+          retention-days: 7
+          if-no-files-found: ignore
+
       - name: Upload results
         if: always()
         uses: actions/upload-artifact@v4
@@ -161,6 +209,12 @@ jobs:
     name: shipped clients conform
     needs: [guards, traceability]
     runs-on: ubuntu-latest
+    # Nightly, on request, or when a pull request explicitly asks by label.
+    # Booting a stack per shard is minutes of runner time; a change that wants
+    # that signal says so.
+    if: >-
+      github.event_name != 'pull_request'
+      || contains(github.event.pull_request.labels.*.name, 'run-scenarios')
     steps:
       - uses: actions/checkout@v4
       - name: Install uv
@@ -189,3 +243,15 @@ jobs:
       - name: Client conformance
         working-directory: tests/scenarios
         run: uv run pytest journeys/clients -q
+
+      # The stack writes the server and worker to one file. Without it a
+      # CI-only failure is undiagnosable from CI: the scenario says what it
+      # waited for, and the reason it never happened is in the worker's log.
+      - name: Keep the stack log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: stack-log-${{ github.job }}-${{ strategy.job-index || '0' }}
+          path: /tmp/lemma-scenarios-*.log
+          retention-days: 7
+          if-no-files-found: ignore
