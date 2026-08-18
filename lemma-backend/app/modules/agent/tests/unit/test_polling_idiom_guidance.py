@@ -89,5 +89,12 @@ def test_the_agent_host_prompt_says_pausing_is_unavailable():
 
     for tool in ("ask_user", "request_approval", "snooze"):
         assert tool in prompt, f"{tool} is inert here and goes unmentioned"
-    # And says what to do instead, not merely that they fail.
-    assert "end your turn" in prompt
+    # And names the mechanism that *does* work, not merely that they fail.
+    # Falling back to prose loses the rendered interaction card, so the
+    # replacement has to be the real waiting contract: end the turn with
+    # `final_answer` at status WAITING and let the reply start a fresh run.
+    assert "final_answer" in prompt
+    assert "WAITING" in prompt
+    # This runtime pauses -- it holds an ACP permission open for half an hour --
+    # so the guidance must not claim it cannot.
+    assert "cannot suspend a turn" not in prompt
