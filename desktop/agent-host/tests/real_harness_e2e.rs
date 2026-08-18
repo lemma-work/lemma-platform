@@ -1181,3 +1181,72 @@ async fn a_real_agent_waits_inside_its_turn_for_a_parked_tool() {
         println!("{agent}: LEMMA_REAL_PARKED_TOOL_OK");
     }
 }
+
+/// Waking up, with a real agent on the other end.
+///
+/// A woken run adds no user message, so Lemma prompts it with the return it
+/// synthesized for the `snooze` call it resolved — rendered exactly as
+/// `remote_payload._render_history` writes it. The hermetic tests prove that
+/// return is chosen and rendered. Only a real provider can prove the part that
+/// decides whether the feature works: that an agent resuming its own session
+/// reads a tool result arriving as a fresh prompt as *its own call returning*,
+/// and carries on with what it was doing — rather than treating it as a new
+/// request, apologising for a tool it does not remember calling, or starting
+/// the task over.
+///
+/// The subject is the tell, and it appears only in the first turn. An answer
+/// that names it came from the resumed session; the wake prompt says nothing
+/// about what the agent was waiting for.
+#[tokio::test]
+#[ignore = "requires authenticated local agents and spends real provider quota"]
+async fn a_real_agent_wakes_and_carries_on_where_it_slept() {
+    let paths = HostPaths::under(agent_host_data_directory());
+    let manifest = AdapterManifest::builtin()
+        .unwrap()
+        .with_cache_root(paths.adapters.clone());
+
+    for agent in configured_agents() {
+        let conversation_id = Uuid::new_v4();
+        let workspace = conversation_workspace(&paths, &agent, conversation_id);
+        let (session_id, _) = one_turn(
+            &manifest,
+            &workspace,
+            &agent,
+            conversation_id,
+            "You are waiting for the Fenwick deployment to finish. It is not \
+             ready yet, so you called the snooze tool to sleep. Reply with \
+             only: sleeping.",
+            None,
+        )
+        .await;
+
+        // Exactly the shape `_render_history` produces for the return the wake
+        // writes, prompted into the session the agent slept in. Deliberately
+        // says nothing about the subject: everything the agent knows about what
+        // it was doing has to come from the session it is resuming.
+        let (resumed_session_id, answer) = one_turn(
+            &manifest,
+            &workspace,
+            &agent,
+            conversation_id,
+            "TOOL:\nTool result snooze(lemma-mcp-1):\n{\n  \"success\": true,\n  \
+             \"woke_because\": \"TIMER\",\n  \"slept_seconds\": 600,\n  \
+             \"note_to_self\": \"name what you were waiting for, in one \
+             sentence\",\n  \"message\": \"Your time elapsed. That is all this \
+             means - check whatever you were waiting for before acting as \
+             though it happened.\"\n}",
+            Some(session_id.clone()),
+        )
+        .await;
+
+        assert_eq!(
+            resumed_session_id, session_id,
+            "{agent} woke in a different session than the one it slept in"
+        );
+        assert!(
+            answer.to_lowercase().contains("fenwick"),
+            "{agent} did not carry on from where it slept; it answered {answer:?}"
+        );
+        println!("{agent}: LEMMA_REAL_WAKE_OK -> {answer:?}");
+    }
+}
