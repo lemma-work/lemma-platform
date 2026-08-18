@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
@@ -50,6 +50,7 @@ from app.modules.agent.infrastructure.agent_host_repository import AgentHostRepo
 from app.modules.agent.infrastructure.repositories import (
     AgentRuntimeProfileRepository,
 )
+
 # Imported as a module, not by name: tests patch the discovery functions, and a
 # `from ... import f` binding here would keep calling the unpatched original.
 from app.core.infrastructure.db.transaction_locks import connection_released
@@ -167,6 +168,11 @@ class ResolvedAgentRuntime:
     model: RuntimeModelCatalogEntry | None
     provider_model_name: str | None
     credentials: dict[str, object] | None
+    # What the runtime can do when no catalog entry is selected. A harness
+    # profile routinely pins no model -- the harness picks its own -- and
+    # capabilities must survive that, because "nothing selected" says nothing
+    # about whether the thing on the other end can read an image.
+    unselected_capabilities: list[RuntimeModelCapability] = field(default_factory=list)
 
     @property
     def model_name_for_harness(self) -> str:
@@ -189,11 +195,20 @@ class ResolvedAgentRuntime:
             # Carried so paths that rebuild a context from the snapshot — the
             # MCP bridges, notably — can work out whether this model reads
             # images, instead of assuming it cannot and delegating needlessly.
-            "model_capabilities": (
-                [capability.value for capability in self.model.capabilities]
-                if self.model
-                else []
-            ),
+            # Sourced from the selected model when there is one, and from the
+            # runtime itself when there is not. It used to be `[] if not
+            # self.model`, which read "this model cannot see" for every Agent
+            # Host run -- those pin no model -- so `pod_view_document_pages`
+            # refused and `view_image` was withheld from hosts that read images
+            # natively.
+            "model_capabilities": [
+                capability.value
+                for capability in (
+                    self.model.capabilities
+                    if self.model
+                    else self.unselected_capabilities
+                )
+            ],
             "config": _config_dict(self.profile.config),
         }
 
@@ -304,7 +319,9 @@ class AgentRuntimeProfileService:
             RuntimeProfileScope.ORGANIZATION,
             RuntimeProfileScope.PERSONAL,
         }:
-            raise ValueError("Agent Host profile scope must be ORGANIZATION or PERSONAL")
+            raise ValueError(
+                "Agent Host profile scope must be ORGANIZATION or PERSONAL"
+            )
 
         normalized_name = _normalize_profile_name(name)
         harness = await self.require_ready_harness(
@@ -568,22 +585,27 @@ class AgentRuntimeProfileService:
             raise RuntimeError(
                 f"Agent runtime profile {profile_id!r} has no selectable model"
             )
-        model = await self._with_live_harness_vision(profile, model)
+        harness_sees = await self._harness_reads_images(profile)
+        model = _with_harness_vision(model, harness_sees=harness_sees)
         credentials = reveal_credentials(profile.credentials)
         return ResolvedAgentRuntime(
             profile=profile,
             harness_kind=profile.derived_harness_kind(),
             model=model,
+            # Left alone on purpose when nothing is selected. Naming a model
+            # here would tell the harness which one to run, and "the harness
+            # picks" is the designed meaning of an unpinned profile.
             provider_model_name=model.provider_model_name if model else None,
             credentials=credentials,
+            unselected_capabilities=(
+                []
+                if model is not None
+                else _unselected_capabilities(profile, harness_sees=harness_sees)
+            ),
         )
 
-    async def _with_live_harness_vision(
-        self,
-        profile: AgentRuntimeProfile,
-        model: RuntimeModelCatalogEntry | None,
-    ) -> RuntimeModelCatalogEntry | None:
-        """Let a harness that has learned to see say so, without a profile edit.
+    async def _harness_reads_images(self, profile: AgentRuntimeProfile) -> bool:
+        """Ask the harness itself whether it reads images, not the copy of it.
 
         A harness profile's catalog is built once, at create time, from whatever
         ``capabilities["images"]`` said then -- and a harness registers before
@@ -592,20 +614,13 @@ class AgentRuntimeProfileService:
         rebuilt when somebody edits the profile in Models settings. Until then a
         Claude Code or Codex host that reads images natively is described as
         text-only, and `pod_view_document_pages` refuses.
-
-        So the harness is asked rather than the copy. Only ever additive: a
-        harness that reports images gains VISION, one that does not is left
-        exactly as stored, because the stored catalog is what an operator may
-        have deliberately edited.
         """
         if (
-            model is None
-            or profile.kind is not RuntimeProfileKind.HARNESS
+            profile.kind is not RuntimeProfileKind.HARNESS
             or profile.harness_id is None
             or self.host_repository is None
-            or RuntimeModelCapability.VISION in model.capabilities
         ):
-            return model
+            return False
         try:
             harnesses = await self.host_repository.get_harnesses({profile.harness_id})
         except SQLAlchemyError:
@@ -616,17 +631,11 @@ class AgentRuntimeProfileService:
                 "agent.runtime_profile.harness_vision_lookup_failed.diagnostic",
                 exc_info=True,
             )
-            return model
+            return False
         harness = harnesses.get(profile.harness_id)
-        if harness is None or (getattr(harness, "capabilities", None) or {}).get(
-            "images"
-        ) is not True:
-            return model
-        return model.model_copy(
-            update={
-                "capabilities": [*model.capabilities, RuntimeModelCapability.VISION]
-            }
-        )
+        if harness is None:
+            return False
+        return (getattr(harness, "capabilities", None) or {}).get("images") is True
 
     async def _archived_profile(
         self,
@@ -831,6 +840,58 @@ def _agent_host_model_catalog(
                 )
             )
     return entries
+
+
+def _with_harness_vision(
+    model: RuntimeModelCatalogEntry | None,
+    *,
+    harness_sees: bool,
+) -> RuntimeModelCatalogEntry | None:
+    """Additive only: a harness that reports images gains VISION.
+
+    One that does not is left exactly as stored, because the stored catalog is
+    what an operator may have deliberately edited.
+    """
+    if (
+        model is None
+        or not harness_sees
+        or RuntimeModelCapability.VISION in model.capabilities
+    ):
+        return model
+    return model.model_copy(
+        update={"capabilities": [*model.capabilities, RuntimeModelCapability.VISION]}
+    )
+
+
+def _unselected_capabilities(
+    profile: AgentRuntimeProfile,
+    *,
+    harness_sees: bool,
+) -> list[RuntimeModelCapability]:
+    """What the runtime can do when no catalog entry is selected.
+
+    An Agent Host profile routinely pins no model: `_agent_host_model_catalog`
+    documents an empty catalog as meaning "let the harness use its own default",
+    and a populated catalog with no chosen entry means the same. Either way
+    `_selected_model` returns None, and reading capabilities off that None was
+    reporting every such runtime as unable to see.
+
+    The catalog is still the better source when it has entries, so it is used --
+    but by **intersection**, so a mixed catalog cannot claim a capability only
+    some of its models have. `harness_sees` is then additive on top, exactly as
+    it is for a selected model.
+    """
+    baseline = [RuntimeModelCapability.TEXT, RuntimeModelCapability.TOOLS]
+    if profile.model_catalog:
+        shared = set(profile.model_catalog[0].capabilities)
+        for entry in profile.model_catalog[1:]:
+            shared &= set(entry.capabilities)
+        capabilities = [c for c in profile.model_catalog[0].capabilities if c in shared]
+    else:
+        capabilities = list(baseline)
+    if harness_sees and RuntimeModelCapability.VISION not in capabilities:
+        capabilities.append(RuntimeModelCapability.VISION)
+    return capabilities
 
 
 def _profile_availability(
