@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 
 import pytest
 from sqlalchemy import select
@@ -178,9 +179,7 @@ async def test_failure_kind_decides_terminal_vs_retry_and_never_leaks_secrets(
         # document. It must go back to PENDING with its attempt refunded, or an
         # extractor outage would burn the 3-attempt budget and permanently fail
         # perfectly good user documents.
-        released = await _wait_for_status(
-            pod_api, provider_error["path"], {"PENDING"}
-        )
+        released = await _wait_for_status(pod_api, provider_error["path"], {"PENDING"})
         assert released["processing_attempts"] == 0, (
             "a 5xx from the extractor must not spend the file's retry budget"
         )
@@ -191,7 +190,7 @@ async def test_failure_kind_decides_terminal_vs_retry_and_never_leaks_secrets(
 
 
 @pytest.mark.asyncio
-async def test_docling_and_xberg_adapters_run_through_http_outbox_and_worker(
+async def test_docling_adapter_runs_through_http_outbox_and_worker(
     pod_api: DatastoreApi,
     db_manager,
     document_worker,
@@ -234,27 +233,92 @@ async def test_docling_and_xberg_adapters_run_through_http_outbox_and_worker(
         assert b"<!-- PAGE 1 -->" in content
         assert b"<!-- PAGE 2 -->" in content
 
+    # xberg has its own journey below, against the real wheel. It is not a
+    # service with a URL, so there is nothing here worth doubling: the double
+    # this used to run accepted every call, which is precisely how it certified
+    # an `ExtractInput` the real extractor rejects outright.
+
+
+@pytest.mark.asyncio
+async def test_desktop_local_journey_converts_and_indexes_with_the_real_xberg_wheel(
+    pod_api: DatastoreApi,
+    db_manager,
+    document_worker,
+):
+    """The desktop and local install's document path, with nothing doubled.
+
+    This configuration has no counterpart in cloud: cloud converts in a
+    Kreuzberg container reached over HTTP, and a local install has no container
+    fleet, so it converts in the backend process through the real ``xberg``
+    wheel. Every other document E2E exercises the HTTP adapter, so until this
+    existed the in-process adapter's only coverage was against a hand-written
+    double.
+
+    That double is why this test exists. It accepted any ``ExtractInput``, so it
+    certified a call that omitted ``mime_type`` and ``filename`` -- and the real
+    wheel, handed a URI whose path is an extensionless temp file, cannot infer a
+    type and refuses. Every upload on desktop failed with
+    ``RuntimeError: document processing failed`` and pod search silently went
+    empty. A double cannot catch that; only the wheel can.
+
+    So the assertions below are about *real extraction*: text that only a real
+    PDF parser produces, page markers derived from real page boundaries, and a
+    search hit for a phrase that exists nowhere but inside the document.
+    """
+    fixture = Path(__file__).resolve().parents[2] / "tests/fixtures/arxiv/seq2seq.pdf"
+    pdf_bytes = fixture.read_bytes()
+
     async with document_worker("xberg"):
-        xberg = await pod_api.upload_file(
-            "xberg-success.html",
-            b"Hermetic Xberg source",
-            content_type="text/html",
+        pdf = await pod_api.upload_file(
+            "real-paper.pdf", pdf_bytes, content_type="application/pdf"
         )
-        xberg_failure = await pod_api.upload_file(
-            "xberg-failure.html",
-            b"FAIL with a provider payload",
-            content_type="text/html",
+        markdown = await pod_api.upload_file(
+            "notes.md",
+            b"# Field notes\n\nThe quokka telemetry handshake completed.\n",
+            content_type="text/markdown",
+        )
+        html = await pod_api.upload_file(
+            "page.html", b"<h1>Hermetic source</h1>", content_type="text/html"
+        )
+        # Genuinely corrupt, not a magic string a double agreed to reject: the
+        # real extractor fails on this with a parse error from its Rust core.
+        corrupt = await pod_api.upload_file(
+            "corrupt.pdf",
+            b"this is definitely not a pdf",
+            content_type="application/pdf",
         )
         await _dispatch_outbox(db_manager)
-        await _wait_for_status(pod_api, xberg["path"], {"COMPLETED"})
-        failed = await _wait_for_status(pod_api, xberg_failure["path"], {"FAILED"})
-        assert "CANARY_DATASTORE_PROVIDER_SECRET" not in str(failed)
-        xberg_children = await pod_api.list_children(xberg["path"])
-        xberg_markdown = next(
-            item
-            for item in xberg_children["items"]
-            if item["name"] == "document.md"
+
+        await _wait_for_status(pod_api, pdf["path"], {"COMPLETED"})
+        await _wait_for_status(pod_api, markdown["path"], {"COMPLETED"})
+        await _wait_for_status(pod_api, html["path"], {"COMPLETED"})
+        failed = await _wait_for_status(pod_api, corrupt["path"], {"FAILED"})
+
+        # A failure must stay terminal and must not carry the extractor's own
+        # words into a stored, user-visible field.
+        assert "document processing failed" in str(failed.get("last_processing_error"))
+        assert "pdf_oxide" not in str(failed)
+
+        children = await pod_api.list_children(pdf["path"])
+        document_md = next(
+            item for item in children["items"] if item["name"] == "document.md"
         )
-        content = await pod_api.child_content(xberg_markdown["path"])
-        assert b"Xberg output" in content
-        assert b"Hermetic Xberg source" in content
+        converted = (await pod_api.child_content(document_md["path"])).decode(
+            "utf-8", "replace"
+        )
+
+        # Text only a real parser produces. The double emitted the source bytes
+        # back under a heading, so any assertion of this kind passed there
+        # whether or not extraction worked.
+        assert "sequence" in converted.lower()
+        assert len(converted) > 5_000, f"suspiciously short: {len(converted)}"
+        # Page boundaries are reconstructed from the wheel's per-page content;
+        # a single marker proves the reconstruction ran at all.
+        assert "<!-- PAGE 1 -->" in converted
+
+        # Indexing is the half users actually notice: this is what came back
+        # empty on desktop, indistinguishable from "no matches".
+        hits = await pod_api.search_files(query="quokka telemetry handshake")
+        assert any(item["path"] == markdown["path"] for item in hits["items"]), (
+            f"markdown not indexed; got {[i['path'] for i in hits['items']]}"
+        )

@@ -510,6 +510,14 @@ class DatastoreFileService(FileTransactionFacade):
         """
         return await self.file_repository.count_active_for_pod(pod_id)
 
+    async def count_files_that_failed_processing(self, pod_id: UUID) -> int:
+        """Files this pod could not index at all.
+
+        Counted apart from the queued ones because the advice differs: a queued
+        file becomes searchable by waiting, a failed one never does.
+        """
+        return await self.file_repository.count_failed_for_pod(pod_id)
+
     async def get_directory_tree(
         self,
         pod_id: UUID,

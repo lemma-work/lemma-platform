@@ -75,6 +75,34 @@ class DatastoreFileRecoveryQueriesMixin:
             or 0
         )
 
+    async def count_failed_for_pod(self, pod_id: UUID) -> int:
+        """Files this pod tried to index and could not (FAILED + FAILED_PERMANENT).
+
+        The sibling of `count_active_for_pod`, and the half it does not cover.
+        Both describe a file that will not answer a search, but only one of them
+        resolves itself by waiting -- which is why they are counted separately
+        rather than folded into one "not searchable" number that would be told
+        to retry.
+        """
+        return int(
+            await self.session.scalar(
+                select(func.count())
+                .select_from(DatastoreFile)
+                .where(
+                    DatastoreFile.pod_id == pod_id,
+                    DatastoreFile.kind == "FILE",
+                    DatastoreFile.search_enabled == True,  # noqa: E712
+                    DatastoreFile.status.in_(
+                        (
+                            FileStatus.FAILED.value,
+                            FileStatus.FAILED_PERMANENT.value,
+                        )
+                    ),
+                )
+            )
+            or 0
+        )
+
     async def list_pending_dispatch_candidates(
         self,
         *,

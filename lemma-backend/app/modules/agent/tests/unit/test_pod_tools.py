@@ -153,9 +153,7 @@ async def test_pod_write_record_validates_required_fields(monkeypatch):
     # update/delete require record_id; create/update require data — caught before
     # touching services (so the AsyncMock is never awaited).
     services = SimpleNamespace(
-        record=SimpleNamespace(
-            update_record=AsyncMock(), delete_record=AsyncMock()
-        ),
+        record=SimpleNamespace(update_record=AsyncMock(), delete_record=AsyncMock()),
         table=SimpleNamespace(get_table=AsyncMock()),
         ctx=SimpleNamespace(pod_id=uuid4(), user_id=uuid4()),
     )
@@ -319,9 +317,7 @@ async def test_pod_read_file_text_decodes_utf8(monkeypatch):
     )
     services = SimpleNamespace(
         file=SimpleNamespace(
-            download_file_content_by_path=AsyncMock(
-                return_value=(entity, b"hello")
-            )
+            download_file_content_by_path=AsyncMock(return_value=(entity, b"hello"))
         ),
         ctx=SimpleNamespace(pod_id=uuid4(), user_id=uuid4()),
     )
@@ -476,6 +472,7 @@ async def test_empty_search_says_when_files_are_still_being_processed(monkeypatc
         file=SimpleNamespace(
             search_files=AsyncMock(return_value=[]),
             count_files_awaiting_processing=AsyncMock(return_value=3),
+            count_files_that_failed_processing=AsyncMock(return_value=0),
         ),
         ctx=SimpleNamespace(pod_id=uuid4(), user_id=uuid4()),
     )
@@ -494,11 +491,16 @@ async def test_empty_search_says_when_files_are_still_being_processed(monkeypatc
 @pytest.mark.asyncio
 async def test_an_empty_search_on_a_fully_indexed_pod_stays_a_plain_answer(monkeypatch):
     """No caveat when there is nothing to caveat -- that would be noise on every
-    genuine miss, and would teach a reader to ignore the field that matters."""
+    genuine miss, and would teach a reader to ignore the field that matters.
+
+    "Fully indexed" here means both counts are zero. It used to mean only the
+    queued one, which is why a pod whose every file had FAILED read as healthy.
+    """
     services = SimpleNamespace(
         file=SimpleNamespace(
             search_files=AsyncMock(return_value=[]),
             count_files_awaiting_processing=AsyncMock(return_value=0),
+            count_files_that_failed_processing=AsyncMock(return_value=0),
         ),
         ctx=SimpleNamespace(pod_id=uuid4(), user_id=uuid4()),
     )
@@ -760,3 +762,59 @@ async def test_pod_write_file_conflict_with_overwrite_updates_existing(monkeypat
     services.file.write_update_storage.assert_awaited_once_with(plan, ANY)
     services.file.persist_update_file.assert_awaited_once_with(plan)
     services.file.finalize_update_file.assert_awaited_once_with(plan, updated)
+
+
+@pytest.mark.asyncio
+async def test_a_pod_whose_files_all_failed_does_not_search_clean(monkeypatch):
+    """The state the sweep actually hit, and the one the first signal missed.
+
+    The queued count covers files that will become searchable by waiting. Once
+    they have all failed it is zero, so the caveat never fired and an empty
+    result was indistinguishable from a healthy pod holding nothing on the
+    subject -- while every document in it was unreadable.
+    """
+    services = SimpleNamespace(
+        file=SimpleNamespace(
+            search_files=AsyncMock(return_value=[]),
+            count_files_awaiting_processing=AsyncMock(return_value=0),
+            count_files_that_failed_processing=AsyncMock(return_value=2),
+        ),
+        ctx=SimpleNamespace(pod_id=uuid4(), user_id=uuid4()),
+    )
+    _patch_services(monkeypatch, services)
+
+    result = await pod_adapter.pod_search_files(
+        _run_ctx(), SearchFilesRequest(query="quokka telemetry handshake")
+    )
+
+    assert result["success"] is True
+    assert result["files_failed_processing"] == 2
+    assert "could not be processed" in result["note"]
+    # The advice for a queued file is wrong for a failed one: waiting fixes
+    # nothing, and telling an agent to retry sends it round a loop with no end.
+    assert "retry once processing finishes" not in result["note"]
+
+
+@pytest.mark.asyncio
+async def test_queued_and_failed_files_are_reported_as_the_different_things(
+    monkeypatch,
+):
+    """A pod can be mid-backfill and holding broken files at the same time."""
+    services = SimpleNamespace(
+        file=SimpleNamespace(
+            search_files=AsyncMock(return_value=[]),
+            count_files_awaiting_processing=AsyncMock(return_value=4),
+            count_files_that_failed_processing=AsyncMock(return_value=1),
+        ),
+        ctx=SimpleNamespace(pod_id=uuid4(), user_id=uuid4()),
+    )
+    _patch_services(monkeypatch, services)
+
+    result = await pod_adapter.pod_search_files(
+        _run_ctx(), SearchFilesRequest(query="anything")
+    )
+
+    assert result["files_awaiting_processing"] == 4
+    assert result["files_failed_processing"] == 1
+    assert "still being processed" in result["note"]
+    assert "could not be processed" in result["note"]
