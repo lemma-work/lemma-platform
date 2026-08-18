@@ -27,6 +27,7 @@ from app.modules.agent.tools.pod.models import (
     PodTablesRequest,
     PodWriteFileRequest,
     PodWriteRecordRequest,
+    SearchFilesRequest,
     ViewDocumentPagesRequest,
 )
 from app.modules.agent.tools.registry import resolve_agent_toolsets
@@ -329,6 +330,176 @@ async def test_pod_read_file_text_decodes_utf8(monkeypatch):
     assert result["success"] is True
     assert result["format"] == "text"
     assert result["text"] == "hello"
+
+
+@pytest.mark.asyncio
+async def test_a_text_file_is_returned_as_its_own_original_content(monkeypatch):
+    """Text-like files are never converted -- the original bytes ARE the answer."""
+    entity = SimpleNamespace(path="/me/notes.md", mime_type="text/markdown", size_bytes=11)
+    markdown = AsyncMock()
+    services = SimpleNamespace(
+        file=SimpleNamespace(
+            download_file_content_by_path=AsyncMock(
+                return_value=(entity, b"# hello\nyo")
+            ),
+            get_document_markdown=markdown,
+        ),
+        ctx=SimpleNamespace(pod_id=uuid4(), user_id=uuid4()),
+    )
+    _patch_services(monkeypatch, services)
+
+    result = await pod_adapter.pod_read_file(
+        _run_ctx(), PodReadFileRequest(path="/me/notes.md")
+    )
+
+    assert result["format"] == "text"
+    assert result["text"] == "# hello\nyo"
+    # The converted form is not consulted for something that decodes.
+    markdown.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_a_pdf_read_as_text_comes_back_converted(monkeypatch):
+    """Asking for a PDF's contents returns its contents.
+
+    It used to return `binary: true` and an instruction to call again with
+    `format='markdown'` -- a round trip that answers itself, and one the tool
+    sweep's agent had to discover by failing first.
+    """
+    entity = SimpleNamespace(
+        path="/me/toolcheck/toolcheck.pdf", mime_type="application/pdf", size_bytes=2138
+    )
+    document = SimpleNamespace(path="/me/toolcheck/toolcheck.pdf")
+    services = SimpleNamespace(
+        file=SimpleNamespace(
+            download_file_content_by_path=AsyncMock(
+                return_value=(entity, b"%PDF-1.4\x00\xff binary")
+            ),
+            get_document_markdown=AsyncMock(
+                return_value=(document, "# Toolcheck\n\nbody", 2)
+            ),
+        ),
+        ctx=SimpleNamespace(pod_id=uuid4(), user_id=uuid4()),
+    )
+    _patch_services(monkeypatch, services)
+
+    result = await pod_adapter.pod_read_file(
+        _run_ctx(), PodReadFileRequest(path="/me/toolcheck/toolcheck.pdf")
+    )
+
+    assert result["format"] == "markdown"
+    assert result["converted"] is True
+    assert result["markdown"] == "# Toolcheck\n\nbody"
+    assert result["page_count"] == 2
+    assert "binary" not in result
+
+
+@pytest.mark.asyncio
+async def test_a_binary_with_no_conversion_says_which_kind_of_missing(monkeypatch):
+    """A PNG has no converted form and never will; a PENDING PDF does not yet.
+
+    Both used to be one flat "Binary file" hint. The reader's message already
+    tells them apart, so carry it through rather than restating it worse.
+    """
+    from app.modules.datastore.contracts import DatastoreFileNotFoundError
+
+    entity = SimpleNamespace(path="/me/photo.png", mime_type="image/png", size_bytes=90)
+    services = SimpleNamespace(
+        file=SimpleNamespace(
+            download_file_content_by_path=AsyncMock(
+                return_value=(entity, b"\x89PNG\r\n\x1a\n")
+            ),
+            get_document_markdown=AsyncMock(
+                side_effect=DatastoreFileNotFoundError(
+                    "/me/photo.png is not an indexable document, so no markdown "
+                    "was derived from it."
+                )
+            ),
+        ),
+        ctx=SimpleNamespace(pod_id=uuid4(), user_id=uuid4()),
+    )
+    _patch_services(monkeypatch, services)
+
+    result = await pod_adapter.pod_read_file(
+        _run_ctx(), PodReadFileRequest(path="/me/photo.png")
+    )
+
+    assert result["binary"] is True
+    assert "not an indexable document" in result["hint"]
+
+
+@pytest.mark.asyncio
+async def test_empty_search_says_when_files_are_still_being_processed(monkeypatch):
+    """An empty list is two different answers, and only one of them is an answer.
+
+    A pod whose files have not been indexed searches cleanly and returns [] --
+    identical to a pod that genuinely holds nothing on the topic. An agent
+    cannot tell them apart, so it reports the second with confidence when the
+    truth is the first. This is the whole reason the sweep's `pod_search_files`
+    finding was rated more dangerous than the outright failures beside it.
+    """
+    services = SimpleNamespace(
+        file=SimpleNamespace(
+            search_files=AsyncMock(return_value=[]),
+            count_files_awaiting_processing=AsyncMock(return_value=3),
+        ),
+        ctx=SimpleNamespace(pod_id=uuid4(), user_id=uuid4()),
+    )
+    _patch_services(monkeypatch, services)
+
+    result = await pod_adapter.pod_search_files(
+        _run_ctx(), SearchFilesRequest(query="quokka telemetry handshake")
+    )
+
+    assert result["success"] is True
+    assert result["results"] == []
+    assert result["files_awaiting_processing"] == 3
+    assert "still being processed" in result["note"]
+
+
+@pytest.mark.asyncio
+async def test_an_empty_search_on_a_fully_indexed_pod_stays_a_plain_answer(monkeypatch):
+    """No caveat when there is nothing to caveat -- that would be noise on every
+    genuine miss, and would teach a reader to ignore the field that matters."""
+    services = SimpleNamespace(
+        file=SimpleNamespace(
+            search_files=AsyncMock(return_value=[]),
+            count_files_awaiting_processing=AsyncMock(return_value=0),
+        ),
+        ctx=SimpleNamespace(pod_id=uuid4(), user_id=uuid4()),
+    )
+    _patch_services(monkeypatch, services)
+
+    result = await pod_adapter.pod_search_files(
+        _run_ctx(), SearchFilesRequest(query="nothing here")
+    )
+
+    assert result["results"] == []
+    assert "files_awaiting_processing" not in result
+    assert "note" not in result
+
+
+@pytest.mark.asyncio
+async def test_a_search_with_hits_never_pays_for_the_pending_count(monkeypatch):
+    """The count is a query. A search that found something has already answered
+    the question, so it must not run."""
+    counter = AsyncMock(return_value=99)
+    services = SimpleNamespace(
+        file=SimpleNamespace(
+            search_files=AsyncMock(return_value=[{"path": "/me/a.md"}]),
+            count_files_awaiting_processing=counter,
+        ),
+        ctx=SimpleNamespace(pod_id=uuid4(), user_id=uuid4()),
+    )
+    _patch_services(monkeypatch, services)
+
+    result = await pod_adapter.pod_search_files(
+        _run_ctx(), SearchFilesRequest(query="a")
+    )
+
+    assert result["results"]
+    assert "files_awaiting_processing" not in result
+    counter.assert_not_awaited()
 
 
 @pytest.mark.asyncio

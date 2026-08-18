@@ -12,7 +12,10 @@ from app.modules.datastore.domain.errors import (
     DatastoreObjectNotFoundError,
     DatastoreValidationError,
 )
-from app.modules.datastore.domain.file_entities import DatastoreFileEntity
+from app.modules.datastore.domain.file_entities import (
+    DatastoreFileEntity,
+    FileStatus,
+)
 from app.modules.datastore.domain.ports import DatastoreStoragePort
 from app.modules.datastore.infrastructure.storage_paths import (
     CHILD_MANIFEST_ARTIFACT,
@@ -35,6 +38,29 @@ from app.modules.datastore.services.files.skills_overlay import SkillsOverlay
 from app.modules.datastore.services.system_skill_files import SystemSkillFileProvider
 
 logger = get_logger(__name__)
+
+
+def _missing_markdown_message(file_entity: DatastoreFileEntity) -> str:
+    """Explain an absent derived markdown in terms of the file's own status."""
+    status = file_entity.status
+    path = file_entity.path
+    if status in (FileStatus.PENDING, FileStatus.PROCESSING):
+        return (
+            f"{path} has not finished processing yet (status {status.value}), so "
+            "its converted markdown does not exist. Retry once processing "
+            "completes."
+        )
+    if status in (FileStatus.FAILED, FileStatus.FAILED_PERMANENT):
+        return (
+            f"{path} could not be converted (status {status.value}), so it has "
+            "no markdown to read."
+        )
+    if status is FileStatus.NOT_REQUIRED:
+        return (
+            f"{path} is not an indexable document, so no markdown was derived "
+            "from it."
+        )
+    return f"Converted markdown for {path} not found"
 
 
 class FileReader:
@@ -529,8 +555,12 @@ class FileReader:
                 build_datastore_child_markdown_key(file_entity.pod_id, file_entity.path)
             )
         except DatastoreObjectNotFoundError:
+            # The row knows why, and saying so is the difference between a
+            # caller that waits and one that concludes the document is
+            # unreadable. Absent markdown means "not converted yet" far more
+            # often than "will never exist", and both used to 404 identically.
             raise DatastoreFileNotFoundError(
-                f"Converted markdown for {file_entity.path} not found"
+                _missing_markdown_message(file_entity)
             )
         except Exception as exc:
             raise DatastoreInfrastructureError(

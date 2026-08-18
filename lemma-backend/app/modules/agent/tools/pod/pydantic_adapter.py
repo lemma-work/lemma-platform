@@ -40,6 +40,7 @@ from app.modules.agent.tools.pod.pod_data_access import (
 from app.modules.agent.tools.tool_errors import approval_error_result
 from app.modules.datastore.contracts import (
     DatastoreConflictError,
+    DatastoreFileNotFoundError,
     DatastoreFileUpdateEntity,
     TableContext,
 )
@@ -459,13 +460,45 @@ async def pod_read_file(
                 "text": text[: request.max_chars],
             }
         except UnicodeDecodeError:
+            # Not decodable as text, so this is a document rather than a text
+            # file. Documents are converted at upload precisely so they can be
+            # read, and the conversion is what the caller wanted -- asking for
+            # "the contents of this PDF" and being handed `binary: true` and an
+            # instruction to call again with a different argument is a round
+            # trip that answers itself.
+            #
+            # Text-like files never reach here: they decode, and are returned as
+            # their own original bytes. Only a document falls through, and only
+            # a document has a converted form to fall through to.
+            try:
+                (
+                    document,
+                    markdown,
+                    page_count,
+                ) = await services.file.get_document_markdown(
+                    services.ctx.pod_id, resolved_path, services.ctx
+                )
+            except DatastoreFileNotFoundError as missing:
+                # No converted form either. Say which of the two it is -- the
+                # reader's message already distinguishes "not converted yet"
+                # from "never will be" -- instead of a bare "binary file".
+                return {
+                    "success": True,
+                    "path": entity.path,
+                    "mime_type": entity.mime_type,
+                    "size_bytes": entity.size_bytes,
+                    "binary": True,
+                    "hint": str(missing),
+                }
             return {
                 "success": True,
-                "path": entity.path,
+                "path": document.path,
+                "format": "markdown",
+                "converted": True,
                 "mime_type": entity.mime_type,
-                "size_bytes": entity.size_bytes,
-                "binary": True,
-                "hint": "Binary file; read it with format='markdown' for documents.",
+                "page_count": page_count,
+                "truncated": len(markdown) > request.max_chars,
+                "markdown": markdown[: request.max_chars],
             }
 
     return await _run(
@@ -612,7 +645,30 @@ async def pod_search_files(
             search_method=request.method,
             scope_path=request.scope_path,
         )
-        return {"success": True, "results": to_json_value(results)}
+        payload: JsonObject = {"success": True, "results": to_json_value(results)}
+        if results:
+            return payload
+        # An empty result is two different answers wearing the same clothes:
+        # "nothing in this pod matches" and "this pod is not indexed yet". Only
+        # the first is an answer. Reporting the second as the first is how an
+        # agent states with confidence that a pod holds nothing on a topic it
+        # holds plenty on -- and it cannot tell, because a pod with no chunks
+        # searches cleanly and returns [].
+        #
+        # Said only when the list is empty: a search that found something has
+        # already answered the question, and a count on every call would be a
+        # query per search for a caveat nobody needs.
+        awaiting = await services.file.count_files_awaiting_processing(
+            services.ctx.pod_id
+        )
+        if awaiting:
+            payload["files_awaiting_processing"] = awaiting
+            payload["note"] = (
+                f"No matches, but {awaiting} file(s) in this pod are still being "
+                "processed and are not searchable yet. Results may be incomplete; "
+                "retry once processing finishes."
+            )
+        return payload
 
     return await _run(
         ctx.deps,
