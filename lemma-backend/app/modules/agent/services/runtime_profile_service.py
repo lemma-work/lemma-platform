@@ -175,6 +175,18 @@ class ResolvedAgentRuntime:
     unselected_capabilities: list[RuntimeModelCapability] = field(default_factory=list)
 
     @property
+    def capabilities(self) -> list[RuntimeModelCapability]:
+        """What this runtime can do, selected model or not.
+
+        Read this rather than `model.capabilities`: an Agent Host profile
+        routinely selects no model, and `model is None` says nothing about
+        whether the thing on the other end can read an image.
+        """
+        return list(
+            self.model.capabilities if self.model else self.unselected_capabilities
+        )
+
+    @property
     def model_name_for_harness(self) -> str:
         if self.model is None:
             return "default"
@@ -202,12 +214,7 @@ class ResolvedAgentRuntime:
             # refused and `view_image` was withheld from hosts that read images
             # natively.
             "model_capabilities": [
-                capability.value
-                for capability in (
-                    self.model.capabilities
-                    if self.model
-                    else self.unselected_capabilities
-                )
+                capability.value for capability in self.capabilities
             ],
             "config": _config_dict(self.profile.config),
         }

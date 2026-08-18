@@ -140,6 +140,8 @@ class AgentToolDispatcher:
                 agent=agent,
                 conversation=conversation,
                 include_final_answer=include_final_answer,
+                # The whole reason a remote harness never saw `view_image`.
+                vision_mode=ctx.vision_mode,
             )
         run_ctx = self._run_context(ctx, agent_run_id)
         prepared: dict[str, PreparedTool] = {}

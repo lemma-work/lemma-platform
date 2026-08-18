@@ -104,7 +104,7 @@ async def _profile_for_a_host_that(db_session, scenario, *, reports_images: bool
     return machine, profile
 
 
-async def _vision_mode_for(db_session, scenario, profile) -> AgentVisionMode:
+async def _vision_mode_for(db_session, scenario, profile):
     """Run the shipped bridge over a run pinned to this profile."""
     created = await scenario.owner_client.post(
         f"/pods/{scenario.pod_id}/conversations", json={"title": "vision"}
@@ -127,7 +127,7 @@ async def _vision_mode_for(db_session, scenario, profile) -> AgentVisionMode:
     _agent, _conversation, ctx = await ConversationMCPService()._load_agent_context(
         conversation_id=run.conversation_id, agent_run_id=run.id
     )
-    return ctx.vision_mode
+    return ctx.vision_mode, run
 
 
 @pytest.mark.asyncio
@@ -140,9 +140,9 @@ async def test_a_host_that_reports_images_may_read_a_page_without_a_vision_model
         db_session, scenario, reports_images=True
     )
 
-    assert await _vision_mode_for(db_session, scenario, profile) is (
-        AgentVisionMode.DIRECT
-    )
+    mode, _run = await _vision_mode_for(db_session, scenario, profile)
+
+    assert mode is AgentVisionMode.DIRECT
 
 
 @pytest.mark.asyncio
@@ -190,6 +190,38 @@ async def test_a_stale_catalog_does_not_outvote_a_host_that_learned_to_see(
     )
     assert republished.status_code == 200, republished.text
 
-    assert await _vision_mode_for(db_session, scenario, profile) is (
-        AgentVisionMode.DIRECT
+    mode, _run = await _vision_mode_for(db_session, scenario, profile)
+
+    assert mode is AgentVisionMode.DIRECT
+
+
+@pytest.mark.asyncio
+async def test_the_tool_list_a_remote_harness_receives_actually_contains_view_image(
+    db_session, scenario
+):
+    """The tool the prompts tell every agent to use, over the path it arrives on.
+
+    `view_image` was appended to the toolset by the *runner*, and a remote
+    harness never goes through the runner for tools -- it reaches them through
+    the MCP server, which re-assembles the list from scratch. So no Agent Host
+    run could call `view_image`, whatever its vision mode, while the run spec
+    still advertised the tool because that list is the runner's copy.
+
+    Meanwhile `prompts/web_search.md` and `web_fetch`'s own result message tell
+    the model to view screenshots with it, unconditionally.
+
+    This asks the shipped bridge for the list a real harness is handed.
+    """
+    await scenario.create_org_with_pod(name_prefix="ViewImage")
+    _machine, profile = await _profile_for_a_host_that(
+        db_session, scenario, reports_images=True
     )
+    mode, run = await _vision_mode_for(db_session, scenario, profile)
+    assert mode is AgentVisionMode.DIRECT
+
+    tools = await ConversationMCPService().list_tools(
+        conversation_id=run.conversation_id, agent_run_id=run.id
+    )
+    names = {tool.name for tool in tools}
+
+    assert any("view_image" in name for name in names), sorted(names)
