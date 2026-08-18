@@ -317,6 +317,11 @@ digest-verified runtime archives to a prerelease tagged
 `desktop-nightly-<short-sha>`, then attaches a signed, notarized online DMG
 built against them — installable by anyone, with no version tag cut.
 
+Only the three most recent nightly prereleases are kept; each successful shared
+build deletes the ones before them. Install the runtime from a nightly DMG while
+it is current, because once its prerelease is pruned the first-launch download
+has nothing to fetch.
+
 This is not a public offline installer. It exercises the same first-launch
 installer using trusted application resources, while infrastructure and
 sandbox OCI images still require network access. CI rejects:

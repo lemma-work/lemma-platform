@@ -58,3 +58,153 @@ def test_expensive_security_jobs_are_change_scoped() -> None:
     assert "if: needs.changes.outputs.javascript == 'true'" in workflow
     assert "if: needs.changes.outputs.python_dependencies == 'true'" in workflow
     assert "if: needs.changes.outputs.backend_image == 'true'" in workflow
+
+
+def _nightly_prune_step() -> dict:
+    """The shipped prune step, read out of the workflow rather than retyped.
+
+    A test that restates the script proves only that two copies agree. These
+    run the text that will actually execute in CI.
+    """
+    import yaml
+
+    workflow = yaml.safe_load(_read(".github/workflows/release-local-images.yml"))
+    steps = workflow["jobs"]["share-desktop-dmg"]["steps"]
+    return next(s for s in steps if s["name"] == "Prune superseded nightly prereleases")
+
+
+def _run_prune(tmp_path, releases: list[str], *, keep: str = "3") -> tuple[int, str]:
+    """Run the step with a stubbed `gh`, so no delete can escape the test."""
+    import os
+    import subprocess
+
+    listing = "".join(f'printf "%s\\n" "{line}"\n' for line in releases)
+    stub = tmp_path / "gh"
+    stub.write_text(
+        "#!/bin/bash\n"
+        'if [[ "$1" == "api" ]]; then\n'
+        f"{listing}"
+        "  exit 0\n"
+        "fi\n"
+        'if [[ "$1" == "release" && "$2" == "delete" ]]; then\n'
+        '  echo "DELETED $3"\n'
+        "  exit 0\n"
+        "fi\n"
+        "exit 1\n"
+    )
+    stub.chmod(0o755)
+    script = tmp_path / "prune.sh"
+    script.write_text(_nightly_prune_step()["run"])
+    completed = subprocess.run(
+        ["bash", str(script)],
+        capture_output=True,
+        text=True,
+        env={
+            **os.environ,
+            "PATH": f"{tmp_path}:{os.environ['PATH']}",
+            "GITHUB_REPOSITORY": "lemma-work/lemma-platform",
+            "GH_TOKEN": "stub",
+            "KEEP": keep,
+        },
+    )
+    return completed.returncode, completed.stdout + completed.stderr
+
+
+def test_nightly_prune_keeps_a_rolling_window_of_the_newest_builds(tmp_path) -> None:
+    """Twelve nightly prereleases had buried v0.7.0 fifth from the top.
+
+    Ordering is by creation time and the newest are kept, so the release this
+    run just published is always inside the window and stays installable.
+    """
+    returncode, output = _run_prune(
+        tmp_path,
+        [
+            "2026-08-14T15:07:47Z\tdesktop-nightly-oldest00",
+            "2026-08-18T05:36:33Z\tdesktop-nightly-newest00",
+            "2026-08-17T09:39:47Z\tdesktop-nightly-fourth00",
+            "2026-08-18T05:34:01Z\tdesktop-nightly-second00",
+            "2026-08-17T19:13:00Z\tdesktop-nightly-third000",
+        ],
+    )
+
+    assert returncode == 0, output
+    deleted = {
+        line.split()[1] for line in output.splitlines() if line.startswith("DELETED ")
+    }
+    assert deleted == {"desktop-nightly-fourth00", "desktop-nightly-oldest00"}
+
+
+def test_nightly_prune_refuses_to_delete_anything_that_is_not_a_nightly(
+    tmp_path,
+) -> None:
+    """The guard, not the filter, is what stands between a bug and a lost release.
+
+    `gh release delete --cleanup-tag` destroys the release *and* its tag, so a
+    version tag reaching that loop is unrecoverable. This feeds one straight
+    past the API filter and asserts the loop stops rather than trusting it.
+    """
+    returncode, output = _run_prune(
+        tmp_path,
+        [
+            "2026-08-18T05:36:33Z\tdesktop-nightly-newest00",
+            "2026-08-18T05:34:01Z\tdesktop-nightly-second00",
+            "2026-08-17T19:13:00Z\tdesktop-nightly-third000",
+            "2026-08-15T13:18:34Z\tv0.7.0",
+            "2026-08-14T15:07:47Z\tdesktop-nightly-oldest00",
+        ],
+    )
+
+    assert returncode != 0
+    assert "Refusing to delete a non-nightly release::v0.7.0" in output
+    # It must stop *before* deleting, not merely complain on the way past.
+    assert "DELETED" not in output
+
+
+def test_nightly_prune_survives_a_listing_failure_without_claiming_success(
+    tmp_path,
+) -> None:
+    """Housekeeping runs after the DMG is published, so it must not fail the build.
+
+    But an unreadable listing must not read as a tidy release page either --
+    that is how a prune quietly stops running and the page fills up again.
+    """
+    import os
+    import subprocess
+
+    stub = tmp_path / "gh"
+    stub.write_text(
+        '#!/bin/bash\nif [[ "$1" == "api" ]]; then exit 1; fi\necho "DELETED $3"\n'
+    )
+    stub.chmod(0o755)
+    script = tmp_path / "prune.sh"
+    script.write_text(_nightly_prune_step()["run"])
+
+    completed = subprocess.run(
+        ["bash", str(script)],
+        capture_output=True,
+        text=True,
+        env={
+            **os.environ,
+            "PATH": f"{tmp_path}:{os.environ['PATH']}",
+            "GITHUB_REPOSITORY": "lemma-work/lemma-platform",
+            "GH_TOKEN": "stub",
+            "KEEP": "3",
+        },
+    )
+
+    assert completed.returncode == 0
+    assert "Could not list nightly prereleases" in completed.stdout
+    assert "DELETED" not in completed.stdout
+
+
+def test_nightly_prune_asks_the_api_only_for_nightly_prereleases() -> None:
+    """Both halves of the filter matter, and neither is implied by the other.
+
+    Dropping `.prerelease` would sweep in any future `desktop-nightly-` release
+    that was promoted; dropping the prefix would sweep in every prerelease.
+    """
+    run = _nightly_prune_step()["run"]
+
+    assert 'select(.prerelease and (.tag_name | startswith("desktop-nightly-")))' in run
+    # Deleting the tag is the point -- an orphaned tag is still clutter.
+    assert "--cleanup-tag" in run
