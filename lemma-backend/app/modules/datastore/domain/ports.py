@@ -19,6 +19,7 @@ from app.modules.datastore.domain.document_processing import (
     IndexingMetrics,
 )
 from app.modules.datastore.domain.file_projections import DispatchableFileRef
+from app.modules.datastore.domain.file_visibility import FileVisibilityFilter
 from app.modules.datastore.domain.file_entities import (
     DatastoreFileEntity,
     DatastoreFileSearchResult,
@@ -43,6 +44,13 @@ class DatastoreTableRepositoryPort(Protocol):
     async def get_by_datastore_and_name(
         self, pod_id: UUID, table_name: str, ctx: Context | None = None
     ) -> Optional[DatastoreTableEntity]: ...
+
+    async def get_many_by_datastore_and_names(
+        self,
+        pod_id: UUID,
+        table_names: Sequence[str],
+        ctx: Context | None = None,
+    ) -> dict[str, DatastoreTableEntity]: ...
 
     async def list_by_datastore(
         self, pod_id: UUID, limit: int = 100, cursor: Optional[str] = None
@@ -122,6 +130,22 @@ class DatastoreFileRepositoryPort(Protocol):
         paths: Sequence[str],
     ) -> Sequence[DatastoreFileEntity]: ...
 
+    async def visible_file_ids(
+        self,
+        *,
+        pod_id: UUID,
+        ctx: Context,
+        walk_ancestors: bool,
+    ) -> set[UUID]: ...
+
+    async def file_visibility_split(
+        self,
+        *,
+        pod_id: UUID,
+        ctx: Context,
+        walk_ancestors: bool,
+    ) -> tuple[set[UUID], set[UUID]]: ...
+
     async def filter_visible_ids(
         self,
         *,
@@ -191,6 +215,16 @@ class DatastoreSchemaPort(Protocol):
         primary_key_column: str,
         columns: list[ColumnSchema],
         enable_rls: bool = True,
+    ) -> None: ...
+
+    async def ensure_record_index(
+        self,
+        schema_name: str,
+        table_name: str,
+        *,
+        primary_key_column: str,
+        has_created_at: bool,
+        enable_rls: bool,
     ) -> None: ...
 
     async def drop_table(self, pod_id: UUID, table_name: str) -> None: ...
@@ -416,7 +450,8 @@ class DatastoreSearchPort(Protocol):
         method: SearchMethod = SearchMethod.HYBRID,
         scope_path: str | None = None,
         include_descendants: bool = True,
-        visible_file_ids: set[UUID] | None = None,
+        *,
+        visibility: FileVisibilityFilter,
     ) -> list[DatastoreFileSearchResult]: ...
 
 

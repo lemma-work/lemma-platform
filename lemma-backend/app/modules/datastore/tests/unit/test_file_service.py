@@ -134,6 +134,21 @@ def _make_file(
 def file_repository_mock() -> AsyncMock:
     repository = AsyncMock()
     repository.filter_visible_ids.side_effect = lambda **kwargs: set(kwargs["file_ids"])
+
+    # The SQL visibility predicate is exercised for real in
+    # ``test_file_visibility_equivalence_e2e``; here it stands in as "the
+    # database allows every row it has", which is the same stance
+    # ``filter_visible_ids`` above takes. Each test then controls what the pod
+    # contains through ``get_all_by_datastore``.
+    async def _visible_file_ids(**kwargs) -> set:
+        items = await repository.get_all_by_datastore(kwargs["pod_id"])
+        return {item.id for item in items}
+
+    async def _visibility_split(**kwargs) -> tuple[set, set]:
+        return await _visible_file_ids(**kwargs), set()
+
+    repository.visible_file_ids.side_effect = _visible_file_ids
+    repository.file_visibility_split.side_effect = _visibility_split
     return repository
 
 
@@ -1098,7 +1113,12 @@ async def test_search_files_excludes_private_or_private_ancestor_results_for_non
     )
 
     assert [result.file_id for result in results] == [pod_root_id]
-    assert seen_search_kwargs["visible_file_ids"] == {pod_root_id}
+    visibility = seen_search_kwargs["visibility"]
+    assert visibility.known_file_ids == {pod_root_id}
+    assert not visibility.allows(pod_child_id), (
+        "a chunk whose file row the pod no longer has must not survive the "
+        "filter, whichever direction was pushed down"
+    )
 
 
 @pytest.mark.asyncio

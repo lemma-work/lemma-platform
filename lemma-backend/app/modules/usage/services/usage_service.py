@@ -450,8 +450,17 @@ class UsageService(UsagePricing):
             if limit_values.user_limit_scope == "global"
             else ()
         )
+        # Six serial aggregates became three. The two user windows are one scan
+        # with a FILTER apiece, and the reserved counters are one grouped read
+        # of all three scopes; only the organization total keeps a statement of
+        # its own, because its predicate is a whole org rather than one user in
+        # it and folding it in would widen the scan to every user.
+        #
+        # Not cached, and not gathered. These numbers gate spending, so a cached
+        # answer lets a caller overspend by the TTL; and six concurrent
+        # checkouts from a pool_size=10, max_overflow=0 pool is a worse trade
+        # than three sequential statements.
         org_used = 0.0
-        org_reserved = 0.0
         if organization_id is not None:
             org_used = await self.usage_repository.get_system_cost(
                 organization_id=organization_id,
@@ -459,38 +468,28 @@ class UsageService(UsagePricing):
                 start=month_start,
                 end=now,
             )
-            org_reserved = await self.usage_repository.get_reserved_cost(
-                organization_id=organization_id,
-                user_id=None,
-                window_kind="org_month",
-                window_start=month_start,
-            )
-        user_weekly_used = await self.usage_repository.get_system_cost(
+        user_used = await self.usage_repository.get_system_cost_by_window(
             organization_id=user_limit_organization_id,
             user_id=user_id,
-            start=week_start,
+            window_starts={"user_week": week_start, "user_month": month_start},
             end=now,
             exclude_organization_ids=excluded_organization_ids,
         )
-        user_weekly_reserved = await self.usage_repository.get_reserved_cost(
-            organization_id=user_limit_organization_id,
-            user_id=user_id,
-            window_kind="user_week",
-            window_start=week_start,
+        user_weekly_used = user_used["user_week"]
+        user_monthly_used = user_used["user_month"]
+
+        reserved_scopes: list[tuple[UUID | None, UUID | None, str, datetime]] = [
+            (user_limit_organization_id, user_id, "user_week", week_start),
+            (user_limit_organization_id, user_id, "user_month", month_start),
+        ]
+        if organization_id is not None:
+            reserved_scopes.append((organization_id, None, "org_month", month_start))
+        reserved = await self.usage_repository.get_reserved_costs(
+            scopes=reserved_scopes
         )
-        user_monthly_used = await self.usage_repository.get_system_cost(
-            organization_id=user_limit_organization_id,
-            user_id=user_id,
-            start=month_start,
-            end=now,
-            exclude_organization_ids=excluded_organization_ids,
-        )
-        user_monthly_reserved = await self.usage_repository.get_reserved_cost(
-            organization_id=user_limit_organization_id,
-            user_id=user_id,
-            window_kind="user_month",
-            window_start=month_start,
-        )
+        org_reserved = reserved.get("org_month", 0.0)
+        user_weekly_reserved = reserved["user_week"]
+        user_monthly_reserved = reserved["user_month"]
         org_scope = self._limit_scope(
             limit_usd=limit_values.org_monthly_limit_usd,
             used_usd=org_used,

@@ -333,9 +333,11 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'connector_catalog.toolkit.skipped': EventSpec('debug', frozenset({'error_type', 'toolkit_id'})),
     'connector_catalog.toolkits.selected': EventSpec('debug', frozenset({'managed_by', 'toolkit_count'})),
     'connectors.account_identity.telegram_getme_while_resolving_account.diagnostic': EventSpec('debug', frozenset()),
-    'connectors.breaker.opened.degraded': EventSpec('warning', frozenset({'cooldown_seconds', 'failures', 'scope'})),
+    'connectors.breaker.opened.degraded': EventSpec('warning', frozenset({'connector_id', 'cooldown_seconds', 'failures', 'operation_name', 'organization_id'})),
+    'connectors.breaker.rejected.degraded': EventSpec('warning', frozenset({'connector_id', 'cooldown_seconds', 'operation_name', 'organization_id'})),
+    'connectors.breaker.recovered': EventSpec('info', frozenset({'connector_id', 'operation_name', 'organization_id'})),
     'function.runtime.endpoint_acquired': EventSpec('info', frozenset({'cold', 'elapsed_ms', 'mode', 'pod_id'})),
-    'connectors.breaker.unavailable.diagnostic': EventSpec('debug', frozenset({'scope'})),
+    'connectors.breaker.unavailable.degraded': EventSpec('warning', frozenset({'scope'})),
     'connectors.composio_auth_provider.fetch_token_info_google_api.diagnostic': EventSpec('debug', frozenset({'status'})),
     'connectors.composio_auth_provider.fetching_google_token_expiration.diagnostic': EventSpec('debug', frozenset()),
     'connectors.composio_auth_provider.set_token_expiration.observed': EventSpec('debug', frozenset()),
@@ -399,8 +401,15 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'datastore.projection.remove_indexed_chunks_s_s.diagnostic': EventSpec('debug', frozenset()),
     'datastore.query_role.grant.degraded': EventSpec('warning', frozenset({'schema_name', 'table_name'})),
     'datastore.reader.load_child_manifest_s.diagnostic': EventSpec('debug', frozenset()),
+    'datastore.record.bulk_update.propagated': EventSpec('debug', frozenset()),
     'datastore.record.bulk_write.propagated': EventSpec('debug', frozenset()),
     'datastore.record.create.propagated': EventSpec('debug', frozenset()),
+    'datastore.search.visibility_filter.degraded': EventSpec(
+        'warning', frozenset({'pod_id', 'visible_count', 'hidden_count'})
+    ),
+    'datastore.record.index.degraded': EventSpec(
+        'warning', frozenset({'schema_name', 'table_name'})
+    ),
     'datastore.record.list.propagated': EventSpec('debug', frozenset()),
     'datastore.record.query.propagated': EventSpec('debug', frozenset()),
     'datastore.record.query.rls_context_tampered.degraded': EventSpec('warning', frozenset()),

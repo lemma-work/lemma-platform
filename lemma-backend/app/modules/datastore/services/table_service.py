@@ -26,6 +26,7 @@ from app.modules.datastore.domain.ports import (
     DatastoreTableRepositoryPort,
 )
 from app.modules.datastore.services.authorization import DatastoreAuthorization
+from app.modules.datastore.services.table_context import TableHydration
 
 
 class TableService:
@@ -199,9 +200,46 @@ class TableService:
             table_id=table.id,
             table_name=table.table_name,
             ctx=ctx,
+            hydration=TableHydration.of(table),
         )
 
         return table
+
+    async def get_tables(
+        self,
+        pod_id: UUID,
+        table_names: Sequence[str],
+        ctx: Context,
+    ) -> dict[str, DatastoreTableEntity]:
+        """``get_table`` for several names, in one read.
+
+        The per-table READ check still runs per table — it is the same
+        ``ctx.require`` with the same reason codes, and nothing here decides
+        access from the projected actions. What is batched is the *lookup*:
+        one statement instead of one per name, with each table's visibility
+        and owner carried into the check so it does not read the row again.
+
+        Raises ``DatastoreTableNotFoundError`` for the first missing name, in
+        sorted order, so the error a caller sees does not depend on how the
+        database happened to order the rows.
+        """
+        requester_user_id = ctx.user_id
+        tables = await self.table_repository.get_many_by_datastore_and_names(
+            pod_id, table_names, ctx=ctx
+        )
+        for table_name in sorted(set(table_names)):
+            table = tables.get(table_name)
+            if table is None:
+                raise DatastoreTableNotFoundError(f"Table '{table_name}' not found")
+            await self.authz.require_table_read(
+                user_id=requester_user_id,
+                pod_id=pod_id,
+                table_id=table.id,
+                table_name=table.table_name,
+                ctx=ctx,
+                hydration=TableHydration.of(table),
+            )
+        return tables
 
     async def list_tables(
         self,

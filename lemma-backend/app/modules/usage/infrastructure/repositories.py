@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Sequence
+from collections.abc import Mapping, Sequence
 from uuid import UUID
 
 from sqlalchemy import and_, func, or_, select
@@ -16,6 +16,10 @@ from app.modules.usage.domain.entities import (
     UsageSummary,
 )
 from app.modules.usage.domain.ports import UsageRepositoryPort
+from app.modules.usage.infrastructure.usage_limit_reads import (
+    reserved_costs,
+    system_cost_by_window,
+)
 from app.modules.usage.infrastructure.models import (
     UsageLimitCounter,
     UsageRecord as UsageRecordModel,
@@ -262,6 +266,34 @@ class UsageRepository(UsageRepositoryPort):
             )
         result = await self.session.execute(stmt)
         return float(result.scalar_one() or 0.0)
+
+    async def get_system_cost_by_window(
+        self,
+        *,
+        organization_id: UUID | None,
+        user_id: UUID | None,
+        window_starts: Mapping[str, datetime],
+        end: datetime,
+        exclude_organization_ids: Sequence[UUID] = (),
+    ) -> dict[str, float]:
+        """``get_system_cost`` for several windows over the same rows."""
+        return await system_cost_by_window(
+            self.session,
+            organization_id=organization_id,
+            user_id=user_id,
+            window_starts=window_starts,
+            end=end,
+            exclude_organization_ids=exclude_organization_ids,
+            apply_filters=self._apply_filters,
+        )
+
+    async def get_reserved_costs(
+        self,
+        *,
+        scopes: Sequence[tuple[UUID | None, UUID | None, str, datetime]],
+    ) -> dict[str, float]:
+        """``get_reserved_cost`` for several scopes, keyed by window kind."""
+        return await reserved_costs(self.session, scopes=scopes)
 
     async def get_reserved_cost(
         self,

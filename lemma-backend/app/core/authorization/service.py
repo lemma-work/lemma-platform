@@ -1072,6 +1072,15 @@ class AuthorizationDataService:
 class Authorizer:
     def __init__(self, session: AsyncSession):
         self.session = session
+        # Grant rows for one (pod, resource-target set, principal group), keyed
+        # without the permission. See `_grant_rows_for_principal_group`.
+        self._grant_rows: dict[
+            tuple[UUID, tuple[str, ...], tuple[UUID, ...], frozenset[PrincipalRef]],
+            list[tuple[UUID, str]],
+        ] = {}
+        # Ancestor-folder ids by (pod, candidate paths). See
+        # `_acceptable_grant_resource_ids`.
+        self._folder_ids_by_paths: dict[tuple[UUID, tuple[str, ...]], list[UUID]] = {}
 
     async def _describe_resource(self, resource: ResourceRef | None) -> str | None:
         """Human name for a denied resource, or None when it can't be resolved.
@@ -1840,14 +1849,32 @@ class Authorizer:
             # self-grant would otherwise never match. This mirrors the SQL
             # projection's self-match (``resource_path_col == granted.path``).
             candidate_paths = [*self._ancestor_folder_paths(resource.path), resource.path]
-            stmt = select(DatastoreFile.id).where(
-                DatastoreFile.pod_id == resource.pod_id,
-                DatastoreFile.path.in_(candidate_paths),
-            )
             acceptable.update(
-                (await self.session.execute(stmt)).scalars().all()
+                await self._folder_ids_for_paths(resource.pod_id, tuple(candidate_paths))
             )
         return list(acceptable)
+
+    async def _folder_ids_for_paths(
+        self, pod_id: UUID, candidate_paths: tuple[str, ...]
+    ) -> list[UUID]:
+        """Ancestor-folder ids for ``candidate_paths``, resolved once.
+
+        The paths depend on the *resource*, not on the permission being
+        checked, so a caller asking many permissions about one folder was
+        re-resolving the same ancestor chain each time. Memoized for the same
+        reason and with the same lifetime as ``_grant_rows`` below.
+        """
+        key = (pod_id, candidate_paths)
+        cached = self._folder_ids_by_paths.get(key)
+        if cached is not None:
+            return cached
+        stmt = select(DatastoreFile.id).where(
+            DatastoreFile.pod_id == pod_id,
+            DatastoreFile.path.in_(candidate_paths),
+        )
+        resolved = list((await self.session.execute(stmt)).scalars().all())
+        self._folder_ids_by_paths[key] = resolved
+        return resolved
 
     async def _matching_grant_ids_for_principal_sets(
         self,
@@ -1861,44 +1888,89 @@ class Authorizer:
         permission_ids = equivalent_permission_ids(permission_id)
         if not principal_sets or any(not group for group in principal_sets):
             return []
-        from sqlalchemy import or_, and_
 
         # For folders/documents, a grant on any ancestor folder (or the pod-wide
         # root grant) cascades down; every other resource type stays exact-match.
         acceptable_ids = await self._acceptable_grant_resource_ids(resource)
         if acceptable_ids is None:
-            resource_id_clause = (
-                ResourcePermissionGrantModel.resource_id == resource.resource_id
-            )
+            target_ids: tuple[UUID, ...] = (resource.resource_id,)
         elif not acceptable_ids:
             return []
         else:
-            resource_id_clause = ResourcePermissionGrantModel.resource_id.in_(
-                acceptable_ids
-            )
+            target_ids = tuple(sorted(acceptable_ids))
 
+        resource_type_values = grant_resource_type_values(resource.resource_type)
         matched_ids: list[UUID] = []
         for principal_group in principal_sets:
-            clauses = [
-                (
-                    ResourcePermissionGrantModel.grantee_type == principal.type,
-                    ResourcePermissionGrantModel.grantee_id == principal.id,
-                )
-                for principal in principal_group
-            ]
-            resource_type_values = grant_resource_type_values(resource.resource_type)
-            stmt = select(ResourcePermissionGrantModel.id).where(
-                ResourcePermissionGrantModel.pod_id == resource.pod_id,
-                ResourcePermissionGrantModel.resource_type.in_(resource_type_values),
-                resource_id_clause,
-                ResourcePermissionGrantModel.permission_id.in_(permission_ids),
-                or_(*(and_(*clause) for clause in clauses)),
+            rows = await self._grant_rows_for_principal_group(
+                pod_id=resource.pod_id,
+                resource_type_values=resource_type_values,
+                target_ids=target_ids,
+                principal_group=principal_group,
             )
-            group_ids = list((await self.session.execute(stmt)).scalars().all())
+            group_ids = [
+                grant_id
+                for grant_id, granted_permission_id in rows
+                if granted_permission_id in permission_ids
+            ]
             if not group_ids:
                 return []
             matched_ids.extend(group_ids)
         return matched_ids
+
+    async def _grant_rows_for_principal_group(
+        self,
+        *,
+        pod_id: UUID,
+        resource_type_values: tuple[str, ...],
+        target_ids: tuple[UUID, ...],
+        principal_group: frozenset[PrincipalRef],
+    ) -> list[tuple[UUID, str]]:
+        """``(grant_id, permission_id)`` for one principal group, read once.
+
+        The permission is deliberately *not* in the WHERE clause, and that is
+        the whole point. Everything else in the key — the pod, the resource
+        targets, the principals — is fixed for a caller asking many questions
+        about one resource, so filtering by permission in SQL turned N
+        permissions into N round trips over the same handful of rows.
+        ``/pods/{id}/permissions/me`` asks 51 of them; a POD_VIEWER paid ~40.
+
+        Selecting the permission alongside the id and filtering in Python
+        returns exactly the rows the per-permission query returned, so every
+        decision, reason code and matched grant id is identical by
+        construction. Nothing here knows how to rebuild a decision — it only
+        avoids asking the same question again.
+
+        The memo is per ``Authorizer``, which is built per context, so its
+        lifetime matches the decision cache that already sits in front of it.
+        """
+        from sqlalchemy import or_, and_
+
+        key = (pod_id, resource_type_values, target_ids, principal_group)
+        cached = self._grant_rows.get(key)
+        if cached is not None:
+            return cached
+        clauses = [
+            (
+                ResourcePermissionGrantModel.grantee_type == principal.type,
+                ResourcePermissionGrantModel.grantee_id == principal.id,
+            )
+            for principal in principal_group
+        ]
+        stmt = select(
+            ResourcePermissionGrantModel.id,
+            ResourcePermissionGrantModel.permission_id,
+        ).where(
+            ResourcePermissionGrantModel.pod_id == pod_id,
+            ResourcePermissionGrantModel.resource_type.in_(resource_type_values),
+            ResourcePermissionGrantModel.resource_id.in_(target_ids),
+            or_(*(and_(*clause) for clause in clauses)),
+        )
+        rows = [
+            (row[0], row[1]) for row in (await self.session.execute(stmt)).all()
+        ]
+        self._grant_rows[key] = rows
+        return rows
 
     @staticmethod
     def _normalize_visibility(value: str | None) -> ResourceVisibility:

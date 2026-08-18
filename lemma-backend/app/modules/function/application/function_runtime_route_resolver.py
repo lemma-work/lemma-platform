@@ -419,7 +419,20 @@ class FunctionRuntimeRouteResolver:
         if remaining <= 0:
             return
         server_floor = max(0.0, (retry_after_ms or 0) / 1000)
-        backoff = min(5.0, 0.5 * (2 ** min(attempt, 4)))
+        # 100ms doubling to a 750ms ceiling, not 500ms doubling to 5s.
+        #
+        # This is a poll for "is the sandbox serving yet", and the old ladder
+        # slept 0.5, 1, 2, 4, 5 -- so four waits was 7.5 to 9 seconds of pure
+        # sleeping, on top of however long the sandbox actually took. A boot
+        # that finishes at 2.1s was not noticed until 3.5s, and the overshoot
+        # grew with every attempt. The caller is a user waiting on a synchronous
+        # function call, so the cost of asking again is a cheap local check and
+        # the cost of asking late is the whole request.
+        #
+        # The ceiling still matters: `retry_after_ms` from the provider is
+        # honoured as a floor above it, so a sandbox that says "not for 5
+        # seconds" is still believed.
+        backoff = min(0.75, 0.1 * (2 ** min(attempt, 3)))
         delay = max(server_floor, backoff) * random.uniform(1.0, 1.2)
         await asyncio.sleep(min(delay, remaining))
 
