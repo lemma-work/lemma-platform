@@ -65,6 +65,7 @@ async def _outbox_event_for_file(db_manager, file_id: str) -> DomainEventOutbox:
     return next(row for row in rows if row.payload.get("file_id") == file_id)
 
 
+@pytest.mark.timeout(240)
 @pytest.mark.asyncio
 async def test_kreuzberg_upload_runs_outbox_worker_projection_search_and_dedup(
     pod_api: DatastoreApi,
