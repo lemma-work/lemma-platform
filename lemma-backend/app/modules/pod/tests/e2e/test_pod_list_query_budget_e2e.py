@@ -9,37 +9,14 @@ instead of being discovered in production.
 from __future__ import annotations
 
 import time
-from contextlib import contextmanager
 from uuid import uuid4
 
 import pytest
 from fastapi import status
-from sqlalchemy import event
 
-from app.core.infrastructure.db.session import get_engine
+from app.modules.test_support.query_counting import counted_queries
 
 pytestmark = [pytest.mark.e2e]
-
-
-@contextmanager
-def counted_queries():
-    """Record every statement the engine executes inside the block.
-
-    Attached to the engine rather than one session because the request path
-    opens more than one: ``verify_auth`` reads the user through a session of its
-    own, and that read is exactly the kind of cost worth seeing here.
-    """
-    statements: list[str] = []
-    engine = get_engine().sync_engine
-
-    def before(conn, cursor, statement, parameters, context, executemany):
-        statements.append(statement)
-
-    event.listen(engine, "before_cursor_execute", before)
-    try:
-        yield statements
-    finally:
-        event.remove(engine, "before_cursor_execute", before)
 
 
 async def _create_pods(client, org_id: str, count: int) -> None:
@@ -88,23 +65,40 @@ async def test_pod_list_query_count_does_not_grow_with_pod_count(
 async def test_pod_list_stays_within_its_query_budget(
     authenticated_client, fixed_test_org
 ):
-    """A ceiling, so the per-request overhead cannot creep up unnoticed.
+    """A ceiling, so *fixed* per-request overhead cannot creep up unnoticed.
 
-    The endpoint needs the caller's auth state, their organization membership,
-    and the pods themselves. Everything beyond that is worth a second look,
-    which is what this number is for.
+    Distinct from the differential test above, which catches work that scales
+    with the number of pods but not a new constant query added to every
+    request. This is the one that catches that.
+
+    The number has to sit below what a regression would produce or it asserts
+    nothing. It was 6 against an observed 2, and a per-pod read introduced
+    deliberately to check took the count to 5 — under budget, test green. Four
+    leaves one slot of headroom above the two queries this endpoint genuinely
+    needs (the caller's organization membership, then the pods) while still
+    landing below the 5 that a per-pod regression produces at this fixture
+    size.
+
+    Changing it is meant to be a deliberate act: if a legitimate read is added
+    here, raise it and say why in the same commit.
     """
     org_id = fixed_test_org["id"]
-    await _create_pods(authenticated_client, org_id, 3)
+    pod_count = 3
+    await _create_pods(authenticated_client, org_id, pod_count)
 
     with counted_queries() as statements:
         response = await authenticated_client.get(f"/pods/organization/{org_id}")
     assert response.status_code == status.HTTP_200_OK, response.text
 
-    budget = 6
+    budget = 4
     assert len(statements) <= budget, (
         f"pod list issued {len(statements)} queries, budget is {budget}:\n"
         + "\n".join(f"  {statement[:120]}" for statement in statements)
+    )
+    assert budget < len(statements) + pod_count, (
+        f"the budget ({budget}) is loose enough to absorb a read per pod at "
+        f"this fixture size ({pod_count} pods, {len(statements)} queries), so "
+        "it cannot fail for the reason it exists"
     )
 
 
