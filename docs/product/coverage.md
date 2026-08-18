@@ -11,14 +11,14 @@ only a promise marked `covered` with no test is.
 
 | Status | Scenarios |
 | --- | ---: |
-| `covered` | 140 |
+| `covered` | 143 |
 | `gap` | 11 |
 | `manual` | 0 |
-| `planned` | 9 |
+| `planned` | 6 |
 | `withdrawn` | 0 |
 | **total** | **160** |
 
-Scenario tests declaring a promise: 311.
+Scenario tests declaring a promise: 321.
 
 ## Contract coverage
 
@@ -29,7 +29,7 @@ the module suites may cover it — but it is untested *as product*.
 | Surface | Exercised | Total |
 | --- | ---: | ---: |
 | OpenAPI operations | 235 | 235 |
-| Product events | 24 | 28 |
+| Product events | 25 | 28 |
 
 ## [Agents and conversations](journeys/agents-and-conversations.md)
 
@@ -162,7 +162,7 @@ the module suites may cover it — but it is untested *as product*.
 | `PS-PACK-013` A hostile bundle cannot damage the platform | `covered` | `test_a_hostile_bundle_cannot_reach_outside_the_pod` |
 | `PS-PACK-014` An imported pod works without further wiring | `covered` | `test_an_imported_function_actually_runs` |
 | `PS-PACK-020` A person publishes a pod so others can install it | `covered` | `test_an_expired_publication_says_so`, `test_publishing_needs_an_account` |
-| `PS-PACK-021` A shared bundle can be viewed before it is installed | `planned` | — |
+| `PS-PACK-021` A shared bundle can be viewed before it is installed | `covered` | `test_a_stranger_can_read_a_shared_bundle`, `test_reading_a_bundle_grants_nothing_else`, `test_a_forged_link_is_refused` |
 | `PS-PACK-030` A person builds an app for a pod | `covered` | `test_an_app_can_be_changed`, `test_a_bad_bundle_is_refused`, `test_an_app_is_created`, `test_a_duplicate_app_name_is_refused`, `test_deleting_an_app_removes_it`, `test_promoting_a_missing_result_is_refused` |
 | `PS-PACK-031` An app reaches the people it is meant for | `gap` | `test_an_asset_without_a_release_is_not_found`, `test_an_outsider_cannot_read_apps` |
 | `PS-PACK-032` A person can retrieve what an app was built from | `covered` | `test_an_app_without_a_release_is_honest` |
@@ -172,7 +172,7 @@ the module suites may cover it — but it is untested *as product*.
 | Scenario | Status | Proven by |
 | --- | --- | --- |
 | `PS-SCHED-001` A person schedules work for a time or a repeat | `covered` | `test_a_repeating_schedule_is_created`, `test_unusable_timing_is_refused`, `test_an_outsider_cannot_touch_schedules` |
-| `PS-SCHED-002` A person can pause a schedule without losing it | `covered` | `test_a_schedule_can_be_paused_and_resumed`, `test_a_paused_schedule_does_not_fire` |
+| `PS-SCHED-002` A person can pause a schedule without losing it | `covered` | `test_a_stopped_schedule_can_be_restarted`, `test_a_schedule_can_be_paused_and_resumed`, `test_a_paused_schedule_does_not_fire` |
 | `PS-SCHED-003` Deleting a schedule stops it everywhere | `covered` | `test_deleting_a_schedule_removes_it`, `test_a_deleted_schedule_does_not_fire` |
 | `PS-SCHED-010` A pod reacts to a webhook from outside | `covered` | `test_verification_needs_no_session`, `test_a_bad_verification_token_is_refused`, `test_a_delivery_to_an_unknown_surface_is_refused` |
 | `PS-SCHED-011` A pod reacts to its own data changing | `covered` | `test_a_change_meeting_the_condition_fires`, `test_a_record_change_fires_a_schedule`, `test_an_unwatched_operation_does_not_fire`, `test_another_table_does_not_fire` |
@@ -180,14 +180,14 @@ the module suites may cover it — but it is untested *as product*.
 | `PS-SCHED-020` Work fires once, however many times the trigger arrives | `covered` | `test_a_repeated_delivery_is_answered_once`, `test_a_raced_delivery_is_answered_once` |
 | `PS-SCHED-021` A person can see every firing and how it went | `covered` | `test_a_schedules_history_is_readable`, `test_a_record_change_fires_a_schedule`, `test_an_outsider_cannot_read_history` |
 | `PS-SCHED-022` A firing that fails is retried, and then given up on visibly | `covered` | `test_retrying_an_unknown_firing_is_refused` |
-| `PS-SCHED-023` A schedule that keeps failing is turned off and reported | `planned` | — |
+| `PS-SCHED-023` A schedule that keeps failing is turned off and reported | `covered` | `test_repeated_failure_stops_a_schedule`, `test_a_stopped_schedule_explains_itself`, `test_a_stopped_schedule_can_be_restarted` |
 | `PS-SCHED-030` A schedule can drive an agent, a workflow, or a message | `covered` | `test_a_schedule_can_target_a_workflow` |
 
 ## [Sharing and permissions](journeys/sharing-and-permissions.md)
 
 | Scenario | Status | Proven by |
 | --- | --- | --- |
-| `PS-ACCESS-001` Every resource has a stated reach | `covered` | `test_the_default_reach_is_the_pod`, `test_a_personal_resource_stays_personal`, `test_public_never_means_anonymous` |
+| `PS-ACCESS-001` Every resource has a stated reach | `covered` | `test_reading_a_bundle_grants_nothing_else`, `test_the_default_reach_is_the_pod`, `test_a_personal_resource_stays_personal`, `test_public_never_means_anonymous`, `test_a_stranger_is_sent_nothing` |
 | `PS-ACCESS-002` Narrowing a resource's reach takes access away immediately | `covered` | `test_revoking_closes_it_again` |
 | `PS-ACCESS-003` Changing reach does not silently disarm the pod's software | `covered` | `test_narrowing_reach_keeps_workload_grants` |
 | `PS-ACCESS-010` A person grants one other person access to one resource | `covered` | `test_approving_cannot_confer_unheld_pod_permissions`, `test_a_grant_is_narrow`, `test_revoking_closes_it_again`, `test_a_grant_is_scoped_to_its_pod`, `test_nobody_confers_more_than_they_have` |
@@ -244,4 +244,4 @@ the module suites may cover it — but it is untested *as product*.
 | `PS-DATA-042` One person's bulk upload does not stall everyone else | `planned` | — |
 | `PS-DATA-043` A person searches what is in their documents | `covered` | `test_documents_are_searchable` |
 | `PS-DATA-050` A person gets a link to a file that works and then stops | `covered` | `test_a_file_has_a_link`, `test_a_signed_link_is_issued` |
-| `PS-DATA-060` A person sees records change as they change | `planned` | — |
+| `PS-DATA-060` A person sees records change as they change | `covered` | `test_a_new_record_arrives_live`, `test_updates_and_deletions_arrive`, `test_a_stranger_is_sent_nothing`, `test_a_reconnecting_watcher_resumes` |

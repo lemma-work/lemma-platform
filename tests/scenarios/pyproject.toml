@@ -14,6 +14,10 @@ dependencies = [
     "pytest>=8.3",
     "pytest-asyncio>=0.24",
     "pytest-timeout>=2.3",
+    # A person watching records live does it over a websocket, and httpx does
+    # not speak one. Nothing else in the suite needs it; PS-DATA-060 is the
+    # whole reason it is here.
+    "websockets>=13.0",
 ]
 
 [tool.pytest.ini_options]

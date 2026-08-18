@@ -138,7 +138,7 @@ about it when it eventually cannot.
 **Contracts:** `schedule.run.retry`, `schedule.run.list`
 
 ### PS-SCHED-023 — A schedule that keeps failing is turned off and reported
-**Status:** planned
+**Status:** covered
 
 - If a schedule fails repeatedly in a row, then the system shall deactivate it
   rather than continuing to fire work that cannot succeed.

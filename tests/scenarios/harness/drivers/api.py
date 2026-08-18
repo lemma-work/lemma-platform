@@ -62,6 +62,17 @@ class ApiDriver:
     def token(self) -> str | None:
         return self._token
 
+    @property
+    def base_url(self) -> str:
+        """Where this client is really talking, for anything httpx cannot carry.
+
+        A websocket handshake is not an httpx request, so a scenario watching
+        records live has to build its own URL — and it must be the address the
+        server is actually listening on, not the public-looking one the stack
+        claims. See `PUBLIC_API_URL`.
+        """
+        return str(self._client.base_url).rstrip("/")
+
     def authenticate(self, token: str) -> None:
         self._token = token
 

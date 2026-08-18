@@ -312,7 +312,7 @@ put it there having to think about it on every operation.
 ## Capability: Watch data change
 
 ### PS-DATA-060 — A person sees records change as they change
-**Status:** planned
+**Status:** covered
 
 - While a person is watching a pod's records, the system shall deliver each
   change they are entitled to see, as it happens.

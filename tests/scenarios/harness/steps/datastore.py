@@ -444,3 +444,19 @@ class DatastoreSteps:
             f"/pods/{in_pod['id']}/datastore/files/children/content",
             params={"path": f"{path.rstrip('/')}/document.md"},
         )
+
+    # --- watching records change ------------------------------------------
+
+    def changes_url(self, pod: JSON, *, since: str | None = None) -> str:
+        """Where a client watches a pod's records change.
+
+        A websocket, because "as it happens" is the promise and polling cannot
+        keep it. The session goes in the query string: a browser cannot set a
+        header on a websocket handshake, so this is the shape a real client
+        uses too.
+        """
+        base = self.api.base_url.replace("https://", "wss://").replace(
+            "http://", "ws://"
+        )
+        url = f"{base}/pods/{pod['id']}/datastore/changes?access_token={self.api.token}"
+        return f"{url}&since={since}" if since else url

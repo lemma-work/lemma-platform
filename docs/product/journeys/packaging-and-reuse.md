@@ -125,7 +125,7 @@ their credentials do not travel with it.
 **Contracts:** `pod.bundle.publish.start`, `pod.bundle.publish.get`, `pod.bundle.publish.events`
 
 ### PS-PACK-021 — A shared bundle can be viewed before it is installed
-**Status:** planned
+**Status:** covered
 
 - When someone opens a shared bundle link, the system shall let them see what it
   contains before installing it.
