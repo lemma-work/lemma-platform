@@ -124,7 +124,7 @@ async def test_answering_a_run_that_is_not_waiting_is_refused(pod):
 
 
 @pytest.mark.xfail(
-    reason="DEV-FLOW-001: both visualize endpoints 500 on Starlette 1.3.1",
+    reason="DEV-FLOW-001: both visualize endpoints 500 — the two-argument TemplateResponse was removed",
     strict=True,
 )
 @scenario("A person sees the path a run actually took")

@@ -91,14 +91,16 @@ over a single resource is [Sharing and permissions](sharing-and-permissions.md).
   that role permits and refuse the rest, on every request and not only in the
   interface that offered it.
 - When a pod admin changes a person's roles, the system shall apply the change
-  promptly and shall never require a cached snapshot to expire first.
+  on the affected person's very next request, and shall never require a cached
+  snapshot to expire first.
 
-> A role change is observable within a request or two, not immediately within
-> the same one — the cached snapshot is dropped just after the change commits,
-> so a request already in flight behind it can be served from the old one. The
-> measured window is a single request. `DEV-POD-003` records it; the promise
-> above is deliberately worded to the guarantee that matters, which is that
-> nobody waits five minutes for a demotion.
+> "Next request" is the whole promise, and it is worth saying why it is
+> achievable rather than aspirational. The cached role snapshot is dropped
+> inside the transaction's commit, and the commit completes before the response
+> to the changing request is sent — so by the time an admin is told the change
+> landed, no later request can be served from the old snapshot. A request
+> already in flight *alongside* the change may still see the old roles; that is
+> ordinary concurrency and not what this promises.
 
 **Contracts:** `pod.member.update_roles`, `pod.permissions.me`, `pod.permissions.catalog`
 

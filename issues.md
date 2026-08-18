@@ -61,7 +61,7 @@ would remove the last one is refused.
 **Why it matters:** The state is unrecoverable through the API. Once there are
 no owners: `update_organization` requires `ORG_OWNER` (`:195`),
 `update_member_role` requires `ORG_OWNER` (`:629`), and `can_grant_org_role`
-([`organization_entities.py:33`](lemma-backend/app/modules/identity/domain/organization_entities.py#L33))
+([`organization_entities.py:31`](lemma-backend/app/modules/identity/domain/organization_entities.py#L31))
 caps every non-owner at granting `ORG_MEMBER`. So no remaining member can ever
 mint an owner. The organization can still be read and used, but can never again
 be administered — its name, joining rules, and member roles are frozen forever.
@@ -276,8 +276,14 @@ unhandled exception and the good message is thrown away with it.
 **Why it matters:** Building a custom role means typing permission ids by hand,
 so this is on the ordinary path rather than an edge — and a 500 tells the person
 the platform is broken when what actually happened is that they made a typo the
-platform had already diagnosed. It also leaks a stack trace to the client, which
-the logging contract says API responses never do.
+platform had already diagnosed.
+
+What the client gets back depends on `DEBUG`. The application registers a clean
+`INTERNAL_ERROR` JSON handler for unhandled exceptions, but Starlette's
+`ServerErrorMiddleware` returns its own HTML traceback *instead of* calling that
+handler whenever `debug` is true — and `debug` defaults to true. So on a default
+deployment this answers with a stack trace, which the logging contract says API
+responses never do. See `DEV-OPS-006`.
 
 **Fix:** Catch `ValueError` in the two controller paths that call
 `create_or_update_role` and re-raise as a 400 carrying the message. The same
@@ -285,47 +291,6 @@ escape exists on `pod.roles.update`.
 
 **Covered by:** `test_an_unknown_permission_is_refused_clearly`, marked
 `xfail(strict=True)`.
-
----
-
-### DEV-POD-003 — A role change is invisible to the member's very next request
-**Violates:** PS-POD-011
-**Severity:** low
-**Where:** [`service.py:442`](lemma-backend/app/core/authorization/service.py#L442)
-(`assign_roles` → `_invalidate_snapshots_after_commit`)
-
-**Required:** A role change applies to the affected person's next request.
-
-**Actual:** It applies to the one after that. `assign_roles` invalidates the
-cached role snapshot through `uow.after_commit(...)`, which by design runs once
-the transaction has committed rather than inline. That callback is not ordered
-against the HTTP response, so a request arriving immediately behind the response
-can still be served from the pre-change snapshot.
-
-Measured, not inferred: with a scenario firing reads in a tight loop straight
-after the update, **exactly one** read returned the old permission set (11
-permissions, `POD_VIEWER`) and the next returned the new one (33, `POD_EDITOR`).
-The window is one request, not the 300-second
-`authorization_role_cache_ttl_seconds`.
-
-**Why it matters:** Mostly it does not, and that is worth saying so nobody
-over-corrects. In the promotion direction it is a UI glitch that a refresh
-fixes. In the demotion direction it is a demoted admin retaining admin rights
-for the length of one in-flight request — a genuine but very narrow window, and
-one an attacker cannot lengthen.
-
-Worth knowing about rather than worth fixing urgently, because the obvious fix
-is worse. `_invalidate_snapshots_after_commit` documents why invalidation is
-deferred: doing it inline holds a pooled connection across a Redis round trip,
-and invalidating *before* the commit lets a concurrent reader repopulate the
-cache from the state the mutation is about to replace — which is the bug this
-design already avoids.
-
-**Fix:** Only if the demotion window is judged to matter. The shape would be to
-have the response itself wait on the invalidation for mutations that *reduce*
-access, leaving the widening case deferred as it is now. Note that the removal
-path (`revoke_member_authorization`) has exactly the same deferral and the same
-window.
 
 ---
 
@@ -395,11 +360,13 @@ return templates.TemplateResponse(
 )
 ```
 
-Starlette is pinned at **1.3.1**, where `TemplateResponse` takes
-`(request, name, context)`. The two-argument form is no longer the supported
-call, and the failure is inside the compatibility handling rather than a clean
-`TypeError` on the signature — which is why it reads as a data problem rather
-than an API change.
+Starlette (**1.6.0** at the time of writing; the call has been broken across
+several versions) takes `(request, name, context)`. The two-argument form is no
+longer the supported call, and the failure is inside the compatibility handling
+rather than a clean `TypeError` on the signature — which is why it reads as a
+data problem rather than an API change. Check the pinned version with
+`uv run python -c "import starlette; print(starlette.__version__)"` rather than
+trusting this line.
 
 Found by a scenario doing nothing exotic: create a workflow, ask to see it.
 There is no branch on graph content before the template call, so this fails for
@@ -662,6 +629,55 @@ marker is not removed.
 ---
 
 ## OPS — the platform and its own tooling
+
+### DEV-OPS-006 — `DEBUG` defaults to on, so a 500 answers with a stack trace
+**Violates:** *(no promise — the in-repo error-envelope contract in
+[`exception_handlers.py`](lemma-backend/app/core/api/exception_handlers.py):
+"Every error response uses one envelope: `{message, code, details}`")*
+**Severity:** medium
+**Where:** [`config.py:826`](lemma-backend/app/core/config.py#L826) (`debug`
+defaults to `True`), consumed at [`app.py:617`](lemma-backend/app/app.py#L617)
+
+**Required:** Every error response uses the one envelope, and an API response
+never carries an exception message or a traceback. The application implements
+exactly that: `handle_unexpected_exception` answers a flat
+`{"message": "Internal server error", "code": "INTERNAL_ERROR"}`.
+
+**Actual:** That handler does not run when `debug` is true. Starlette installs
+an `Exception` handler as `ServerErrorMiddleware.handler`, and the middleware
+checks debug **first**:
+
+```python
+if self.debug:
+    response = self.debug_response(request, exc)   # full HTML traceback
+elif self.handler is None:
+    ...
+else:
+    response = await self.handler(request, exc)    # never reached
+```
+
+`debug` is `Field(default=True)`, so a deployment that does not set `DEBUG`
+explicitly returns source-annotated tracebacks for every unhandled exception,
+and the clean JSON handler is dead code.
+
+**Why it matters:** A traceback names file paths, framework versions, local
+variable names and the shape of internal calls — the reconnaissance an attacker
+would otherwise have to guess at. It also breaks the envelope every client
+parses, so a 500 is shaped differently from every other error the API returns. It is also the reason `DEV-POD-004` presents
+as a stack trace to the caller rather than as an opaque 500.
+
+The honest mitigation, so this is not read as worse than it is:
+[`docs/configuration.md`](docs/configuration.md) does list `DEBUG=false` in its
+production block. This is a *default* problem, not a documentation gap — the
+failure mode is forgetting a line, and nothing catches it.
+
+**Fix:** Refuse to start with `debug=true` outside local/testing, exactly as
+`_require_app_base_domain_outside_local` ([`config.py:1002`](lemma-backend/app/core/config.py#L1002))
+already does for a setting with no safe production default. Flipping the default
+to `False` would work too, but startup validation is the stronger guarantee and
+matches what this file already does elsewhere.
+
+---
 
 ### DEV-OPS-005 — Web search with no provider reports success and finds nothing
 **Violates:** PS-OPS-030

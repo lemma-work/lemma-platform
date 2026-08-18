@@ -115,7 +115,7 @@ class TestWorkflows:
         )
 
     @pytest.mark.xfail(
-        reason="DEV-FLOW-001: both visualize endpoints 500 on Starlette 1.3.1",
+        reason="DEV-FLOW-001: both visualize endpoints 500 — the two-argument TemplateResponse was removed",
         strict=True,
     )
     @scenario("A person can see the shape of a workflow without running it")

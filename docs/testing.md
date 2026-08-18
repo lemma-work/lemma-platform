@@ -104,70 +104,54 @@ make coverage-backend
 
 ---
 
-## Deleting a module e2e test the scenario suite has replaced
+## The two suites overlap, and both stay
 
-The two suites overlap, and the overlap should shrink. It should shrink because
-behaviour moved, not because a percentage held.
+The module e2e suite and the scenario suite touch many of the same endpoints.
+That overlap is not duplication to be cleaned up. They are asking different
+questions, so the same endpoint answering both is the normal case.
 
-**A module e2e test may be deleted only when a named, non-`xfail`, observed-green
-scenario asserts everything it asserted.** Make the claim per test, in the pull
-request, citing the `PS-` id. Never per file — a file of twelve tests routinely
-has five with a scenario counterpart and seven without.
+**Module e2e tests validate a module's contract.** They are meant to be fast,
+they run in-process, and they can do the things a black-box test provably
+cannot: force a dependency to fail, assert a query budget, read a database
+post-condition, pin an exact refusal code. That is a category of coverage the
+scenario suite cannot reach by design, because it forbids mocking.
 
-It must survive five questions:
+**Scenarios validate a promise to a person.** They run over a socket against a
+booted stack, so they see what a client sees — including the lifespan, the wire,
+and the ordering of a write against the response that reports it.
 
-1. **Does the scenario exercise every operation the e2e test did?**
-   `scripts/check_e2e_scenario_overlap.py` reports this.
-2. **Does it assert the same refusal *codes*?** "Refused" is not a replacement
-   for `== 404`. A 404 that becomes a 403 leaks the existence of a resource, and
-   a test asserting `>= 400` sails through it.
-3. **Does it assert the same artifact formats?** A round trip proves the writer
-   and the reader agree. It does not pin a format. Rename a key on both sides
-   and the round trip still passes while every artifact already exported becomes
-   unreadable.
-4. **Does it assert the same post-conditions?** A scenario sees only what an
-   endpoint returns. A test reading the database or the event log is asserting
-   something no scenario can.
-5. **Did it inject a fault?** If it patched a dependency into failing, it has no
-   scenario equivalent by the scenario suite's own rules. Keep it.
+Neither replaces the other, and **no test is deleted for being covered
+elsewhere.** A test is deleted when it asserts nothing, or when the behaviour it
+asserts is gone. Being redundant with a test in the other suite is not a reason.
 
-A "no" on any of the five means **convert, do not delete**: add the missing verb
-to `tests/scenarios/harness/steps/` and strengthen the scenario first, in an
-earlier pull request.
-
-**Coverage is a floor, not a permission slip.** A deletion that clears every
-floor is still wrong if it fails the five questions. Floors are never lowered in
-the same pull request as the deletion that would breach them. The four modules
-under e2e-only floors — `agent`, `agent_surfaces`, `datastore`, `function` —
-take deletions one file at a time, with the module's shard measured before and
-after.
-
-`function` is the fragile one: it is small enough that a single deleted test
-which uniquely covers an error path moves the floor a whole point.
-
-### What happened the first time this was applied
-
-Worth knowing, because it is the expected shape of the answer rather than a
-disappointment. `make e2e-scenario-overlap` narrowed 759 module e2e tests to six
-files whose every operation a scenario already covers. Examined by hand, **all
-six failed the five questions**, and for one consistent reason: the module tests
-assert more *specifically* than the scenarios do.
+This was measured before it was decided. A survey of 759 module e2e tests found
+six files whose every operation a scenario already covers — the strongest
+candidates for redundancy that exist. Examined by hand, **all six were still
+worth keeping**, and for one consistent reason: they assert more *specifically*
+than the scenarios do.
 
 - Two assert query budgets — how many statements a request costs. No black-box
   test can see that.
-- One pins the bundle format field by field. The scenario that covers the same
+- One pins the bundle format field by field. The scenario covering the same
   operations proves the exporter and importer agree with each other, which is a
-  different claim: rename a key on both sides and it still passes.
-- One pins exact refusal codes for a visibility matrix, including the cases where
-  a `404` becoming a `403` would leak that a resource exists. The scenarios use a
+  weaker claim: rename a key on both sides and it still passes.
+- One pins exact refusal codes for a visibility matrix, including cases where a
+  `404` becoming a `403` would leak that a resource exists. The scenarios use a
   helper that accepts any `4xx`.
 - Two assert intermediate states and destructive effects — a cancelling import,
   a column actually removed — that no scenario asserts at all.
 
-So nothing was deleted. The route to deleting these is to **strengthen the
-scenarios first**: assert the refusal code where the code is the point, and pin
-the artifact format where it is an external contract. That is a better use of
-effort than removing a test, and it is the order the policy above requires.
+The useful direction is the other one: where a scenario is the weaker test,
+**strengthen the scenario** — assert the refusal code where the code is the
+point, pin the artifact format where it is an external contract. That adds
+coverage instead of moving it.
+
+### Where a new test goes
+
+Use the three questions at the top of this document, not the overlap. A promise
+to a person gets a scenario. A forced failure, a query budget, or an internal
+invariant gets a module e2e test. One function gets a unit test. When a change
+deserves both, write both.
 
 ---
 
@@ -201,9 +185,9 @@ Written down because a limit nobody has recorded gets rediscovered as a bug.
 
 - **Scenario coverage feeds no gate.** The suite can measure backend coverage
   (`SCENARIOS_COVERAGE=1`), but `scenarios.yml` does not upload it, so the
-  floors in `e2e.yml` see module e2e coverage only. Folding it in is the route
-  to deleting more duplicates; until then the floors under-report what is
-  actually exercised.
+  floors in `e2e.yml` see module e2e coverage only. So the floors under-report
+  what is actually exercised, and a line only a scenario reaches counts as
+  uncovered.
 - **Consent flows cannot be automated.** Google deliberately blocks automated
   sign-in. The live lane proves the connect flow a deployment hands a person —
   the right client, the scopes, offline access — and stops there.

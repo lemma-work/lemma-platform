@@ -194,4 +194,4 @@ For a new or changed scenario:
 - **Speed and load.** There are benchmark harnesses for that.
 
 The counterpart to this list is in [docs/testing.md](../../docs/testing.md),
-along with the rules for deleting a module e2e test this suite has replaced.
+along with why the module e2e suite covers much of the same ground on purpose.

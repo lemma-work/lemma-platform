@@ -165,15 +165,13 @@ class TestPuttingPeopleInAPod:
 
         await alice.gives(bob, roles=["POD_EDITOR"], in_pod=pod)
 
-        # Polled, not slept: the cached snapshot is invalidated after the
-        # mutating request commits, so one stale read is possible. The promise
-        # is that this lands promptly — the cache TTL is five minutes, and a
-        # fifteen-second bound proves it is not waiting for that.
-        as_editor = await bob.permissions_settle_to(
-            lambda held: held > as_viewer,
-            in_pod=pod,
-            describe="widen to an editor's",
-        )
+        # One read, deliberately not polled. "Immediately" in the promise means
+        # the request after the one that changed the role, so a poll here would
+        # quietly weaken the scenario into "eventually". It holds because the
+        # snapshot invalidation runs inside the commit and the commit finishes
+        # before the response — see the note on ``UoWDep``.
+        as_editor = await bob.permissions_in(pod)
+        assert as_editor > as_viewer, (as_viewer, as_editor)
         assert "datastore.table.create" in as_editor, as_editor
 
     @scenario("Removing someone from a pod takes their access away immediately")

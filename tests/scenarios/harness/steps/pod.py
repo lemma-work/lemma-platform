@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from typing import Any
 from uuid import uuid4
 
 from harness.drivers.api import items_of
-from harness.waiting import eventually
 
 JSON = dict[str, Any]
 
@@ -300,25 +298,6 @@ class PodSteps:
 
     async def may(self, permission: str, *, in_pod: JSON) -> bool:
         return permission in await self.permissions_in(in_pod)
-
-    async def permissions_settle_to(
-        self, expected: Callable[[set[str]], bool], *, in_pod: JSON, describe: str
-    ) -> set[str]:
-        """Wait for effective permissions to reflect a change just made.
-
-        A role change invalidates the cached snapshot *after* the mutating
-        request commits, so the very next read can still be served from the old
-        snapshot — measured at exactly one stale read. Polling is what a real
-        client does, and it keeps the assertion about the product promise (the
-        change lands promptly, not on a five-minute TTL) rather than about the
-        ordering of two HTTP responses. See DEV-POD-003.
-        """
-        return await eventually(
-            lambda: self.permissions_in(in_pod),
-            expected,
-            describe=f"{self.label}'s permissions to {describe}",
-            timeout=15.0,
-        )
 
     async def can_read(self, pod: JSON) -> None:
         await self.opens_pod(pod)
