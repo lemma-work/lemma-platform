@@ -471,8 +471,7 @@ async def test_empty_search_says_when_files_are_still_being_processed(monkeypatc
     services = SimpleNamespace(
         file=SimpleNamespace(
             search_files=AsyncMock(return_value=[]),
-            count_files_awaiting_processing=AsyncMock(return_value=3),
-            count_files_that_failed_processing=AsyncMock(return_value=0),
+            count_files_missing_from_the_index=AsyncMock(return_value=(3, 0)),
         ),
         ctx=SimpleNamespace(pod_id=uuid4(), user_id=uuid4()),
     )
@@ -499,8 +498,7 @@ async def test_an_empty_search_on_a_fully_indexed_pod_stays_a_plain_answer(monke
     services = SimpleNamespace(
         file=SimpleNamespace(
             search_files=AsyncMock(return_value=[]),
-            count_files_awaiting_processing=AsyncMock(return_value=0),
-            count_files_that_failed_processing=AsyncMock(return_value=0),
+            count_files_missing_from_the_index=AsyncMock(return_value=(0, 0)),
         ),
         ctx=SimpleNamespace(pod_id=uuid4(), user_id=uuid4()),
     )
@@ -523,7 +521,7 @@ async def test_a_search_with_hits_never_pays_for_the_pending_count(monkeypatch):
     services = SimpleNamespace(
         file=SimpleNamespace(
             search_files=AsyncMock(return_value=[{"path": "/me/a.md"}]),
-            count_files_awaiting_processing=counter,
+            count_files_missing_from_the_index=counter,
         ),
         ctx=SimpleNamespace(pod_id=uuid4(), user_id=uuid4()),
     )
@@ -776,8 +774,7 @@ async def test_a_pod_whose_files_all_failed_does_not_search_clean(monkeypatch):
     services = SimpleNamespace(
         file=SimpleNamespace(
             search_files=AsyncMock(return_value=[]),
-            count_files_awaiting_processing=AsyncMock(return_value=0),
-            count_files_that_failed_processing=AsyncMock(return_value=2),
+            count_files_missing_from_the_index=AsyncMock(return_value=(0, 2)),
         ),
         ctx=SimpleNamespace(pod_id=uuid4(), user_id=uuid4()),
     )
@@ -803,8 +800,7 @@ async def test_queued_and_failed_files_are_reported_as_the_different_things(
     services = SimpleNamespace(
         file=SimpleNamespace(
             search_files=AsyncMock(return_value=[]),
-            count_files_awaiting_processing=AsyncMock(return_value=4),
-            count_files_that_failed_processing=AsyncMock(return_value=1),
+            count_files_missing_from_the_index=AsyncMock(return_value=(4, 1)),
         ),
         ctx=SimpleNamespace(pod_id=uuid4(), user_id=uuid4()),
     )

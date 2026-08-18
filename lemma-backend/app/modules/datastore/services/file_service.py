@@ -499,24 +499,17 @@ class DatastoreFileService(FileTransactionFacade):
             ctx=ctx,
         )
 
-    async def count_files_awaiting_processing(self, pod_id: UUID) -> int:
-        """Files this pod has queued or mid-flight (PENDING + PROCESSING).
+    async def count_files_missing_from_the_index(self, pod_id: UUID) -> tuple[int, int]:
+        """`(queued, failed)` — the two ways a file is absent from a search.
 
-        Exists so a caller looking at an empty search result can tell "this pod
-        has nothing to match" from "this pod has not been indexed yet". Those
-        are the same empty list, and reporting the second as the first is how an
-        agent confidently states a pod contains nothing on a topic it has plenty
-        on.
+        Both look like a healthy pod holding nothing on the topic, which is how
+        an agent comes to state that confidently while the index is broken. A
+        pair rather than a total, because only the first is fixed by waiting.
         """
-        return await self.file_repository.count_active_for_pod(pod_id)
-
-    async def count_files_that_failed_processing(self, pod_id: UUID) -> int:
-        """Files this pod could not index at all.
-
-        Counted apart from the queued ones because the advice differs: a queued
-        file becomes searchable by waiting, a failed one never does.
-        """
-        return await self.file_repository.count_failed_for_pod(pod_id)
+        return (
+            await self.file_repository.count_active_for_pod(pod_id),
+            await self.file_repository.count_failed_for_pod(pod_id),
+        )
 
     async def get_directory_tree(
         self,

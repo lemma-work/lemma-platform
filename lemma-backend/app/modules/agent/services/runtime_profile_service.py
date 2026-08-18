@@ -55,6 +55,10 @@ from app.modules.agent.infrastructure.repositories import (
 # `from ... import f` binding here would keep calling the unpatched original.
 from app.core.infrastructure.db.transaction_locks import connection_released
 from app.modules.agent.services import runtime_provider_discovery as discovery
+from app.modules.agent.services.runtime_capabilities import (
+    _unselected_capabilities,
+    _with_harness_vision,
+)
 
 logger = get_logger(__name__)
 
@@ -847,58 +851,6 @@ def _agent_host_model_catalog(
                 )
             )
     return entries
-
-
-def _with_harness_vision(
-    model: RuntimeModelCatalogEntry | None,
-    *,
-    harness_sees: bool,
-) -> RuntimeModelCatalogEntry | None:
-    """Additive only: a harness that reports images gains VISION.
-
-    One that does not is left exactly as stored, because the stored catalog is
-    what an operator may have deliberately edited.
-    """
-    if (
-        model is None
-        or not harness_sees
-        or RuntimeModelCapability.VISION in model.capabilities
-    ):
-        return model
-    return model.model_copy(
-        update={"capabilities": [*model.capabilities, RuntimeModelCapability.VISION]}
-    )
-
-
-def _unselected_capabilities(
-    profile: AgentRuntimeProfile,
-    *,
-    harness_sees: bool,
-) -> list[RuntimeModelCapability]:
-    """What the runtime can do when no catalog entry is selected.
-
-    An Agent Host profile routinely pins no model: `_agent_host_model_catalog`
-    documents an empty catalog as meaning "let the harness use its own default",
-    and a populated catalog with no chosen entry means the same. Either way
-    `_selected_model` returns None, and reading capabilities off that None was
-    reporting every such runtime as unable to see.
-
-    The catalog is still the better source when it has entries, so it is used --
-    but by **intersection**, so a mixed catalog cannot claim a capability only
-    some of its models have. `harness_sees` is then additive on top, exactly as
-    it is for a selected model.
-    """
-    baseline = [RuntimeModelCapability.TEXT, RuntimeModelCapability.TOOLS]
-    if profile.model_catalog:
-        shared = set(profile.model_catalog[0].capabilities)
-        for entry in profile.model_catalog[1:]:
-            shared &= set(entry.capabilities)
-        capabilities = [c for c in profile.model_catalog[0].capabilities if c in shared]
-    else:
-        capabilities = list(baseline)
-    if harness_sees and RuntimeModelCapability.VISION not in capabilities:
-        capabilities.append(RuntimeModelCapability.VISION)
-    return capabilities
 
 
 def _profile_availability(

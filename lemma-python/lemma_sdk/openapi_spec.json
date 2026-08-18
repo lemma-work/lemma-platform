@@ -5460,10 +5460,32 @@
             "title": "Children",
             "type": "array"
           },
+          "has_markdown": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Has Markdown"
+          },
           "has_more_files": {
             "default": false,
             "title": "Has More Files",
             "type": "boolean"
+          },
+          "indexed": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Indexed"
           },
           "kind": {
             "title": "Kind",
@@ -5476,6 +5498,17 @@
           "path": {
             "title": "Path",
             "type": "string"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status"
           },
           "visibility": {
             "anyOf": [

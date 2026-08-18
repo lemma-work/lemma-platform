@@ -104,8 +104,9 @@ async def search_files(
     # Said only when the list is empty: a search that found something has
     # already answered the question, and a count on every call would be a query
     # per search for a caveat nobody needs.
-    awaiting = await services.file.count_files_awaiting_processing(services.ctx.pod_id)
-    failed = await services.file.count_files_that_failed_processing(services.ctx.pod_id)
+    awaiting, failed = await services.file.count_files_missing_from_the_index(
+        services.ctx.pod_id
+    )
     notes: list[str] = []
     if awaiting:
         payload["files_awaiting_processing"] = awaiting

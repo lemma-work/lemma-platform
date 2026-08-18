@@ -322,3 +322,23 @@ async def test_desktop_local_journey_converts_and_indexes_with_the_real_xberg_wh
         assert any(item["path"] == markdown["path"] for item in hits["items"]), (
             f"markdown not indexed; got {[i['path'] for i in hits['items']]}"
         )
+
+        # A recursive listing must be able to tell those two apart. It used to
+        # carry only path/name/kind/visibility, so a folder whose documents had
+        # all failed to convert looked exactly like a healthy one -- and the
+        # empty search over them had nothing to explain it. The flat listing has
+        # always reported these, and the base instructions promise listings do.
+        nodes: dict[str, dict] = {}
+
+        def collect(node: dict) -> None:
+            nodes[node["path"]] = node
+            for child in node.get("children", []):
+                collect(child)
+
+        collect((await pod_api.tree(files_per_directory=20))["tree"])
+
+        assert nodes[pdf["path"]]["status"] == "COMPLETED"
+        assert nodes[pdf["path"]]["indexed"] is True
+        assert nodes[pdf["path"]]["has_markdown"] is True
+        assert nodes[corrupt["path"]]["status"] == "FAILED"
+        assert nodes[corrupt["path"]]["indexed"] is False
