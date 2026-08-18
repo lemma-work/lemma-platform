@@ -3930,24 +3930,62 @@ fn handle_deep_link(app: &AppHandle, url: &tauri::Url) {
     }
 }
 
+/// The last accent AppKit was asked for, and the only answer anything off the
+/// main thread is allowed to see.
+#[cfg(target_os = "macos")]
+static REMEMBERED_ACCENT: Mutex<Option<(u8, u8, u8)>> = Mutex::new(None);
+
 /// The user's System Settings accent, as sRGB bytes.
 ///
 /// `controlAccentColor` is a catalog colour with no component accessors of its
 /// own — it has to be resolved into a real colour space before it can be read,
 /// which is what the `colorUsingColorSpace` hop is for. Returns `None` if that
 /// resolution fails, and callers fall back to systemBlue, the macOS default.
+///
+/// The main-thread gate is not a formality. AppKit is main-thread-only, and
+/// this is reached from threads that are not it: `open_local_settings` builds
+/// the control webview from a spawned thread on purpose, and the Rust test
+/// harness runs every test on a spawned thread of a process that never
+/// created an NSApplication at all. Two of those test threads landing in
+/// AppKit's first-use initialization at once is what killed the whole
+/// `lemma-desktop` test binary with SIGSEGV partway through a CI run — no
+/// assertion failed, the process simply died, and the two tests that call
+/// `desktop_context_script` were the only two that never reported a result.
+///
+/// So the read happens on the main thread and its answer is remembered.
+/// Everyone else gets the remembered answer — which the main window's setup
+/// has already stored by the time any worker can ask — or `None` before the
+/// first read, which is the same fallback a machine that cannot answer gets.
 #[cfg(target_os = "macos")]
 fn macos_accent_rgb() -> Option<(u8, u8, u8)> {
+    use objc2::MainThreadMarker;
     use objc2_app_kit::{NSColor, NSColorSpace};
 
+    fn remembered() -> Option<(u8, u8, u8)> {
+        *REMEMBERED_ACCENT
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    if MainThreadMarker::new().is_none() {
+        return remembered();
+    }
     let accent = NSColor::controlAccentColor();
-    let srgb = accent.colorUsingColorSpace(&NSColorSpace::sRGBColorSpace())?;
+    let Some(srgb) = accent.colorUsingColorSpace(&NSColorSpace::sRGBColorSpace()) else {
+        // A failed resolution says nothing about the accent that was read
+        // before it, so the remembered one stands rather than being cleared.
+        return remembered();
+    };
     let to_byte = |v: f64| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
-    Some((
+    let rgb = (
         to_byte(srgb.redComponent()),
         to_byte(srgb.greenComponent()),
         to_byte(srgb.blueComponent()),
-    ))
+    );
+    *REMEMBERED_ACCENT
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(rgb);
+    Some(rgb)
 }
 
 #[cfg(not(target_os = "macos"))]
