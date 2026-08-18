@@ -229,6 +229,16 @@ signed with Developer ID, notarized and stapled — and attaches it there. The
 download link is printed to the job summary. Prereleases never become "Latest",
 so the version-tag release channel is untouched.
 
+The nightly channel is a **rolling window of the three most recent builds**, not
+an archive. Once a run has published a complete nightly — runtime assets and a
+notarized DMG — it deletes the older nightly prereleases and their tags. Without
+that they accumulated one per shared build, and by 0.7.0 there were twelve of
+them sitting above the newest real release on the releases page. So a nightly
+DMG is good for about three more shared builds: download it, install the runtime,
+and re-share when you need a newer one. Version tags are never touched — the
+prune re-checks the `desktop-nightly-` prefix immediately before deleting,
+because `--cleanup-tag` removes the tag along with the release.
+
 It has to be the online DMG. Apple's notary service unpacks `host-runtime.zip`
 and rejects everything inside: a bundled CPython and `node_modules` are not
 Developer ID signed and never will be. So a self-contained DMG cannot be
