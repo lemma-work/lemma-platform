@@ -409,7 +409,7 @@ fn build(
         ),
         ("LOCAL_KREUZBERG_ENABLED", "false".to_owned()),
         ("KREUZBERG_URL", String::new()),
-        ("DOCUMENT_PROCESSOR", "markitdown".to_owned()),
+        ("DOCUMENT_PROCESSOR", "xberg".to_owned()),
         // One document at a time. The backend embeds every worker lane in the
         // API process, so bulk extraction shares a core count with the thing
         // the user is waiting on; the default of two, sized for a worker with a
@@ -951,7 +951,7 @@ mod tests {
             .is_none());
         assert_eq!(
             manifest["services"][0]["env"]["DOCUMENT_PROCESSOR"],
-            "markitdown"
+            "xberg"
         );
         assert_eq!(
             manifest["services"][0]["env"]["HOME"],

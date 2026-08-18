@@ -136,13 +136,13 @@ def test_effective_document_processor_auto_follows_kreuzberg_url(monkeypatch):
     with_url = DatastoreSettings(kreuzberg_url="http://kreuzberg:8000")
     assert with_url.effective_document_processor() == "kreuzberg"
     without_url = DatastoreSettings(kreuzberg_url="")
-    assert without_url.effective_document_processor() == "markitdown"
+    assert without_url.effective_document_processor() == "xberg"
 
 
 def test_effective_document_processor_explicit_wins(monkeypatch):
-    monkeypatch.setenv("DOCUMENT_PROCESSOR", "markitdown")
+    monkeypatch.setenv("DOCUMENT_PROCESSOR", "xberg")
     # Explicit choice is honoured even though a Kreuzberg URL is present.
-    assert DatastoreSettings().effective_document_processor() == "markitdown"
+    assert DatastoreSettings().effective_document_processor() == "xberg"
     monkeypatch.setenv("DOCUMENT_PROCESSOR", "kreuzberg")
     assert (
         DatastoreSettings(kreuzberg_url="").effective_document_processor()
@@ -156,7 +156,7 @@ def test_effective_document_processor_auto_never_selects_docling(monkeypatch):
     settings = DatastoreSettings(
         kreuzberg_url="", docling_serve_url="http://docling:5001"
     )
-    assert settings.effective_document_processor() == "markitdown"
+    assert settings.effective_document_processor() == "xberg"
     # ...but an explicit choice activates it.
     assert (
         DatastoreSettings(document_processor="docling").effective_document_processor()

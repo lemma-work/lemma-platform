@@ -361,7 +361,7 @@ class DocumentProcessorPort(Protocol):
         ``content_path`` lets the caller stream a large file to a temp file and
         hand the path down, so the extractor can stream it (Kreuzberg) rather than
         holding the whole file — plus a multipart copy — in memory. Processors
-        that must work in-process (markitdown/docling) read the path into bytes.
+        that must work in-process (xberg/docling) read the path into bytes.
         Exactly one of ``content`` / ``content_path`` is provided.
         """
         ...

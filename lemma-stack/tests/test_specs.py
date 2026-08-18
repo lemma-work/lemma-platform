@@ -65,14 +65,14 @@ def test_kreuzberg_legacy_flag_cannot_add_a_local_service(config, paths, manifes
     assert "kreuzberg" not in [s.name for s in specs]
     backend = by_name(specs, "backend")
     assert backend.env["KREUZBERG_URL"] == ""
-    assert backend.env["DOCUMENT_PROCESSOR"] == "markitdown"
+    assert backend.env["DOCUMENT_PROCESSOR"] == "xberg"
 
 
-def test_document_processor_is_in_process_markitdown(config, paths, manifest):
+def test_document_processor_is_in_process_xberg(config, paths, manifest):
     specs = build(config, paths, manifest)
     assert "kreuzberg" not in [s.name for s in specs]
     backend = by_name(specs, "backend")
-    assert backend.env["DOCUMENT_PROCESSOR"] == "markitdown"
+    assert backend.env["DOCUMENT_PROCESSOR"] == "xberg"
     assert backend.env["KREUZBERG_URL"] == ""
 
 

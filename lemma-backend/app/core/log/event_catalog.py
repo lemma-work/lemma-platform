@@ -384,7 +384,6 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'datastore.kreuzberg_helper.kreuzberg_enhanced_extraction_s_retrying.diagnostic': EventSpec('debug', frozenset()),
     'datastore.kreuzberg_helper.kreuzberg_extract_connection_s_attempt.diagnostic': EventSpec('debug', frozenset({'max_attempts'})),
     'datastore.kreuzberg_helper.pdfium_ocr_probe_defaulting_native.observed': EventSpec('debug', frozenset()),
-    'datastore.markitdown_processor.markitdown_pdf_page_count_probe.observed': EventSpec('debug', frozenset()),
     'datastore.module.datastore_query_role_grants_ensured.observed': EventSpec('debug', frozenset()),
     'datastore.module.local_embedding_model_degraded.degraded': EventSpec('warning', frozenset({'error_type'})),
     'datastore.module.local_embedding_model_ready.observed': EventSpec('debug', frozenset()),

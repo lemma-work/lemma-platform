@@ -8,10 +8,10 @@ Kreuzberg path lands ~10-20s per digital-first PDF.
 
 Usage (from lemma-backend/):
   uv run python scripts/experiments/bench_document_processors.py \
-      --processor markitdown --out /tmp/docproc
+      --processor xberg --out /tmp/docproc
 
   # Kreuzberg/Xberg needs the service running. The dev compose stack does NOT
-  # include it (it runs the in-process markitdown adapter), so start one
+  # include it (it runs the in-process xberg adapter), so start one
   # directly. Both engines speak the same adapter:
   docker run -d -p 8002:8000 ghcr.io/kreuzberg-dev/kreuzberg-core:4.10.2 \
       serve --host 0.0.0.0 --port 8000
@@ -47,12 +47,12 @@ FIXTURES = (
 
 
 def _make_processor(name: str) -> DocumentProcessorPort:
-    if name == "markitdown":
-        from app.modules.datastore.infrastructure.markitdown_processor import (
-            MarkItDownDocumentProcessor,
+    if name == "xberg":
+        from app.modules.datastore.infrastructure.xberg_processor import (
+            XbergDocumentProcessor,
         )
 
-        return MarkItDownDocumentProcessor()
+        return XbergDocumentProcessor()
     if name == "kreuzberg":
         from app.modules.datastore.infrastructure.document_processor import (
             KreuzbergDocumentProcessor,
@@ -110,7 +110,7 @@ async def _run(processor_name: str, out_root: Path | None) -> None:
         )
     print("-" * len(header))
     print(f"{'TOTAL':<28}{total:>8.1f}")
-    # In-process peak RSS is meaningful for markitdown; for docling/kreuzberg the
+    # In-process peak RSS is meaningful for xberg; for docling/kreuzberg the
     # heavy work runs in their container (measure that with `docker stats`).
     print(f"in-process peak RSS: {_peak_rss_mb():.0f} MB")
 
@@ -119,8 +119,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--processor",
-        default="markitdown",
-        choices=["markitdown", "kreuzberg", "docling"],
+        default="xberg",
+        choices=["xberg", "kreuzberg", "docling"],
         help="which adapter to benchmark",
     )
     parser.add_argument(
