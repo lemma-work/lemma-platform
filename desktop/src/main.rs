@@ -3946,6 +3946,38 @@ impl Drop for ExitGuard {
     }
 }
 
+/// How long to wait for the runtime to let go of a destroyed window's label.
+///
+/// Generous on purpose. In practice the event loop frees it within a few
+/// milliseconds, and this runs on a blocking thread during a server switch the
+/// user has already been told will take a moment -- so waiting costs nothing
+/// anyone can perceive, while giving up early costs them the entire interface.
+const LABEL_RELEASE_TIMEOUT: Duration = Duration::from_secs(2);
+const LABEL_RELEASE_POLL: Duration = Duration::from_millis(10);
+
+/// Poll `still_registered` until it goes false, or `timeout` elapses.
+///
+/// Returns whether the label came free. Takes the predicate rather than an
+/// `AppHandle` so the waiting itself can be tested without a running event
+/// loop -- which is the half that was wrong, and the half a source-text
+/// assertion could not have caught.
+fn wait_until_label_released(
+    mut still_registered: impl FnMut() -> bool,
+    timeout: Duration,
+    interval: Duration,
+) -> bool {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if !still_registered() {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(interval);
+    }
+}
+
 /// Move the window onto the storage the new server owns.
 ///
 /// A webview's store is fixed when it is built, so this closes the window and
@@ -3976,6 +4008,23 @@ fn rebuild_main_window_for_mode(app: &AppHandle, mode: &str) {
         ));
         return;
     }
+    // `destroy` only *posts* the request. Tauri frees the label when the event
+    // loop processes `Destroyed` and the manager drops it from its webview map,
+    // and this function runs on a blocking thread -- so building here races the
+    // event loop and loses, every time, with `a webview with label \`main\`
+    // already exists`. The retry below inherited the same failure in the same
+    // millisecond, which turned the fallback into a second identical attempt
+    // and left the app with no window at all.
+    if !wait_until_label_released(
+        || app.get_webview_window("main").is_some(),
+        LABEL_RELEASE_TIMEOUT,
+        LABEL_RELEASE_POLL,
+    ) {
+        append_install_log(
+            "[connection-mode] the previous window still holds the `main` label; \
+             building anyway",
+        );
+    }
     // Rebuilt on the splash rather than on the destination: `set_mode`'s caller
     // navigates immediately afterwards, and for local it has to wait for the
     // daemon first. Starting anywhere else would show one server's page against
@@ -3993,6 +4042,11 @@ fn rebuild_main_window_for_mode(app: &AppHandle, mode: &str) {
             "[connection-mode] partitioned window failed for {mode}, \
              falling back to shared storage: {error}"
         ));
+        let _ = wait_until_label_released(
+            || app.get_webview_window("main").is_some(),
+            LABEL_RELEASE_TIMEOUT,
+            LABEL_RELEASE_POLL,
+        );
         if let Err(error) = build_main_window(app, mode, initial, false) {
             append_install_log(&format!(
                 "[connection-mode] could not reopen the window for {mode}: {error}"
@@ -6311,6 +6365,87 @@ mod tests {
         assert!(
             !css.contains("Bricolage"),
             "the page no longer carries its own display face"
+        );
+    }
+
+    #[test]
+    fn waiting_returns_as_soon_as_the_label_comes_free() {
+        // The event loop needs a moment after `destroy`, not a fixed delay --
+        // so this must return on the first poll that sees the label gone, and
+        // must not have given up before then.
+        let polls = std::cell::Cell::new(0);
+        let released = wait_until_label_released(
+            || {
+                polls.set(polls.get() + 1);
+                polls.get() < 3
+            },
+            Duration::from_secs(5),
+            Duration::from_millis(1),
+        );
+
+        assert!(released);
+        assert_eq!(polls.get(), 3, "it stopped polling the moment it came free");
+    }
+
+    #[test]
+    fn waiting_gives_up_rather_than_hanging_the_switch() {
+        // A label that never frees must not park a blocking thread forever.
+        // The caller logs and tries anyway; what it must not do is never return.
+        let start = Instant::now();
+        let released =
+            wait_until_label_released(|| true, Duration::from_millis(30), Duration::from_millis(1));
+
+        assert!(!released);
+        assert!(start.elapsed() >= Duration::from_millis(30));
+        assert!(
+            start.elapsed() < Duration::from_secs(5),
+            "the timeout has to actually bound the wait"
+        );
+    }
+
+    #[test]
+    fn the_window_swap_waits_between_destroying_and_rebuilding() {
+        // The bug this pins: `destroy` returns as soon as the request is
+        // posted, so building immediately afterwards failed with `a webview
+        // with label `main` already exists` -- and because the fallback ran in
+        // the same millisecond it failed identically, leaving the app running
+        // with no window at all. Both build attempts have to be preceded by a
+        // wait.
+        //
+        // Asserted on the source because reaching the real path needs a running
+        // event loop; `wait_until_label_released` itself is tested above.
+        let source = include_str!("main.rs");
+        let body = {
+            let start = source
+                .find("fn rebuild_main_window_for_mode(app: &AppHandle, mode: &str)")
+                .expect("rebuild_main_window_for_mode exists");
+            let end = source[start..]
+                .find("\nfn ")
+                .map_or(source.len(), |offset| start + offset);
+            &source[start..end]
+        };
+
+        let destroy = body.find(".destroy()").expect("it destroys the old window");
+        let first_build = body
+            .find("build_main_window(app, mode, initial.clone(), true)")
+            .expect("it rebuilds partitioned");
+        let fallback = body
+            .find("build_main_window(app, mode, initial, false)")
+            .expect("it falls back to the shared store");
+        let waits: Vec<usize> = body
+            .match_indices("wait_until_label_released")
+            .map(|(index, _)| index)
+            .collect();
+
+        assert_eq!(waits.len(), 2, "every rebuild attempt waits for the label");
+        assert!(
+            destroy < waits[0] && waits[0] < first_build,
+            "the partitioned rebuild must wait after destroy"
+        );
+        assert!(
+            waits[1] < fallback,
+            "the shared-store fallback must wait too, or it repeats the failure \
+             it is supposed to recover from"
         );
     }
 
