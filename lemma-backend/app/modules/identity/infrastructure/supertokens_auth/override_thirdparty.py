@@ -16,6 +16,9 @@ from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.events.message_bus import get_message_bus
 from app.modules.identity.domain.email import normalize_identity_email
 from app.modules.identity.domain.user_entities import UserEntity
+from app.modules.identity.infrastructure.supertokens_auth.provider_profile import (
+    names_from_provider,
+)
 from app.modules.identity.infrastructure.organization_repositories import (
     OrganizationRepository,
 )
@@ -102,10 +105,19 @@ def override_thirdparty_functions(
                             uow, message_bus=message_bus
                         ),
                     )
+                    # The provider just told us who this is. Storing it here is
+                    # what lets the first screen after signup be the product
+                    # rather than a form asking for a name we were handed.
+                    first_name, last_name = names_from_provider(
+                        raw_user_info_from_provider.from_id_token_payload,
+                        raw_user_info_from_provider.from_user_info_api,
+                    )
                     await user_service.create_user(
                         UserEntity(
                             id=UUID(result.user.id),
                             email=normalize_identity_email(result.user.emails[0]),
+                            first_name=first_name,
+                            last_name=last_name,
                             is_verified=is_verified,
                             email_verified_at=(
                                 datetime.now(timezone.utc) if is_verified else None
