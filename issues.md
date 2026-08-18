@@ -129,6 +129,13 @@ if the pod named by the invitation cannot be resolved. A pod that has been
 deleted since the invitation was sent is a real case — that one should fail with
 a message naming the pod, not succeed silently.
 
+**Scope, measured:** the ordinary path works. A scenario that invites somebody
+to a pod and accepts finds them in the pod, so `pod_membership_port` is wired in
+a standard deployment and the grant lands. What is not guarded is the
+fall-through: invite, delete the pod, accept — that returns 200 with the pod
+dropped and the invitation spent. `test_an_invitation_to_a_vanished_pod_is_not_silently_half_applied`
+holds it, marked `xfail(strict=True)`.
+
 ### DEV-ONB-004 — Every organization member-join crashes the analytics consumer
 **Violates:** PS-ONB-020
 **Severity:** high

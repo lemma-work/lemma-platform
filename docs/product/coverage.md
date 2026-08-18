@@ -18,7 +18,7 @@ only a promise marked `covered` with no test is.
 | `withdrawn` | 0 |
 | **total** | **160** |
 
-Scenario tests declaring a promise: 331.
+Scenario tests declaring a promise: 336.
 
 ## Contract coverage
 
@@ -89,7 +89,7 @@ the module suites may cover it — but it is untested *as product*.
 | `PS-POD-030` A person sees exactly the pods they may open | `gap` | `test_a_non_member_cannot_open_the_pod`, `test_an_outsider_cannot_open_the_pod`, `test_the_cli_lists_pods`, `test_the_python_sdk_lists_pods`, `test_the_typescript_sdk_lists_pods` |
 | `PS-POD-031` A person sees their pods across every organization at once | `covered` | `test_an_organization_has_a_home` |
 | `PS-POD-040` Removing someone from a pod takes their access away immediately | `covered` | `test_removing_a_member_revokes_access`, `test_a_non_admin_cannot_remove_members` |
-| `PS-POD-041` A pod always has at least one admin | `gap` | — |
+| `PS-POD-041` A pod always has at least one admin | `gap` | `test_the_last_pod_admin_cannot_step_down` |
 | `PS-POD-050` Deleting a pod stops the work it was doing | `covered` | `test_deleting_a_pod_removes_it`, `test_a_deleted_pods_name_is_reusable`, `test_a_non_admin_cannot_delete_the_pod` |
 | `PS-POD-051` Deletion does not take unrelated things with it | `covered` | `test_deleting_one_pod_spares_the_others`, `test_deleting_one_pod_leaves_the_others_working` |
 
@@ -120,17 +120,17 @@ the module suites may cover it — but it is untested *as product*.
 | `PS-ONB-004` A person sets a display name and preferences that follow them | `covered` | `test_a_profile_is_one_thing` |
 | `PS-ONB-010` The person who creates an organization owns it | `covered` | `test_creator_of_an_organization_owns_it`, `test_a_person_can_own_several_organizations` |
 | `PS-ONB-011` An organization has a handle that survives being renamed | `covered` | `test_renaming_an_organization_keeps_its_handle`, `test_handle_availability_is_checkable` |
-| `PS-ONB-014` Two organizations may share a display name | `gap` | — |
+| `PS-ONB-014` Two organizations may share a display name | `gap` | `test_two_organizations_may_share_a_display_name` |
 | `PS-ONB-013` Only an owner changes what the organization is | `covered` | `test_only_an_owner_changes_the_organization` |
 | `PS-ONB-020` An invited person joins with the role they were offered | `covered` | `test_an_invited_person_joins_with_the_offered_role`, `test_an_invitation_is_addressed` |
-| `PS-ONB-021` An invitation can carry a pod, and accepting it grants both | `gap` | — |
+| `PS-ONB-021` An invitation can carry a pod, and accepting it grants both | `gap` | `test_an_invitation_carries_its_pod`, `test_an_invitation_to_a_vanished_pod_is_not_silently_half_applied` |
 | `PS-ONB-022` An invitation stops working when it should | `covered` | `test_a_revoked_invitation_is_dead`, `test_an_invitation_is_single_use` |
 | `PS-ONB-023` Inviting someone already inside is refused clearly | `covered` | `test_inviting_an_existing_member_is_refused` |
 | `PS-ONB-024` A person can see the invitations waiting for them | `covered` | `test_a_person_sees_their_invitations`, `test_an_owner_sees_sent_invitations` |
 | `PS-ONB-030` A person is offered the organizations they could join | `covered` | `test_suggestions_are_empty_without_a_matching_domain` |
 | `PS-ONB-031` A person joins an organization that is open to them | `covered` | `test_invite_only_refuses_self_join` |
 | `PS-ONB-040` An owner changes what a member may do | `covered` | `test_an_owner_changes_a_role`, `test_a_member_cannot_change_roles` |
-| `PS-ONB-041` An organization always has at least one owner | `gap` | — |
+| `PS-ONB-041` An organization always has at least one owner | `gap` | `test_the_last_owner_cannot_step_down` |
 | `PS-ONB-042` Removal respects the role hierarchy | `covered` | `test_removing_a_member_takes_their_access` |
 | `PS-ONB-043` A person can leave on their own | `covered` | `test_removing_a_member_takes_their_access` |
 
