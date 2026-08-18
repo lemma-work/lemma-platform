@@ -25,11 +25,11 @@ from app.core.infrastructure.db.manager import DatabaseManager
 from app.core.test_utils import (
     create_postgres_database,
     get_postgres_url,
-    get_redis_container,
     get_redis_url,
     get_supertokens_container,
     get_supertokens_url,
     shared_postgres,
+    shared_redis,
 )
 
 if TYPE_CHECKING:
@@ -297,11 +297,48 @@ def _postgres_worker_db_name(worker_id: str) -> str:
     return f"lemma_e2e_{_sanitize_worker_id(worker_id)}"
 
 
+def _redis_worker_db_index(worker_id: str) -> int:
+    """Map an xdist worker id to a small Redis logical-DB index.
+
+    Redis has a native per-connection "logical database" concept (``SELECT
+    <n>``, or ``redis://host:port/<n>``) -- unlike Postgres there's no
+    ``CREATE DATABASE``-equivalent step, so each worker just gets routed to
+    its own index on the one shared server. "master" (no xdist) -> 0,
+    "gw0" -> 1, "gw1" -> 2, etc.
+
+    Redis ships with only 16 databases (0-15) by default, so this fails
+    loudly rather than silently colliding two workers on the same index if
+    parallelism ever grows past that. The widest matrix in
+    ``.github/workflows/e2e.yml`` today is ``-n 3``, well under the ceiling;
+    if that ever changes, either raise ``databases`` in the shared
+    container's redis.conf or shrink worker counts.
+    """
+    if worker_id == "master":
+        return 0
+    import re
+
+    match = re.search(r"(\d+)$", worker_id)
+    if not match:
+        raise RuntimeError(
+            f"Cannot derive a Redis DB index from xdist worker id {worker_id!r} "
+            "(expected 'master' or a 'gwN' id)."
+        )
+    index = int(match.group(1)) + 1
+    if index > 15:
+        raise RuntimeError(
+            f"xdist worker {worker_id!r} maps to Redis DB index {index}, but "
+            "Redis only ships 16 logical databases (0-15) by default. Reduce "
+            "xdist parallelism or raise `databases` in the shared Redis "
+            "container's config."
+        )
+    return index
+
+
 def _postgres_worker_datastore_db_name(worker_id: str) -> str:
     return f"datastore_{_sanitize_worker_id(worker_id)}"
 
 
-def _start_postgres(worker_id: str, tmp_path_factory) -> None:
+def _start_postgres(worker_id: str, basetemp_parent) -> None:
     """Connect to the ONE Postgres server shared across all xdist workers.
 
     Each worker gets its own logical database inside it (created via
@@ -310,7 +347,6 @@ def _start_postgres(worker_id: str, tmp_path_factory) -> None:
     run instead of N. See ``shared_postgres`` in test_utils for the
     coordination mechanism (mirrors ``shared_kreuzberg``).
     """
-    basetemp_parent = tmp_path_factory.getbasetemp().parent
 
     def _factory():
         return shared_postgres(basetemp_parent, worker_id)
@@ -322,6 +358,24 @@ def _start_postgres(worker_id: str, tmp_path_factory) -> None:
             postgres, _postgres_worker_datastore_db_name(worker_id)
         )
         setattr(postgres, "_lemma_worker_databases_created", True)
+
+
+def _start_redis(worker_id: str, basetemp_parent) -> None:
+    """Connect to the ONE Redis server shared across all xdist workers.
+
+    Each worker gets its own logical DB index inside it (selected via the
+    connection URL, see ``_redis_worker_db_index``), rather than its own full
+    container -- one `docker run redis` for the whole run instead of N. See
+    ``shared_redis`` in test_utils for the coordination mechanism (mirrors
+    ``shared_postgres``/``shared_kreuzberg``). Unlike Postgres, no
+    per-worker provisioning step is needed here -- Redis DBs exist by index
+    already, nothing to create.
+    """
+
+    def _factory():
+        return shared_redis(basetemp_parent, worker_id)
+
+    _shared_context_resource("redis", _factory)
 
 
 def _warm_shared_containers(worker_id: str, tmp_path_factory) -> None:
@@ -343,11 +397,20 @@ def _warm_shared_containers(worker_id: str, tmp_path_factory) -> None:
     ):
         return
 
+    # Resolve once on this (the calling) thread before fanning out to the
+    # pool below. ``TempPathFactory.getbasetemp()`` lazily creates and caches
+    # the base temp dir on first call and is not safe to invoke from two
+    # threads at once -- postgres and redis both used to derive this
+    # independently inside their own worker thread, and running both jobs
+    # concurrently raced two `mkdir`s for the same path, one losing with
+    # ``FileExistsError``.
+    basetemp_parent = tmp_path_factory.getbasetemp().parent
+
     jobs: list[Callable[[], Any]] = []
     if "postgres" not in _SHARED_RESOURCES:
-        jobs.append(lambda: _start_postgres(worker_id, tmp_path_factory))
+        jobs.append(lambda: _start_postgres(worker_id, basetemp_parent))
     if "redis" not in _SHARED_RESOURCES:
-        jobs.append(lambda: _shared_context_resource("redis", get_redis_container))
+        jobs.append(lambda: _start_redis(worker_id, basetemp_parent))
     if "supertokens" not in _SHARED_RESOURCES:
         jobs.append(
             lambda: _shared_context_resource("supertokens", get_supertokens_container)
@@ -382,8 +445,8 @@ def test_database_url(postgres_container, worker_id) -> str:
 
 
 @pytest.fixture(scope="session")
-def test_redis_url(redis_container) -> str:
-    return get_redis_url(redis_container)
+def test_redis_url(redis_container, worker_id) -> str:
+    return get_redis_url(redis_container, _redis_worker_db_index(worker_id))
 
 
 

@@ -655,6 +655,78 @@ def shared_postgres(
                 refs_file.unlink(missing_ok=True)
 
 
+def start_shared_redis(name: str) -> LemmaDockerContainer:
+    """Start ONE named Redis container and return a reference to it.
+
+    Mirrors ``start_shared_postgres``: one Redis *server process* shared
+    across all xdist workers (each worker gets its own logical database
+    inside it, selected via the connection URL's ``/<n>`` suffix -- Redis has
+    a native per-connection ``SELECT <db-index>`` concept, so unlike Postgres
+    there is no ``CREATE DATABASE``-equivalent step needed), instead of one
+    full container per worker. Not auto-stopped; the last worker out calls
+    ``remove_named_container`` (and the label-based prune sweeps any
+    straggler).
+    """
+    # Clear any straggler with this name from a previously crashed run.
+    subprocess.run(["docker", "rm", "-f", name], check=False, capture_output=True)
+    container = LemmaDockerContainer(REDIS_IMAGE, 6379).with_run_args("--name", name)
+    container.__enter__()  # start detached; intentionally no matching __exit__
+    _wait_for_tcp(container, 6379, _env_int("REDIS_STARTUP_TIMEOUT_SECONDS", 120))
+    return container
+
+
+SHARED_REDIS_NAME = "lemma-e2e-redis-shared"
+
+
+@contextmanager
+def shared_redis(
+    basetemp_parent, worker_id: str
+) -> Generator[LemmaDockerContainer, None, None]:
+    """Yield a ``LemmaDockerContainer`` pointed at a SINGLE Redis server
+    shared across all xdist workers.
+
+    Refcounted via a file lock in the xdist-shared temp root, same pattern as
+    ``shared_postgres``/``shared_kreuzberg``: the first worker in starts a
+    named container; later workers reconstruct a lightweight reference to it
+    (docker accepts a container NAME anywhere it accepts an ID, so
+    ``get_exposed_port``/``get_logs`` -- which just shell out to ``docker
+    port``/``docker logs`` -- work identically); the last worker out removes
+    it. Without xdist (``worker_id == 'master'``) it falls back to a plain
+    per-session container.
+    """
+    if worker_id == "master":
+        with get_redis_container() as redis:
+            yield redis
+        return
+
+    from pathlib import Path
+
+    from filelock import FileLock
+
+    root = Path(basetemp_parent)
+    lock = FileLock(str(root / "redis.lock"))
+    refs_file = root / "redis_refs.txt"
+
+    with lock:
+        refs = int(refs_file.read_text()) if refs_file.exists() else 0
+        if refs == 0:
+            start_shared_redis(SHARED_REDIS_NAME)
+        refs_file.write_text(str(refs + 1))
+
+    container = LemmaDockerContainer(REDIS_IMAGE, 6379)
+    container.container_id = SHARED_REDIS_NAME
+
+    try:
+        yield container
+    finally:
+        with lock:
+            refs = (int(refs_file.read_text()) if refs_file.exists() else 1) - 1
+            refs_file.write_text(str(refs))
+            if refs <= 0:
+                remove_named_container(SHARED_REDIS_NAME)
+                refs_file.unlink(missing_ok=True)
+
+
 def get_postgres_url(
     container: LemmaPostgresContainer, database_name: Optional[str] = None
 ) -> str:
@@ -693,11 +765,19 @@ def create_postgres_database(
                 cur.execute(f'CREATE DATABASE "{database_name}"')
 
 
-def get_redis_url(container: LemmaDockerContainer) -> str:
-    """Helper to extract Redis URL from container."""
+def get_redis_url(container: LemmaDockerContainer, db: Optional[int] = None) -> str:
+    """Helper to extract Redis URL from container.
+
+    ``db`` overrides the connection's logical database index (used by the
+    shared-Redis model, where multiple xdist workers share one Redis server
+    but each connects to its own logical DB, 0-15 by default). Omit for the
+    server's default DB 0.
+    """
     host = container.get_container_host_ip()
     port = container.get_exposed_port(6379)
-    return f"redis://{host}:{port}"
+    if db is None:
+        return f"redis://{host}:{port}"
+    return f"redis://{host}:{port}/{db}"
 
 
 def get_supertokens_url(container: LemmaDockerContainer) -> str:
