@@ -143,7 +143,12 @@ def test_register_model_pricing_hook_works():
 async def test_injected_limit_uses_legacy_default_reservation_amount():
     repo = AsyncMock()
     repo.get_system_cost.return_value = 0.0
-    repo.get_reserved_cost.return_value = 0.0
+    repo.get_system_cost_by_window.return_value = {"user_week": 0.0, "user_month": 0.0}
+    repo.get_reserved_costs.return_value = {
+        "user_week": 0.0,
+        "user_month": 0.0,
+        "org_month": 0.0,
+    }
     repo.reserve_limit_scopes.return_value = []
     service = _limited_service(repo)
 
@@ -178,7 +183,12 @@ async def test_unlimited_default_skips_admission_for_unpriced_custom_model():
 async def test_injected_limit_does_not_reject_unpriced_custom_model():
     repo = AsyncMock()
     repo.get_system_cost.return_value = 0.0
-    repo.get_reserved_cost.return_value = 0.0
+    repo.get_system_cost_by_window.return_value = {"user_week": 0.0, "user_month": 0.0}
+    repo.get_reserved_costs.return_value = {
+        "user_week": 0.0,
+        "user_month": 0.0,
+        "org_month": 0.0,
+    }
     repo.reserve_limit_scopes.return_value = []
     service = _limited_service(repo)
 

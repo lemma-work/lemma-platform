@@ -19,6 +19,11 @@ from app.modules.datastore.tests.e2e.harness import (
     invite_to_pod,
     signup_user,
 )
+from app.modules.test_support.query_counting import (
+    counted_queries,
+    format_statements,
+    statements_touching,
+)
 
 pytestmark = pytest.mark.e2e
 
@@ -335,6 +340,52 @@ class TestDatastoreRecords:
             expected_status=status.HTTP_400_BAD_REQUEST,
         )
         assert mutation["code"] == "DATASTORE_QUERY_ERROR"
+
+    @pytest.mark.asyncio
+    async def test_multi_table_query_resolves_every_table_in_one_read(
+        self,
+        project_workspace: DatastoreApi,
+        fixed_test_user,
+    ):
+        """A join must not pay one table lookup per table it names.
+
+        Resolving each referenced table on its own meant a query's fixed cost
+        scaled with how many tables it joined -- a read, an authorization and a
+        commit apiece -- before a single row was fetched. The lookup is now one
+        statement; the per-table READ check still runs per table.
+
+        Counted rather than timed, and compared against the same query naming a
+        single table, so the assertion is about the *shape* of the work and not
+        about how fast the container is.
+        """
+        pod_api = project_workspace
+        rows = await _seed_projects(pod_api, fixed_test_user["id"])
+        await pod_api.bulk_create(
+            "milestones",
+            [{"project_id": rows["apollo"]["id"], "title": "Kickoff", "sort_order": 1}],
+        )
+
+        with counted_queries() as single_statements:
+            await pod_api.query("SELECT id FROM projects")
+        with counted_queries() as join_statements:
+            await pod_api.query(
+                "SELECT p.name AS project_name, m.title "
+                "FROM projects p JOIN milestones m ON m.project_id = p.id "
+                "ORDER BY m.sort_order ASC"
+            )
+
+        single_lookups = statements_touching(single_statements, "datastore_tables")
+        join_lookups = statements_touching(join_statements, "datastore_tables")
+        assert single_lookups, (
+            "the one-table query read no table metadata at all -- this test is "
+            "no longer measuring the lookup it was written for"
+        )
+        assert len(join_lookups) <= len(single_lookups), (
+            f"a two-table join issued {len(join_lookups)} table lookups where a "
+            f"one-table query issued {len(single_lookups)}; the lookup is still "
+            f"scaling with the number of tables:\n"
+            f"{format_statements(join_lookups)}"
+        )
 
     @pytest.mark.asyncio
     async def test_records_and_tables_can_be_deleted(

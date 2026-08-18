@@ -4,7 +4,18 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from sqlalchemy import String, and_, case, cast, exists, false, func, literal, or_
+from sqlalchemy import (
+    Boolean,
+    String,
+    and_,
+    case,
+    cast,
+    exists,
+    false,
+    func,
+    literal,
+    or_,
+)
 from sqlalchemy.dialects.postgresql import ARRAY, array
 from sqlalchemy.orm import aliased
 from sqlalchemy.sql import ColumnElement
@@ -163,7 +174,15 @@ def allowed_actions_contains(
     allowed_actions: ColumnElement,
     action: str,
 ) -> ColumnElement[bool]:
-    return allowed_actions.op("@>")(_text_array([action]))
+    """``allowed_actions @> ARRAY[action]`` — does this row permit *action*?
+
+    ``return_type`` is not cosmetic. Without it the expression inherits the
+    left operand's type, so SQLAlchemy labels a *boolean* as ``text[]`` and
+    hands the row's ``True`` to the array result processor. In a WHERE clause
+    that never shows, because nothing reads the value back; the first time this
+    was SELECTed it raised ``'bool' object is not iterable``.
+    """
+    return allowed_actions.op("@>", return_type=Boolean)(_text_array([action]))
 
 
 def _anonymous_allowed_actions_expr(

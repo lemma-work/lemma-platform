@@ -113,7 +113,13 @@ async def test_gateway_uses_standard_principal_and_releases_uow_before_storage(
     )
 
     class _Storage:
-        async def read_file(self, path):
+        async def read_file(self, path):  # pragma: no cover - the artifact
+            raise AssertionError(
+                "the artifact is binary; read_bytes avoids a whole-buffer "
+                "decode attempt that only gets re-encoded"
+            )
+
+        async def read_bytes(self, path):
             assert state.active == 0
             assert path == context.artifact_path
             return artifact

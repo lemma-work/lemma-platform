@@ -925,7 +925,7 @@ async def test_execute_readonly_query_scopes_to_user_by_default_even_for_admin()
     ctx = AsyncMock()
     ctx.can.return_value = True  # caller administers the table
     table_service = AsyncMock()
-    table_service.get_table.return_value = _rls_table_entity()
+    table_service.get_tables.return_value = {"expenses": _rls_table_entity()}
     record_repository = AsyncMock()
     record_repository.execute_readonly_query.return_value = ([], 0)
     service = RecordService(
@@ -941,7 +941,7 @@ async def test_execute_readonly_query_scopes_to_user_by_default_even_for_admin()
         ctx=ctx,
     )
 
-    table_service.get_table.assert_awaited_once()  # per-table read authorization
+    table_service.get_tables.assert_awaited_once()  # per-table read authorization
     ctx.can.assert_not_awaited()
     assert record_repository.execute_readonly_query.await_args.kwargs["is_pod_admin"] is False
 
@@ -950,7 +950,7 @@ async def test_execute_readonly_query_admin_mode_grants_admin_rows_when_admin_on
     ctx = AsyncMock()
     ctx.can.return_value = True  # caller administers the table
     table_service = AsyncMock()
-    table_service.get_table.return_value = _rls_table_entity()
+    table_service.get_tables.return_value = {"expenses": _rls_table_entity()}
     record_repository = AsyncMock()
     record_repository.execute_readonly_query.return_value = ([{"merchant": "x"}], 1)
     service = RecordService(
@@ -968,7 +968,7 @@ async def test_execute_readonly_query_admin_mode_grants_admin_rows_when_admin_on
     )
 
     assert (rows, total) == ([{"merchant": "x"}], 1)
-    table_service.get_table.assert_awaited_once()  # per-table read authorization
+    table_service.get_tables.assert_awaited_once()  # per-table read authorization
     assert record_repository.execute_readonly_query.await_args.kwargs["is_pod_admin"] is True
 
 
@@ -978,7 +978,7 @@ async def test_execute_readonly_query_admin_mode_rejected_when_not_table_admin()
     ctx = AsyncMock()
     ctx.can.return_value = False  # caller does not administer the table
     table_service = AsyncMock()
-    table_service.get_table.return_value = _rls_table_entity()
+    table_service.get_tables.return_value = {"expenses": _rls_table_entity()}
     record_repository = AsyncMock()
     service = RecordService(
         record_repository=record_repository,
@@ -1022,7 +1022,7 @@ async def test_execute_readonly_query_requires_pod_read_when_no_table_referenced
     assert record_repository.execute_readonly_query.await_args.kwargs["is_pod_admin"] is False
 
 
-async def test_bulk_update_checks_permission_and_dispatches_events_once():
+async def test_bulk_update_checks_permission_and_dispatches_events_once(monkeypatch):
     """Bulk work must cost one authorization check, not one per record.
 
     `bulk_update_records` looped over `update_record`, which re-runs the whole
@@ -1035,11 +1035,24 @@ async def test_bulk_update_checks_permission_and_dispatches_events_once():
     check and stages events for one dispatch. This is that shape, applied to
     update. Production saw the difference as p50 8.6s and max 14.9s on
     `records/bulk/update`.
+
+    The rows themselves are now written by one repository call in one
+    transaction, rather than N calls that each opened a session, set the RLS
+    context, staged an event and committed.
     """
     ctx = _events_enabled_context()
     user_id = uuid4()
     record_repository = AsyncMock()
-    record_repository.update_record.return_value = {"id": "x"}
+    batched: list[tuple] = []
+
+    async def _fake_bulk_update(repository, ctx_arg, updates_arg, user_arg, **kwargs):
+        batched.append((repository, updates_arg))
+        return len(updates_arg)
+
+    monkeypatch.setattr(
+        "app.modules.datastore.services.record_service.write_bulk_updates",
+        _fake_bulk_update,
+    )
 
     service = RecordService(record_repository=record_repository)
     authz = AsyncMock()
@@ -1051,7 +1064,14 @@ async def test_bulk_update_checks_permission_and_dispatches_events_once():
     count = await service.bulk_update_records(ctx, updates, user_id)
 
     assert count == 5
-    assert record_repository.update_record.await_count == 5, "every row is written"
+    assert len(batched) == 1, (
+        "five rows must be one transaction, not five -- update_record opened a "
+        "session, set RLS, staged an event and committed for every row"
+    )
+    assert record_repository.update_record.await_count == 0, (
+        "the per-row path must not be reachable from a bulk call"
+    )
+    assert len(batched[0][1]) == 5, "every row still reaches the writer"
     assert authz.require_record_write.await_count == 1, (
         f"{authz.require_record_write.await_count} permission checks for one bulk "
         "call; the caller and table do not change inside the loop"

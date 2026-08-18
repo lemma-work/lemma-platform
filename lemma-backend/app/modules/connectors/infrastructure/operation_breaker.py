@@ -50,9 +50,28 @@ logger = get_logger(__name__)
 
 _PREFIX = "lemma:connector:breaker"
 
+#: What Redis returns from TTL for a key that does not exist.
+_KEY_MISSING = -2
+
 
 def _keys(scope: str) -> tuple[str, str]:
     return f"{_PREFIX}:open:{scope}", f"{_PREFIX}:fail:{scope}"
+
+
+def _fields(scope: str) -> tuple[str, str, str]:
+    """Split the compound scope so a log query can group by connector.
+
+    ``scope`` is ``[org:]connector:operation``. As one opaque string it could
+    only be grouped by string surgery, and the organization -- which matters
+    precisely because the key is per-tenant -- was invisible. Returns
+    ``(organization_id, connector_id, operation_name)``.
+    """
+    parts = scope.split(":")
+    if len(parts) >= 3:
+        return parts[0], parts[1], ":".join(parts[2:])
+    if len(parts) == 2:
+        return "", parts[0], parts[1]
+    return "", scope, ""
 
 
 def breaker_scope(
@@ -87,20 +106,50 @@ async def guard(scope: str) -> None:
     if not connector_settings.connector_breaker_enabled:
         return
     open_key, _ = _keys(scope)
+    announce_key = f"{_PREFIX}:said:{scope}"
+    cooldown = connector_settings.connector_breaker_cooldown_seconds
     try:
-        is_open = await get_redis().exists(open_key)
+        # One round trip for both questions. `ttl` answers "is it open" and
+        # "for how much longer" together -- -2 means no such key, -1 means no
+        # expiry. The SET NX is the once-per-incident log token below; putting
+        # it in the same pipeline keeps the refusal path at a single call.
+        async with get_redis().pipeline(transaction=False) as pipe:
+            pipe.ttl(open_key)
+            pipe.set(announce_key, "1", ex=cooldown, nx=True)
+            remaining, first_refusal = await pipe.execute()
     except (RedisError, OSError):
         # A breaker that cannot reach Redis must not become an outage of its
         # own. Losing the protection is strictly better than refusing traffic
         # that would have worked.
-        logger.debug("connectors.breaker.unavailable.diagnostic", scope=scope)
+        logger.warning("connectors.breaker.unavailable.degraded", scope=scope)
         return
-    if is_open:
-        raise OperationExecutionCircuitOpenError(
-            f"Connector operation {scope} is temporarily disabled after repeated "
-            "provider failures.",
-            details={"scope": scope},
+    if remaining == _KEY_MISSING:
+        return
+    # A caller told "retry in 60s" fifty seconds into a sixty-second cooldown
+    # would wait twice as long as it needed to. Report what is left, and fall
+    # back to the full cooldown only if the key somehow carries no expiry.
+    retry_after = remaining if remaining >= 0 else cooldown
+    if first_refusal:
+        # Logged, because a refused call left no trace of its own: the seven in
+        # one production incident existed only as request failures naming no
+        # connector, which is why nobody could say which provider had tripped.
+        #
+        # Once per cooldown per scope, not once per call. A client retrying a
+        # down provider in a loop would otherwise turn one incident into a
+        # flood of identical warnings, which is how a signal stops being read.
+        org_id, connector_id, operation_name = _fields(scope)
+        logger.warning(
+            "connectors.breaker.rejected.degraded",
+            organization_id=org_id,
+            connector_id=connector_id,
+            operation_name=operation_name,
+            cooldown_seconds=cooldown,
         )
+    raise OperationExecutionCircuitOpenError(
+        f"Connector operation {scope} is temporarily disabled after repeated "
+        "provider failures.",
+        details={"scope": scope, "retry_after": retry_after},
+    )
 
 
 async def record_success(scope: str) -> None:
@@ -108,10 +157,28 @@ async def record_success(scope: str) -> None:
     if not connector_settings.connector_breaker_enabled:
         return
     open_key, fail_key = _keys(scope)
+    announce_key = f"{_PREFIX}:said:{scope}"
     try:
-        await get_redis().delete(open_key, fail_key)
+        # Deleted separately, because only the open key's fate is newsworthy.
+        # `delete(open_key, fail_key)` returns how many of the two existed, and
+        # a plain failure streak leaves `fail_key` behind without the breaker
+        # ever having opened -- so a single success cleared one key and
+        # announced a recovery from an incident that never happened.
+        async with get_redis().pipeline(transaction=False) as pipe:
+            pipe.delete(open_key)
+            pipe.delete(fail_key, announce_key)
+            was_open, _ = await pipe.execute()
     except (RedisError, OSError):
-        logger.debug("connectors.breaker.unavailable.diagnostic", scope=scope)
+        logger.warning("connectors.breaker.unavailable.degraded", scope=scope)
+        return
+    if was_open:
+        org_id, connector_id, operation_name = _fields(scope)
+        logger.info(
+            "connectors.breaker.recovered",
+            organization_id=org_id,
+            connector_id=connector_id,
+            operation_name=operation_name,
+        )
 
 
 async def record_failure(scope: str) -> None:
@@ -134,12 +201,20 @@ async def record_failure(scope: str) -> None:
         # call after the breaker reopens is a probe, and a single failure
         # re-opens it rather than starting the count again.
         await redis.set(fail_key, threshold - 1, ex=cooldown + window)
+        # Each opening gets to announce itself once. The token `guard` sets is
+        # keyed to the refusal, not to the opening, so without this a breaker
+        # that re-opened moments after closing would refuse silently for the
+        # remainder of the previous token's life.
+        await redis.delete(f"{_PREFIX}:said:{scope}")
     except (RedisError, OSError):
-        logger.debug("connectors.breaker.unavailable.diagnostic", scope=scope)
+        logger.warning("connectors.breaker.unavailable.degraded", scope=scope)
         return
+    org_id, connector_id, operation_name = _fields(scope)
     logger.warning(
         "connectors.breaker.opened.degraded",
-        scope=scope,
+        organization_id=org_id,
+        connector_id=connector_id,
+        operation_name=operation_name,
         failures=threshold,
         cooldown_seconds=cooldown,
     )
