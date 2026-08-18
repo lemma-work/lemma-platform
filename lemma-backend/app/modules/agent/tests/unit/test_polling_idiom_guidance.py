@@ -73,28 +73,27 @@ def test_an_omitted_chars_still_polls_rather_than_writing_stdin():
     assert "if chars:" in source
 
 
-def test_the_agent_host_prompt_says_pausing_is_unavailable():
-    """The fallbacks degrade well; nothing told the agent they existed.
+def test_the_agent_host_prompt_teaches_both_ways_of_waiting():
+    """All three pausing tools work here now, and they do not work alike.
 
-    `ask_user`, `request_approval` and `snooze` all return
-    `interaction_fallback: true` under Agent Host, because the runtime cannot
-    suspend a turn. Meanwhile the base guidance builds whole workflows on them
-    -- the message_user/snooze/check_messages sequence for reaching a person,
-    "a 403 is your cue to request_approval", "ask_user pauses and resumes with
-    their answer". An agent discovered the mismatch only by calling and failing.
+    They used to return `interaction_fallback: true` and the prompt said so.
+    Then `ask_user`/`request_approval` learned to hold their MCP response open
+    while a person decides, and `snooze` learned to end the turn and be woken --
+    two different contracts, neither of them a fallback. A prompt still
+    describing the old refusal is worse than one saying nothing: an agent that
+    believes asking is unavailable will not ask.
     """
     from app.modules.agent.domain.prompts import load_agent_host_runtime_prompt
 
     prompt = load_agent_host_runtime_prompt()
 
     for tool in ("ask_user", "request_approval", "snooze"):
-        assert tool in prompt, f"{tool} is inert here and goes unmentioned"
-    # And names the mechanism that *does* work, not merely that they fail.
-    # Falling back to prose loses the rendered interaction card, so the
-    # replacement has to be the real waiting contract: end the turn with
-    # `final_answer` at status WAITING and let the reply start a fresh run.
-    assert "final_answer" in prompt
-    assert "WAITING" in prompt
-    # This runtime pauses -- it holds an ACP permission open for half an hour --
-    # so the guidance must not claim it cannot.
+        assert tool in prompt, f"{tool} works here and goes unmentioned"
+    # Nothing may still describe them as refusing, or as unable to pause. Both
+    # sentences were true once and are now the opposite of the behaviour.
+    assert "interaction_fallback" not in prompt
     assert "cannot suspend a turn" not in prompt
+    # The two contracts are different in the one way that changes what the agent
+    # should do, so the prompt has to distinguish them.
+    assert "keep you in this turn" in prompt
+    assert "ends this turn" in prompt
