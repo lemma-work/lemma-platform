@@ -152,6 +152,13 @@ struct Shell {
     /// `ExitRequested`, including the `app.exit` the confirmed path issues
     /// itself; without this the prompt would re-arm and the app could not leave.
     quit_confirmed: AtomicBool,
+    /// Set while the main window is being swapped onto another server's
+    /// storage. Destroying the only window is indistinguishable from closing
+    /// the last one, so without this the swap raises `ExitRequested` -- which
+    /// on an idle app has nothing to warn about and simply lets it exit, and on
+    /// a running one puts a "quit?" prompt in front of a user who asked to
+    /// change servers.
+    swapping_window: AtomicBool,
 }
 
 struct LocaldConnection {
@@ -181,6 +188,7 @@ impl Shell {
             agent_host_status: Mutex::new(None),
             sharing_mode: Mutex::new(None),
             quit_confirmed: AtomicBool::new(false),
+            swapping_window: AtomicBool::new(false),
         }
     }
 }
@@ -2224,6 +2232,17 @@ fn should_preserve_inflight_phase(
 
 fn open_app_window(app: &AppHandle, url: &str) -> Result<(), String> {
     let target = tauri::Url::parse(url).map_err(|error| format!("invalid app URL: {error}"))?;
+    // Rebuilt rather than refused when it is missing. The window is destroyed
+    // and recreated when the user changes servers, so "not available" is now a
+    // state the app can legitimately be in -- and if the recreate failed, this
+    // is the path the tray's Open uses to ask for it again. Refusing here would
+    // leave a running app whose only interface is a tray icon that cannot open
+    // anything, with no way back except quitting.
+    if app.get_webview_window("main").is_none() {
+        let mode = current_mode(app);
+        build_main_window(app, &mode, WebviewUrl::App("index.html".into()), true)
+            .map_err(|error| format!("could not reopen the window: {error}"))?;
+    }
     let window = app
         .get_webview_window("main")
         .ok_or("main window is not available")?;
@@ -3665,22 +3684,304 @@ fn current_mode(app: &AppHandle) -> String {
     ui.mode.clone()
 }
 
+/// Build the one window the app has, against the storage its server owns.
+///
+/// Extracted from `setup` so a server switch can rebuild it. Everything
+/// here has to be re-applied on a rebuild, not just on first launch: the
+/// navigation and download policies, the theme and accent listeners, the
+/// vibrancy material, and the initialization script that carries the
+/// desktop context into every document the window later navigates to.
+fn build_main_window(
+    handle: &AppHandle,
+    mode: &str,
+    initial_url: WebviewUrl,
+    partitioned: bool,
+) -> tauri::Result<tauri::WebviewWindow> {
+    let main_builder = WebviewWindowBuilder::new(handle, "main", initial_url)
+        .title("Lemma")
+        .inner_size(1280.0, 860.0)
+        .min_inner_size(980.0, 680.0)
+        .devtools(true)
+        // Corrected to the real appearance immediately after build.
+        // Light is the safer guess to start from: a white flash reads
+        // as a page loading, a black one reads as a broken app.
+        .background_color(CANVAS_LIGHT)
+        .initialization_script(desktop_context_script(mode))
+        .on_navigation({
+            let handle = handle.clone();
+            move |url| {
+                let (mode, app_base, api_base) = navigation_context(&handle);
+                match navigation_disposition(url, &mode, &app_base, &api_base) {
+                    NavigationDisposition::Allow => true,
+                    NavigationDisposition::OpenExternal => {
+                        open_external(url.as_str());
+                        false
+                    }
+                    NavigationDisposition::Deny => false,
+                }
+            }
+        })
+        .on_new_window({
+            let handle = handle.clone();
+            move |url, _features| {
+                let (mode, app_base, api_base) = navigation_context(&handle);
+                match new_window_disposition(&url, &mode, &app_base, &api_base) {
+                    NewWindowDisposition::NavigateInApp => {
+                        let _ = navigate_app_window(&handle, url.as_str());
+                    }
+                    NewWindowDisposition::OpenExternal => {
+                        open_external(url.as_str());
+                    }
+                    NewWindowDisposition::Deny => {}
+                }
+                NewWindowResponse::Deny
+            }
+        })
+        .on_download({
+            let handle = handle.clone();
+            move |_webview, event| match event {
+                DownloadEvent::Requested { url, .. } => {
+                    let (mode, app_base, api_base) = navigation_context(&handle);
+                    download_disposition(&url, &mode, &app_base, &api_base)
+                }
+                _ => true,
+            }
+        });
+
+    // Native materials. Vibrancy is only ever visible where the web
+    // content declines to paint, so the window has to be transparent
+    // for any of it to show — which also means every surface that
+    // *should* stay opaque has to say so itself. That sweep is not
+    // done, so this stays behind a flag: without it the app composites
+    // exactly as it did before, and with it the [data-desktop-vibrancy]
+    // rules in styles/tokens.css open up the shell rail.
+    #[cfg(target_os = "macos")]
+    let main_builder = if desktop_vibrancy_enabled() {
+        main_builder.transparent(true)
+    } else {
+        main_builder
+    };
+
+    // Which storage this window gets. Set here because it is a
+    // builder-time property: a live webview cannot be moved between
+    // stores, which is why switching servers rebuilds the window
+    // rather than clearing the one store both used to share.
+    #[cfg(target_os = "macos")]
+    let main_builder = if partitioned {
+        main_builder.data_store_identifier(session_partition_id(mode))
+    } else {
+        main_builder
+    };
+    #[cfg(target_os = "windows")]
+    let main_builder = if partitioned {
+        main_builder.data_directory(session_partition_dir(mode))
+    } else {
+        main_builder
+    };
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    let _ = partitioned;
+
+    let main = main_builder.build()?;
+
+    // The builder had to guess an appearance before the window existed.
+    // Now that it does, ask it, and keep asking: a window whose layer
+    // stays light while the page goes dark flashes white on every
+    // navigation, which is the same bug with the colours swapped.
+    if let Ok(theme) = main.theme() {
+        let _ = main.set_background_color(Some(canvas_color(theme)));
+    }
+    main.on_window_event({
+        let window = main.clone();
+        move |event| {
+            if let tauri::WindowEvent::ThemeChanged(theme) = event {
+                let _ = window.set_background_color(Some(canvas_color(*theme)));
+            }
+        }
+    });
+
+    #[cfg(target_os = "macos")]
+    if desktop_vibrancy_enabled() {
+        use window_vibrancy::{apply_vibrancy, NSVisualEffectMaterial, NSVisualEffectState};
+
+        // Sidebar is the material AppKit itself uses behind source
+        // lists, which is what the pod shell rail is.
+        // The attribute itself rides in the initialization script, so it
+        // is already set on this document and on every document the
+        // window navigates to afterwards. Only the failure path needs
+        // to say anything here, and it takes the attribute back off so
+        // the page is not styled for a material that is not there.
+        if let Err(error) = apply_vibrancy(
+            &main,
+            NSVisualEffectMaterial::Sidebar,
+            Some(NSVisualEffectState::FollowsWindowActiveState),
+            None,
+        ) {
+            eprintln!("lemma: could not apply window vibrancy: {error}");
+            let _ = main.eval("document.documentElement.removeAttribute('data-desktop-vibrancy')");
+        }
+    }
+
+    // Only relevant when the OS accent is driving the palette. The
+    // accent is read once at launch, so it would otherwise go stale the
+    // moment the user changes it in System Settings; re-reading on focus
+    // catches exactly that — they leave to change it and come back.
+    if desktop_system_accent_enabled() {
+        main.on_window_event({
+            let window = main.clone();
+            move |event| {
+                if matches!(
+                    event,
+                    tauri::WindowEvent::Focused(true) | tauri::WindowEvent::ThemeChanged(_)
+                ) {
+                    let _ = window.eval(format!(
+                        "document.documentElement.style.setProperty('--accent-rgb','{}')",
+                        accent_channel_triple(),
+                    ));
+                }
+            }
+        });
+    }
+
+    main.show()?;
+    main.set_focus()?;
+    if std::env::var("LEMMA_DESKTOP_DEVTOOLS").as_deref() == Ok("1") {
+        main.open_devtools();
+    }
+    Ok(main)
+}
+
 fn set_mode(app: &AppHandle, mode: &str) -> Result<(), String> {
     write_config(|config| {
         config["connectionMode"] = json!(mode);
         config["connectionModePromptRevision"] = json!(CONNECTION_MODE_PROMPT_REVISION);
     })?;
     refresh_menus_for_connection_mode(app);
-    {
+    let changed = {
         let shell: State<Shell> = app.state();
         let mut ui = shell.ui.lock().unwrap();
-        if ui.mode != mode && mode == "local" {
+        let changed = ui.mode != mode;
+        if changed && mode == "local" {
             ui.url.clear();
             ui.api_url.clear();
         }
         ui.mode = mode.to_string();
+        changed
+    };
+    if changed {
+        rebuild_main_window_for_mode(app, mode);
     }
     Ok(())
+}
+
+/// The storage partition a server's session lives in.
+///
+/// Lemma Cloud and a local install are different servers -- different accounts,
+/// different databases, different signing keys -- shown in one window. They are
+/// also different origins (`lemma.work` versus `app.lemma.localhost`), so the
+/// browser's own rules already stop either reading the other's cookies.
+///
+/// What the origin rules do *not* do is bound a session's lifetime to the
+/// server that issued it. `app.lemma.localhost` is a stable hostname reused by
+/// every local installation this machine ever has, and cookies ignore the port,
+/// so a session minted against one local database is still presented to the
+/// next one -- which rejects it, correctly, on every authorized route while
+/// `/auth/session/refresh` keeps answering 200 because the refresh token itself
+/// is genuinely valid. One install was measured writing 8 MB of backend log an
+/// hour in that state, indefinitely.
+///
+/// Giving each server its own store is what makes the two independent rather
+/// than merely non-overlapping. The earlier version of this fix cleared the
+/// single shared store whenever the mode changed, which signed the user out of
+/// the server they were leaving *and* out of the one they were returning to --
+/// and still did not fix the case above, which needs no mode change at all.
+///
+/// The identifiers are constants, not derived: they have to name the same store
+/// on every launch, or a restart would look like a new server and lose the
+/// session it was meant to keep.
+#[cfg(target_os = "macos")]
+fn session_partition_id(mode: &str) -> [u8; 16] {
+    // Arbitrary, fixed, and distinct. Never reuse or reorder these.
+    const HOSTED: [u8; 16] = *b"lemma.cloud.sess";
+    const LOCAL: [u8; 16] = *b"lemma.local.sess";
+    if mode == "hosted" {
+        HOSTED
+    } else {
+        LOCAL
+    }
+}
+
+/// The Windows spelling of the same idea. WebView2 partitions by user-data
+/// folder rather than by identifier, so the two servers get two directories.
+#[cfg(target_os = "windows")]
+fn session_partition_dir(mode: &str) -> PathBuf {
+    let name = if mode == "hosted" { "hosted" } else { "local" };
+    app_support_dir().join("webview").join(name)
+}
+
+/// Clears the swap flag however the rebuild ends, including on an early
+/// return. A flag left set would make the app unquittable.
+struct ExitGuard(AppHandle);
+
+impl Drop for ExitGuard {
+    fn drop(&mut self) {
+        let shell: State<Shell> = self.0.state();
+        shell.swapping_window.store(false, Ordering::Release);
+    }
+}
+
+/// Move the window onto the storage the new server owns.
+///
+/// A webview's store is fixed when it is built, so this closes the window and
+/// builds it again. That is the price of real isolation, and it is paid only on
+/// an actual server change: a restart, a reconnect, or a runtime coming back on
+/// new ports all keep the window they have.
+///
+/// Failure is deliberately not fatal to the switch. The mode has already been
+/// written and the caller is about to navigate; a window that is still on the
+/// previous store shows the right server with the wrong cookie jar, which is
+/// the behaviour that shipped before this existed. Refusing to switch servers
+/// at all would be worse.
+fn rebuild_main_window_for_mode(app: &AppHandle, mode: &str) {
+    let Some(existing) = app.get_webview_window("main") else {
+        // Nothing built yet -- `setup` will create it against the right store.
+        return;
+    };
+    // Held across both halves, and cleared on every path out. `destroy` is
+    // deliberate rather than `close`: the app hides to tray on CloseRequested,
+    // so `close` would leave the old window alive on the old store and no new
+    // one would ever be built.
+    let shell: State<Shell> = app.state();
+    shell.swapping_window.store(true, Ordering::Release);
+    let _reset = ExitGuard(app.clone());
+    if let Err(error) = existing.destroy() {
+        append_install_log(&format!(
+            "[connection-mode] could not close the previous server's window: {error}"
+        ));
+        return;
+    }
+    // Rebuilt on the splash rather than on the destination: `set_mode`'s caller
+    // navigates immediately afterwards, and for local it has to wait for the
+    // daemon first. Starting anywhere else would show one server's page against
+    // the other's storage for as long as that takes.
+    let initial = WebviewUrl::App("index.html".into());
+    if let Err(error) = build_main_window(app, mode, initial.clone(), true) {
+        // Falling back to the shared store, not to nothing. Per-webview storage
+        // is the newer half of this: macOS needs 14 (which the bundle already
+        // requires) and Windows gives each webview its own WebView2 environment,
+        // which is not something this can prove on every machine it will run on.
+        // Losing the partition costs the isolation and restores exactly the
+        // behaviour that shipped before it; losing the window leaves the user
+        // with an app that has no interface at all.
+        append_install_log(&format!(
+            "[connection-mode] partitioned window failed for {mode}, \
+             falling back to shared storage: {error}"
+        ));
+        if let Err(error) = build_main_window(app, mode, initial, false) {
+            append_install_log(&format!(
+                "[connection-mode] could not reopen the window for {mode}: {error}"
+            ));
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -4993,141 +5294,8 @@ fn main() {
                 WebviewUrl::App("index.html".into())
             };
 
-            let main_builder = WebviewWindowBuilder::new(app, "main", initial_url)
-                .title("Lemma")
-                .inner_size(1280.0, 860.0)
-                .min_inner_size(980.0, 680.0)
-                .devtools(true)
-                // Corrected to the real appearance immediately after build.
-                // Light is the safer guess to start from: a white flash reads
-                // as a page loading, a black one reads as a broken app.
-                .background_color(CANVAS_LIGHT)
-                .initialization_script(desktop_context_script(&mode))
-                .on_navigation({
-                    let handle = handle.clone();
-                    move |url| {
-                        let (mode, app_base, api_base) = navigation_context(&handle);
-                        match navigation_disposition(url, &mode, &app_base, &api_base) {
-                            NavigationDisposition::Allow => true,
-                            NavigationDisposition::OpenExternal => {
-                                open_external(url.as_str());
-                                false
-                            }
-                            NavigationDisposition::Deny => false,
-                        }
-                    }
-                })
-                .on_new_window({
-                    let handle = handle.clone();
-                    move |url, _features| {
-                        let (mode, app_base, api_base) = navigation_context(&handle);
-                        match new_window_disposition(&url, &mode, &app_base, &api_base) {
-                            NewWindowDisposition::NavigateInApp => {
-                                let _ = navigate_app_window(&handle, url.as_str());
-                            }
-                            NewWindowDisposition::OpenExternal => {
-                                open_external(url.as_str());
-                            }
-                            NewWindowDisposition::Deny => {}
-                        }
-                        NewWindowResponse::Deny
-                    }
-                })
-                .on_download({
-                    let handle = handle.clone();
-                    move |_webview, event| match event {
-                        DownloadEvent::Requested { url, .. } => {
-                            let (mode, app_base, api_base) = navigation_context(&handle);
-                            download_disposition(&url, &mode, &app_base, &api_base)
-                        }
-                        _ => true,
-                    }
-                });
-
-            // Native materials. Vibrancy is only ever visible where the web
-            // content declines to paint, so the window has to be transparent
-            // for any of it to show — which also means every surface that
-            // *should* stay opaque has to say so itself. That sweep is not
-            // done, so this stays behind a flag: without it the app composites
-            // exactly as it did before, and with it the [data-desktop-vibrancy]
-            // rules in styles/tokens.css open up the shell rail.
-            #[cfg(target_os = "macos")]
-            let main_builder = if desktop_vibrancy_enabled() {
-                main_builder.transparent(true)
-            } else {
-                main_builder
-            };
-
-            let main = main_builder.build()?;
-
-            // The builder had to guess an appearance before the window existed.
-            // Now that it does, ask it, and keep asking: a window whose layer
-            // stays light while the page goes dark flashes white on every
-            // navigation, which is the same bug with the colours swapped.
-            if let Ok(theme) = main.theme() {
-                let _ = main.set_background_color(Some(canvas_color(theme)));
-            }
-            main.on_window_event({
-                let window = main.clone();
-                move |event| {
-                    if let tauri::WindowEvent::ThemeChanged(theme) = event {
-                        let _ = window.set_background_color(Some(canvas_color(*theme)));
-                    }
-                }
-            });
-
-            #[cfg(target_os = "macos")]
-            if desktop_vibrancy_enabled() {
-                use window_vibrancy::{
-                    apply_vibrancy, NSVisualEffectMaterial, NSVisualEffectState,
-                };
-
-                // Sidebar is the material AppKit itself uses behind source
-                // lists, which is what the pod shell rail is.
-                // The attribute itself rides in the initialization script, so it
-                // is already set on this document and on every document the
-                // window navigates to afterwards. Only the failure path needs
-                // to say anything here, and it takes the attribute back off so
-                // the page is not styled for a material that is not there.
-                if let Err(error) = apply_vibrancy(
-                    &main,
-                    NSVisualEffectMaterial::Sidebar,
-                    Some(NSVisualEffectState::FollowsWindowActiveState),
-                    None,
-                ) {
-                    eprintln!("lemma: could not apply window vibrancy: {error}");
-                    let _ = main
-                        .eval("document.documentElement.removeAttribute('data-desktop-vibrancy')");
-                }
-            }
-
-            // Only relevant when the OS accent is driving the palette. The
-            // accent is read once at launch, so it would otherwise go stale the
-            // moment the user changes it in System Settings; re-reading on focus
-            // catches exactly that — they leave to change it and come back.
-            if desktop_system_accent_enabled() {
-                main.on_window_event({
-                    let window = main.clone();
-                    move |event| {
-                        if matches!(
-                            event,
-                            tauri::WindowEvent::Focused(true) | tauri::WindowEvent::ThemeChanged(_)
-                        ) {
-                            let _ = window.eval(format!(
-                                "document.documentElement.style.setProperty('--accent-rgb','{}')",
-                                accent_channel_triple(),
-                            ));
-                        }
-                    }
-                });
-            }
-
-            main.show()?;
-            main.set_focus()?;
+            build_main_window(&handle, &mode, initial_url, true)?;
             launch_trace("window shown");
-            if std::env::var("LEMMA_DESKTOP_DEVTOOLS").as_deref() == Ok("1") {
-                main.open_devtools();
-            }
 
             app.set_menu(build_app_menu(&handle)?)?;
             app.on_menu_event(|app, event| handle_menu_action(app, event.id().as_ref()));
@@ -5290,6 +5458,14 @@ fn main() {
             // to say so about.
             tauri::RunEvent::ExitRequested { api, .. } => {
                 let shell: State<Shell> = app.state();
+                // A server switch closes the window and opens another one. In
+                // between there are no windows, which looks exactly like the
+                // last one closing -- so hold the exit rather than asking about
+                // it or taking it.
+                if shell.swapping_window.load(Ordering::Acquire) {
+                    api.prevent_exit();
+                    return;
+                }
                 if shell.quit_confirmed.load(Ordering::Acquire) {
                     return;
                 }
@@ -5320,6 +5496,28 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use std::fs::File;
+
+    /// Cloud and local must never share a store, and neither may drift between
+    /// launches.
+    ///
+    /// The identifiers are constants precisely so this can be asserted. If one
+    /// were ever derived from something per-run, a restart would look like a
+    /// different server and silently sign the user out of the one they kept.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn each_server_gets_its_own_session_store() {
+        let hosted = super::session_partition_id("hosted");
+        let local = super::session_partition_id("local");
+        assert_ne!(hosted, local);
+        // Stable across calls, which is what makes a session survive a restart.
+        assert_eq!(hosted, super::session_partition_id("hosted"));
+        assert_eq!(local, super::session_partition_id("local"));
+        // Anything that is not the hosted server is the local one. "undecided"
+        // reaches here on a first launch that has not been answered yet, and it
+        // must not land in the cloud store.
+        assert_eq!(local, super::session_partition_id("undecided"));
+        assert_eq!(local, super::session_partition_id(""));
+    }
 
     /// The shell and the daemon must derive the same endpoint name.
     ///
