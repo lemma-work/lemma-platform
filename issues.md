@@ -332,6 +332,53 @@ accepting is the better product. What must not remain is 200 with nothing kept.
 
 ---
 
+### DEV-DATA-002 — One of four pod-schema creators skips the lock that exists for it
+**Violates:** PS-DATA-001
+**Severity:** medium
+**Where:** [`postgres_search_service.py:83`](lemma-backend/app/modules/datastore/services/search/postgres_search_service.py#L83),
+against [`schema_manager.py:148`](lemma-backend/app/modules/datastore/infrastructure/schema_manager.py#L148)
+(`_lock_schema_bootstrap`)
+
+**Required:** Creating a pod's datastore schema is safe against a concurrent
+creator. The code already knows this and says so in the lock's own docstring:
+
+> PostgreSQL's `CREATE SCHEMA IF NOT EXISTS` is not race-free: two concurrent
+> transactions can both observe the namespace as absent and one later fails the
+> `pg_namespace.nspname` unique index. […] so they must share this
+> transaction-scoped advisory lock.
+
+**Actual:** Four places run `CREATE SCHEMA IF NOT EXISTS "pod_…"`. Three take
+`pg_advisory_xact_lock(hashtext(schema_name))` first. The search service's
+`_ensure_schema` does not — it builds the same name (`pod_{uuid}` at `:44`) and
+creates it bare.
+
+Observed rather than reasoned: a scenario run's worker log carries
+
+```
+IntegrityError: duplicate key value violates unique constraint
+  "pg_namespace_nspname_index"
+DETAIL:  Key (nspname)=(pod_01a015d9_51d1_75e0_aa86_4553f099eeca) already exists.
+[SQL: CREATE SCHEMA IF NOT EXISTS "pod_01a015d9_51d1_75e0_aa86_4553f099eeca"]
+```
+
+raised from `pod_schema_consumer.on_pod_created` — the locked path losing to the
+unlocked one.
+
+**Why it matters:** The pod-created consumer fails and retries, so the schema
+does arrive; the cost is a guaranteed error and burnt retry budget whenever a
+pod's first search initialisation overlaps its provisioning. It also puts a real
+`IntegrityError` in the log for a condition that is not a bug in the caller,
+which is how genuine integrity failures stop being noticed. A pod created and
+immediately used — the common shape for anything scripted, and for bundle
+import — is exactly the overlap.
+
+**Fix:** Take the same lock in `_ensure_schema`, or route it through
+`SchemaManager.create_datastore_schema`, which already does. The second is
+better: it keeps one creator, and the search service currently also misses the
+schema-level `try_grant` that `create_datastore_schema` does afterwards.
+
+---
+
 ## FLOW — workflows
 
 ### DEV-FLOW-001 — Both workflow visualisation endpoints return 500, always
