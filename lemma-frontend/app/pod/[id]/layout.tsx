@@ -26,7 +26,7 @@ import { getLemmaClient } from "@/lib/sdk/lemma-client";
 import { usePod } from "@/lib/hooks/use-pods";
 import { usePodContext } from "@/lib/hooks/use-pod-context";
 import { usePodAccess } from "@/lib/hooks/use-pod-access";
-import { parseConversationMetadataParam } from "@/lib/pods/composer-launch";
+import { parseConversationMetadataParam, stripAssistantLaunchParams } from "@/lib/pods/composer-launch";
 import { clearLastOpenedPodId, writeLastOpenedPodId } from "@/lib/pods/last-opened-pod";
 import { getWorkspaceTabAfterClose, getWorkspaceTabHref } from "@/lib/pods/workspace-tabs";
 import {
@@ -460,31 +460,26 @@ function PodShell({
         if (handledAssistantMessageRef.current === key) return;
         handledAssistantMessageRef.current = key;
 
-        const nextParams = new URLSearchParams(searchParams.toString());
-        nextParams.delete("assistantMessage");
-        const nextQuery = nextParams.toString();
-
         if (isPodHome) {
-            const conversationParams = new URLSearchParams(nextParams.toString());
-            conversationParams.set("assistantMessage", assistantMessage);
-            router.replace(`/pod/${pod.id}/conversations/new?${conversationParams.toString()}`);
+            router.replace(`/pod/${pod.id}/conversations/new?${searchParams.toString()}`);
             return;
         }
 
+        // Cleared as the send goes out. Clearing it after the turn instead
+        // pinned the launch URL on screen for the length of the answer, and
+        // then replaced whatever route the reader had moved on to.
+        const nextQuery = stripAssistantLaunchParams(searchParams);
+        router.replace(nextQuery ? `${pathname}?${nextQuery}` : pathname);
+
         void (async () => {
-            if (isConversationRoute) {
-                closeAssistant();
-            } else {
-                openAssistant();
-            }
+            openAssistant();
             await sendMessage(assistantMessage, {
                 forceNewConversation: true,
                 instructions: conversationInstructions || undefined,
                 conversationMetadata: parsedConversationMetadata,
             });
-            router.replace(nextQuery ? `${pathname}?${nextQuery}` : pathname);
         })();
-    }, [assistantMessage, closeAssistant, conversationInstructions, conversationMetadata, isConversationRoute, isPodHome, isReady, openAssistant, parsedConversationMetadata, pathname, pod.id, router, searchParams, sendMessage]);
+    }, [assistantMessage, conversationInstructions, conversationMetadata, isConversationRoute, isPodHome, isReady, openAssistant, parsedConversationMetadata, pathname, pod.id, router, searchParams, sendMessage]);
 
     useEffect(() => {
         if (isPodHome && isAssistantOpen) {
