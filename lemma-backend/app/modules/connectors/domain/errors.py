@@ -11,7 +11,14 @@ def _safe_connector_details(details: object | None) -> dict | None:
         key: value
         for key, value in details.items()
         if str(key).lower()
-        in {"status", "status_code", "code", "error", "reason", "error_type", "upstream_status", "upstream_code"}
+        in {
+            "status", "status_code", "code", "error", "reason", "error_type",
+            "upstream_status", "upstream_code",
+            # Which connector and operation, and when to come back. The circuit
+            # breaker builds both and they were dropped here, so a caller got
+            # `details: null` and a message naming nothing at all.
+            "scope", "connector_id", "operation_name", "retry_after",
+        }
     }
     return redact_value(allowed) if allowed else None
 
@@ -304,12 +311,19 @@ class OperationExecutionCircuitOpenError(OperationExecutionInfrastructureError):
     ``OperationExecutionError`` directly rather than ``super()``: the parent
     fixes its own message and code, which is the whole thing this class exists
     to override.
+
+    The caller's *message* is kept, which it previously was not. The breaker
+    carefully builds one naming the connector and operation, and this class
+    shadowed it with a fixed string -- so a caller was told "a connector is
+    disabled" without being told which, and the seven of these in one
+    production incident were attributable to no provider at all.
     """
 
     def __init__(self, message: str, details: object | None = None):
         OperationExecutionError.__init__(
             self,
-            message="Connector provider is temporarily disabled after repeated failures.",
+            message=message
+            or "Connector provider is temporarily disabled after repeated failures.",
             code="OPERATION_EXECUTION_CIRCUIT_OPEN",
             status_code=503,
             details=_safe_connector_details(details),

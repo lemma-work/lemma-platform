@@ -55,6 +55,22 @@ def _keys(scope: str) -> tuple[str, str]:
     return f"{_PREFIX}:open:{scope}", f"{_PREFIX}:fail:{scope}"
 
 
+def _fields(scope: str) -> tuple[str, str, str]:
+    """Split the compound scope so a log query can group by connector.
+
+    ``scope`` is ``[org:]connector:operation``. As one opaque string it could
+    only be grouped by string surgery, and the organization -- which matters
+    precisely because the key is per-tenant -- was invisible. Returns
+    ``(organization_id, connector_id, operation_name)``.
+    """
+    parts = scope.split(":")
+    if len(parts) >= 3:
+        return parts[0], parts[1], ":".join(parts[2:])
+    if len(parts) == 2:
+        return "", parts[0], parts[1]
+    return "", scope, ""
+
+
 def breaker_scope(
     connector_id: str, operation_name: str, organization_id: object | None = None
 ) -> str:
@@ -93,13 +109,25 @@ async def guard(scope: str) -> None:
         # A breaker that cannot reach Redis must not become an outage of its
         # own. Losing the protection is strictly better than refusing traffic
         # that would have worked.
-        logger.debug("connectors.breaker.unavailable.diagnostic", scope=scope)
+        logger.warning("connectors.breaker.unavailable.degraded", scope=scope)
         return
     if is_open:
+        cooldown = connector_settings.connector_breaker_cooldown_seconds
+        # Logged, because a refused call left no trace of its own: the seven in
+        # one production incident existed only as request failures naming no
+        # connector, which is why nobody could say which provider had tripped.
+        org_id, connector_id, operation_name = _fields(scope)
+        logger.warning(
+            "connectors.breaker.rejected.degraded",
+            organization_id=org_id,
+            connector_id=connector_id,
+            operation_name=operation_name,
+            cooldown_seconds=cooldown,
+        )
         raise OperationExecutionCircuitOpenError(
             f"Connector operation {scope} is temporarily disabled after repeated "
             "provider failures.",
-            details={"scope": scope},
+            details={"scope": scope, "retry_after": cooldown},
         )
 
 
@@ -109,9 +137,21 @@ async def record_success(scope: str) -> None:
         return
     open_key, fail_key = _keys(scope)
     try:
-        await get_redis().delete(open_key, fail_key)
+        # `delete` returns how many keys existed. A non-zero open key means this
+        # success ended an incident, and an incident that starts in the logs and
+        # never ends there reads as still ongoing forever.
+        cleared = await get_redis().delete(open_key, fail_key)
     except (RedisError, OSError):
-        logger.debug("connectors.breaker.unavailable.diagnostic", scope=scope)
+        logger.warning("connectors.breaker.unavailable.degraded", scope=scope)
+        return
+    if cleared:
+        org_id, connector_id, operation_name = _fields(scope)
+        logger.info(
+            "connectors.breaker.recovered",
+            organization_id=org_id,
+            connector_id=connector_id,
+            operation_name=operation_name,
+        )
 
 
 async def record_failure(scope: str) -> None:
@@ -135,11 +175,14 @@ async def record_failure(scope: str) -> None:
         # re-opens it rather than starting the count again.
         await redis.set(fail_key, threshold - 1, ex=cooldown + window)
     except (RedisError, OSError):
-        logger.debug("connectors.breaker.unavailable.diagnostic", scope=scope)
+        logger.warning("connectors.breaker.unavailable.degraded", scope=scope)
         return
+    org_id, connector_id, operation_name = _fields(scope)
     logger.warning(
         "connectors.breaker.opened.degraded",
-        scope=scope,
+        organization_id=org_id,
+        connector_id=connector_id,
+        operation_name=operation_name,
         failures=threshold,
         cooldown_seconds=cooldown,
     )

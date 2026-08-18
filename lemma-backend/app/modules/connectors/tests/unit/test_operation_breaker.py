@@ -313,3 +313,40 @@ def test_the_same_organization_shares_one_breaker_per_operation():
 
     assert breaker_scope("gmail", "send", org) == breaker_scope("gmail", "send", org)
     assert breaker_scope("gmail", "send", org) != breaker_scope("gmail", "list", org)
+
+
+# -- a refused call must say what refused it ----------------------------------
+
+
+def test_the_circuit_open_error_names_the_connector_and_when_to_retry():
+    """Seven of these in one production incident, attributable to nothing.
+
+    The breaker builds a message naming the scope and passes `details={"scope":
+    ...}`. The error class shadowed the message with a fixed string, and the
+    details allowlist dropped "scope" because it was not on it — so the caller
+    received `details: null` and "a connector is disabled", with no way to learn
+    which one or when to come back.
+    """
+    error = OperationExecutionCircuitOpenError(
+        "Connector operation org-1:gmail:send is temporarily disabled after "
+        "repeated provider failures.",
+        details={"scope": "org-1:gmail:send", "retry_after": 60},
+    )
+
+    assert "org-1:gmail:send" in error.message
+    assert error.details is not None, "details were dropped by the allowlist"
+    assert error.details["scope"] == "org-1:gmail:send"
+    assert error.details["retry_after"] == 60
+
+
+def test_the_scope_splits_into_fields_a_log_query_can_group_by():
+    """One opaque compound string could only be grouped by string surgery, and
+    the organization — which matters *because* the key is per-tenant — was not
+    visible at all."""
+    assert operation_breaker._fields("org-1:gmail:send") == (
+        "org-1",
+        "gmail",
+        "send",
+    )
+    # Legacy two-part keys still parse rather than raising.
+    assert operation_breaker._fields("gmail:send") == ("", "gmail", "send")
