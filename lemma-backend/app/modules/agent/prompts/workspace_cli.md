@@ -70,7 +70,7 @@ The workspace is private to this conversation. Work in your working directory (b
 
 **Python — two cases, and they use different tools.**
 
-*Adding a package to the interpreter you already have* (the one `execute_python` uses): `pip install <package>`. Not `uv pip install`, which targets a system environment you cannot write to and fails with a permission error. `numpy`, `pandas`, `matplotlib`, `openpyxl`, `pillow`, `requests` and `tabulate` are already there. These installs last for the conversation.
+*Adding a package to the interpreter you already have* (the one `execute_python` uses): `pip install <package>` or `uv pip install <package>` — both land in the same place and `execute_python` imports either. `numpy`, `pandas`, `matplotlib`, `openpyxl`, `pillow`, `requests` and `tabulate` are already there. These installs last for the conversation.
 
 *Building a Python project* — anything with a `pyproject.toml`, or that needs its own pinned dependencies: use `uv`. `uv venv` then `uv pip install`, or `uv sync` for a project with a lockfile. Its cache is on the workspace volume too, so repeat installs are fast. Run the project's code with that venv's interpreter rather than `execute_python`, which is bound to the shared one.
 

@@ -78,8 +78,9 @@ class WriteStdinRequest(BaseModel):
     chars: Optional[str] = Field(
         default=None,
         description=(
-            'Characters to send to stdin. Use `""` to poll output without sending '
-            "input. Include `\\n` when pressing Enter is required. Control keys "
+            "Characters to send to stdin. Omit this field entirely to poll "
+            "output without sending input. Include `\\n` when pressing Enter is "
+            "required. Control keys "
             "are sent as their characters: `\\u0003` interrupts (Ctrl-C), "
             "`\\u0004` sends EOF (Ctrl-D) to exit a REPL, and `\\u001b[A` / "
             "`\\u001b[B` are the up and down arrows. Prefer interrupting a stuck "
@@ -131,8 +132,9 @@ class ManageProcessRequest(BaseModel):
     chars: Optional[str] = Field(
         default=None,
         description=(
-            'Stdin for action="input"; `""` polls output without sending. Include '
-            "`\\n` for Enter. `\\u0003` is Ctrl-C, `\\u0004` is Ctrl-D."
+            'Stdin for action="input". Omit this field to poll output without '
+            "sending. Include `\\n` for Enter. `\\u0003` is Ctrl-C, "
+            "`\\u0004` is Ctrl-D."
         ),
     )
     cols: int = Field(default=120, ge=20, le=500, description="Width, for 'resize'.")

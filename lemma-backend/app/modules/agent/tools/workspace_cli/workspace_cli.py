@@ -44,6 +44,7 @@ from app.modules.agent.tools.workspace_cli.helper import (
     trim_python_result,
 )
 from app.modules.agent.tools.workspace_entities import PythonExecutionResult
+from app.modules.workspace.session_support import retry_advice
 from app.composition.agent_workspace import (
     get_workspace_tool_runtime,
 )
@@ -90,7 +91,7 @@ def _workspace_tool_failure(
     process_id: str | None = None,
 ) -> ExecCommandResult:
     logger.debug(
-        'agent.workspace_cli.workspace_cli_s_s.diagnostic',
+        "agent.workspace_cli.workspace_cli_s_s.diagnostic",
         operation=operation,
         exc_info=True,
     )
@@ -103,9 +104,7 @@ def _workspace_tool_failure(
         process_id=process_id,
         error=(
             f"Workspace {operation} failed before the tool could complete: "
-            f"{describe_exception(exc)}. "
-            "Treat this as a recoverable tool failure and retry if the operation "
-            "is still needed."
+            f"{describe_exception(exc)}." + retry_advice(exc)
         ),
     )
 
@@ -114,7 +113,7 @@ def _python_workspace_tool_failure(
     exc: Exception, *, operation: str
 ) -> PythonExecutionResult:
     logger.debug(
-        'agent.workspace_cli.workspace_cli_s_s.diagnostic',
+        "agent.workspace_cli.workspace_cli_s_s.diagnostic",
         operation=operation,
         exc_info=True,
     )
@@ -127,9 +126,7 @@ def _python_workspace_tool_failure(
             "ename": "WorkspaceToolError",
             "evalue": (
                 f"Workspace {operation} failed before Python execution completed: "
-                f"{describe_exception(exc)}. "
-                "Treat this as a recoverable tool failure and retry if the operation "
-                "is still needed."
+                f"{describe_exception(exc)}." + retry_advice(exc)
             ),
             "traceback": [],
         },
@@ -297,7 +294,7 @@ async def exec_command_internal(
                     # it just runs without credentials and fails with git's
                     # own native auth error, same as with no bridge at all.
                     logger.debug(
-                        'agent.workspace_cli.github_credential_bridge_failed.diagnostic',
+                        "agent.workspace_cli.github_credential_bridge_failed.diagnostic",
                         exc_info=True,
                     )
             if request.tty:
@@ -465,7 +462,8 @@ async def list_processes_internal(
         )
     except Exception as exc:
         logger.debug(
-            'agent.workspace_cli.workspace_cli_list_processes_s.diagnostic', exc_info=True
+            "agent.workspace_cli.workspace_cli_list_processes_s.diagnostic",
+            exc_info=True,
         )
         return ListProcessesResult(
             success=False,

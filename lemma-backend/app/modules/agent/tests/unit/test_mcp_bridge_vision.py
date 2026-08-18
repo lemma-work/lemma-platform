@@ -61,7 +61,9 @@ async def test_the_bridge_resolves_the_runtime_so_capabilities_are_present(monke
         resolve = AsyncMock(return_value=resolved)
 
     monkeypatch.setattr(bridge, "AgentRuntimeProfileService", _Service)
-    monkeypatch.setattr(bridge, "AgentRuntimeProfileRepository", lambda *a, **k: object())
+    monkeypatch.setattr(
+        bridge, "AgentRuntimeProfileRepository", lambda *a, **k: object()
+    )
     monkeypatch.setattr(bridge, "AgentHostRepository", lambda *a, **k: object())
     monkeypatch.setattr(bridge, "get_secret_cipher", object)
 
@@ -81,7 +83,9 @@ async def test_the_bridge_resolves_the_runtime_so_capabilities_are_present(monke
 
 
 @pytest.mark.asyncio
-async def test_a_failed_resolve_falls_back_instead_of_failing_the_tool_call(monkeypatch):
+async def test_a_failed_resolve_falls_back_instead_of_failing_the_tool_call(
+    monkeypatch,
+):
     """A profile archived mid-run must not turn every tool call into an error.
 
     Falling back to the stored config restores exactly the previous behaviour --
@@ -97,7 +101,9 @@ async def test_a_failed_resolve_falls_back_instead_of_failing_the_tool_call(monk
         resolve = AsyncMock(side_effect=RuntimeError("profile archived"))
 
     monkeypatch.setattr(bridge, "AgentRuntimeProfileService", _Service)
-    monkeypatch.setattr(bridge, "AgentRuntimeProfileRepository", lambda *a, **k: object())
+    monkeypatch.setattr(
+        bridge, "AgentRuntimeProfileRepository", lambda *a, **k: object()
+    )
     monkeypatch.setattr(bridge, "AgentHostRepository", lambda *a, **k: object())
     monkeypatch.setattr(bridge, "get_secret_cipher", object)
 
@@ -157,6 +163,7 @@ async def test_a_harness_that_learned_to_see_is_believed_over_its_stored_catalog
     )
     from app.modules.agent.services.runtime_profile_service import (
         AgentRuntimeProfileService,
+        _with_harness_vision,
     )
 
     harness_id = uuid4()
@@ -166,16 +173,16 @@ async def test_a_harness_that_learned_to_see_is_believed_over_its_stored_catalog
         provider_model_name="claude-opus-5",
         capabilities=[RuntimeModelCapability.TEXT, RuntimeModelCapability.TOOLS],
     )
-    profile = SimpleNamespace(
-        kind=RuntimeProfileKind.HARNESS, harness_id=harness_id
-    )
+    profile = SimpleNamespace(kind=RuntimeProfileKind.HARNESS, harness_id=harness_id)
 
     class _Hosts:
         async def get_harnesses(self, ids):
             return {harness_id: SimpleNamespace(capabilities={"images": True})}
 
     service = AgentRuntimeProfileService(None, _Hosts())
-    refreshed = await service._with_live_harness_vision(profile, stale)
+    refreshed = _with_harness_vision(
+        stale, harness_sees=await service._harness_reads_images(profile)
+    )
 
     assert RuntimeModelCapability.VISION in refreshed.capabilities
     # Additive only -- the stored entry is not mutated.
@@ -192,6 +199,7 @@ async def test_a_harness_that_cannot_see_leaves_the_stored_catalog_alone():
     )
     from app.modules.agent.services.runtime_profile_service import (
         AgentRuntimeProfileService,
+        _with_harness_vision,
     )
 
     harness_id = uuid4()
@@ -208,7 +216,9 @@ async def test_a_harness_that_cannot_see_leaves_the_stored_catalog_alone():
             return {harness_id: SimpleNamespace(capabilities={"images": False})}
 
     service = AgentRuntimeProfileService(None, _Hosts())
-    result = await service._with_live_harness_vision(profile, stored)
+    result = _with_harness_vision(
+        stored, harness_sees=await service._harness_reads_images(profile)
+    )
     assert result.capabilities == [RuntimeModelCapability.TEXT]
 
 
@@ -222,6 +232,7 @@ async def test_a_harness_lookup_failure_never_fails_the_run():
     )
     from app.modules.agent.services.runtime_profile_service import (
         AgentRuntimeProfileService,
+        _with_harness_vision,
     )
 
     stored = RuntimeModelCatalogEntry(
@@ -239,5 +250,158 @@ async def test_a_harness_lookup_failure_never_fails_the_run():
             raise SQLAlchemyError("host database is down")
 
     service = AgentRuntimeProfileService(None, _Hosts())
-    result = await service._with_live_harness_vision(profile, stored)
+    result = _with_harness_vision(
+        stored, harness_sees=await service._harness_reads_images(profile)
+    )
     assert result is stored
+
+
+def _entry(name: str, *capabilities):
+    from app.modules.agent.domain.runtime_profiles import RuntimeModelCatalogEntry
+
+    return RuntimeModelCatalogEntry(
+        name=name,
+        display_name=name,
+        provider_model_name=name,
+        capabilities=list(capabilities),
+    )
+
+
+def test_a_harness_with_no_model_pinned_still_reports_what_it_can_do():
+    """The shape every Agent Host run actually has, and the one that was broken.
+
+    A run stores `{"profile_id": ...}` and nothing else, and an Agent Host
+    profile routinely has no `default_model_name` -- `_agent_host_model_catalog`
+    documents an unpinned profile as meaning "let the harness use its own
+    default". So `_selected_model` returns None, and capabilities were read off
+    that None as `[]`: every such runtime was reported unable to see, however
+    loudly its catalog and its harness said otherwise.
+    """
+    from app.modules.agent.domain.runtime_profiles import (
+        RuntimeModelCapability,
+        RuntimeProfileKind,
+    )
+    from app.modules.agent.services.runtime_profile_service import (
+        _unselected_capabilities,
+    )
+
+    profile = SimpleNamespace(
+        kind=RuntimeProfileKind.HARNESS,
+        model_catalog=[
+            _entry(
+                "default",
+                RuntimeModelCapability.TEXT,
+                RuntimeModelCapability.TOOLS,
+                RuntimeModelCapability.VISION,
+            ),
+            _entry(
+                "opus[1m]",
+                RuntimeModelCapability.TEXT,
+                RuntimeModelCapability.TOOLS,
+                RuntimeModelCapability.VISION,
+            ),
+        ],
+    )
+
+    capabilities = _unselected_capabilities(profile, harness_sees=True)
+
+    assert RuntimeModelCapability.VISION in capabilities
+
+
+def test_an_unselected_catalog_reports_only_what_every_model_shares():
+    """Intersection, not the first entry.
+
+    Nothing selected means any of them could run, so claiming a capability only
+    some of them have would hand images to a model that cannot read them -- the
+    exact failure the vision mode exists to prevent, arrived at from the other
+    direction.
+    """
+    from app.modules.agent.domain.runtime_profiles import (
+        RuntimeModelCapability,
+        RuntimeProfileKind,
+    )
+    from app.modules.agent.services.runtime_profile_service import (
+        _unselected_capabilities,
+    )
+
+    profile = SimpleNamespace(
+        kind=RuntimeProfileKind.HARNESS,
+        model_catalog=[
+            _entry(
+                "sees",
+                RuntimeModelCapability.TEXT,
+                RuntimeModelCapability.VISION,
+            ),
+            _entry("blind", RuntimeModelCapability.TEXT),
+        ],
+    )
+
+    capabilities = _unselected_capabilities(profile, harness_sees=False)
+
+    assert RuntimeModelCapability.VISION not in capabilities
+    assert RuntimeModelCapability.TEXT in capabilities
+
+
+def test_an_empty_catalog_falls_back_to_the_harness_itself():
+    """A harness offering no `model` option yields an empty catalog by design."""
+    from app.modules.agent.domain.runtime_profiles import (
+        RuntimeModelCapability,
+        RuntimeProfileKind,
+    )
+    from app.modules.agent.services.runtime_profile_service import (
+        _unselected_capabilities,
+    )
+
+    profile = SimpleNamespace(kind=RuntimeProfileKind.HARNESS, model_catalog=[])
+
+    assert RuntimeModelCapability.VISION in _unselected_capabilities(
+        profile, harness_sees=True
+    )
+    assert RuntimeModelCapability.VISION not in _unselected_capabilities(
+        profile, harness_sees=False
+    )
+
+
+def test_the_snapshot_the_bridge_reads_carries_those_capabilities():
+    """The whole point: this dict is what `vision_mode_from_runtime_profile` sees.
+
+    Deriving the capabilities is worthless if `public_snapshot` still reports
+    `[]` whenever no model is selected, which is what it did.
+    """
+    from app.modules.agent.domain.runtime_profiles import (
+        RuntimeModelCapability,
+        RuntimeProfileKind,
+    )
+    from app.modules.agent.services.runtime_profile_service import (
+        ResolvedAgentRuntime,
+    )
+    from app.modules.agent.domain.value_objects import HarnessOptions  # noqa: F401
+
+    profile = SimpleNamespace(
+        id="p",
+        name="Claude Code",
+        user_id=None,
+        harness_id=None,
+        scope=SimpleNamespace(value="PERSONAL"),
+        protocol=SimpleNamespace(value="AGENT_HOST"),
+        kind=RuntimeProfileKind.HARNESS,
+        config=None,
+    )
+    resolved = ResolvedAgentRuntime(
+        profile=profile,
+        harness_kind=SimpleNamespace(),
+        model=None,
+        provider_model_name=None,
+        credentials=None,
+        unselected_capabilities=[
+            RuntimeModelCapability.TEXT,
+            RuntimeModelCapability.VISION,
+        ],
+    )
+
+    snapshot = resolved.public_snapshot()
+
+    assert "VISION" in snapshot["model_capabilities"]
+    assert vision_mode_from_runtime_profile(snapshot) is AgentVisionMode.DIRECT
+    # Still unpinned: naming a model here would tell the harness what to run.
+    assert snapshot["model_name"] is None

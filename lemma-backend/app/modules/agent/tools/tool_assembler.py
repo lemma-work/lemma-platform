@@ -10,6 +10,7 @@ from __future__ import annotations
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.agent.domain.entities import Agent, Conversation
 from app.modules.agent.domain.value_objects import AgentToolset
+from app.modules.agent.domain.vision import AgentVisionMode
 from app.modules.agent.tools.callable_tool_factory import AgentCallableToolFactory
 from app.modules.agent.tools.registry import (
     POD_DEFAULT_AGENT_TOOLSETS,
@@ -30,12 +31,14 @@ class RunToolAssembler:
         agent: Agent | None,
         conversation: Conversation | None,
         include_final_answer: bool = False,
+        vision_mode: AgentVisionMode | None = None,
     ) -> list[object]:
         with run_phase("tool_assembly") as span:
             toolsets = await self._assemble(
                 agent=agent,
                 conversation=conversation,
                 include_final_answer=include_final_answer,
+                vision_mode=vision_mode,
             )
             span.set_attribute("lemma.toolsets", len(toolsets))
             return toolsets
@@ -46,6 +49,7 @@ class RunToolAssembler:
         agent: Agent | None,
         conversation: Conversation | None,
         include_final_answer: bool,
+        vision_mode: AgentVisionMode | None = None,
     ) -> list[object]:
         # The pod default assistant (no specific agent) gets the fixed default
         # toolset. User-created agents get their configured toolsets plus narrow
@@ -145,4 +149,22 @@ class RunToolAssembler:
                         ),
                     )
                 )
+        # Offered whenever the run can interpret an image at all -- directly, or
+        # by delegating to a configured vision model, which answers in text and
+        # so is safe on a text-only model.
+        #
+        # Here rather than in the runner, because the runner is not the only
+        # assembler. A remote harness reaches every tool through the MCP server,
+        # which re-assembles from scratch, so appending it in the runner left
+        # `view_image` unreachable on every Agent Host run whatever its vision
+        # mode -- while the run spec still advertised it, because that list is
+        # the runner's copy. Prompts and `web_fetch`'s own result message tell
+        # the model to use the tool unconditionally.
+        if vision_mode is not None and vision_mode.can_see:
+            from app.modules.agent.tools.workspace_cli.pydantic_adapter import (
+                view_image_toolset,
+            )
+
+            if view_image_toolset not in toolsets:
+                toolsets.append(view_image_toolset)
         return toolsets

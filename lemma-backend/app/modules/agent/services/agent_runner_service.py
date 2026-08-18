@@ -73,7 +73,11 @@ from app.modules.agent.services.realtime import (
 )
 from app.modules.agent.services.agent_context_brief import AgentContextBriefBuilder
 from app.modules.agent.services.run_message_writer import RunMessageWriter
-from app.modules.agent.services.run_phase_spans import observe_first_output, record_history_size, run_phase
+from app.modules.agent.services.run_phase_spans import (
+    observe_first_output,
+    record_history_size,
+    run_phase,
+)
 from app.modules.agent.services.runtime_history import (
     FULL_HISTORY_AGENT_RUN_COUNT,  # noqa: F401 - re-exported for callers and tests
     apply_surface_history_window,
@@ -88,14 +92,14 @@ from app.composition.agent_usage import (
     usage_execution_context,
 )
 from app.modules.agent.services.workspace_location import (
-    resolve_pod_cwd,
+    has_recorded_cwd,
+    pod_cwd_from_workspace_cwd,
     resolve_workspace_location,
 )
 from app.modules.agent.tools.context import ConversationContext
 from app.modules.agent.tools.callable_tool_factory import AgentCallableToolFactory
 from app.modules.agent.tools.final_answer import get_final_answer_tool
 from app.modules.agent.tools.registry import POD_DEFAULT_AGENT_TOOLSETS
-from app.modules.agent.tools.workspace_cli.pydantic_adapter import view_image_toolset
 from app.modules.agent.tools.tool_assembler import RunToolAssembler
 from app.core.crypto import get_secret_cipher
 from app.core.authorization.delegation import DEFAULT_POD_AGENT_NAME
@@ -132,7 +136,6 @@ def _run_failure_message(exc: BaseException) -> str:
     return "Agent run failed. Please check the agent runtime configuration."
 
 
-
 async def _finalize_safely(coro: Awaitable[None], *, agent_run_id: UUID) -> None:
     """Await a finalization coroutine, swallowing all errors.
 
@@ -143,9 +146,16 @@ async def _finalize_safely(coro: Awaitable[None], *, agent_run_id: UUID) -> None
     try:
         await coro
     except asyncio.CancelledError:
-        logger.debug('agent.agent_runner_service.agent_run_finalization_cancelled_run.diagnostic', agent_run_id=agent_run_id)
+        logger.debug(
+            "agent.agent_runner_service.agent_run_finalization_cancelled_run.diagnostic",
+            agent_run_id=agent_run_id,
+        )
     except Exception:
-        logger.error("agent.agent_runner_service.agent_run_finalization_run_s.failed", agent_run_id=agent_run_id, exc_info=True)
+        logger.error(
+            "agent.agent_runner_service.agent_run_finalization_run_s.failed",
+            agent_run_id=agent_run_id,
+            exc_info=True,
+        )
 
 
 def _rejected_run_error_message(data: object) -> str:
@@ -263,7 +273,21 @@ class AgentRunnerService:
             runtime_profile_snapshot = resolved_runtime.public_snapshot()
             runtime_credentials = resolved_runtime.credentials or {}
             workspace_location = resolve_workspace_location(conversation)
-            pod_cwd = resolve_pod_cwd(conversation)
+            # Same rule the MCP bridge follows: a conversation that never had a
+            # cwd written down gets one now, so metadata is the source of truth
+            # in fact. Costs nothing on the common path -- creation stamps it,
+            # so this only opens a unit of work for a row that predates that.
+            if not has_recorded_cwd(conversation):
+                async with self.uow_factory() as uow:
+                    await ConversationRepository(uow).set_conversation_metadata_key(
+                        conversation.id, "cwd", workspace_location.cwd
+                    )
+                    await uow.commit()
+                conversation.metadata = {
+                    **(conversation.metadata or {}),
+                    "cwd": workspace_location.cwd,
+                }
+            pod_cwd = pod_cwd_from_workspace_cwd(workspace_location.cwd)
             ctx = ConversationContext(
                 user_id=user_id,
                 org_id=conversation.organization_id,
@@ -302,27 +326,23 @@ class AgentRunnerService:
                     user_id=user_id,
                     pod_id=conversation.pod_id,
                 )
-            full_toolsets = await self.tool_assembler.assemble(
-                agent=agent,
-                conversation=conversation,
-            )
-            # How image-returning tools answer on this run. `view_image` itself
-            # is always offered (see below): withholding it on a text-only model
-            # never protected anything, because `pod_view_document_pages`
-            # shipped image content to that same model anyway.
+            # How image-returning tools answer on this run. Settled before the
+            # toolset is built, because the assembler needs it: `view_image` is
+            # offered whenever the mode can answer at all, and withholding it on
+            # a text-only model never protected anything -- `pod_view_document_
+            # pages` shipped image content to that same model anyway.
             supports_vision = (
-                resolved_runtime.model is not None
-                and RuntimeModelCapability.VISION in resolved_runtime.model.capabilities
+                RuntimeModelCapability.VISION in resolved_runtime.capabilities
             )
             ctx.vision_mode = resolve_vision_mode(
                 model_supports_vision=supports_vision,
                 delegate_model_configured=vision_delegate_available(),
             )
-            # Present for every agent whose vision mode can answer at all: on a
-            # text-only model the tool delegates to the configured vision model
-            # and returns text, so it is safe everywhere.
-            if ctx.vision_mode.can_see and view_image_toolset not in full_toolsets:
-                full_toolsets = [*full_toolsets, view_image_toolset]
+            full_toolsets = await self.tool_assembler.assemble(
+                agent=agent,
+                conversation=conversation,
+                vision_mode=ctx.vision_mode,
+            )
             # Remote harnesses (Codex/Claude-Code) reach every tool through the MCP
             # server, so they keep the full toolset list. The in-process LEMMA
             # harness instead shows core tools directly and defers the heavy "extra"
@@ -410,7 +430,10 @@ class AgentRunnerService:
                             await observer.on_run_started(conversation, ctx)
                             observer_started = True
                         except Exception:
-                            logger.debug('agent.agent_runner_service.agent_run_observer_start_run.diagnostic', agent_run_id=agent_run_id)
+                            logger.debug(
+                                "agent.agent_runner_service.agent_run_observer_start_run.diagnostic",
+                                agent_run_id=agent_run_id,
+                            )
                     try:
                         run_usage_context = usage_context_from_agent_context(
                             ctx,
@@ -436,7 +459,10 @@ class AgentRunnerService:
                                             event, conversation, ctx
                                         )
                                     except Exception:
-                                        logger.debug('agent.agent_runner_service.agent_run_observer_run_s.diagnostic', agent_run_id=agent_run_id)
+                                        logger.debug(
+                                            "agent.agent_runner_service.agent_run_observer_run_s.diagnostic",
+                                            agent_run_id=agent_run_id,
+                                        )
                                 if event.type == AgentEventType.USAGE:
                                     if isinstance(event.data, AgentRunUsage):
                                         usage_data = event.data
@@ -485,7 +511,10 @@ class AgentRunnerService:
                             try:
                                 await observer.on_run_finished(conversation, ctx)
                             except Exception:
-                                logger.debug('agent.agent_runner_service.agent_run_observer_finish_run.diagnostic', agent_run_id=agent_run_id)
+                                logger.debug(
+                                    "agent.agent_runner_service.agent_run_observer_finish_run.diagnostic",
+                                    agent_run_id=agent_run_id,
+                                )
         except BaseException as exc:
             if isinstance(exc, UsageLimitExceededError):
                 # Not a crash: the organisation is out of plan quota. This was
@@ -883,7 +912,7 @@ class AgentRunnerService:
             )
         except Exception:
             logger.debug(
-                'agent.agent_runner_service.finalize_agent_run_run_s.propagated',
+                "agent.agent_runner_service.finalize_agent_run_run_s.propagated",
                 agent_run_id=agent_run_id,
                 exc_info=True,
             )
@@ -891,7 +920,7 @@ class AgentRunnerService:
                 await self.usage_recorder.release(usage_reservation)
             except Exception:
                 logger.debug(
-                    'agent.agent_runner_service.release_usage_reservation_run_s.diagnostic',
+                    "agent.agent_runner_service.release_usage_reservation_run_s.diagnostic",
                     agent_run_id=agent_run_id,
                 )
             raise
