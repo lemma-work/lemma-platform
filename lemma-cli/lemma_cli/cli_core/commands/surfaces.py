@@ -306,3 +306,78 @@ def setup_status(
     )
     if result is not None:
         emit(state, result)
+
+
+@app.command("telegram-setup")
+def start_telegram_setup(
+    ctx: typer.Context,
+    pod: str | None = typer.Option(None, "--pod"),
+    name: str | None = typer.Option(
+        None, "--name", help="Pod-unique surface name. Defaults to telegram."
+    ),
+    default_agent_name: str | None = typer.Option(
+        None,
+        "--agent",
+        "--agent-name",
+        help="Agent that answers. Omit to answer as the pod assistant.",
+    ),
+    enabled: bool | None = typer.Option(None, "--enabled/--disabled"),
+    data: str | None = typer.Option(None, "--data", "-d", help="Raw JSON payload."),
+    file: Path | None = typer.Option(
+        None,
+        "--file",
+        "-f",
+        exists=True,
+        dir_okay=False,
+        readable=True,
+    ),
+) -> None:
+    """Start a managed Telegram bot setup and print the link that creates the bot.
+
+    The bot is made inside Telegram: open the returned ``launch_url`` (or show it
+    as a QR), name the bot there, and it binds to this pod on its own -- there is
+    no token to copy back. The surface does not exist until that finishes, so
+    poll ``telegram-setup-status SETUP_ID`` until ``bot_username`` is set.
+
+    Omitting ``--agent`` answers as the pod assistant, which is what lets a brand
+    new pod take Telegram messages before any agent has been created.
+    """
+    state = state_from_ctx(ctx)
+    payload: dict[str, Any] = read_json(data, file, required=False) or {}
+    if name is not None:
+        payload["name"] = name
+    if default_agent_name is not None:
+        payload["default_agent_name"] = default_agent_name
+    if enabled is not None:
+        payload["is_enabled"] = enabled
+    result = run_with_client(
+        ctx,
+        lambda client, s: pod_client(
+            client, s, pod
+        ).surfaces.start_telegram_bot_setup(payload),
+    )
+    if result is not None:
+        emit(state, result)
+
+
+@app.command("telegram-setup-status")
+def telegram_setup_status(
+    ctx: typer.Context,
+    setup_id: str = typer.Argument(..., help="Setup id from `telegram-setup`."),
+    pod: str | None = typer.Option(None, "--pod"),
+) -> None:
+    """Show where a managed Telegram bot setup has got to.
+
+    ``status`` moves while the person is in Telegram; ``bot_username`` and
+    ``surface_id`` are only set once the bot exists and is bound to this pod.
+    ``error`` is set when the setup failed rather than merely being unfinished.
+    """
+    state = state_from_ctx(ctx)
+    result = run_with_client(
+        ctx,
+        lambda client, s: pod_client(client, s, pod).surfaces.get_telegram_bot_setup(
+            setup_id
+        ),
+    )
+    if result is not None:
+        emit(state, result)
