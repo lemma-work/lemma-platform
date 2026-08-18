@@ -669,7 +669,7 @@ async def write_stdin(
 
     Use only with a `process_id` returned by `exec_command` for an unfinished command.
     Typical uses:
-    - Poll logs without typing anything: `chars=""`
+    - Poll logs without typing anything: omit `chars`
     - Respond to prompts / hotkeys: `chars="y\\n"` or `chars="q\\n"`
     - Run another command in the same shell: `chars="npm test\\n"`
     """
@@ -685,7 +685,7 @@ async def resize_terminal(
 
     Use when a `tty` program's output is wrapping badly or a full-screen UI is
     clipped — for example a wide table, `htop`, or a pager. Follow with
-    `write_stdin` (`chars=""`) to read the redrawn screen.
+    `write_stdin` with no `chars` to read the redrawn screen.
     """
     return await resize_terminal_internal(ctx, request)
 

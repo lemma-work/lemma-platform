@@ -13,8 +13,9 @@ use crate::provider_probe::{HttpModelProviderProbe, ModelProviderProbe};
 const CONFIG_SCHEMA_VERSION: u64 = 1;
 const VAULT_SERVICE: &str = "work.lemma.local";
 
-const SECRET_NAMES: [&str; 18] = [
+const SECRET_NAMES: [&str; 19] = [
     "ai.api_key",
+    "integrations.deepgram_api_key",
     "integrations.composio_api_key",
     "integrations.composio_webhook_secret",
     "integrations.google_client_secret",
@@ -890,8 +891,9 @@ fn readiness(config: &OperatorConfig, secrets: &BTreeMap<String, bool>) -> Value
     })
 }
 
-fn secret_environment() -> [(&'static str, &'static str); 17] {
+fn secret_environment() -> [(&'static str, &'static str); 18] {
     [
+        ("integrations.deepgram_api_key", "DEEPGRAM_API_KEY"),
         ("integrations.composio_api_key", "COMPOSIO_API_KEY"),
         (
             "integrations.composio_webhook_secret",
