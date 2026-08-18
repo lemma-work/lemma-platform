@@ -3245,10 +3245,6 @@
           ],
           "default": null,
           "description": "Whatever you passed in note_to_self."
-        },
-        "interaction_fallback": {
-          "default": false,
-          "type": "boolean"
         }
       },
       "title": "SnoozeResponse",

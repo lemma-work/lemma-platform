@@ -16,8 +16,12 @@ from uuid import uuid7
 
 import pytest
 
+from app.modules.agent.domain.agent_host import AgentHostEventType
 from app.modules.agent.domain.value_objects import AgentEvent, AgentEventType
-from app.modules.agent.infrastructure.agent_host_event_stream import StreamBatch
+from app.modules.agent.infrastructure.agent_host_event_stream import (
+    StreamBatch,
+    StreamedEvent,
+)
 from app.modules.agent.infrastructure.harnesses import agent_host
 from app.modules.agent.infrastructure.harnesses.agent_host import RemoteHarness
 from app.modules.agent.infrastructure.harnesses.agent_host_run_window import (
@@ -55,8 +59,39 @@ def _options():
     )
 
 
-def _harness(stream: _RecordingStream, **kwargs) -> RemoteHarness:
-    return RemoteHarness(uow_factory=None, event_stream=stream, **kwargs)
+def _sleeping_since(*, tool_call_id: str):
+    """Stand in for the wait row a snoozing run leaves behind."""
+
+    async def _lookup(uow, *, agent_run_id):
+        del uow, agent_run_id
+        return SimpleNamespace(tool_call_id=tool_call_id)
+
+    return _lookup
+
+
+def _awake():
+    async def _lookup(uow, *, agent_run_id):
+        del uow, agent_run_id
+        return None
+
+    return _lookup
+
+
+def _uow_factory():
+    """A unit of work that opens and closes and touches nothing."""
+
+    class _Uow:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+    return _Uow()
+
+
+def _harness(stream, *, uow_factory=None, **kwargs) -> RemoteHarness:
+    return RemoteHarness(uow_factory=uow_factory, event_stream=stream, **kwargs)
 
 
 def _stub_dispatch(harness: RemoteHarness, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -167,3 +202,113 @@ class TestStreamDeletion:
 
         assert [event.type for event in events] == [AgentEventType.ERROR]
         assert stream.deleted == []
+
+
+class _TerminalStream:
+    """A stream that reports one finished run and nothing else."""
+
+    def __init__(self, state: str) -> None:
+        self.state = state
+        self.deleted: list = []
+        self.sent = False
+
+    async def read(self, *, run_id, after_id="0-0", block_ms=1000):
+        if self.sent:
+            return StreamBatch([], cursor=after_id)
+        self.sent = True
+        return StreamBatch(
+            [
+                StreamedEvent(
+                    stream_id="1-0",
+                    sequence=1,
+                    type=AgentHostEventType.TERMINAL.value,
+                    object_id=None,
+                    payload={"state": self.state},
+                )
+            ],
+            cursor="1-0",
+        )
+
+    async def delete(self, *, run_id) -> None:
+        self.deleted.append(run_id)
+
+
+class TestATurnEndedForASleepingAgent:
+    """A remote `snooze` ends its turn from the outside, so the state lies.
+
+    Lemma asks the host to stop, and the host reports what it saw — CANCELLED
+    when the stop landed first, SUCCEEDED when the agent finished talking before
+    it did, and which one wins is a race between a poke and a model. Taken
+    literally, the first says the user pressed Stop and the second says the turn
+    is over; both leave the conversation looking finished while a timer is still
+    counting down to wake it. What actually happened is on the wait row.
+    """
+
+    @pytest.mark.parametrize("state", ["CANCELLED", "SUCCEEDED"])
+    async def test_either_ending_is_reported_as_waiting(
+        self, state: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        agent_run_id = uuid7()
+        stream = _TerminalStream(state)
+        harness = _harness(
+            stream,
+            uow_factory=_uow_factory,
+            event_timeout_seconds=30.0,
+            stream_block_ms=1,
+        )
+        _stub_dispatch(harness, monkeypatch)
+        monkeypatch.setattr(
+            agent_host,
+            "run_suspended_on",
+            _sleeping_since(tool_call_id="lemma-mcp-1"),
+        )
+
+        events = [event async for event in await _drive(harness, agent_run_id)]
+
+        assert events[-1].type is AgentEventType.WAITING
+        # The shape the in-process pause yields, so one reader serves both.
+        assert events[-1].data["tool_call_id"] == "lemma-mcp-1"
+        assert events[-1].data["kind"] == "snooze"
+
+    async def test_a_turn_that_simply_ended_is_untouched(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        agent_run_id = uuid7()
+        stream = _TerminalStream("SUCCEEDED")
+        harness = _harness(
+            stream,
+            uow_factory=_uow_factory,
+            event_timeout_seconds=30.0,
+            stream_block_ms=1,
+        )
+        _stub_dispatch(harness, monkeypatch)
+        monkeypatch.setattr(agent_host, "run_suspended_on", _awake())
+
+        events = [event async for event in await _drive(harness, agent_run_id)]
+
+        assert events[-1].type is AgentEventType.COMPLETED
+
+    async def test_a_failure_is_still_a_failure(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A run that hit its context ceiling really did fail, wait row or not.
+
+        Reporting it as WAITING would hide the error behind a conversation that
+        looks like it is patiently sleeping. The timer still wakes it either way.
+        """
+        agent_run_id = uuid7()
+        stream = _TerminalStream("FAILED")
+        harness = _harness(
+            stream,
+            uow_factory=_uow_factory,
+            event_timeout_seconds=30.0,
+            stream_block_ms=1,
+        )
+        _stub_dispatch(harness, monkeypatch)
+        monkeypatch.setattr(
+            agent_host, "run_suspended_on", _sleeping_since(tool_call_id="x")
+        )
+
+        events = [event async for event in await _drive(harness, agent_run_id)]
+
+        assert events[-1].type is AgentEventType.ERROR
