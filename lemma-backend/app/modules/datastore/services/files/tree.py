@@ -13,6 +13,36 @@ from app.modules.datastore.services.files.skills_overlay import SkillsOverlay
 from app.modules.datastore.services.system_skill_files import SystemSkillFileProvider
 
 
+def _file_leaf(child: DatastoreFileEntity) -> dict[str, Any]:
+    """A file in the tree, carrying whether it is actually readable.
+
+    The flat listing has always reported `status` and `has_markdown`, and the
+    base instructions promise that listings do. The recursive tree dropped both,
+    so an agent that listed a folder saw its files and no hint that every one of
+    them had failed to convert -- and the search over them came back empty with
+    nothing to explain it. Only a per-file read revealed the truth.
+
+    Deliberately narrower than the flat listing's `_file_summary`: a tree is a
+    shape, and `mime_type`/`size_bytes`/`description` on every node would bloat
+    a response whose whole point is breadth. These three are the ones that
+    answer "can I read this".
+    """
+    metadata = child.metadata or {}
+    status = getattr(child, "status", None)
+    status_value = status.value if hasattr(status, "value") else status
+    return {
+        "path": child.path,
+        "name": child.name,
+        "kind": child.kind.value,
+        "visibility": child.visibility,
+        "has_more_files": False,
+        "children": [],
+        "status": status_value,
+        "indexed": status_value == "COMPLETED",
+        "has_markdown": bool(metadata.get("has_markdown", False)),
+    }
+
+
 class DirectoryTreeBuilder:
     """Builds the nested directory tree for a pod, with the skills overlay
     spliced in under ``/skills``."""
@@ -90,9 +120,9 @@ class DirectoryTreeBuilder:
         )
         children_by_directory: dict[str, list[DatastoreFileEntity]] = {}
         for item in visible_items:
-            children_by_directory.setdefault(self.paths._parent_path(item.path), []).append(
-                item
-            )
+            children_by_directory.setdefault(
+                self.paths._parent_path(item.path), []
+            ).append(item)
         for siblings in children_by_directory.values():
             siblings.sort(
                 key=lambda item: (item.kind != FileKind.FOLDER, item.name.lower())
@@ -119,17 +149,7 @@ class DirectoryTreeBuilder:
                     )
                     for child in directory_children
                 ]
-                + [
-                    {
-                        "path": child.path,
-                        "name": child.name,
-                        "kind": child.kind.value,
-                        "visibility": child.visibility,
-                        "has_more_files": False,
-                        "children": [],
-                    }
-                    for child in visible_files
-                ],
+                + [_file_leaf(child) for child in visible_files],
             }
 
         if root_directory is not None:

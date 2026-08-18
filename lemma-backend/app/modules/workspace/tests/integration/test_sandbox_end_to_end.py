@@ -40,7 +40,6 @@ async def sandbox_stack(sandbox_uow_factory, monkeypatch) -> AsyncIterator[tuple
     if not os.path.exists(_SOCKET):
         pytest.skip(f"no docker socket at {_SOCKET}")
 
-
     monkeypatch.setattr(workspace_settings, "workspace_image", _IMAGE)
 
     engine = DockerEngineClient(socket_path=_SOCKET)
@@ -171,3 +170,86 @@ def _far_future():
     from datetime import datetime, timedelta, timezone
 
     return datetime.now(timezone.utc) + timedelta(seconds=120)
+
+
+async def test_a_package_installed_from_the_shell_imports_in_execute_python(
+    sandbox_stack,
+) -> None:
+    """The two halves of the sandbox must agree about what Python is.
+
+    An agent installs a library with `exec_command` and then writes code that
+    imports it with `execute_python`. Those are different entry points into the
+    same container, and nothing in the tool contract says whether they share an
+    interpreter -- so this asserts it against the real image rather than trusting
+    the layout.
+
+    Both installers are exercised, because both are on the PATH and an agent
+    will reach for either. `uv pip install` used to fail outright: it targets
+    the shared interpreter's own site-packages, which is root-owned and
+    read-only to the agent, and died with `Permission denied (os error 13)`.
+    `pip` never hit that because `PIP_PREFIX` sends it to the writable workspace
+    prefix instead. One PATH, two installers, two answers, one of them broken.
+    """
+    service, _, sandbox = sandbox_stack
+    session = _session(LocalSandboxClient(service), sandbox.id)
+
+    installed_with_pip = await session.exec_command(
+        cmd="pip install --quiet --disable-pip-version-check cowsay", timeout=300
+    )
+    assert installed_with_pip["exit_code"] == 0, installed_with_pip
+
+    installed_with_uv = await session.exec_command(
+        cmd="uv pip install humanize", timeout=300
+    )
+    assert installed_with_uv["exit_code"] == 0, installed_with_uv
+
+    result = await session.execute_code(
+        code=(
+            "import cowsay, humanize, sys\n"
+            "print(sys.executable)\n"
+            "print(cowsay.__file__)\n"
+            "print(humanize.__file__)\n"
+            "print(humanize.intword(1234567))\n"
+        ),
+        timeout=120,
+    )
+
+    assert result.success is True, result
+    output = result.stdout or ""
+    # Not just importable -- actually usable, so a broken install that happens
+    # to expose a module directory cannot pass this.
+    assert "1.2 million" in output, output
+    # Both installers reached the shared environment, not two different ones.
+    assert output.count("/workspace/.python/lib/") == 2, output
+
+
+async def test_a_project_venv_keeps_its_own_dependencies(sandbox_stack) -> None:
+    """The other half of the contract, which the fix above must not break.
+
+    A project that pins its own versions has to get them. `uv pip install` is
+    redirected to the shared prefix only when uv would otherwise write to the
+    read-only environment -- never when a virtualenv is active or discoverable,
+    because that would install a project's dependencies where the project
+    cannot see them.
+    """
+    service, _, sandbox = sandbox_stack
+    session = _session(LocalSandboxClient(service), sandbox.id)
+
+    created = await session.exec_command(
+        cmd="mkdir -p /workspace/proj && cd /workspace/proj && uv venv", timeout=300
+    )
+    assert created["exit_code"] == 0, created
+
+    installed = await session.exec_command(
+        cmd="cd /workspace/proj && uv pip install humanize", timeout=300
+    )
+    assert installed["exit_code"] == 0, installed
+
+    located = await session.exec_command(
+        cmd=(
+            "test -d /workspace/proj/.venv/lib/python3.14/site-packages/humanize "
+            "&& echo IN_VENV"
+        ),
+        timeout=120,
+    )
+    assert "IN_VENV" in (located["stdout"] or ""), located

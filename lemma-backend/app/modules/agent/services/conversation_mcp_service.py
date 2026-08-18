@@ -40,6 +40,10 @@ from app.modules.agent.infrastructure.repositories import (
     AgentRuntimeProfileRepository,
     ConversationRepository,
 )
+from app.modules.agent.services.workspace_location import (
+    ensure_recorded_location,
+    pod_cwd_from_workspace_cwd,
+)
 from app.modules.agent.services.runtime_profile_service import (
     AgentRuntimeProfileService,
 )
@@ -162,7 +166,7 @@ class ConversationMCPService:
             # validation / execution exception surfacing as a protocol/HTTP error
             # that aborts the run.
             logger.debug(
-                'agent.conversation_mcp_service.conversation_mcp_tool_r_returning.diagnostic',
+                "agent.conversation_mcp_service.conversation_mcp_tool_r_returning.diagnostic",
                 exc_info=True,
             )
             return self._mcp_error_result(tool_name, exc)
@@ -190,6 +194,11 @@ class ConversationMCPService:
                 run = await conversation_repo.get_active_agent_run(conversation_id)
             agent_id = conversation.agent_id or (run.agent_id if run else None)
             agent = await agent_repo.get(agent_id) if agent_id is not None else None
+            # Records the cwd when nothing had recorded it, so metadata is
+            # the source of truth in fact and not only by intention.
+            workspace_location = await ensure_recorded_location(
+                conversation, record=conversation_repo.set_conversation_metadata_key
+            )
             runtime_profile = await self._resolved_runtime_profile(
                 run=run,
                 uow=uow,
@@ -204,10 +213,25 @@ class ConversationMCPService:
                 agent_name=agent.name if agent is not None else None,
                 agent_run_id=agent_run_id or (run.id if run is not None else None),
                 runtime_profile=runtime_profile,
-                # The runner computes this for the in-process harness; the MCP
-                # bridge has to derive it too, or every remote harness looks
-                # text-only and delegates images it could have read itself.
+                # The runner computes these for the in-process harness, and this
+                # bridge has to as well -- it is the tool path for *every*
+                # remote harness, so anything left at its default is a default
+                # the whole of Agent Host runs on.
+                #
+                # `vision_mode`: or a harness that reads images natively is
+                # treated as text-only and delegates work it could do itself.
                 vision_mode=vision_mode_from_runtime_profile(runtime_profile),
+                # The location fields: without them `get_workspace_cwd()` falls
+                # back to `/workspace/conversations/<uuid>`, so tools ran in a
+                # directory the agent's own prompt does not name -- the prompt
+                # says `/workspace/c/<date>/<slug>`, which is where the resolver
+                # actually put the conversation, and which is where a previous
+                # turn's files are. `pod_cwd` has the same effect on the pod
+                # filesystem, scattering writes under `/me/conversations/<uuid>`.
+                workspace_id=workspace_location.workspace_id,
+                workspace_cwd=workspace_location.cwd,
+                workspace_repo=workspace_location.repo,
+                pod_cwd=pod_cwd_from_workspace_cwd(workspace_location.cwd),
                 **_surface_context_from_conversation(conversation),
             )
             return agent, conversation, ctx
@@ -256,7 +280,7 @@ class ConversationMCPService:
                 organization_id=organization_id,
                 user_id=user_id,
             )
-        except (DomainError, RuntimeError, SQLAlchemyError):
+        except DomainError, RuntimeError, SQLAlchemyError:
             # Named rather than bare: these are what resolution actually fails
             # with -- an archived or deleted profile, a missing repository, a
             # database that will not answer. Anything else is a bug and should

@@ -172,7 +172,7 @@ COPY --from=node-runtime /usr/local/bin/node /usr/local/bin/node
 COPY --from=node-runtime /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/npm
 COPY --from=node-runtime /opt/lemma-node /opt/lemma-node
 COPY --from=python-runtime /opt/lemma-python /opt/lemma-python
-COPY --from=uv-runtime /uv /usr/local/bin/uv
+COPY --from=uv-runtime /uv /usr/local/lib/lemma-uv-bin
 COPY --from=uv-runtime /uvx /usr/local/bin/uvx
 COPY --from=gh-runtime /usr/local/bin/gh /usr/local/bin/gh
 # Where `pip install` puts things (PIP_PREFIX), made importable by the Lemma
@@ -188,7 +188,9 @@ RUN printf '/app\n/workspace/.python/lib/python3.14/site-packages\n' \
       > /opt/lemma-python/lib/python3.14/site-packages/lemma-workspace-paths.pth
 
 COPY lemma-backend/sandbox-images/scripts/lemma-node-tool /usr/local/lib/lemma-node-tool
-RUN ln -sf "$(command -v chromium)" /usr/local/bin/workspace-chrome \
+COPY lemma-backend/sandbox-images/scripts/lemma-uv /usr/local/bin/uv
+RUN chmod 0755 /usr/local/bin/uv /usr/local/lib/lemma-uv-bin \
+    && ln -sf "$(command -v chromium)" /usr/local/bin/workspace-chrome \
     && ln -sf ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
     && ln -sf ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
     && ln -sf /opt/lemma-python/bin/lemma /usr/local/bin/lemma \
