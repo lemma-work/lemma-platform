@@ -12,6 +12,13 @@ export interface UseAssistantRuntimeOptions {
    * Re-opening one of these is instant and silent; anything older reloads.
    */
   retainConversations?: number;
+  /**
+   * Called with the conversations whose transcripts have just left the store,
+   * whether retention evicted them or the store was cleared outright. Anyone
+   * caching "we already have this one" has to hear about it, or they will skip
+   * a load for a transcript nobody is holding any more.
+   */
+  onConversationsDropped?: (conversationIds: string[]) => void;
 }
 
 export interface UseAssistantRuntimeResult {
@@ -125,7 +132,12 @@ export function useAssistantRuntime({
   sessionConversationId = null,
   sessionMessages = [],
   retainConversations = DEFAULT_RETAINED_CONVERSATIONS,
+  onConversationsDropped,
 }: UseAssistantRuntimeOptions): UseAssistantRuntimeResult {
+  // Held in a ref so a caller passing an inline function cannot re-run the
+  // retention effect, which would evict on every render.
+  const onConversationsDroppedRef = useRef(onConversationsDropped);
+  onConversationsDroppedRef.current = onConversationsDropped;
   const [runtimeMessages, setRuntimeMessages] = useState<RuntimeConversationMessage[]>([]);
   // Mirrors the committed store so `hasConversationMessages` can answer from an
   // event handler without taking the list as a dependency.
@@ -194,8 +206,12 @@ export function useAssistantRuntime({
   }, [conversationId]);
 
   const clear = useCallback(() => {
+    const dropped = recentConversationIdsRef.current;
     recentConversationIdsRef.current = [];
     setRuntimeMessages([]);
+    if (dropped.length > 0) {
+      onConversationsDroppedRef.current?.(dropped);
+    }
   }, []);
 
   const hasConversationMessages = useCallback((targetConversationId: string | null | undefined) => {
@@ -211,13 +227,18 @@ export function useAssistantRuntime({
     lastSessionMessageIdRef.current = null;
     if (!conversationId) return;
 
+    const previousRecent = recentConversationIdsRef.current;
     const recent = [
       conversationId,
-      ...recentConversationIdsRef.current.filter((id) => id !== conversationId),
+      ...previousRecent.filter((id) => id !== conversationId),
     ].slice(0, Math.max(1, retainConversations));
     recentConversationIdsRef.current = recent;
 
     const retained = new Set(recent);
+    const dropped = previousRecent.filter((id) => !retained.has(id));
+    if (dropped.length > 0) {
+      onConversationsDroppedRef.current?.(dropped);
+    }
     setRuntimeMessages((previous) => {
       const next = previous.filter((message) => (
         // A message with no conversation of its own is in-flight local state

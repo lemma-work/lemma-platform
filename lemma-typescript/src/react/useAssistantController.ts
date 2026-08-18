@@ -750,7 +750,13 @@ export function useAssistantController({
   );
   const previousHistoryScopeKeyRef = useRef(historyScopeKey);
 
+  // A failed message load comes back from the session as an empty page, which
+  // reads exactly like a conversation that has nothing in it. Counting the
+  // errors it reports on the way is how a load can tell the two apart.
+  const sessionErrorCountRef = useRef(0);
+
   const handleAssistantSessionError = useCallback((sessionError: unknown) => {
+    sessionErrorCountRef.current += 1;
     setLocalError((prev) => prev || (sessionError instanceof Error ? sessionError.message : "Agent session failed"));
   }, []);
 
@@ -790,12 +796,20 @@ export function useAssistantController({
     appendOptimisticUserMessage,
     replaceLoadedMessages,
     mergeMessages,
-    hasConversationMessages,
     clear: clearRuntimeMessages,
   } = useAssistantRuntime({
     conversationId: activeConversationId,
     sessionConversationId,
     sessionMessages,
+    // The store is what actually holds transcripts, so it decides what counts
+    // as loaded. Without this the set below kept saying yes about conversations
+    // retention had already thrown away, and the open skipped its own fetch.
+    onConversationsDropped: (droppedConversationIds) => {
+      droppedConversationIds.forEach((droppedConversationId) => {
+        loadedConversationIdsRef.current.delete(droppedConversationId);
+        olderMessagesCursorsRef.current.delete(droppedConversationId);
+      });
+    },
   });
 
   const activeConversation = useMemo(
@@ -990,12 +1004,18 @@ export function useAssistantController({
     conversationId: string,
   ): Promise<AssistantApiConversationMessage[] | null> => {
     setIsLoadingMessages(true);
+    const errorsBeforeLoad = sessionErrorCountRef.current;
     try {
       const response = await sessionLoadMessages({
         conversationId,
         limit: 100,
       });
       if (activeConversationIdRef.current !== conversationId) {
+        return null;
+      }
+      // Null means "no transcript to hold", so the caller re-fetches next time
+      // rather than caching the empty page a failed request handed back.
+      if (sessionErrorCountRef.current !== errorsBeforeLoad) {
         return null;
       }
       const sorted = sortMessagesByCreatedAt((response.items || []) as AssistantApiConversationMessage[]);
@@ -1258,13 +1278,18 @@ export function useAssistantController({
       return;
     }
 
+    // Every branch that decides not to fetch has to put the loading flag down
+    // on its way out. `selectConversation` raises it optimistically, and a
+    // return that leaves it up is a spinner nothing will ever come back to.
     if (skipInitialLoadConversationIdsRef.current.has(activeConversationId)) {
       skipInitialLoadConversationIdsRef.current.delete(activeConversationId);
       loadedConversationIdsRef.current.add(activeConversationId);
+      setIsLoadingMessages(false);
       return;
     }
 
     if (loadedConversationIdsRef.current.has(activeConversationId)) {
+      setIsLoadingMessages(false);
       return;
     }
     if (loadingConversationIdRef.current === activeConversationId) {
@@ -1275,9 +1300,14 @@ export function useAssistantController({
     loadingConversationIdRef.current = activeConversationId;
     const loadConversation = async () => {
       setOlderMessagesCursor(null);
-      await loadConversationMessagesRef.current?.(activeConversationId);
+      const loaded = await loadConversationMessagesRef.current?.(activeConversationId);
       if (cancelled) return;
-      loadedConversationIdsRef.current.add(activeConversationId);
+      // A load that failed left the store empty, so calling it loaded would
+      // hold the transcript blank until the whole scope resets. Leaving it
+      // unmarked costs one more request and gets the messages back.
+      if (loaded) {
+        loadedConversationIdsRef.current.add(activeConversationId);
+      }
       try {
         await resumeConversationIfRunningRef.current?.(activeConversationId);
       } catch (error) {
@@ -1359,7 +1389,12 @@ export function useAssistantController({
       setOlderMessagesCursor(null);
       setIsLoadingMessages(true);
       void loadConversationMessagesRef.current?.(conversationId)
-        .then(() => resumeConversationIfRunningRef.current?.(conversationId))
+        .then((loaded) => {
+          if (loaded) {
+            loadedConversationIdsRef.current.add(conversationId);
+          }
+          return resumeConversationIfRunningRef.current?.(conversationId);
+        })
         .catch((error) => {
           setLocalError((prev) => prev || (error instanceof Error ? error.message : "Failed to resume conversation"));
         })
@@ -1367,7 +1402,6 @@ export function useAssistantController({
           if (loadingConversationIdRef.current === conversationId) {
             loadingConversationIdRef.current = null;
           }
-          loadedConversationIdsRef.current.add(conversationId);
         });
       return;
     }
@@ -1377,8 +1411,10 @@ export function useAssistantController({
     loadingConversationIdRef.current = null;
     // The store keeps the last few transcripts, so switching to one that is
     // still resident is a swap, not a load: no wipe, and no loading state to
-    // paint a skeleton over messages we are holding.
-    const isResident = hasConversationMessages(conversationId);
+    // paint a skeleton over messages we are holding. Asked of the loaded set
+    // rather than of the messages, so a conversation that is genuinely empty
+    // reads as held instead of being re-fetched on every click.
+    const isResident = Boolean(conversationId && loadedConversationIdsRef.current.has(conversationId));
     setOlderMessagesCursor(
       isResident && conversationId
         ? olderMessagesCursorsRef.current.get(conversationId) ?? null
@@ -1386,7 +1422,7 @@ export function useAssistantController({
     );
     setIsLoadingMessages(Boolean(conversationId && autoLoadMessages && !isResident));
     setActiveConversationId(conversationId);
-  }, [autoLoadMessages, hasConversationMessages, refreshConversationDetail, sessionCancel]);
+  }, [autoLoadMessages, refreshConversationDetail, sessionCancel]);
 
   const openConversation = useCallback((conversationId: string) => {
     selectConversation(conversationId);

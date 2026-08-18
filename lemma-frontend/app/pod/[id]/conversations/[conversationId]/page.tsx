@@ -25,7 +25,7 @@ import { useAgentRuntimes } from '@/lib/hooks/use-agent-runtime';
 import { useAgent, useAgents } from '@/lib/hooks/use-agents';
 import { usePod } from '@/lib/hooks/use-pods';
 import { usePodAccess } from '@/lib/hooks/use-pod-access';
-import { parseConversationMetadataParam } from '@/lib/pods/composer-launch';
+import { parseConversationMetadataParam, stripAssistantLaunchParams } from '@/lib/pods/composer-launch';
 import { withSettingsReturnPath } from '@/lib/navigation/settings-return';
 import type { AgentRuntimeConfig } from '@/lib/types';
 
@@ -227,6 +227,12 @@ export default function PodConversationPage({
         if (handledAssistantMessageRef.current === key) return;
         handledAssistantMessageRef.current = key;
 
+        // Before the send, not after it. The params are spent the moment the
+        // message is dispatched, and waiting for the answer would leave a URL
+        // that replays the whole send on reload for as long as the turn runs.
+        const nextQuery = stripAssistantLaunchParams(searchParams);
+        router.replace(`/pod/${podId}/conversations/new${nextQuery ? `?${nextQuery}` : ''}`);
+
         void (async () => {
             closeAssistant({ suppressUrlRestore: false });
             clearMessages();
@@ -243,12 +249,6 @@ export default function PodConversationPage({
                         : 'onboarding_start',
                 },
             });
-            const nextParams = new URLSearchParams(searchParams.toString());
-            nextParams.delete('assistantMessage');
-            nextParams.delete('conversationInstructions');
-            nextParams.delete('conversationMetadata');
-            const nextQuery = nextParams.toString();
-            router.replace(`/pod/${podId}/conversations/new${nextQuery ? `?${nextQuery}` : ''}`);
         })();
     }, [assistantMessage, clearMessages, closeAssistant, conversationInstructions, conversationMetadata, isNewConversation, isReady, newConversationScopeKey, podId, router, searchParams, sendMessage]);
 

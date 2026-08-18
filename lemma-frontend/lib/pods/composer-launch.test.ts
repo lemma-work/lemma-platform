@@ -4,6 +4,7 @@ import {
     buildComposerLaunchHref,
     parseConversationMetadataParam,
     readComposerLaunch,
+    stripAssistantLaunchParams,
     stripComposerLaunchParams,
 } from './composer-launch';
 
@@ -48,6 +49,25 @@ describe('composer launch', () => {
         expect(stripComposerLaunchParams(params)).toBe('tab=build');
         // The source must not be mutated — the effect still reads it afterward.
         expect(params.get('composerDraft')).toBe('hello');
+    });
+
+    it('strips a send-on-arrival launch without taking the route scope with it', () => {
+        const params = new URLSearchParams(
+            'agent=support&assistantMessage=Hi&conversationInstructions=framing&conversationMetadata=%7B%7D',
+        );
+
+        // `agent=` is what the route runs as, not part of the launch: dropping
+        // it would hand the message to the pod default instead.
+        expect(stripAssistantLaunchParams(params)).toBe('agent=support');
+        expect(params.get('assistantMessage')).toBe('Hi');
+    });
+
+    it('leaves a composer launch alone, and the reverse', () => {
+        const composer = new URLSearchParams('composerDraft=hello');
+        const assistant = new URLSearchParams('assistantMessage=Hi');
+
+        expect(stripAssistantLaunchParams(composer)).toBe('composerDraft=hello');
+        expect(stripComposerLaunchParams(assistant)).toBe('assistantMessage=Hi');
     });
 
     it('drops metadata it cannot trust rather than failing the navigation', () => {
