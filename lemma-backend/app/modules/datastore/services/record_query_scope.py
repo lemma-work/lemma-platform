@@ -8,35 +8,22 @@ sits in one place rather than interleaved with the loop that authorizes.
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
-from typing import TYPE_CHECKING, Protocol
 from uuid import UUID
 
 from app.core.authorization.context import Context
 from app.modules.datastore.domain.datastore_entities import DatastoreTableEntity
 from app.modules.datastore.domain.errors import DatastoreAccessDeniedError
+from app.modules.datastore.services.authorization import DatastoreAuthorization
 from app.modules.datastore.services.table_context import TableHydration
-
-if TYPE_CHECKING:
-    from app.modules.datastore.services.table_service import TableService
-
-
-class _AdminChecker(Protocol):
-    async def can_admin_table(
-        self,
-        *,
-        pod_id: UUID,
-        table_id: UUID,
-        ctx: Context | None = ...,
-        hydration: TableHydration | None = ...,
-    ) -> bool: ...
+from app.modules.datastore.services.table_service import TableService
 
 
 async def resolve_query_row_scope(
     *,
     pod_id: UUID,
     table_names: set[str],
-    table_service: "TableService",
-    authz: _AdminChecker | None,
+    table_service: TableService,
+    authz: DatastoreAuthorization | None,
     ctx: Context,
     admin_mode: bool,
     ensure_index: Callable[[DatastoreTableEntity], Awaitable[None]] | None = None,

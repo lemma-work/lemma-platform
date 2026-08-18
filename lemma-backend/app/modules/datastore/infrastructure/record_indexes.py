@@ -37,6 +37,13 @@ _SUFFIX = "_listing"
 _PREFIX = "ix_"
 _STEM_BUDGET = _MAX_IDENTIFIER_BYTES - len(_PREFIX) - len(_SUFFIX) - _DIGEST_CHARS - 1
 
+#: How long the lazy build may wait for the table lock, and how long it may
+#: then hold it. Both are short on purpose: this runs inside a request, and
+#: a build that cannot finish quickly should get out of the way rather than
+#: stall the caller and every writer behind it.
+_INDEX_LOCK_TIMEOUT_MS = 2_000
+_INDEX_BUILD_TIMEOUT_MS = 15_000
+
 
 def record_index_name(table_name: str) -> str:
     """A schema-unique, length-safe index name derived from *table_name*.
@@ -143,6 +150,15 @@ async def ensure_record_index(
     best-effort: a read that works without the index must not start failing
     because the index could not be built. Memoised in *memo*, so this costs one
     statement per table per process rather than one per read.
+
+    **Bounded, because this runs on a request.** A plain ``CREATE INDEX`` takes
+    a SHARE lock for the whole build, which blocks writers, and the advisory
+    lock above has no timeout of its own — so on the very tables this exists to
+    help, the largest ones, the first caller after a deploy would wait out the
+    build and hold writers behind it. The timeouts turn that into a fast
+    failure and a warning: the read still works unindexed, and the *next*
+    process to come along tries again. Deliberately not ``CONCURRENTLY``, which
+    cannot run inside a transaction and so could not share this lock at all.
     """
     memo_key = (schema_name, table_name)
     if memo_key in memo:
@@ -159,6 +175,17 @@ async def ensure_record_index(
         return
     try:
         async with engine.begin() as conn:
+            await conn.execute(
+                text(
+                    f"SET LOCAL lock_timeout = '{_INDEX_LOCK_TIMEOUT_MS}ms'"
+                )
+            )
+            await conn.execute(
+                text(
+                    "SET LOCAL statement_timeout = "
+                    f"'{_INDEX_BUILD_TIMEOUT_MS}ms'"
+                )
+            )
             await lock(conn, schema_name)
             await conn.execute(text(index_sql))
     except DBAPIError:

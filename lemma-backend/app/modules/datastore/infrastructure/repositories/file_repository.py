@@ -4,8 +4,13 @@ from datetime import datetime, timezone
 from typing import Optional, Sequence, Tuple
 from uuid import UUID
 
-from sqlalchemy import and_, delete, func, or_, select, text, update
-from sqlalchemy.orm import aliased
+from sqlalchemy import (
+    and_,
+    delete,
+    select,
+    text,
+    update,
+)
 
 from app.core.authorization.context import Context, ResourceType, ResourceVisibility
 from app.core.authorization.grants import delete_resource_sharing_grants
@@ -24,6 +29,9 @@ from app.modules.datastore.domain.file_entities import (
 )
 from app.modules.datastore.domain.ports import DatastoreFileRepositoryPort
 from app.modules.datastore.infrastructure.models import DatastoreFile
+from app.modules.datastore.infrastructure.repositories.file_visibility_sql import (
+    has_unreadable_ancestor,
+)
 from app.modules.datastore.infrastructure.repositories._base import (
     DatastoreRepositoryBase,
 )
@@ -50,55 +58,6 @@ def _file_actions_expr(ctx: Context):
         owner_user_id_col=DatastoreFile.owner_user_id,
         visibility_col=DatastoreFile.visibility,
         resource_path_col=DatastoreFile.path,
-    )
-
-
-def _is_ancestor_path(ancestor_path, descendant_path):
-    """True when *ancestor_path* names a proper ancestor folder of *descendant*.
-
-    The prefix comparison is the same idiom the grant cascade uses in
-    ``sql_actions`` — ``left(path, len(prefix) + 1) = prefix || '/'`` — which is
-    index-friendly and, unlike ``LIKE``, needs no escaping of the path.
-
-    The root is special-cased because its path is already ``/``: appending a
-    separator would look for ``//``, and nothing is stored under that.
-    """
-    return or_(
-        and_(ancestor_path == "/", descendant_path != "/"),
-        func.left(descendant_path, func.length(ancestor_path) + 1)
-        == ancestor_path.concat("/"),
-    )
-
-
-def _has_unreadable_ancestor(ctx: Context, pod_id: UUID):
-    """A correlated EXISTS over the folders above each row.
-
-    The Python walk this replaces climbed parent by parent and stopped at the
-    first ancestor row that was missing, so a gap in the folder chain let
-    everything above it go unchecked. This does not stop: an unreadable folder
-    anywhere above hides the row. That is the direction the rule was reaching
-    for — a file under a folder you cannot read should not appear — and the
-    only shape a single statement can express.
-    """
-    ancestor = aliased(DatastoreFile)
-    ancestor_actions = allowed_actions_expr(
-        ctx=ctx,
-        resource_type=ResourceType.DOCUMENT,
-        resource_id_col=ancestor.id,
-        pod_id_col=ancestor.pod_id,
-        owner_user_id_col=ancestor.owner_user_id,
-        visibility_col=ancestor.visibility,
-        resource_path_col=ancestor.path,
-    )
-    return (
-        select(ancestor.id)
-        .where(
-            ancestor.pod_id == pod_id,
-            ancestor.id != DatastoreFile.id,
-            _is_ancestor_path(ancestor.path, DatastoreFile.path),
-            ~allowed_actions_contains(ancestor_actions, Permissions.FOLDER_READ),
-        )
-        .exists()
     )
 
 
@@ -529,7 +488,7 @@ class DatastoreFileRepository(
             allowed_actions_contains(actions, Permissions.FOLDER_READ),
         )
         if walk_ancestors:
-            stmt = stmt.where(~_has_unreadable_ancestor(ctx, pod_id))
+            stmt = stmt.where(~has_unreadable_ancestor(ctx, pod_id))
         result = await self.session.execute(stmt)
         return set(result.scalars().all())
 
@@ -555,7 +514,7 @@ class DatastoreFileRepository(
         actions = _file_actions_expr(ctx)
         visible_expr = allowed_actions_contains(actions, Permissions.FOLDER_READ)
         if walk_ancestors:
-            visible_expr = and_(visible_expr, ~_has_unreadable_ancestor(ctx, pod_id))
+            visible_expr = and_(visible_expr, ~has_unreadable_ancestor(ctx, pod_id))
         rows = await self.session.execute(
             select(DatastoreFile.id, visible_expr.label("visible")).where(
                 DatastoreFile.pod_id == pod_id
