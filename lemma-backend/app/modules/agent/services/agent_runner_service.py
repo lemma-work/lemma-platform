@@ -92,7 +92,8 @@ from app.composition.agent_usage import (
     usage_execution_context,
 )
 from app.modules.agent.services.workspace_location import (
-    resolve_pod_cwd,
+    has_recorded_cwd,
+    pod_cwd_from_workspace_cwd,
     resolve_workspace_location,
 )
 from app.modules.agent.tools.context import ConversationContext
@@ -272,7 +273,21 @@ class AgentRunnerService:
             runtime_profile_snapshot = resolved_runtime.public_snapshot()
             runtime_credentials = resolved_runtime.credentials or {}
             workspace_location = resolve_workspace_location(conversation)
-            pod_cwd = resolve_pod_cwd(conversation)
+            # Same rule the MCP bridge follows: a conversation that never had a
+            # cwd written down gets one now, so metadata is the source of truth
+            # in fact. Costs nothing on the common path -- creation stamps it,
+            # so this only opens a unit of work for a row that predates that.
+            if not has_recorded_cwd(conversation):
+                async with self.uow_factory() as uow:
+                    await ConversationRepository(uow).set_conversation_metadata_key(
+                        conversation.id, "cwd", workspace_location.cwd
+                    )
+                    await uow.commit()
+                conversation.metadata = {
+                    **(conversation.metadata or {}),
+                    "cwd": workspace_location.cwd,
+                }
+            pod_cwd = pod_cwd_from_workspace_cwd(workspace_location.cwd)
             ctx = ConversationContext(
                 user_id=user_id,
                 org_id=conversation.organization_id,

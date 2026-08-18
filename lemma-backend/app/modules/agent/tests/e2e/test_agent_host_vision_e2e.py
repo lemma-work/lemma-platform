@@ -26,7 +26,7 @@ from datetime import datetime, timezone
 from uuid import UUID
 
 import pytest
-from sqlalchemy import update
+from sqlalchemy import select, update
 
 from app.core.crypto import get_secret_cipher
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
@@ -36,7 +36,10 @@ from app.modules.agent.infrastructure.agent_host_repository import AgentHostRepo
 from app.modules.agent.infrastructure.repositories import (
     AgentRuntimeProfileRepository,
 )
-from app.modules.agent.infrastructure.models import AgentRunModel
+from app.modules.agent.infrastructure.models import (
+    AgentRunModel,
+    ConversationModel,
+)
 from app.modules.agent.infrastructure.runtime_models import AgentHostModel
 from app.modules.agent.services.conversation_mcp_service import ConversationMCPService
 from app.modules.agent.services.runtime_profile_service import (
@@ -264,3 +267,108 @@ async def test_the_bridge_hands_tools_the_directory_the_prompt_names(
     assert ctx.get_pod_cwd() == resolve_pod_cwd(conversation)
     # Named explicitly: this is the shape the tools used to get.
     assert not ctx.get_workspace_cwd().startswith("/workspace/conversations/")
+
+
+@pytest.mark.asyncio
+async def test_a_repo_backed_conversation_reaches_a_remote_harness(
+    db_session, scenario
+):
+    """Picking a project is picking a directory, and that has to survive MCP.
+
+    `exec_command` clones the project and installs git credentials on the
+    strength of `ctx.workspace_repo`, and for a repo-backed conversation it does
+    so before *any* command -- an `ls` in an empty directory is not an answer.
+    The bridge never set that field, so under Claude Code or Codex the checkout
+    never happened and credentials were only fetched when the command happened
+    to look like git.
+
+    The cwd travels with it: a repo derives its own directory, so a conversation
+    on a project must land in the checkout rather than in a scratch folder.
+    """
+    await scenario.create_org_with_pod(name_prefix="Repo")
+    _machine, profile = await _profile_for_a_host_that(
+        db_session, scenario, reports_images=True
+    )
+
+    created = await scenario.owner_client.post(
+        f"/pods/{scenario.pod_id}/conversations",
+        json={
+            "title": "on a project",
+            # The shape `parse_project_repo` accepts. A bare
+            # "owner/name" string is dropped, which is the point of
+            # parsing untrusted metadata at all.
+            "metadata": {"repo": {"owner": "lemma-work", "repo": "lemma-platform"}},
+        },
+    )
+    assert created.status_code in {200, 201}, created.text
+    conversation_id = created.json()["id"]
+
+    run = AgentRunModel(
+        conversation_id=conversation_id,
+        status="RUNNING",
+        agent_runtime={"profile_id": str(profile.id)},
+        started_at=datetime.now(timezone.utc),
+    )
+    db_session.add(run)
+    await db_session.flush()
+    await db_session.commit()
+
+    _agent, _conversation, ctx = await ConversationMCPService()._load_agent_context(
+        conversation_id=run.conversation_id, agent_run_id=run.id
+    )
+
+    assert ctx.workspace_repo is not None, "the repo never reached the tools"
+    assert ctx.workspace_repo.full_name == "lemma-work/lemma-platform"
+    # Derived from the repo, not a scratch directory beside it.
+    assert ctx.get_workspace_cwd() == ctx.workspace_repo.cwd
+
+
+@pytest.mark.asyncio
+async def test_a_conversation_without_a_recorded_cwd_gets_one_written_down(
+    db_session, scenario
+):
+    """Metadata is the source of truth, so it has to actually hold the answer.
+
+    Creation stamps the cwd, but a row that predates that stamping -- or one
+    written by a path that skipped it -- resolved through a deterministic
+    fallback instead. Stable, so nothing looked wrong, and recorded nowhere: the
+    day the fallback's formula changes, every such conversation moves house and
+    its previous turns' files stay behind.
+    """
+    await scenario.create_org_with_pod(name_prefix="Stamp")
+    _machine, profile = await _profile_for_a_host_that(
+        db_session, scenario, reports_images=True
+    )
+
+    created = await scenario.owner_client.post(
+        f"/pods/{scenario.pod_id}/conversations", json={"title": "unstamped"}
+    )
+    conversation_id = UUID(created.json()["id"])
+
+    # Back to how a pre-stamping row looks on disk.
+    await db_session.execute(
+        update(ConversationModel)
+        .where(ConversationModel.id == conversation_id)
+        .values(conversation_metadata={})
+    )
+    run = AgentRunModel(
+        conversation_id=conversation_id,
+        status="RUNNING",
+        agent_runtime={"profile_id": str(profile.id)},
+        started_at=datetime.now(timezone.utc),
+    )
+    db_session.add(run)
+    await db_session.flush()
+    await db_session.commit()
+
+    _agent, _conversation, ctx = await ConversationMCPService()._load_agent_context(
+        conversation_id=conversation_id, agent_run_id=run.id
+    )
+
+    stored = await db_session.scalar(
+        select(ConversationModel.conversation_metadata).where(
+            ConversationModel.id == conversation_id
+        )
+    )
+    assert stored.get("cwd") == ctx.get_workspace_cwd(), stored
+    assert stored["cwd"].startswith("/workspace/c/"), stored

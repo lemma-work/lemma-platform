@@ -230,6 +230,44 @@ def _write_repo(
     write("repo_full_name", repo.full_name)
 
 
+def has_recorded_cwd(conversation: Conversation) -> bool:
+    """Whether this conversation's own metadata names its directory."""
+    metadata = conversation.metadata if isinstance(conversation.metadata, dict) else {}
+    workspace = metadata.get("workspace")
+    workspace = workspace if isinstance(workspace, dict) else {}
+    return bool(workspace.get("cwd") or metadata.get("cwd"))
+
+
+async def ensure_recorded_location(
+    conversation: Conversation,
+    *,
+    record: Callable[[UUID, str, str], Awaitable[None]],
+) -> WorkspaceLocation:
+    """Resolve the location, writing the cwd down if nothing had written it.
+
+    Metadata is meant to be the single source of truth for where a conversation
+    works, and creation stamps it (`apply_location_metadata`). A row that
+    predates that, or that was created by some path which did not stamp, falls
+    back to `default_workspace_cwd` -- deterministic, so stable, but recomputed
+    forever and recorded nowhere. That is a source of truth in name only: the
+    moment the fallback's formula changes, every such conversation moves house,
+    and the files from its previous turns do not move with it.
+
+    So the first run that resolves one writes the answer down, through
+    `set_conversation_metadata_key` rather than a whole-metadata update, because
+    sibling keys (`is_sub_agent`, `surface_platform`) are written concurrently by
+    other paths. After that this is a pure read.
+    """
+    location = resolve_workspace_location(conversation)
+    if has_recorded_cwd(conversation):
+        return location
+    metadata = conversation.metadata if isinstance(conversation.metadata, dict) else {}
+    metadata["cwd"] = location.cwd
+    conversation.metadata = metadata
+    await record(conversation.id, "cwd", location.cwd)
+    return location
+
+
 def pod_cwd_from_workspace_cwd(workspace_cwd: str) -> str:
     """Mirror a workspace cwd into the pod filesystem under ``/me``.
 

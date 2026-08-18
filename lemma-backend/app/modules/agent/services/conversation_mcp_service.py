@@ -41,8 +41,8 @@ from app.modules.agent.infrastructure.repositories import (
     ConversationRepository,
 )
 from app.modules.agent.services.workspace_location import (
-    resolve_pod_cwd,
-    resolve_workspace_location,
+    ensure_recorded_location,
+    pod_cwd_from_workspace_cwd,
 )
 from app.modules.agent.services.runtime_profile_service import (
     AgentRuntimeProfileService,
@@ -194,7 +194,11 @@ class ConversationMCPService:
                 run = await conversation_repo.get_active_agent_run(conversation_id)
             agent_id = conversation.agent_id or (run.agent_id if run else None)
             agent = await agent_repo.get(agent_id) if agent_id is not None else None
-            workspace_location = resolve_workspace_location(conversation)
+            # Records the cwd when nothing had recorded it, so metadata is
+            # the source of truth in fact and not only by intention.
+            workspace_location = await ensure_recorded_location(
+                conversation, record=conversation_repo.set_conversation_metadata_key
+            )
             runtime_profile = await self._resolved_runtime_profile(
                 run=run,
                 uow=uow,
@@ -227,7 +231,7 @@ class ConversationMCPService:
                 workspace_id=workspace_location.workspace_id,
                 workspace_cwd=workspace_location.cwd,
                 workspace_repo=workspace_location.repo,
-                pod_cwd=resolve_pod_cwd(conversation),
+                pod_cwd=pod_cwd_from_workspace_cwd(workspace_location.cwd),
                 **_surface_context_from_conversation(conversation),
             )
             return agent, conversation, ctx
