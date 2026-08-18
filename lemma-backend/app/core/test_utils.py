@@ -1,8 +1,10 @@
 import os
+import shutil
 import socket
 import subprocess
 import time
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from typing import Generator, Optional
 
 import psycopg
@@ -78,8 +80,12 @@ class LemmaDockerContainer:
 
     def __exit__(self, exc_type, exc, tb) -> None:
         if self.container_id:
+            # -v also removes the container's anonymous data volume (e.g.
+            # postgres/pgvector, supertokens, and kreuzberg all declare VOLUME
+            # in their image) — without it, every teardown, even a clean one,
+            # leaked one volume forever.
             subprocess.run(
-                ["docker", "rm", "-f", self.container_id],
+                ["docker", "rm", "-f", "-v", self.container_id],
                 check=False,
                 capture_output=True,
             )
@@ -128,6 +134,160 @@ def _env_int(name: str, default: int) -> int:
         return int(raw)
     except ValueError:
         return default
+
+
+# (docker filter, hours a STOPPED matching container may sit before reaping).
+# Thresholds are generous per resource kind, not a single global number:
+# lemma.e2e testcontainers finish in minutes, so 2h is already a wide margin;
+# managed-by=lemma-workspace is also the PRODUCTION sandbox label, and a dev
+# may run a real sandbox locally for an afternoon, so it gets 12h; a
+# load-test session (build the fixture stack, run k6, inspect the result) can
+# reasonably span a few hours, so lemma-load-* gets 6h.
+_REAPABLE_CONTAINER_FILTERS: tuple[tuple[str, float], ...] = (
+    (f"label={DOCKER_LABEL}", 2.0),
+    ("label=managed-by=lemma-workspace", 12.0),
+    ("name=^lemma-load-", 6.0),
+)
+# Only the workspace provider's own named sandbox volumes (lemma-vol-*) are
+# swept here — anonymous container volumes are handled by passing -v to every
+# `docker rm -f` above, and `docker volume prune` (see `make docker-reap`)
+# already only ever touches volumes with zero references.
+_REAPABLE_VOLUME_FILTER: tuple[str, float] = ("label=managed-by=lemma-workspace", 12.0)
+
+
+def _has_docker() -> bool:
+    return shutil.which("docker") is not None
+
+
+def _parse_docker_timestamp(raw: str) -> Optional[datetime]:
+    raw = raw.strip()
+    if not raw:
+        return None
+    try:
+        return datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _stopped_container_age_hours(container_id: str) -> Optional[float]:
+    """Hours since creation, or None if the container is running/unknown.
+
+    A running container is never a reap candidate regardless of age — that is
+    what makes this safe to call unconditionally on a shared dev machine: a
+    concurrently active session's containers are always excluded, full stop.
+    """
+    result = subprocess.run(
+        [
+            "docker",
+            "inspect",
+            "--format",
+            "{{.State.Running}}|{{.Created}}",
+            container_id,
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0 or "|" not in result.stdout:
+        return None
+    running, created = result.stdout.strip().split("|", 1)
+    if running == "true":
+        return None
+    created_at = _parse_docker_timestamp(created)
+    if created_at is None:
+        return None
+    return (datetime.now(timezone.utc) - created_at).total_seconds() / 3600
+
+
+def reap_stale_lemma_containers() -> list[str]:
+    """Force-remove STOPPED Lemma-managed containers past their grace period.
+
+    Best-effort cleanup for containers a crashed/hard-killed test or sandbox
+    process never got to tear down in its own `finally`/fixture teardown.
+    Age-gated per `_REAPABLE_CONTAINER_FILTERS`, so it is safe to run
+    unconditionally: nothing still running is ever touched, so it can't
+    disturb a concurrently running e2e/sandbox/load-test session on the same
+    Docker daemon.
+    """
+    if not _has_docker():
+        return []
+    removed: list[str] = []
+    seen: set[str] = set()
+    for docker_filter, max_age_hours in _REAPABLE_CONTAINER_FILTERS:
+        list_result = subprocess.run(
+            ["docker", "ps", "-aq", "--filter", docker_filter],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if list_result.returncode != 0:
+            continue
+        for container_id in list_result.stdout.splitlines():
+            container_id = container_id.strip()
+            if not container_id or container_id in seen:
+                continue
+            seen.add(container_id)
+            age_hours = _stopped_container_age_hours(container_id)
+            if age_hours is None or age_hours < max_age_hours:
+                continue
+            subprocess.run(
+                ["docker", "rm", "-f", "-v", container_id],
+                check=False,
+                capture_output=True,
+            )
+            removed.append(container_id)
+    return removed
+
+
+def reap_stale_lemma_volumes() -> list[str]:
+    """Force-remove named ``lemma-vol-*`` sandbox volumes past their grace period.
+
+    ``docker volume rm`` refuses (harmlessly — ``check=False``) a volume still
+    attached to any container, so this can never touch a volume backing a live
+    sandbox even if that sandbox happens to be older than the threshold.
+    """
+    if not _has_docker():
+        return []
+    docker_filter, max_age_hours = _REAPABLE_VOLUME_FILTER
+    list_result = subprocess.run(
+        ["docker", "volume", "ls", "-q", "--filter", docker_filter],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if list_result.returncode != 0:
+        return []
+    removed: list[str] = []
+    for name in list_result.stdout.splitlines():
+        name = name.strip()
+        if not name:
+            continue
+        inspect_result = subprocess.run(
+            ["docker", "volume", "inspect", "--format", "{{.CreatedAt}}", name],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if inspect_result.returncode != 0:
+            continue
+        created_at = _parse_docker_timestamp(inspect_result.stdout)
+        if created_at is None:
+            continue
+        age_hours = (datetime.now(timezone.utc) - created_at).total_seconds() / 3600
+        if age_hours < max_age_hours:
+            continue
+        rm_result = subprocess.run(
+            ["docker", "volume", "rm", name], check=False, capture_output=True
+        )
+        if rm_result.returncode == 0:
+            removed.append(name)
+    return removed
+
+
+def reap_stale_lemma_resources() -> None:
+    """Best-effort cleanup for stale E2E/sandbox/load-test Docker resources."""
+    reap_stale_lemma_containers()
+    reap_stale_lemma_volumes()
 
 
 def _wait_for_tcp(
@@ -351,7 +511,7 @@ def start_shared_kreuzberg(name: str) -> str:
     (and the label-based prune sweeps any straggler).
     """
     # Clear any straggler with this name from a previously crashed run.
-    subprocess.run(["docker", "rm", "-f", name], check=False, capture_output=True)
+    subprocess.run(["docker", "rm", "-f", "-v", name], check=False, capture_output=True)
     container = LemmaDockerContainer(KREUZBERG_IMAGE, 8000).with_run_args(
         "--name", name, "--restart", "unless-stopped"
     )
@@ -363,8 +523,10 @@ def start_shared_kreuzberg(name: str) -> str:
 
 
 def remove_named_container(name: str) -> None:
-    """Force-remove a container by name (best effort)."""
-    subprocess.run(["docker", "rm", "-f", name], check=False, capture_output=True)
+    """Force-remove a container by name, and its anonymous volumes (best effort)."""
+    subprocess.run(
+        ["docker", "rm", "-f", "-v", name], check=False, capture_output=True
+    )
 
 
 SHARED_KREUZBERG_NAME = "lemma-e2e-kreuzberg-shared"
@@ -550,3 +712,30 @@ def get_kreuzberg_url(container: LemmaDockerContainer) -> str:
     host = container.get_container_host_ip()
     port = container.get_exposed_port(8000)
     return f"http://{host}:{port}"
+
+
+def _reap_cli() -> None:
+    """Entry point for ``make docker-reap`` — a manual, on-demand version of the
+    same age-gated sweep that already runs automatically around e2e test
+    sessions. Prints what it removed; safe to run anytime, including while
+    another e2e/load-test run is active on the same machine, since it never
+    touches anything still running."""
+    containers = reap_stale_lemma_containers()
+    volumes = reap_stale_lemma_volumes()
+    if containers:
+        print(f"Removed {len(containers)} stale container(s): {', '.join(containers)}")
+    else:
+        print("No stale containers to remove.")
+    if volumes:
+        print(f"Removed {len(volumes)} stale volume(s): {', '.join(volumes)}")
+    else:
+        print("No stale lemma-vol-* volumes to remove.")
+    print(
+        "Note: this does not prune anonymous/dangling volumes left by older "
+        "runs before the -v fix, nor unrelated Docker images/build cache — "
+        "run `docker volume prune` / `docker system prune` separately for those."
+    )
+
+
+if __name__ == "__main__":
+    _reap_cli()

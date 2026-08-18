@@ -60,7 +60,7 @@ FUNCTION_BENCH_ENV = \
 	FUNCTION_BENCH_TERMINAL_TIMEOUT_SECONDS=$(FUNCTION_BENCH_TERMINAL_TIMEOUT_SECONDS)
 FUNCTION_BENCH_TEST = app/modules/function/tests/perf/test_function_execution_benchmark.py
 
-.PHONY: help test test-unit test-e2e test-e2e-real test-e2e-fast test-e2e-runtime test-module coverage coverage-unit coverage-e2e coverage-backend-unit coverage-backend-e2e-shard coverage-backend-report coverage-backend-gate test-collect lint lint-async lint-session-scope lint-io-hygiene lint-import-budget test-connection-scope typecheck-critical architecture migrate docker-build docker-build-cloud docker-build-arm64 docker-build-amd64 benchmark-functions-docker benchmark-functions-e2b teams-manifest-zip load-test-build load-test-up load-test-migrate load-test-setup load-test-run load-test-sse load-test-journey load-test-datastore-up load-test-datastore-setup load-test-datastore-files load-test-datastore-stats load-test-datastore-down load-test-monitor load-test-profile load-test-down load-test
+.PHONY: help test test-unit test-e2e test-e2e-real test-e2e-fast test-e2e-runtime test-module coverage coverage-unit coverage-e2e coverage-backend-unit coverage-backend-e2e-shard coverage-backend-report coverage-backend-gate test-collect lint lint-async lint-session-scope lint-io-hygiene lint-import-budget test-connection-scope typecheck-critical architecture migrate docker-build docker-build-cloud docker-build-arm64 docker-build-amd64 benchmark-functions-docker benchmark-functions-e2b teams-manifest-zip load-test-build load-test-up load-test-migrate load-test-setup load-test-run load-test-sse load-test-journey load-test-datastore-up load-test-datastore-setup load-test-datastore-files load-test-datastore-stats load-test-datastore-down load-test-monitor load-test-profile load-test-down load-test docker-reap
 
 help:
 	@echo "Lemma backend:"
@@ -109,6 +109,13 @@ help:
 	@echo "                         #   PROFILE=journey|ws|sse|micro USERS=20"
 	@echo "  make load-test-down    # tear down containers and clean up"
 	@echo "  Override: MAX_SUBSCRIBERS=200 WRITER_VUS=4 make load-test"
+	@echo ""
+	@echo "  make docker-reap       # remove stopped lemma.e2e / sandbox / load-test"
+	@echo "                         #   Docker containers+volumes past their grace"
+	@echo "                         #   period. Safe to run anytime, including next"
+	@echo "                         #   to a live test run — never touches anything"
+	@echo "                         #   still running. Run this if your machine is"
+	@echo "                         #   sluggish from accumulated test leftovers."
 	@echo ""
 	@echo "Run app-level commands such as setup/start/logs from the repository root."
 
@@ -453,6 +460,16 @@ load-test-down:
 load-test: load-test-build load-test-up load-test-migrate load-test-setup load-test-run
 	@echo ""
 	@echo "Done. Run 'make load-test-down' to remove containers and credentials."
+
+# Age-gated, so safe to run any time — including while another test/sandbox/
+# load-test session is active on the same Docker daemon. Only ever touches
+# containers that are already STOPPED and volumes with zero references, past
+# a generous grace period per resource kind (see test_utils.py). This is the
+# same sweep that already runs automatically around e2e sessions; this target
+# is for manual/periodic cleanup (e.g. a crashed run from yesterday, or a
+# machine that's accumulated cruft across many worktrees).
+docker-reap:
+	uv run python -m app.core.test_utils
 
 # ── Sandbox images ────────────────────────────────────────────────────────────
 # The two images the workspace module provisions. They live here because the
