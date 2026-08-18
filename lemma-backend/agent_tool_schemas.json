@@ -1836,20 +1836,11 @@
   {
     "tool_name": "pod_read_file",
     "toolset": "POD",
-    "description": "Read a pod file as text, or a document as converted markdown.\n\nDocuments are converted and cached at upload, so reading is instant \u2014 never\ndownload and re-parse one. Use ``pod_view_document_pages`` to see pages\nvisually instead.",
+    "description": "Read a pod file's text.\n\nA file that has text of its own -- markdown, plain text, HTML, CSV, code,\nemail -- is returned exactly as it is. A file that has none, because it is a\nbinary document like a PDF or a DOCX, is returned as the markdown it was\nconverted into at upload.\n\nUse ``pod_view_document_pages`` to *see* pages rather than read them.",
     "input_schema": {
       "properties": {
         "path": {
           "description": "Pod file path. Absolute paths (e.g. `/knowledge/notes.txt`) are used as-is; a relative path resolves against `/me/c/{date}/{slug}`.",
-          "type": "string"
-        },
-        "format": {
-          "default": "text",
-          "description": "'markdown' returns converted document text (PDF, DOCX) and supports a page range; use `pod_view_document_pages` to see pages as images.",
-          "enum": [
-            "text",
-            "markdown"
-          ],
           "type": "string"
         },
         "page_start": {
@@ -1863,7 +1854,7 @@
             }
           ],
           "default": null,
-          "description": "markdown only: first page (1-based)."
+          "description": "Documents only: first page (1-based). Ignored for text files."
         },
         "page_end": {
           "anyOf": [
@@ -1876,7 +1867,7 @@
             }
           ],
           "default": null,
-          "description": "markdown only: last page, inclusive. Defaults to page_start."
+          "description": "Documents only: last page, inclusive. Defaults to page_start."
         },
         "max_chars": {
           "default": 50000,
@@ -1981,7 +1972,7 @@
   {
     "tool_name": "pod_view_document_pages",
     "toolset": "POD",
-    "description": "Render PDF pages as images so you can *see* them (layout, tables, figures).\n\nPages are 1-based. Only PDFs can be rendered visually; for other document\ntypes use ``pod_read_file`` with ``format=\"markdown\"`` to read the page text.\n\nSet ``instructions`` to say what you need from the pages. If this agent's\nmodel reads images itself you get the page images inline; otherwise a vision\nmodel reads them and returns a description, so this tool works either way.",
+    "description": "Render PDF pages as images so you can *see* them (layout, tables, figures).\n\nPages are 1-based. Only PDFs can be rendered visually; for other document\ntypes use ``pod_read_file`` to read the page text.\n\nSet ``instructions`` to say what you need from the pages. If this agent's\nmodel reads images itself you get the page images inline; otherwise a vision\nmodel reads them and returns a description, so this tool works either way.",
     "input_schema": {
       "properties": {
         "path": {

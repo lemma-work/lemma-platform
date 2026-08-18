@@ -541,8 +541,8 @@ async def view_image_internal(
         if media_type == "application/pdf" or file_path.lower().endswith(".pdf"):
             hint = (
                 "This is a PDF, not an image. Use `pod_view_document_pages` to see "
-                "pages (layout, tables, figures), or `pod_read_file` with "
-                "format='markdown' to read the text."
+                "pages (layout, tables, figures), or `pod_read_file` to read "
+                "the text."
             )
         else:
             hint = (
@@ -758,7 +758,7 @@ async def view_image(
       `pod_search_files`.
 
     Only image files are supported. For a PDF, use `pod_view_document_pages` to
-    see pages or `pod_read_file` (format='markdown') to read text. Very large
+    see pages or `pod_read_file` to read text. Very large
     images are rejected — downscale them first.
     """
     return await view_image_internal(ctx, request)

@@ -417,39 +417,30 @@ async def pod_read_file(
     ctx: RunContext[BaseAgentContext],
     request: PodReadFileRequest,
 ) -> JsonObject:
-    """Read a pod file as text, or a document as converted markdown.
+    """Read a pod file's text.
 
-    Documents are converted and cached at upload, so reading is instant — never
-    download and re-parse one. Use ``pod_view_document_pages`` to see pages
-    visually instead.
+    A file that has text of its own -- markdown, plain text, HTML, CSV, code,
+    email -- is returned exactly as it is. A file that has none, because it is a
+    binary document like a PDF or a DOCX, is returned as the markdown it was
+    converted into at upload.
+
+    Use ``pod_view_document_pages`` to *see* pages rather than read them.
     """
 
     async def op(services: PodServices) -> JsonObject:
         resolved_path = _resolve_pod_path(ctx.deps, request.path)
-        if request.format == "markdown":
-            entity, markdown, page_count = await services.file.get_document_markdown(
-                services.ctx.pod_id,
-                resolved_path,
-                services.ctx,
-                page_start=request.page_start,
-                page_end=request.page_end,
-            )
-            return {
-                "success": True,
-                "path": entity.path,
-                "format": "markdown",
-                "page_count": page_count,
-                "page_start": request.page_start,
-                "page_end": request.page_end,
-                "truncated": len(markdown) > request.max_chars,
-                "markdown": markdown[: request.max_chars],
-            }
-
         entity, content = await services.file.download_file_content_by_path(
             services.ctx.pod_id, resolved_path, services.ctx
         )
         try:
             text = content.decode("utf-8")
+        except UnicodeDecodeError:
+            pass
+        else:
+            # It has text of its own, so that text is the answer. Converting it
+            # would replace the real thing with a rendering of it -- HTML would
+            # come back as prose with its markup discarded, a CSV as a table
+            # someone else laid out.
             return {
                 "success": True,
                 "path": entity.path,
@@ -459,47 +450,43 @@ async def pod_read_file(
                 "truncated": len(text) > request.max_chars,
                 "text": text[: request.max_chars],
             }
-        except UnicodeDecodeError:
-            # Not decodable as text, so this is a document rather than a text
-            # file. Documents are converted at upload precisely so they can be
-            # read, and the conversion is what the caller wanted -- asking for
-            # "the contents of this PDF" and being handed `binary: true` and an
-            # instruction to call again with a different argument is a round
-            # trip that answers itself.
-            #
-            # Text-like files never reach here: they decode, and are returned as
-            # their own original bytes. Only a document falls through, and only
-            # a document has a converted form to fall through to.
-            try:
-                (
-                    document,
-                    markdown,
-                    page_count,
-                ) = await services.file.get_document_markdown(
-                    services.ctx.pod_id, resolved_path, services.ctx
-                )
-            except DatastoreFileNotFoundError as missing:
-                # No converted form either. Say which of the two it is -- the
-                # reader's message already distinguishes "not converted yet"
-                # from "never will be" -- instead of a bare "binary file".
-                return {
-                    "success": True,
-                    "path": entity.path,
-                    "mime_type": entity.mime_type,
-                    "size_bytes": entity.size_bytes,
-                    "binary": True,
-                    "hint": str(missing),
-                }
+
+        # No text of its own. Documents are converted at upload precisely so
+        # they can still be read, and that conversion is what the caller wanted:
+        # asking for a PDF's contents and being handed `binary: true` and an
+        # instruction to call again is a round trip that answers itself.
+        try:
+            document, markdown, page_count = await services.file.get_document_markdown(
+                services.ctx.pod_id,
+                resolved_path,
+                services.ctx,
+                page_start=request.page_start,
+                page_end=request.page_end,
+            )
+        except DatastoreFileNotFoundError as missing:
+            # Nothing to read, now or ever, or not yet -- the reader's message
+            # already distinguishes those, so carry it rather than flatten it
+            # into "binary file".
             return {
                 "success": True,
-                "path": document.path,
-                "format": "markdown",
-                "converted": True,
+                "path": entity.path,
                 "mime_type": entity.mime_type,
-                "page_count": page_count,
-                "truncated": len(markdown) > request.max_chars,
-                "markdown": markdown[: request.max_chars],
+                "size_bytes": entity.size_bytes,
+                "binary": True,
+                "hint": str(missing),
             }
+        return {
+            "success": True,
+            "path": document.path,
+            "format": "markdown",
+            "converted": True,
+            "mime_type": entity.mime_type,
+            "page_count": page_count,
+            "page_start": request.page_start,
+            "page_end": request.page_end,
+            "truncated": len(markdown) > request.max_chars,
+            "markdown": markdown[: request.max_chars],
+        }
 
     return await _run(
         ctx.deps, tool_name="pod_read_file", args=request.model_dump(), op=op
@@ -513,7 +500,7 @@ async def pod_view_document_pages(
     """Render PDF pages as images so you can *see* them (layout, tables, figures).
 
     Pages are 1-based. Only PDFs can be rendered visually; for other document
-    types use ``pod_read_file`` with ``format="markdown"`` to read the page text.
+    types use ``pod_read_file`` to read the page text.
 
     Set ``instructions`` to say what you need from the pages. If this agent's
     model reads images itself you get the page images inline; otherwise a vision

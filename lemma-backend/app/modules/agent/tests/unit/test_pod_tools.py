@@ -286,10 +286,15 @@ async def test_pod_get_records_single_vs_list(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_pod_read_file_markdown_returns_page_range(monkeypatch):
-    entity = SimpleNamespace(path="/pod/report.pdf")
+    entity = SimpleNamespace(
+        path="/pod/report.pdf", mime_type="application/pdf", size_bytes=10
+    )
     services = SimpleNamespace(
         file=SimpleNamespace(
-            get_document_markdown=AsyncMock(return_value=(entity, "## Page 2", 5))
+            download_file_content_by_path=AsyncMock(
+                return_value=(entity, b"%PDF-1.4\x00\xff")
+            ),
+            get_document_markdown=AsyncMock(return_value=(entity, "## Page 2", 5)),
         ),
         ctx=SimpleNamespace(pod_id=uuid4(), user_id=uuid4()),
     )
@@ -297,9 +302,7 @@ async def test_pod_read_file_markdown_returns_page_range(monkeypatch):
 
     result = await pod_adapter.pod_read_file(
         _run_ctx(),
-        PodReadFileRequest(
-            path="/pod/report.pdf", format="markdown", page_start=2, page_end=2
-        ),
+        PodReadFileRequest(path="/pod/report.pdf", page_start=2, page_end=2),
     )
 
     assert result["success"] is True
@@ -334,8 +337,10 @@ async def test_pod_read_file_text_decodes_utf8(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_a_text_file_is_returned_as_its_own_original_content(monkeypatch):
-    """Text-like files are never converted -- the original bytes ARE the answer."""
-    entity = SimpleNamespace(path="/me/notes.md", mime_type="text/markdown", size_bytes=11)
+    """A file with text of its own is that text -- never a rendering of it."""
+    entity = SimpleNamespace(
+        path="/me/notes.md", mime_type="text/markdown", size_bytes=11
+    )
     markdown = AsyncMock()
     services = SimpleNamespace(
         file=SimpleNamespace(
@@ -354,29 +359,58 @@ async def test_a_text_file_is_returned_as_its_own_original_content(monkeypatch):
 
     assert result["format"] == "text"
     assert result["text"] == "# hello\nyo"
-    # The converted form is not consulted for something that decodes.
     markdown.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_a_pdf_read_as_text_comes_back_converted(monkeypatch):
-    """Asking for a PDF's contents returns its contents.
+async def test_html_is_returned_as_html_not_as_prose(monkeypatch):
+    """HTML has text of its own, so converting it would discard the markup.
 
-    It used to return `binary: true` and an instruction to call again with
-    `format='markdown'` -- a round trip that answers itself, and one the tool
-    sweep's agent had to discover by failing first.
+    This is the case that decides the rule: an earlier version routed by file
+    type and would have handed back a rendering with the tags thrown away.
+    """
+    entity = SimpleNamespace(path="/me/page.html", mime_type="text/html", size_bytes=40)
+    markdown = AsyncMock()
+    services = SimpleNamespace(
+        file=SimpleNamespace(
+            download_file_content_by_path=AsyncMock(
+                return_value=(entity, b"<h1>Title</h1><p>body</p>")
+            ),
+            get_document_markdown=markdown,
+        ),
+        ctx=SimpleNamespace(pod_id=uuid4(), user_id=uuid4()),
+    )
+    _patch_services(monkeypatch, services)
+
+    result = await pod_adapter.pod_read_file(
+        _run_ctx(), PodReadFileRequest(path="/me/page.html")
+    )
+
+    assert result["format"] == "text"
+    assert result["text"] == "<h1>Title</h1><p>body</p>"
+    markdown.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_a_pdf_is_read_as_its_converted_text(monkeypatch):
+    """A PDF has no text of its own, so the conversion is the answer.
+
+    It used to need `format='markdown'`; without it a PDF came back as
+    `binary: true` and an instruction to call again -- a round trip that
+    answers itself, and one the tool sweep's agent found by failing first.
     """
     entity = SimpleNamespace(
-        path="/me/toolcheck/toolcheck.pdf", mime_type="application/pdf", size_bytes=2138
+        path="/me/toolcheck/toolcheck.pdf",
+        mime_type="application/pdf",
+        size_bytes=2138,
     )
-    document = SimpleNamespace(path="/me/toolcheck/toolcheck.pdf")
     services = SimpleNamespace(
         file=SimpleNamespace(
             download_file_content_by_path=AsyncMock(
                 return_value=(entity, b"%PDF-1.4\x00\xff binary")
             ),
             get_document_markdown=AsyncMock(
-                return_value=(document, "# Toolcheck\n\nbody", 2)
+                return_value=(entity, "# Toolcheck\n\nbody", 2)
             ),
         ),
         ctx=SimpleNamespace(pod_id=uuid4(), user_id=uuid4()),
@@ -396,10 +430,10 @@ async def test_a_pdf_read_as_text_comes_back_converted(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_a_binary_with_no_conversion_says_which_kind_of_missing(monkeypatch):
-    """A PNG has no converted form and never will; a PENDING PDF does not yet.
+    """A PNG will never have text; a PENDING PDF does not have it yet.
 
     Both used to be one flat "Binary file" hint. The reader's message already
-    tells them apart, so carry it through rather than restating it worse.
+    tells them apart, so carry it through rather than restate it worse.
     """
     from app.modules.datastore.contracts import DatastoreFileNotFoundError
 

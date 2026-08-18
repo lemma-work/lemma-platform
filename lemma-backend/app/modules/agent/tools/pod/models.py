@@ -164,20 +164,15 @@ class PodReadFileRequest(BaseModel):
             "as-is; a relative path resolves against `/me/c/{date}/{slug}`."
         ),
     )
-    format: Literal["text", "markdown"] = Field(
-        default="text",
-        description=(
-            "'markdown' returns converted document text (PDF, DOCX) and supports "
-            "a page range; use `pod_view_document_pages` to see pages as images."
-        ),
-    )
     page_start: int | None = Field(
-        default=None, ge=1, description="markdown only: first page (1-based)."
+        default=None,
+        ge=1,
+        description="Documents only: first page (1-based). Ignored for text files.",
     )
     page_end: int | None = Field(
         default=None,
         ge=1,
-        description="markdown only: last page, inclusive. Defaults to page_start.",
+        description="Documents only: last page, inclusive. Defaults to page_start.",
     )
     max_chars: int = Field(default=50000, ge=1, le=400000)
 
