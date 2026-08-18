@@ -327,9 +327,18 @@ impl HostProcessManager {
             log_dir,
         });
         let monitor = Arc::clone(&manager);
-        thread::spawn(move || loop {
-            thread::sleep(Duration::from_secs(1));
-            monitor.reconcile_crashes();
+        thread::spawn(move || {
+            let mut next_rotation = Instant::now() + SERVICE_LOG_ROTATE_INTERVAL;
+            loop {
+                thread::sleep(Duration::from_secs(1));
+                monitor.reconcile_crashes();
+                // Separate cadence from the crash check on purpose: this stats
+                // a file per service and nothing here needs it every second.
+                if Instant::now() >= next_rotation {
+                    monitor.rotate_service_logs();
+                    next_rotation = Instant::now() + SERVICE_LOG_ROTATE_INTERVAL;
+                }
+            }
         });
         Ok(manager)
     }
@@ -985,6 +994,31 @@ impl HostProcessManager {
             state.children.remove(&id);
             state.last_exit.insert(id.clone(), exit);
             let _ = self.remove_ledger_entry(&id);
+        }
+    }
+
+    /// Hold each service's log to its ceiling while the service is running.
+    ///
+    /// `process_log` rotates when it opens the file, which is once, at spawn.
+    /// The handle it returns then *is* the child's stdout and stderr for the
+    /// whole life of the process -- so a backend that stays up for days was
+    /// never checked again. One install was found with a 16 MB `backend.log`
+    /// still growing at 8 MB an hour, and the only thing that would ever have
+    /// truncated it was a restart.
+    ///
+    /// Rotating a live log is exactly what `rotate_log` was built for: it
+    /// copies aside and truncates in place rather than renaming, so the writer
+    /// holding the descriptor keeps writing to the same file and simply finds
+    /// it back at zero. That property was already relied on at spawn; nothing
+    /// was calling it afterwards.
+    fn rotate_service_logs(&self) {
+        for id in &self.ordered_ids {
+            let path = self.log_dir.join(format!("{id}.log"));
+            // Best effort, per service. A log that cannot be rotated -- removed
+            // out from under us, or briefly locked on Windows -- must not stop
+            // the others being rotated, and must not take down the supervisor
+            // thread that is also the crash monitor.
+            let _ = rotate_log(&path, SERVICE_LOG_MAX_BYTES);
         }
     }
 
@@ -1819,9 +1853,18 @@ impl Drop for HostProcessManager {
     }
 }
 
+/// Ceiling for one service's log before it is rotated, and therefore half the
+/// most it can occupy: the rotated copy sits beside it at the same size.
+const SERVICE_LOG_MAX_BYTES: u64 = 5 * 1024 * 1024;
+
+/// How often a running service's log is measured. Long enough to be free, short
+/// enough that a service logging hard cannot get far past the ceiling between
+/// checks.
+const SERVICE_LOG_ROTATE_INTERVAL: Duration = Duration::from_secs(30);
+
 fn process_log(log_dir: &Path, id: &str) -> io::Result<File> {
     let path = log_dir.join(format!("{id}.log"));
-    rotate_log(&path, 5 * 1024 * 1024)?;
+    rotate_log(&path, SERVICE_LOG_MAX_BYTES)?;
     let mut options = OpenOptions::new();
     options.create(true).append(true);
     #[cfg(unix)]
@@ -2073,7 +2116,80 @@ mod tests {
     #[cfg(unix)]
     use crate::port_reservation::PortReservation;
     use std::net::{Ipv4Addr, TcpListener};
-    use tempfile::tempdir;
+    use tempfile::{tempdir, TempDir};
+
+    /// The log directory to hand a manager under test: a directory *inside*
+    /// `root`, never `root` itself.
+    ///
+    /// A manager takes its installation state root — `installation.id` and the
+    /// process ledger — from the log directory's *parent*, because in
+    /// production it is handed `<state root>/logs`. Passing `root.path()` here
+    /// therefore made the parent the system temporary directory, so every
+    /// manager in every test, and in every test binary running at the same
+    /// time, shared one `$TMPDIR/processes.json` under one installation id.
+    ///
+    /// That is a live weapon: constructing a manager runs
+    /// `reclaim_verified_processes`, which SIGTERMs any pid in the ledger that
+    /// still matches its recorded executable and start time. With the ledger
+    /// shared, one test's `HostProcessManager::new` killed the `/bin/sleep`
+    /// services another test had spawned seconds earlier — which is exactly
+    /// how `opens_restart_circuit_after_crash_budget_is_exhausted` came to
+    /// fail on a loaded runner with its frontend dead 50ms after it started,
+    /// and why it never failed on an idle machine, where the tests do not
+    /// overlap. One directory deeper gives every manager its own installation,
+    /// which is what the reclaim was written to assume.
+    fn log_dir_in(root: &TempDir) -> PathBuf {
+        root.path().join("logs")
+    }
+
+    /// A manager whose installation state stays inside `root`.
+    fn manager_in(root: &TempDir, value: HostPackManifest) -> Arc<HostProcessManager> {
+        HostProcessManager::new(value, log_dir_in(root)).unwrap()
+    }
+
+    /// A running service's log is truncated under the writer that holds it.
+    ///
+    /// This is the property the whole rotation scheme depends on and the reason
+    /// it copies aside instead of renaming: the child owns this descriptor for
+    /// its entire life, so a rename would leave it writing into the rotated
+    /// file and the live one frozen at zero forever. Asserted with a handle
+    /// still open, because that is the only state that ever actually occurs.
+    #[test]
+    fn a_live_service_log_is_rotated_under_the_process_writing_it() {
+        use std::io::Write;
+
+        let root = tempdir().unwrap();
+        let path = root.path().join("backend.log");
+        let mut writer = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .unwrap();
+        writer.write_all(&vec![b'x'; 1024]).unwrap();
+
+        // Under the ceiling: left exactly alone.
+        rotate_log(&path, 4096).unwrap();
+        assert_eq!(path.metadata().unwrap().len(), 1024);
+        assert!(!path.with_extension("previous.log").exists());
+
+        // Over it: copied aside and truncated back to zero.
+        writer.write_all(&vec![b'x'; 4096]).unwrap();
+        rotate_log(&path, 4096).unwrap();
+        assert_eq!(path.metadata().unwrap().len(), 0);
+        assert_eq!(
+            path.with_extension("previous.log")
+                .metadata()
+                .unwrap()
+                .len(),
+            5120
+        );
+
+        // And the writer that never let go keeps appending to the same file,
+        // which is now counting up from zero rather than from 5 KiB.
+        writer.write_all(b"after").unwrap();
+        writer.flush().unwrap();
+        assert_eq!(path.metadata().unwrap().len(), 5);
+    }
 
     fn manifest(services: Vec<HostProcessSpec>) -> HostPackManifest {
         HostPackManifest {
@@ -2282,8 +2398,7 @@ mod tests {
             stabilization_seconds: 0,
         });
         let root = tempdir().unwrap();
-        let manager =
-            HostProcessManager::new(manifest(vec![frontend, backend]), root.path().into()).unwrap();
+        let manager = manager_in(&root, manifest(vec![frontend, backend]));
 
         assert_eq!(manager.application_ports(), Some((3711, 8711)));
         assert_eq!(loopback_http_port("https://127.0.0.1:3711/"), None);
@@ -2325,14 +2440,13 @@ mod tests {
     #[test]
     fn operator_secrets_are_ephemeral_and_backend_scoped() {
         let root = tempdir().unwrap();
-        let manager = HostProcessManager::new(
+        let manager = manager_in(
+            &root,
             manifest(vec![
                 service("frontend", &["backend"]),
                 service("backend", &[]),
             ]),
-            root.path().into(),
-        )
-        .unwrap();
+        );
         manager.set_backend_environment(HashMap::from([(
             "LEMMA_OPENAI_API_KEY".into(),
             "vault-secret".into(),
@@ -2355,14 +2469,13 @@ mod tests {
     #[test]
     fn dependency_failure_clears_readiness_and_surfaces_the_cause() {
         let root = tempdir().unwrap();
-        let manager = HostProcessManager::new(
+        let manager = manager_in(
+            &root,
             manifest(vec![
                 service("frontend", &["backend"]),
                 service("backend", &[]),
             ]),
-            root.path().into(),
-        )
-        .unwrap();
+        );
         manager.desired_running.store(true, Ordering::Release);
         manager.health_ready.store(true, Ordering::Release);
 
@@ -2392,7 +2505,7 @@ mod tests {
             service("backend", &[]),
         ]);
         value.setup[0].command = vec!["/usr/bin/env".into()];
-        let manager = HostProcessManager::new(value, root.path().into()).unwrap();
+        let manager = manager_in(&root, value);
         manager.set_backend_environment(HashMap::from([(
             "DATABASE_URL".into(),
             "postgresql://private-guest/lemma".into(),
@@ -2400,7 +2513,7 @@ mod tests {
 
         manager.run_setups().unwrap();
 
-        let log = std::fs::read_to_string(root.path().join("migrations.log")).unwrap();
+        let log = std::fs::read_to_string(log_dir_in(&root).join("migrations.log")).unwrap();
         assert!(log.contains("DATABASE_URL=postgresql://private-guest/lemma"));
     }
 
@@ -2421,7 +2534,7 @@ mod tests {
         value.setup[0].command = vec!["/bin/sh".into(), "-c".into(), "exit 9".into()];
         value.setup[0].max_attempts = 1;
         value.setup[0].optional = true;
-        let manager = HostProcessManager::new(value, root.path().to_path_buf()).unwrap();
+        let manager = manager_in(&root, value);
 
         manager
             .run_setups()
@@ -2439,7 +2552,7 @@ mod tests {
         value.setup[0].command = vec!["/bin/sh".into(), "-c".into(), "exit 9".into()];
         value.setup[0].max_attempts = 1;
         value.setup[0].optional = false;
-        let manager = HostProcessManager::new(value, root.path().to_path_buf()).unwrap();
+        let manager = manager_in(&root, value);
 
         assert!(manager.run_setups().is_err());
     }
@@ -2461,11 +2574,11 @@ mod tests {
             marker.to_string_lossy().into_owned(),
         ];
         value.setup[0].max_attempts = 2;
-        let manager = HostProcessManager::new(value, root.path().into()).unwrap();
+        let manager = manager_in(&root, value);
 
         manager.run_setups().unwrap();
 
-        let log = std::fs::read_to_string(root.path().join("migrations.log")).unwrap();
+        let log = std::fs::read_to_string(log_dir_in(&root).join("migrations.log")).unwrap();
         assert!(log.contains("setup attempt 1 exited"));
         assert!(marker.is_file());
     }
@@ -2500,7 +2613,7 @@ mod tests {
         ]);
         value.setup[0].command = vec!["/usr/bin/true".into()];
         value.setup[0].timeout_seconds = 5;
-        let manager = HostProcessManager::new(value, root.path().into()).unwrap();
+        let manager = manager_in(&root, value);
         manager.set_backend_environment(HashMap::from([(
             "DATABASE_URL".into(),
             format!("postgresql://postgres:secret@{address}/lemma"),
@@ -2554,7 +2667,7 @@ mod tests {
         let root = tempdir().unwrap();
         let mut value = manifest(vec![frontend, backend]);
         value.setup[0].command = vec!["/usr/bin/true".into()];
-        let manager = HostProcessManager::new(value, root.path().into()).unwrap();
+        let manager = manager_in(&root, value);
 
         manager.start_all().unwrap();
         assert!(manager.status().iter().all(|process| process.running));
@@ -2659,7 +2772,7 @@ mod tests {
         let root = tempdir().unwrap();
         let mut value = manifest(vec![frontend, backend]);
         value.setup[0].command = vec!["/usr/bin/true".into()];
-        let manager = HostProcessManager::new(value, root.path().into()).unwrap();
+        let manager = manager_in(&root, value);
 
         let started = Instant::now();
         let error = manager.start_all().unwrap_err().to_string();
@@ -2695,7 +2808,7 @@ mod tests {
         let root = tempdir().unwrap();
         let mut value = manifest(vec![frontend, backend]);
         value.setup[0].command = vec!["/usr/bin/true".into()];
-        let manager = HostProcessManager::new(value, root.path().into()).unwrap();
+        let manager = manager_in(&root, value);
         // The production path mints the generation before starting, and every
         // health spec is rewritten to expect it.
         *body.lock().unwrap() = manager.prepare_runtime_generation().unwrap();
@@ -2739,7 +2852,7 @@ mod tests {
         let root = tempdir().unwrap();
         let mut value = manifest(vec![frontend, backend]);
         value.setup[0].command = vec!["/usr/bin/true".into()];
-        let manager = HostProcessManager::new(value, root.path().into()).unwrap();
+        let manager = manager_in(&root, value);
         manager.start_all().unwrap();
         assert!(manager.backend_restart_available());
         manager.mark_dependency_unavailable("private runtime is cold".into());
@@ -2858,7 +2971,7 @@ mod tests {
         let root = tempdir().unwrap();
         let mut value = manifest(vec![frontend, backend]);
         value.setup[0].command = vec!["/usr/bin/true".into()];
-        let manager = HostProcessManager::new(value, root.path().into()).unwrap();
+        let manager = manager_in(&root, value);
 
         manager.start_all().unwrap();
         // Both, before anything is crashed. The frontend depends on the backend
