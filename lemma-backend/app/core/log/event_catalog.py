@@ -400,6 +400,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'datastore.projection.remove_indexed_chunks_s_s.diagnostic': EventSpec('debug', frozenset()),
     'datastore.query_role.grant.degraded': EventSpec('warning', frozenset({'schema_name', 'table_name'})),
     'datastore.reader.load_child_manifest_s.diagnostic': EventSpec('debug', frozenset()),
+    'datastore.record.bulk_update.propagated': EventSpec('debug', frozenset()),
     'datastore.record.bulk_write.propagated': EventSpec('debug', frozenset()),
     'datastore.record.create.propagated': EventSpec('debug', frozenset()),
     'datastore.record.list.propagated': EventSpec('debug', frozenset()),

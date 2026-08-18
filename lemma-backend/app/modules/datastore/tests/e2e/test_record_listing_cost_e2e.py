@@ -116,3 +116,64 @@ class TestRecordListingCost:
 
         assert len(seen) == 30, f"paged {len(seen)} rows out of 30"
         assert len(set(seen)) == 30, "a row was returned on two different pages"
+
+
+class TestBulkUpdateCost:
+    @pytest.mark.asyncio
+    async def test_a_bulk_update_is_one_transaction_not_one_per_row(
+        self, pod_api: DatastoreApi
+    ):
+        """`update_record` is right for one row and wrong N times.
+
+        It opens its own session, sets the RLS context, runs the UPDATE, stages
+        its event and commits — so a bulk update paid four round trips and a
+        fresh connection checkout per row, while the create and upsert paths
+        had been batching all along.
+        """
+        table = f"cost_bulk_{uuid4().hex[:8]}"
+        await _seed(pod_api, table, 20)
+        rows = (await pod_api.list_records(table, limit=20))["items"]
+
+        with _counted_statements() as statements:
+            updated = await pod_api.bulk_update(
+                table,
+                [{"id": row["id"], "title": f"renamed-{index}"} for index, row in enumerate(rows)],
+            )
+
+        assert updated["count"] == 20
+        commits = sum(1 for s in statements if s.strip().upper() == "COMMIT")
+        assert commits <= 2, (
+            f"{commits} commits for one bulk update of 20 rows; the per-row path "
+            "committed once per record"
+        )
+        rls = sum(1 for s in statements if "set_config" in s.lower())
+        assert rls <= 2, f"{rls} RLS context statements for one bulk update"
+
+    @pytest.mark.asyncio
+    async def test_a_bulk_update_that_fails_writes_nothing(
+        self, pod_api: DatastoreApi
+    ):
+        """The atomicity half, which matters more than the latency.
+
+        Per-row commits meant a batch failing halfway left the first half
+        written and the caller holding an error, with no way to tell which rows
+        had landed.
+        """
+        table = f"cost_atomic_{uuid4().hex[:8]}"
+        await _seed(pod_api, table, 4)
+        rows = (await pod_api.list_records(table, limit=4))["items"]
+
+        await pod_api.bulk_update(
+            table,
+            [
+                {"id": rows[0]["id"], "title": "written"},
+                {"id": str(uuid4()), "title": "no such row"},
+            ],
+            expected_status=404,
+        )
+
+        after = (await pod_api.list_records(table, limit=4))["items"]
+        titles = {row["title"] for row in after}
+        assert "written" not in titles, (
+            "the first row was committed before the batch failed"
+        )

@@ -14,6 +14,9 @@ from app.modules.datastore.domain.errors import (
 from app.modules.datastore.domain.datastore_entities import DatastoreDataType
 from app.modules.datastore.domain.ports import DatastoreRecordRepositoryPort
 from app.modules.datastore.services.authorization import DatastoreAuthorization
+from app.modules.datastore.infrastructure.record_bulk_update import (
+    bulk_update_records as write_bulk_updates,
+)
 from app.modules.datastore.services.record_validator import (
     RecordValidator,
     convert_record,
@@ -135,12 +138,18 @@ class RecordService:
         self,
         ctx: TableContext,
         data: dict[str, Any],
+        checked_user_ids: set[UUID] | None = None,
     ) -> None:
+        """Confirm every USER-typed value names a real user.
+
+        ``checked_user_ids`` lets a bulk caller share the dedup set across rows.
+        """
         if self.user_repository is None:
             return
 
         converted = convert_record(ctx.columns, data, skip_auto=False)
-        checked_user_ids: set[UUID] = set()
+        if checked_user_ids is None:
+            checked_user_ids = set()
 
         for key, value in converted.items():
             column = ctx.get_column(key)
@@ -349,6 +358,7 @@ class RecordService:
         user_id: UUID,
         *,
         enforce_user_scope: bool,
+        checked_user_ids: set[UUID] | None = None,
     ):
         """Validate and write one row, without the per-caller preamble.
 
@@ -359,7 +369,9 @@ class RecordService:
         """
         sanitized_data = RecordValidator(ctx).strip_system_write_overrides(data)
         self._validate_update_payload(ctx, sanitized_data)
-        await self._validate_user_reference_columns(ctx, sanitized_data)
+        await self._validate_user_reference_columns(
+            ctx, sanitized_data, checked_user_ids
+        )
         event_factory = (
             partial(
                 self.events.required_for_record,
@@ -481,7 +493,10 @@ class RecordService:
             admin_mode=admin_mode,
         )
         pk = ctx.primary_key_column
-        count = 0
+        # Shared across the batch: the dedup set was per row, so 200 rows
+        # naming one owner asked the user repository for it 200 times.
+        checked_user_ids: set[UUID] = set()
+        prepared: list[tuple[Any, dict[str, Any]]] = []
 
         for update in updates:
             pk_val = update.get(pk) or update.get("id")
@@ -494,14 +509,31 @@ class RecordService:
             payload.pop(pk, None)
             payload.pop("id", None)
 
-            await self._write_update(
-                ctx,
-                pk_val,
-                payload,
-                user_id,
-                enforce_user_scope=enforce_user_scope,
+            sanitized = RecordValidator(ctx).strip_system_write_overrides(payload)
+            self._validate_update_payload(ctx, sanitized)
+            await self._validate_user_reference_columns(
+                ctx, sanitized, checked_user_ids
             )
-            count += 1
+            prepared.append((pk_val, sanitized))
+
+        event_factory = (
+            partial(
+                self.events.required_for_record,
+                ctx=ctx,
+                operation=DatastoreRecordOperation.UPDATE,
+                user_id=user_id,
+            )
+            if ctx.events_enabled
+            else None
+        )
+        count = await write_bulk_updates(
+            self.record_repository,
+            ctx,
+            prepared,
+            user_id,
+            enforce_user_scope=enforce_user_scope,
+            event_factory=event_factory,
+        )
 
         # One dispatch for the batch, not one per row. Each row still stages its
         # own UPDATE event through the repository, so the event contract is
