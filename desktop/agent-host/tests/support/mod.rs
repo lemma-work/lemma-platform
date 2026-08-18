@@ -432,6 +432,15 @@ async fn mcp_post(
                     "required": ["text"],
                 },
                 "_meta": {"lemma_tool_name": "echo"},
+            }, {
+                // The parking tool has to be *offered*, not merely answered: an
+                // agent cannot call a tool it was never shown, which is exactly
+                // how the first real-provider run of this failed.
+                "name": PARK_TOOL,
+                "description":
+                    "Ask the user a question and wait for their answer.",
+                "inputSchema": {"type": "object", "properties": {}},
+                "_meta": {"lemma_tool_name": "ask_user"},
             }]},
         }),
         "tools/call" => {

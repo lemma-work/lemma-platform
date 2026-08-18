@@ -1128,3 +1128,56 @@ async fn a_real_agent_answers_from_history_carried_in_the_prompt() {
         println!("{agent}: answered from prompt-carried history");
     }
 }
+
+/// Parking, with a real commercial agent on the other end.
+///
+/// The hermetic suite proves the bridge waits and rewrites the frame. Only a
+/// real provider can prove the part that matters to a person: that an agent
+/// handed a parked tool result *stays in its turn* while someone decides, and
+/// then uses their answer — rather than treating the slow tool as a failure,
+/// giving up, or answering from its own head.
+///
+/// The stand-in withholds the decision for two polls, so the agent genuinely
+/// waits rather than being handed an answer that happened to be ready.
+#[tokio::test]
+#[ignore = "requires authenticated local agents and spends real provider quota"]
+async fn a_real_agent_waits_inside_its_turn_for_a_parked_tool() {
+    for agent in configured_agents() {
+        let endpoint = support::LemmaMcpEndpoint::start(support::McpTransport::StatelessJson).await;
+        let (_directory, control) = paired_real_run(
+            &agent,
+            concat!(
+                "Call the Lemma MCP tool named lemma_park with no arguments. ",
+                "It may take a while to answer; wait for it. Do not use any ",
+                "other tool and do not write files. When it returns, reply ",
+                "with exactly the value it gives for the key 'Pick one'."
+            ),
+            endpoint.run_configuration(),
+            support::PermissionAnswer::AllowOnce,
+            Duration::from_secs(300),
+        )
+        .await;
+
+        let call = endpoint
+            .requests()
+            .into_iter()
+            .find(|record| record.method == "tools/call")
+            .unwrap_or_else(|| panic!("{agent} never called the parked tool"));
+        assert_eq!(call.params["name"], support::PARK_TOOL);
+        // The bridge really held the response open rather than handing the
+        // placeholder straight to the agent.
+        assert!(
+            endpoint.interaction_polls() > 2,
+            "{agent}'s bridge did not wait: {} poll(s)",
+            endpoint.interaction_polls()
+        );
+        // And the agent used the person's answer, which it could only have
+        // received as that tool's return.
+        assert!(
+            control.assistant_text().contains("Blue"),
+            "{agent} did not use the parked answer: {:?}",
+            control.assistant_text()
+        );
+        println!("{agent}: LEMMA_REAL_PARKED_TOOL_OK");
+    }
+}
