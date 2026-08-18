@@ -116,7 +116,7 @@ over a single resource is [Sharing and permissions](sharing-and-permissions.md).
 **Contracts:** `pod.permissions.me`, `pod.permissions.catalog`
 
 ### PS-POD-013 — A pod admin defines roles the built-in ones do not cover
-**Status:** covered
+**Status:** gap
 
 - When a pod admin creates a custom role with a set of permissions, the system
   shall allow it to be assigned like a built-in one.
@@ -125,6 +125,12 @@ over a single resource is [Sharing and permissions](sharing-and-permissions.md).
   they have.
 - When a pod admin changes a custom role's permissions, the system shall apply
   the change to everyone already holding it.
+
+> **Gap:** defining and assigning custom roles works, and so does the refusal
+> to confer more than you hold. Naming a permission that does not exist does
+> not: the validation produces the right message and nothing translates it, so
+> the request answers 500. See `DEV-POD-004`; held by a scenario marked
+> `xfail(strict=True)`.
 
 **Contracts:** `pod.roles.create`, `pod.roles.update`, `pod.role.permissions.replace`, `pod.role.permissions.get`
 
@@ -215,7 +221,7 @@ over a single resource is [Sharing and permissions](sharing-and-permissions.md).
 ## Capability: Change and remove membership
 
 ### PS-POD-040 — Removing someone from a pod takes their access away immediately
-**Status:** covered
+**Status:** gap
 
 - When a pod admin removes a member, the system shall revoke their access to the
   pod and everything in it on their next request.
@@ -224,6 +230,11 @@ over a single resource is [Sharing and permissions](sharing-and-permissions.md).
   old access.
 - If someone who is neither an organization owner nor a pod admin attempts to
   remove another member, then the system shall refuse.
+
+> **Gap:** the access revocation holds — the pod closes on the next request.
+> Dropping the resource grants held *through* that membership does not happen,
+> so a removed member keeps control of the agent conversations they started.
+> See `DEV-ACCESS-001`; held by a scenario marked `xfail(strict=True)`.
 
 **Contracts:** `pod.member.remove`, `pod.permissions.me`
 
@@ -246,7 +257,7 @@ over a single resource is [Sharing and permissions](sharing-and-permissions.md).
 ## Capability: Delete a pod
 
 ### PS-POD-050 — Deleting a pod stops the work it was doing
-**Status:** covered
+**Status:** gap
 
 - When an organization owner or a pod admin deletes a pod, the system shall stop
   showing it and shall stop its schedules, surfaces, and other standing work.
@@ -256,6 +267,13 @@ over a single resource is [Sharing and permissions](sharing-and-permissions.md).
   system shall refuse.
 - The system shall keep deleting safe to repeat, so that a retried deletion
   reports success rather than failing on the second attempt.
+
+> **Gap:** the pod stops being shown, `pod.deleted` is recorded, the name is
+> freed and a repeat deletion is safe. Stopping the standing work does not
+> happen: `delete_pod` touches only the pod row, so its schedules stay reachable
+> and still report `is_active: true`, and a deleted pod keeps waking up and
+> running agents nobody can see. See `DEV-OPS-003`; held by a scenario marked
+> `xfail(strict=True)`.
 
 **Contracts:** `pod.delete`, `pod.deleted`
 

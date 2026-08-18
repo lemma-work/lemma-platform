@@ -333,7 +333,8 @@ accepting is the better product. What must not remain is 200 with nothing kept.
 ---
 
 ### DEV-DATA-002 — One of four pod-schema creators skips the lock that exists for it
-**Violates:** PS-DATA-001
+**Violates:** *(no promise — the retry hides it from every client. This is an
+internal invariant the code states and then breaks in one place.)*
 **Severity:** medium
 **Where:** [`postgres_search_service.py:83`](lemma-backend/app/modules/datastore/services/search/postgres_search_service.py#L83),
 against [`schema_manager.py:148`](lemma-backend/app/modules/datastore/infrastructure/schema_manager.py#L148)

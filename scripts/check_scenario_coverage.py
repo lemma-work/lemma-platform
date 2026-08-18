@@ -6,16 +6,20 @@ checks run. Without them a scenario can claim to prove something that was never
 written down, a promise can claim to be covered by a test that does not exist,
 and both drift silently until the document is decoration.
 
-Five gates, all cheap enough to sit in ``make quality``:
+Six gates, all cheap enough to sit in ``make quality``:
 
 1. Every ``@proves`` id in the suite names a scenario that exists.
 2. Every contract reference — ``@covers`` in a test, ``**Contracts:**`` in the
    specification — names a live OpenAPI operation or a live analytics event.
 3. Every scenario marked ``covered`` has at least one test proving it.
 4. Every scenario marked ``gap`` carries a ``> **Gap:**`` note saying how the
-   implementation diverges. The detail lives in the gitignored deviation
-   register; what has to stay in the repository is the admission.
-5. ``docs/product/coverage.md`` matches what the sources produce.
+   implementation diverges. The detail lives in ``issues.md``; what has to stay
+   beside the promise is the admission.
+5. Every promise named by an ``issues.md`` entry is marked ``gap``. Without
+   this the register and the specification drift apart in the one direction
+   that flatters us: a promise reads ``covered`` while a committed entry says
+   the system does not keep it.
+6. ``docs/product/coverage.md`` matches what the sources produce.
 
 Run with ``--write`` to regenerate the coverage document, ``--check`` (the
 default) to verify it.
@@ -383,7 +387,32 @@ def main() -> int:
                 f"'> **Gap:**' note saying how the implementation diverges"
             )
 
-    # Gate 5 — the coverage document is current.
+    # Gate 5 — a promise the register says is broken is not still `covered`.
+    # The two documents are written at different times by different people, and
+    # nothing else compares them: a finding lands in issues.md, the promise it
+    # names keeps saying `covered`, and the specification quietly overstates
+    # what the system does.
+    register = ROOT / "issues.md"
+    if register.is_file():
+        for line in register.read_text(encoding="utf-8").splitlines():
+            if not line.startswith("**Violates:**"):
+                continue
+            for scenario_id in re.findall(r"PS-[A-Z]+-\d+", line):
+                scenario = by_id.get(scenario_id)
+                if scenario is None:
+                    errors.append(
+                        f"issues.md: '{line.strip()}' names {scenario_id}, which is "
+                        f"not in docs/product/journeys"
+                    )
+                elif scenario.status == "covered":
+                    errors.append(
+                        f"issues.md names {scenario_id} as violated, but "
+                        f"{scenario.journey_file} still marks it covered — mark it "
+                        f"gap with a '> **Gap:**' note, or drop it from the entry "
+                        f"if the entry does not actually break that promise"
+                    )
+
+    # Gate 6 — the coverage document is current.
     rendered = render_coverage(scenarios, tests)
     if args.write:
         COVERAGE_DOC.parent.mkdir(parents=True, exist_ok=True)

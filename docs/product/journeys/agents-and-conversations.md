@@ -143,7 +143,7 @@ it happens.
 ## Capability: Stay in control of what the agent does
 
 ### PS-AGENT-020 — Consequential actions come back to a person first
-**Status:** covered
+**Status:** gap
 
 - If an agent attempts something destructive — dropping a table, deleting
   records in bulk, sending a message outside the pod — then the system shall
@@ -157,6 +157,12 @@ it happens.
 - Where a person approves an action for the rest of the session, the system
   shall stop asking for that action in that session only, and shall ask again in
   the next one.
+
+> **Gap:** the pause, the indefinite wait, the resume, and the refusal all
+> hold. Approving *for the session* does not: a second approval of the same
+> call takes an exact-match fast path that discards the permissions it carried,
+> so the agent is told yes and refused anyway. See `DEV-ACCESS-002`; held by a
+> scenario marked `xfail(strict=True)`.
 
 **Contracts:** `agent.conversation.approval.list`, `agent.conversation.approval.resolve`, `agent.conversation.get`
 

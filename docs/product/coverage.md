@@ -11,8 +11,8 @@ only a promise marked `covered` with no test is.
 
 | Status | Scenarios |
 | --- | ---: |
-| `covered` | 144 |
-| `gap` | 13 |
+| `covered` | 138 |
+| `gap` | 19 |
 | `manual` | 3 |
 | `planned` | 0 |
 | `withdrawn` | 0 |
@@ -44,7 +44,7 @@ the module suites may cover it — but it is untested *as product*.
 | `PS-AGENT-012` A person can stop an agent | `covered` | `test_stopping_a_run_leaves_the_conversation_usable` |
 | `PS-AGENT-013` A failed run can be tried again | `covered` | `test_retrying_a_healthy_run_is_refused` |
 | `PS-AGENT-014` A conversation is private to the pod | `covered` | `test_an_outsider_cannot_read_a_conversation` |
-| `PS-AGENT-020` Consequential actions come back to a person first | `covered` | `test_deciding_an_unknown_approval_is_refused`, `test_approvals_are_listable`, `test_approving_runs_the_described_action`, `test_denying_leaves_the_action_undone`, `test_a_destructive_attempt_asks_rather_than_failing_silently`, `test_an_approval_is_offered_with_native_controls` |
+| `PS-AGENT-020` Consequential actions come back to a person first | `gap` | `test_deciding_an_unknown_approval_is_refused`, `test_approvals_are_listable`, `test_approving_runs_the_described_action`, `test_denying_leaves_the_action_undone`, `test_a_destructive_attempt_asks_rather_than_failing_silently`, `test_an_approval_is_offered_with_native_controls` |
 | `PS-AGENT-021` An agent can ask a person a question mid-run | `covered` | `test_an_agent_asks_and_resumes_with_the_answer`, `test_an_unanswered_question_keeps_waiting` |
 | `PS-AGENT-022` Every action is attributable | `covered` | `test_agent_actions_are_attributable`, `test_decisions_are_a_durable_record` |
 | `PS-AGENT-030` An agent can delegate to a subagent | `covered` | `test_an_agent_delegates_to_a_subagent` |
@@ -82,15 +82,15 @@ the module suites may cover it — but it is untested *as product*.
 | `PS-POD-010` A pod admin adds an organization member to the pod | `covered` | `test_a_member_can_be_found`, `test_admin_adds_an_organization_member` |
 | `PS-POD-011` A person's pod role decides what they may do inside it | `covered` | `test_a_viewer_reads_but_does_not_write`, `test_a_role_change_applies_to_the_next_request` |
 | `PS-POD-012` A person can find out what they may do, before trying | `covered` | `test_effective_permissions_are_readable`, `test_reported_permissions_are_honest` |
-| `PS-POD-013` A pod admin defines roles the built-in ones do not cover | `covered` | `test_a_roles_permissions_can_change`, `test_a_role_can_be_described_and_removed`, `test_a_custom_role_is_created_and_assignable`, `test_a_role_cannot_exceed_its_creator`, `test_an_unknown_permission_is_refused_clearly` |
+| `PS-POD-013` A pod admin defines roles the built-in ones do not cover | `gap` | `test_a_roles_permissions_can_change`, `test_a_role_can_be_described_and_removed`, `test_a_custom_role_is_created_and_assignable`, `test_a_role_cannot_exceed_its_creator`, `test_an_unknown_permission_is_refused_clearly` |
 | `PS-POD-020` A pod decides who may walk in | `covered` | `test_a_new_pod_is_invite_only`, `test_an_org_open_pod_admits_members`, `test_an_outsider_cannot_join_an_org_open_pod` |
 | `PS-POD-021` A person asks for access and an admin decides | `covered` | `test_a_person_sees_their_own_request`, `test_a_join_request_is_approved` |
 | `PS-POD-022` Approving a request cannot be used to gain authority | `covered` | `test_approving_cannot_confer_a_higher_organization_role`, `test_approving_within_your_own_authority_is_allowed`, `test_approving_cannot_confer_unheld_pod_permissions` |
 | `PS-POD-030` A person sees exactly the pods they may open | `gap` | `test_a_non_member_cannot_open_the_pod`, `test_an_outsider_cannot_open_the_pod`, `test_the_cli_lists_pods`, `test_the_python_sdk_lists_pods`, `test_the_typescript_sdk_lists_pods` |
 | `PS-POD-031` A person sees their pods across every organization at once | `covered` | `test_an_organization_has_a_home` |
-| `PS-POD-040` Removing someone from a pod takes their access away immediately | `covered` | `test_removing_a_member_revokes_access`, `test_a_non_admin_cannot_remove_members` |
+| `PS-POD-040` Removing someone from a pod takes their access away immediately | `gap` | `test_removing_a_member_revokes_access`, `test_a_non_admin_cannot_remove_members` |
 | `PS-POD-041` A pod always has at least one admin | `gap` | `test_the_last_pod_admin_cannot_step_down` |
-| `PS-POD-050` Deleting a pod stops the work it was doing | `covered` | `test_deleting_a_pod_removes_it`, `test_a_deleted_pods_name_is_reusable`, `test_a_non_admin_cannot_delete_the_pod` |
+| `PS-POD-050` Deleting a pod stops the work it was doing | `gap` | `test_deleting_a_pod_removes_it`, `test_a_deleted_pods_name_is_reusable`, `test_a_non_admin_cannot_delete_the_pod` |
 | `PS-POD-051` Deletion does not take unrelated things with it | `covered` | `test_deleting_one_pod_spares_the_others`, `test_deleting_one_pod_leaves_the_others_working` |
 
 ## [Connectors and accounts](journeys/connectors-and-accounts.md)
@@ -122,7 +122,7 @@ the module suites may cover it — but it is untested *as product*.
 | `PS-ONB-011` An organization has a handle that survives being renamed | `covered` | `test_renaming_an_organization_keeps_its_handle`, `test_handle_availability_is_checkable` |
 | `PS-ONB-014` Two organizations may share a display name | `gap` | `test_two_organizations_may_share_a_display_name` |
 | `PS-ONB-013` Only an owner changes what the organization is | `covered` | `test_only_an_owner_changes_the_organization` |
-| `PS-ONB-020` An invited person joins with the role they were offered | `covered` | `test_an_invited_person_joins_with_the_offered_role`, `test_an_invitation_is_addressed` |
+| `PS-ONB-020` An invited person joins with the role they were offered | `gap` | `test_an_invited_person_joins_with_the_offered_role`, `test_an_invitation_is_addressed` |
 | `PS-ONB-021` An invitation can carry a pod, and accepting it grants both | `gap` | `test_an_invitation_carries_its_pod`, `test_an_invitation_to_a_vanished_pod_is_not_silently_half_applied` |
 | `PS-ONB-022` An invitation stops working when it should | `covered` | `test_a_revoked_invitation_is_dead`, `test_an_invitation_is_single_use` |
 | `PS-ONB-023` Inviting someone already inside is refused clearly | `covered` | `test_inviting_an_existing_member_is_refused` |
@@ -239,7 +239,7 @@ the module suites may cover it — but it is untested *as product*.
 | `PS-DATA-030` A person uploads a file and it lands where they put it | `covered` | `test_a_file_lands_where_it_was_put`, `test_a_file_lands_in_a_folder`, `test_an_outsider_cannot_read_files` |
 | `PS-DATA-031` A person browses a pod's files as a tree | `covered` | `test_a_folder_lists_its_contents`, `test_a_file_lands_in_a_folder`, `test_the_file_tree_is_browsable` |
 | `PS-DATA-032` A person moves, renames, and deletes files | `covered` | `test_moving_a_file_keeps_its_identity`, `test_deleting_a_file_removes_it` |
-| `PS-DATA-040` An uploaded document becomes readable text | `covered` | `test_supplied_markdown_is_used`, `test_attaching_to_an_unindexed_file_is_refused` |
+| `PS-DATA-040` An uploaded document becomes readable text | `gap` | `test_supplied_markdown_is_used`, `test_attaching_to_an_unindexed_file_is_refused` |
 | `PS-DATA-041` A document that fails to convert is not lost | `covered` | `test_an_unavailable_converter_does_not_burn_attempts`, `test_the_original_bytes_survive` |
 | `PS-DATA-042` One person's bulk upload does not stall everyone else | `covered` | `test_backpressure_is_legible`, `test_a_declined_upload_can_be_retried`, `test_a_burst_does_not_starve_another_pod`, `test_every_accepted_upload_survives` |
 | `PS-DATA-043` A person searches what is in their documents | `covered` | `test_documents_are_searchable` |

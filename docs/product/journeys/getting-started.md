@@ -124,7 +124,7 @@ worse than asking.
 ## Capability: Bring a team in
 
 ### PS-ONB-020 — An invited person joins with the role they were offered
-**Status:** covered
+**Status:** gap
 
 - When an owner or editor invites an email address with a role, the system shall
   create a pending invitation for that email and notify it.
@@ -134,6 +134,11 @@ worse than asking.
   `organization.member_joined`.
 - If a person attempts to accept an invitation addressed to a different email,
   then the system shall refuse.
+
+> **Gap:** the joining itself is correct — the invitation, the role, and the
+> refusal of a mismatched email all hold. The `organization.member_joined`
+> record does not: its consumer calls a repository method that does not exist,
+> so every join raises and the event is never recorded. See `DEV-ONB-004`.
 
 **Contracts:** `org.invitation.invite`, `org.invitation.accept`, `organization.member_joined`
 
