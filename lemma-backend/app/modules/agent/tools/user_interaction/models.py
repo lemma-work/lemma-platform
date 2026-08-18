@@ -205,6 +205,15 @@ class RequestApprovalResponse(BaseToolResponse):
             "for confirmation conversationally instead."
         ),
     )
+    parked_tool_call_id: str | None = Field(
+        default=None,
+        description=(
+            "Set when the decision is not in yet and the caller must wait for "
+            "it. The Agent Host MCP bridge holds the tool response open and "
+            "polls this id until the person decides, so the model sits inside "
+            "its turn exactly as it does for its own native approvals."
+        ),
+    )
 
 
 class AskUserOption(BaseModel):
@@ -251,5 +260,14 @@ class AskUserResponse(BaseToolResponse):
             "True when a remote harness runtime could not pause and the model must "
             "ask "
             "the question conversationally instead."
+        ),
+    )
+    parked_tool_call_id: str | None = Field(
+        default=None,
+        description=(
+            "Set when the answer is not ready yet and the caller must wait for "
+            "it. The Agent Host MCP bridge holds the tool response open and "
+            "polls this id until the person decides, so the model sits inside "
+            "its turn exactly as it does for its own native approvals."
         ),
     )

@@ -35,7 +35,11 @@ from app.modules.agent.services.approval_reconciliation import (
 from app.modules.agent.services.conversation_service import ConversationService
 
 _PAYLOAD = {
-    "toolCall": {"toolCallId": "call-9", "title": "Run rm -rf build", "kind": "execute"},
+    "toolCall": {
+        "toolCallId": "call-9",
+        "title": "Run rm -rf build",
+        "kind": "execute",
+    },
     "message": "The local agent asked for permission to use a native tool.",
     "options": [
         {"optionId": "reject", "kind": "reject_once", "name": "No"},
@@ -105,7 +109,12 @@ class TestDecisionMapping:
         """Adapters differ on `allow_once` vs `allowOnce`; guessing wrong would
         silently fall through to "first allowed option"."""
         request = _request(
-            {"options": [{"optionId": "x", "kind": "rejectOnce"}, {"optionId": "y", "kind": "allowOnce"}]}
+            {
+                "options": [
+                    {"optionId": "x", "kind": "rejectOnce"},
+                    {"optionId": "y", "kind": "allowOnce"},
+                ]
+            }
         )
 
         assert request.option_for(AgentRunApprovalDecision.APPROVE_ONCE) == "y"
@@ -346,7 +355,9 @@ def _patch_agent_host(
     monkeypatch.setitem(sys.modules, channels.__name__, channels)
     monkeypatch.setitem(sys.modules, dispatch.__name__, dispatch)
     monkeypatch.setattr(
-        approval_reconciliation, "SessionUnitOfWorkFactory", lambda _maker: _FakeUowFactory()
+        approval_reconciliation,
+        "SessionUnitOfWorkFactory",
+        lambda _maker: _FakeUowFactory(),
     )
 
 
@@ -387,6 +398,11 @@ class _ConversationRepository:
         )
         self.appended.append(message)
         return message
+
+    async def get_agent_run(self, _run_id):
+        # None unless a test says otherwise: a run that paused in-process has
+        # already finished, so "no run here" is the ordinary case.
+        return getattr(self, "paused_run", None)
 
     async def lock_conversation(self, _conversation_id) -> None:
         return None
@@ -470,9 +486,7 @@ class TestResolutionRouting:
         )
 
         assert resolution.status == "resolved"
-        assert dispatched == [
-            ("call-9", run_id, AgentRunApprovalDecision.APPROVE_ONCE)
-        ]
+        assert dispatched == [("call-9", run_id, AgentRunApprovalDecision.APPROVE_ONCE)]
         assert repository.created_runs == 0
 
     @pytest.mark.asyncio
@@ -562,10 +576,60 @@ async def test_a_session_approval_is_recorded_before_the_tool_runs() -> None:
     # path that commits first.
     uow.after_commit(_record)
 
-    await uow.commit()          # execute_approved_tool_as_user commits here …
-    order.append("tool-ran")    # … and only then executes.
+    await uow.commit()  # execute_approved_tool_as_user commits here …
+    order.append("tool-ran")  # … and only then executes.
 
     assert order == ["approval-recorded", "tool-ran"], (
         "the session approval landed after the tool ran; an APPROVE_FOR_SESSION "
         "call will be denied by the grant the user just gave"
     )
+
+
+class TestAParkedInteractionDoesNotResume:
+    """A decision for a turn that is still in flight must not start a second one.
+
+    A remote harness's `ask_user` / `request_approval` parks: the run keeps
+    running while the host's MCP bridge holds the tool response open, and the
+    synthesized return appended by the resolution is exactly what that bridge is
+    polling for. The turn carries on the moment it reads it, so dispatching a
+    resume run here would put two runs on the same turn.
+
+    Keyed on the run still running rather than on a marker in the call's
+    arguments, unlike the ACP permission above: those arguments come from the
+    model, not from Lemma, so there is nothing of ours to read back. "Still
+    running" is also the honest condition — it is what makes a resume wrong.
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_live_run_is_left_to_finish_its_own_turn(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from app.modules.agent.domain.value_objects import AgentRunStatus
+
+        service, repository, run_id = TestResolutionRouting()._service(monkeypatch, [])
+        # An ordinary request_approval — no ACP marker, so only the run's own
+        # state can tell this apart from an in-process pause.
+        repository.call.tool_args = {"tool_name": "exec_command", "args": {}}
+        repository.paused_run = SimpleNamespace(
+            id=run_id, status=AgentRunStatus.RUNNING
+        )
+        conversation = SimpleNamespace(
+            id=repository.call.conversation_id, agent_id=None, pod_id=uuid4()
+        )
+
+        await service.resolve_user_approval_internal(
+            conversation=conversation,
+            approval_id=repository.call.tool_call_id,
+            user_id=uuid4(),
+            pod_id=conversation.pod_id,
+            # Denied rather than approved: an approval would run the wrapped
+            # tool as the user, which is a different mechanism entirely. The
+            # resume guard is the same either way, and a denial reaches it
+            # without dragging runtime resolution into a unit test.
+            decision=AgentRunApprovalDecision.DENY,
+        )
+
+        assert repository.created_runs == 0, "a duplicate run was dispatched"
+        # The answer still has to be written, because it is the thing the parked
+        # bridge is waiting to read.
+        assert any(m.kind == MessageKind.TOOL_RETURN for m in repository.appended)

@@ -351,6 +351,49 @@ class TestToolCalls:
         assert duplicate == []
         assert len(_messages(closed)) == 1
 
+    def test_a_pausing_tool_is_left_to_lemma_to_record(self) -> None:
+        """The harness's copy of `ask_user` never reaches the conversation.
+
+        Lemma records these itself, when the MCP call arrives, because only an
+        id Lemma minted can be answered: the approval endpoint, the snooze
+        timer and the resume all address a call by its id, and the one the
+        harness reports here belongs to a namespace none of them can reach.
+        Emitting both put two identical questions in the conversation, one of
+        them on a card whose buttons resolved nothing.
+        """
+        n = _normalizer()
+        opened = n.normalize(
+            _event(
+                1,
+                AgentHostEventType.TOOL_CALL_UPSERT,
+                {"name": "ask_user", "rawInput": {"question": "Which one?"}},
+                object_id="host-call-1",
+            )
+        )
+        closed = n.normalize(
+            _event(
+                2,
+                AgentHostEventType.TOOL_CALL_UPDATE,
+                {"status": "COMPLETED", "result": {"answer": "the blue one"}},
+                object_id="host-call-1",
+            )
+        )
+        assert _messages(opened) == []
+        assert _messages(closed) == []
+
+    def test_an_ordinary_tool_is_still_recorded_from_the_harness(self) -> None:
+        """The suppression is by tool, not a general silencing of the lane."""
+        n = _normalizer()
+        opened = n.normalize(
+            _event(
+                1,
+                AgentHostEventType.TOOL_CALL_UPSERT,
+                {"name": "exec_command", "rawInput": {"command": "ls"}},
+                object_id="host-call-2",
+            )
+        )
+        assert len(_messages(opened)) == 1
+
     def test_a_streamed_call_keeps_the_arguments_that_arrive_after_it(self) -> None:
         """The sequence a streaming adapter really sends, in order.
 

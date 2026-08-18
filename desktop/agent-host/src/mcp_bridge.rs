@@ -22,6 +22,24 @@ const MAX_MCP_ATTEMPTS: u32 = 4;
 const MCP_RETRY_MIN: std::time::Duration = std::time::Duration::from_millis(400);
 const MCP_RETRY_MAX: std::time::Duration = std::time::Duration::from_secs(8);
 
+/// Key Lemma sets on a tool result when it is waiting for a person rather than
+/// answering. `ask_user` and `request_approval` return it on an Agent Host run:
+/// they cannot end the agent's turn from inside a tool call, so the wait
+/// happens here instead.
+const PARKED_KEY: &str = "parked_tool_call_id";
+
+/// How long a parked tool response is held open.
+///
+/// The same half hour the host already gives a native ACP permission request,
+/// because it is the same act from the person's side: they are being asked
+/// something and the agent is waiting. Matching it keeps one answer to "how
+/// long will this sit there" rather than two.
+const PARK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30 * 60);
+
+/// Gap between polls while parked. Slow on purpose: a person is deciding, and
+/// nothing about answering sooner depends on asking more often.
+const PARK_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
+
 pub async fn run_bridge(paths: &HostPaths, target_id: Uuid, run_id: Uuid) -> anyhow::Result<()> {
     // The run's MCP configuration was delivered inline with the start command
     // and journaled durably before dispatch, so the bridge is fully local.
@@ -153,6 +171,11 @@ pub async fn run_bridge(paths: &HostPaths, target_id: Uuid, run_id: Uuid) -> any
         let Some(frames) = frames else {
             continue;
         };
+        // Lemma may have answered "waiting for the person" instead of with a
+        // result. Hold the tool response open until the decision lands, so the
+        // model sits inside its turn exactly as it does for one of its own
+        // native permission requests.
+        let frames = resolve_parked_frames(&http, &endpoint, frames).await;
         for frame in frames {
             stdout.write_all(frame.as_bytes()).await?;
             stdout.write_all(b"\n").await?;
@@ -173,6 +196,114 @@ pub async fn run_bridge(paths: &HostPaths, target_id: Uuid, run_id: Uuid) -> any
         let _ = http.delete(&endpoint.url).headers(headers).send().await;
     }
     Ok(())
+}
+
+/// Wait out any frame that came back parked, and answer with the decision.
+///
+/// A frame is parked when Lemma could not answer yet because it is waiting for
+/// a person -- `ask_user` and `request_approval` on an Agent Host run. Those
+/// tools cannot end the agent's turn from inside a tool call, so the waiting is
+/// done here, and the agent is simply handed the person's answer as that call's
+/// result. From the model's side nothing unusual happened: one tool took a
+/// while.
+async fn resolve_parked_frames(
+    http: &reqwest::Client,
+    endpoint: &ResolvedEndpoint,
+    frames: Vec<String>,
+) -> Vec<String> {
+    let mut resolved = Vec::with_capacity(frames.len());
+    for frame in frames {
+        resolved.push(match parked_tool_call_id(&frame) {
+            Some(tool_call_id) => match await_decision(http, endpoint, &tool_call_id).await {
+                Some(answer) => frame_with_result(&frame, answer).unwrap_or(frame),
+                // Timed out, or the poll never succeeded. The unchanged frame
+                // still says it is waiting, which is true and leaves the model
+                // able to say so rather than stalling on a promise nobody kept.
+                None => frame,
+            },
+            None => frame,
+        });
+    }
+    resolved
+}
+
+/// The parked id on a `tools/call` result, if this frame carries one.
+fn parked_tool_call_id(frame: &str) -> Option<String> {
+    let value: Value = serde_json::from_str(frame).ok()?;
+    value
+        .pointer("/result/structuredContent")?
+        .get(PARKED_KEY)?
+        .as_str()
+        .filter(|id| !id.is_empty())
+        .map(str::to_owned)
+}
+
+/// Poll Lemma until the person decides, or the park times out.
+async fn await_decision(
+    http: &reqwest::Client,
+    endpoint: &ResolvedEndpoint,
+    tool_call_id: &str,
+) -> Option<Value> {
+    let url = interactions_url(&endpoint.url, tool_call_id)?;
+    let authorization = normalize_authorization(&endpoint.authorization).ok()?;
+    let deadline = tokio::time::Instant::now() + PARK_TIMEOUT;
+    tracing::info!(
+        tool_call_id,
+        "waiting for the user to answer a parked tool call"
+    );
+    while tokio::time::Instant::now() < deadline {
+        match http
+            .get(&url)
+            .header(AUTHORIZATION, authorization)
+            .header("x-lemma-agent-run-id", endpoint.run_id.to_string())
+            .send()
+            .await
+        {
+            // 204 is "not decided yet", which is the expected answer for most
+            // of the wait; anything else non-2xx is transient and treated the
+            // same way, because giving up would strand the agent.
+            Ok(response) if response.status() == reqwest::StatusCode::OK => {
+                return response.json::<Value>().await.ok();
+            }
+            Ok(_) => {}
+            Err(error) => {
+                tracing::debug!(%error, "polling a parked tool call failed; retrying");
+            }
+        }
+        tokio::time::sleep(PARK_POLL_INTERVAL).await;
+    }
+    tracing::warn!(tool_call_id, "a parked tool call was never answered");
+    None
+}
+
+/// `.../conversations/{id}/mcp` -> `.../conversations/{id}/interactions/{id}`.
+fn interactions_url(mcp_url: &str, tool_call_id: &str) -> Option<String> {
+    let base = mcp_url.trim_end_matches('/').strip_suffix("/mcp")?;
+    Some(format!("{base}/interactions/{tool_call_id}"))
+}
+
+/// Put the decision where the parked placeholder was, in both places a client
+/// reads a tool result: the structured content and the text beside it.
+fn frame_with_result(frame: &str, answer: Value) -> Option<String> {
+    let mut value: Value = serde_json::from_str(frame).ok()?;
+    let text = serde_json::to_string(&answer).ok()?;
+    let result = value.get_mut("result")?;
+    result
+        .as_object_mut()?
+        .insert("structuredContent".to_owned(), answer);
+    if let Some(content) = result.pointer_mut("/content")
+        && let Some(entries) = content.as_array_mut()
+    {
+        for entry in entries.iter_mut() {
+            if entry.get("type").and_then(Value::as_str) == Some("text")
+                && let Some(object) = entry.as_object_mut()
+            {
+                object.insert("text".to_owned(), Value::String(text.clone()));
+                break;
+            }
+        }
+    }
+    serde_json::to_string(&value).ok()
 }
 
 struct ResolvedEndpoint {
@@ -409,5 +540,80 @@ mod tests {
         let result =
             endpoint_from_mcp(Uuid::new_v4(), &json!({"url": "https://lemma.example/mcp"}));
         assert!(result.is_err());
+    }
+}
+
+#[cfg(test)]
+mod parked_tests {
+    use super::*;
+
+    fn parked_frame(id: &str) -> String {
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 7,
+            "result": {
+                "content": [{"type": "text", "text": "{\"parked_tool_call_id\":\"x\"}"}],
+                "structuredContent": {"success": true, PARKED_KEY: id},
+            }
+        })
+        .to_string()
+    }
+
+    #[test]
+    fn a_parked_result_is_recognised_and_an_ordinary_one_is_not() {
+        assert_eq!(
+            parked_tool_call_id(&parked_frame("call-42")).as_deref(),
+            Some("call-42")
+        );
+
+        let ordinary = serde_json::json!({
+            "jsonrpc": "2.0", "id": 7,
+            "result": {"structuredContent": {"success": true, "rows": []}}
+        })
+        .to_string();
+        assert!(parked_tool_call_id(&ordinary).is_none());
+
+        // An empty id would send the poller at a URL that can never resolve.
+        assert!(parked_tool_call_id(&parked_frame("")).is_none());
+    }
+
+    #[test]
+    fn the_decision_replaces_the_placeholder_everywhere_a_client_reads_it() {
+        // Clients read either the structured content or the text beside it, so
+        // leaving one of them saying "parked" would show the model a decision
+        // and a contradiction at the same time.
+        let answer = serde_json::json!({"success": true, "answers": {"Pick": "Blue"}});
+        let resolved = frame_with_result(&parked_frame("call-42"), answer).expect("rewritten");
+        let value: Value = serde_json::from_str(&resolved).unwrap();
+
+        assert!(parked_tool_call_id(&resolved).is_none());
+        assert_eq!(
+            value.pointer("/result/structuredContent/answers/Pick"),
+            Some(&Value::String("Blue".to_owned()))
+        );
+        let text = value
+            .pointer("/result/content/0/text")
+            .and_then(Value::as_str)
+            .expect("text content");
+        assert!(text.contains("Blue"), "{text}");
+        // The envelope has to survive: a client matches the response to its
+        // request by id.
+        assert_eq!(value.get("id"), Some(&Value::from(7)));
+    }
+
+    #[test]
+    fn the_poll_url_is_the_mcp_url_with_the_interaction_on_it() {
+        assert_eq!(
+            interactions_url(
+                "https://api.lemma.work/agent-runtime/conversations/abc/mcp",
+                "call-42"
+            )
+            .as_deref(),
+            Some("https://api.lemma.work/agent-runtime/conversations/abc/interactions/call-42")
+        );
+        // Trailing slash is how the endpoint is sometimes written.
+        assert!(interactions_url("https://x/conversations/abc/mcp/", "c").is_some());
+        // Anything that is not the MCP endpoint must not be guessed at.
+        assert!(interactions_url("https://x/conversations/abc", "c").is_none());
     }
 }

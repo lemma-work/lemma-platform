@@ -83,15 +83,35 @@ def _ctx() -> BaseAgentContext:
     )
 
 
-def _user_prompt(*, carries_history: bool) -> str:
+def _woke_up(sequence: int, tool_call_id: str) -> Message:
+    """The return the wake synthesizes for the snooze it resolved."""
+    return Message(
+        id=uuid7(),
+        conversation_id=CONVERSATION_ID,
+        sequence=sequence,
+        role=MessageRole.TOOL,
+        kind=MessageKind.TOOL_RETURN,
+        tool_name="snooze",
+        tool_call_id=tool_call_id,
+        tool_result={"woke_because": "TIMER", "note_to_self": "check the build"},
+    )
+
+
+def _user_prompt(
+    *,
+    carries_history: bool,
+    messages: list[Message] | None = None,
+    resumed_tool_call_id: str | None = None,
+) -> str:
     payload = run_start_payload(
         agent=_agent(),
         conversation=_conversation(),
-        messages=_transcript(),
+        messages=_transcript() if messages is None else messages,
         ctx=_ctx(),
         agent_run_id=uuid7(),
         runtime_instructions="",
         carries_history=carries_history,
+        resumed_tool_call_id=resumed_tool_call_id,
     )
     return str(payload["prompt"]["user_prompt"])
 
@@ -115,6 +135,45 @@ class TestHistory:
         assert "Which night?" in prompt
         assert "Friday." in prompt
         assert prompt.index("Book me a table") < prompt.index("Friday.")
+
+
+class TestWakingUp:
+    """What a run started by a timer says to an agent that already remembers.
+
+    A woken run adds no user message, so "the latest user message" is the
+    request that started the task — and the provider session already contains
+    it, along with everything the agent did about it. Sending it again does not
+    read as "carry on", it reads as the person asking a second time, and the
+    agent starts the work over.
+    """
+
+    async def test_the_woken_run_is_told_it_woke(self):
+        prompt = _user_prompt(
+            carries_history=False,
+            messages=[*_transcript(), _woke_up(4, "lemma-mcp-1")],
+            resumed_tool_call_id="lemma-mcp-1",
+        )
+
+        assert "TIMER" in prompt
+        assert "check the build" in prompt
+        assert "Friday." not in prompt
+
+    async def test_an_ordinary_turn_still_sends_the_latest_message(self):
+        prompt = _user_prompt(carries_history=False, resumed_tool_call_id=None)
+
+        assert "Friday." in prompt
+
+    async def test_a_resume_whose_return_is_gone_falls_back(self):
+        """History is trimmed by size, so the message may not have survived.
+
+        Re-sending the last user message is a poor prompt but a live one; a run
+        dispatched with no prompt at all is an agent asked to do nothing.
+        """
+        prompt = _user_prompt(
+            carries_history=False, resumed_tool_call_id="lemma-mcp-missing"
+        )
+
+        assert "Friday." in prompt
 
 
 class TestCredentials:
