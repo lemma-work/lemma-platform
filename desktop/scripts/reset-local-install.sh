@@ -48,12 +48,19 @@ for path in "${support}" "${caches}" "${webkit}" "${prefs}" "${saved}"; do
   fi
 done
 
-# locald keeps operator secrets in the login keychain, keyed to its identifier.
-# They are meaningless once the databases they unlock are gone, and leaving them
-# means the next install adopts credentials for a workspace that no longer exists.
+# locald keeps operator secrets in the login keychain. They are meaningless once
+# the databases they unlock are gone, and leaving them means the next install
+# adopts credentials for a workspace that no longer exists.
+#
+# The service is VAULT_SERVICE from locald/src/operator_config.rs -- the string
+# it passes to keyring, which becomes the keychain service attribute. It is
+# *not* the daemon's code-signing identifier, work.lemma.locald, which is what
+# this used to delete: a name no item is ever stored under, so the loop matched
+# nothing, exited immediately, and reported "removed 0 keychain item(s)" on a
+# machine whose secrets were all still there.
 printf '\n→ Removing keychain entries\n'
 removed=0
-while security delete-generic-password -s "work.lemma.locald" >/dev/null 2>&1; do
+while security delete-generic-password -s "work.lemma.local" >/dev/null 2>&1; do
   removed=$((removed + 1))
 done
 say "removed ${removed} keychain item(s)"

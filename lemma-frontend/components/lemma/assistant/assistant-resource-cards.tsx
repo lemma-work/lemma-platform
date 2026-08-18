@@ -16,7 +16,10 @@ import {
   extractDisplayResourceFromInvocation,
   type DisplayResourceRequest,
 } from "@/lib/assistant/display-resource";
-import { CONVERSATION_PRESENTED_RESOURCE_PARAM } from "@/lib/assistant/conversation-presentation";
+import {
+  buildConversationStandaloneResourceHref,
+  CONVERSATION_PRESENTED_RESOURCE_PARAM,
+} from "@/lib/assistant/conversation-presentation";
 import { getLemmaClient } from "@/lib/sdk/lemma-client";
 import { fileNameFromPath } from "./assistant-format";
 import { displayResourceIcon } from "./assistant-parts";
@@ -76,6 +79,18 @@ export function humanizeResourceName(value: string): string {
     .trim();
   if (!cleaned) return value;
   return cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
+}
+
+/** Names the widget for the pod tab strip and the topbar of its own route. */
+export function appendWidgetTabTitle(href: string | null, title: string): string | null {
+  if (!href || !title.trim()) return href;
+  try {
+    const url = new URL(href, "https://lemma.local");
+    url.searchParams.set("title", title.trim());
+    return `${url.pathname}${url.search}${url.hash}`;
+  } catch {
+    return href;
+  }
 }
 
 export function displayResourceKind(request: DisplayResourceRequest): string {
@@ -349,6 +364,12 @@ export function DisplayResourceCards({
 
         if (renderWidgetInline && podId) {
           const canExpand = !!onNavigateResource && !!card.href;
+          // The pod tab strip derives itself from the URL, so opening a widget
+          // as a tab is a plain navigation to its own route — and the name has
+          // to ride along in the link, since that route cannot look it up.
+          const podTabHref = card.href
+            ? appendWidgetTabTitle(buildConversationStandaloneResourceHref(card.href), title)
+            : null;
           return (
             <InlineWidget
               key={card.toolCallId}
@@ -359,6 +380,7 @@ export function DisplayResourceCards({
               title={title}
               loadingMessages={card.request.loadingMessages}
               variant="inline"
+              podTabHref={podTabHref}
               onExpand={canExpand ? expandResource : undefined}
             />
           );

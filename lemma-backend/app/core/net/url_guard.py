@@ -337,6 +337,7 @@ async def fetch_guarded(
     timeout: float,
     headers: dict[str, str] | None = None,
     max_redirects: int = 3,
+    policy: GuardPolicy | None = None,
 ) -> bytes:
     """GET ``url``, re-validating every redirect hop and capping the body.
 
@@ -348,7 +349,7 @@ async def fetch_guarded(
     """
     import httpx
 
-    policy = GuardPolicy.from_settings()
+    policy = policy or GuardPolicy.from_settings()
     current = url
     for _ in range(max_redirects + 1):
         await assert_safe_url(current, policy=policy)

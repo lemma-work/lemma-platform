@@ -18,7 +18,28 @@ param(
 $ErrorActionPreference = "Stop"
 
 function Say { param([string]$msg) Write-Host $msg }
-function Fail { param([string]$msg) Write-Error "error: $msg"; exit 1 }
+# Writes to stderr and exits 1, the way install.sh's `fail` does. Not
+# Write-Error: under `Stop` that raises a terminating error, so the `exit 1`
+# after it never ran and the caller got a PowerShell exception trace instead of
+# the one-line message and the exit code this is supposed to produce.
+function Fail { param([string]$msg) [Console]::Error.WriteLine("error: $msg"); exit 1 }
+
+# install.sh runs under `set -Eeuo pipefail`, so any command that fails stops
+# the script. PowerShell has no equivalent for native executables --
+# $ErrorActionPreference governs cmdlets, and a non-zero exit from uv.exe or
+# lemma-stack.exe is not an error it can see -- so every one of them is checked
+# by hand below. Without that this script reported a successful install no
+# matter what happened, which is the one thing an installer must never do.
+function Require-ExitCode { param([string]$what) if ($LASTEXITCODE -ne 0) { Fail "$what (exit code $LASTEXITCODE)" } }
+
+# `--cli-only` is what install.sh accepts and what the docs show. PowerShell
+# binds `-CliOnly`, and anything it does not recognise falls into $StackArgs --
+# so the documented spelling used to be forwarded to `lemma-stack install` as a
+# stray argument and the user got the full runtime installer they asked to skip.
+if ($StackArgs -contains "--cli-only") {
+    $CliOnly = $true
+    $StackArgs = @($StackArgs | Where-Object { $_ -ne "--cli-only" })
+}
 
 # Ensure $HOME\.local\bin is on PATH (where uv places tools on Windows)
 $uvBin = Join-Path $env:USERPROFILE ".local\bin"
@@ -30,9 +51,22 @@ if ($env:PATH -notlike "*$uvBin*") {
 if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
     Say "Installing uv (https://astral.sh/uv)..."
     $uvInstaller = Join-Path $env:TEMP "uv-installer.ps1"
-    Invoke-RestMethod "https://astral.sh/uv/install.ps1" -OutFile $uvInstaller
+    # Matches the curl flags install.sh uses: a bounded connect timeout and
+    # retries, so a flaky network fails with a sentence rather than a raw
+    # WebException half a minute later.
+    try {
+        Invoke-RestMethod "https://astral.sh/uv/install.ps1" `
+            -OutFile $uvInstaller `
+            -TimeoutSec 20 `
+            -MaximumRetryCount 5 `
+            -RetryIntervalSec 2
+    } catch {
+        Fail "could not download the uv installer; check your network and re-run"
+    }
     & powershell -ExecutionPolicy Bypass -File $uvInstaller
+    $uvInstallerExit = $LASTEXITCODE
     Remove-Item $uvInstaller -ErrorAction SilentlyContinue
+    if ($uvInstallerExit -ne 0) { Fail "the uv installer failed (exit code $uvInstallerExit)" }
 
     # Re-source PATH after uv install
     $env:PATH = "$uvBin;$env:PATH"
@@ -52,6 +86,9 @@ $lemmaStackSpec = if ($env:LEMMA_STACK_SOURCE) {
 
 Say "Installing lemma-stack..."
 uv tool install --force $lemmaStackSpec | Out-Null
+# Checked before the PATH probes below, so a failed install reports itself
+# rather than being reported as "installed but not on PATH".
+Require-ExitCode "could not install lemma-stack"
 
 if (-not (Get-Command lemma-stack -ErrorAction SilentlyContinue)) {
     $uvToolBin = uv tool dir --bin 2>$null
@@ -70,3 +107,8 @@ if ($CliOnly -or $env:LEMMA_STACK_CLI_ONLY -eq "1") {
 }
 
 & lemma-stack install @StackArgs
+# install.sh ends in `exec`, so the runtime installer's exit code *is* the
+# script's. PowerShell has no exec, and without this the bootstrap swallowed
+# that code and reported success for a failed install -- to a user who piped
+# this whole file into `iex` and has nothing else to check.
+exit $LASTEXITCODE

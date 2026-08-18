@@ -1195,7 +1195,7 @@ test-cli-e2e:
 
 test-python:
 	@echo "→ lemma-python SDK tests (non-integration)…"
-	@cd $(PYTHON_DIR) && uv run --with pytest pytest tests/ -m "not integration" -q
+	@cd $(PYTHON_DIR) && uv run --with pytest --with pytest-asyncio pytest tests/ -m "not integration" -q
 
 # ── Product scenarios ─────────────────────────────────────────────────────────
 # The black-box suite: it boots the real stack (postgres/redis/supertokens +

@@ -50,7 +50,6 @@ export type WebAnalyticEvent = keyof typeof CLIENT_CATALOG;
 export const KNOWN_UNEMITTED: readonly WebAnalyticEvent[] = [
     "landing.viewed",
     "pod.create_started",
-    "client.error",
 ];
 
 /** Properties the client attaches to every event, so they are never dropped by

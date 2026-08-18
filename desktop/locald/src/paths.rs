@@ -82,12 +82,21 @@ impl LocalPaths {
 
         #[cfg(windows)]
         {
-            let pipe_name = format!(r"LOCAL\work.lemma.locald.{:016x}", stable_hash(&self.root));
-            pipe_name
+            locald_pipe_name(&self.root)
                 .to_ns_name::<GenericNamespaced>()
                 .map(Name::into_owned)
         }
     }
+}
+
+/// What the control endpoint is called on Windows.
+///
+/// Split out so one assertion can pin the whole name -- the literal and the
+/// hash together. Both halves are duplicated in the desktop shell, which is
+/// what opens this name; see the note on `stable_hash`.
+#[cfg(windows)]
+pub(crate) fn locald_pipe_name(root: &Path) -> String {
+    format!(r"LOCAL\work.lemma.locald.{:016x}", stable_hash(root))
 }
 
 #[cfg(not(windows))]
@@ -147,5 +156,28 @@ mod tests {
     fn named_pipe_identity_is_stable_and_user_root_specific() {
         assert_eq!(stable_hash(Path::new("a")), stable_hash(Path::new("a")));
         assert_ne!(stable_hash(Path::new("a")), stable_hash(Path::new("b")));
+    }
+
+    /// The daemon and the shell must derive the same endpoint name.
+    ///
+    /// This exact assertion is duplicated in desktop/src/main.rs, over the same
+    /// path and the same expected string, because the code that produces it is
+    /// duplicated too and cannot cheaply be shared -- locald is a sidecar
+    /// binary, not a library the app links. They drifted once: the shell hashed
+    /// the root unnormalised while this side lowercased it, so on every default
+    /// Windows install the app opened a pipe its own daemon never listened on.
+    /// Changing this value without changing the other one is the bug.
+    #[cfg(windows)]
+    #[test]
+    fn named_pipe_name_matches_the_one_the_desktop_shell_opens() {
+        assert_eq!(
+            locald_pipe_name(Path::new(r"C:\Users\Example\AppData\Local\Lemma\locald")),
+            r"LOCAL\work.lemma.locald.a5c86f3cbfe10caf"
+        );
+        // Every spelling of one directory is one endpoint.
+        assert_eq!(
+            locald_pipe_name(Path::new(r"C:\Users\Example\AppData\Local\Lemma\locald")),
+            locald_pipe_name(Path::new(r"c:/users/example/appdata/local/lemma/locald/"))
+        );
     }
 }

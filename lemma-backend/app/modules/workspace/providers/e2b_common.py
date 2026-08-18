@@ -13,7 +13,11 @@ from sandbox_runtime.errors import (
     SandboxPathNotFound,
     SandboxUnavailable,
 )
-from app.modules.workspace.providers.base import ProviderGone, ProviderRejected
+from app.modules.workspace.providers.base import (
+    ProviderFailed,
+    ProviderGone,
+    ProviderRejected,
+)
 
 DEFAULT_METADATA_NAMESPACE = "lemma"
 
@@ -147,3 +151,73 @@ async def every_page(paginator) -> list:
     while paginator.has_next:
         found.extend(await paginator.next_items())
     return found
+
+
+async def ensure_runtime_serving(
+    sandbox,
+    provider_id: str,
+    *,
+    runtime_port: int,
+    budget_seconds: float = 6.0,
+) -> None:
+    """Raise unless the runtime inside this sandbox is answering.
+
+    `is_running()` asks E2B about the *VM*, and a VM outlives the process it was
+    started for. That gap is the whole 2026-08-16 P0: a function sandbox whose
+    runtime had died still reported `running`, so adoption kept accepting it and
+    every dispatch got 502 for 100 minutes. Measured against the service:
+
+        healthy runtime   ->  404  (route absent, port listening)
+        dead runtime      ->  502  (nothing behind E2B's edge)
+
+    So any HTTP answer at all means the runtime is there -- 404 included, and
+    deliberately, because the probe must not depend on an authenticated route.
+    502 and a transport failure mean it is not.
+
+    Polled rather than probed once, because readiness is allowed to wait: a
+    resumed sandbox needs a moment before E2B's edge routes to it. The budget is
+    short because this also runs on the warm path, and it only elapses when the
+    runtime is *not* answering -- a healthy one replies well inside it.
+    """
+    with sdk_errors():
+        if not await sandbox.is_running():
+            raise ProviderFailed(f"e2b sandbox {provider_id} is not running")
+
+    # Substitutable like `query_type` and `pty_size_type` on the SDK seam: a fake
+    # sandbox serves no HTTP, and a unit test still has to be able to say whether
+    # the runtime inside it is answering.
+    substitute = getattr(sandbox, "runtime_status", None)
+    if substitute is not None:
+        status = substitute(runtime_port)
+    else:
+        status = await _poll_runtime(
+            f"https://{sandbox.get_host(runtime_port)}/health", budget_seconds
+        )
+    if status is None:
+        raise ProviderFailed(
+            f"e2b sandbox {provider_id} runtime port {runtime_port} never "
+            f"answered within {budget_seconds}s"
+        )
+    if status >= 500:
+        raise ProviderFailed(
+            f"e2b sandbox {provider_id} is running but its runtime answered "
+            f"{status}; the process inside has died"
+        )
+
+
+async def _poll_runtime(url: str, budget_seconds: float) -> int | None:
+    """The runtime's status, or None if it never answered inside the budget."""
+    import asyncio
+    import time
+
+    import httpx
+
+    deadline = time.monotonic() + budget_seconds
+    async with httpx.AsyncClient(timeout=budget_seconds) as client:
+        while True:
+            try:
+                return (await client.get(url)).status_code
+            except httpx.HTTPError:
+                if time.monotonic() >= deadline:
+                    return None
+                await asyncio.sleep(0.1)

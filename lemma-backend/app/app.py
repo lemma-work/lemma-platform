@@ -253,6 +253,7 @@ async def lifespan(app: FastAPI):
             # opened against customer databases. Closed explicitly so a reload
             # does not leak sockets into the next process.
             from app.core.net.http_client import close_shared_http_client
+            from app.core.net.impersonating_client import close_impersonating_client
             from app.modules.agent.services.runtime_model_factory import (
                 close_agent_provider_clients,
             )
@@ -261,6 +262,8 @@ async def lifespan(app: FastAPI):
             )
 
             await close_shared_http_client()
+            # The separate libcurl session `web_fetch` reads pages through.
+            await close_impersonating_client()
             # Per-endpoint LLM provider pools, kept alive across runs for
             # connection reuse.
             await close_agent_provider_clients()
@@ -277,6 +280,41 @@ async def lifespan(app: FastAPI):
             shutdown_telemetry()
 
 
+#: The route label for a request that reached no FastAPI route. It is a real
+#: outcome (a 404, a sub-app mount, an error before routing), not an error --
+#: but it is also not an identity, which is why the raw path rides along on the
+#: signals that matter.
+_UNMATCHED_ROUTE = "unmatched"
+
+
+class TrailingSlashMiddleware:
+    """Treat ``/things/`` as ``/things`` so a stray slash is not a 404.
+
+    Mutates the scope in place rather than copying it, for the same reason
+    documented in ``apps/api/host_routing.py``: the router records the matched
+    route by writing ``scope["route"]``, and :class:`RequestObserverMiddleware`
+    reads it from *outside* this middleware. With a copy the router wrote to an
+    object the observer never saw, so every request whose path ended in a slash
+    was logged as ``route: "unmatched"`` regardless of what it actually matched
+    or returned -- silently seeding the bucket that production's fixed-cost
+    5.2s "unmatched" 404s were being investigated in.
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        path = scope.get("path", "")
+        if path != "/" and path.endswith("/"):
+            scope["path"] = path.rstrip("/")
+
+        await self.app(scope, receive, send)
+
+
 class RequestObserverMiddleware:
     """Bind HTTP correlation, emit bounded terminal signals, and record metrics."""
 
@@ -289,6 +327,13 @@ class RequestObserverMiddleware:
     QUIET_PATHS = frozenset(
         {"/health", "/health/live", "/health/ready", "/health/capabilities", "/livez"}
     )
+    # Routes that are supposed to take a long time. A long poll answers when it
+    # has news or when its hold expires, so a slow one is the design working:
+    # every completed idle poll logged a warning, and on one local stack 311 of
+    # 314 slow-request warnings were healthy 25-second polls. A warning that
+    # fires on the normal case is not a signal, and it buried the three that
+    # meant something.
+    HELD_ROUTES = frozenset({"/agent-host/poll"})
 
     def __init__(self, app):
         self.app = app
@@ -396,6 +441,17 @@ class RequestObserverMiddleware:
                         "status_code": status_code,
                         "duration_ms": duration_ms,
                     }
+                    # "unmatched" names no request, so a slow or failing one in
+                    # that bucket cannot be investigated at all: two separate
+                    # passes at production's fixed-cost 5.2s `unmatched` 404s
+                    # failed for exactly this reason. Populated only for that
+                    # bucket -- a real route template is already the identity,
+                    # and raw paths are unbounded.
+                    fields["path"] = (
+                        str(scope.get("path", ""))[:120]
+                        if route == _UNMATCHED_ROUTE
+                        else ""
+                    )
                     if status_code >= 500 or caught is not None:
                         fields["error_type"] = state.get(
                             "lemma_error_type",
@@ -418,6 +474,7 @@ class RequestObserverMiddleware:
                             error_type=fields["error_type"],
                             error_code=fields["error_code"],
                             exc_info=exc_info,
+                            path=fields["path"],
                         )
                     elif status_code == 429:
                         logger.warning(
@@ -434,7 +491,10 @@ class RequestObserverMiddleware:
                             if streaming and response_started_at is not None
                             else (finished_at - started_at)
                         )
-                        if elapsed >= self.SLOW_SECONDS:
+                        if (
+                            elapsed >= self.SLOW_SECONDS
+                            and fields["route"] not in self.HELD_ROUTES
+                        ):
                             fields["duration_ms"] = round(elapsed * 1000, 1)
                             fields["latency_kind"] = (
                                 "time_to_first_byte" if streaming else "total"
@@ -446,6 +506,7 @@ class RequestObserverMiddleware:
                                 status_code=fields["status_code"],
                                 duration_ms=fields["duration_ms"],
                                 latency_kind=fields["latency_kind"],
+                                path=fields["path"],
                             )
                         elif settings.local_http_access_logs_enabled:
                             logger.info(
@@ -468,7 +529,7 @@ class RequestObserverMiddleware:
     def _route_template(scope: dict) -> str:
         route = scope.get("route")
         value = getattr(route, "path_format", None) or getattr(route, "path", None)
-        return value if isinstance(value, str) else "unmatched"
+        return value if isinstance(value, str) else _UNMATCHED_ROUTE
 
 
 # Compatibility name retained for imports and generated SDK tests.
@@ -568,22 +629,6 @@ def create_app(modules=OSS_MODULES) -> FastAPI:
     # ({"message","code","request_id","details"}). Domain errors translate automatically via
     # their status_code/code, so controllers don't catch-and-remap them.
     register_exception_handlers(app)
-
-    class TrailingSlashMiddleware:
-        def __init__(self, app):
-            self.app = app
-
-        async def __call__(self, scope, receive, send):
-            if scope["type"] != "http":
-                await self.app(scope, receive, send)
-                return
-
-            path = scope.get("path", "")
-            if path != "/" and path.endswith("/"):
-                scope = dict(scope)
-                scope["path"] = path.rstrip("/")
-
-            await self.app(scope, receive, send)
 
     init_telemetry(service_name="lemma-api")
     instrument_database_engine(get_engine())

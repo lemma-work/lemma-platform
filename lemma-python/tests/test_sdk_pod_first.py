@@ -7,6 +7,9 @@ import pytest
 
 from lemma_sdk import Lemma, Pod
 from lemma_sdk.errors import LemmaAPIError, LemmaConfigError
+from lemma_sdk.openapi_client.models.datastore_count_response import (
+    DatastoreCountResponse,
+)
 from lemma_sdk.openapi_client.models.function_run_response import FunctionRunResponse
 from lemma_sdk.openapi_client.models.operation_execution_response import (
     OperationExecutionResponse,
@@ -37,6 +40,12 @@ class StubTransport:
             return RecordCreateResponseRecordCreate.from_dict(
                 {"id": "rec-1", **body["data"]}
             )
+        if ".record_bulk_" in endpoint.__name__:
+            # Every bulk endpoint answers with an affected-row count. Without
+            # this branch the stub returns None and the facades all report 0,
+            # which would let a broken delegation pass.
+            counted = body.get("records") or body.get("record_ids") or []
+            return DatastoreCountResponse.from_dict({"count": len(counted)})
         if endpoint.__name__.endswith("function_run"):
             return FunctionRunResponse.from_dict(
                 {
@@ -102,6 +111,79 @@ def test_pod_table_create_binds_pod_and_returns_typed_record():
         "body_model": "CreateRecordRequest",
         "kwargs": {},
     }
+
+
+def _bound_pod(transport: StubTransport) -> Pod:
+    lemma = Lemma(token="token", base_url="https://api.example.test", org_id="11111111-1111-4111-8111-111111111111")
+    lemma._transport = transport
+    return lemma.pod("22222222-2222-4222-8222-222222222222")
+
+
+def test_pod_table_bulk_create_writes_every_row_in_one_call():
+    """The reason this method exists.
+
+    Without it the only batch path was ``pod.records.bulk_create``, so a caller
+    holding a table handle wrote N rows as N ``create`` calls -- N round trips
+    from wherever the code runs back to the API. A benchmark probe did exactly
+    that and spent 17 of its 17.3 seconds on them.
+    """
+    transport = StubTransport()
+    pod = _bound_pod(transport)
+    rows = [{"title": f"row-{index}"} for index in range(50)]
+
+    count = pod.table("tickets").bulk_create(rows)
+
+    assert count == 50
+    assert len(transport.calls) == 1, "50 rows must cost one round trip, not 50"
+    assert transport.calls[0] == {
+        "endpoint": "lemma_sdk.openapi_client.api.records.record_bulk_create",
+        "path_args": (UUID("22222222-2222-4222-8222-222222222222"), "tickets"),
+        "body": {"records": rows, "upsert": False},
+        "body_model": "BulkCreateRecordsRequest",
+        "kwargs": {},
+    }
+
+
+def test_pod_table_bulk_create_forwards_upsert():
+    transport = StubTransport()
+    pod = _bound_pod(transport)
+
+    pod.table("tickets").bulk_create([{"id": "rec-1", "title": "again"}], upsert=True)
+
+    assert transport.calls[0]["body"]["upsert"] is True
+
+
+def test_pod_table_bulk_update_binds_the_table_it_was_opened_on():
+    transport = StubTransport()
+    pod = _bound_pod(transport)
+
+    count = pod.table("tickets").bulk_update(
+        [{"id": "rec-1", "status": "resolved"}, {"id": "rec-2", "status": "open"}]
+    )
+
+    assert count == 2
+    assert (
+        transport.calls[0]["endpoint"]
+        == "lemma_sdk.openapi_client.api.records.record_bulk_update"
+    )
+    assert transport.calls[0]["path_args"] == (
+        UUID("22222222-2222-4222-8222-222222222222"),
+        "tickets",
+    )
+
+
+def test_pod_table_bulk_delete_binds_the_table_it_was_opened_on():
+    transport = StubTransport()
+    pod = _bound_pod(transport)
+
+    count = pod.table("tickets").bulk_delete(["rec-1", "rec-2", "rec-3"])
+
+    assert count == 3
+    assert (
+        transport.calls[0]["endpoint"]
+        == "lemma_sdk.openapi_client.api.records.record_bulk_delete"
+    )
+    assert transport.calls[0]["body"] == {"record_ids": ["rec-1", "rec-2", "rec-3"]}
 
 
 def test_pod_records_list_serializes_structured_filter_and_sort_clauses():

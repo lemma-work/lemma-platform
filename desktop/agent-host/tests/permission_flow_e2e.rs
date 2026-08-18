@@ -372,6 +372,7 @@ async fn an_unanswered_request_is_denied_when_the_timeout_elapses() {
                     context: JsonMap::new(),
                     mcp: Value::Null,
                     run_deadline: Utc::now() + chrono::Duration::minutes(2),
+                    system_prompt_delivery: None,
                 },
                 scratch_directory: scratch.path().join("run"),
                 mcp_server: None,

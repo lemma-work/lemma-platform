@@ -28,6 +28,7 @@ _WEB_SEARCH_PROMPT_PATH = _PROMPT_DIR / "web_search.md"
 _TODO_PROMPT_PATH = _PROMPT_DIR / "todo.md"
 _SPEECH_PROMPT_PATH = _PROMPT_DIR / "speech.md"
 _MESSAGING_PROMPT_PATH = _PROMPT_DIR / "messaging.md"
+_USER_INTERACTION_PROMPT_PATH = _PROMPT_DIR / "user_interaction.md"
 _AGENT_HOST_RUNTIME_PROMPT_PATH = _PROMPT_DIR / "agent_host_runtime.md"
 
 # Per-toolset prompt fragments, in the order they should appear in the system
@@ -44,6 +45,15 @@ FRAGMENT_BY_TOOLSET: dict[AgentToolset, Path] = {
     AgentToolset.SPEECH: _SPEECH_PROMPT_PATH,
     AgentToolset.TODO: _TODO_PROMPT_PATH,
     AgentToolset.MESSAGING: _MESSAGING_PROMPT_PATH,
+    # `display_resource` had no fragment on either path for a long time, on the
+    # theory that the tool's own description was enough. It is enough for an
+    # in-process run, where that description is a first-class tool definition
+    # and nothing competes with it. It is not enough for a coding agent driven
+    # through Agent Host, which meets the same text as one MCP tool among its
+    # own file and shell tools, underneath its own system prompt telling it to
+    # behave like a coding agent — so it answered in prose and never showed
+    # anything. Convention belongs in the instructions, not only in a schema.
+    AgentToolset.USER_INTERACTION: _USER_INTERACTION_PROMPT_PATH,
 }
 
 
@@ -83,6 +93,10 @@ def load_messaging_prompt() -> str:
 
 def load_speech_prompt() -> str:
     return _read_required_prompt(_SPEECH_PROMPT_PATH)
+
+
+def load_user_interaction_prompt() -> str:
+    return _read_required_prompt(_USER_INTERACTION_PROMPT_PATH)
 
 
 def load_agent_host_runtime_prompt() -> str:

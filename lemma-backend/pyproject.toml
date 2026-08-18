@@ -62,6 +62,12 @@ dependencies = [
     # Emits markdown directly, so a fetched page never becomes raw HTML in the
     # agent's context.
     "trafilatura>=2.2.0",
+    # Browser TLS/JA3 fingerprint for `web_fetch` (MIT). Sites fingerprint the
+    # handshake before they read User-Agent, so a header alone cannot stop a 403
+    # -- measured, 8 of 15 ordinary research URLs failed the plain-httpx fetch and
+    # fell through to a ~5s sandbox browser render. See
+    # app/core/net/impersonating_client.py.
+    "curl-cffi>=0.16.0",
     "lemma-pod-bundle",
 ]
 

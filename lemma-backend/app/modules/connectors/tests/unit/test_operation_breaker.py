@@ -14,6 +14,8 @@ badly-formed integration disable a working connector for every other tenant.
 
 from __future__ import annotations
 
+from uuid import uuid4
+
 import pytest
 
 from app.modules.connectors.config import connector_settings
@@ -22,11 +24,16 @@ from app.modules.connectors.domain.errors import (
     OperationExecutionCircuitOpenError,
     OperationExecutionInfrastructureError,
     OperationExecutionNotFoundError,
+    OperationExecutionRateLimitedError,
     OperationExecutionTimeoutError,
     OperationExecutionUnauthorizedError,
     OperationExecutionValidationError,
 )
 from app.modules.connectors.infrastructure import operation_breaker
+from app.modules.connectors.infrastructure.adapters.composio_operation_gateway import (
+    ComposioOperationGateway,
+)
+from app.modules.connectors.infrastructure.operation_breaker import breaker_scope
 
 
 class _FakeRedis:
@@ -221,3 +228,88 @@ def test_the_open_error_is_distinguishable_from_a_provider_failure() -> None:
 
     assert opened.code != failed.code
     assert opened.status_code == 503
+
+
+# -- what may open the breaker, and what may not ------------------------------
+#
+# The breaker exists for one thing: a provider that hangs holds an OS thread per
+# call, and refusing to *start* calls is the only mechanism that stops those
+# accumulating (see composio_operation_gateway, which measured a limiter of 2
+# serving 4 live threads). Nothing else it does is worth an outage.
+#
+# Production found the cost of getting the boundary wrong. Composio answered
+# `413 Upstream_PayloadTooLarge` five times in 25 seconds -- an agent asking a
+# tool for more data than it could return -- each was reported as "provider
+# temporarily unavailable", and the fifth opened the breaker on a provider that
+# was healthy and answering in 3.4s. Seven later calls were refused.
+
+
+def _classify(status: int | None, error: str = "boom"):
+    return ComposioOperationGateway._classify_failure(
+        "GMAIL_SEND_EMAIL", status, error, {}
+    )
+
+
+@pytest.mark.parametrize(
+    "status",
+    [400, 404, 409, 413, 422, 429, 402, 451, 418],
+    ids=["bad-request", "not-found", "conflict", "payload-too-large",
+         "unprocessable", "rate-limited", "payment-required", "legal", "unknown-4xx"],
+)
+def test_a_provider_4xx_never_opens_the_breaker(status):
+    """Whatever the provider rejected, it answered — so it is up, and this is
+    the caller's problem. 413 is the one that reached production; the rest are
+    here so the next unfamiliar status does not have to."""
+    error = _classify(status)
+
+    assert not isinstance(error, OperationExecutionInfrastructureError), (
+        f"{status} would count toward the breaker and disable the operation"
+    )
+
+
+@pytest.mark.parametrize(
+    "status",
+    [500, 502, 503, 504, None],
+    ids=["internal", "bad-gateway", "unavailable", "gateway-timeout", "no-status"],
+)
+def test_a_provider_5xx_or_a_silent_failure_does_open_the_breaker(status):
+    """The other half. These say something about the provider's health, which
+    is the only thing the breaker is for."""
+    assert isinstance(_classify(status), OperationExecutionInfrastructureError)
+
+
+def test_a_rate_limit_is_reported_as_one():
+    """429 asks the caller to slow down. Reporting it as "temporarily
+    unavailable" tells them to retry, which is the opposite."""
+    error = _classify(429)
+
+    assert isinstance(error, OperationExecutionRateLimitedError)
+    assert error.status_code == 429
+
+
+def test_payload_too_large_is_reported_as_a_rejected_request():
+    error = _classify(413, "The tool response payload is too large.")
+
+    assert isinstance(error, OperationExecutionValidationError)
+    assert error.status_code == 422
+
+
+# -- one tenant may not break another -----------------------------------------
+
+
+def test_two_organizations_do_not_share_a_breaker():
+    """The scope used to be the *catalog* connector id, so a breaker opened by
+    one tenant's traffic refused every other tenant's. For MCP, SQL and HTTP
+    kinds the endpoint is per install, so the two organizations were not even
+    talking to the same server."""
+    org_a = breaker_scope("mcp", "list_tools", uuid4())
+    org_b = breaker_scope("mcp", "list_tools", uuid4())
+
+    assert org_a != org_b
+
+
+def test_the_same_organization_shares_one_breaker_per_operation():
+    org = uuid4()
+
+    assert breaker_scope("gmail", "send", org) == breaker_scope("gmail", "send", org)
+    assert breaker_scope("gmail", "send", org) != breaker_scope("gmail", "list", org)

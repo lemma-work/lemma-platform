@@ -13,7 +13,7 @@ from uuid import UUID
 
 from pydantic import HttpUrl
 
-from app.modules.agent.domain.agent_host import (
+from app.modules.agent.domain.agent_host_selections import (
     validate_agent_host_model,
     validate_agent_host_selections,
 )

@@ -107,12 +107,13 @@ class WorkspaceSettings(BaseSettings):
         ),
     )
     sweep_cron: str = Field(
-        default="*/5 * * * *",
+        default="2-59/5 * * * *",
         validation_alias=AliasChoices("WORKSPACE_SWEEP_CRON"),
         description=(
             "How often idle release and orphan reclaim run. Orphan reclaim is "
             "what stops a container or paid sandbox outliving the row that "
-            "owned it, so this is a cost control."
+            "owned it, so this is a cost control. Offset off the round minute "
+            "on purpose -- see test_cron_schedule_spread."
         ),
     )
 

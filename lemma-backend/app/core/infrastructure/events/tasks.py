@@ -8,7 +8,7 @@ from app.core.log.log import get_logger
 logger = get_logger(__name__)
 
 
-@streaq_cron("0 * * * *", name="prune_event_delivery_records")
+@streaq_cron("7 * * * *", name="prune_event_delivery_records")
 async def prune_event_delivery_records_task() -> None:
     deleted = await prune_event_delivery_records(async_session_maker)
     if total := sum(deleted.values()):

@@ -86,6 +86,11 @@ def normalize_event(event: StreamEvent) -> ChatEvent | None:
     event_type = event.type.lower()
     data = event.data
     if event_type == "token":
+        # `kind` rides beside `data` on the wire ("text", "thinking", "tool").
+        # Anything but the answer channel would otherwise be typed into the
+        # transcript as if the assistant had said it.
+        if event.kind is not None and event.kind != "text":
+            return None
         text = str(data or "")
         return Token(text) if text else None
     if event_type == "message":

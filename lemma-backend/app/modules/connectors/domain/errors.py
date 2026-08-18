@@ -234,6 +234,25 @@ class OperationExecutionValidationError(OperationExecutionError):
         )
 
 
+class OperationExecutionRateLimitedError(OperationExecutionError):
+    """The provider asked the caller to slow down.
+
+    Deliberately not an infrastructure error, even though it is transient: the
+    provider is healthy and answering, the caller is simply asking too often.
+    Counting it toward the circuit breaker would let one busy caller disable an
+    operation for everyone sharing that provider, which is the opposite of what
+    a rate limit is asking for. Backing off is the caller's job.
+    """
+
+    def __init__(self, message: str, details: object | None = None):
+        super().__init__(
+            message="Connector provider is rate limiting these requests.",
+            code="OPERATION_EXECUTION_RATE_LIMITED",
+            status_code=429,
+            details=_safe_connector_details(details),
+        )
+
+
 class OperationExecutionUnauthorizedError(OperationExecutionError):
     def __init__(self, message: str, details: object | None = None):
         super().__init__(

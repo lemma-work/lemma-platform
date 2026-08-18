@@ -307,17 +307,48 @@ fn locald_socket_name(root: &std::path::Path) -> Result<Name<'_>, String> {
     }
     #[cfg(windows)]
     {
-        let pipe_name = format!(r"LOCAL\work.lemma.locald.{:016x}", stable_hash(root));
-        pipe_name
+        locald_pipe_name(root)
             .to_ns_name::<GenericNamespaced>()
             .map(Name::into_owned)
             .map_err(|error| error.to_string())
     }
 }
 
+/// What the control endpoint is called on Windows.
+///
+/// Split out so one assertion can pin the whole name -- the literal and the
+/// hash together. Both halves are duplicated in locald, and it was the hash
+/// half that drifted.
+#[cfg(windows)]
+fn locald_pipe_name(root: &std::path::Path) -> String {
+    format!(r"LOCAL\work.lemma.locald.{:016x}", stable_hash(root))
+}
+
+/// A stable identity for a state root, for naming things keyed to it.
+///
+/// This has to stay byte-for-byte identical to `LocalPaths::stable_hash` in
+/// locald/src/paths.rs, because the two are the only things that decide what
+/// the control endpoint is called: the app opens the name this produces, and
+/// the daemon listens on the name that one produces. locald is a sidecar
+/// binary, not a library this crate links -- pulling in hyper, tokio, keyring
+/// and reqwest to share eight lines would cost more than the app's whole
+/// payload budget -- so the code is duplicated and pinned instead. Both copies
+/// carry the same golden test over the same path, so a change to either one
+/// fails its own crate's suite rather than shipping.
+///
+/// Normalised first: Windows paths are case-insensitive and accept either
+/// separator, so the same directory can be spelled several ways and each
+/// spelling used to hash differently. The daemon has normalised since that was
+/// found; this side did not, and `%LOCALAPPDATA%` always contains uppercase --
+/// so on every default Windows install the app looked for a pipe the daemon it
+/// had just spawned was never going to open, and spent the whole 45s start
+/// budget failing to connect to a process that was running fine.
 #[cfg(windows)]
 fn stable_hash(path: &std::path::Path) -> u64 {
     path.to_string_lossy()
+        .replace('/', "\\")
+        .trim_end_matches('\\')
+        .to_ascii_lowercase()
         .bytes()
         .fold(0xcbf29ce484222325, |hash, byte| {
             (hash ^ u64::from(byte)).wrapping_mul(0x100000001b3)
@@ -5251,6 +5282,36 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use std::fs::File;
+
+    /// The shell and the daemon must derive the same endpoint name.
+    ///
+    /// This exact assertion is duplicated in locald/src/paths.rs, over the same
+    /// path and the same expected string, because the code that produces it is
+    /// duplicated too and cannot cheaply be shared -- locald is a sidecar
+    /// binary, not a library this crate links. They drifted once: this side
+    /// hashed the root unnormalised while the daemon lowercased it, so on every
+    /// default Windows install the app opened a pipe its own daemon never
+    /// listened on and called it "control endpoint unavailable". Changing this
+    /// value without changing the other one is the bug.
+    #[cfg(windows)]
+    #[test]
+    fn named_pipe_name_matches_the_one_locald_listens_on() {
+        assert_eq!(
+            super::locald_pipe_name(std::path::Path::new(
+                r"C:\Users\Example\AppData\Local\Lemma\locald"
+            )),
+            r"LOCAL\work.lemma.locald.a5c86f3cbfe10caf"
+        );
+        // Every spelling of one directory is one endpoint.
+        assert_eq!(
+            super::locald_pipe_name(std::path::Path::new(
+                r"C:\Users\Example\AppData\Local\Lemma\locald"
+            )),
+            super::locald_pipe_name(std::path::Path::new(
+                r"c:/users/example/appdata/local/lemma/locald/"
+            ))
+        );
+    }
 
     #[test]
     fn a_menu_verb_runs_once() {

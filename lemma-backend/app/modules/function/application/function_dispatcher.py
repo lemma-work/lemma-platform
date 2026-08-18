@@ -299,8 +299,10 @@ class FunctionDispatcher:
         organization_id: str | None,
     ) -> RuntimeTerminalRequest | RuntimeAcceptedResponse:
         # Provider-gateway 401/403/404/410 responses happen before user code can
-        # start. Refreshing an allocation-fenced endpoint once is safe. Transport
-        # errors and runtime 5xx responses are ambiguous and must never be replayed.
+        # start. Refreshing an allocation-fenced endpoint once is safe. A refused
+        # connection is the same situation reached a different way: the request
+        # was never delivered. Everything else -- our own deadline, a broken read,
+        # a runtime 5xx -- is ambiguous and must never be replayed.
         try:
             return await self._invoke_runtime(
                 dispatch,
@@ -312,14 +314,23 @@ class FunctionDispatcher:
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code not in {401, 403, 404, 410}:
                 raise
-            refreshed = await self._runtime_endpoint(dispatch)
-            return await self._invoke_runtime(
-                dispatch,
-                context=context,
-                endpoint=refreshed,
-                function_token=function_token,
-                organization_id=organization_id,
+        except RuntimeNeverReached:
+            # The endpoint was quarantined on the way out, so re-resolving now
+            # cannot hand back the sandbox that just refused us. Retried once
+            # and once only: a second failure is a real one and is reported.
+            logger.info(
+                "function.runtime.reresolved_after_refused_connection",
+                pod_id=str(dispatch.pod_id),
+                run_id=str(dispatch.run_id),
             )
+        refreshed = await self._runtime_endpoint(dispatch)
+        return await self._invoke_runtime(
+            dispatch,
+            context=context,
+            endpoint=refreshed,
+            function_token=function_token,
+            organization_id=organization_id,
+        )
 
     async def _invoke_runtime(
         self,
@@ -378,11 +389,32 @@ class FunctionDispatcher:
             raise InvocationOutcomeUnconfirmed(
                 "function invocation exceeded its deadline"
             ) from exc
+        except httpx.ConnectError as exc:
+            # The connection was never established, so the request was never
+            # delivered and the run cannot have started. This endpoint has
+            # proved it is not answering, so it must not be handed to the next
+            # run -- and because nothing executed, this one can be re-resolved
+            # and replayed rather than failed.
+            await self._routes.quarantine(dispatch.pod_id, endpoint)
+            raise RuntimeNeverReached(
+                "function runtime refused the connection"
+            ) from exc
         except httpx.TransportError as exc:
+            # Bytes crossed the wire and then something broke -- a read error, a
+            # half-written request, a server that hung up mid-response. The run
+            # may be underway with only the response lost, so this must not be
+            # replayed even though the endpoint is clearly unhealthy.
+            await self._routes.quarantine(dispatch.pod_id, endpoint)
             raise InvocationOutcomeUnconfirmed(
                 "function invocation response was lost"
             ) from exc
         if response.status_code >= 500:
+            # A runtime that answers 5xx is reachable and broken. This was the
+            # one case that did *not* evict, while a healthy-but-routeless
+            # sandbox (404, below) did -- exactly inverted. A dead runtime
+            # process answers 502 here, so every later run was handed the same
+            # sandbox and failed the same way, indefinitely.
+            await self._routes.quarantine(dispatch.pod_id, endpoint)
             raise InvocationOutcomeUnconfirmed(
                 f"function runtime returned {response.status_code}"
             )
@@ -544,3 +576,17 @@ class FunctionDispatcher:
 
 class InvocationOutcomeUnconfirmed(RuntimeError):
     """The runtime may have begun work, so the invocation must not be replayed."""
+
+
+class RuntimeNeverReached(InvocationOutcomeUnconfirmed):
+    """No connection was ever established, so the runtime cannot have begun work.
+
+    The one failure where replay is provably safe, and it is deliberately
+    narrow. ``httpx.TransportError`` is not the right boundary: ``ReadError``,
+    ``WriteError`` and ``RemoteProtocolError`` all mean bytes crossed the wire
+    and the run may be underway with only the response lost. Only a refused or
+    unroutable connection proves the request was never delivered.
+
+    It still subclasses ``InvocationOutcomeUnconfirmed`` so that any caller
+    which does not know about this distinction keeps the safe behaviour.
+    """

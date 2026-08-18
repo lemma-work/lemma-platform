@@ -24,6 +24,8 @@ from app.modules.agent.domain.agent_host import (
     AgentHostHarnessHealth,
     AgentHostRunSpec,
     AgentHostRunState,
+)
+from app.modules.agent.domain.agent_host_selections import (
     validate_agent_host_selections,
 )
 from app.modules.agent.infrastructure.agent_host_repository import (

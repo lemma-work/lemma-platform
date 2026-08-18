@@ -413,9 +413,9 @@ struct TargetWorker {
     probes: HashMap<String, ProbedHarness>,
     active_runs: HashMap<Uuid, ActiveRun>,
     permissions: PermissionGate,
-    /// Runs whose event batches Lemma has rejected, and how often. Kept per
-    /// run so one unhappy run cannot stop the target's poll loop.
-    event_rejections: HashMap<Uuid, u32>,
+    /// Event delivery, shared with the task that drives it. Behind a lock so a
+    /// shutdown flush and the delivery task cannot send the same batch twice.
+    flusher: Arc<tokio::sync::Mutex<EventFlusher>>,
     /// Runs whose liveness checkpoints Lemma refuses, and how many more polls
     /// they sit out before trying again. Their leases meanwhile fall to the
     /// server's own expiry recovery; their terminal states are never given up
@@ -447,6 +447,153 @@ struct TargetWorker {
         mpsc::UnboundedSender<Option<ProbedHarnesses>>,
         mpsc::UnboundedReceiver<Option<ProbedHarnesses>>,
     ),
+}
+
+/// Delivery of journaled events to Lemma, off the poll loop.
+///
+/// Owns everything that delivery touches — the journal, the client, and how
+/// often each run's batches have been refused — so it can run as its own task
+/// while the poll loop holds its poll open.
+///
+/// That separation is the whole point. Flushing used to be an arm of the same
+/// `select!` as the poll, so every event a run streamed abandoned the poll in
+/// flight and opened a new one. The server had no idea the old one was gone and
+/// held it for the rest of its 25 seconds: one host streaming a single answer
+/// was measured stacking 26 concurrent polls, against exactly one while idle.
+struct EventFlusher {
+    target_id: Uuid,
+    journal: Journal,
+    client: TargetClient,
+    /// Runs whose event batches Lemma has rejected, and how often. Kept per
+    /// run so one unhappy run cannot stop delivery for every other.
+    rejections: HashMap<Uuid, u32>,
+}
+
+impl EventFlusher {
+    /// Hand journaled events to Lemma, keeping each run's failures to itself.
+    ///
+    /// Only a target-level failure -- unreachable, unauthenticated, throttled,
+    /// server fault -- is returned as an error. A batch Lemma rejects on its own
+    /// merits belongs to exactly one run, so it is contained there: the poll
+    /// loop must still poll, because the poll is what heartbeats the lease of
+    /// every *other* run on this host.
+    async fn flush(&mut self) -> anyhow::Result<()> {
+        let target_id = self.target_id;
+        // Runs whose remaining batches this pass must leave alone, because the
+        // journal no longer matches the batches read at the top of the loop.
+        let mut stale = HashSet::new();
+        for batch in self.journal.pending_events(target_id, 1024)? {
+            let Some(first) = batch.events.first() else {
+                continue;
+            };
+            let (run_id, lease_epoch) = (first.run_id, first.lease_epoch);
+            if stale.contains(&run_id) {
+                continue;
+            }
+            if self.rejections.get(&run_id).copied().unwrap_or(0) >= MAX_EVENT_REJECTIONS {
+                let dropped = self
+                    .journal
+                    .discard_events(target_id, run_id, lease_epoch)?;
+                stale.insert(run_id);
+                tracing::warn!(
+                    %run_id,
+                    dropped,
+                    "dropping events Lemma will not accept for this run"
+                );
+                continue;
+            }
+            match self.client.append_events(&batch).await {
+                Ok(ack) => {
+                    self.rejections.remove(&run_id);
+                    self.journal.acknowledge_events(target_id, &ack)?;
+                }
+                Err(error) if error.is_request_rejected() => {
+                    stale.insert(run_id);
+                    self.reject_run_events(run_id, lease_epoch, &error)?;
+                }
+                Err(error) => return Err(error.into()),
+            }
+        }
+        Ok(())
+    }
+
+    /// Contain a run whose event batch Lemma refused.
+    ///
+    /// The first refusal is treated as a lost server-side stream, which is the
+    /// only recoverable cause: the stream is transient and its watermark drops
+    /// to zero when it is evicted, so it starts expecting sequence 1 again from
+    /// a run that is far past it. Replaying the run's retained events answers
+    /// exactly that, and is safe against every other cause because the server
+    /// keeps the first write for a sequence it already holds.
+    fn reject_run_events(
+        &mut self,
+        run_id: Uuid,
+        lease_epoch: u32,
+        error: &crate::api::ApiError,
+    ) -> anyhow::Result<()> {
+        let rejections = self.rejections.entry(run_id).or_default();
+        *rejections += 1;
+        if *rejections >= MAX_EVENT_REJECTIONS {
+            tracing::error!(
+                %run_id,
+                error = %redact_error(&error.to_string()),
+                "Lemma rejected this run's events after a replay; giving up on its transcript"
+            );
+            return Ok(());
+        }
+        let replayed = self
+            .journal
+            .rewind_acknowledgements(self.target_id, run_id, lease_epoch)?;
+        tracing::warn!(
+            %run_id,
+            replayed,
+            error = %redact_error(&error.to_string()),
+            "Lemma rejected this run's events; replaying its journaled history"
+        );
+        Ok(())
+    }
+}
+
+/// Deliver events as they are journaled, until the host shuts down.
+///
+/// A run's output reaching Lemma is not something the poll loop should be able
+/// to delay, and not something that should be able to disturb the poll: this
+/// waits on the same `events_ready` the run tasks raise, and takes the lock the
+/// shutdown flush also takes, so the two can never be in flight together.
+///
+/// Failures are logged and retried rather than reported: the poll loop is the
+/// one authority on whether this target is reachable, and having two writers of
+/// the connection state produced an ONLINE/OFFLINE flap between them.
+async fn deliver_events(
+    flusher: Arc<tokio::sync::Mutex<EventFlusher>>,
+    events_ready: Arc<tokio::sync::Notify>,
+    mut shutdown: watch::Receiver<bool>,
+) {
+    let mut retry = RETRY_MIN;
+    loop {
+        tokio::select! {
+            () = events_ready.notified() => {}
+            _ = shutdown.changed() => return,
+        }
+        if *shutdown.borrow() {
+            return;
+        }
+        match flusher.lock().await.flush().await {
+            Ok(()) => retry = RETRY_MIN,
+            Err(error) => {
+                tracing::debug!(%error, "could not deliver Agent Host events; retrying");
+                tokio::select! {
+                    () = tokio::time::sleep(retry) => {}
+                    _ = shutdown.changed() => return,
+                }
+                retry = (retry * 2).min(RETRY_MAX);
+                // Nothing consumed the notification that brought us here, so
+                // re-raise it: the events are still pending and the next pass
+                // has to be woken by something.
+                events_ready.notify_one();
+            }
+        }
+    }
 }
 
 /// One run in flight, and the two ways it can be stopped.
@@ -497,6 +644,12 @@ impl TargetWorker {
         let client = TargetClient::new(target.clone(), installation_id)?;
         journal.register_target(target.target_id)?;
         let draining = target.draining;
+        let flusher = Arc::new(tokio::sync::Mutex::new(EventFlusher {
+            target_id: target.target_id,
+            journal: journal.clone(),
+            client: client.clone(),
+            rejections: HashMap::new(),
+        }));
         Ok(Self {
             target,
             client,
@@ -512,7 +665,7 @@ impl TargetWorker {
             probes: HashMap::new(),
             active_runs: HashMap::new(),
             permissions: PermissionGate::new(),
-            event_rejections: HashMap::new(),
+            flusher,
             refused_heartbeats: HashMap::new(),
             draining,
             refresh_due: std::time::Instant::now(),
@@ -527,6 +680,21 @@ impl TargetWorker {
 
     async fn run(mut self) -> anyhow::Result<()> {
         self.recover_interrupted_runs()?;
+        // Event delivery runs alongside the poll rather than competing with it.
+        // Aborted at the end of this function; the shutdown path takes the same
+        // lock and does the last flush itself, so nothing in the journal is left
+        // behind by stopping it.
+        let delivery = tokio::spawn(deliver_events(
+            Arc::clone(&self.flusher),
+            Arc::clone(&self.events_ready),
+            self.shutdown.clone(),
+        ));
+        let outcome = self.poll_loop().await;
+        delivery.abort();
+        outcome
+    }
+
+    async fn poll_loop(&mut self) -> anyhow::Result<()> {
         let mut retry = RETRY_MIN;
         // Cloned out of `self` once, so the select below can await it without
         // borrowing `self` twice. A `watch` receiver tracks versions rather than
@@ -558,6 +726,11 @@ impl TargetWorker {
                 self.refresh_harnesses();
                 self.refresh_due = std::time::Instant::now() + HARNESS_REFRESH_INTERVAL;
             }
+            // `deliver_events` is what normally sends these, and it does so
+            // without waiting for the loop to come back around. This pass is
+            // the backstop and the connection check: it is the one place a
+            // delivery failure is turned into OFFLINE, because two writers of
+            // that state flapped it between them.
             if let Err(error) = self.flush_events().await {
                 self.note_offline(&error.to_string())?;
                 self.wait_retry(retry).await;
@@ -578,17 +751,18 @@ impl TargetWorker {
             // is not something that happens on a schedule, it is something that
             // happens when the poll returns.
             //
-            // Both of the other arms abandon a poll that is mid-flight, which is
-            // the point of them and costs nothing: the poll is a lease-based
-            // pull, so anything the server was about to hand over is handed over
-            // by the next one.
-            let events_ready = Arc::clone(&self.events_ready);
+            // Waking here abandons the poll in flight. That is cheap for the
+            // host — the poll is a lease-based pull, so anything the server was
+            // about to hand over comes back on the next one — but it is not free
+            // for the server, which goes on holding the abandoned poll for the
+            // rest of its hold. So an arm has to be worth a stranded poll.
+            //
+            // A run's streamed output emphatically is not: it arrives dozens of
+            // times per turn, and putting it here stacked 26 concurrent polls
+            // against one idle. It has its own task now — see `deliver_events`.
+            // An agent being installed or removed happens approximately never.
             let polled = tokio::select! {
-                // A run finishing inside the hold used to have its output sit in
-                // the journal until the poll returned — the agent answered in 8s
-                // and the conversation still waited 20+.
                 result = self.poll_target(capacity) => Some(result),
-                () = events_ready.notified() => None,
                 // The agents on this machine changed. This is what makes
                 // `DISK_SCAN_INTERVAL` mean what it says: the scan itself was
                 // always cheap, but it used to be *reached* once per iteration,
@@ -1607,87 +1781,9 @@ impl TargetWorker {
         settled
     }
 
-    /// Hand journaled events to Lemma, keeping each run's failures to itself.
-    ///
-    /// Only a target-level failure -- unreachable, unauthenticated, throttled,
-    /// server fault -- is returned as an error. A batch Lemma rejects on its own
-    /// merits belongs to exactly one run, so it is contained there: the caller
-    /// must still poll, because the poll is what heartbeats the lease of every
-    /// *other* run on this host.
+    /// Hand journaled events to Lemma. See [`EventFlusher::flush`].
     async fn flush_events(&mut self) -> anyhow::Result<()> {
-        let target_id = self.target.target_id;
-        // Runs whose remaining batches this pass must leave alone, because the
-        // journal no longer matches the batches read at the top of the loop.
-        let mut stale = HashSet::new();
-        for batch in self.journal.pending_events(target_id, 1024)? {
-            let Some(first) = batch.events.first() else {
-                continue;
-            };
-            let (run_id, lease_epoch) = (first.run_id, first.lease_epoch);
-            if stale.contains(&run_id) {
-                continue;
-            }
-            if self.event_rejections.get(&run_id).copied().unwrap_or(0) >= MAX_EVENT_REJECTIONS {
-                let dropped = self
-                    .journal
-                    .discard_events(target_id, run_id, lease_epoch)?;
-                stale.insert(run_id);
-                tracing::warn!(
-                    %run_id,
-                    dropped,
-                    "dropping events Lemma will not accept for this run"
-                );
-                continue;
-            }
-            match self.client.append_events(&batch).await {
-                Ok(ack) => {
-                    self.event_rejections.remove(&run_id);
-                    self.journal.acknowledge_events(target_id, &ack)?;
-                }
-                Err(error) if error.is_request_rejected() => {
-                    stale.insert(run_id);
-                    self.reject_run_events(run_id, lease_epoch, &error)?;
-                }
-                Err(error) => return Err(error.into()),
-            }
-        }
-        Ok(())
-    }
-
-    /// Contain a run whose event batch Lemma refused.
-    ///
-    /// The first refusal is treated as a lost server-side stream, which is the
-    /// only recoverable cause: the stream is transient and its watermark drops
-    /// to zero when it is evicted, so it starts expecting sequence 1 again from
-    /// a run that is far past it. Replaying the run's retained events answers
-    /// exactly that, and is safe against every other cause because the server
-    /// keeps the first write for a sequence it already holds.
-    fn reject_run_events(
-        &mut self,
-        run_id: Uuid,
-        lease_epoch: u32,
-        error: &crate::api::ApiError,
-    ) -> anyhow::Result<()> {
-        let rejections = self.event_rejections.entry(run_id).or_default();
-        *rejections += 1;
-        if *rejections >= MAX_EVENT_REJECTIONS {
-            tracing::error!(
-                %run_id,
-                error = %redact_error(&error.to_string()),
-                "Lemma rejected this run's events after a replay; giving up on its transcript"
-            );
-            return Ok(());
-        }
-        let replayed =
-            self.journal
-                .rewind_acknowledgements(self.target.target_id, run_id, lease_epoch)?;
-        tracing::warn!(
-            %run_id,
-            replayed,
-            error = %redact_error(&error.to_string()),
-            "Lemma rejected this run's events; replaying its journaled history"
-        );
-        Ok(())
+        self.flusher.lock().await.flush().await
     }
 
     async fn reap_finished(&mut self) {
@@ -2341,7 +2437,7 @@ mod target_worker_tests {
     use tokio::sync::{Semaphore, watch};
     use uuid::Uuid;
 
-    use super::TargetWorker;
+    use super::{TargetWorker, deliver_events};
     use crate::acp::{AcpCallbacks, AcpProbeOutcome, AcpRunOutcome, AcpRunRequest, AgentDriver};
     use crate::adapters::{AdapterManifest, ResolvedAdapter};
     use crate::config::{HostPaths, TargetConfig};
@@ -2544,6 +2640,7 @@ mod target_worker_tests {
                 context: JsonMap::new(),
                 mcp: serde_json::json!({}),
                 run_deadline: Utc::now() + chrono::Duration::minutes(5),
+                system_prompt_delivery: None,
             };
             let command = Command {
                 command_id: Uuid::new_v4(),
@@ -2597,6 +2694,105 @@ mod target_worker_tests {
         fn drop(&mut self) {
             self.server.abort();
         }
+    }
+
+    /// Wait for `predicate`, or fail rather than hang.
+    async fn within(budget: Duration, what: &str, predicate: impl Fn() -> bool) {
+        let deadline = tokio::time::Instant::now() + budget;
+        while tokio::time::Instant::now() < deadline {
+            if predicate() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        panic!("timed out waiting for {what}");
+    }
+
+    /// The finding: a run's output reached Lemma only by abandoning the poll.
+    ///
+    /// Delivery used to be an arm of the same `select!` as the poll, so every
+    /// event a run streamed cancelled the poll in flight and opened a new one.
+    /// The server never learned the old one was gone and held it for the rest
+    /// of its 25 seconds — one host streaming a single answer stacked 26
+    /// concurrent polls against exactly one while idle.
+    ///
+    /// This drives delivery with no poll running at all, which is only a
+    /// meaningful thing to ask because the two are now independent.
+    #[tokio::test]
+    async fn a_runs_events_reach_lemma_with_no_poll_involved() {
+        let harness = Harness::new().await;
+        let run_id = harness.seed_run(3);
+
+        let (_shutdown_tx, shutdown) = watch::channel(false);
+        let delivery = tokio::spawn(deliver_events(
+            Arc::clone(&harness.worker.flusher),
+            Arc::clone(&harness.worker.events_ready),
+            shutdown,
+        ));
+        // Exactly what a run task does the moment it journals an event.
+        harness.worker.events_ready.notify_one();
+
+        within(
+            Duration::from_secs(5),
+            "the run's events to reach Lemma",
+            || harness.accepted().get(&run_id) == Some(&3),
+        )
+        .await;
+        assert!(harness.pending(run_id).is_empty());
+
+        // And it keeps serving. A run streams for its whole turn, so delivering
+        // the first batch and then going quiet until the poll came back is the
+        // same defect in a different place.
+        for _ in 0..4 {
+            harness
+                .journal
+                .append_event(
+                    harness.target_id,
+                    run_id,
+                    1,
+                    EventType::AgentMessageChunk,
+                    None,
+                    JsonMap::new(),
+                )
+                .unwrap();
+        }
+        harness.worker.events_ready.notify_one();
+
+        within(
+            Duration::from_secs(5),
+            "later events to reach Lemma",
+            || harness.accepted().get(&run_id) == Some(&7),
+        )
+        .await;
+        assert!(harness.pending(run_id).is_empty());
+
+        delivery.abort();
+    }
+
+    /// Shutting the loop down must not strand what the journal still holds.
+    ///
+    /// The delivery task is aborted when the poll loop ends, so the last flush
+    /// belongs to the shutdown path. Both take the same lock, which is what
+    /// stops them sending one batch twice.
+    #[tokio::test]
+    async fn events_journaled_after_delivery_stops_are_still_sent() {
+        let mut harness = Harness::new().await;
+
+        let (shutdown_tx, shutdown) = watch::channel(false);
+        let delivery = tokio::spawn(deliver_events(
+            Arc::clone(&harness.worker.flusher),
+            Arc::clone(&harness.worker.events_ready),
+            shutdown,
+        ));
+        let _ = shutdown_tx.send(true);
+        let _ = delivery.await;
+
+        // Journaled with nothing left running to notice.
+        let run_id = harness.seed_run(2);
+        harness.worker.flush_events().await.unwrap();
+
+        assert_eq!(harness.accepted().get(&run_id), Some(&2));
+        assert!(harness.pending(run_id).is_empty());
     }
 
     /// The finding: one run Lemma refuses used to abort the whole flush and
@@ -3215,6 +3411,7 @@ mod stream_upsert_tests {
             context: JsonMap::new(),
             mcp: Value::Null,
             run_deadline: Utc::now() + chrono::Duration::minutes(5),
+            system_prompt_delivery: None,
         };
         let command = Command {
             command_id: Uuid::new_v4(),

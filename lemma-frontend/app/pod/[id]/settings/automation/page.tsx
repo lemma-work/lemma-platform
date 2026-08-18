@@ -205,6 +205,7 @@ function TriggerLedgerRow({
     onDelete: () => void;
 }) {
     const active = schedule.is_active !== false;
+    const stoppedItself = !active && schedule.paused_by_failures === true;
     const targetKind = getScheduleTargetKind(schedule);
     const targetName = formatAgentName(getScheduleTargetName(schedule));
     const targetHref = getTargetHref(podId, schedule);
@@ -255,12 +256,23 @@ function TriggerLedgerRow({
                 <div className="flex min-w-0 flex-1 items-center gap-2.5">{body}</div>
             )}
 
-            <span className={cn(
-                'inline-flex shrink-0 items-center gap-1.5 text-xs font-medium',
-                active ? 'text-[var(--state-success)]' : 'text-[var(--text-tertiary)]',
-            )}>
+            {/* A trigger the platform stopped after repeated failures used to
+                render exactly like one somebody paused on purpose, so the only
+                notice was an email at the moment it happened. Saying which is
+                the difference between "I paused this" and "this is broken". */}
+            <span
+                title={stoppedItself ? `Paused automatically after ${schedule.consecutive_failures ?? 0} consecutive failures` : undefined}
+                className={cn(
+                    'inline-flex shrink-0 items-center gap-1.5 text-xs font-medium',
+                    active
+                        ? 'text-[var(--state-success)]'
+                        : stoppedItself
+                            ? 'text-[var(--state-warning)]'
+                            : 'text-[var(--text-tertiary)]',
+                )}
+            >
                 <span className="h-1.5 w-1.5 rounded-full bg-current" aria-hidden />
-                {active ? 'Active' : 'Paused'}
+                {active ? 'Active' : stoppedItself ? 'Paused — failing' : 'Paused'}
             </span>
 
             {canUpdate || canDelete ? (

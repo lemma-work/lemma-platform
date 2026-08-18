@@ -109,7 +109,13 @@ export function usePodWorkspaceTabs({
     }, [store]);
     const getSnapshot = useCallback(() => store.tabs, [store]);
     const tabs = useSyncExternalStore(subscribe, getSnapshot, () => SERVER_TABS);
-    const activeTabId = getActiveWorkspaceTabId(podId, pathname, appSlug);
+    // A presented widget is identified by its tool call, which lives in the
+    // query rather than the path, so the active-tab lookup needs both halves.
+    const currentSearchParams = useMemo(
+        () => new URLSearchParams(currentHref.split('?')[1] || ''),
+        [currentHref],
+    );
+    const activeTabId = getActiveWorkspaceTabId(podId, pathname, appSlug, currentSearchParams);
     const wasNewConversationRouteRef = useRef(false);
     const newConversationBaselineRef = useRef<string | null>(null);
     const lastConversationOutsideNewRef = useRef<string | null>(openedConversationId);

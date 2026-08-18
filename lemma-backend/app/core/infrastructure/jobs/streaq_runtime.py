@@ -37,6 +37,7 @@ from app.core.infrastructure.events.message_bus import (
     get_message_bus,
 )
 from app.core.infrastructure.events.outbox import outbox_dispatcher_lifespan
+from app.core.infrastructure.events.quarantine import StreamQuarantineMiddleware
 from app.core.infrastructure.events.stream_observability import (
     redis_stream_snapshot_loop,
 )
@@ -271,6 +272,11 @@ broker = RedisBroker(
     # it at INFO and let the supplied WARNING logger drop those records while
     # still forwarding explicitly actionable warning/error calls.
     log_level=logging.INFO,
+    # A message that can never be processed must be given up on, not redelivered
+    # until the end of the deployment. Registered on the broker rather than per
+    # handler because the failure it exists for happens during decoding, before
+    # any handler body runs.
+    middlewares=(StreamQuarantineMiddleware,),
 )
 
 
@@ -466,6 +472,7 @@ async def worker_lifespan() -> AsyncGenerator[AppWorkerContext]:
     from app.core.analytics.bootstrap import start_analytics, stop_analytics
     from app.core.concurrency.offload import configure_thread_pool
     from app.core.net.http_client import close_shared_http_client
+    from app.core.net.impersonating_client import close_impersonating_client
     from app.core.observability.connection_scope import (
         start_connection_scope_monitor_from_settings,
     )
@@ -641,6 +648,11 @@ async def worker_lifespan() -> AsyncGenerator[AppWorkerContext]:
         await _safe_shutdown_step("stop_analytics", stop_analytics)
         await _safe_shutdown_step(
             "close_shared_http_client", close_shared_http_client
+        )
+        # `web_fetch` runs in the worker, so this is the session that would
+        # otherwise leak a libcurl handle per worker process.
+        await _safe_shutdown_step(
+            "close_impersonating_client", close_impersonating_client
         )
         await _safe_shutdown_step("close_streaq_job_queue", close_streaq_job_queue)
         await _safe_shutdown_step("close_message_bus", close_message_bus)

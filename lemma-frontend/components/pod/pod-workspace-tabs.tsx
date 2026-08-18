@@ -8,6 +8,7 @@ import { ProductIcon, type ProductIconKind } from '@/components/pod/product-icon
 import { getAppAccent } from '@/lib/app/app-accent';
 import {
     getWorkspaceTabHref,
+    isWidgetWorkspaceRouteKey,
     type PodWorkspaceTab,
 } from '@/lib/pods/workspace-tabs';
 import { cn } from '@/lib/utils';
@@ -31,9 +32,15 @@ const routeTabKinds: Record<string, ProductIconKind> = {
 };
 
 function RouteTabIcon({ routeKey, active }: { routeKey: string; active: boolean }) {
+    // Each presented widget carries its own route key, so the shared widget
+    // glyph is found by shape rather than by an exact match.
+    const kind = isWidgetWorkspaceRouteKey(routeKey)
+        ? routeTabKinds.widgets
+        : routeTabKinds[routeKey];
+
     return (
         <ProductIcon
-            kind={routeTabKinds[routeKey] || 'pods'}
+            kind={kind || 'pods'}
             size="xs"
             state={active ? 'selected' : 'default'}
         />

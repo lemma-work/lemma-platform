@@ -166,3 +166,30 @@ async def test_dispatcher_without_a_wake_still_sleeps_on_the_ladder() -> None:
     started = loop.time()
     await dispatcher._idle_wait(0.05)  # noqa: SLF001
     assert loop.time() - started >= 0.04
+
+
+def test_the_wake_listener_is_on_by_default() -> None:
+    """The backoff ladder is what a chat message waits out before anything runs.
+
+    An idle dispatcher climbs to ``outbox_idle_poll_max_seconds`` and a message
+    landing mid-sleep waits out the remainder; measured against a local stack
+    that was 1.4-4.1s per message, ahead of every other term in the turn. The
+    listener removes it, and the fallback poll means turning it on cannot lose
+    an event -- only find it sooner.
+    """
+    assert event_transport_settings.outbox_listen_enabled
+
+
+def test_attaching_a_listener_cannot_be_slower_than_the_ladder_it_replaces() -> None:
+    """The fallback is a recovery bound, and must not become a regression.
+
+    A transaction-mode pooler swallows session-scoped LISTEN silently, so a
+    deployment behind one gets the fallback rather than the wake. If that
+    fallback were longer than the ladder, switching the listener on would make
+    exactly those deployments slower -- which is the one outcome a hint is not
+    allowed to have.
+    """
+    assert (
+        event_transport_settings.outbox_listen_fallback_poll_seconds
+        <= event_transport_settings.outbox_idle_poll_max_seconds
+    )

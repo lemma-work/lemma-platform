@@ -275,6 +275,17 @@ class Settings(BaseSettings):
             "``LOOP_STALL_SAMPLE_SECONDS``."
         ),
     )
+    loop_stall_tick_seconds: float = Field(
+        default=0.05,
+        description=(
+            "How often the loop publishes liveness for the stall sampler to "
+            "watch. This is the sampler's resolution: it can only report a "
+            "stall as 'time since the last tick', so the tick interval is a "
+            "floor under every stall it measures. Kept far below "
+            "``LOOP_STALL_SAMPLE_SECONDS`` so the threshold means what it "
+            "says. Env: ``LOOP_STALL_TICK_SECONDS``."
+        ),
+    )
     loop_lag_unhealthy_seconds: float = Field(
         default=5.0,
         description=(
@@ -888,6 +899,20 @@ class Settings(BaseSettings):
             "Private object storage backend. 'auto' preserves the historical "
             "local-or-GCS selection. Supported explicit cloud adapters: GCS, "
             "Amazon S3 (and S3-compatible endpoints), and Azure Blob Storage."
+        ),
+    )
+    storage_endpoint_url: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "storage_endpoint_url",
+            "STORAGE_ENDPOINT_URL",
+        ),
+        description=(
+            "S3-compatible endpoint to use instead of AWS S3 — MinIO, R2, "
+            "Wasabi. Only read when the backend is 's3'; leave unset for AWS, "
+            "which resolves its own region endpoint. Addressing is path-style, "
+            "and plain HTTP is permitted only for an explicit http:// URL. "
+            "Env: ``STORAGE_ENDPOINT_URL``."
         ),
     )
     storage_bucket: Optional[str] = Field(
