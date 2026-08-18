@@ -76,11 +76,7 @@ class FileSearcher:
                 "HYBRID": SearchMethod.HYBRID,
             }.get(str(search_method).upper(), SearchMethod.HYBRID)
 
-        visible_file_ids = await self.authorizer.get_visible_file_ids(
-            pod_id=pod_id,
-            requester_user_id=requester_user_id,
-            ctx=ctx,
-        )
+        visibility = await self.authorizer.visibility_filter(pod_id=pod_id, ctx=ctx)
         search_service = self._search_factory_provider()(pod_id)
         results = await search_service.search(
             query=query,
@@ -88,9 +84,16 @@ class FileSearcher:
             method=method,
             scope_path=normalized_scope_path,
             include_descendants=include_descendants,
-            visible_file_ids=visible_file_ids,
+            visibility=visibility,
         )
-        visible_results = [result for result in results if result.file_id in visible_file_ids]
+        # Kept even though the filter is applied in the query. It costs one set
+        # membership test per returned row and it is the only thing standing
+        # between a future bug in the pushdown and a leaked file. The direction
+        # is asked of the filter rather than assumed, so it stays correct
+        # whichever side was pushed.
+        visible_results = [
+            result for result in results if visibility.allows(result.file_id)
+        ]
         return [
             self._to_api_search_result(result, requester_user_id=requester_user_id)
             for result in visible_results

@@ -499,6 +499,17 @@ class DatastoreFileService(FileTransactionFacade):
             ctx=ctx,
         )
 
+    async def count_files_awaiting_processing(self, pod_id: UUID) -> int:
+        """Files this pod has queued or mid-flight (PENDING + PROCESSING).
+
+        Exists so a caller looking at an empty search result can tell "this pod
+        has nothing to match" from "this pod has not been indexed yet". Those
+        are the same empty list, and reporting the second as the first is how an
+        agent confidently states a pod contains nothing on a topic it has plenty
+        on.
+        """
+        return await self.file_repository.count_active_for_pod(pod_id)
+
     async def get_directory_tree(
         self,
         pod_id: UUID,

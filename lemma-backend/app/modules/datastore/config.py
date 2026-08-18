@@ -56,6 +56,16 @@ class DatastoreSettings(BaseSettings):
         default=5_000_000,
         description="Reject ad-hoc datastore SQL queries whose EXPLAIN estimated row count exceeds this ceiling.",
     )
+    datastore_search_visibility_id_soft_limit: int = Field(
+        default=20_000,
+        description=(
+            "Log a degraded event when a search's visibility filter has to send "
+            "more than this many file ids to the pod database. Deliberately a "
+            "warning threshold and not a cap: truncating the visible list would "
+            "drop results, and truncating the hidden list would leak files the "
+            "caller may not read, so neither side is ever trimmed."
+        ),
+    )
 
     # Document processing
     document_processing_max_concurrency: int = Field(
@@ -224,18 +234,19 @@ class DatastoreSettings(BaseSettings):
     )
 
     # Document-processor adapter selection
-    document_processor: Literal["auto", "kreuzberg", "markitdown", "docling"] = Field(
+    document_processor: Literal["auto", "kreuzberg", "xberg", "markitdown", "docling"] = Field(
         default="auto",
         description=(
             "Which document-processor adapter converts non-markdown files to "
-            "markdown. 'markitdown' runs IN-PROCESS (optional dep; MIT; light, no "
-            "models; strongest on office formats, weaker on PDFs). 'docling' calls "
+            "markdown. 'xberg' runs IN-PROCESS (optional dep; MIT; a Rust core "
+            "with no models and no Python dependencies; what local and desktop "
+            "installs use, since they have no container to run). 'docling' calls "
             "a Docling Serve container OVER HTTP (MIT; beautiful research-paper/"
             "book markdown with tables; ML-heavy + GPU-oriented, so it runs as "
             "its own service and the backend stays lean — opt-in only, set this "
             "to 'docling' + DOCLING_SERVE_URL). 'kreuzberg' calls the Kreuzberg "
             "REST container. 'auto' (the default) uses 'kreuzberg' when "
-            "KREUZBERG_URL is set, else the in-process 'markitdown'; it never "
+            "KREUZBERG_URL is set, else the in-process 'xberg'; it never "
             "auto-selects docling. Env: ``DOCUMENT_PROCESSOR``."
         ),
     )
@@ -399,16 +410,27 @@ class DatastoreSettings(BaseSettings):
         """Resolve ``document_processor`` to a concrete adapter name.
 
         'auto' uses Kreuzberg when a Kreuzberg URL is configured, otherwise the
-        in-process 'markitdown' adapter — so a stack that drops the Kreuzberg
+        in-process 'xberg' adapter — so a stack that drops the Kreuzberg
         container (KREUZBERG_URL="") still converts documents in-process.
+
+        Extraction is CPU-bound, which is why cloud keeps it in a container of
+        its own rather than in the API process; a local install has no container
+        fleet, so in-process is the only option there.
 
         Docling is intentionally NOT auto-selected: it is GPU-oriented (slow on
         CPU) so it is opt-in only via an explicit ``DOCUMENT_PROCESSOR=docling``
         (plus ``DOCLING_SERVE_URL``).
         """
+        if self.document_processor == "markitdown":
+            # Accepted, and resolved to its replacement. markitdown was the
+            # in-process adapter until xberg took over, and the value is written
+            # into every desktop host pack, every local stack .env, and any
+            # deployment that pinned it -- so rejecting it would turn an upgrade
+            # into a backend that refuses to start over a name.
+            return "xberg"
         if self.document_processor != "auto":
             return self.document_processor
-        return "kreuzberg" if (self.kreuzberg_url or "").strip() else "markitdown"
+        return "kreuzberg" if (self.kreuzberg_url or "").strip() else "xberg"
 
 
 datastore_settings = DatastoreSettings()

@@ -61,17 +61,68 @@ class _FakeRedis:
         self._check()
         self.ttls[key] = seconds
 
-    async def set(self, key, value, ex=None):
+    async def set(self, key, value, ex=None, nx=False):
         self._check()
+        if nx and key in self.store:
+            return None
         self.store[key] = value
         if ex is not None:
             self.ttls[key] = ex
+        return True
+
+    async def ttl(self, key):
+        self._check()
+        if key not in self.store:
+            return -2
+        return self.ttls.get(key, -1)
 
     async def delete(self, *keys):
         self._check()
+        removed = 0
         for key in keys:
-            self.store.pop(key, None)
+            if self.store.pop(key, None) is not None:
+                removed += 1
             self.ttls.pop(key, None)
+        return removed
+
+    def pipeline(self, transaction=False):
+        del transaction
+        return _FakePipeline(self)
+
+
+class _FakePipeline:
+    """Queues calls and replays them, like redis-py's async pipeline.
+
+    Faithful enough to matter: the real one returns one result *per queued
+    command*, which is the whole reason the breaker can tell an open key from a
+    failure counter.
+    """
+
+    def __init__(self, redis: "_FakeRedis") -> None:
+        self._redis = redis
+        self._queued: list = []
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+    def ttl(self, key):
+        self._queued.append(("ttl", (key,), {}))
+
+    def set(self, key, value, ex=None, nx=False):
+        self._queued.append(("set", (key, value), {"ex": ex, "nx": nx}))
+
+    def delete(self, *keys):
+        self._queued.append(("delete", keys, {}))
+
+    async def execute(self):
+        results = []
+        for name, args, kwargs in self._queued:
+            results.append(await getattr(self._redis, name)(*args, **kwargs))
+        self._queued.clear()
+        return results
 
 
 @pytest.fixture
@@ -313,3 +364,149 @@ def test_the_same_organization_shares_one_breaker_per_operation():
 
     assert breaker_scope("gmail", "send", org) == breaker_scope("gmail", "send", org)
     assert breaker_scope("gmail", "send", org) != breaker_scope("gmail", "list", org)
+
+
+# -- a refused call must say what refused it ----------------------------------
+
+
+def test_the_circuit_open_error_names_the_connector_and_when_to_retry():
+    """Seven of these in one production incident, attributable to nothing.
+
+    The breaker builds a message naming the scope and passes `details={"scope":
+    ...}`. The error class shadowed the message with a fixed string, and the
+    details allowlist dropped "scope" because it was not on it — so the caller
+    received `details: null` and "a connector is disabled", with no way to learn
+    which one or when to come back.
+    """
+    error = OperationExecutionCircuitOpenError(
+        "Connector operation org-1:gmail:send is temporarily disabled after "
+        "repeated provider failures.",
+        details={"scope": "org-1:gmail:send", "retry_after": 60},
+    )
+
+    assert "org-1:gmail:send" in error.message
+    assert error.details is not None, "details were dropped by the allowlist"
+    assert error.details["scope"] == "org-1:gmail:send"
+    assert error.details["retry_after"] == 60
+
+
+def test_the_scope_splits_into_fields_a_log_query_can_group_by():
+    """One opaque compound string could only be grouped by string surgery, and
+    the organization — which matters *because* the key is per-tenant — was not
+    visible at all."""
+    assert operation_breaker._fields("org-1:gmail:send") == (
+        "org-1",
+        "gmail",
+        "send",
+    )
+    # Legacy two-part keys still parse rather than raising.
+    assert operation_breaker._fields("gmail:send") == ("", "gmail", "send")
+
+
+@pytest.mark.anyio
+async def test_clearing_a_failure_streak_does_not_announce_a_recovery(
+    redis, caplog
+) -> None:
+    """A recovery is the end of an incident, and there was no incident.
+
+    ``delete(open_key, fail_key)`` returns how many of the *two* keys existed,
+    so a success that merely cleared a partial failure streak — the ordinary
+    case, since most streaks never reach the threshold — reported a recovery
+    from an outage that never happened. An incident log that fires without a
+    matching opening makes the pair useless for reading what occurred.
+    """
+    for _ in range(connector_settings.connector_breaker_failure_threshold - 1):
+        await operation_breaker.record_failure(SCOPE)
+
+    with caplog.at_level("INFO"):
+        await operation_breaker.record_success(SCOPE)
+
+    assert "connectors.breaker.recovered" not in caplog.text, (
+        "a success that ended no incident announced a recovery"
+    )
+
+
+@pytest.mark.anyio
+async def test_a_real_recovery_is_still_announced(redis, caplog) -> None:
+    """The counterweight: silencing the false positive must not silence the
+    true one, or an incident starts in the logs and never ends there."""
+    for _ in range(connector_settings.connector_breaker_failure_threshold):
+        await operation_breaker.record_failure(SCOPE)
+    with pytest.raises(OperationExecutionCircuitOpenError):
+        await operation_breaker.guard(SCOPE)
+
+    with caplog.at_level("INFO"):
+        await operation_breaker.record_success(SCOPE)
+
+    assert "connectors.breaker.recovered" in caplog.text
+    await operation_breaker.guard(SCOPE)  # and the breaker really is closed
+
+
+@pytest.mark.anyio
+async def test_retry_after_counts_down_rather_than_repeating_the_cooldown(
+    redis,
+) -> None:
+    """Telling a caller to wait the full cooldown every time overstates it.
+
+    Someone arriving fifty seconds into a sixty-second cooldown would wait
+    twice as long as they needed to.
+    """
+    for _ in range(connector_settings.connector_breaker_failure_threshold):
+        await operation_breaker.record_failure(SCOPE)
+
+    open_key, _ = operation_breaker._keys(SCOPE)
+    redis.ttls[open_key] = 7  # most of the cooldown has already elapsed
+
+    with pytest.raises(OperationExecutionCircuitOpenError) as raised:
+        await operation_breaker.guard(SCOPE)
+
+    assert raised.value.details["retry_after"] == 7, (
+        "retry_after reported the whole cooldown instead of what remains of it"
+    )
+
+
+@pytest.mark.anyio
+async def test_a_retry_loop_does_not_flood_the_log(redis, caplog) -> None:
+    """One warning per incident, not one per refused call.
+
+    A client retrying a down provider in a loop is the normal case, and it is
+    exactly when a per-call warning turns one incident into pages of identical
+    lines.
+    """
+    for _ in range(connector_settings.connector_breaker_failure_threshold):
+        await operation_breaker.record_failure(SCOPE)
+
+    with caplog.at_level("WARNING"):
+        for _ in range(25):
+            with pytest.raises(OperationExecutionCircuitOpenError):
+                await operation_breaker.guard(SCOPE)
+
+    refusals = caplog.text.count("connectors.breaker.rejected.degraded")
+    assert refusals == 1, (
+        f"25 refused calls produced {refusals} warnings; the breaker should "
+        "announce an incident once per cooldown, not once per caller"
+    )
+
+
+@pytest.mark.anyio
+async def test_reopening_announces_itself_again(redis, caplog) -> None:
+    """Each opening is its own incident and deserves its own line."""
+    threshold = connector_settings.connector_breaker_failure_threshold
+    for _ in range(threshold):
+        await operation_breaker.record_failure(SCOPE)
+    with pytest.raises(OperationExecutionCircuitOpenError):
+        await operation_breaker.guard(SCOPE)
+
+    await operation_breaker.record_success(SCOPE)
+    for _ in range(threshold):
+        await operation_breaker.record_failure(SCOPE)
+
+    caplog.clear()  # the first incident's line is not what this asserts on
+    with caplog.at_level("WARNING"):
+        with pytest.raises(OperationExecutionCircuitOpenError):
+            await operation_breaker.guard(SCOPE)
+
+    assert caplog.text.count("connectors.breaker.rejected.degraded") == 1, (
+        "a breaker that re-opened refused silently — the announcement token "
+        "from the previous incident was still alive"
+    )

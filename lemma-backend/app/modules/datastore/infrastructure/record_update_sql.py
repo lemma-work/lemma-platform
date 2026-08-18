@@ -14,10 +14,12 @@ from __future__ import annotations
 
 import json
 from typing import Any
+from uuid import UUID
 
 from app.modules.datastore.domain.datastore_entities import SYSTEM_COLUMNS
 from app.modules.datastore.infrastructure.sql_identifiers import sanitize_identifier
 from app.modules.datastore.services.table_context import TableContext
+from app.modules.datastore.services.record_validator import convert_record
 from app.modules.datastore.services.value_converter import ValueConverter
 
 
@@ -245,3 +247,43 @@ def build_bulk_statements(
         bulk_returning_statement(ctx, ordered_keys, chunk, conflict_sql)
         for chunk in chunk_for_parameter_limit(prepared_records, len(ordered_keys))
     ]
+
+
+def prepare_bulk_updates(
+    ctx: TableContext,
+    updates: list[tuple[Any, dict[str, Any]]],
+    user_id: UUID,
+    *,
+    enforce_user_scope: bool,
+    capture_previous: bool,
+) -> list[tuple[str, dict[str, Any], list[str], str | None]]:
+    """Build one UPDATE per row, ready to run inside a single transaction.
+
+    Pure, and here rather than on the repository, because it is statement
+    construction and this module already owns that for the single-row path.
+    Each tuple is ``(sql, params, changed_columns, previous_alias)``.
+
+    Rows whose payload changes nothing are dropped rather than issued: the
+    single-row path returns the untouched record in that case, but a bulk
+    caller only counts, so the statement would be a round trip for no effect.
+    """
+    prepared: list[tuple[str, dict[str, Any], list[str], str | None]] = []
+    for record_id, data in updates:
+        parsed_id = ctx.parse_primary_key(record_id)
+        mutable_data, set_clauses, params = build_assignments(
+            ctx, convert_record(ctx.columns, data), parsed_id
+        )
+        if not mutable_data:
+            continue
+        where_clauses = [f'"{ctx.primary_key_column}" = :id']
+        if ctx.enable_rls and enforce_user_scope:
+            where_clauses.append('"user_id" = :current_user_id')
+            params["current_user_id"] = str(user_id)
+        sql, previous_alias = build_update_statement(
+            ctx,
+            set_clauses=set_clauses,
+            where_clauses=where_clauses,
+            capture_previous=capture_previous,
+        )
+        prepared.append((sql, params, sorted(mutable_data.keys()), previous_alias))
+    return prepared

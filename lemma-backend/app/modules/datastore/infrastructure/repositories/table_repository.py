@@ -131,6 +131,46 @@ class DatastoreTableRepository(DatastoreRepositoryBase, DatastoreTableRepository
         row = result.first()
         return self._with_allowed_actions(row[0].to_entity(), row[1]) if row else None
 
+    async def get_many_by_datastore_and_names(
+        self,
+        pod_id: UUID,
+        table_names: Sequence[str],
+        ctx: Context | None = None,
+    ) -> dict[str, DatastoreTableEntity]:
+        """The same statement as above, for several names at once.
+
+        An ad-hoc query naming five tables was resolving them one at a time,
+        so a five-table join paid five round trips to answer one question the
+        database can answer once. Keyed by name because that is what the
+        caller has; missing names are simply absent.
+        """
+        if not table_names:
+            return {}
+        wanted = sorted(set(table_names))
+        if ctx is None:
+            result = await self.session.execute(
+                select(DatastoreTable).where(
+                    DatastoreTable.pod_id == pod_id,
+                    DatastoreTable.table_name.in_(wanted),
+                )
+            )
+            return {
+                table.table_name: table.to_entity()
+                for table in result.scalars().all()
+            }
+
+        actions = _table_actions_expr(ctx)
+        result = await self.session.execute(
+            select(DatastoreTable, actions).where(
+                DatastoreTable.pod_id == pod_id,
+                DatastoreTable.table_name.in_(wanted),
+            )
+        )
+        return {
+            row[0].table_name: self._with_allowed_actions(row[0].to_entity(), row[1])
+            for row in result.all()
+        }
+
     async def list_by_datastore(
         self, pod_id: UUID, limit: int = 100, cursor: Optional[str] = None
     ) -> Tuple[Sequence[DatastoreTableEntity], Optional[str]]:

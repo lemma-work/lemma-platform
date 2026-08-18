@@ -48,10 +48,18 @@ def test_completed_is_not_described_as_a_tty_quirk() -> None:
 
 
 def test_process_id_explains_how_to_poll() -> None:
+    """It must still say how to poll -- just not with an empty string.
+
+    This used to assert the description contained `chars=''`, pinning an idiom
+    that reaches exactly the same code as omitting the argument while inviting
+    the model to emit an empty-string value. The pin moves to the replacement
+    rather than being dropped: an agent still has to learn how to poll.
+    """
     description = _describe(ExecCommandResult, "process_id")
 
     assert "manage_process" in description
-    assert "chars=''" in description or 'chars=""' in description
+    assert "process_id=..." in description
+    assert "chars=''" not in description and 'chars=""' not in description
 
 
 def test_exec_command_docstring_teaches_the_poll_loop() -> None:

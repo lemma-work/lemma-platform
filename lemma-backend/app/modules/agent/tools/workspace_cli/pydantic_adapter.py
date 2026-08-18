@@ -44,9 +44,9 @@ async def exec_command(
 
         exec_command(cmd="npm ci && npm run build", timeout_seconds=300)
         -> completed: false, process_id: "abc"
-        manage_process(action="input", process_id="abc", chars="")
+        manage_process(action="input", process_id="abc")
         -> completed: false        # repeat; each poll returns new output
-        manage_process(action="input", process_id="abc", chars="")
+        manage_process(action="input", process_id="abc")
         -> completed: true, exit_code: 0
 
     Never re-run a command because it did not finish — that starts a second
@@ -64,7 +64,7 @@ async def manage_process(
     Drive a process started by `exec_command`.
 
     `input` sends characters to a running process, or polls its output when
-    `chars=""`. `kill` stops it. `list` shows tracked processes in this
+    `chars` is omitted. `kill` stops it. `list` shows tracked processes in this
     workspace. `resize` changes an interactive terminal's `cols`/`rows`. All but
     `list` need `process_id`.
     """

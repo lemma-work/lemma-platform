@@ -230,7 +230,7 @@ def install_python(
             "from fastmcp import FastMCP; "
             "from app.modules.workspace.providers.lemma_local import "
             "LemmaLocalSandboxProvider; "
-            "import keyring, local_app, markitdown, uvicorn; "
+            "import keyring, local_app, uvicorn, xberg; "
             "assert LemmaLocalSandboxProvider.name == 'lemma_local'; "
             "print('backend pack: import ok')"
         ),

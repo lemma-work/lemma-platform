@@ -2,7 +2,7 @@
 
 Rendering PDF pages to images is engine-agnostic — it reads the original PDF
 with pypdfium2 and never touches the extraction engine — so every
-``DocumentProcessorPort`` adapter (Kreuzberg, markitdown, …) inherits it from
+``DocumentProcessorPort`` adapter (Kreuzberg, xberg, …) inherits it from
 here and produces identical page images. The concurrency gate lives at module
 scope so it actually bounds rasterizations across every adapter instance.
 """

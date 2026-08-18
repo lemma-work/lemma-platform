@@ -191,7 +191,7 @@ async def test_failure_kind_decides_terminal_vs_retry_and_never_leaks_secrets(
 
 
 @pytest.mark.asyncio
-async def test_docling_and_markitdown_adapters_run_through_http_outbox_and_worker(
+async def test_docling_and_xberg_adapters_run_through_http_outbox_and_worker(
     pod_api: DatastoreApi,
     db_manager,
     document_worker,
@@ -234,27 +234,27 @@ async def test_docling_and_markitdown_adapters_run_through_http_outbox_and_worke
         assert b"<!-- PAGE 1 -->" in content
         assert b"<!-- PAGE 2 -->" in content
 
-    async with document_worker("markitdown"):
-        markitdown = await pod_api.upload_file(
-            "markitdown-success.html",
-            b"Hermetic MarkItDown source",
+    async with document_worker("xberg"):
+        xberg = await pod_api.upload_file(
+            "xberg-success.html",
+            b"Hermetic Xberg source",
             content_type="text/html",
         )
-        markitdown_failure = await pod_api.upload_file(
-            "markitdown-failure.html",
+        xberg_failure = await pod_api.upload_file(
+            "xberg-failure.html",
             b"FAIL with a provider payload",
             content_type="text/html",
         )
         await _dispatch_outbox(db_manager)
-        await _wait_for_status(pod_api, markitdown["path"], {"COMPLETED"})
-        failed = await _wait_for_status(pod_api, markitdown_failure["path"], {"FAILED"})
+        await _wait_for_status(pod_api, xberg["path"], {"COMPLETED"})
+        failed = await _wait_for_status(pod_api, xberg_failure["path"], {"FAILED"})
         assert "CANARY_DATASTORE_PROVIDER_SECRET" not in str(failed)
-        markitdown_children = await pod_api.list_children(markitdown["path"])
-        markitdown_markdown = next(
+        xberg_children = await pod_api.list_children(xberg["path"])
+        xberg_markdown = next(
             item
-            for item in markitdown_children["items"]
+            for item in xberg_children["items"]
             if item["name"] == "document.md"
         )
-        content = await pod_api.child_content(markitdown_markdown["path"])
-        assert b"MarkItDown output" in content
-        assert b"Hermetic MarkItDown source" in content
+        content = await pod_api.child_content(xberg_markdown["path"])
+        assert b"Xberg output" in content
+        assert b"Hermetic Xberg source" in content

@@ -4,7 +4,7 @@ Docling (MIT, LF AI & Data) produces high-fidelity structured markdown — readi
 order, heading hierarchy, TableFormer tables — for born-digital research papers
 and books. It is ML-heavy (torch + models), so like Kreuzberg it runs as its OWN
 container (``quay.io/docling-project/docling-serve``) and the backend talks to it
-over HTTP. This keeps lemma-backend lean: NO torch, NO markitdown-style in-process
+over HTTP. This keeps lemma-backend lean: NO torch, NO torch-style in-process
 model deps — only an aiohttp call.
 
 Conversions use Docling Serve's ASYNC api — submit the file (``/v1/convert/file/

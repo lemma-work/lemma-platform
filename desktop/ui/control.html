@@ -194,6 +194,10 @@
             <summary><span><strong>Microsoft</strong><small>Microsoft connector OAuth app</small></span><span class="status">Optional</span></summary>
             <div class="drawer-body"><div class="form-grid"><div class="field"><label for="microsoft-id">Client ID</label><input id="microsoft-id" /></div><div class="field"><label for="microsoft-secret">Client secret</label><div class="secret-wrap"><input id="microsoft-secret" type="password" data-secret="integrations.microsoft_client_secret" /><button class="secret-clear">Remove</button></div></div></div></div>
           </details>
+          <details class="config-drawer">
+            <summary><span><strong>Deepgram</strong><small>Speech: <code>say</code> and <code>listen</code></small></span><span class="status">Optional</span></summary>
+            <div class="drawer-body"><div class="form-grid"><div class="field"><label for="deepgram-key">API key</label><div class="secret-wrap"><input id="deepgram-key" type="password" data-secret="integrations.deepgram_api_key" /><button class="secret-clear">Remove</button></div></div></div><p class="hint">Without it, <code>say</code> and <code>listen</code> fail and inbound voice notes cannot be read.</p></div>
+          </details>
         </article>
         <div class="savebar"><span>Unsaved integration changes</span><button class="btn primary" data-save>Save integrations</button></div>
       </section>

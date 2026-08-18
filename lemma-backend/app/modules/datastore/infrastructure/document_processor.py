@@ -273,15 +273,15 @@ def create_document_processor() -> DocumentProcessorPort:
 
     The adapter is selected by ``DATASTORE_DOCUMENT_PROCESSOR`` (resolved via
     ``effective_document_processor``): 'kreuzberg' (default when a Kreuzberg URL
-    is set) or the in-process 'markitdown' adapter (optional dep). markitdown is
-    imported lazily so the dependency is only required when it is selected."""
+    is set) or the in-process 'xberg' adapter (optional dep). xberg is imported
+    lazily so the dependency is only required when it is selected."""
     which = datastore_settings.effective_document_processor()
-    if which == "markitdown":
-        from app.modules.datastore.infrastructure.markitdown_processor import (
-            MarkItDownDocumentProcessor,
+    if which == "xberg":
+        from app.modules.datastore.infrastructure.xberg_processor import (
+            XbergDocumentProcessor,
         )
 
-        return MarkItDownDocumentProcessor()
+        return XbergDocumentProcessor()
     if which == "docling":
         from app.modules.datastore.infrastructure.docling_processor import (
             DoclingDocumentProcessor,

@@ -116,7 +116,7 @@ def backend_env(
         "SUPERTOKENS_CORE_URL": "http://supertokens:3567",
         "LOCAL_KREUZBERG_ENABLED": "false",
         "KREUZBERG_URL": "",
-        "DOCUMENT_PROCESSOR": "markitdown",
+        "DOCUMENT_PROCESSOR": "xberg",
         # Sandboxes are provisioned by the backend itself.
         "WORKSPACE_PROVIDER": adapter_provider,
         "WORKSPACE_RUNTIME_CREDENTIAL_KEY": _runtime_credential_key(doc),

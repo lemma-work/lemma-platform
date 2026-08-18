@@ -31,6 +31,11 @@ EXPECTED = [
     ("datastore_query_max_rows", "DATASTORE_QUERY_MAX_ROWS", 1000),
     ("datastore_query_max_cost", "DATASTORE_QUERY_MAX_COST", 1_000_000.0),
     ("datastore_query_max_plan_rows", "DATASTORE_QUERY_MAX_PLAN_ROWS", 5_000_000),
+    (
+        "datastore_search_visibility_id_soft_limit",
+        "DATASTORE_SEARCH_VISIBILITY_ID_SOFT_LIMIT",
+        20_000,
+    ),
     ("document_processing_max_concurrency", "DOCUMENT_PROCESSING_MAX_CONCURRENCY", 2),
     (
         "document_processing_debounce_seconds",
@@ -136,13 +141,13 @@ def test_effective_document_processor_auto_follows_kreuzberg_url(monkeypatch):
     with_url = DatastoreSettings(kreuzberg_url="http://kreuzberg:8000")
     assert with_url.effective_document_processor() == "kreuzberg"
     without_url = DatastoreSettings(kreuzberg_url="")
-    assert without_url.effective_document_processor() == "markitdown"
+    assert without_url.effective_document_processor() == "xberg"
 
 
 def test_effective_document_processor_explicit_wins(monkeypatch):
-    monkeypatch.setenv("DOCUMENT_PROCESSOR", "markitdown")
+    monkeypatch.setenv("DOCUMENT_PROCESSOR", "xberg")
     # Explicit choice is honoured even though a Kreuzberg URL is present.
-    assert DatastoreSettings().effective_document_processor() == "markitdown"
+    assert DatastoreSettings().effective_document_processor() == "xberg"
     monkeypatch.setenv("DOCUMENT_PROCESSOR", "kreuzberg")
     assert (
         DatastoreSettings(kreuzberg_url="").effective_document_processor()
@@ -156,7 +161,7 @@ def test_effective_document_processor_auto_never_selects_docling(monkeypatch):
     settings = DatastoreSettings(
         kreuzberg_url="", docling_serve_url="http://docling:5001"
     )
-    assert settings.effective_document_processor() == "markitdown"
+    assert settings.effective_document_processor() == "xberg"
     # ...but an explicit choice activates it.
     assert (
         DatastoreSettings(document_processor="docling").effective_document_processor()
