@@ -70,6 +70,25 @@ class AgentConversationWaitRepository:
         model = (await self.session.execute(stmt)).scalars().first()
         return model.to_entity() if model else None
 
+    async def find_active_for_run(
+        self, agent_run_id: UUID
+    ) -> AgentConversationWaitEntity | None:
+        """The wait that this run suspended on, if it suspended on one.
+
+        Asked by the remote harness of a run that just ended, to tell a turn
+        that stopped because the agent went to sleep from one that stopped
+        because it was over. Keyed on the run rather than the conversation
+        because that is the question being asked, even though the partial
+        unique index means the two can only ever disagree by naming a wait
+        some *other* run of the same conversation is holding.
+        """
+        stmt = select(AgentConversationWaitModel).where(
+            AgentConversationWaitModel.agent_run_id == agent_run_id,
+            AgentConversationWaitModel.status == AgentWaitStatus.ACTIVE.value,
+        )
+        model = (await self.session.execute(stmt)).scalars().first()
+        return model.to_entity() if model else None
+
     async def find_active_for_conversation(
         self, conversation_id: UUID
     ) -> AgentConversationWaitEntity | None:
