@@ -50,3 +50,35 @@ def format_statements(statements: list[str], *, limit: int = 20) -> str:
     if len(statements) > limit:
         lines.append(f"  ... and {len(statements) - limit} more")
     return "\n".join(lines)
+
+
+@contextmanager
+def counted_commits() -> Iterator[list[str]]:
+    """Count transaction boundaries, which statement counting cannot see.
+
+    ``before_cursor_execute`` fires for statements, and a commit is not one --
+    SQLAlchemy issues it through the dialect's transaction API, so no cursor
+    execute ever carries the text ``COMMIT``. Counting statements and grepping
+    for it therefore finds zero every time, which makes an assertion like
+    ``commits <= 2`` pass no matter how many transactions ran. That is exactly
+    how a per-row-commit regression could slip past a test written to catch it.
+
+    ``commit`` and ``rollback`` are the events for this. Listening on the
+    ``Engine`` class covers whichever engine the caller drives, for the same
+    reason ``counted_queries`` does.
+    """
+    boundaries: list[str] = []
+
+    def on_commit(conn):
+        boundaries.append("COMMIT")
+
+    def on_rollback(conn):
+        boundaries.append("ROLLBACK")
+
+    event.listen(Engine, "commit", on_commit)
+    event.listen(Engine, "rollback", on_rollback)
+    try:
+        yield boundaries
+    finally:
+        event.remove(Engine, "commit", on_commit)
+        event.remove(Engine, "rollback", on_rollback)
