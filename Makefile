@@ -29,7 +29,7 @@ SHELL := /bin/bash
         test test-backend test-backend-unit test-backend-e2e \
         test-frontend test-cli test-cli-unit test-cli-e2e test-python \
         scenarios scenarios-guards scenarios-sandbox scenarios-live scenarios-images \
-        scenario-coverage scenarios-code-coverage \
+        scenario-coverage scenarios-code-coverage e2e-scenario-overlap \
         coverage coverage-backend coverage-backend-unit coverage-backend-e2e \
         coverage-backend-module coverage-cli coverage-cli-unit coverage-cli-e2e coverage-frontend \
         lint quality check codeql codeql-python codeql-javascript codeql-all migrate
@@ -1259,6 +1259,12 @@ scenarios-code-coverage:
 	@cd $(BACKEND_DIR) && uv run coverage combine && uv run coverage report | tail -30
 
 # Regenerate docs/product/coverage.md. `make quality` checks it is current.
+# Which module e2e tests the scenario suite might already cover. A report, not a
+# gate: it answers one of the five questions in docs/testing.md, and the other
+# four are not mechanical. See the script's own docstring.
+e2e-scenario-overlap:
+	@cd $(BACKEND_DIR) && uv run python ../scripts/check_e2e_scenario_overlap.py $(ARGS)
+
 scenario-coverage:
 	@python3 scripts/check_scenario_coverage.py --write
 

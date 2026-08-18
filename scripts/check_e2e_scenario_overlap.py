@@ -17,8 +17,11 @@ only that the exporter and the importer agree with each other.
 So this is a **report, not a gate**. It narrows the list. It does not authorise
 anything.
 
-    python3 scripts/check_e2e_scenario_overlap.py
-    python3 scripts/check_e2e_scenario_overlap.py --module pod --verbose
+    cd lemma-backend && uv run python ../scripts/check_e2e_scenario_overlap.py
+    cd lemma-backend && uv run python ../scripts/check_e2e_scenario_overlap.py --module pod --verbose
+
+Run it through the backend's interpreter: the tests it parses use Python 3.14
+syntax that earlier versions reject outright.
 
 How it works: the committed OpenAPI spec maps every (method, path template) to
 an operation id. An AST pass over the e2e tests reconstructs the paths they call

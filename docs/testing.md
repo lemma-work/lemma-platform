@@ -145,6 +145,30 @@ after.
 `function` is the fragile one: it is small enough that a single deleted test
 which uniquely covers an error path moves the floor a whole point.
 
+### What happened the first time this was applied
+
+Worth knowing, because it is the expected shape of the answer rather than a
+disappointment. `make e2e-scenario-overlap` narrowed 759 module e2e tests to six
+files whose every operation a scenario already covers. Examined by hand, **all
+six failed the five questions**, and for one consistent reason: the module tests
+assert more *specifically* than the scenarios do.
+
+- Two assert query budgets — how many statements a request costs. No black-box
+  test can see that.
+- One pins the bundle format field by field. The scenario that covers the same
+  operations proves the exporter and importer agree with each other, which is a
+  different claim: rename a key on both sides and it still passes.
+- One pins exact refusal codes for a visibility matrix, including the cases where
+  a `404` becoming a `403` would leak that a resource exists. The scenarios use a
+  helper that accepts any `4xx`.
+- Two assert intermediate states and destructive effects — a cancelling import,
+  a column actually removed — that no scenario asserts at all.
+
+So nothing was deleted. The route to deleting these is to **strengthen the
+scenarios first**: assert the refusal code where the code is the point, and pin
+the artifact format where it is an external contract. That is a better use of
+effort than removing a test, and it is the order the policy above requires.
+
 ---
 
 ## Rules that apply everywhere
