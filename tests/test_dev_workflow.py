@@ -52,7 +52,7 @@ class DevWorkflowTests(unittest.TestCase):
             self.assertEqual(backend_env["ENVIRONMENT"], "local")
             self.assertEqual(backend_env["LOG_LEVEL"], "DEBUG")
             self.assertTrue(backend_env["DATASTORE_DATABASE_URL"].endswith("/lemma_datastore"))
-            self.assertEqual(backend_env["DOCUMENT_PROCESSOR"], "markitdown")
+            self.assertEqual(backend_env["DOCUMENT_PROCESSOR"], "xberg")
             self.assertEqual(backend_env["EMAIL_TRANSPORT"], "filesystem")
             self.assertEqual(backend_env["AUTH_EMAIL_VERIFICATION_REQUIRED"], "false")
             self.assertEqual(backend_env["API_URL"], "http://localhost:8710")

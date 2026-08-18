@@ -118,8 +118,8 @@ async def describe_document_pages(
                 "path": path,
                 "error": (
                     f"{exc} This agent's model cannot read images, so PDF pages "
-                    "cannot be viewed. Use `pod_read_file` with "
-                    "format='markdown' to read the page text instead."
+                    "cannot be viewed. Use `pod_read_file` to read the page "
+                    "text instead."
                 ),
             }
         except VisionDescriptionError as exc:

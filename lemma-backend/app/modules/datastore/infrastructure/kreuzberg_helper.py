@@ -164,7 +164,7 @@ class KreuzbergHelper:
     ) -> list[dict[str, Any]]:
         """Chunk markdown in this process, off the event loop.
 
-        Mirrors what the markitdown/docling adapters already do, so a document is
+        Mirrors what the xberg/docling adapters already do, so a document is
         never indexed as a single unsplittable blob just because the extractor
         has no chunking endpoint.
         """

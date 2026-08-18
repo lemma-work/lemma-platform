@@ -65,7 +65,7 @@ make logs               # tail backend logs
 - API: `http://localhost:8710`
 - API docs (Scalar): `http://localhost:8710/scalar`
 
-`make dev` runs Postgres/Redis/SuperTokens in Docker and the backend as **one** host process (`uvicorn standalone_app:app`) that combines the FastAPI app, the streaq event worker, and the scheduler — convenient for local dev. It also installs the local `lemma` CLI and registers it as the `local-dev` server:
+`make dev` runs Postgres/Redis/SuperTokens in Docker and the backend as **one** host process (`uvicorn local_app:app`) that combines the FastAPI app, the streaq event worker, and the scheduler — convenient for local dev. It also installs the local `lemma` CLI and registers it as the `local-dev` server:
 
 ```bash
 lemma servers select local-dev

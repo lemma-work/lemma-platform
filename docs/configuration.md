@@ -530,8 +530,12 @@ per-minute dispatcher drains it round-robin across pods. So one tenant uploading
 a thousand documents cannot monopolise ingestion, Redis depth stays bounded, and
 every file is still processed eventually.
 
-Leaving `WORKER_LANES` empty runs both lanes in one process, which is what the
-local stack and desktop do. Split deployments set `WORKER_LANES=interactive` on
+Leaving `WORKER_LANES` empty runs both lanes in one process. The local stack,
+desktop and `make dev` embed the worker inside the API process and run *every*
+lane unconditionally, ignoring `WORKER_LANES` — that process is the whole
+deployment, so there is no second one a lane could be delegated to, and honouring
+the variable there would let it silently leave a queue unconsumed. Split
+deployments (a separate `python -m app.worker`) set `WORKER_LANES=interactive` on
 one worker and `WORKER_LANES=bulk` on another; the interactive lane owns
 process-wide startup, so at least one process must run it.
 

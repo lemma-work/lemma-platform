@@ -75,7 +75,7 @@ dependencies = [
 # Managed/local composition: document conversion in the single backend
 # process. Cloud/split deployments do not need to install this extra.
 local = [
-    "markitdown[docx,pptx,xlsx,xls,pdf,outlook]>=0.1.0",
+    "xberg>=1.0.14",
 ]
 # Cloud key backends for app/core/crypto. Optional so OSS/local stays lean; the
 # imports are lazy (only loaded when secret_key_provider selects them).
@@ -93,12 +93,15 @@ e2b = [
 keychain = [
     "keyring>=25.0.0",
 ]
-# In-process document processor (DOCUMENT_PROCESSOR=markitdown), so a
-# deployment can convert docs to markdown without the Kreuzberg container. Kept
-# optional so OSS/pip installs stay lean; the released backend image installs it
-# (see lemma-backend/Dockerfile) because the local stack defaults to it.
-markitdown = [
-    "markitdown[docx,pptx,xlsx,xls,pdf,outlook]>=0.1.0",
+# In-process document processor (DOCUMENT_PROCESSOR=xberg), so a deployment can
+# convert documents without the Kreuzberg container. Kept optional so OSS/pip
+# installs stay lean; the released backend image installs it (see
+# lemma-backend/Dockerfile) because local and desktop default to it.
+#
+# A Rust core with abi3 wheels and no Python dependencies of its own, so this
+# adds one compiled extension rather than a dependency tree.
+xberg = [
+    "xberg>=1.0.14",
 ]
 
 [dependency-groups]

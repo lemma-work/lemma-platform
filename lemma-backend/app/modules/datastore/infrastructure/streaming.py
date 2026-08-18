@@ -20,7 +20,7 @@ from typing import AsyncIterator
 
 
 def read_file_bytes(path: str) -> bytes:
-    """Read a file fully into bytes (for the in-process markitdown/docling path)."""
+    """Read a file fully into bytes (for the in-process xberg/docling path)."""
     with open(path, "rb") as handle:
         return handle.read()
 

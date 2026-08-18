@@ -38,6 +38,7 @@ from app.modules.agent.tools.pod.pod_data_access import (
     pod_services,
 )
 from app.modules.agent.tools.tool_errors import approval_error_result
+from app.modules.agent.tools.pod.file_reads import read_file_text, search_files
 from app.modules.datastore.contracts import (
     DatastoreConflictError,
     DatastoreFileUpdateEntity,
@@ -416,57 +417,20 @@ async def pod_read_file(
     ctx: RunContext[BaseAgentContext],
     request: PodReadFileRequest,
 ) -> JsonObject:
-    """Read a pod file as text, or a document as converted markdown.
+    """Read a pod file's text.
 
-    Documents are converted and cached at upload, so reading is instant — never
-    download and re-parse one. Use ``pod_view_document_pages`` to see pages
-    visually instead.
+    A file that has text of its own -- markdown, plain text, HTML, CSV, code,
+    email -- is returned exactly as it is. A file that has none, because it is a
+    binary document like a PDF or a DOCX, is returned as the markdown it was
+    converted into at upload.
+
+    Use ``pod_view_document_pages`` to *see* pages rather than read them.
     """
 
     async def op(services: PodServices) -> JsonObject:
-        resolved_path = _resolve_pod_path(ctx.deps, request.path)
-        if request.format == "markdown":
-            entity, markdown, page_count = await services.file.get_document_markdown(
-                services.ctx.pod_id,
-                resolved_path,
-                services.ctx,
-                page_start=request.page_start,
-                page_end=request.page_end,
-            )
-            return {
-                "success": True,
-                "path": entity.path,
-                "format": "markdown",
-                "page_count": page_count,
-                "page_start": request.page_start,
-                "page_end": request.page_end,
-                "truncated": len(markdown) > request.max_chars,
-                "markdown": markdown[: request.max_chars],
-            }
-
-        entity, content = await services.file.download_file_content_by_path(
-            services.ctx.pod_id, resolved_path, services.ctx
+        return await read_file_text(
+            services, request, _resolve_pod_path(ctx.deps, request.path)
         )
-        try:
-            text = content.decode("utf-8")
-            return {
-                "success": True,
-                "path": entity.path,
-                "format": "text",
-                "mime_type": entity.mime_type,
-                "size_bytes": entity.size_bytes,
-                "truncated": len(text) > request.max_chars,
-                "text": text[: request.max_chars],
-            }
-        except UnicodeDecodeError:
-            return {
-                "success": True,
-                "path": entity.path,
-                "mime_type": entity.mime_type,
-                "size_bytes": entity.size_bytes,
-                "binary": True,
-                "hint": "Binary file; read it with format='markdown' for documents.",
-            }
 
     return await _run(
         ctx.deps, tool_name="pod_read_file", args=request.model_dump(), op=op
@@ -480,7 +444,7 @@ async def pod_view_document_pages(
     """Render PDF pages as images so you can *see* them (layout, tables, figures).
 
     Pages are 1-based. Only PDFs can be rendered visually; for other document
-    types use ``pod_read_file`` with ``format="markdown"`` to read the page text.
+    types use ``pod_read_file`` to read the page text.
 
     Set ``instructions`` to say what you need from the pages. If this agent's
     model reads images itself you get the page images inline; otherwise a vision
@@ -604,15 +568,7 @@ async def pod_search_files(
     """Semantic/keyword search across indexed pod files."""
 
     async def op(services: PodServices) -> JsonObject:
-        results = await services.file.search_files(
-            services.ctx.pod_id,
-            request.query,
-            services.ctx,
-            limit=request.limit,
-            search_method=request.method,
-            scope_path=request.scope_path,
-        )
-        return {"success": True, "results": to_json_value(results)}
+        return await search_files(services, request)
 
     return await _run(
         ctx.deps,
