@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { ExternalLink } from '@/components/ui/icons';
 
+import { CreateSlackAppButton } from '@/components/connectors/create-slack-app-button';
 import { SchemaFields } from '@/components/connectors/schema-fields';
 import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -127,15 +128,25 @@ export function SurfaceConnectStep({
                         Signing in to {definition.label} happens once for the whole organization.
                         Do that first, then come back here.
                     </p>
-                    {definition.platform === 'SLACK' ? (
-                        <p className="mt-2 text-xs leading-5 text-[var(--text-tertiary)]">
-                            Want Lemma to show up under your own name in Slack? You can set
-                            that up there too.
-                        </p>
-                    ) : null}
                     <Button asChild className="mt-3" size="sm" variant="secondary">
                         <Link href={`/pod/${podId}/connectors`}>Open connectors</Link>
                     </Button>
+                    {/* Running your own Slack app is a second route to the same
+                        place, not a footnote on this one — and it starts here,
+                        because making the app is what produces the credentials
+                        connectors then asks for. Burying it behind the link
+                        above meant nobody found it: it sat inside the custom
+                        credential form, on a row action that hid itself once
+                        Slack was connected. */}
+                    {definition.platform === 'SLACK' ? (
+                        <div className="mt-4 border-t border-[var(--border-subtle)] pt-3">
+                            <p className="mb-2 text-xs leading-5 text-[var(--text-secondary)]">
+                                Or run Lemma under your own name in Slack — your workspace,
+                                your app, your bot’s name and icon.
+                            </p>
+                            <CreateSlackAppButton />
+                        </div>
+                    ) : null}
                 </div>
             )}
         </div>
