@@ -168,6 +168,7 @@ pub struct LemmaMcpEndpoint {
     transport: McpTransport,
     accepted: Arc<Mutex<Vec<String>>>,
     scripted: Arc<Mutex<Vec<ScriptedFailure>>>,
+    polls: Arc<Mutex<u32>>,
 }
 
 /// A failure to serve instead of the next real answer.
@@ -197,8 +198,34 @@ pub enum McpTransport {
     ServerSentEvents,
 }
 
+/// The tool that parks, and the durable id it parks under.
+pub const PARK_TOOL: &str = "lemma_park";
+pub const PARK_CALL_ID: &str = "parked-call-1";
+const PARKED_POLLS_BEFORE_DECISION: u32 = 2;
+
+async fn interaction_poll(
+    axum::extract::State(state): axum::extract::State<McpState>,
+    axum::extract::Path((_conversation_id, tool_call_id)): axum::extract::Path<(String, String)>,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let mut polls = state.polls.lock().unwrap();
+    *polls += 1;
+    let answered = *polls > PARKED_POLLS_BEFORE_DECISION;
+    drop(polls);
+    if !answered {
+        return axum::http::StatusCode::NO_CONTENT.into_response();
+    }
+    axum::Json(json!({
+        "success": true,
+        "answers": {"Pick one": "Blue"},
+        "decided_for": tool_call_id,
+    }))
+    .into_response()
+}
+
 #[derive(Clone)]
 struct McpState {
+    polls: Arc<Mutex<u32>>,
     requests: Arc<Mutex<Vec<McpRequestRecord>>>,
     deletes: Arc<Mutex<Vec<Option<String>>>>,
     transport: McpTransport,
@@ -210,6 +237,11 @@ struct McpState {
 }
 
 impl LemmaMcpEndpoint {
+    /// How many times the bridge asked whether the parked call was decided.
+    pub fn interaction_polls(&self) -> u32 {
+        *self.polls.lock().unwrap()
+    }
+
     /// # Panics
     /// If the listener cannot bind.
     pub async fn start(transport: McpTransport) -> Self {
@@ -217,7 +249,9 @@ impl LemmaMcpEndpoint {
         let deletes = Arc::new(Mutex::new(Vec::new()));
         let accepted = Arc::new(Mutex::new(vec![format!("Bearer {MCP_BEARER}")]));
         let scripted = Arc::new(Mutex::new(Vec::new()));
+        let polls = Arc::new(Mutex::new(0u32));
         let state = McpState {
+            polls: Arc::clone(&polls),
             requests: Arc::clone(&requests),
             deletes: Arc::clone(&deletes),
             transport,
@@ -228,6 +262,14 @@ impl LemmaMcpEndpoint {
             .route(
                 "/agent-runtime/conversations/{conversation_id}/mcp",
                 post(mcp_post).delete(mcp_delete),
+            )
+            // What Lemma answers a bridge that is holding a parked tool
+            // response open: 204 while the person is still deciding, then the
+            // decision. Two 204s first, so the test proves the bridge actually
+            // waits rather than happening to ask once after the answer landed.
+            .route(
+                "/agent-runtime/conversations/{conversation_id}/interactions/{tool_call_id}",
+                axum::routing::get(interaction_poll),
             )
             .with_state(state);
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -244,6 +286,7 @@ impl LemmaMcpEndpoint {
             transport,
             accepted,
             scripted,
+            polls,
         }
     }
 
@@ -389,6 +432,15 @@ async fn mcp_post(
                     "required": ["text"],
                 },
                 "_meta": {"lemma_tool_name": "echo"},
+            }, {
+                // The parking tool has to be *offered*, not merely answered: an
+                // agent cannot call a tool it was never shown, which is exactly
+                // how the first real-provider run of this failed.
+                "name": PARK_TOOL,
+                "description":
+                    "Ask the user a question and wait for their answer.",
+                "inputSchema": {"type": "object", "properties": {}},
+                "_meta": {"lemma_tool_name": "ask_user"},
             }]},
         }),
         "tools/call" => {
@@ -400,7 +452,20 @@ async fn mcp_post(
                 .pointer("/params/arguments/text")
                 .and_then(Value::as_str)
                 .unwrap_or_default();
-            if name == ECHO_TOOL {
+            if name == PARK_TOOL {
+                json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "result": {
+                        "content": [{"type": "text", "text": "{\"parked\":true}"}],
+                        "structuredContent": {
+                            "success": true,
+                            "parked_tool_call_id": PARK_CALL_ID,
+                        },
+                        "isError": false,
+                    },
+                })
+            } else if name == ECHO_TOOL {
                 json!({
                     "jsonrpc": "2.0",
                     "id": id,

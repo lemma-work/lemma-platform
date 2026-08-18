@@ -614,3 +614,85 @@ async fn a_refreshed_credential_reaches_the_bridge_without_restarting_the_run() 
 
     host.shutdown().await;
 }
+
+/// Parking, driven through the real bridge subprocess.
+///
+/// `ask_user` and `request_approval` on an Agent Host run cannot end the
+/// agent's turn from inside a tool call, so they answer "waiting for the
+/// person" and the bridge does the waiting. This drives that: the stand-in
+/// answers parked, holds the decision back for two polls, and the agent must
+/// see one ordinary tool result carrying the person's actual answer.
+///
+/// Deliberately at this level rather than over the helper functions alone.
+/// Those were unit-tested first, and deleting the call that wires them into the
+/// bridge loop failed nothing -- the agent would have received the raw parked
+/// placeholder and had no idea a person was ever asked.
+#[tokio::test]
+async fn the_bridge_waits_for_a_person_and_answers_with_their_decision() {
+    let endpoint = LemmaMcpEndpoint::start(McpTransport::StatelessJson).await;
+    let directory = TempDir::new().unwrap();
+    let paths = HostPaths::under(directory.path());
+    paths.ensure().unwrap();
+    let target_id = Uuid::new_v4();
+    let run_id = Uuid::new_v4();
+    journal_run(&paths, target_id, run_id, endpoint.run_configuration());
+
+    let mut bridge = BridgeProcess::spawn(directory.path(), target_id, run_id);
+    bridge
+        .request(
+            "initialize",
+            json!({
+                "protocolVersion": "2025-06-18",
+                "capabilities": {},
+                "clientInfo": {"name": "bridge-e2e", "version": "1.0.0"},
+            }),
+        )
+        .await;
+    bridge.notify("notifications/initialized").await;
+    let called = bridge
+        .request(
+            "tools/call",
+            json!({"name": support::PARK_TOOL, "arguments": {}}),
+        )
+        .await;
+    let output = bridge.finish().await;
+
+    assert!(
+        output.status.success(),
+        "bridge exited with {:?}: {}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
+    // The agent sees the decision, not the placeholder.
+    assert_eq!(
+        called["result"]["structuredContent"]["answers"]["Pick one"], "Blue",
+        "the person's answer never reached the agent: {called}"
+    );
+    assert!(
+        called["result"]["structuredContent"]
+            .get("parked_tool_call_id")
+            .is_none(),
+        "the parked placeholder was left in the result the agent reads"
+    );
+    // The text beside it has to agree, or a client reading either one sees a
+    // decision and a contradiction at the same time.
+    let text = called["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap_or_default();
+    assert!(
+        text.contains("Blue"),
+        "text content still says parked: {text}"
+    );
+    // And it genuinely waited rather than asking once and getting lucky.
+    assert!(
+        endpoint.interaction_polls() > 2,
+        "the bridge did not keep asking: {} poll(s)",
+        endpoint.interaction_polls()
+    );
+    // The parked call is answered under the durable id Lemma handed back, which
+    // is the id the person's approval card resolves through.
+    assert_eq!(
+        called["result"]["structuredContent"]["decided_for"],
+        support::PARK_CALL_ID
+    );
+}

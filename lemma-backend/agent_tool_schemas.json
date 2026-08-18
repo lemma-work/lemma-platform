@@ -116,6 +116,18 @@
           "default": false,
           "description": "True when a remote harness runtime could not pause and the model must ask the question conversationally instead.",
           "type": "boolean"
+        },
+        "parked_tool_call_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Set when the answer is not ready yet and the caller must wait for it. The Agent Host MCP bridge holds the tool response open and polls this id until the person decides, so the model sits inside its turn exactly as it does for its own native approvals."
         }
       },
       "title": "AskUserResponse",
@@ -2849,6 +2861,18 @@
           "default": false,
           "description": "True when a remote harness runtime could not pause and the model must ask for confirmation conversationally instead.",
           "type": "boolean"
+        },
+        "parked_tool_call_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Set when the decision is not in yet and the caller must wait for it. The Agent Host MCP bridge holds the tool response open and polls this id until the person decides, so the model sits inside its turn exactly as it does for its own native approvals."
         }
       },
       "title": "RequestApprovalResponse",
@@ -3221,10 +3245,6 @@
           ],
           "default": null,
           "description": "Whatever you passed in note_to_self."
-        },
-        "interaction_fallback": {
-          "default": false,
-          "type": "boolean"
         }
       },
       "title": "SnoozeResponse",

@@ -605,16 +605,29 @@ async def test_request_approval_auto_execute_failure_reports_error(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_interaction_tools_guide_instead_of_pausing_on_remote_harness():
-    """On remote/MCP runs (no pause signal) the tools never raise or block; they
-    return guidance so the model falls back to a conversational ask."""
+async def test_interaction_tools_park_instead_of_refusing_on_a_remote_harness():
+    """A remote harness waits for the person; it does not fall back to prose.
+
+    These tools never raise here -- raising is caught only by the in-process run
+    loop, and a tool served over MCP cannot end its caller's turn from inside a
+    tool call. So they return a parked id instead, and the host's MCP bridge
+    holds the response open until the decision lands, exactly as it already does
+    for the harness's own native ACP permission requests.
+
+    They used to return guidance telling the model to ask in prose. That lost
+    the interaction card: the choices, the recommended option and the native
+    buttons on Slack/Teams/Telegram all collapsed into a paragraph.
+    """
     ask = await ask_user(
         _ask_ctx(supports_pause_signal=False),  # type: ignore[arg-type]
         _one_question(),
     )
-    assert ask.success is False
-    assert ask.interaction_fallback is True
-    assert "continue this conversation" in (ask.message or "")
+    assert ask.success is True
+    assert ask.interaction_fallback is False
+    assert ask.parked_tool_call_id, ask
+    # The id the bridge polls has to be the durable tool call id the card
+    # resolves through, or the answer would be waited for in the wrong place.
+    assert ask.parked_tool_call_id == "question-call"
 
     approval = await request_approval(
         _approval_ctx("approval-remote", supports_pause_signal=False),  # type: ignore[arg-type]
@@ -622,9 +635,9 @@ async def test_interaction_tools_guide_instead_of_pausing_on_remote_harness():
         args={"cmd": "ls"},
         title="List files?",
     )
-    assert approval.success is False
-    assert approval.interaction_fallback is True
-    assert "can't run a tool with the user's approval" in (approval.message or "")
+    assert approval.success is True
+    assert approval.interaction_fallback is False
+    assert approval.parked_tool_call_id == "approval-remote"
 
 
 @pytest.mark.asyncio

@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from uuid import UUID
 
 from app.modules.agent.domain.agent_host import AgentHostEventType, AgentHostRunState
+from app.modules.agent.domain.pausing_tools import PAUSING_TOOL_NAMES
 from app.modules.agent.domain.agent_host_permissions import (
     permission_approval_events,
     permission_approval_tool_call_id,
@@ -238,6 +239,13 @@ class AgentHostEventNormalizer:
         if announced is None:
             return []
         draft, sequence = announced
+        if draft.tool_name in PAUSING_TOOL_NAMES:
+            # Already on the record, under an id that can be answered. Lemma
+            # writes these itself when the MCP call arrives, because the id the
+            # harness reports here is one no approval endpoint, timer or resume
+            # can address. Keeping both would ask the person the same question
+            # twice, once on a card nothing resolves. See ``mcp_pausing_calls``.
+            return self._drain_tokens()
         return [
             *self._drain_tokens(),
             AgentEvent(
@@ -386,6 +394,12 @@ class AgentHostEventNormalizer:
                 "success": False,
                 "error": str(payload.get("error") or status.lower()),
             }
+        if tool_name in PAUSING_TOOL_NAMES:
+            # The other half of the drop above: with no call on the record under
+            # this id, a return under it pairs with nothing. What the model was
+            # actually told — a park's answer, a snooze's "you are asleep" — is
+            # written against the id Lemma owns, by whatever resolved it.
+            return [*opening, *self._drain_tokens()]
         return [
             *opening,
             *self._drain_tokens(),

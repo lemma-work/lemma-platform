@@ -40,6 +40,11 @@ from app.modules.agent.infrastructure.repositories import (
     AgentRuntimeProfileRepository,
     ConversationRepository,
 )
+from app.modules.agent.services.mcp_pausing_calls import (
+    close_pausing_tool_call,
+    is_pausing_tool,
+    record_pausing_tool_call,
+)
 from app.modules.agent.services.workspace_location import (
     ensure_recorded_location,
     pod_cwd_from_workspace_cwd,
@@ -81,6 +86,34 @@ class ConversationMCPService:
                 include_runs=False,
             )
         return conversation is not None and conversation.user_id == token_user_id
+
+    async def parked_tool_return(
+        self,
+        *,
+        conversation_id: UUID,
+        tool_call_id: str,
+    ) -> JsonObject | None:
+        """The answer to a parked interaction, or ``None`` while it is pending.
+
+        The host's MCP bridge polls this after `ask_user` or `request_approval`
+        hands it a parked id, and hands the result back as that tool's return so
+        the model never leaves its turn.
+
+        Nothing new is stored to make this work. Deciding an interaction already
+        writes a synthesized tool RETURN under the same durable id -- that is how
+        the in-process resume replays the answer, and how re-running an approved
+        tool is prevented -- so the pending/decided question is just "has that
+        return been written yet".
+        """
+        async with self.uow_factory() as uow:
+            message = await ConversationRepository(uow).get_tool_return(
+                conversation_id=conversation_id,
+                tool_call_id=tool_call_id,
+            )
+        if message is None:
+            return None
+        result = getattr(message, "tool_result", None)
+        return result if isinstance(result, dict) else {"result": to_json_value(result)}
 
     async def list_tools(
         self,
@@ -146,6 +179,19 @@ class ConversationMCPService:
             agent_run_id=agent_run_id,
         )
         tool_name = normalize_local_mcp_tool_name(name)
+        # A tool that outlives its own return needs an id the record is
+        # addressed by, and MCP supplies none. See ``mcp_pausing_calls``.
+        tool_call_id = (
+            await record_pausing_tool_call(
+                self.uow_factory,
+                conversation_id=conversation_id,
+                agent_run_id=agent_run_id,
+                tool_name=tool_name,
+                arguments=arguments,
+            )
+            if is_pausing_tool(tool_name)
+            else None
+        )
         try:
             result = await self.dispatcher.call_tool(
                 agent=agent,
@@ -154,6 +200,7 @@ class ConversationMCPService:
                 name=tool_name,
                 arguments=arguments,
                 agent_run_id=agent_run_id,
+                tool_call_id=tool_call_id,
                 # Must match list_tools, or we advertise a tool we then reject
                 # as unknown.
                 include_final_answer=True,
@@ -169,8 +216,44 @@ class ConversationMCPService:
                 "agent.conversation_mcp_service.conversation_mcp_tool_r_returning.diagnostic",
                 exc_info=True,
             )
-            return self._mcp_error_result(tool_name, exc)
+            error = self._mcp_error_result(tool_name, exc)
+            await self._close_if_it_did_not_wait(
+                tool_call_id=tool_call_id,
+                conversation_id=conversation_id,
+                agent_run_id=agent_run_id,
+                tool_name=tool_name,
+                result=error.structuredContent,
+            )
+            return error
+        await self._close_if_it_did_not_wait(
+            tool_call_id=tool_call_id,
+            conversation_id=conversation_id,
+            agent_run_id=agent_run_id,
+            tool_name=tool_name,
+            result=result,
+        )
         return self._mcp_result(result)
+
+    async def _close_if_it_did_not_wait(
+        self,
+        *,
+        tool_call_id: str | None,
+        conversation_id: UUID,
+        agent_run_id: UUID | None,
+        tool_name: str,
+        result: object,
+    ) -> None:
+        """Finish a recorded pausing call that answered instead of waiting."""
+        if tool_call_id is None:
+            return
+        await close_pausing_tool_call(
+            self.uow_factory,
+            conversation_id=conversation_id,
+            agent_run_id=agent_run_id,
+            tool_call_id=tool_call_id,
+            tool_name=tool_name,
+            result=result,
+        )
 
     async def _load_agent_context(
         self,
