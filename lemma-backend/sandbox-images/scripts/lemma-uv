@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+# `uv pip install` targets the shared interpreter's own site-packages, which is
+# root-owned and read-only to the agent, so it died with a bare
+#
+#   failed to create directory `/opt/lemma-python/.../humanize-4.16.0.dist-info`:
+#   Permission denied (os error 13)
+#
+# `pip` never hit that, because `PIP_PREFIX` sends it to `/workspace/.python`
+# instead -- writable, on the volume that survives a sandbox being recreated,
+# and already on the shared interpreter's `sys.path` via
+# `lemma-workspace-paths.pth`. So the two installers on the PATH disagreed about
+# where a package goes, and the faster, more modern one was the broken one.
+#
+# This gives uv the same convention, and only where uv would otherwise have
+# written to the read-only environment. Every other invocation is passed
+# through untouched, which matters: `uv venv`, `uv sync`, `uv run` and an
+# install into an active venv are all documented workflows, and a project that
+# pins its own dependencies must keep getting them, not the shared ones.
+set -euo pipefail
+
+UV_BINARY="${LEMMA_UV_BINARY:-/usr/local/lib/lemma-uv-bin}"
+
+# Only the subcommands that write packages into an environment. `uv pip list`,
+# `show`, `freeze` and `tree` read one and reject `--prefix`.
+writes_packages() {
+  [ "${1:-}" = "pip" ] || return 1
+  case "${2:-}" in
+    install | sync) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# Anything that already names a destination, or implies one, is left alone.
+# `--python` is included because it points uv at a specific interpreter, which
+# is a deliberate choice about where the install lands.
+targets_something_already() {
+  for argument in "$@"; do
+    case "$argument" in
+      --prefix | --prefix=* | --target | --target=* | --system | --python | --python=* | -p)
+        return 0
+        ;;
+    esac
+  done
+  return 1
+}
+
+# uv resolves an environment before this script can: an activated venv wins,
+# and otherwise a `.venv` beside the caller is discovered. Redirecting either
+# would install a project's dependencies somewhere the project cannot see them.
+a_virtualenv_is_in_play() {
+  [ -n "${VIRTUAL_ENV:-}" ] && return 0
+  [ -x "${PWD}/.venv/bin/python" ] && return 0
+  return 1
+}
+
+if [ -n "${PIP_PREFIX:-}" ] \
+  && writes_packages "$@" \
+  && ! targets_something_already "$@" \
+  && ! a_virtualenv_is_in_play; then
+  # After the subcommand, so it reads as `uv pip install --prefix ... <args>`
+  # in any error uv prints.
+  subcommand="$1"
+  action="$2"
+  shift 2
+  exec "$UV_BINARY" "$subcommand" "$action" --prefix "$PIP_PREFIX" "$@"
+fi
+
+exec "$UV_BINARY" "$@"
