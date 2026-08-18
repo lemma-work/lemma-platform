@@ -17,7 +17,7 @@ tests confirm a real client completes the handshake and calls tools.
 
 from __future__ import annotations
 
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import httpx
 import pytest
@@ -111,7 +111,9 @@ async def test_pod_mcp_client_lists_and_calls_tools(
             {"table_name": table},
         )
         assert listed.is_error is False, listed.content
-        titles = [record.get("title") for record in listed.structured_content["records"]]
+        titles = [
+            record.get("title") for record in listed.structured_content["records"]
+        ]
         assert "from-mcp" in titles, listed.structured_content
 
 
@@ -241,3 +243,69 @@ async def test_mcp_endpoint_is_stateless(
         body = list_tools.json()
         names = {tool["name"] for tool in body["result"]["tools"]}
         assert "lemma_pod_get_records" in names, body
+
+
+@pytest.mark.asyncio
+async def test_the_bridge_can_poll_a_parked_interaction_until_it_is_decided(
+    authenticated_client,
+    fixed_test_org,
+    fixed_test_user,
+    backend_server,
+    db_session,
+):
+    """What the host's MCP bridge does while it holds a tool response open.
+
+    `ask_user` and `request_approval` hand a remote harness a parked tool call id
+    instead of prose. This is the other end of that: the bridge polls the id and
+    gets 204 until a person decides, then the answer -- which it returns as the
+    tool's own result, so the model waits inside its turn exactly as it does for
+    a native ACP permission.
+
+    Nothing is stored to make this work. Deciding an interaction already writes a
+    synthesized tool RETURN under the same durable id, so "decided" is simply
+    "that return exists".
+    """
+    pod_id = await _create_pod(authenticated_client, fixed_test_org)
+    created = await authenticated_client.post(
+        f"/pods/{pod_id}/conversations", json={"title": "parked"}
+    )
+    assert created.status_code == status.HTTP_201_CREATED, created.text
+    conversation_id = created.json()["id"]
+
+    base = backend_server["host_base_url"].rstrip("/")
+    tool_call_id = f"parked-{uuid4().hex[:8]}"
+    url = f"{base}/agent-runtime/conversations/{conversation_id}/interactions/{tool_call_id}"
+    headers = {"Authorization": f"Bearer {fixed_test_user['token']}"}
+
+    async with httpx.AsyncClient() as client:
+        pending = await client.get(url, headers=headers)
+        # 204, not 404: "not decided yet" is the normal answer the bridge polls
+        # on, and 404 is what an unknown route says.
+        assert pending.status_code == status.HTTP_204_NO_CONTENT, pending.text
+
+        # A token that is not this conversation's must not be able to read it.
+        anonymous = await client.get(url, headers={"Authorization": "Bearer nope"})
+        assert anonymous.status_code == status.HTTP_401_UNAUTHORIZED, anonymous.text
+
+    # The person decides. This is the same write the approvals endpoint makes.
+    from app.modules.agent.domain.value_objects import MessageKind, MessageRole
+    from app.modules.agent.infrastructure.models import MessageModel
+
+    db_session.add(
+        MessageModel(
+            conversation_id=UUID(conversation_id),
+            role=MessageRole.TOOL.value,
+            kind=MessageKind.TOOL_RETURN.value,
+            tool_call_id=tool_call_id,
+            tool_name="ask_user",
+            tool_result={"success": True, "answers": {"Pick one": "Blue"}},
+            sequence=1,
+        )
+    )
+    await db_session.commit()
+
+    async with httpx.AsyncClient() as client:
+        decided = await client.get(url, headers=headers)
+
+    assert decided.status_code == status.HTTP_200_OK, decided.text
+    assert decided.json()["answers"] == {"Pick one": "Blue"}

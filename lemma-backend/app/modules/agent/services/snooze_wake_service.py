@@ -15,6 +15,7 @@ from app.core.authorization.current import reset_current_context, set_current_co
 from app.core.authorization.factory import create_authorization_data_service
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.log.log import get_logger
+from app.modules.agent.domain.pausing_tools import SNOOZE_TOOL_NAME
 from app.modules.agent.domain.wait import (
     AgentConversationWaitEntity,
     AgentWaitWakeReason,
@@ -29,8 +30,6 @@ from app.modules.agent.tools.snooze.models import (
 )
 
 logger = get_logger(__name__)
-
-SNOOZE_TOOL_NAME = "snooze"
 
 
 class SnoozeWakeService:

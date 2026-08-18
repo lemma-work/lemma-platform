@@ -64,6 +64,8 @@ from app.modules.agent.infrastructure.harnesses.agent_host_run_config import (
     _agent_host_run_config,
     _resolve_pod_cwd,
 )
+from app.modules.agent.domain.pausing_tools import SNOOZE_TOOL_NAME
+from app.modules.agent.services.run_suspension import run_suspended_on
 from app.modules.agent.infrastructure.harnesses.agent_host_run_window import (
     CREDENTIAL_DEADLINE_MESSAGE,
     DEFAULT_AGENT_HOST_EVENT_TIMEOUT_SECONDS,
@@ -95,7 +97,6 @@ DEFAULT_STREAM_BLOCK_MS = 1_000
 # it only matters for acceptance, expiry, and recovery.
 DEFAULT_LEASE_CHECK_SECONDS = 5.0
 DEFAULT_TERMINAL_EVENT_GRACE_SECONDS = 5.0
-
 
 
 class RemoteHarness:
@@ -140,7 +141,9 @@ class RemoteHarness:
         try:
             run_config = _agent_host_run_config(options)
         except (KeyError, TypeError, ValueError) as exc:
-            yield error_event(agent_run_id, f"Invalid Agent Host runtime profile: {exc}")
+            yield error_event(
+                agent_run_id, f"Invalid Agent Host runtime profile: {exc}"
+            )
             return
 
         try:
@@ -264,9 +267,7 @@ class RemoteHarness:
             lease_check_due_at = now + self.lease_check_seconds
 
             wall_clock = self._now()
-            if credential_refresh_due(
-                expires_at=credential_expires_at, now=wall_clock
-            ):
+            if credential_refresh_due(expires_at=credential_expires_at, now=wall_clock):
                 refreshed = await refresh_credential(
                     uow_factory=self.uow_factory,
                     agent_run_id=agent_run_id,
@@ -277,9 +278,7 @@ class RemoteHarness:
                 )
                 if refreshed is not None:
                     credential_expires_at = refreshed
-            if credential_exhausted(
-                expires_at=credential_expires_at, now=wall_clock
-            ):
+            if credential_exhausted(expires_at=credential_expires_at, now=wall_clock):
                 # Every refresh failed. Ending the run here is what keeps this
                 # from becoming a run whose tools silently 401 for the rest of
                 # its life without anything being reported to anyone.
@@ -308,8 +307,8 @@ class RemoteHarness:
                 # this is the only chance to pick up a final answer the tool
                 # recorded before the stream went quiet.
                 await adopt_recorded_final_answer(
-                self.uow_factory, normalizer, agent_run_id=agent_run_id
-            )
+                    self.uow_factory, normalizer, agent_run_id=agent_run_id
+                )
                 for event in normalizer.finish_without_terminal(
                     state=outcome.terminal_state
                 ):
@@ -408,7 +407,59 @@ class RemoteHarness:
                 self.uow_factory, normalizer, agent_run_id=agent_run_id
             )
         events.extend(normalizer.normalize(envelope, payload_override=payload_override))
+        if entry.type == AgentHostEventType.TERMINAL.value:
+            events = await self._as_suspension(
+                events, agent_run_id=agent_run_id, conversation=conversation
+            )
         return events
+
+    async def _as_suspension(
+        self,
+        events: list[AgentEvent],
+        *,
+        agent_run_id: UUID,
+        conversation: Conversation,
+    ) -> list[AgentEvent]:
+        """Re-read a turn that ended as one that was suspended, if it was.
+
+        ``snooze`` on a remote harness cannot end the turn from inside its own
+        tool call, so Lemma asks the host to stop it. The host has no idea why
+        and reports what it saw: ``CANCELLED`` when the stop arrived first,
+        ``SUCCEEDED`` when the agent finished talking before it did. Neither is
+        what happened. The durable wait row is, and it says the agent is asleep
+        — which is ``WAITING``, exactly as the in-process harness reports the
+        same tool.
+
+        Failures are left alone. A run that hit its context ceiling or lost its
+        host really did fail, and a wait row does not make that untrue; the
+        timer still wakes the conversation either way.
+        """
+        if not any(
+            event.type in {AgentEventType.COMPLETED, AgentEventType.STOPPED}
+            for event in events
+        ):
+            return events
+        async with self.uow_factory() as uow:
+            wait = await run_suspended_on(uow, agent_run_id=agent_run_id)
+        if wait is None:
+            return events
+        return [
+            AgentEvent(
+                type=AgentEventType.WAITING,
+                # The shape the in-process pause yields, so that everything
+                # downstream of a paused turn reads one event, not two.
+                data={
+                    "tool_call_id": wait.tool_call_id,
+                    "kind": SNOOZE_TOOL_NAME,
+                    "conversation_id": str(conversation.id),
+                },
+                agent_run_id=agent_run_id,
+                sequence=event.sequence,
+            )
+            if event.type in {AgentEventType.COMPLETED, AgentEventType.STOPPED}
+            else event
+            for event in events
+        ]
 
     async def _cancel_if_requested(
         self,
