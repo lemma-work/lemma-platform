@@ -1081,6 +1081,65 @@ jobs:
             echo "[Download the DMG](${url})"
           } >> "${GITHUB_STEP_SUMMARY}"
 
+      # The nightly channel is a rolling window, not an archive. Every shared
+      # build used to leave its prerelease behind for good: by 0.7.0 twelve had
+      # accumulated, so most of the releases page was throwaway builds and the
+      # newest real release had been pushed fifth from the top. Nothing reads a
+      # nightly tag except the DMG built in the same run, and its own notes say
+      # there is no upgrade path, so keeping them all bought nothing.
+      #
+      # Pruning here rather than beside the release's creation is deliberate.
+      # By this point the new nightly is complete -- runtime assets and a
+      # notarized, stapled DMG -- so the window never closes over older builds
+      # in favour of one that turned out to be unusable.
+      - name: Prune superseded nightly prereleases
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          KEEP: "3"
+        run: |
+          # No -e: this is housekeeping running after the DMG is already
+          # published. A GitHub API hiccup here must not report the nightly as
+          # failed, so failures warn and the step still succeeds.
+          set -uo pipefail
+          # `if !` rather than a bare assignment: with pipefail a failed
+          # listing yields an empty string, which is indistinguishable from
+          # "there is nothing to prune" -- and reporting a broken API as a tidy
+          # release page is how this quietly stops working.
+          if ! stale="$(
+            gh api "repos/${GITHUB_REPOSITORY}/releases" --paginate \
+              --jq '.[]
+                    | select(.prerelease and (.tag_name | startswith("desktop-nightly-")))
+                    | [.created_at, .tag_name]
+                    | @tsv' \
+              | sort -r \
+              | tail -n "+$((KEEP + 1))" \
+              | cut -f2
+          )"; then
+            echo "::warning title=Could not list nightly prereleases::Nothing was pruned."
+            exit 0
+          fi
+          if [[ -z "${stale}" ]]; then
+            echo "Nothing to prune: ${KEEP} or fewer nightly prereleases exist."
+            exit 0
+          fi
+          while read -r tag; do
+            [[ -n "${tag}" ]] || continue
+            # Re-checked rather than trusted, because the next line deletes a
+            # release *and its tag*. A version tag reaching this loop would
+            # destroy a real release, so a surprise here stops the step instead
+            # of proceeding on the assumption that the filter above held.
+            if [[ "${tag}" != desktop-nightly-* ]]; then
+              echo "::error title=Refusing to delete a non-nightly release::${tag}"
+              exit 1
+            fi
+            if gh release delete "${tag}" --cleanup-tag --yes; then
+              echo "Pruned ${tag}"
+            else
+              echo "::warning title=Could not prune a nightly prerelease::${tag}"
+            fi
+          done <<< "${stale}"
+
       - name: Remove temporary signing keychain
         if: always() && steps.apple-signing.outcome == 'success'
         run: security delete-keychain "${{ steps.apple-signing.outputs.keychain-path }}"
