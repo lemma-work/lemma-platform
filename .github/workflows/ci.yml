@@ -26,6 +26,7 @@ jobs:
       frontend: ${{ steps.filter.outputs.frontend }}
       codegen: ${{ steps.filter.outputs.codegen }}
       desktop: ${{ steps.filter.outputs.desktop }}
+      desktop_packaging: ${{ steps.filter.outputs.desktop_packaging }}
       repo_tooling: ${{ steps.filter.outputs.repo_tooling }}
     steps:
       - uses: actions/checkout@v7
@@ -84,6 +85,24 @@ jobs:
               - '.github/workflows/ci.yml'
               - '.github/workflows/release-desktop.yml'
               - '.github/workflows/release-local-images.yml'
+            # What can change how the app is *packaged*, as opposed to what it
+            # does. Bundling is the expensive half of the Windows check -- 255s
+            # of a 707s job, for an installer that is then thrown away -- and
+            # nothing outside this list can alter its result. Ordinary Rust
+            # changes still get compiled, linted and tested on Windows; they
+            # just stop paying to watch NSIS produce the same installer again.
+            desktop_packaging:
+              - 'desktop/tauri*.conf.json'
+              - 'desktop/Cargo.toml'
+              - 'desktop/Cargo.lock'
+              - 'desktop/icons/**'
+              - 'desktop/capabilities/**'
+              - 'desktop/permissions/**'
+              - 'desktop/build.rs'
+              - 'desktop/scripts/build-sidecar.ps1'
+              - 'desktop/scripts/tauri-cli-version.txt'
+              - 'desktop/runtime/lemma-local.json'
+              - '.github/workflows/ci.yml'
             repo_tooling:
               - 'Makefile'
               - 'tests/**'
@@ -811,13 +830,27 @@ jobs:
       # Unsigned: the Authenticode path needs release secrets. This proves the
       # bundler runs and the payload stays within budget, not that the artifact
       # is installable.
+      # Skipped on a pull request that cannot have changed the result. The
+      # bundle is the single most expensive step in CI's Windows job and its
+      # output is discarded, so it runs where a regression would actually be
+      # caught by it: every push to main, and any branch that touches packaging.
+      # A compile or test regression -- the thing this job exists to catch, and
+      # the thing that has actually caught real bugs -- is still gated on every
+      # pull request by the clippy and test steps above.
       - name: Build online NSIS installer
+        if: >-
+          github.event_name == 'push'
+          || needs.changes.outputs.desktop_packaging == 'true'
         working-directory: desktop
         run: |
           npx -y $env:TAURI_CLI build --config tauri.online.conf.json --bundles nsis
           if ($LASTEXITCODE -ne 0) { throw "Online NSIS build failed" }
 
+      # Measures what the step above produced, so it goes wherever that goes.
       - name: Enforce small online application payload
+        if: >-
+          github.event_name == 'push'
+          || needs.changes.outputs.desktop_packaging == 'true'
         run: |
           $ErrorActionPreference = "Stop"
           $payload = @(
