@@ -112,7 +112,12 @@ def _cleanup_e2e_workspace_containers(*, sandboxes_only: bool = False) -> None:
             line.strip() for line in ps.stdout.splitlines() if line.strip()
         ]
     if container_ids:
-        subprocess.run(["docker", "rm", "-f", *sorted(set(container_ids))], check=False)
+        # -v also removes each container's anonymous data volume (postgres,
+        # supertokens, and kreuzberg all declare VOLUME in their image) — every
+        # sweep that ran without it leaked one volume per container, forever.
+        subprocess.run(
+            ["docker", "rm", "-f", "-v", *sorted(set(container_ids))], check=False
+        )
 
     if sandboxes_only:
         return
