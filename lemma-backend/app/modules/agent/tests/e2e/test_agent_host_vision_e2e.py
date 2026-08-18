@@ -42,6 +42,10 @@ from app.modules.agent.services.conversation_mcp_service import ConversationMCPS
 from app.modules.agent.services.runtime_profile_service import (
     AgentRuntimeProfileService,
 )
+from app.modules.agent.services.workspace_location import (
+    resolve_pod_cwd,
+    resolve_workspace_location,
+)
 from app.modules.agent.tests.e2e.agent_host_helpers import (
     paired_machine,
     stale_after,
@@ -225,3 +229,38 @@ async def test_the_tool_list_a_remote_harness_receives_actually_contains_view_im
     names = {tool.name for tool in tools}
 
     assert any("view_image" in name for name in names), sorted(names)
+
+
+@pytest.mark.asyncio
+async def test_the_bridge_hands_tools_the_directory_the_prompt_names(
+    db_session, scenario
+):
+    """The agent's prompt and the agent's tools disagreed about where it is.
+
+    `resolve_workspace_location` puts a conversation at
+    `/workspace/c/<date>/<slug>`, stamps it into the conversation's metadata,
+    and the prompt quotes it. The tools go wherever `ctx.get_workspace_cwd()`
+    says -- and this bridge never set `workspace_cwd`, so it fell back to
+    `/workspace/conversations/<uuid>`. For the in-process harness the prompt was
+    true; for every remote harness it named a directory the tools never entered,
+    which is why `pwd` disagreed with the Working Directory section.
+
+    `pod_cwd` had the same hole, scattering pod writes under
+    `/me/conversations/<uuid>` instead of the `/me/c/<date>/<slug>` the resolver
+    mirrors the workspace to.
+    """
+    await scenario.create_org_with_pod(name_prefix="Cwd")
+    _machine, profile = await _profile_for_a_host_that(
+        db_session, scenario, reports_images=True
+    )
+    _mode, run = await _vision_mode_for(db_session, scenario, profile)
+
+    _agent, conversation, ctx = await ConversationMCPService()._load_agent_context(
+        conversation_id=run.conversation_id, agent_run_id=run.id
+    )
+
+    expected = resolve_workspace_location(conversation)
+    assert ctx.get_workspace_cwd() == expected.cwd
+    assert ctx.get_pod_cwd() == resolve_pod_cwd(conversation)
+    # Named explicitly: this is the shape the tools used to get.
+    assert not ctx.get_workspace_cwd().startswith("/workspace/conversations/")
