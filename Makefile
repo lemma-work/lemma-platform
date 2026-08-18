@@ -1222,7 +1222,7 @@ scenarios-images:
 	@docker build --platform $(SCENARIOS_PLATFORM) \
 		-f $(BACKEND_DIR)/sandbox-images/Dockerfile.workspace \
 		-t lemma-workspace:scenarios .
-	@echo "✓ sandbox images ready; run `make scenarios-sandbox`"
+	@echo "✓ sandbox images ready; run 'make scenarios-sandbox'"
 
 # The sandbox lane: functions executing, workflows running their graphs, and
 # bundle imports that build what they import. Needs `make scenarios-images`

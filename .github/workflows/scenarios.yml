@@ -186,6 +186,21 @@ jobs:
       - name: Run the sandbox lane
         working-directory: tests/scenarios
         run: uv run pytest -m sandbox -q --junitxml=sandbox-results.xml
+      # A sandbox failure is a container failure, and the container is gone by
+      # the time anyone reads this. `schema_extraction` failing with a bare
+      # ConnectError says only that nothing answered on the published port —
+      # whether the runtime crashed, or had not finished starting, is in here
+      # and nowhere else.
+      - name: What the sandboxes did
+        if: failure()
+        run: |
+          docker ps -a --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}'
+          for c in $(docker ps -aq --filter ancestor=lemma-function:scenarios \
+                                   --filter ancestor=lemma-workspace:scenarios); do
+            echo "=== $(docker inspect -f '{{.Name}} {{.State.Status}} exit={{.State.ExitCode}}' "$c")"
+            docker logs --tail 80 "$c" 2>&1 || true
+          done
+
       # The stack writes the server and worker to one file. Without it a
       # CI-only failure is undiagnosable from CI: the scenario says what it
       # waited for, and the reason it never happened is in the worker's log.
