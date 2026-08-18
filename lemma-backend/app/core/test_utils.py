@@ -1,3 +1,4 @@
+import hashlib
 import os
 import shutil
 import socket
@@ -500,6 +501,28 @@ def _wait_for_kreuzberg_ready(container: LemmaDockerContainer) -> None:
     )
 
 
+def _session_scoped_container_name(base_name: str, basetemp_parent) -> str:
+    """Make a shared-container name unique to THIS pytest invocation.
+
+    Under xdist, ``tmp_path_factory.getbasetemp()`` for a worker is a
+    ``popen-gwN`` subdirectory of a per-invocation, monotonically-numbered
+    ``pytest-<N>`` root -- so ``.parent`` (what callers pass in as
+    ``basetemp_parent``) is stable across all workers of ONE invocation but
+    different for every separate invocation (confirmed empirically: two
+    `pytest` runs in a row get `pytest-355` and `pytest-356`; xdist workers
+    of one run share the same parent). A bare fixed name here would instead
+    be the same across completely unrelated invocations -- e.g. two
+    developers running the suite at once, or two worktrees sharing a Docker
+    daemon -- and the second invocation's ``docker rm -f <name>`` would rip
+    out the first invocation's still-live container out from under it,
+    independent of (and invisible to) the first invocation's own refcount.
+    Observed exactly this: a concurrent worktree's run corrupted another's
+    containers mid-test with connection-refused errors.
+    """
+    digest = hashlib.sha256(str(basetemp_parent).encode()).hexdigest()[:10]
+    return f"{base_name}-{digest}"
+
+
 def start_shared_kreuzberg(name: str) -> str:
     """Start ONE named Kreuzberg container and return its URL.
 
@@ -554,6 +577,7 @@ def shared_kreuzberg(basetemp_parent, worker_id: str) -> Generator[str, None, No
     from filelock import FileLock
 
     root = Path(basetemp_parent)
+    name = _session_scoped_container_name(SHARED_KREUZBERG_NAME, basetemp_parent)
     lock = FileLock(str(root / "kreuzberg.lock"))
     url_file = root / "kreuzberg_url.txt"
     refs_file = root / "kreuzberg_refs.txt"
@@ -562,7 +586,7 @@ def shared_kreuzberg(basetemp_parent, worker_id: str) -> Generator[str, None, No
         if url_file.exists():
             url = url_file.read_text().strip()
         else:
-            url = start_shared_kreuzberg(SHARED_KREUZBERG_NAME)
+            url = start_shared_kreuzberg(name)
             url_file.write_text(url)
         refs = int(refs_file.read_text()) if refs_file.exists() else 0
         refs_file.write_text(str(refs + 1))
@@ -574,7 +598,7 @@ def shared_kreuzberg(basetemp_parent, worker_id: str) -> Generator[str, None, No
             refs = (int(refs_file.read_text()) if refs_file.exists() else 1) - 1
             refs_file.write_text(str(refs))
             if refs <= 0:
-                remove_named_container(SHARED_KREUZBERG_NAME)
+                remove_named_container(name)
                 url_file.unlink(missing_ok=True)
                 refs_file.unlink(missing_ok=True)
 
@@ -632,17 +656,18 @@ def shared_postgres(
     from filelock import FileLock
 
     root = Path(basetemp_parent)
+    name = _session_scoped_container_name(SHARED_POSTGRES_NAME, basetemp_parent)
     lock = FileLock(str(root / "postgres.lock"))
     refs_file = root / "postgres_refs.txt"
 
     with lock:
         refs = int(refs_file.read_text()) if refs_file.exists() else 0
         if refs == 0:
-            start_shared_postgres(SHARED_POSTGRES_NAME)
+            start_shared_postgres(name)
         refs_file.write_text(str(refs + 1))
 
     container = LemmaPostgresContainer()
-    container.container_id = SHARED_POSTGRES_NAME
+    container.container_id = name
 
     try:
         yield container
@@ -651,7 +676,7 @@ def shared_postgres(
             refs = (int(refs_file.read_text()) if refs_file.exists() else 1) - 1
             refs_file.write_text(str(refs))
             if refs <= 0:
-                remove_named_container(SHARED_POSTGRES_NAME)
+                remove_named_container(name)
                 refs_file.unlink(missing_ok=True)
 
 
@@ -704,17 +729,18 @@ def shared_redis(
     from filelock import FileLock
 
     root = Path(basetemp_parent)
+    name = _session_scoped_container_name(SHARED_REDIS_NAME, basetemp_parent)
     lock = FileLock(str(root / "redis.lock"))
     refs_file = root / "redis_refs.txt"
 
     with lock:
         refs = int(refs_file.read_text()) if refs_file.exists() else 0
         if refs == 0:
-            start_shared_redis(SHARED_REDIS_NAME)
+            start_shared_redis(name)
         refs_file.write_text(str(refs + 1))
 
     container = LemmaDockerContainer(REDIS_IMAGE, 6379)
-    container.container_id = SHARED_REDIS_NAME
+    container.container_id = name
 
     try:
         yield container
@@ -723,7 +749,7 @@ def shared_redis(
             refs = (int(refs_file.read_text()) if refs_file.exists() else 1) - 1
             refs_file.write_text(str(refs))
             if refs <= 0:
-                remove_named_container(SHARED_REDIS_NAME)
+                remove_named_container(name)
                 refs_file.unlink(missing_ok=True)
 
 
