@@ -8,32 +8,15 @@ job, and that is what the budget tests pin.
 from __future__ import annotations
 
 import time
-from contextlib import contextmanager
 from uuid import uuid4
 
 import pytest
 from fastapi import status
-from sqlalchemy import event
 
-from app.core.infrastructure.db.session import get_engine
+from app.modules.test_support.query_counting import counted_queries
 from app.modules.test_support.e2e_authz import signup_user
 
 pytestmark = [pytest.mark.e2e]
-
-
-@contextmanager
-def counted_queries():
-    statements: list[str] = []
-    engine = get_engine().sync_engine
-
-    def before(conn, cursor, statement, parameters, context, executemany):
-        statements.append(statement)
-
-    event.listen(engine, "before_cursor_execute", before)
-    try:
-        yield statements
-    finally:
-        event.remove(engine, "before_cursor_execute", before)
 
 
 async def _create_org(client, name: str) -> str:
