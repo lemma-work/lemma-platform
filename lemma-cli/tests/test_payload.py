@@ -55,7 +55,7 @@ def test_accepted_field_names_matches_every_sdk_model_from_dict():
     for cls in _sdk_model_classes():
         try:
             source = inspect.getsource(cls.from_dict)
-        except (OSError, TypeError):  # pragma: no cover - source always present
+        except OSError, TypeError:  # pragma: no cover - source always present
             continue
         wire = set(_POP_RE.findall(source))
         if not wire:
@@ -146,7 +146,9 @@ def test_build_request_still_reports_missing_required_fields():
 
 
 def test_build_request_is_quiet_for_a_clean_payload(capsys):
-    build_request(CreateFunctionRequest, {"name": "f", "code": "x"}, context="function f")
+    build_request(
+        CreateFunctionRequest, {"name": "f", "code": "x"}, context="function f"
+    )
     assert capsys.readouterr().out == ""
 
 
@@ -224,3 +226,52 @@ def test_json_output_stays_pipeable_when_a_warning_fires(tmp_path, monkeypatch):
     assert "descriptoin" in result.output
     # ...and stdout is still nothing but the payload.
     assert _json.loads(result.stdout) == {"id": "fn-1", "name": "adder"}
+
+
+def test_a_bad_enum_value_names_the_command_that_lists_the_valid_ones():
+    """`'text' is not a valid DatastoreDataType` on its own is a dead end.
+
+    It names the type and nothing else: not the members, not that they are
+    upper-case, not where to look them up. Generated enums raise a plain
+    `ValueError`, which sailed past `build_request`'s `KeyError`/`TypeError`
+    branches -- the only places the schema hint was appended -- so the one
+    command that prints the full list went unmentioned.
+    """
+    from lemma_sdk.openapi_client.models.create_table_request import (
+        CreateTableRequest,
+    )
+
+    from lemma_cli.cli_core.payload import build_request
+
+    with pytest.raises(ValueError) as caught:
+        build_request(
+            CreateTableRequest,
+            {
+                "name": "tool_test",
+                "primary_key_column": "id",
+                "columns": [{"name": "id", "type": "text"}],
+            },
+            context="table",
+        )
+
+    message = str(caught.value)
+    assert "DatastoreDataType" in message
+    assert "lemma tables schema" in message
+
+
+def test_the_schema_hint_uses_the_plural_form_every_doc_teaches():
+    """Both spellings are registered and both run, so the singular was not
+    broken -- but it contradicts every skill and doc, which is what made it read
+    as a typo for a command that does not exist."""
+    from lemma_cli.cli_core.payload import _schema_hint
+
+    for singular, plural in (
+        ("table", "tables"),
+        ("agent", "agents"),
+        ("function", "functions"),
+        ("workflow", "workflows"),
+        ("schedule", "schedules"),
+        ("surface", "surfaces"),
+    ):
+        hint = _schema_hint(singular)
+        assert f"lemma {plural} schema" in hint, hint

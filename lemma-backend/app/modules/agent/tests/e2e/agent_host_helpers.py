@@ -70,6 +70,8 @@ async def paired_machine(
     display_name: str = "e2e machine",
     harness_key: str = "codex",
     load_session: bool = True,
+    capabilities: dict | None = None,
+    config_options: list | None = None,
 ) -> dict:
     """A paired machine with one published harness, and its credential.
 
@@ -88,9 +90,13 @@ async def paired_machine(
                     "display_name": harness_key.title(),
                     "adapter_version": "1.0.0",
                     "health": "READY",
-                    "capabilities": {"load_session": load_session},
+                    "capabilities": (
+                        {"load_session": load_session}
+                        if capabilities is None
+                        else capabilities
+                    ),
                     "config_revision": "rev-1",
-                    "config_options": [],
+                    "config_options": config_options or [],
                     "stale_after": stale_after(),
                 }
             ]

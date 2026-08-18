@@ -79,7 +79,9 @@ async def read_file_text(
     }
 
 
-async def search_files(services: PodServices, request: SearchFilesRequest) -> JsonObject:
+async def search_files(
+    services: PodServices, request: SearchFilesRequest
+) -> JsonObject:
     """Search indexed pod files, saying when an empty result is not an answer."""
     results = await services.file.search_files(
         services.ctx.pod_id,
@@ -102,12 +104,29 @@ async def search_files(services: PodServices, request: SearchFilesRequest) -> Js
     # Said only when the list is empty: a search that found something has
     # already answered the question, and a count on every call would be a query
     # per search for a caveat nobody needs.
-    awaiting = await services.file.count_files_awaiting_processing(services.ctx.pod_id)
+    awaiting, failed = await services.file.count_files_missing_from_the_index(
+        services.ctx.pod_id
+    )
+    notes: list[str] = []
     if awaiting:
         payload["files_awaiting_processing"] = awaiting
-        payload["note"] = (
-            f"No matches, but {awaiting} file(s) in this pod are still being "
-            "processed and are not searchable yet. Results may be incomplete; "
-            "retry once processing finishes."
+        notes.append(
+            f"{awaiting} file(s) in this pod are still being processed and are "
+            "not searchable yet; retry once processing finishes."
         )
+    # Counted and worded separately from the queued ones on purpose. Waiting
+    # fixes a queued file and never fixes a failed one, so telling an agent to
+    # "retry once processing finishes" for a pod whose every upload failed sends
+    # it round a loop that cannot end. This is also the case that was silent:
+    # the queued count is zero once everything has failed, so the caveat did not
+    # fire at all and an empty result was indistinguishable from a healthy pod
+    # holding nothing on the subject.
+    if failed:
+        payload["files_failed_processing"] = failed
+        notes.append(
+            f"{failed} file(s) in this pod could not be processed and will "
+            "never match a search. Read one with pod_read_file for the reason."
+        )
+    if notes:
+        payload["note"] = "No matches, but " + " ".join(notes)
     return payload

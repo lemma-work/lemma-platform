@@ -118,11 +118,26 @@ class XbergLocalClient:
         # From the path when there is one. The bytes are already on disk, and
         # handing over a path lets the Rust side stream them instead of making
         # the caller hold a whole document in memory first.
+        #
+        # `mime_type` and `filename` are not decoration on this branch. Given
+        # only a URI, xberg infers the type from the path's extension -- and the
+        # caller streams the source to a temp file that has none, so it raised
+        # "Could not determine MIME type from file path: /var/.../tmpb8d9ays4"
+        # and *every* upload failed. The caller already knows both; they just
+        # have to be carried across.
         if content_path:
-            source = ExtractInput(kind="uri", uri=content_path)
+            source = ExtractInput(
+                kind="uri",
+                uri=content_path,
+                mime_type=mime_type,
+                filename=filename,
+            )
         else:
             source = ExtractInput(
-                kind="bytes", bytes=content or b"", mime_type=mime_type
+                kind="bytes",
+                bytes=content or b"",
+                mime_type=mime_type,
+                filename=filename,
             )
 
         output = await extract(source, ExtractionConfig(**config_kwargs))

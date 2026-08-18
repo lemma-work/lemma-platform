@@ -1371,7 +1371,7 @@
             }
           ],
           "default": null,
-          "description": "Stdin for action=\"input\"; `\"\"` polls output without sending. Include `\\n` for Enter. `\\u0003` is Ctrl-C, `\\u0004` is Ctrl-D."
+          "description": "Stdin for action=\"input\". Omit this field to poll output without sending. Include `\\n` for Enter. `\\u0003` is Ctrl-C, `\\u0004` is Ctrl-D."
         },
         "cols": {
           "default": 120,

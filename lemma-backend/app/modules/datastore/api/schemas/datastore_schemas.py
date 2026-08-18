@@ -244,6 +244,13 @@ class DirectoryTreeNode(BaseModel):
     visibility: str | None = None
     has_more_files: bool = False
     children: List["DirectoryTreeNode"] = Field(default_factory=list)
+    # Additive and optional: folders carry none of these, and an older client
+    # ignores them. Present on files so a recursive listing can tell a readable
+    # document from one that failed to convert, which the flat listing has
+    # always reported and this shape silently dropped.
+    status: str | None = None
+    indexed: bool | None = None
+    has_markdown: bool | None = None
 
 
 class DirectoryTreeResponse(BaseModel):

@@ -81,6 +81,28 @@ def sandbox_failure_types() -> tuple[type[BaseException], ...]:
     return (SandboxError,)
 
 
+def retry_advice(exc: Exception) -> str:
+    """Whether this failure is actually worth another go.
+
+    The sentence used to be unconditional -- appended to everything a bare
+    `except Exception` caught, asserting recoverability that no code had
+    evaluated. A stopped workspace container reaches here as
+    `SandboxUnavailable` only after the provider says so; anything else is a
+    durable fault, and inviting a retry on one sends an agent round a loop with
+    no exit. That is exactly what happened: four identical failures over several
+    minutes, each one advertising itself as recoverable.
+
+    `SandboxUnavailable` is how the platform already spells "transient" --
+    `session_support.sandbox_command_failure` classifies the same way.
+    """
+    if isinstance(exc, SandboxUnavailable):
+        return " Treat this as a recoverable tool failure and retry if the operation is still needed."
+    return (
+        " This is not expected to succeed on retry; report it rather than "
+        "repeating the call."
+    )
+
+
 def sandbox_command_failure(
     *,
     error: str,
@@ -168,7 +190,7 @@ async def sandbox_is_responsive(
             after_sequence=0,
             wait_seconds=max(0.5, budget_seconds - 1),
         )
-    except (SandboxError, httpx.HTTPError, OSError):
+    except SandboxError, httpx.HTTPError, OSError:
         return False
     return any(b"ok" in chunk.data for chunk in snapshot.chunks)
 

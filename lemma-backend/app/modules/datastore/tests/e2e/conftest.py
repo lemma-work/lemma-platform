@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
-from pathlib import Path
 import subprocess
 from typing import Literal
 
@@ -137,9 +136,6 @@ def document_worker(
             "DOCLING_REQUEST_TIMEOUT_SECONDS": "2",
             "DOCUMENT_PROCESSING_DEBOUNCE_SECONDS": "0",
         }
-        if processor == "xberg":
-            fake_dependencies = Path(__file__).parent / "fake_processor_deps"
-            extra_env["PYTHONPATH"] = f"{fake_dependencies}:."
         async with production_worker_process(
             e2e_settings,
             log_prefix=f"lemma_datastore_{processor}_worker",
