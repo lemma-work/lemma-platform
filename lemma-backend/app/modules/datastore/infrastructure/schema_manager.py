@@ -17,6 +17,11 @@ from app.modules.datastore.infrastructure.session import (
     get_datastore_session_maker,
 )
 from app.modules.datastore.infrastructure.query_role import QueryRoleGrants
+from app.modules.datastore.infrastructure.record_indexes import (
+    ensure_record_index,
+    rebuild_record_index,
+    record_index_sql,
+)
 from app.modules.datastore.infrastructure.sql_identifiers import (
     map_datastore_db_error,
     quote_sql_literal,
@@ -35,6 +40,7 @@ class SchemaManager:
         self._engine = engine or get_datastore_engine()
         self.session_factory = session_factory or get_datastore_session_maker()
         self._query_role = QueryRoleGrants(self._engine)
+        self._ensured_record_indexes: set[tuple[str, str]] = set()
 
     async def ensure_query_role(self) -> None:
         return await self._query_role.ensure_role()
@@ -298,6 +304,16 @@ class SchemaManager:
                         text(self._user_isolation_policy_sql(schema_name, table_name))
                     )
 
+                index_sql = record_index_sql(
+                    schema_name,
+                    table_name,
+                    primary_key_column=primary_key_column,
+                    has_created_at="created_at" in added_columns,
+                    enable_rls=enable_rls,
+                )
+                if index_sql:
+                    await conn.execute(text(index_sql))
+
                 known_column_names = {c.name for c in columns}
                 known_column_names.update(added_columns)
                 for col in computed_columns:
@@ -500,12 +516,36 @@ class SchemaManager:
                             f'ALTER TABLE "{schema_name}"."{table_name}" DISABLE ROW LEVEL SECURITY'
                         )
                     )
+                await rebuild_record_index(
+                    conn, schema_name, table_name, enable_rls=enable
+                )
         except DBAPIError as exc:
             raise self._map_db_error(
                 operation=f"toggle RLS on table '{table_name}'",
                 exc=exc,
                 table_name=table_name,
             ) from exc
+
+    async def ensure_record_index(
+        self,
+        schema_name: str,
+        table_name: str,
+        *,
+        primary_key_column: str,
+        has_created_at: bool,
+        enable_rls: bool,
+    ) -> None:
+        """Create the listing index for a table that predates it."""
+        await ensure_record_index(
+            self._engine,
+            schema_name,
+            table_name,
+            primary_key_column=primary_key_column,
+            has_created_at=has_created_at,
+            enable_rls=enable_rls,
+            lock=self._lock_schema_bootstrap,
+            memo=self._ensured_record_indexes,
+        )
 
     async def set_rls_context(
         self,

@@ -56,6 +56,16 @@ class DatastoreSettings(BaseSettings):
         default=5_000_000,
         description="Reject ad-hoc datastore SQL queries whose EXPLAIN estimated row count exceeds this ceiling.",
     )
+    datastore_search_visibility_id_soft_limit: int = Field(
+        default=20_000,
+        description=(
+            "Log a degraded event when a search's visibility filter has to send "
+            "more than this many file ids to the pod database. Deliberately a "
+            "warning threshold and not a cap: truncating the visible list would "
+            "drop results, and truncating the hidden list would leak files the "
+            "caller may not read, so neither side is ever trimmed."
+        ),
+    )
 
     # Document processing
     document_processing_max_concurrency: int = Field(

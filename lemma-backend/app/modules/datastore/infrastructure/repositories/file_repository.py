@@ -4,7 +4,8 @@ from datetime import datetime, timezone
 from typing import Optional, Sequence, Tuple
 from uuid import UUID
 
-from sqlalchemy import delete, select, text, update
+from sqlalchemy import and_, delete, func, or_, select, text, update
+from sqlalchemy.orm import aliased
 
 from app.core.authorization.context import Context, ResourceType, ResourceVisibility
 from app.core.authorization.grants import delete_resource_sharing_grants
@@ -49,6 +50,55 @@ def _file_actions_expr(ctx: Context):
         owner_user_id_col=DatastoreFile.owner_user_id,
         visibility_col=DatastoreFile.visibility,
         resource_path_col=DatastoreFile.path,
+    )
+
+
+def _is_ancestor_path(ancestor_path, descendant_path):
+    """True when *ancestor_path* names a proper ancestor folder of *descendant*.
+
+    The prefix comparison is the same idiom the grant cascade uses in
+    ``sql_actions`` — ``left(path, len(prefix) + 1) = prefix || '/'`` — which is
+    index-friendly and, unlike ``LIKE``, needs no escaping of the path.
+
+    The root is special-cased because its path is already ``/``: appending a
+    separator would look for ``//``, and nothing is stored under that.
+    """
+    return or_(
+        and_(ancestor_path == "/", descendant_path != "/"),
+        func.left(descendant_path, func.length(ancestor_path) + 1)
+        == ancestor_path.concat("/"),
+    )
+
+
+def _has_unreadable_ancestor(ctx: Context, pod_id: UUID):
+    """A correlated EXISTS over the folders above each row.
+
+    The Python walk this replaces climbed parent by parent and stopped at the
+    first ancestor row that was missing, so a gap in the folder chain let
+    everything above it go unchecked. This does not stop: an unreadable folder
+    anywhere above hides the row. That is the direction the rule was reaching
+    for — a file under a folder you cannot read should not appear — and the
+    only shape a single statement can express.
+    """
+    ancestor = aliased(DatastoreFile)
+    ancestor_actions = allowed_actions_expr(
+        ctx=ctx,
+        resource_type=ResourceType.DOCUMENT,
+        resource_id_col=ancestor.id,
+        pod_id_col=ancestor.pod_id,
+        owner_user_id_col=ancestor.owner_user_id,
+        visibility_col=ancestor.visibility,
+        resource_path_col=ancestor.path,
+    )
+    return (
+        select(ancestor.id)
+        .where(
+            ancestor.pod_id == pod_id,
+            ancestor.id != DatastoreFile.id,
+            _is_ancestor_path(ancestor.path, DatastoreFile.path),
+            ~allowed_actions_contains(ancestor_actions, Permissions.FOLDER_READ),
+        )
+        .exists()
     )
 
 
@@ -446,6 +496,76 @@ class DatastoreFileRepository(
             )
         )
         return set(result.scalars().all())
+
+    async def visible_file_ids(
+        self,
+        *,
+        pod_id: UUID,
+        ctx: Context,
+        walk_ancestors: bool,
+    ) -> set[UUID]:
+        """Every file id in the pod the caller may read, in one statement.
+
+        This replaces a loop that loaded *every* file row in the pod (16,050 in
+        one production pod), hydrated them into ORM objects and then entities,
+        collected the ancestor path of each, re-queried by those paths, and
+        then re-derived inheritance in Python. The predicate it re-derived is
+        the same ``_file_actions_expr`` CASE used everywhere else, so it was
+        being evaluated in SQL and then again, differently, above it.
+
+        ``walk_ancestors`` is the human/workload split, and it is a real
+        difference in the rule rather than an optimization. A workload holds no
+        ambient access, so ``_file_actions_expr`` — which already resolves the
+        grant cascade — is the whole answer: re-deriving inheritance on top of
+        it would demand a separate grant on every folder above and cancel the
+        cascade it just followed. That regression withheld 241 of 241 files
+        from an agent holding a real folder grant. A human, by contrast, may
+        read a POD file by role alone, so an unreadable folder above it has to
+        hide what is inside.
+        """
+        actions = _file_actions_expr(ctx)
+        stmt = select(DatastoreFile.id).where(
+            DatastoreFile.pod_id == pod_id,
+            allowed_actions_contains(actions, Permissions.FOLDER_READ),
+        )
+        if walk_ancestors:
+            stmt = stmt.where(~_has_unreadable_ancestor(ctx, pod_id))
+        result = await self.session.execute(stmt)
+        return set(result.scalars().all())
+
+    async def file_visibility_split(
+        self,
+        *,
+        pod_id: UUID,
+        ctx: Context,
+        walk_ancestors: bool,
+    ) -> tuple[set[UUID], set[UUID]]:
+        """``(visible, hidden)`` for the whole pod, in one statement.
+
+        Search sends its filter to a *different database* — chunks live in the
+        pod's datastore schema, and there is no join back to here — so the ids
+        travel as an array either way. Which side to send is then a question of
+        length, and it is worth asking: in the observed data most files are
+        POD-visible and RESTRICTED is rare, so the hidden side is usually the
+        short one and often empty. Returning both costs the same single scan.
+
+        The predicate is the same one ``visible_file_ids`` uses, projected as a
+        boolean instead of applied as a filter, so the two cannot drift.
+        """
+        actions = _file_actions_expr(ctx)
+        visible_expr = allowed_actions_contains(actions, Permissions.FOLDER_READ)
+        if walk_ancestors:
+            visible_expr = and_(visible_expr, ~_has_unreadable_ancestor(ctx, pod_id))
+        rows = await self.session.execute(
+            select(DatastoreFile.id, visible_expr.label("visible")).where(
+                DatastoreFile.pod_id == pod_id
+            )
+        )
+        visible: set[UUID] = set()
+        hidden: set[UUID] = set()
+        for file_id, is_visible in rows.all():
+            (visible if is_visible else hidden).add(file_id)
+        return visible, hidden
 
     async def get_descendants(
         self,

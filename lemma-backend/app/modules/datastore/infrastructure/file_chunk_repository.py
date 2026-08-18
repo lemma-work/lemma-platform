@@ -11,6 +11,7 @@ from sqlalchemy.sql import text
 
 from app.core.concurrency.offload import run_blocking
 from app.core.config import settings
+from app.modules.datastore.domain.file_visibility import FileVisibilityFilter
 from app.modules.datastore.infrastructure.sql_identifiers import (
     escape_like as _escape_like,
 )
@@ -156,10 +157,11 @@ class DatastoreFileChunkRepository:
         limit: int = 10,
         scope_path: str | None = None,
         include_descendants: bool = True,
-        visible_file_ids: set[UUID] | None = None,
+        *,
+        visibility: FileVisibilityFilter,
     ) -> list[dict[str, Any]]:
         del pod_id
-        if visible_file_ids is not None and not visible_file_ids:
+        if visibility.matches_nothing:
             return []
         embedding_str = "[" + ",".join(str(x) for x in query_embedding) + "]"
         dim = settings.embedding_dimension
@@ -176,7 +178,6 @@ class DatastoreFileChunkRepository:
             await session.execute(
                 text("SET LOCAL hnsw.iterative_scan = 'relaxed_order'")
             )
-            file_filter = ""
             params: dict[str, Any] = {
                 "vec": embedding_str,
                 "scope_path": scope_path,
@@ -189,9 +190,9 @@ class DatastoreFileChunkRepository:
                 "include_descendants": include_descendants,
                 "limit": limit,
             }
-            if visible_file_ids is not None:
-                file_filter = "AND rc.file_id = ANY(:visible_file_ids)"
-                params["visible_file_ids"] = list(visible_file_ids)
+            file_filter = visibility.sql_clause("rc.file_id", "visible_file_ids")
+            if visibility.binds:
+                params["visible_file_ids"] = visibility.parameter_value()
 
             stmt = text(f"""
                 SELECT
@@ -219,7 +220,7 @@ class DatastoreFileChunkRepository:
                 ORDER BY rc.embedding::halfvec({dim}) <=> CAST(:vec AS halfvec({dim}))
                 LIMIT :limit
             """)
-            if visible_file_ids is not None:
+            if visibility.binds:
                 stmt = stmt.bindparams(
                     bindparam(
                         "visible_file_ids",
@@ -248,16 +249,16 @@ class DatastoreFileChunkRepository:
         limit: int = 10,
         scope_path: str | None = None,
         include_descendants: bool = True,
-        visible_file_ids: set[UUID] | None = None,
+        *,
+        visibility: FileVisibilityFilter,
     ) -> list[dict[str, Any]]:
         del pod_id
-        if visible_file_ids is not None and not visible_file_ids:
+        if visibility.matches_nothing:
             return []
         async with self._session_factory() as session:
             await session.execute(
                 text(f'SET LOCAL search_path TO "{self.schema_name}", public')
             )
-            file_filter = ""
             params: dict[str, Any] = {
                 "query": query,
                 "scope_path": scope_path,
@@ -270,9 +271,9 @@ class DatastoreFileChunkRepository:
                 "include_descendants": include_descendants,
                 "limit": limit,
             }
-            if visible_file_ids is not None:
-                file_filter = "AND rc.file_id = ANY(:visible_file_ids)"
-                params["visible_file_ids"] = list(visible_file_ids)
+            file_filter = visibility.sql_clause("rc.file_id", "visible_file_ids")
+            if visibility.binds:
+                params["visible_file_ids"] = visibility.parameter_value()
 
             stmt = text(f"""
                 WITH search_query AS (
@@ -311,7 +312,7 @@ class DatastoreFileChunkRepository:
                 ORDER BY score DESC, rc.chunk_index ASC
                 LIMIT :limit
             """)
-            if visible_file_ids is not None:
+            if visibility.binds:
                 stmt = stmt.bindparams(
                     bindparam(
                         "visible_file_ids",

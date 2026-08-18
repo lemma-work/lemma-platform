@@ -7,7 +7,6 @@ from uuid import UUID
 
 from app.core.authorization.context import Context
 from app.modules.datastore.domain.errors import (
-    DatastoreAccessDeniedError,
     DatastoreRecordNotFoundError,
     DatastoreValidationError,
 )
@@ -23,6 +22,7 @@ from app.modules.datastore.services.record_validator import (
 )
 from app.modules.datastore.services.sql_introspection import analyze_query
 from app.modules.datastore.services.table_context import TableContext
+from app.modules.datastore.services.record_query_scope import resolve_query_row_scope
 
 if TYPE_CHECKING:
     from app.modules.datastore.services.table_service import TableService
@@ -229,6 +229,13 @@ class RecordService:
             ),
         )
 
+    async def _ensure_listing_index(self, table) -> None:
+        await self.record_repository.ensure_listing_index(
+            TableContext.from_table_entity(
+                table, self.record_repository.schema_manager.get_schema_name(table.pod_id)
+            )
+        )
+
     async def execute_readonly_query(
         self,
         *,
@@ -243,7 +250,7 @@ class RecordService:
 
         Parses the statement (single, read-only, no cross-schema references) and
         enforces per-table ``DATASTORE_TABLE_READ`` for every referenced table via
-        ``table_service.get_table``. RLS-enabled tables are row-filtered at the
+        ``resolve_query_row_scope``. RLS-enabled tables are row-filtered at the
         database layer.
 
         Rows of RLS tables are scoped to ``user_id`` by default — for every
@@ -257,22 +264,6 @@ class RecordService:
         """
         analysis = analyze_query(query)
 
-        saw_rls = False
-        admin_on_all_rls = True
-        for table_name in sorted(analysis.tables):
-            # Always enforce per-table READ; only consult the admin signal when
-            # admin mode is requested, so the default path does no extra work.
-            table = await table_service.get_table(pod_id, table_name, ctx=ctx)
-            if table.enable_rls:
-                saw_rls = True
-                if admin_mode and (
-                    self.authz is None
-                    or not await self.authz.can_admin_table(
-                        pod_id=pod_id, table_id=table.id, ctx=ctx
-                    )
-                ):
-                    admin_on_all_rls = False
-
         if not analysis.tables:
             # No registered table referenced (e.g. SELECT from a set-returning
             # function); fall back to a pod-level read check since there is no
@@ -281,14 +272,15 @@ class RecordService:
                 user_id=user_id, pod_id=pod_id, ctx=ctx
             )
 
-        is_pod_admin = False
-        if admin_mode and saw_rls:
-            if not admin_on_all_rls:
-                raise DatastoreAccessDeniedError(
-                    "Admin mode requires permission to administer every "
-                    "RLS-enabled table referenced by the query."
-                )
-            is_pod_admin = True
+        is_pod_admin = await resolve_query_row_scope(
+            pod_id=pod_id,
+            table_names=analysis.tables,
+            table_service=table_service,
+            authz=self.authz,
+            ctx=ctx,
+            admin_mode=admin_mode,
+            ensure_index=self._ensure_listing_index,
+        )
 
         return await self.record_repository.execute_readonly_query(
             pod_id=pod_id,

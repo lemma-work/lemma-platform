@@ -132,6 +132,40 @@ class ResourceRef:
         )
 
     @classmethod
+    def hydrated_table(
+        cls,
+        pod_id: UUID,
+        table_id: UUID,
+        *,
+        visibility: "ResourceVisibility | str | None",
+        owner_user_id: UUID | None,
+    ) -> "ResourceRef":
+        """A table reference that authorization will not re-read.
+
+        ``_hydrate_resource`` returns early once ``visibility`` is set, so a
+        caller holding the row it just selected can hand both fields over
+        instead of paying a second read of the same row to authorize it.
+
+        Separate from ``table`` and with both arguments required, because they
+        must travel together: hydration fills them as a pair, and setting only
+        the visibility would leave ``owner_user_id`` None and silently deny the
+        table's own owner. ``owner_user_id`` may legitimately *be* None — an
+        unowned table — which is why this cannot be inferred from the values.
+        """
+        resolved = (
+            normalize_resource_visibility(visibility)
+            if isinstance(visibility, str)
+            else visibility
+        )
+        return cls(
+            resource_type=ResourceType.DATASTORE_TABLE,
+            resource_id=table_id,
+            pod_id=pod_id,
+            visibility=resolved or ResourceVisibility.POD,
+            owner_user_id=owner_user_id,
+        )
+
+    @classmethod
     def app(cls, pod_id: UUID, app_id: UUID) -> "ResourceRef":
         return cls(resource_type=ResourceType.APP, resource_id=app_id, pod_id=pod_id)
 

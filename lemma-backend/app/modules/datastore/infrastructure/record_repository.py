@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from typing import Any
 from uuid import UUID
 
@@ -11,7 +10,6 @@ from app.modules.datastore.config import datastore_settings
 from app.modules.datastore.domain.errors import (
     DatastoreConflictError,
     DatastoreInfrastructureError,
-    DatastoreQueryError,
     DatastoreRecordNotFoundError,
     DatastoreValidationError,
 )
@@ -38,6 +36,10 @@ from app.modules.datastore.infrastructure.record_update_sql import (
 from app.modules.datastore.infrastructure.rls_context import verify_rls_context
 from app.modules.datastore.infrastructure.sql_identifiers import sanitize_identifier
 from app.modules.datastore.services.record_validator import convert_record
+from app.modules.datastore.infrastructure.record_indexes import ensure_listing_index_for
+from app.modules.datastore.infrastructure.record_query_cost import (
+    reject_if_too_expensive,
+)
 from app.modules.datastore.services.table_context import TableContext
 from app.modules.datastore.services.value_converter import ValueConverter
 from app.core.log.log import get_logger
@@ -330,7 +332,7 @@ class DatastoreRecordRepository(DatastoreRecordRepositoryPort):
                 # Set after the RLS-context GUCs above, which the policies read.
                 await session.execute(text(f'SET LOCAL ROLE "{query_role}"'))
 
-                await self._reject_if_too_expensive(session, query)
+                await reject_if_too_expensive(session, query)
 
                 # Stream via a server-side cursor and pull at most max_rows + 1 so a
                 # runaway result set never fully materializes in memory; the extra
@@ -351,33 +353,9 @@ class DatastoreRecordRepository(DatastoreRecordRepositoryPort):
             logger.debug("datastore.record.query.propagated", exc_info=True)
             raise_record_read_error(exc, operation="query execution")
 
-    async def _reject_if_too_expensive(self, session, query: str) -> None:
-        """Reject a query whose planned cost or row estimate exceeds the ceiling.
-
-        ``EXPLAIN`` (without ``ANALYZE``) only plans the statement, so this runs no
-        user SQL; it executes under the same RLS context, so estimates reflect the
-        row-filtered query.
-        """
-        try:
-            explain = await session.execute(text(f"EXPLAIN (FORMAT JSON) {query}"))
-            plan_json = explain.scalar_one()
-        except DBAPIError as exc:
-            logger.debug("datastore.record.query_plan.propagated", exc_info=True)
-            raise_record_read_error(exc, operation="query planning")
-
-        if isinstance(plan_json, str):
-            plan_json = json.loads(plan_json)
-        plan = plan_json[0]["Plan"]
-        total_cost = float(plan.get("Total Cost", 0.0))
-        plan_rows = int(plan.get("Plan Rows", 0))
-        if (
-            total_cost > datastore_settings.datastore_query_max_cost
-            or plan_rows > datastore_settings.datastore_query_max_plan_rows
-        ):
-            raise DatastoreQueryError(
-                "Query rejected: its estimated cost is too high. "
-                "Add filters or a LIMIT to narrow the result set."
-            )
+    async def ensure_listing_index(self, ctx: TableContext) -> None:
+        """Back-fill the listing index for one table, lazily."""
+        await ensure_listing_index_for(self.schema_manager, ctx)
 
     async def list_records(
         self,
@@ -390,6 +368,9 @@ class DatastoreRecordRepository(DatastoreRecordRepositoryPort):
         *,
         enforce_user_scope: bool = True,
     ) -> tuple[list[RecordEntity], int]:
+        # Tables predating the listing index have none, and this is the read
+        # whose sort it matches. See ``SchemaManager.ensure_record_index``.
+        await self.ensure_listing_index(ctx)
         count_sql = f'SELECT COUNT(*) FROM "{ctx.schema_name}"."{ctx.table_name}"'
         list_sql = f'SELECT * FROM "{ctx.schema_name}"."{ctx.table_name}"'
 

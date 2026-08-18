@@ -403,6 +403,12 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'datastore.record.bulk_update.propagated': EventSpec('debug', frozenset()),
     'datastore.record.bulk_write.propagated': EventSpec('debug', frozenset()),
     'datastore.record.create.propagated': EventSpec('debug', frozenset()),
+    'datastore.search.visibility_filter.degraded': EventSpec(
+        'warning', frozenset({'pod_id', 'visible_count', 'hidden_count'})
+    ),
+    'datastore.record.index.degraded': EventSpec(
+        'warning', frozenset({'schema_name', 'table_name'})
+    ),
     'datastore.record.list.propagated': EventSpec('debug', frozenset()),
     'datastore.record.query.propagated': EventSpec('debug', frozenset()),
     'datastore.record.query.rls_context_tampered.degraded': EventSpec('warning', frozenset()),

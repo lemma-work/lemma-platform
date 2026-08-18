@@ -30,17 +30,15 @@ from __future__ import annotations
 
 import statistics
 import time
-from contextlib import contextmanager
 from uuid import UUID, uuid4
 
 import pytest
 from fastapi import status
-from sqlalchemy import event
 
 from app.core.authorization.context import ResourceRef, ResourceType
-from app.core.authorization.permissions import Permissions
+from app.core.authorization.permissions import PERMISSION_BY_ID, Permissions
 from app.core.authorization.service import AuthorizationDataService
-from app.core.infrastructure.db.session import get_engine
+from app.modules.test_support.query_counting import counted_queries
 
 pytestmark = [pytest.mark.e2e]
 
@@ -49,26 +47,6 @@ pytestmark = [pytest.mark.e2e]
 _WARM_SAMPLES = 30
 _COLD_SAMPLES = 8
 _REPEAT_SAMPLES = 50
-
-
-@contextmanager
-def counted_queries():
-    """Count statements on the engine, not on one session.
-
-    Authorization can read through more than one session, and a change that
-    moves a query rather than removing it should not look like a win here.
-    """
-    statements: list[str] = []
-    engine = get_engine().sync_engine
-
-    def before(conn, cursor, statement, parameters, context, executemany):
-        statements.append(statement)
-
-    event.listen(engine, "before_cursor_execute", before)
-    try:
-        yield statements
-    finally:
-        event.remove(engine, "before_cursor_execute", before)
 
 
 def _median_ms(samples: list[float]) -> float:
@@ -275,4 +253,167 @@ async def test_unrelated_pod_is_still_denied(
     assert not allowed, (
         "authorization allowed a pod the principal has no membership in -- the "
         "snapshot cache key or the decision cache key is too coarse"
+    )
+
+
+async def test_effective_permissions_reads_grants_once_not_once_per_permission(
+    db_session, async_client, authenticated_client, fixed_test_org, real_pod
+) -> None:
+    """`/permissions/me` asks 51 questions; it must not make 51 round trips.
+
+    The regimes above are all measured as an *org owner*, who short-circuits at
+    `ORG_OWNER_POD` before any grant lookup — so the expensive regime was
+    entirely untested. A POD_VIEWER is the opposite: it holds a handful of the
+    51 permissions and falls through to the grant query for each of the rest.
+
+    Both halves matter and are asserted together, because either alone is
+    satisfiable by a bug. The count alone would pass if the memo returned the
+    wrong rows; the equality alone would pass if nothing had been fixed. So the
+    same loop runs twice against the same context — once with the memo cleared
+    between permissions, which is exactly the pre-fix behaviour, and once
+    letting it stand.
+    """
+    from app.modules.test_support.e2e_authz import (
+        add_pod_member,
+        invite_org_member,
+        signup_user,
+    )
+
+    pod_id = UUID(real_pod["id"])
+    viewer = await signup_user(async_client, "authz-cost-viewer")
+    org_member = await invite_org_member(
+        authenticated_client,
+        async_client,
+        org_id=fixed_test_org["id"],
+        user=viewer,
+    )
+    await add_pod_member(
+        authenticated_client,
+        pod_id=str(pod_id),
+        organization_member_id=org_member["id"],
+        role="POD_VIEWER",
+    )
+
+    service = AuthorizationDataService(db_session)
+    viewer_id = UUID(viewer["id"])
+    resource = ResourceRef(
+        resource_type=ResourceType.POD, resource_id=pod_id, pod_id=pod_id
+    )
+    permission_ids = sorted(PERMISSION_BY_ID)
+    assert len(permission_ids) > 40, "the whole point is that this list is long"
+
+    async def _effective_actions(ctx, *, forget_between_permissions: bool) -> list[str]:
+        allowed: list[str] = []
+        for permission_id in permission_ids:
+            if forget_between_permissions:
+                ctx.authorizer._grant_rows.clear()
+                ctx.authorizer._folder_ids_by_paths.clear()
+            if await ctx.can(permission_id, resource):
+                allowed.append(permission_id)
+        return allowed
+
+    unmemoized_ctx = await service.build_user_context(
+        user_id=viewer_id, pod_id=pod_id
+    )
+    with counted_queries() as before_statements:
+        before = await _effective_actions(
+            unmemoized_ctx, forget_between_permissions=True
+        )
+
+    memoized_ctx = await service.build_user_context(user_id=viewer_id, pod_id=pod_id)
+    with counted_queries() as after_statements:
+        after = await _effective_actions(
+            memoized_ctx, forget_between_permissions=False
+        )
+
+    assert after == before, (
+        "memoizing the grant lookup changed which permissions a POD_VIEWER "
+        f"holds. only in the memoized answer: {sorted(set(after) - set(before))}; "
+        f"only in the per-permission answer: {sorted(set(before) - set(after))}"
+    )
+    assert before, "the viewer holds no permissions at all -- the fixture is wrong"
+
+    grant_reads_after = [s for s in after_statements if "resource_permission_grants" in s]
+    grant_reads_before = [
+        s for s in before_statements if "resource_permission_grants" in s
+    ]
+    assert len(grant_reads_before) > 20, (
+        "the pre-fix regime issued only "
+        f"{len(grant_reads_before)} grant reads -- this fixture is no longer in "
+        "the costly regime, so the assertion below proves nothing"
+    )
+    assert len(grant_reads_after) <= 1, (
+        f"{len(permission_ids)} permissions on one resource issued "
+        f"{len(grant_reads_after)} grant reads (was {len(grant_reads_before)}):\n"
+        f"{_format_statements(grant_reads_after)}"
+    )
+
+
+async def test_a_grant_added_to_a_fresh_context_is_seen(
+    db_session, async_client, authenticated_client, fixed_test_org, real_pod
+) -> None:
+    """The memo must not outlive the context that owns it.
+
+    Counterweight to the test above, which rewards remembering. A memo keyed
+    too loosely -- or held for longer than one context -- would make that test
+    pass and leave a revoked grant answering yes.
+    """
+    from app.modules.test_support.e2e_authz import (
+        add_pod_member,
+        auth_headers,
+        invite_org_member,
+        signup_user,
+    )
+
+    pod_id = UUID(real_pod["id"])
+    viewer = await signup_user(async_client, "authz-cost-grantee")
+    org_member = await invite_org_member(
+        authenticated_client,
+        async_client,
+        org_id=fixed_test_org["id"],
+        user=viewer,
+    )
+    member = await add_pod_member(
+        authenticated_client,
+        pod_id=str(pod_id),
+        organization_member_id=org_member["id"],
+        role="POD_VIEWER",
+    )
+    resource = ResourceRef(
+        resource_type=ResourceType.POD, resource_id=pod_id, pod_id=pod_id
+    )
+    service = AuthorizationDataService(db_session)
+    viewer_id = UUID(viewer["id"])
+
+    before_ctx = await service.build_user_context(user_id=viewer_id, pod_id=pod_id)
+    assert await before_ctx.can(Permissions.POD_READ, resource)
+    assert not await before_ctx.can(Permissions.POD_UPDATE, resource)
+
+    role = await authenticated_client.post(
+        f"/pods/{pod_id}/roles",
+        json={"name": f"updaters_{uuid4().hex[:6]}", "permission_ids": ["pod.update"]},
+    )
+    assert role.status_code == status.HTTP_201_CREATED, role.text
+    role_name = role.json()["name"]
+    updated = await authenticated_client.patch(
+        f"/pods/{pod_id}/members/{member['pod_member_id']}/roles",
+        json={"roles": ["POD_VIEWER", role_name]},
+    )
+    assert updated.status_code == status.HTTP_200_OK, updated.text
+
+    from app.core.authorization import cache as authz_cache
+
+    await authz_cache.invalidate_role_snapshot_cache(user_id=viewer_id)
+    after_ctx = await service.build_user_context(user_id=viewer_id, pod_id=pod_id)
+    assert await after_ctx.can(Permissions.POD_UPDATE, resource), (
+        "a permission granted after the context was built was not visible to a "
+        "context built afterwards -- something is cached beyond one request"
+    )
+
+    effective = await async_client.get(
+        f"/pods/{pod_id}/permissions/me", headers=auth_headers(viewer)
+    )
+    assert effective.status_code == status.HTTP_200_OK, effective.text
+    assert Permissions.POD_UPDATE in effective.json()["actions"], (
+        "the endpoint the memo exists to speed up did not report the new grant"
     )

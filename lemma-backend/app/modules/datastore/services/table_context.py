@@ -13,6 +13,24 @@ from app.modules.datastore.domain.errors import DatastoreValidationError
 from app.modules.datastore.services.value_converter import ValueConverter
 
 
+@dataclass(frozen=True, slots=True)
+class TableHydration:
+    """The two fields authorization would otherwise re-read the table for.
+
+    ``_hydrate_resource`` short-circuits once a ``ResourceRef`` carries its
+    visibility, so a caller that has just selected the table row can hand these
+    over and skip a second read of it. They travel as a pair because hydration
+    fills them as a pair — see ``ResourceRef.hydrated_table``.
+    """
+
+    visibility: str | None
+    owner_user_id: UUID | None
+
+    @classmethod
+    def of(cls, table: DatastoreTableEntity) -> "TableHydration":
+        return cls(visibility=table.visibility, owner_user_id=table.user_id)
+
+
 @dataclass
 class TableContext:
     """Resolved schema + operation flags for a single table's record ops.
