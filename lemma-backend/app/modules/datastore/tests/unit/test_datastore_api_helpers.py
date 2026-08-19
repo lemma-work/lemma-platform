@@ -27,6 +27,19 @@ def test_parse_record_filters_accepts_json_filter_clauses():
     ]
 
 
+def test_parse_record_filters_accepts_in_with_a_list_value():
+    result = parse_record_filters(
+        ['{"field":"status","op":"in","value":["new","open","pending"]}'],
+    )
+
+    assert result == [("status", "in", ["new", "open", "pending"])]
+
+
+def test_parse_record_filters_rejects_unknown_operator():
+    with pytest.raises(DatastoreValidationError, match="Unsupported filter operator"):
+        parse_record_filters(['{"field":"status","op":"nope","value":"x"}'])
+
+
 def test_parse_record_filters_rejects_bad_json():
     with pytest.raises(DatastoreValidationError, match="Invalid filter parameter"):
         parse_record_filters(["{not json"])

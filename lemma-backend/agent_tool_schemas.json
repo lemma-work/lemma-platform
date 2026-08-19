@@ -338,7 +338,8 @@
             "lt",
             "lte",
             "like",
-            "ilike"
+            "ilike",
+            "in"
           ],
           "title": "RecordFilterOperator",
           "type": "string"
@@ -1651,7 +1652,7 @@
             },
             "op": {
               "default": "eq",
-              "description": "eq, ne, gt, gte, lt, lte, like, in.",
+              "description": "eq, ne, gt, gte, lt, lte, like, ilike, in. Use `in` with a list value for multi-value membership.",
               "type": "string"
             },
             "value": {

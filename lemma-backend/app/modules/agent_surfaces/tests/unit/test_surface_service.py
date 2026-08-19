@@ -1159,3 +1159,43 @@ async def test_teams_consent_callback_requires_the_nonce_it_issued(monkeypatch):
     # The issued one works exactly once, so a replayed callback loses.
     assert await teams_consent.consume_nonce(surface_id, nonce)
     assert not await teams_consent.consume_nonce(surface_id, nonce)
+
+
+def _runtime_service() -> AgentSurfaceService:
+    return AgentSurfaceService(
+        surface_repository=AsyncMock(),
+        account_binding_resolver=AsyncMock(),
+    )
+
+
+async def test_resend_surface_allowed_without_public_url_when_polling_enabled(monkeypatch):
+    """The desktop-app fix: a localhost API URL must not block a Resend surface
+    when polling mode is on — outbound goes over the API and inbound is polled,
+    so no public webhook callback is needed."""
+    monkeypatch.setattr(
+        "app.modules.agent_surfaces.services.surface_service.settings.api_url",
+        "http://localhost:8711",
+    )
+    monkeypatch.setattr(
+        "app.modules.agent_surfaces.services.surface_service.surface_settings.enable_resend_polling_mode",
+        True,
+    )
+    surface = _surface_entity(surface_type=SurfacePlatform.RESEND, account_id=None)
+
+    # Does not raise.
+    _runtime_service()._validate_runtime_supported(surface)
+
+
+async def test_resend_surface_rejected_on_local_url_without_polling(monkeypatch):
+    monkeypatch.setattr(
+        "app.modules.agent_surfaces.services.surface_service.settings.api_url",
+        "http://localhost:8711",
+    )
+    monkeypatch.setattr(
+        "app.modules.agent_surfaces.services.surface_service.surface_settings.enable_resend_polling_mode",
+        False,
+    )
+    surface = _surface_entity(surface_type=SurfacePlatform.RESEND, account_id=None)
+
+    with pytest.raises(AgentSurfaceValidationError, match="public HTTPS API URL"):
+        _runtime_service()._validate_runtime_supported(surface)

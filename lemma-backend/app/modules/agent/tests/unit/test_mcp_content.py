@@ -10,10 +10,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from pydantic_ai import BinaryContent, ToolReturn
+
 from app.modules.agent.services.mcp_content import (
     MAX_MCP_IMAGE_BYTES,
     MAX_MCP_IMAGE_BYTES_TOTAL,
     image_contents,
+    result_payload,
 )
 
 
@@ -71,3 +74,28 @@ def test_a_long_page_range_is_truncated_rather_than_refused() -> None:
 def test_a_result_with_no_images_produces_none() -> None:
     assert image_contents(_Result([])) == []
     assert image_contents(object()) == []
+
+
+def test_tool_return_payload_excludes_the_binary_content() -> None:
+    """The text/structured channel must carry the describable result only.
+
+    ``view_image``/``pod_view_document_pages`` return a ``ToolReturn`` whose
+    picture rides ``.content``. Serializing the whole ``ToolReturn`` dumped the
+    raw image bytes into the text payload too — the ~25k-token duplication (and,
+    on a multi-page doc, the overflow that lost the pages). ``result_payload``
+    must serialize ``.return_value`` alone.
+    """
+    picture = b"\x89PNG\r\n" + b"x" * 4096
+    result = ToolReturn(
+        return_value={"success": True, "path": "/me/shot.png"},
+        content=[BinaryContent(data=picture, media_type="image/png")],
+    )
+
+    payload = result_payload(result)
+
+    assert payload == {"success": True, "path": "/me/shot.png"}
+    assert b"PNG" not in repr(payload).encode()
+
+
+def test_plain_result_is_serialized_as_is() -> None:
+    assert result_payload({"ok": True}) == {"ok": True}

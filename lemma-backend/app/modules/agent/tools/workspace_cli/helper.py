@@ -63,17 +63,26 @@ def tail_truncate(text: str | None, limit: int) -> str | None:
     return "…[earlier output truncated]…\n" + text[-limit:]
 
 
-def replace_result_if_present(
-    result: PythonExecutionResult, new_result: str
-) -> PythonExecutionResult:
-    """Replace the result value in stdout/stderr if it is present"""
+def _redact_if_only_the_result(stream: str | None, result_value: str) -> str | None:
+    """Redact a stream *only* when it is nothing but the echoed result.
+
+    The `result` field already carries the last expression's value, so when a
+    stream contains that value and nothing else it is a pure duplicate worth
+    collapsing. A blind substring replace, by contrast, clobbered any `print(x)`
+    whose text merely coincided with (or contained) the result — silently
+    dropping a line the code genuinely emitted — so match the whole stream, not
+    a substring.
+    """
     replace_string = "[Result REDACTED as it is given in `result` field]"
-    stdout = result.stdout
-    stderr = result.stderr
-    if result.result and stdout and result.result in stdout:
-        stdout = stdout.replace(result.result, replace_string)
-    if result.result and stderr and result.result in stderr:
-        stderr = stderr.replace(result.result, replace_string)
+    if stream and result_value and stream.strip() == result_value.strip():
+        return replace_string
+    return stream
+
+
+def replace_result_if_present(result: PythonExecutionResult) -> PythonExecutionResult:
+    """Collapse stdout/stderr to a marker when it only echoes the result."""
+    stdout = _redact_if_only_the_result(result.stdout, result.result)
+    stderr = _redact_if_only_the_result(result.stderr, result.result)
     return PythonExecutionResult(
         success=result.success,
         stdout=stdout,
@@ -88,7 +97,7 @@ def replace_result_if_present(
 def trim_python_result(result: PythonExecutionResult) -> PythonExecutionResult:
     """Trim the Python execution result to remove unnecessary details and limit size"""
     # Create a new result with only the necessary fields
-    result = replace_result_if_present(result, result.result)
+    result = replace_result_if_present(result)
     return PythonExecutionResult(
         success=result.success,
         stdout=result.stdout[:CHARACTER_LIMIT_STDOUT] if result.stdout else None,

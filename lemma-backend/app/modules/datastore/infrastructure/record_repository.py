@@ -23,6 +23,7 @@ from app.modules.datastore.infrastructure.record_errors import (
     raise_record_read_error,
     raise_record_write_error,
 )
+from app.modules.datastore.infrastructure.record_filter_sql import build_filter_predicate
 from app.modules.datastore.infrastructure.record_page import rows_and_total
 from app.modules.datastore.infrastructure.record_update_sql import (
     build_assignments,
@@ -391,37 +392,11 @@ class DatastoreRecordRepository(DatastoreRecordRepositoryPort):
                 col = next((c for c in ctx.columns if c.name == field), None)
                 param_name = f"f_{len(params)}"
 
-                if op == "eq":
-                    where_clauses.append(f'"{field}" = :{param_name}')
-                elif op == "ne":
-                    where_clauses.append(f'"{field}" != :{param_name}')
-                elif op == "gt":
-                    where_clauses.append(f'"{field}" > :{param_name}')
-                elif op == "gte":
-                    where_clauses.append(f'"{field}" >= :{param_name}')
-                elif op == "lt":
-                    where_clauses.append(f'"{field}" < :{param_name}')
-                elif op == "lte":
-                    where_clauses.append(f'"{field}" <= :{param_name}')
-                elif op == "like":
-                    where_clauses.append(f'"{field}" LIKE :{param_name}')
-                elif op == "ilike":
-                    where_clauses.append(f'"{field}" ILIKE :{param_name}')
-                else:
-                    raise DatastoreValidationError(
-                        f"Unsupported filter operator '{op}'",
-                        details={
-                            "operator": op,
-                            "allowed_operators": ["eq", "ne", "gt", "gte", "lt", "lte", "like", "ilike"],
-                        },
-                    )
-
-                if col:
-                    try:
-                        value = ValueConverter.convert_value(value, col)
-                    except ValueError:
-                        pass
-                params[param_name] = value
+                clause, bound = build_filter_predicate(
+                    field, op, value, col, param_name
+                )
+                where_clauses.append(clause)
+                params.update(bound)
 
         if where_clauses:
             where_sql = " WHERE " + " AND ".join(where_clauses)

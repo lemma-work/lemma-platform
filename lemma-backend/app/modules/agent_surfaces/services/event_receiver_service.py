@@ -6,8 +6,7 @@ import json
 import socket
 import uuid
 from collections.abc import Callable
-from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any
 from uuid import UUID
 
 import httpx
@@ -46,6 +45,16 @@ from app.modules.agent_surfaces.platforms.telegram.update_batching import (
 from app.modules.agent_surfaces.infrastructure.repositories.surface_repository import (
     SurfaceRepository,
 )
+from app.modules.agent_surfaces.services.native_receiver_base import (
+    NativeReceiverCandidate,
+    ReceiverRunnerFactory,
+    receiver_key as _receiver_key,
+)
+from app.modules.agent_surfaces.services.resend_polling_receiver import (
+    ResendPollingReceiverRunner,
+    resend_candidate_from_surface,
+    resend_receiver_credentials,
+)
 
 logger = get_logger(__name__)
 
@@ -60,22 +69,6 @@ if redis.call('get', KEYS[1]) == ARGV[1] then
 end
 return 0
 """
-
-
-class ReceiverRunner(Protocol):
-    async def run(self) -> None: ...
-
-
-ReceiverRunnerFactory = Callable[["NativeReceiverCandidate"], ReceiverRunner]
-
-
-@dataclass(frozen=True)
-class NativeReceiverCandidate:
-    key: str
-    platform: SurfacePlatform
-    surface_ids: tuple[UUID, ...]
-    credential_label: str
-    credentials: dict[str, Any]
 
 
 async def notify_surface_receiver_config_changed(
@@ -113,6 +106,7 @@ class SurfaceEventReceiverService:
         return bool(
             surface_settings.enable_telegram_polling_mode
             or surface_settings.enable_slack_socket_mode
+            or surface_settings.enable_resend_polling_mode
         )
 
     async def run(self) -> None:
@@ -145,6 +139,7 @@ class NativeSurfaceReceiverCoordinator:
         self._runner_factories = runner_factories or {
             SurfacePlatform.TELEGRAM: TelegramPollingReceiverRunner,
             SurfacePlatform.SLACK: SlackSocketReceiverRunner,
+            SurfacePlatform.RESEND: ResendPollingReceiverRunner,
         }
 
     async def run(self) -> None:
@@ -213,6 +208,8 @@ class NativeSurfaceReceiverCoordinator:
             platforms.add(SurfacePlatform.TELEGRAM)
         if surface_settings.enable_slack_socket_mode:
             platforms.add(SurfacePlatform.SLACK)
+        if surface_settings.enable_resend_polling_mode:
+            platforms.add(SurfacePlatform.RESEND)
         if not platforms:
             return []
 
@@ -500,6 +497,8 @@ async def _receiver_credentials(
                 logger.debug('agent_surfaces.event_receiver_service.telegram_system_surface_exists_but.diagnostic')
                 return None
             return {"bot_token": surface_settings.telegram_bot_token}
+        if surface.surface_type is SurfacePlatform.RESEND:
+            return resend_receiver_credentials()
         return None
 
     if surface.account_id not in account_cache:
@@ -554,6 +553,9 @@ def _candidate_from_surface(
             credential_label=credential_label,
             credentials=credentials,
         )
+
+    if surface.surface_type is SurfacePlatform.RESEND:
+        return resend_candidate_from_surface(surface, credentials)
     return None
 
 
@@ -564,11 +566,6 @@ def _nested_credential(credentials: dict[str, Any], key: str) -> str | None:
     if isinstance(raw_response, dict) and raw_response.get(key):
         return str(raw_response[key])
     return None
-
-
-def _receiver_key(platform: str, label: str, secret: str) -> str:
-    digest = hashlib.sha256(secret.encode("utf-8")).hexdigest()[:24]
-    return f"{platform}:{label}:{digest}"
 
 
 def _lease_key(key: str) -> str:
