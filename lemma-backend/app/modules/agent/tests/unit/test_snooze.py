@@ -89,18 +89,6 @@ def test_seconds_is_required():
 
 
 @pytest.mark.asyncio
-async def test_snooze_falls_back_when_the_runtime_cannot_pause():
-    """Remote harnesses own their session; guide the model instead of hanging."""
-    response = await snooze(
-        _ctx(supports_pause_signal=False),
-        SnoozeRequest(reason="waiting", seconds=600),
-    )
-    assert response.success is False
-    assert response.interaction_fallback is True
-    assert "end your turn" in (response.message or "")
-
-
-@pytest.mark.asyncio
 async def test_snooze_refuses_a_pointless_short_sleep():
     """Rejected, not clamped — a 5s ask means the model misread the tool."""
     response = await snooze(
@@ -180,12 +168,26 @@ def suspend_harness(monkeypatch):
         async def commit(self):
             pass
 
+    suspended: list = []
+    poked: list = []
+
+    async def _fake_suspend_remote_run(uow, *, agent_run_id):
+        suspended.append(agent_run_id)
+        return "host-1"
+
+    async def _fake_poke_host(host_id):
+        poked.append(host_id)
+
     monkeypatch.setattr(adapter, "schedule_snooze_wake", _fake_schedule_snooze_wake)
     monkeypatch.setattr(adapter, "AgentConversationWaitRepository", _FakeRepo)
     monkeypatch.setattr(
         adapter, "SessionUnitOfWorkFactory", lambda maker: lambda: _FakeUow()
     )
-    return SimpleNamespace(scheduled=scheduled, created=created)
+    monkeypatch.setattr(adapter, "suspend_remote_run", _fake_suspend_remote_run)
+    monkeypatch.setattr(adapter, "poke_host", _fake_poke_host)
+    return SimpleNamespace(
+        scheduled=scheduled, created=created, suspended=suspended, poked=poked
+    )
 
 
 @pytest.mark.asyncio
@@ -214,6 +216,44 @@ async def test_snooze_schedules_a_timer_and_pauses_the_run(suspend_harness):
     assert wait.status is AgentWaitStatus.ACTIVE
     assert wait.tool_call_id == "tc-1"
     assert wait.spec["note_to_self"] is None
+
+
+@pytest.mark.asyncio
+async def test_a_remote_harness_sleeps_too_and_is_told_to_stop(suspend_harness):
+    """The same wait, ended a different way.
+
+    A remote harness cannot catch a pause raised inside its own MCP tool call,
+    so Lemma asks the host to end the turn. What it must *not* do is what it
+    used to: refuse the sleep and tell the model to give up, which left the one
+    tool for "check back on this in an hour" unavailable to every agent running
+    on somebody's own machine.
+    """
+    ctx = _ctx(supports_pause_signal=False)
+    response = await snooze(ctx, SnoozeRequest(reason="waiting", seconds=600))
+
+    # Armed exactly as it is in-process: same timer, same ACTIVE row, same id.
+    (job,) = suspend_harness.scheduled
+    (wait,) = suspend_harness.created
+    assert str(job["timer_id"]) == wait.external_ref
+    assert wait.status is AgentWaitStatus.ACTIVE
+    assert wait.tool_call_id == "tc-1"
+
+    # The turn is ended by Lemma, not left to the model to end politely.
+    assert suspend_harness.suspended == [ctx.deps.agent_run_id]
+    assert suspend_harness.poked == ["host-1"]
+
+    assert response.success is True
+    assert "Your turn ends here" in (response.message or "")
+
+
+@pytest.mark.asyncio
+async def test_the_in_process_harness_is_never_asked_to_cancel_itself(
+    suspend_harness,
+):
+    """It raises, which the run loop catches; a cancel would race that."""
+    with pytest.raises(AgentInputRequired):
+        await snooze(_ctx(), SnoozeRequest(reason="waiting", seconds=600))
+    assert suspend_harness.suspended == []
 
 
 @pytest.mark.asyncio

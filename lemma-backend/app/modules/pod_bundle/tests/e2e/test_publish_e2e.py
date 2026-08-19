@@ -9,7 +9,6 @@ with a fake GithubOps.
 
 from __future__ import annotations
 
-import asyncio
 from uuid import uuid4
 
 import pytest
@@ -19,20 +18,29 @@ from app.modules.datastore.tests.e2e.harness import (
     auth_headers,
     invite_to_pod,
 )
+from app.modules.test_support.e2e.waiters import wait_for_status
 from app.modules.test_support.e2e_authz import signup_user
 
 pytestmark = [pytest.mark.e2e, pytest.mark.worker]
 
 
 async def _wait(client, pod_id, publish_id, *, until, timeout=60) -> dict:
-    for _ in range(timeout):
+    async def probe() -> dict:
         res = await client.get(f"/pods/{pod_id}/bundle/publishes/{publish_id}")
         assert res.status_code == status.HTTP_200_OK, res.text
-        body = res.json()
-        if body["status"] in until:
-            return body
-        await asyncio.sleep(1)
-    raise AssertionError(f"Publish stuck at {body['status']}")
+        return res.json()
+
+    # failed=set(): the module's own docstring says FAILED is this file's
+    # deterministic, expected outcome (no connected GitHub account) -- only
+    # stop on a status in `until`, never fail-fast on FAILED itself.
+    return await wait_for_status(
+        label=f"pod {pod_id} bundle publish {publish_id} to reach {until}",
+        probe=probe,
+        expected=set(until),
+        failed=set(),
+        timeout_seconds=timeout,
+        interval_seconds=0.15,
+    )
 
 
 async def test_publish_without_github_account_fails_cleanly(

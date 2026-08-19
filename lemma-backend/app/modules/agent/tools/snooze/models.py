@@ -57,9 +57,6 @@ class SnoozeResponse(BaseToolResponse):
     note_to_self: str | None = Field(
         default=None, description="Whatever you passed in note_to_self."
     )
-    # Set when a runtime cannot pause. Mirrors ask_user's contract so the model
-    # gets guidance instead of a dead end.
-    interaction_fallback: bool = False
 
 
 # The two messages the model can wake to. TIMER leans on what it does *not* say:

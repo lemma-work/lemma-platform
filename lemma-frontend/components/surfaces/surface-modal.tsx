@@ -37,6 +37,8 @@ import {
 import { useAssistants } from '@/lib/hooks/use-assistants';
 import { useAccounts, useAuthConfigs } from '@/lib/hooks/use-connectors';
 import { usePod } from '@/lib/hooks/use-pods';
+import { useProfile } from '@/lib/hooks/use-user';
+import { trackSurfaceConnected } from '@/lib/analytics/onboarding';
 import {
     useAvailableSurfaces,
     useCreatePodSurface,
@@ -118,6 +120,7 @@ export function SurfaceModal({
     const definition = getSurfaceDefinition(target?.platform);
 
     const { data: pod } = usePod(podId);
+    const { data: profile } = useProfile();
     const { data: surfaces = [] } = usePodSurfaces(target ? podId : undefined);
     const { data: catalog } = useAvailableSurfaces(podId, Boolean(target));
     const { data: assistantsData } = useAssistants(target ? podId : '');
@@ -300,8 +303,11 @@ export function SurfaceModal({
                 ? `@${managedSetup.bot_username} is connected`
                 : 'Your Telegram bot is connected',
         );
+        if (definition) {
+            trackSurfaceConnected(definition.platform, profile?.created_at ?? null);
+        }
         setStep('live');
-    }, [managedSetup, podId, queryClient]);
+    }, [definition, managedSetup, podId, profile?.created_at, queryClient]);
 
     const patchDraft = useCallback(
         (patch: Partial<ConfigureDraft>) => setDraft((current) => ({ ...current, ...patch })),
@@ -399,6 +405,7 @@ export function SurfaceModal({
             })) as AssistantSurface;
 
             setCreatedSurface(created);
+            trackSurfaceConnected(definition.platform, profile?.created_at ?? null);
             // A surface Lemma can't wire up itself isn't reachable yet, so the
             // proof state would be a lie — go straight to what's left to do.
             // The setup read resolves against the surface we just created.

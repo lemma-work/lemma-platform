@@ -17,6 +17,21 @@ export const KNOWN_HARNESSES: ReadonlyArray<{ key: string; displayName: string }
     { key: 'cursor', displayName: 'Cursor' },
 ];
 
+/**
+ * How long "Rescan" stays busy after asking the host to look again.
+ *
+ * Rescan does not fetch anything. It asks the Agent Host to re-probe, and the
+ * host reads that request off its control file on a five-second beat before it
+ * starts spawning agents — so the answer arrives over the following seconds
+ * through the poll this screen already runs, not at any moment worth refetching
+ * at. The button stays busy for long enough to cover both, because a control
+ * that finishes before anything can possibly have changed reads as a control
+ * that did nothing.
+ *
+ * It used to wait 1.2s, which expired before the host had even read the request.
+ */
+export const RECHECK_SETTLE_MS = 9000;
+
 export type DiscoveryPhase = 'starting' | 'connecting' | 'scanning' | 'settled' | 'unavailable';
 
 export type DiscoveredHarness = {
@@ -85,6 +100,46 @@ export function harnessRowStates<T extends DiscoveredHarness>(
             harness,
         }));
     return [...known, ...extra];
+}
+
+/**
+ * How long a first probe runs before the wait deserves an explanation.
+ *
+ * Under this, saying "this can take a minute" is borrowing trouble; over it,
+ * saying nothing reads as a screen that has given up. The number is the point at
+ * which a person starts wondering, not a measurement of the probe.
+ */
+export const DISCOVERY_PATIENCE_MS = 15_000;
+
+/**
+ * The one live line about what is happening, for the column the user is reading.
+ *
+ * All the progress copy used to live in the preview pane, which is `hidden
+ * lg:flex` — so on a narrow window the screen said nothing at all while it
+ * worked. This is what the left column shows beside the agents.
+ *
+ * `null` once there is nothing left to report: a settled screen is described by
+ * its rows, and a status line that stays put after the work is done is the thing
+ * that makes people distrust the next one.
+ */
+export function discoveryStatusLine(input: {
+    phase: DiscoveryPhase;
+    foundCount: number;
+    elapsedMs: number;
+}): string | null {
+    if (input.phase === 'settled' || input.phase === 'unavailable') return null;
+    if (input.phase === 'starting') return 'Starting the agent host on this Mac…';
+    if (input.phase === 'connecting') return 'Connecting this computer…';
+    // Counted, not promised. Some of the four are simply not installed and will
+    // never report, so "2 of 4" would be a progress bar that stops at 2 and
+    // reads as stuck.
+    const found =
+        input.foundCount === 0
+            ? 'Looking for coding agents'
+            : `Found ${input.foundCount} so far, still looking`;
+    return input.elapsedMs >= DISCOVERY_PATIENCE_MS
+        ? `${found} — each one is started once, which can take a minute the first time`
+        : `${found}…`;
 }
 
 /** What the panel says while it resolves, in one voice. */

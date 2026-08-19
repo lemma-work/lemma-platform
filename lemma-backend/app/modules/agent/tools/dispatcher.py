@@ -97,6 +97,7 @@ class AgentToolDispatcher:
         toolsets: list[object] | None = None,
         agent_run_id: UUID | None = None,
         include_final_answer: bool = False,
+        tool_call_id: str | None = None,
     ) -> object:
         async with AsyncExitStack() as exit_stack:
             prepared = await self._prepare(
@@ -111,7 +112,7 @@ class AgentToolDispatcher:
             tool = prepared.get(name)
             if tool is None:
                 raise UnknownToolError(name)
-            tool_ctx = self._tool_call_context(tool, agent_run_id)
+            tool_ctx = self._tool_call_context(tool, agent_run_id, tool_call_id)
             validated = await self._validate_arguments(
                 tool=tool,
                 arguments=arguments or {},
@@ -182,7 +183,19 @@ class AgentToolDispatcher:
         self,
         tool: PreparedTool,
         agent_run_id: UUID | None,
+        tool_call_id: str | None = None,
     ) -> RunContext[Any]:
+        """The context one tool call runs under.
+
+        ``tool_call_id`` is what a tool addresses itself by on the durable
+        record — the id an approval card is resolved through, a widget's
+        content is stored under, and a paused call's return is written to. The
+        in-process run loop fills it in from the model's own tool call. There is
+        no equivalent over MCP: the wire format carries a JSON-RPC request id
+        and nothing that survives the response, so a caller that needs the call
+        to outlive its own return has to put it on the record and pass the id
+        in here.
+        """
         max_retries = tool.tool.max_retries
         if max_retries is None:
             max_retries = _DEFAULT_TOOL_MAX_RETRIES
@@ -191,6 +204,7 @@ class AgentToolDispatcher:
             usage=RunUsage(tool_calls=1),
             retries={tool.name: 0},
             tool_name=tool.name,
+            tool_call_id=tool_call_id,
             retry=0,
             max_retries=max_retries,
             run_id=str(agent_run_id) if agent_run_id is not None else None,

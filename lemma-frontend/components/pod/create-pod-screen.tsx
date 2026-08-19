@@ -17,7 +17,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ArrowRight, Boxes } from "@/components/ui/icons";
-import { buildComposerLaunchHref } from "@/lib/pods/composer-launch";
+import { buildNewPodConversationHref } from "@/lib/pods/new-pod-conversation";
 import { normalizeRemixSource, remixSourceLabel } from "@/lib/remix/app-remix";
 import { getLemmaClient } from "@/lib/sdk/lemma-client";
 
@@ -68,7 +68,7 @@ export function CreatePodScreen({ remixSource: rawRemixSource }: { remixSource: 
    */
   const createAndGo = async (
     action: PendingAction,
-    destination: (podId: string) => string,
+    destination: (podId: string, podName: string) => string,
     fallbackName = DEFAULT_POD_NAME,
   ) => {
     if (pending) return;
@@ -84,7 +84,7 @@ export function CreatePodScreen({ remixSource: rawRemixSource }: { remixSource: 
         organization_id: currentOrg.id,
       });
       queryClient.invalidateQueries({ queryKey: ["pods"] });
-      router.push(destination(pod.id));
+      router.push(destination(pod.id, pod.name));
     } catch (error) {
       toast.error(
         error instanceof Error && error.message
@@ -99,10 +99,16 @@ export function CreatePodScreen({ remixSource: rawRemixSource }: { remixSource: 
     const launch = startPathComposerLaunch(path);
     void createAndGo(
       path,
-      (podId) =>
-        buildComposerLaunchHref(podId, {
-          draft: launch.stem,
-          instructions: remixSource
+      // Same landing as naming a pod and pressing create. Picking a starting
+      // point is a *stronger* statement of intent, so it must not end up
+      // somewhere less started than saying nothing did.
+      (podId, podName) =>
+        buildNewPodConversationHref({
+          podId,
+          podName,
+          isFirstPod: false,
+          openingMessage: launch.stem,
+          extraInstructions: remixSource
             ? [
                 launch.instructions,
                 `Use ${remixSource} as the reference experience. Inspect it before building, preserve the interaction mechanics that matter, and make the result Lemma-native rather than a visual copy.`,
@@ -148,7 +154,9 @@ export function CreatePodScreen({ remixSource: rawRemixSource }: { remixSource: 
             className="mt-7"
             onSubmit={(event) => {
               event.preventDefault();
-              void createAndGo("create", (podId) => `/pod/${podId}`);
+              void createAndGo("create", (podId, podName) =>
+                buildNewPodConversationHref({ podId, podName, isFirstPod: false }),
+              );
             }}
           >
             <Label

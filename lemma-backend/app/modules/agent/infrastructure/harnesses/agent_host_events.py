@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from uuid import UUID
 
 from app.modules.agent.domain.agent_host import AgentHostEventType, AgentHostRunState
+from app.modules.agent.domain.pausing_tools import PAUSING_TOOL_NAMES
 from app.modules.agent.domain.agent_host_permissions import (
     permission_approval_events,
     permission_approval_tool_call_id,
@@ -31,6 +32,7 @@ from app.modules.agent.infrastructure.harnesses.agent_host_event_text import (
     error_event,
     event_text,
     is_terminal_event,
+    narration_event,
     terminal_event,
 )
 from app.modules.agent.infrastructure.harnesses.streaming import TextStreamBuffer
@@ -238,7 +240,22 @@ class AgentHostEventNormalizer:
         if announced is None:
             return []
         draft, sequence = announced
+        # Whatever the agent said before reaching for a tool is its own message,
+        # sealed here. Accumulating across the whole run instead produced one
+        # text message per run containing every narration glued together -- and
+        # a fifty-eight step run rendered as a single paragraph reading "Loading
+        # schemas first.Schemas loaded. Starting the test sweep.Empty pod", with
+        # the actual answer welded onto the end of it.
+        narration = self._flush_narration()
+        if draft.tool_name in PAUSING_TOOL_NAMES:
+            # Already on the record, under an id that can be answered. Lemma
+            # writes these itself when the MCP call arrives, because the id the
+            # harness reports here is one no approval endpoint, timer or resume
+            # can address. Keeping both would ask the person the same question
+            # twice, once on a card nothing resolves. See ``mcp_pausing_calls``.
+            return [*narration, *self._drain_tokens()]
         return [
+            *narration,
             *self._drain_tokens(),
             AgentEvent(
                 type=AgentEventType.MESSAGE,
@@ -258,6 +275,17 @@ class AgentHostEventNormalizer:
         ]
         self._token_kind = None
         return events
+
+    def _flush_narration(self) -> list[AgentEvent]:
+        """Seal what the agent has said so far as a message of its own."""
+        text, object_id = self._message.take()
+        if not text:
+            return []
+        return [
+            narration_event(
+                agent_run_id=self.agent_run_id, text=text, object_id=object_id
+            )
+        ]
 
     def _flush_messages(
         self,
@@ -307,9 +335,22 @@ class AgentHostEventNormalizer:
                 metadata.update(final_answer_metadata(record))
                 if self._final_answer_tool_call_id is not None:
                     metadata["tool_call_id"] = self._final_answer_tool_call_id
-                message = message or final_answer_text(
+                answer = final_answer_text(
                     record.get("output"), fallback=record.get("error")
                 )
+                if self._final_answer is not None and answer:
+                    # The tool's answer *is* the answer -- the agent is told to
+                    # end the task by calling it. This used to be `message or
+                    # answer`, so any trailing text at all won instead, and on a
+                    # long run the accumulated narration was never empty: the
+                    # report the agent had written was dropped from the body and
+                    # survived only in metadata.
+                    message = answer
+                else:
+                    # Inferred rather than called: the record was read back out
+                    # of this very text, so the text is the better rendering of
+                    # it and `answer` is only a fallback for an empty one.
+                    message = message or answer
         if message:
             events.append(
                 AgentEvent(
@@ -386,6 +427,12 @@ class AgentHostEventNormalizer:
                 "success": False,
                 "error": str(payload.get("error") or status.lower()),
             }
+        if tool_name in PAUSING_TOOL_NAMES:
+            # The other half of the drop above: with no call on the record under
+            # this id, a return under it pairs with nothing. What the model was
+            # actually told — a park's answer, a snooze's "you are asleep" — is
+            # written against the id Lemma owns, by whatever resolved it.
+            return [*opening, *self._drain_tokens()]
         return [
             *opening,
             *self._drain_tokens(),

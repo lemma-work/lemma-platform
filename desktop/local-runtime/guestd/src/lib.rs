@@ -306,7 +306,25 @@ fn run_bounded_engine_command(
             stderr.try_clone().map_err(|error| error.to_string())?,
         ))
         .process_group(0);
-    let mut child = command.spawn().map_err(|error| error.to_string())?;
+    // A just-written, just-chmod'd executable can make exec() answer ETXTBSY
+    // ("text file busy") even though this process already closed its own
+    // write handle -- the underlying storage layer's busy state can lag the
+    // close() that cleared it, especially under concurrent I/O (observed in
+    // CI on the runner's overlayfs). Spurious and short-lived: retry a
+    // handful of times on that one specific error rather than surface a
+    // transient race as a real spawn failure. Any other spawn error still
+    // fails immediately, unchanged.
+    let mut spawn_attempts = 0;
+    let mut child = loop {
+        match command.spawn() {
+            Ok(child) => break child,
+            Err(error) if error.raw_os_error() == Some(libc::ETXTBSY) && spawn_attempts < 5 => {
+                spawn_attempts += 1;
+                thread::sleep(Duration::from_millis(20));
+            }
+            Err(error) => return Err(error.to_string()),
+        }
+    };
     let deadline = Instant::now() + timeout;
     let status = loop {
         if let Some(status) = child.try_wait().map_err(|error| error.to_string())? {
@@ -2675,6 +2693,27 @@ mod tests {
         }
     }
 
+    /// A ceiling on a test that hangs, not part of what any test asserts.
+    ///
+    /// These budgets were all one second, which reads as harmless — the work
+    /// they bound takes milliseconds. But they are *wall-clock* deadlines, and
+    /// the suite runs its tests in parallel on a shared CI runner, so a 250ms
+    /// retry sleep or a `printf` can miss a one-second bus. Four tests failed
+    /// at random against deadlines none of them were about; under contention
+    /// one of them was measured taking over seven seconds.
+    ///
+    /// Nothing is slower for it. Each of these tests is driven by a fake that
+    /// answers immediately or a script that exits, so the budget is only ever
+    /// reached when something is already broken.
+    const UNHURRIED_TEST_TIMEOUT_SECS: u64 = 30;
+
+    /// How long the stand-in engine sleeps when a test needs it not to finish.
+    ///
+    /// The timeout test proves the kill landed by returning long before this
+    /// elapses, so its assertion is written against this rather than against a
+    /// second constant that could drift away from it.
+    const FORKING_ENGINE_SLEEP_SECS: u64 = 30;
+
     fn output(success: bool, stdout: &str) -> Output {
         Output {
             status: std::process::ExitStatus::from_raw(if success { 0 } else { 1 }),
@@ -2777,7 +2816,10 @@ mod tests {
         .unwrap();
 
         let value = service
-            .wait_engine_output(&["exec".into(), "lemma-core-postgres".into()], 1)
+            .wait_engine_output(
+                &["exec".into(), "lemma-core-postgres".into()],
+                UNHURRIED_TEST_TIMEOUT_SECS,
+            )
             .unwrap();
 
         assert_eq!(value, "1");
@@ -2805,7 +2847,9 @@ mod tests {
         )
         .unwrap();
 
-        service.ensure_database("lemma_datastore", 1).unwrap();
+        service
+            .ensure_database("lemma_datastore", UNHURRIED_TEST_TIMEOUT_SECS)
+            .unwrap();
 
         let commands = service.engine.commands.lock().unwrap();
         assert_eq!(commands.len(), 3);
@@ -3411,7 +3455,11 @@ mod tests {
         let executable = root.path().join("forking-engine");
         let capture_root = root.path().join("captures");
         fs::create_dir(&capture_root).unwrap();
-        fs::write(&executable, "#!/bin/sh\nsleep 30\n").unwrap();
+        fs::write(
+            &executable,
+            format!("#!/bin/sh\nsleep {FORKING_ENGINE_SLEEP_SECS}\n"),
+        )
+        .unwrap();
         fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
         let started = Instant::now();
 
@@ -3419,8 +3467,19 @@ mod tests {
             run_bounded_engine_command(&executable, &capture_root, &[], Duration::from_millis(100))
                 .unwrap_err();
 
-        assert!(error.contains("timed out"));
-        assert!(started.elapsed() < Duration::from_secs(2));
+        // Carries the error: the one CI failure this test has produced was this
+        // assertion printing nothing about what it actually got, and it was
+        // neither of the two conditions reproducible under load.
+        assert!(error.contains("timed out"), "{error}");
+        // Well short of the sleep, so returning at all means the kill landed
+        // rather than the script running itself out. Half of it, rather than a
+        // fixed two seconds: the elapsed time also covers spawning, polling and
+        // reaping on a machine running the rest of the suite beside it.
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed < Duration::from_secs(FORKING_ENGINE_SLEEP_SECS / 2),
+            "the engine outlived its timeout by {elapsed:?}"
+        );
     }
 
     #[test]
@@ -3432,9 +3491,13 @@ mod tests {
         fs::write(&executable, "#!/bin/sh\nprintf '%s' \"$TMPDIR\"\n").unwrap();
         fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
 
-        let output =
-            run_bounded_engine_command(&executable, &capture_root, &[], Duration::from_secs(1))
-                .unwrap();
+        let output = run_bounded_engine_command(
+            &executable,
+            &capture_root,
+            &[],
+            Duration::from_secs(UNHURRIED_TEST_TIMEOUT_SECS),
+        )
+        .unwrap();
 
         assert!(output.status.success());
         assert_eq!(

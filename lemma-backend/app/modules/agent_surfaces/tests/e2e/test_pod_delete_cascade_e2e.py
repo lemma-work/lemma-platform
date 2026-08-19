@@ -15,7 +15,6 @@ external scheduler service and proves the cleanup deletes internal schedules too
 
 from __future__ import annotations
 
-import asyncio
 from uuid import UUID, uuid4
 
 import pytest
@@ -28,11 +27,12 @@ from app.modules.agent_surfaces.tests.e2e.helpers import _ensure_connector_accou
 from app.modules.schedule.domain.schedule import ScheduleEntity, ScheduleType
 from app.modules.schedule.infrastructure.models.schedule import Schedule
 from app.modules.schedule.repositories.schedule_repository import ScheduleRepository
+from app.modules.test_support.e2e.waiters import eventually
 
 pytestmark = pytest.mark.e2e
 
 CLEANUP_TIMEOUT_SECONDS = 60
-CLEANUP_POLL_SECONDS = 0.5
+CLEANUP_POLL_SECONDS = 0.15
 
 
 async def _create_pod(client: AsyncClient, org_id: str, *, name: str) -> str:
@@ -164,14 +164,16 @@ async def test_pod_delete_cascades_schedule_and_surface_cleanup(
     assert deleted.status_code == 204, deleted.text
 
     # Poll until the worker has removed every schedule and surface for the pod.
-    deadline = asyncio.get_running_loop().time() + CLEANUP_TIMEOUT_SECONDS
-    schedules = surfaces = -1
-    while asyncio.get_running_loop().time() < deadline:
-        schedules, surfaces = await _count_pod_children(db_manager, pod_uuid)
-        if schedules == 0 and surfaces == 0:
-            break
-        await asyncio.sleep(CLEANUP_POLL_SECONDS)
+    async def probe() -> tuple[int, int]:
+        return await _count_pod_children(db_manager, pod_uuid)
 
+    schedules, surfaces = await eventually(
+        label=f"pod {pod_uuid} schedules and surfaces cleaned up",
+        probe=probe,
+        done=lambda counts: counts == (0, 0),
+        timeout_seconds=CLEANUP_TIMEOUT_SECONDS,
+        interval_seconds=CLEANUP_POLL_SECONDS,
+    )
     assert schedules == 0, f"schedules not cleaned up after pod delete: {schedules}"
     assert surfaces == 0, f"surfaces not cleaned up after pod delete: {surfaces}"
 

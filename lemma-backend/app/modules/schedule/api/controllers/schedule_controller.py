@@ -5,6 +5,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
+from app.core.api.dependencies import UoWDep
 from app.core.api.pagination import parse_uuid_page_token
 from app.core.authorization.context import ResourceRef
 from app.core.authorization.dependencies import PodContextDep, require_pod_membership
@@ -84,6 +85,7 @@ async def list_schedules(
     pod_id: UUID,
     service: ScheduleServiceDep,
     ctx: PodContextDep,
+    uow: UoWDep,
     schedule_type: Optional[ScheduleType] = None,
     is_active: Optional[bool] = None,
     agent_name: str | None = None,
@@ -105,6 +107,16 @@ async def list_schedules(
         cursor=cursor,
         ctx=ctx,
     )
+    # The read is done -- hand the pooled connection back before building and
+    # serializing the response below. `uow` is the same request-scoped unit of
+    # work `service` used (FastAPI caches `UoWDep` per request), so this just
+    # ends the read-only transaction the repository call above opened; nothing
+    # in this handler writes. Left uncommitted, the connection stays checked
+    # out through `ScheduleDetailResponse.model_validate` and FastAPI's
+    # `response_model` serialization below, exactly the shape
+    # `_release_after_authorization` (app/core/authorization/dependencies.py)
+    # fixes for the context-building step that runs before this handler.
+    await uow.commit()
     return ScheduleListResponse(
         items=[ScheduleDetailResponse.model_validate(t) for t in schedules],
         limit=limit,

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from uuid import uuid4
 
 from httpx import AsyncClient
@@ -116,49 +117,67 @@ async def create_role_visibility_context(
     assert role_response.status_code == status.HTTP_201_CREATED, role_response.text
     assert role_response.json()["name"] == custom_role
 
-    viewer = await signup_user(async_client, f"{pod_name_prefix}-viewer")
-    custom_viewer = await signup_user(async_client, f"{pod_name_prefix}-custom")
-    editor = await signup_user(async_client, f"{pod_name_prefix}-editor")
-
-    viewer_org_member = await invite_org_member(
-        owner_client,
-        async_client,
-        org_id=fixed_test_org["id"],
-        user=viewer,
-    )
-    custom_org_member = await invite_org_member(
-        owner_client,
-        async_client,
-        org_id=fixed_test_org["id"],
-        user=custom_viewer,
-    )
-    editor_org_member = await invite_org_member(
-        owner_client,
-        async_client,
-        org_id=fixed_test_org["id"],
-        user=editor,
+    # The 3 actors are independent of each other within each stage below --
+    # only the ordering BETWEEN stages is a real dependency (invite needs the
+    # signed-up user's email; add_pod_member needs the org-member id invite
+    # returns). Gathering within a stage is safe: no shared mutable state in
+    # this module, ASGITransport gives each concurrent request genuine
+    # per-call isolation, DB sessions are fresh per call, and SuperTokens
+    # abuse-protection is already disabled in e2e. One accepted tradeoff:
+    # asyncio.gather() surfaces whichever actor's assertion fails first in
+    # completion order, not submission order, unlike the old strictly
+    # sequential version -- harmless today since no caller of this function
+    # asserts on *which* actor's setup error message it sees, only whether
+    # setup as a whole succeeded.
+    viewer, custom_viewer, editor = await asyncio.gather(
+        signup_user(async_client, f"{pod_name_prefix}-viewer"),
+        signup_user(async_client, f"{pod_name_prefix}-custom"),
+        signup_user(async_client, f"{pod_name_prefix}-editor"),
     )
 
-    viewer_member = await add_pod_member(
-        owner_client,
-        pod_id=pod_id,
-        organization_member_id=viewer_org_member["id"],
-        role="POD_VIEWER",
-        roles=["POD_VIEWER"],
+    viewer_org_member, custom_org_member, editor_org_member = await asyncio.gather(
+        invite_org_member(
+            owner_client,
+            async_client,
+            org_id=fixed_test_org["id"],
+            user=viewer,
+        ),
+        invite_org_member(
+            owner_client,
+            async_client,
+            org_id=fixed_test_org["id"],
+            user=custom_viewer,
+        ),
+        invite_org_member(
+            owner_client,
+            async_client,
+            org_id=fixed_test_org["id"],
+            user=editor,
+        ),
     )
-    custom_member = await add_pod_member(
-        owner_client,
-        pod_id=pod_id,
-        organization_member_id=custom_org_member["id"],
-        role="POD_VIEWER",
-        roles=["POD_VIEWER", custom_role],
-    )
-    editor_member = await add_pod_member(
-        owner_client,
-        pod_id=pod_id,
-        organization_member_id=editor_org_member["id"],
-        role="POD_EDITOR",
-        roles=["POD_EDITOR"],
+
+    viewer_member, custom_member, editor_member = await asyncio.gather(
+        add_pod_member(
+            owner_client,
+            pod_id=pod_id,
+            organization_member_id=viewer_org_member["id"],
+            role="POD_VIEWER",
+            roles=["POD_VIEWER"],
+        ),
+        add_pod_member(
+            owner_client,
+            pod_id=pod_id,
+            organization_member_id=custom_org_member["id"],
+            role="POD_VIEWER",
+            roles=["POD_VIEWER", custom_role],
+        ),
+        add_pod_member(
+            owner_client,
+            pod_id=pod_id,
+            organization_member_id=editor_org_member["id"],
+            role="POD_EDITOR",
+            roles=["POD_EDITOR"],
+        ),
     )
 
     return {

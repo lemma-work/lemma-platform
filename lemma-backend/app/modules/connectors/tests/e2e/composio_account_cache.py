@@ -42,7 +42,7 @@ def human_oauth_enabled() -> bool:
 def _read_cache() -> dict[str, Any]:
     try:
         return json.loads(_CACHE_PATH.read_text())
-    except (OSError, ValueError):
+    except OSError, ValueError:
         # A missing or corrupt cache is not an error: it just means we have not
         # connected yet, or the file was hand-edited.
         return {}
@@ -65,6 +65,9 @@ def _connection_status(composio: Any, account_id: str) -> str | None:
 
 
 def _wait_until_active(composio: Any, account_id: str, *, timeout: float) -> None:
+    # Plain time.sleep, not waiters.eventually(): the Composio SDK is sync, and
+    # every function in this module is plain `def`, called from sync test setup
+    # rather than from inside a test's event loop.
     deadline = time.time() + timeout
     last = None
     while time.time() < deadline:

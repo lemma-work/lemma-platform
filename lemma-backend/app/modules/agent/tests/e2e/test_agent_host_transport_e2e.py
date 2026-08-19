@@ -538,8 +538,13 @@ async def test_a_second_cancel_for_the_same_lease_is_not_queued(db_session, scen
 
 
 @pytest.mark.asyncio
-async def test_concurrent_idle_polls_all_return(authenticated_client, async_client):
+async def test_concurrent_idle_polls_all_return(
+    authenticated_client, async_client, monkeypatch
+):
     """Two machines idling at once is the normal state of a workspace."""
+    monkeypatch.setattr(agent_host_controller, "_IDLE_REPOLL_SECONDS", 0.2)
+    monkeypatch.setattr(agent_host_controller, "_LONG_POLL_SECONDS", 1.0)
+
     first = await pair(authenticated_client, async_client, display_name="e2e a")
     second = await pair(authenticated_client, async_client, display_name="e2e b")
     responses = await asyncio.gather(

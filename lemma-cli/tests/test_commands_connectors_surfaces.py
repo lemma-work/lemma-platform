@@ -126,3 +126,113 @@ def test_surfaces_list_json_output(monkeypatch):
     payload = json.loads(result.stdout)
     assert "items" in payload
     assert payload["items"][0]["platform"] == "SLACK"
+
+
+# ---------------------------------------------------------------------------
+# Managed Telegram bot setup
+# ---------------------------------------------------------------------------
+
+def _make_telegram_setup_client_and_captured():
+    captured = {}
+
+    class FakeSurfaces:
+        def start_telegram_bot_setup(self, payload):
+            captured["start_payload"] = payload
+            return {
+                "setup_id": "setup-1",
+                "status": "AWAITING_BOT",
+                "launch_url": "https://t.me/LemmaManagerBot?start=setup-1",
+                "manager_bot_username": "LemmaManagerBot",
+                "expires_at": "2026-08-18T10:00:00Z",
+            }
+
+        def get_telegram_bot_setup(self, setup_id):
+            captured["status_setup_id"] = setup_id
+            return {
+                "setup_id": setup_id,
+                "status": "COMPLETED",
+                "launch_url": "https://t.me/LemmaManagerBot?start=setup-1",
+                "manager_bot_username": "LemmaManagerBot",
+                "expires_at": "2026-08-18T10:00:00Z",
+                "bot_username": "acme_ops_bot",
+            }
+
+    class FakePod:
+        def __init__(self):
+            self.surfaces = FakeSurfaces()
+
+    class FakeClient:
+        def pod(self, pod_id):
+            captured["pod_id"] = pod_id
+            return FakePod()
+
+    return FakeClient(), captured
+
+
+def test_telegram_setup_starts_and_returns_launch_url(monkeypatch):
+    client, captured = _make_telegram_setup_client_and_captured()
+    _patch_surfaces(monkeypatch, client, output="json")
+
+    result = runner.invoke(
+        app, ["--json", "--pod", "pod-1", "surfaces", "telegram-setup"]
+    )
+
+    assert result.exit_code == 0, result.stdout
+    payload = json.loads(result.stdout)
+    assert payload["launch_url"].startswith("https://t.me/")
+    assert payload["setup_id"] == "setup-1"
+
+
+def test_telegram_setup_defaults_to_the_pod_assistant(monkeypatch):
+    """No --agent means no `default_agent_name`, which is what binds the surface
+    to the pod assistant instead of requiring an agent to exist first."""
+    client, captured = _make_telegram_setup_client_and_captured()
+    _patch_surfaces(monkeypatch, client, output="json")
+
+    result = runner.invoke(
+        app, ["--json", "--pod", "pod-1", "surfaces", "telegram-setup"]
+    )
+
+    assert result.exit_code == 0, result.stdout
+    assert "default_agent_name" not in captured["start_payload"]
+
+
+def test_telegram_setup_forwards_agent_and_name(monkeypatch):
+    client, captured = _make_telegram_setup_client_and_captured()
+    _patch_surfaces(monkeypatch, client, output="json")
+
+    result = runner.invoke(
+        app,
+        [
+            "--json",
+            "--pod",
+            "pod-1",
+            "surfaces",
+            "telegram-setup",
+            "--agent",
+            "ops",
+            "--name",
+            "telegram-ops",
+            "--disabled",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    assert captured["start_payload"]["default_agent_name"] == "ops"
+    assert captured["start_payload"]["name"] == "telegram-ops"
+    assert captured["start_payload"]["is_enabled"] is False
+
+
+def test_telegram_setup_status_dispatches_setup_id(monkeypatch):
+    client, captured = _make_telegram_setup_client_and_captured()
+    _patch_surfaces(monkeypatch, client, output="json")
+
+    result = runner.invoke(
+        app,
+        ["--json", "--pod", "pod-1", "surfaces", "telegram-setup-status", "setup-1"],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    assert captured["status_setup_id"] == "setup-1"
+    payload = json.loads(result.stdout)
+    assert payload["bot_username"] == "acme_ops_bot"

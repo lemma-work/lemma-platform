@@ -307,6 +307,10 @@ _SMOKE_OPS: dict[str, tuple[str, dict]] = {
 def _wait_for_active_connection(
     composio: Composio, connection_id: str, timeout: float = 300.0
 ):
+    # Plain time.sleep, not waiters.eventually(): the Composio SDK is sync, and
+    # a human is expected to be looking at a just-opened browser tab for most of
+    # this wait, so blocking the caller's event loop for it costs nothing real
+    # -- this whole file only runs with RUN_HUMAN_OAUTH=1, never in CI.
     deadline = time.time() + timeout
     last_status = None
     while time.time() < deadline:

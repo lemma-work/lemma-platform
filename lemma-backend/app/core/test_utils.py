@@ -1,13 +1,12 @@
+import hashlib
 import os
 import shutil
 import socket
 import subprocess
 import time
 from contextlib import contextmanager
-from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Generator, Optional
-from uuid import uuid4
 
 import psycopg
 
@@ -34,32 +33,11 @@ POSTGRES_DB = "test"
 DOCKER_LABEL = "lemma.e2e=true"
 
 
-@dataclass
-class LemmaDockerNetwork:
-    name: str = field(default_factory=lambda: f"lemma-e2e-{uuid4().hex[:12]}")
-
-    def __enter__(self) -> "LemmaDockerNetwork":
-        subprocess.run(
-            ["docker", "network", "create", self.name],
-            check=True,
-            capture_output=True,
-        )
-        return self
-
-    def __exit__(self, exc_type, exc, tb) -> None:
-        subprocess.run(
-            ["docker", "network", "rm", self.name],
-            check=False,
-            capture_output=True,
-        )
-
-
 class LemmaDockerContainer:
     def __init__(self, image: str, internal_port: int) -> None:
         self.image = image
         self.internal_port = internal_port
         self.container_id: str | None = None
-        self._network: LemmaDockerNetwork | None = None
         self._env: dict[str, str] = {}
         self._extra_run_args: list[str] = []
         self._command: list[str] = []
@@ -78,10 +56,6 @@ class LemmaDockerContainer:
         self._command.extend(args)
         return self
 
-    def with_network(self, network: LemmaDockerNetwork) -> "LemmaDockerContainer":
-        self._network = network
-        return self
-
     def __enter__(self) -> "LemmaDockerContainer":
         command = [
             "docker",
@@ -92,8 +66,6 @@ class LemmaDockerContainer:
             "-p",
             f"127.0.0.1::{self.internal_port}",
         ]
-        if self._network is not None:
-            command.extend(["--network", self._network.name])
         for name, value in self._env.items():
             command.extend(["-e", f"{name}={value}"])
         command.extend(self._extra_run_args)
@@ -354,36 +326,37 @@ def _wait_for_postgres(container: LemmaPostgresContainer) -> None:
 
 
 @contextmanager
-def get_test_network() -> Generator[LemmaDockerNetwork, None, None]:
-    """
-    Creates a Docker network for test containers to communicate.
-    """
-    reap_stale_lemma_containers()
-    with LemmaDockerNetwork() as network:
-        try:
-            yield network
-        finally:
-            reap_stale_lemma_containers()
-
-
-@contextmanager
-def get_postgres_container(
-    network: Optional[LemmaDockerNetwork] = None,
-) -> Generator[LemmaPostgresContainer, None, None]:
+def get_postgres_container() -> Generator[LemmaPostgresContainer, None, None]:
     """
     Starts a PostgreSQL container and yields it.
     Can be used in pytest fixtures with scope="session".
+
+    Only used serially (no xdist, e.g. ``make test-connection-scope``'s
+    ``-m connection_scope`` has no ``-n``) -- ``shared_postgres``'s xdist path
+    goes through ``start_shared_postgres`` instead. Named and networked the
+    same way regardless: ``get_postgres_uri_from_another_container`` needs
+    ``container.container_id`` to be a real Docker name, not the bare hex id
+    an unqualified ``docker run`` would otherwise leave it as, and SuperTokens
+    needs ``SHARED_E2E_NETWORK_NAME`` to already exist to join it.
     """
+    name = f"lemma-e2e-postgres-{hashlib.sha256(f'{os.getpid()}-{time.time()}'.encode()).hexdigest()[:10]}"
+    _ensure_docker_network(SHARED_E2E_NETWORK_NAME)
     container = (
         LemmaPostgresContainer()
         .with_env("POSTGRES_USER", POSTGRES_USER)
         .with_env("POSTGRES_PASSWORD", POSTGRES_PASSWORD)
         .with_env("POSTGRES_DB", POSTGRES_DB)
+        .with_run_args("--name", name, "--network", SHARED_E2E_NETWORK_NAME)
     )
-    if network:
-        container.with_network(network)
 
     with container as postgres:
+        # __enter__ just overwrote container_id with `docker run`'s stdout --
+        # the container's full hex id, not the --name given above. Docker's
+        # embedded DNS resolves the name, not that id, so this must be reset
+        # before anything (SuperTokens, via get_postgres_uri_from_another_
+        # container) tries to reach this container by it -- the same reset
+        # shared_postgres's xdist path already does for the same reason.
+        postgres.container_id = name
         _wait_for_postgres(postgres)
         yield postgres
 
@@ -421,11 +394,43 @@ def get_minio_container() -> Generator[LemmaDockerContainer, None, None]:
 
 
 @contextmanager
-def get_supertokens_container() -> Generator[LemmaDockerContainer, None, None]:
+def get_supertokens_container(
+    postgres_connection_uri: Optional[str] = None,
+    network: Optional[str] = None,
+) -> Generator[LemmaDockerContainer, None, None]:
     """
-    Starts a SuperTokens container with in-memory SQLite (default).
+    Starts a SuperTokens container.
+
+    ``postgres_connection_uri``, if given, points the core at a real Postgres
+    database instead of its no-config in-memory SQLite fallback. SQLite's
+    shared-cache mode only supports one writer at a time -- concurrent
+    signups (e.g. asyncio.gather()-ing several actors' signup calls in
+    create_role_visibility_context) hit real
+    ``SQLITE_LOCKED_SHAREDCACHE: database table is locked`` errors under it.
+    The image is literally named "supertokens-postgresql"; SQLite is a
+    quick-start fallback, not the intended concurrent-write-safe mode.
+
+    ``network``, if given, joins this container to the same user-defined
+    Docker network as ``postgres_connection_uri``'s target (see
+    ``get_postgres_uri_from_another_container``) -- required for the
+    container-name hostname in that URI to resolve at all.
     """
-    container = LemmaDockerContainer(SUPERTOKENS_IMAGE, 3567)
+    # Every user signup/signin in the suite pays real bcrypt cost against the
+    # default work factor (2^11 rounds). This container is thrown away at the
+    # end of the run and never holds anything worth protecting, so drop the
+    # rounds to the minimum SuperTokens accepts -- tests that create several
+    # actors (e.g. visibility-matrix fixtures signing up 3+ users) see that
+    # multiplied per signup.
+    container = LemmaDockerContainer(SUPERTOKENS_IMAGE, 3567).with_env(
+        "BCRYPT_LOG_ROUNDS",
+        os.getenv("E2E_SUPERTOKENS_BCRYPT_LOG_ROUNDS", "4"),
+    )
+    if postgres_connection_uri:
+        container = container.with_env(
+            "POSTGRESQL_CONNECTION_URI", postgres_connection_uri
+        )
+    if network:
+        container = container.with_run_args("--network", network)
 
     with container as st:
         # Wait for SuperTokens to be ready by polling the health endpoint
@@ -537,6 +542,59 @@ def _wait_for_kreuzberg_ready(container: LemmaDockerContainer) -> None:
     )
 
 
+def _session_scoped_container_name(base_name: str, basetemp_parent) -> str:
+    """Make a shared-container name unique to THIS pytest invocation.
+
+    Under xdist, ``tmp_path_factory.getbasetemp()`` for a worker is a
+    ``popen-gwN`` subdirectory of a per-invocation, monotonically-numbered
+    ``pytest-<N>`` root -- so ``.parent`` (what callers pass in as
+    ``basetemp_parent``) is stable across all workers of ONE invocation but
+    different for every separate invocation (confirmed empirically: two
+    `pytest` runs in a row get `pytest-355` and `pytest-356`; xdist workers
+    of one run share the same parent). A bare fixed name here would instead
+    be the same across completely unrelated invocations -- e.g. two
+    developers running the suite at once, or two worktrees sharing a Docker
+    daemon -- and the second invocation's ``docker rm -f <name>`` would rip
+    out the first invocation's still-live container out from under it,
+    independent of (and invisible to) the first invocation's own refcount.
+    Observed exactly this: a concurrent worktree's run corrupted another's
+    containers mid-test with connection-refused errors.
+    """
+    digest = hashlib.sha256(str(basetemp_parent).encode()).hexdigest()[:10]
+    return f"{base_name}-{digest}"
+
+
+# ONE fixed name, not digested per invocation like the container names above.
+# A user-defined network consumes a subnet from Docker's finite default
+# address pool on creation (historically ~31 of them); a network per pytest
+# invocation is exactly the shape that exhausted it before -- see the
+# "prune orphaned lemma-e2e-* networks" comment in e2e_base.py's
+# _cleanup_e2e_workspace_containers, from before the shared-Postgres model,
+# when every testcontainer got its own network. Reusing one well-known name
+# forever means at most one network ever exists, and there is nothing to
+# accumulate: many unrelated invocations' differently (and uniquely) named
+# containers can share it with no cross-talk risk, since reaching another
+# container by name requires already knowing its invocation-specific name.
+SHARED_E2E_NETWORK_NAME = "lemma-e2e-shared-net"
+
+
+def _ensure_docker_network(name: str) -> None:
+    """Create a user-defined bridge network if it doesn't already exist.
+
+    Container-to-container DNS-by-name only works on a user-defined network --
+    the default ``bridge`` network an unqualified ``docker run`` joins does
+    not provide it, and routing back out through a host-published port
+    doesn't work either (see ``get_postgres_uri_from_another_container``).
+    Idempotent and racy on purpose: ``docker network create`` on a name that
+    already exists just errors, which this swallows, since whichever
+    container starts first on a given machine creates it for every other one
+    after it.
+    """
+    subprocess.run(
+        ["docker", "network", "create", name], check=False, capture_output=True
+    )
+
+
 def start_shared_kreuzberg(name: str) -> str:
     """Start ONE named Kreuzberg container and return its URL.
 
@@ -561,9 +619,7 @@ def start_shared_kreuzberg(name: str) -> str:
 
 def remove_named_container(name: str) -> None:
     """Force-remove a container by name, and its anonymous volumes (best effort)."""
-    subprocess.run(
-        ["docker", "rm", "-f", "-v", name], check=False, capture_output=True
-    )
+    subprocess.run(["docker", "rm", "-f", "-v", name], check=False, capture_output=True)
 
 
 SHARED_KREUZBERG_NAME = "lemma-e2e-kreuzberg-shared"
@@ -591,6 +647,7 @@ def shared_kreuzberg(basetemp_parent, worker_id: str) -> Generator[str, None, No
     from filelock import FileLock
 
     root = Path(basetemp_parent)
+    name = _session_scoped_container_name(SHARED_KREUZBERG_NAME, basetemp_parent)
     lock = FileLock(str(root / "kreuzberg.lock"))
     url_file = root / "kreuzberg_url.txt"
     refs_file = root / "kreuzberg_refs.txt"
@@ -599,7 +656,7 @@ def shared_kreuzberg(basetemp_parent, worker_id: str) -> Generator[str, None, No
         if url_file.exists():
             url = url_file.read_text().strip()
         else:
-            url = start_shared_kreuzberg(SHARED_KREUZBERG_NAME)
+            url = start_shared_kreuzberg(name)
             url_file.write_text(url)
         refs = int(refs_file.read_text()) if refs_file.exists() else 0
         refs_file.write_text(str(refs + 1))
@@ -611,19 +668,215 @@ def shared_kreuzberg(basetemp_parent, worker_id: str) -> Generator[str, None, No
             refs = (int(refs_file.read_text()) if refs_file.exists() else 1) - 1
             refs_file.write_text(str(refs))
             if refs <= 0:
-                remove_named_container(SHARED_KREUZBERG_NAME)
+                remove_named_container(name)
                 url_file.unlink(missing_ok=True)
                 refs_file.unlink(missing_ok=True)
 
 
-def get_postgres_url(container: LemmaPostgresContainer) -> str:
-    """Helper to extract async database URL from container."""
+def start_shared_postgres(name: str) -> LemmaPostgresContainer:
+    """Start ONE named Postgres container and return a reference to it.
+
+    Mirrors ``start_shared_kreuzberg``: one Postgres *server process* shared
+    across all xdist workers (each worker still gets its own logical
+    database inside it via ``create_postgres_database``), instead of one
+    full container per worker. Not auto-stopped; the last worker out calls
+    ``remove_named_container`` (and the label-based prune sweeps any
+    straggler).
+    """
+    # Clear any straggler with this name from a previously crashed run.
+    subprocess.run(["docker", "rm", "-f", name], check=False, capture_output=True)
+    _ensure_docker_network(SHARED_E2E_NETWORK_NAME)
+    container = (
+        LemmaPostgresContainer()
+        .with_env("POSTGRES_USER", POSTGRES_USER)
+        .with_env("POSTGRES_PASSWORD", POSTGRES_PASSWORD)
+        .with_env("POSTGRES_DB", POSTGRES_DB)
+        .with_run_args("--name", name, "--network", SHARED_E2E_NETWORK_NAME)
+    )
+    container.__enter__()  # start detached; intentionally no matching __exit__
+    _wait_for_postgres(container)
+    return container
+
+
+SHARED_POSTGRES_NAME = "lemma-e2e-postgres-shared"
+
+
+@contextmanager
+def shared_postgres(
+    basetemp_parent, worker_id: str
+) -> Generator[LemmaPostgresContainer, None, None]:
+    """Yield a ``LemmaPostgresContainer`` pointed at a SINGLE Postgres server
+    shared across all xdist workers.
+
+    Refcounted via a file lock in the xdist-shared temp root, same pattern as
+    ``shared_kreuzberg``: the first worker in starts a named container; later
+    workers reconstruct a lightweight reference to it (docker accepts a
+    container NAME anywhere it accepts an ID, so ``get_exposed_port``/
+    ``get_logs`` -- which just shell out to ``docker port``/``docker logs`` --
+    work identically); the last worker out removes it. Without xdist
+    (``worker_id == 'master'``) it falls back to a plain per-session
+    container.
+    """
+    if worker_id == "master":
+        with get_postgres_container() as postgres:
+            yield postgres
+        return
+
+    from pathlib import Path
+
+    from filelock import FileLock
+
+    root = Path(basetemp_parent)
+    name = _session_scoped_container_name(SHARED_POSTGRES_NAME, basetemp_parent)
+    lock = FileLock(str(root / "postgres.lock"))
+    refs_file = root / "postgres_refs.txt"
+
+    with lock:
+        refs = int(refs_file.read_text()) if refs_file.exists() else 0
+        if refs == 0:
+            start_shared_postgres(name)
+        refs_file.write_text(str(refs + 1))
+
+    container = LemmaPostgresContainer()
+    container.container_id = name
+
+    try:
+        yield container
+    finally:
+        with lock:
+            refs = (int(refs_file.read_text()) if refs_file.exists() else 1) - 1
+            refs_file.write_text(str(refs))
+            if refs <= 0:
+                remove_named_container(name)
+                refs_file.unlink(missing_ok=True)
+                # SHARED_E2E_NETWORK_NAME is NOT removed here: it is one fixed,
+                # permanent resource reused by every invocation on this
+                # machine, not owned by this one -- see its own comment.
+
+
+def start_shared_redis(name: str) -> LemmaDockerContainer:
+    """Start ONE named Redis container and return a reference to it.
+
+    Mirrors ``start_shared_postgres``: one Redis *server process* shared
+    across all xdist workers (each worker gets its own logical database
+    inside it, selected via the connection URL's ``/<n>`` suffix -- Redis has
+    a native per-connection ``SELECT <db-index>`` concept, so unlike Postgres
+    there is no ``CREATE DATABASE``-equivalent step needed), instead of one
+    full container per worker. Not auto-stopped; the last worker out calls
+    ``remove_named_container`` (and the label-based prune sweeps any
+    straggler).
+    """
+    # Clear any straggler with this name from a previously crashed run.
+    subprocess.run(["docker", "rm", "-f", name], check=False, capture_output=True)
+    container = LemmaDockerContainer(REDIS_IMAGE, 6379).with_run_args("--name", name)
+    container.__enter__()  # start detached; intentionally no matching __exit__
+    _wait_for_tcp(container, 6379, _env_int("REDIS_STARTUP_TIMEOUT_SECONDS", 120))
+    return container
+
+
+SHARED_REDIS_NAME = "lemma-e2e-redis-shared"
+
+
+@contextmanager
+def shared_redis(
+    basetemp_parent, worker_id: str
+) -> Generator[LemmaDockerContainer, None, None]:
+    """Yield a ``LemmaDockerContainer`` pointed at a SINGLE Redis server
+    shared across all xdist workers.
+
+    Refcounted via a file lock in the xdist-shared temp root, same pattern as
+    ``shared_postgres``/``shared_kreuzberg``: the first worker in starts a
+    named container; later workers reconstruct a lightweight reference to it
+    (docker accepts a container NAME anywhere it accepts an ID, so
+    ``get_exposed_port``/``get_logs`` -- which just shell out to ``docker
+    port``/``docker logs`` -- work identically); the last worker out removes
+    it. Without xdist (``worker_id == 'master'``) it falls back to a plain
+    per-session container.
+    """
+    if worker_id == "master":
+        with get_redis_container() as redis:
+            yield redis
+        return
+
+    from pathlib import Path
+
+    from filelock import FileLock
+
+    root = Path(basetemp_parent)
+    name = _session_scoped_container_name(SHARED_REDIS_NAME, basetemp_parent)
+    lock = FileLock(str(root / "redis.lock"))
+    refs_file = root / "redis_refs.txt"
+
+    with lock:
+        refs = int(refs_file.read_text()) if refs_file.exists() else 0
+        if refs == 0:
+            start_shared_redis(name)
+        refs_file.write_text(str(refs + 1))
+
+    container = LemmaDockerContainer(REDIS_IMAGE, 6379)
+    container.container_id = name
+
+    try:
+        yield container
+    finally:
+        with lock:
+            refs = (int(refs_file.read_text()) if refs_file.exists() else 1) - 1
+            refs_file.write_text(str(refs))
+            if refs <= 0:
+                remove_named_container(name)
+                refs_file.unlink(missing_ok=True)
+
+
+def get_postgres_url(
+    container: LemmaPostgresContainer, database_name: Optional[str] = None
+) -> str:
+    """Helper to extract async database URL from container.
+
+    ``database_name`` overrides the container's default database (used by the
+    shared-Postgres model, where multiple xdist workers share one container
+    but each connects to its own logical database).
+    """
     host = container.get_container_host_ip()
     port = container.get_exposed_port(5432)
     user = container.username
     password = container.password
-    dbname = container.dbname
+    dbname = database_name or container.dbname
     return f"postgresql+asyncpg://{user}:{password}@{host}:{port}/{dbname}"
+
+
+def get_postgres_uri_from_another_container(
+    container: LemmaPostgresContainer, database_name: str
+) -> str:
+    """A bare ``postgresql://`` URI for a container connecting from ANOTHER
+    container (e.g. SuperTokens' ``POSTGRESQL_CONNECTION_URI``) on the SAME
+    ``SHARED_E2E_NETWORK_NAME`` Docker network, not from the host pytest
+    process.
+
+    ``get_postgres_url()`` returns ``container.get_container_host_ip()``
+    (``127.0.0.1``) plus the ``+asyncpg`` SQLAlchemy dialect suffix -- right
+    for this process's own connections, wrong on every count for a sibling
+    container: ``127.0.0.1`` inside a container means the container itself,
+    SuperTokens' Java core doesn't understand a SQLAlchemy dialect string,
+    and routing back out through a host-published port doesn't work either --
+    ``host.docker.internal`` was tried first and confirmed broken on CI's
+    native Linux runners: Postgres's ``-p 127.0.0.1::5432`` binding only
+    accepts connections whose destination is literally ``127.0.0.1``, and
+    traffic arriving via the docker0 bridge gateway (what ``host.docker.
+    internal`` resolves to without Docker Desktop's Mac/Windows-only magic)
+    has a different destination address, so it's refused before Postgres
+    ever sees it -- passed locally for the same reason the other attempt did.
+
+    Use the container's own name and internal port instead: Docker's
+    embedded DNS resolves a container by name for any other container on the
+    same user-defined network, and that traffic goes container-to-container
+    directly, never touching the host's published-port machinery at all.
+    ``container.container_id`` is a name, not a docker-assigned hex id, for
+    every caller of this function -- see ``shared_postgres``.
+    """
+    return (
+        f"postgresql://{container.username}:{container.password}"
+        f"@{container.container_id}:5432/{database_name}"
+    )
 
 
 def create_postgres_database(
@@ -647,11 +900,19 @@ def create_postgres_database(
                 cur.execute(f'CREATE DATABASE "{database_name}"')
 
 
-def get_redis_url(container: LemmaDockerContainer) -> str:
-    """Helper to extract Redis URL from container."""
+def get_redis_url(container: LemmaDockerContainer, db: Optional[int] = None) -> str:
+    """Helper to extract Redis URL from container.
+
+    ``db`` overrides the connection's logical database index (used by the
+    shared-Redis model, where multiple xdist workers share one Redis server
+    but each connects to its own logical DB, 0-15 by default). Omit for the
+    server's default DB 0.
+    """
     host = container.get_container_host_ip()
     port = container.get_exposed_port(6379)
-    return f"redis://{host}:{port}"
+    if db is None:
+        return f"redis://{host}:{port}"
+    return f"redis://{host}:{port}/{db}"
 
 
 def get_supertokens_url(container: LemmaDockerContainer) -> str:
