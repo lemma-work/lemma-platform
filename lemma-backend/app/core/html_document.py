@@ -37,10 +37,14 @@ _HEIGHT_BRIDGE = """
           "--lemma-widget-chart-5"
         ];
         var post = function () {
+          // No floor here. `min-height` used to sit on html/body, which made the
+          // document always as tall as the frame the host had already sized —
+          // so this measured the host's own guess and a short widget could
+          // never shrink below it. The host clamps the low end; this reports
+          // what the content actually is.
           var h = Math.max(
             document.documentElement.scrollHeight || 0,
-            document.body ? document.body.scrollHeight : 0,
-            240
+            document.body ? document.body.scrollHeight : 0
           );
           parent.postMessage({ type: "lemma-widget-height", height: h }, "*");
         };
@@ -78,7 +82,7 @@ _RESET_STYLES = """
 # blends into the conversation surface. A standalone (promoted) app gets none of
 # this — it owns the full page.
 _EMBED_STYLES = """
-      html, body { min-height: 100%; background: transparent; }
+      html, body { background: transparent; }
       body { padding: 16px; }"""
 
 
