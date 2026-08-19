@@ -24,6 +24,7 @@ from sqlalchemy import text
 from app.core.infrastructure.db.manager import DatabaseManager
 from app.core.test_utils import (
     create_postgres_database,
+    get_postgres_uri_from_another_container,
     get_postgres_url,
     get_redis_url,
     get_supertokens_container,
@@ -336,6 +337,10 @@ def _postgres_worker_datastore_db_name(worker_id: str) -> str:
     return f"datastore_{_sanitize_worker_id(worker_id)}"
 
 
+def _postgres_worker_supertokens_db_name(worker_id: str) -> str:
+    return f"supertokens_{_sanitize_worker_id(worker_id)}"
+
+
 def _start_postgres(worker_id: str, basetemp_parent) -> None:
     """Connect to the ONE Postgres server shared across all xdist workers.
 
@@ -355,7 +360,30 @@ def _start_postgres(worker_id: str, basetemp_parent) -> None:
         create_postgres_database(
             postgres, _postgres_worker_datastore_db_name(worker_id)
         )
+        create_postgres_database(
+            postgres, _postgres_worker_supertokens_db_name(worker_id)
+        )
         setattr(postgres, "_lemma_worker_databases_created", True)
+
+
+def _start_supertokens(worker_id: str, basetemp_parent) -> None:
+    """Start this worker's SuperTokens container against real Postgres.
+
+    Depends on postgres (needs it running, plus this worker's supertokens_*
+    database to exist before the core's first connection) -- unlike
+    postgres/redis, deliberately NOT threaded alongside the other two in
+    _warm_shared_containers; see the comment there.
+    """
+    _start_postgres(worker_id, basetemp_parent)
+    postgres = _SHARED_RESOURCES["postgres"]
+    postgres_uri = get_postgres_uri_from_another_container(
+        postgres, _postgres_worker_supertokens_db_name(worker_id)
+    )
+
+    def _factory():
+        return get_supertokens_container(postgres_uri)
+
+    _shared_context_resource("supertokens", _factory)
 
 
 def _start_redis(worker_id: str, basetemp_parent) -> None:
@@ -377,18 +405,19 @@ def _start_redis(worker_id: str, basetemp_parent) -> None:
 
 
 def _warm_shared_containers(worker_id: str, tmp_path_factory) -> None:
-    """Boot postgres/redis/supertokens concurrently on first use.
+    """Boot postgres(+supertokens) and redis concurrently on first use.
 
-    These are three independent Docker containers -- nothing about starting
-    one depends on another -- but as three separate session-scoped pytest
-    fixtures they'd otherwise be resolved one at a time by whichever fixture
-    chain asks for them first, each paying its own `docker run` + health-poll
-    cost in series (measured ~1-3s each once the image is warm). Threading
-    them collapses that to the slowest single one; `subprocess.run` and the
+    postgres and redis are independent Docker containers with nothing to
+    wait on each other for, so they're threaded -- `subprocess.run` and the
     HTTP/TCP health polls all release the GIL while waiting, so this is real
-    concurrency, not just interleaving. `_shared_context_resource` is the
-    dedupe layer, so a second caller (or a test that only needs one of the
-    three) always gets the same cached instance.
+    concurrency, not just interleaving. supertokens now runs against real
+    Postgres (see _start_supertokens), so it's resolved sequentially AFTER
+    postgres within the same job rather than threaded alongside it -- it
+    needs postgres already running, with this worker's supertokens_*
+    database already created, before its own first connection.
+    `_shared_context_resource` is the dedupe layer, so a second caller (or a
+    test that only needs one of the three) always gets the same cached
+    instance.
     """
     if all(
         name in _SHARED_RESOURCES for name in ("postgres", "redis", "supertokens")
@@ -405,14 +434,10 @@ def _warm_shared_containers(worker_id: str, tmp_path_factory) -> None:
     basetemp_parent = tmp_path_factory.getbasetemp().parent
 
     jobs: list[Callable[[], Any]] = []
-    if "postgres" not in _SHARED_RESOURCES:
-        jobs.append(lambda: _start_postgres(worker_id, basetemp_parent))
+    if "postgres" not in _SHARED_RESOURCES or "supertokens" not in _SHARED_RESOURCES:
+        jobs.append(lambda: _start_supertokens(worker_id, basetemp_parent))
     if "redis" not in _SHARED_RESOURCES:
         jobs.append(lambda: _start_redis(worker_id, basetemp_parent))
-    if "supertokens" not in _SHARED_RESOURCES:
-        jobs.append(
-            lambda: _shared_context_resource("supertokens", get_supertokens_container)
-        )
 
     with ThreadPoolExecutor(max_workers=len(jobs)) as pool:
         for future in [pool.submit(job) for job in jobs]:

@@ -376,9 +376,20 @@ def get_minio_container() -> Generator[LemmaDockerContainer, None, None]:
 
 
 @contextmanager
-def get_supertokens_container() -> Generator[LemmaDockerContainer, None, None]:
+def get_supertokens_container(
+    postgres_connection_uri: Optional[str] = None,
+) -> Generator[LemmaDockerContainer, None, None]:
     """
-    Starts a SuperTokens container with in-memory SQLite (default).
+    Starts a SuperTokens container.
+
+    ``postgres_connection_uri``, if given, points the core at a real Postgres
+    database instead of its no-config in-memory SQLite fallback. SQLite's
+    shared-cache mode only supports one writer at a time -- concurrent
+    signups (e.g. asyncio.gather()-ing several actors' signup calls in
+    create_role_visibility_context) hit real
+    ``SQLITE_LOCKED_SHAREDCACHE: database table is locked`` errors under it.
+    The image is literally named "supertokens-postgresql"; SQLite is a
+    quick-start fallback, not the intended concurrent-write-safe mode.
     """
     # Every user signup/signin in the suite pays real bcrypt cost against the
     # default work factor (2^11 rounds). This container is thrown away at the
@@ -390,6 +401,10 @@ def get_supertokens_container() -> Generator[LemmaDockerContainer, None, None]:
         "BCRYPT_LOG_ROUNDS",
         os.getenv("E2E_SUPERTOKENS_BCRYPT_LOG_ROUNDS", "4"),
     )
+    if postgres_connection_uri:
+        container = container.with_env(
+            "POSTGRESQL_CONNECTION_URI", postgres_connection_uri
+        )
 
     with container as st:
         # Wait for SuperTokens to be ready by polling the health endpoint
@@ -768,6 +783,32 @@ def get_postgres_url(
     password = container.password
     dbname = database_name or container.dbname
     return f"postgresql+asyncpg://{user}:{password}@{host}:{port}/{dbname}"
+
+
+def get_postgres_uri_from_another_container(
+    container: LemmaPostgresContainer, database_name: str
+) -> str:
+    """A bare ``postgresql://`` URI for a container connecting from ANOTHER
+    container (e.g. SuperTokens' ``POSTGRESQL_CONNECTION_URI``), not from the
+    host pytest process.
+
+    ``get_postgres_url()`` returns ``container.get_container_host_ip()``
+    (``127.0.0.1``) plus the ``+asyncpg`` SQLAlchemy dialect suffix -- right
+    for this process's own connections, wrong on both counts for a sibling
+    container: ``127.0.0.1`` inside a container means the container itself,
+    and SuperTokens' Java core doesn't understand a SQLAlchemy dialect
+    string. Use ``host.docker.internal`` (already relied on elsewhere in this
+    file for the same container-to-host-published-port need, e.g.
+    ``workspace_callback_api_url``; confirmed reachable from a sibling
+    container against a ``-p 127.0.0.1::PORT``-published port) and the plain
+    ``postgresql://`` scheme SuperTokens' docs require (``postgres://``
+    fails at its startup).
+    """
+    port = container.get_exposed_port(5432)
+    return (
+        f"postgresql://{container.username}:{container.password}"
+        f"@host.docker.internal:{port}/{database_name}"
+    )
 
 
 def create_postgres_database(
