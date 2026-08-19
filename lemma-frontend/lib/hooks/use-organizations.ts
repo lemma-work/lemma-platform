@@ -82,8 +82,14 @@ export const useOrganizationNameAvailability = (
 export const useCreateOrganization = () => {
     const queryClient = useQueryClient();
     return useMutation({
-        mutationFn: (data: { name: string; join_policy?: OrganizationJoinPolicy; email_domain?: string | null }) =>
-            getLemmaClient().organizations.create(data) as Promise<Organization>,
+        mutationFn: (data: {
+            name: string;
+            join_policy?: OrganizationJoinPolicy;
+            email_domain?: string | null;
+            /** Take the next free name rather than conflicting. For a derived
+             *  name the user never typed; leave unset for one they did. */
+            resolve_name_conflicts?: boolean;
+        }) => getLemmaClient().organizations.create(data) as Promise<Organization>,
         onSuccess: () => {
             queryClient.invalidateQueries({ queryKey: ['organizations'] });
             queryClient.invalidateQueries({ queryKey: ['organizations', 'suggested'] });

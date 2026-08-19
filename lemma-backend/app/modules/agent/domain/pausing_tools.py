@@ -14,6 +14,8 @@ interrupted tool and report it to the model as failed.
 
 from __future__ import annotations
 
-PAUSING_TOOL_NAMES = ("ask_user", "request_approval", "snooze")
+SNOOZE_TOOL_NAME = "snooze"
 
-__all__ = ["PAUSING_TOOL_NAMES"]
+PAUSING_TOOL_NAMES = ("ask_user", "request_approval", SNOOZE_TOOL_NAME)
+
+__all__ = ["PAUSING_TOOL_NAMES", "SNOOZE_TOOL_NAME"]

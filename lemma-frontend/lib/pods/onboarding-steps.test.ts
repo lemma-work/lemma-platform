@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   codingAgentStarterPrompt,
+  firstPodName,
   generatedOrganizationName,
   hasUsableProfileName,
   isRetriableOrganizationNameConflict,
@@ -238,5 +239,56 @@ describe("onboarding step paths", () => {
     expect(launch.instructions).toContain(
       "Codex, Claude Code, or OpenCode",
     );
+  });
+});
+
+describe("firstPodName", () => {
+  // The server's own rule, copied from `normalize_pod_name`. Every name this
+  // builds is checked against it: a name the server rejects fails the create,
+  // which is invisible from here and cost two rounds of debugging once already.
+  const SERVER_POD_NAME_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9 _-]*[A-Za-z0-9])?$/;
+
+  it("puts the person in the name of the pod they are given", () => {
+    expect(firstPodName({ first_name: "Kapeed", last_name: "Verma" })).toBe(
+      "Kapeed Pod",
+    );
+    expect(firstPodName({ full_name: "Ada Lovelace" })).toBe("Ada Pod");
+  });
+
+  it("derives a name from the address when the provider sent none", () => {
+    expect(firstPodName({ email: "ada.lovelace@example.com" })).toBe("Ada Pod");
+  });
+
+  it("drops an apostrophe rather than sending a name the server refuses", () => {
+    expect(firstPodName({ full_name: "Siobhan O'Brien" })).toBe("Siobhan Pod");
+    expect(firstPodName({ first_name: "O'Brien" })).toBe("OBrien Pod");
+  });
+
+  it("folds accents instead of stripping the letters under them", () => {
+    expect(firstPodName({ first_name: "José" })).toBe("Jose Pod");
+    expect(firstPodName({ first_name: "Ångström" })).toBe("Angstrom Pod");
+  });
+
+  it("falls back to the generic name when nothing usable survives", () => {
+    expect(firstPodName(null)).toBe("Personal Pod");
+    expect(firstPodName({ email: "" })).toBe("Personal Pod");
+    expect(firstPodName({ first_name: "陳" })).toBe("Personal Pod");
+  });
+
+  it("only ever builds a name the server will accept", () => {
+    const profiles = [
+      { first_name: "Kapeed", last_name: "Verma" },
+      { full_name: "Siobhan O'Brien" },
+      { first_name: "José" },
+      { first_name: "Ångström" },
+      { email: "ada.lovelace@example.com" },
+      { email: "x_y-z@example.com" },
+      { first_name: "陳" },
+      null,
+    ];
+
+    for (const profile of profiles) {
+      expect(firstPodName(profile)).toMatch(SERVER_POD_NAME_PATTERN);
+    }
   });
 });
