@@ -215,23 +215,25 @@ async def member_users(
 
 @pytest_asyncio.fixture(scope="function")
 async def index_datastore_file(db_manager, kreuzberg_wired):
-    import asyncio
-
     from app.modules.datastore.domain.file_entities import FileStatus
     from app.modules.datastore.infrastructure.models import DatastoreFile
+    from app.modules.test_support.e2e.waiters import wait_for_status
 
     _TERMINAL = {FileStatus.COMPLETED.value, FileStatus.NOT_REQUIRED.value}
 
-    async def _file_status(file_id):
+    async def _file_status(file_id) -> dict:
         async with db_manager.session_factory() as session:
             result = await session.execute(
                 select(DatastoreFile).where(DatastoreFile.id == file_id)
             )
             file_model = result.scalar_one()
-            return file_model.status, (file_model.file_metadata or {})
+            return {
+                "status": file_model.status,
+                "metadata": file_model.file_metadata or {},
+            }
 
     async def _index(pod_id, file_id):
-        _, metadata = await _file_status(file_id)
+        initial = await _file_status(file_id)
 
         service = get_datastore_composition().build_processing_service(
             pod_id,
@@ -242,16 +244,18 @@ async def index_datastore_file(db_manager, kreuzberg_wired):
         # worker is still indexing async. Either way, wait until indexing has
         # actually finished so the subsequent search sees a populated index;
         # otherwise the search races the indexer and returns nothing under load.
-        await service.process_file_async(file_id, metadata)
-        for _ in range(120):  # ~60s at 0.5s
-            status, _ = await _file_status(file_id)
-            if status in _TERMINAL:
-                return
-            if status == FileStatus.FAILED.value:
-                raise AssertionError(f"Indexing failed for file {file_id}")
-            await asyncio.sleep(0.5)
-        raise AssertionError(
-            f"Indexing did not complete for file {file_id} (last status: {status})"
+        await service.process_file_async(file_id, initial["metadata"])
+        # failed={FAILED}: unlike the document-worker-journey helper, every
+        # caller here always expects COMPLETED/NOT_REQUIRED -- none is testing
+        # a FAILED path through this fixture -- so fail fast instead of
+        # burning the full timeout on a file that already went terminal-bad.
+        await wait_for_status(
+            label=f"datastore file {file_id} indexing",
+            probe=lambda: _file_status(file_id),
+            expected=_TERMINAL,
+            failed={FileStatus.FAILED.value},
+            timeout_seconds=60,
+            interval_seconds=0.15,
         )
 
     return _index
