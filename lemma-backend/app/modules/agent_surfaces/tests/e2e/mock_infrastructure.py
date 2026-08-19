@@ -204,6 +204,17 @@ class FakeSlackServer:
             "*", "/api/assistant.threads.setStatus", self._assistant_threads_set_status
         )
         app.router.add_route(
+            "*", "/api/assistant.threads.setTitle", self._assistant_threads_set_title
+        )
+        app.router.add_route(
+            "*",
+            "/api/assistant.threads.setSuggestedPrompts",
+            self._assistant_threads_set_suggested_prompts,
+        )
+        app.router.add_route("*", "/api/views.open", self._views_open)
+        app.router.add_route("*", "/api/views.publish", self._views_publish)
+        app.router.add_route("*", "/api/conversations.info", self._conversations_info)
+        app.router.add_route(
             "*", "/api/files.getUploadURLExternal", self._files_get_upload_url_external
         )
         app.router.add_route(
@@ -420,6 +431,81 @@ class FakeSlackServer:
         self._store.add("SLACK_STATUS", params)
         return web.json_response({"ok": True})
 
+    async def _assistant_threads_set_title(self, request: web.Request) -> web.Response:
+        params = await self._collect_params(request)
+        self._store.add("SLACK_THREAD_TITLE", params)
+        return web.json_response({"ok": True})
+
+    async def _assistant_threads_set_suggested_prompts(
+        self, request: web.Request
+    ) -> web.Response:
+        params = await self._collect_params(request)
+        self._store.add("SLACK_SUGGESTED_PROMPTS", params)
+        return web.json_response({"ok": True})
+
+    async def _views_open(self, request: web.Request) -> web.Response:
+        params = await self._collect_params(request)
+        self._store.add("SLACK_VIEWS_OPEN", params)
+        view_id = f"V{len(self._store.get_all('SLACK_VIEWS_OPEN')):09d}"
+        return web.json_response(
+            {"ok": True, "view": self._view_envelope(params.get("view"), view_id)}
+        )
+
+    async def _views_publish(self, request: web.Request) -> web.Response:
+        params = await self._collect_params(request)
+        self._store.add("SLACK_VIEWS_PUBLISH", params)
+        view_id = f"V{len(self._store.get_all('SLACK_VIEWS_PUBLISH')):09d}"
+        return web.json_response(
+            {"ok": True, "view": self._view_envelope(params.get("view"), view_id)}
+        )
+
+    def _view_envelope(self, raw_view: Any, view_id: str) -> dict[str, Any]:
+        return {
+            **self._parse_view(raw_view),
+            "id": view_id,
+            "team_id": "T-SURFACE-E2E",
+            "hash": f"{view_id}.{int(time.time())}",
+        }
+
+    @staticmethod
+    def _parse_view(raw: Any) -> dict[str, Any]:
+        """Recover the ``view`` dict submitted to ``views.open``/``views.publish``.
+
+        slack_sdk posts ``view`` as JSON, but ``_collect_params`` stringifies
+        every field uniformly (as ``chat.appendStream``'s ``chunks`` already
+        does), so what arrives here is a dict's ``repr()``, not JSON — hence
+        ``ast.literal_eval`` rather than ``json.loads``.
+        """
+        if isinstance(raw, dict):
+            return raw
+        if not raw:
+            return {}
+        with suppress(ValueError, SyntaxError):
+            parsed = ast.literal_eval(str(raw))
+            if isinstance(parsed, dict):
+                return parsed
+        return {}
+
+    async def _conversations_info(self, request: web.Request) -> web.Response:
+        params = await self._collect_params(request)
+        self._store.add("SLACK_CHANNEL_INFO", params)
+        channel_id = str(params.get("channel") or "C-SURFACE-E2E")
+        return web.json_response(
+            {
+                "ok": True,
+                "channel": {
+                    "id": channel_id,
+                    "name": "support",
+                    "is_channel": True,
+                    "is_group": False,
+                    "is_im": False,
+                    "is_private": False,
+                    "is_archived": False,
+                    "is_member": True,
+                },
+            }
+        )
+
     async def _files_get_upload_url_external(
         self, request: web.Request
     ) -> web.Response:
@@ -457,6 +543,28 @@ class FakeSlackServer:
         return web.json_response({"ok": True, "files": []})
 
 
+# Azure AD's real ``invalid_grant``/``unauthorized_client`` shapes for the two
+# client_credentials failures client.py's ``_get_token`` classifies by code
+# (see the ``AADSTS65001``/``AADSTS700016`` substring checks there). Keyed by
+# AADSTS code so ``queue_oauth_error`` can select either without the caller
+# needing to know the surrounding envelope.
+_AAD_ERROR_RESPONSES: dict[str, tuple[str, str]] = {
+    "AADSTS65001": (
+        "invalid_grant",
+        "AADSTS65001: The user or administrator has not consented to use the "
+        "application with ID 'fake-teams-app-id'. Send an interactive "
+        "authorization request for this user and resource.",
+    ),
+    "AADSTS700016": (
+        "unauthorized_client",
+        "AADSTS700016: Application with identifier 'fake-teams-app-id' was "
+        "not found in the directory 'fake-teams-tenant'. This can happen if "
+        "the application has not been installed by the administrator of the "
+        "tenant.",
+    ),
+}
+
+
 class FakeTeamsServer:
     """Lightweight aiohttp server mimicking the MS Teams Bot Framework."""
 
@@ -467,6 +575,7 @@ class FakeTeamsServer:
         self._site: web.TCPSite | None = None
         self._port: int | None = None
         self.graph_failure_status: int | None = None
+        self._oauth_error_code: str | None = None
         self._private_key = rsa.generate_private_key(
             public_exponent=65537, key_size=2048
         )
@@ -508,6 +617,32 @@ class FakeTeamsServer:
             "/graph/v1.0/teams/{team_id}/channels/{channel_id}/messages/{message_id}/replies",
             self._get_channel_messages,
         )
+        app.router.add_post(
+            "/oauth/{tenant}/oauth2/v2.0/token",
+            self._oauth_token,
+        )
+        app.router.add_get(
+            "/graph/v1.0/shares/{token}/driveItem",
+            self._graph_shares_drive_item,
+        )
+        app.router.add_get(
+            "/graph/v1.0/drives/{drive_id}/items/{item_id}/content",
+            self._graph_drive_item_content,
+        )
+        # Registered before the host:path wildcard below so the literal
+        # "/sites/root" special case (site_path == "/" in
+        # ``_resolve_sharepoint_site_id``) and the "drive/root:...:/content"
+        # shape (the content URL ``_resolve_sharepoint_file_content_url``
+        # constructs and later fetches) both win over the generic matcher.
+        app.router.add_get("/graph/v1.0/sites/root", self._graph_sites_root)
+        app.router.add_get(
+            "/graph/v1.0/sites/{site_id}/drive/root:{item_path:.*}:/content",
+            self._graph_sharepoint_root_content,
+        )
+        app.router.add_get(
+            "/graph/v1.0/sites/{spec:.+}",
+            self._graph_sites_by_spec,
+        )
 
         self._runner = web.AppRunner(app)
         await self._runner.setup()
@@ -534,6 +669,21 @@ class FakeTeamsServer:
     @property
     def openid_config_url(self) -> str:
         return f"http://127.0.0.1:{self._port}/botframework/.well-known/openidconfiguration"
+
+    @property
+    def oauth_base_url(self) -> str:
+        return f"http://127.0.0.1:{self._port}/oauth"
+
+    def queue_oauth_error(self, code: str) -> None:
+        """Make the NEXT OAuth token request fail with the given AADSTS error.
+
+        Mirrors real Azure AD's 400 ``invalid_grant``/``unauthorized_client``
+        response shape so ``client.py``'s ``_get_token`` classification logic
+        (the ``AADSTS65001``/``AADSTS700016`` substring checks) actually
+        fires. Unrecognized codes still fail the next request, with a generic
+        description carrying the code.
+        """
+        self._oauth_error_code = code
 
     def issue_webhook_token(self, *, audience: str) -> str:
         now = int(time.time())
@@ -673,6 +823,104 @@ class FakeTeamsServer:
             )
         return web.json_response({"value": values})
 
+    async def _oauth_token(self, request: web.Request) -> web.Response:
+        tenant = request.match_info["tenant"]
+        form = await request.post()
+        self._store.add(
+            "TEAMS_OAUTH_TOKEN",
+            {
+                "tenant": tenant,
+                "grant_type": form.get("grant_type"),
+                "client_id": form.get("client_id"),
+                "scope": form.get("scope"),
+                **_request_contract(request),
+            },
+        )
+        if self._oauth_error_code is not None:
+            code = self._oauth_error_code
+            self._oauth_error_code = None
+            error, description = _AAD_ERROR_RESPONSES.get(
+                code, ("invalid_grant", f"{code}: Scripted OAuth failure")
+            )
+            return web.json_response(
+                {"error": error, "error_description": description},
+                status=400,
+            )
+        return web.json_response(
+            {
+                "token_type": "Bearer",
+                "expires_in": 3600,
+                "ext_expires_in": 3600,
+                "access_token": f"fake-teams-token-{tenant}",
+            }
+        )
+
+    async def _graph_shares_drive_item(self, request: web.Request) -> web.Response:
+        token = request.match_info["token"]
+        self._store.add(
+            "TEAMS_GRAPH_SHARES",
+            {"token": token, **_request_contract(request)},
+        )
+        item_id = f"shared-item-{len(self._store.get_all('TEAMS_GRAPH_SHARES'))}"
+        return web.json_response(
+            {
+                "id": item_id,
+                "name": "shared-file.txt",
+                "parentReference": {"driveId": "drive-e2e-1"},
+            }
+        )
+
+    async def _graph_drive_item_content(self, request: web.Request) -> web.Response:
+        drive_id = request.match_info["drive_id"]
+        item_id = request.match_info["item_id"]
+        self._store.add(
+            "TEAMS_GRAPH_CONTENT",
+            {"drive_id": drive_id, "item_id": item_id, **_request_contract(request)},
+        )
+        return web.Response(
+            body=f"fake SharePoint content {drive_id}/{item_id}".encode(),
+            content_type="text/plain",
+        )
+
+    async def _graph_sites_root(self, request: web.Request) -> web.Response:
+        self._store.add(
+            "TEAMS_GRAPH_SITES", {"path": "root", **_request_contract(request)}
+        )
+        return web.json_response({"id": "site-root-e2e", "displayName": "Root Site"})
+
+    async def _graph_sites_by_spec(self, request: web.Request) -> web.Response:
+        # ``_resolve_sharepoint_site_id`` builds this as
+        # "{hostname}:{site_path}" (e.g. "contoso.sharepoint.com:/sites/eng").
+        spec = request.match_info["spec"]
+        hostname, _, site_path = spec.partition(":")
+        self._store.add(
+            "TEAMS_GRAPH_SITES",
+            {
+                "hostname": hostname,
+                "site_path": site_path,
+                **_request_contract(request),
+            },
+        )
+        return web.json_response(
+            {"id": f"site-{hostname}", "displayName": site_path or hostname}
+        )
+
+    async def _graph_sharepoint_root_content(self, request: web.Request) -> web.Response:
+        site_id = request.match_info["site_id"]
+        item_path = request.match_info["item_path"]
+        self._store.add(
+            "TEAMS_GRAPH_CONTENT",
+            {
+                "site_id": site_id,
+                "item_path": item_path,
+                **_request_contract(request),
+            },
+        )
+        return web.Response(
+            body=f"fake SharePoint content {site_id}:{item_path}".encode(),
+            content_type="text/plain",
+        )
+
 
 class FakeWhatsAppServer:
     """Lightweight aiohttp server mimicking the WhatsApp Business API."""
@@ -794,6 +1042,16 @@ class FakeTelegramServer:
         app.router.add_post("/bot{token}/getUpdates", self._get_updates)
         app.router.add_post("/bot{token}/setMyCommands", self._set_my_commands)
         app.router.add_post("/bot{token}/setChatMenuButton", self._set_chat_menu_button)
+        app.router.add_post("/bot{token}/setMyDescription", self._set_my_description)
+        app.router.add_post(
+            "/bot{token}/setMyShortDescription", self._set_my_short_description
+        )
+        app.router.add_post(
+            "/bot{token}/setMyProfilePhoto", self._set_my_profile_photo
+        )
+        app.router.add_post(
+            "/bot{token}/getManagedBotToken", self._get_managed_bot_token
+        )
 
         self._runner = web.AppRunner(app)
         await self._runner.setup()
@@ -1040,6 +1298,71 @@ class FakeTelegramServer:
             },
         )
         return web.json_response({"ok": True, "result": True})
+
+    async def _set_my_description(self, request: web.Request) -> web.Response:
+        body = await request.json()
+        self._store.add(
+            "TELEGRAM_CONFIGURATION",
+            {
+                "method": "setMyDescription",
+                "token": request.match_info["token"],
+                "body": body,
+                **_request_contract(request),
+            },
+        )
+        return web.json_response({"ok": True, "result": True})
+
+    async def _set_my_short_description(self, request: web.Request) -> web.Response:
+        body = await request.json()
+        self._store.add(
+            "TELEGRAM_CONFIGURATION",
+            {
+                "method": "setMyShortDescription",
+                "token": request.match_info["token"],
+                "body": body,
+                **_request_contract(request),
+            },
+        )
+        return web.json_response({"ok": True, "result": True})
+
+    async def _set_my_profile_photo(self, request: web.Request) -> web.Response:
+        # setMyProfilePhoto is a multipart upload: an "attach://" reference
+        # field (JSON-encoded) plus the file part it points at — same shape as
+        # sendVoice/sendDocument above.
+        form = await request.post()
+        photo_field = form.get("profile_photo")
+        self._store.add(
+            "TELEGRAM_CONFIGURATION",
+            {
+                "method": "setMyProfilePhoto",
+                "token": request.match_info["token"],
+                "photo": str(form.get("photo")) if form.get("photo") else None,
+                "has_file": photo_field is not None,
+                "filename": getattr(photo_field, "filename", None),
+                **_request_contract(request),
+            },
+        )
+        return web.json_response({"ok": True, "result": True})
+
+    async def _get_managed_bot_token(self, request: web.Request) -> web.Response:
+        # Telegram's "create a bot on behalf of a user" API, used by the
+        # managed-bot self-service flow (telegram_manager_updates.py's
+        # ``_provision``). Called with the *manager* bot's own token; the
+        # child bot's token is minted server-side and handed back as
+        # ``result``.
+        body = await request.json()
+        user_id = body.get("user_id")
+        self._store.add(
+            "TELEGRAM_MANAGED_BOT_TOKEN",
+            {
+                "token": request.match_info["token"],
+                "user_id": user_id,
+                **_request_contract(request),
+            },
+        )
+        return web.json_response(
+            {"ok": True, "result": f"{user_id}:FAKE-MANAGED-BOT-TOKEN-e2e"}
+        )
 
 
 class FakeGmailServer:
