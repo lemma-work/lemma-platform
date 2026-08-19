@@ -44,6 +44,7 @@ from app.modules.identity.services import telegram_oidc
 from app.modules.identity.services import email_policy
 from app.modules.identity.services.auth_abuse import get_auth_abuse_store
 from app.core.config import settings
+from app.modules.test_support.e2e.waiters import eventually
 from app.modules.test_support.e2e_base import verify_emailpassword_for_tests
 
 pytestmark = pytest.mark.e2e
@@ -81,17 +82,26 @@ async def _wait_for_email(
     *,
     timeout_seconds: float = 10,
 ) -> dict:
-    deadline = asyncio.get_running_loop().time() + timeout_seconds
-    while asyncio.get_running_loop().time() < deadline:
-        matches = [
+    async def _matching_emails() -> list[dict]:
+        return [
             message
             for message in _filesystem_emails(output_dir, recipient)
             if message.get("subject") == subject
         ]
-        if matches:
-            return matches[-1]
-        await asyncio.sleep(0.1)
-    raise AssertionError(f"Timed out waiting for {subject!r} filesystem email")
+
+    # No fail-fast -- done as soon as at least one match appears, same shape
+    # as schedule's near-identical filesystem-mailbox poll
+    # (test_schedule_e2e.py's `matching_emails`). Interval stays at the
+    # original 0.1s: it's already tighter than the ~0.15s default the rest of
+    # this migration tightens toward, so leaving it alone is the correct call.
+    matches = await eventually(
+        label=f"{subject!r} filesystem email for {recipient}",
+        probe=_matching_emails,
+        done=bool,
+        timeout_seconds=timeout_seconds,
+        interval_seconds=0.1,
+    )
+    return matches[-1]
 
 
 def _email_link(message: dict) -> str:
