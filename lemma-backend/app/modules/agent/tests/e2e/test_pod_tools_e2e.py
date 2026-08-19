@@ -18,10 +18,19 @@ from fastapi import status
 from app.modules.agent.tools.context import BaseAgentContext
 from app.modules.agent.tools.pod.models import (
     PodGetRecordsRequest,
+    PodListFilesRequest,
+    PodReadFileRequest,
+    PodTablesRequest,
+    PodWriteFileRequest,
     PodWriteRecordRequest,
+    RecordFilter,
 )
 from app.modules.agent.tools.pod.pydantic_adapter import (
     pod_get_records,
+    pod_list_files,
+    pod_read_file,
+    pod_tables,
+    pod_write_file,
     pod_write_record,
 )
 
@@ -123,6 +132,212 @@ def _run_ctx(*, user_id, pod_id, workload_id, agent_name):
             agent_name=agent_name,
         )
     )
+
+
+def _probe_png_bytes() -> bytes:
+    """A PNG a human (or a vision model) can identify unambiguously."""
+    import io
+
+    from PIL import Image, ImageDraw
+
+    img = Image.new("RGB", (480, 200), "white")
+    draw = ImageDraw.Draw(img)
+    draw.rectangle([0, 0, 479, 199], outline="black", width=4)
+    draw.ellipse([30, 60, 130, 160], fill="red", outline="black", width=3)
+    draw.text((160, 90), "LEMMA VISION 4726", fill="black")
+    buffer = io.BytesIO()
+    img.save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+@pytest.mark.asyncio
+async def test_view_image_reads_a_pod_image_intact_without_leaking_bytes(
+    authenticated_client,
+    fixed_test_org,
+    fixed_test_user,
+):
+    """End to end: an image uploaded to a pod is read by `view_image`, and the
+    real MCP bridge hands the harness an intact image on the image channel with
+    no bytes spilled into the text channel — the critical `view_image` defect.
+    """
+    import base64
+    import io
+    import os
+
+    from PIL import Image
+
+    from app.modules.agent.domain.vision import AgentVisionMode
+    from app.modules.agent.services.pod_mcp_service import pod_mcp_service
+    from app.modules.agent.tools.workspace_cli.models import ViewImageRequest
+    from app.modules.agent.tools.workspace_cli.workspace_cli import view_image_internal
+
+    pod_id = await _create_pod(authenticated_client, fixed_test_org)
+    png = _probe_png_bytes()
+    upload = await authenticated_client.post(
+        f"/pods/{pod_id}/datastore/files",
+        data={"directory_path": "/me/vision", "search_enabled": "false"},
+        files={"data": ("probe.png", png, "image/png")},
+    )
+    assert upload.status_code == status.HTTP_201_CREATED, upload.text
+
+    # DIRECT is the desktop configuration: the model IS the harness (Claude) and
+    # reads images natively, so `view_image` returns the image inline.
+    ctx = BaseAgentContext(
+        user_id=UUID(fixed_test_user["id"]),
+        pod_id=UUID(pod_id),
+        conversation_id=uuid4(),
+        workload_type=None,
+        workload_id=None,
+        agent_name="pod_default",
+        vision_mode=AgentVisionMode.DIRECT,
+    )
+    tool_return = await view_image_internal(
+        ctx, ViewImageRequest(pod_file_path="/me/vision/probe.png")
+    )
+
+    # The real serialization the Agent Host consumes.
+    result = pod_mcp_service._mcp_result(tool_return)
+    images = [c for c in result.content if getattr(c, "type", None) == "image"]
+    texts = [c for c in result.content if getattr(c, "type", None) == "text"]
+    assert len(images) == 1, "exactly one image must reach the harness"
+
+    # The bytes are on the image channel and nowhere in the text/structured one.
+    text_blob = "".join(c.text for c in texts)
+    assert "PNG" not in text_blob and "\\x89" not in text_blob
+    assert result.structuredContent.get("success") is True
+
+    # The image is intact: it decodes and keeps the dimensions we uploaded.
+    extracted = base64.b64decode(images[0].data)
+    restored = Image.open(io.BytesIO(extracted))
+    assert restored.size == (480, 200)
+
+    # For human/vision inspection: dump the emergent image when asked.
+    dump_dir = os.environ.get("VIEW_IMAGE_DUMP")
+    if dump_dir:
+        os.makedirs(dump_dir, exist_ok=True)
+        out = os.path.join(dump_dir, "view_image_emergent.png")
+        with open(out, "wb") as handle:
+            handle.write(extracted)
+        print(f"VIEW_IMAGE_EMERGENT_PATH={out}")
+
+
+async def _create_enum_table(authenticated_client, pod_id: str, table_name: str) -> None:
+    response = await authenticated_client.post(
+        f"/pods/{pod_id}/datastore/tables",
+        json={
+            "name": table_name,
+            "primary_key_column": "id",
+            "enable_rls": False,
+            "columns": [
+                {"name": "id", "type": "UUID", "required": True, "auto": True},
+                {"name": "title", "type": "TEXT", "required": True},
+                {
+                    "name": "result",
+                    "type": "ENUM",
+                    "required": True,
+                    "options": ["pass", "fail", "friction"],
+                },
+            ],
+        },
+    )
+    assert response.status_code == status.HTTP_201_CREATED, response.text
+
+
+@pytest.mark.asyncio
+async def test_pod_get_records_in_operator_matches_any_of_a_list(
+    authenticated_client,
+    fixed_test_org,
+    fixed_test_user,
+):
+    """The agent-facing `in` filter operator returns rows matching any value."""
+    pod_id = await _create_pod(authenticated_client, fixed_test_org)
+    table = f"notes_{uuid4().hex[:8]}"
+    await _create_table(authenticated_client, pod_id, table)
+    ctx = _run_ctx(
+        user_id=fixed_test_user["id"],
+        pod_id=pod_id,
+        workload_id=None,
+        agent_name="pod_default",
+    )
+    for title in ("alpha", "beta", "gamma"):
+        created = await pod_write_record(
+            ctx,
+            PodWriteRecordRequest(
+                action="create", table_name=table, data={"title": title}
+            ),
+        )
+        assert created["success"] is True, created
+
+    listed = await pod_get_records(
+        ctx,
+        PodGetRecordsRequest(
+            table_name=table,
+            filters=[RecordFilter(column="title", op="in", value=["alpha", "gamma"])],
+        ),
+    )
+    assert listed["success"] is True, listed
+    assert sorted(r["title"] for r in listed["records"]) == ["alpha", "gamma"]
+
+
+@pytest.mark.asyncio
+async def test_pod_tables_describe_surfaces_enum_options(
+    authenticated_client,
+    fixed_test_org,
+    fixed_test_user,
+):
+    """Describing a table exposes an ENUM column's allowed values."""
+    pod_id = await _create_pod(authenticated_client, fixed_test_org)
+    table = f"audit_{uuid4().hex[:8]}"
+    await _create_enum_table(authenticated_client, pod_id, table)
+    ctx = _run_ctx(
+        user_id=fixed_test_user["id"],
+        pod_id=pod_id,
+        workload_id=None,
+        agent_name="pod_default",
+    )
+
+    described = await pod_tables(ctx, PodTablesRequest(table_name=table))
+    assert described["success"] is True, described
+    columns = {c["name"]: c for c in described["table"]["columns"]}
+    assert columns["result"]["type"] == "ENUM"
+    assert columns["result"]["options"] == ["pass", "fail", "friction"]
+    # A non-enum column carries no options key.
+    assert "options" not in columns["title"]
+
+
+@pytest.mark.asyncio
+async def test_pod_file_tools_report_me_alias_paths(
+    authenticated_client,
+    fixed_test_org,
+    fixed_test_user,
+):
+    """Every pod file tool presents paths in the /me/... alias form."""
+    pod_id = await _create_pod(authenticated_client, fixed_test_org)
+    ctx = _run_ctx(
+        user_id=fixed_test_user["id"],
+        pod_id=pod_id,
+        workload_id=None,
+        agent_name="pod_default",
+    )
+
+    written = await pod_write_file(
+        ctx,
+        PodWriteFileRequest(path="/me/e2e/report.md", content="hello"),
+    )
+    assert written["success"] is True, written
+    assert written["path"] == "/me/e2e/report.md"
+
+    read = await pod_read_file(ctx, PodReadFileRequest(path="/me/e2e/report.md"))
+    assert read["success"] is True, read
+    assert read["path"] == "/me/e2e/report.md"
+    assert read["text"] == "hello"
+
+    listed = await pod_list_files(ctx, PodListFilesRequest(path="/me/e2e"))
+    assert listed["success"] is True, listed
+    paths = [f["path"] for f in listed["files"]]
+    assert "/me/e2e/report.md" in paths
+    # Never the raw /{user-uuid}/... storage path.
+    assert all(not p.startswith(f"/{fixed_test_user['id']}") for p in paths)
 
 
 @pytest.mark.asyncio

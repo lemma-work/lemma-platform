@@ -189,6 +189,7 @@ class RecordFilterOperator(str, Enum):
     LTE = "lte"
     LIKE = "like"
     ILIKE = "ilike"
+    IN = "in"
 
 
 class RecordFilter(BaseModel):

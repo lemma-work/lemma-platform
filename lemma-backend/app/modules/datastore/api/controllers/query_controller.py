@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from decimal import Decimal
 from uuid import UUID
 
 from fastapi import APIRouter, Query, status
@@ -66,6 +67,11 @@ async def execute_query(
         admin_mode=mode == RecordAccessMode.ADMIN,
     )
     return DatastoreQueryResponse(
-        items=jsonable_encoder(rows),
+        # Postgres numerics (avg/sum/… and NUMERIC columns) arrive as Decimal,
+        # which the default encoder renders as a string — so `avg(x)` came back
+        # as "120.0000000000000000". Encode them as JSON numbers instead; the
+        # tradeoff is float precision, acceptable for the aggregate reads this
+        # endpoint serves.
+        items=jsonable_encoder(rows, custom_encoder={Decimal: float}),
         total=total,
     )

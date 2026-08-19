@@ -14,6 +14,13 @@ read the [README](../README.md) or visit [lemma.work](https://lemma.work).
 | [Authentication hardening](authentication-hardening.md) | Production email, verification, abuse protection, bounce handling, Telegram and WhatsApp verification |
 | [Running the guest VM by hand](local-runtime-vm.md) | Booting Desktop's Linux guest directly, for debugging the `lemma_local` provider |
 
+## What the product does
+
+| Document | What it answers |
+|---|---|
+| [Product specification](product/README.md) | What Lemma promises a user, journey by journey, and which test proves each promise |
+| [Scenario coverage](product/coverage.md) | Every promise and the scenarios covering it — generated, not edited |
+
 ## Architecture
 
 | Document | What it covers |
@@ -56,7 +63,11 @@ issue.
 | Document | What it covers |
 |---|---|
 | [Contributing](../CONTRIBUTING.md) | Setup, architecture rules, and what a pull request needs |
+| [Working in this repository](../AGENTS.md) | A map of the components and the four rules broken most often |
+| [Testing strategy](testing.md) | The three suites, which one a change needs, and what gates what |
+| [Product scenario suite](../tests/scenarios/README.md) | The black-box suite that proves the product specification, and how to add to it |
 | [Backend module guide](../lemma-backend/docs/modules/README.md) | One document per backend module, and the tables each owns |
+| [Module contracts](../lemma-backend/docs/contracts/README.md) | What every API operation and product event guarantees |
 | [Backend development guidelines](../lemma-backend/docs/development.md) | DB sessions, events, errors — each rule with the canonical example to copy |
 | [API and SDK versioning](versioning.md) | The shared compatibility line across the API and both SDKs |
 | [Code of conduct](../CODE_OF_CONDUCT.md) | Expected behavior and how to report a concern |

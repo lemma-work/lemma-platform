@@ -26,9 +26,12 @@ from app.core.config import settings
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.core.log.log import get_logger
-from app.modules.agent.services.mcp_content import image_contents, text_content
+from app.modules.agent.services.mcp_content import (
+    image_contents,
+    result_payload,
+    text_content,
+)
 from app.modules.agent.domain.vision import AgentVisionMode
-from app.modules.agent.domain.value_objects import to_json_value
 from app.modules.agent.infrastructure.mcp import (
     exported_tool_name,
     normalize_local_mcp_tool_name,
@@ -159,7 +162,7 @@ class PodMCPService:
         # See `conversation_mcp_service._mcp_result`: images ride alongside the
         # text so a vision-capable remote harness actually receives them.
         images = image_contents(result)
-        payload = to_json_value(result)
+        payload = result_payload(result)
         if isinstance(payload, dict):
             return CallToolResult(
                 content=[text_content(payload), *images],

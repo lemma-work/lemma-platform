@@ -60,6 +60,7 @@ EXPECTED = [
         False,
     ),
     ("enable_slack_socket_mode", "ENABLE_SLACK_SOCKET_MODE", False),
+    ("enable_resend_polling_mode", "ENABLE_RESEND_POLLING_MODE", False),
 ]
 
 

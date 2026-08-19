@@ -17,6 +17,9 @@ import json
 from typing import Any
 
 from mcp.types import ImageContent, TextContent
+from pydantic_ai import ToolReturn
+
+from app.modules.agent.domain.value_objects import to_json_value
 
 # Matches the per-image ceiling the workspace tool enforces. An MCP client that
 # refuses an oversized image would lose the text result along with it, so the
@@ -78,6 +81,24 @@ def image_contents(result: object) -> list[ImageContent]:
             )
         )
     return contents
+
+
+def result_payload(result: object) -> Any:
+    """The JSON-able payload for the text/structured channel, minus any binary.
+
+    A pydantic-ai ``ToolReturn`` carries its picture in ``.content`` and its
+    describable result in ``.return_value``. ``to_json_value`` on the whole
+    ``ToolReturn`` recurses into ``.content`` and dumps the raw image bytes as a
+    byte literal into the text payload — duplicating megabytes that
+    ``image_contents`` already attaches to the proper image channel. On a large
+    screenshot that alone can blow a context window; on a multi-page document it
+    overflowed the stdio bridge and the pages were lost entirely. So serialize
+    only ``return_value`` when the result is a ``ToolReturn``; the images ride
+    the binary channel and nothing else.
+    """
+    if isinstance(result, ToolReturn):
+        return to_json_value(result.return_value)
+    return to_json_value(result)
 
 
 def text_content(payload: Any) -> TextContent:

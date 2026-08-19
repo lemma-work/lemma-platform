@@ -12,6 +12,7 @@ from __future__ import annotations
 from app.modules.agent.domain.value_objects import JsonObject, to_json_value
 from app.modules.agent.tools.pod.models import PodReadFileRequest, SearchFilesRequest
 from app.modules.agent.tools.pod.pod_data_access import PodServices
+from app.modules.agent.tools.pod.pod_paths import to_me_path
 from app.modules.datastore.contracts import DatastoreFileNotFoundError
 
 
@@ -33,7 +34,7 @@ async def read_file_text(
         # laid out.
         return {
             "success": True,
-            "path": entity.path,
+            "path": to_me_path(entity.path, services.ctx.user_id),
             "format": "text",
             "mime_type": entity.mime_type,
             "size_bytes": entity.size_bytes,
@@ -59,7 +60,7 @@ async def read_file_text(
         # "binary file".
         return {
             "success": True,
-            "path": entity.path,
+            "path": to_me_path(entity.path, services.ctx.user_id),
             "mime_type": entity.mime_type,
             "size_bytes": entity.size_bytes,
             "binary": True,
@@ -67,7 +68,7 @@ async def read_file_text(
         }
     return {
         "success": True,
-        "path": document.path,
+        "path": to_me_path(document.path, services.ctx.user_id),
         "format": "markdown",
         "converted": True,
         "mime_type": entity.mime_type,
