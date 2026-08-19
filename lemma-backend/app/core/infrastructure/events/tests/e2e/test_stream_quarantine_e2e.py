@@ -18,7 +18,6 @@ FastStream ever reorders those, the counts below go non-zero and this fails.
 
 from __future__ import annotations
 
-import asyncio
 import json
 
 import pytest
@@ -33,6 +32,7 @@ from app.core.infrastructure.events.quarantine import (
 from app.core.infrastructure.events.stream_subscriber import (
     reliable_redis_stream_subscriber,
 )
+from app.modules.test_support.e2e.waiters import eventually
 
 pytestmark = [pytest.mark.e2e, pytest.mark.asyncio]
 
@@ -58,13 +58,14 @@ async def _pending_count(client: redis_asyncio.Redis) -> int:
     return int(summary["pending"] if isinstance(summary, dict) else summary[0])
 
 
-async def _wait_for(predicate, *, timeout: float = _SETTLE_SECONDS) -> bool:
-    deadline = asyncio.get_running_loop().time() + timeout
-    while asyncio.get_running_loop().time() < deadline:
-        if await predicate():
-            return True
-        await asyncio.sleep(0.2)
-    return False
+async def _wait_for(predicate, label: str, *, timeout: float = _SETTLE_SECONDS) -> None:
+    await eventually(
+        label=label,
+        probe=predicate,
+        done=lambda ok: ok,
+        timeout_seconds=timeout,
+        interval_seconds=0.2,
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -101,9 +102,7 @@ async def running_broker(test_redis_url, redis_client):
     handled: list[dict] = []
     router = RedisRouter()
 
-    @reliable_redis_stream_subscriber(
-        router, _STREAM, group=_GROUP, consumer=_CONSUMER
-    )
+    @reliable_redis_stream_subscriber(router, _STREAM, group=_GROUP, consumer=_CONSUMER)
     async def handler(event: dict) -> None:
         # Mirrors every real consumer: take the envelope untyped, then parse.
         if event.get("event_type") != "probe.wanted":
@@ -116,9 +115,7 @@ async def running_broker(test_redis_url, redis_client):
             _Probe.model_validate({})
         handled.append(event)
 
-    broker = RedisBroker(
-        test_redis_url, middlewares=(StreamQuarantineMiddleware,)
-    )
+    broker = RedisBroker(test_redis_url, middlewares=(StreamQuarantineMiddleware,))
     broker.include_router(router)
     await broker.start()
     try:
@@ -140,9 +137,10 @@ async def test_a_healthy_message_is_processed_and_acknowledged(
 
     await _publish(redis_client, {"event_type": "probe.wanted", "id": "good-1"})
 
-    assert await _wait_for(lambda: _truthy(handled)), "handler never ran"
-    assert await _wait_for(lambda: _pending_is(redis_client, 0)), (
-        "a successfully handled message was never acknowledged"
+    await _wait_for(lambda: _truthy(handled), "handler never ran")
+    await _wait_for(
+        lambda: _pending_is(redis_client, 0),
+        "a successfully handled message was never acknowledged",
     )
 
 
@@ -160,8 +158,9 @@ async def test_an_event_this_consumer_does_not_want_still_leaves_the_pel(
 
     await _publish(redis_client, {"event_type": "probe.unwanted", "id": "other-1"})
 
-    assert await _wait_for(lambda: _pending_is(redis_client, 0)), (
-        "an ignored event stayed pending — this is the poison loop"
+    await _wait_for(
+        lambda: _pending_is(redis_client, 0),
+        "an ignored event stayed pending — this is the poison loop",
     )
     assert handled == []
 
@@ -176,12 +175,14 @@ async def test_a_message_that_can_never_succeed_is_dead_lettered_not_retried(
     )
 
     dead = dead_letter_stream(_STREAM)
-    assert await _wait_for(lambda: _stream_len_at_least(redis_client, dead, 1)), (
-        "the poison message was never dead-lettered"
+    await _wait_for(
+        lambda: _stream_len_at_least(redis_client, dead, 1),
+        "the poison message was never dead-lettered",
     )
-    assert await _wait_for(lambda: _pending_is(redis_client, 0)), (
+    await _wait_for(
+        lambda: _pending_is(redis_client, 0),
         "the poison message was dead-lettered but never acknowledged, so it is "
-        "still in the PEL and will be reclaimed forever"
+        "still in the PEL and will be reclaimed forever",
     )
 
     entries = await redis_client.xrange(dead)
@@ -204,10 +205,11 @@ async def test_a_poison_message_does_not_hold_up_the_next_one(
     )
     await _publish(redis_client, {"event_type": "probe.wanted", "id": "good-2"})
 
-    assert await _wait_for(
-        lambda: _handled_ids(handled, {"good-2"})
-    ), "a healthy message queued behind a poison one was never processed"
-    assert await _wait_for(lambda: _pending_is(redis_client, 0))
+    await _wait_for(
+        lambda: _handled_ids(handled, {"good-2"}),
+        "a healthy message queued behind a poison one was never processed",
+    )
+    await _wait_for(lambda: _pending_is(redis_client, 0), "still pending after drain")
 
 
 # -- small async predicates, kept out of the tests for readability -----------

@@ -18,6 +18,7 @@ from app.modules.datastore.tests.e2e.harness import (
 from app.modules.datastore.tests.e2e.fake_document_processors import (
     FakeDocumentProcessorServer,
 )
+from app.modules.test_support.e2e.waiters import wait_for_status
 
 pytestmark = [pytest.mark.e2e, pytest.mark.worker]
 
@@ -39,15 +40,18 @@ async def _wait_for_status(
     *,
     timeout_seconds: float = 60,
 ) -> dict:
-    deadline = asyncio.get_running_loop().time() + timeout_seconds
-    last: dict | None = None
-    while asyncio.get_running_loop().time() < deadline:
-        last = await api.get_file(path)
-        if last["status"] in expected:
-            return last
-        await asyncio.sleep(0.1)
-    raise AssertionError(
-        f"file {path} did not reach {sorted(expected)}; last response was {last}"
+    # failed=set(): several callers below wait FOR "FAILED" as their own
+    # expected terminus (the malformed/provider-error/docling/xberg failure
+    # cases) -- wait_for_status's default fail-fast set ({"FAILED", "ERROR"})
+    # would pytest.fail the instant that status is reached, before it could
+    # ever be returned to the caller.
+    return await wait_for_status(
+        label=f"file {path} to reach {sorted(expected)}",
+        probe=lambda: api.get_file(path),
+        expected=expected,
+        failed=set(),
+        timeout_seconds=timeout_seconds,
+        interval_seconds=0.1,
     )
 
 
@@ -65,6 +69,7 @@ async def _outbox_event_for_file(db_manager, file_id: str) -> DomainEventOutbox:
     return next(row for row in rows if row.payload.get("file_id") == file_id)
 
 
+@pytest.mark.timeout(240)
 @pytest.mark.asyncio
 async def test_kreuzberg_upload_runs_outbox_worker_projection_search_and_dedup(
     pod_api: DatastoreApi,

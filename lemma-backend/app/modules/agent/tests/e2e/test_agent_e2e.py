@@ -47,6 +47,7 @@ from app.modules.agent.tests.e2e.system_lemma_helpers import (
     system_lemma_default_model,
     system_lemma_model_names,
 )
+from app.modules.test_support.e2e.waiters import eventually, wait_for_status
 from app.modules.test_support.e2e_authz import (
     create_role_visibility_context,
     item_names,
@@ -449,33 +450,40 @@ async def _wait_for_run_status(
     run_id: UUID,
     status: str,
     *,
-    attempts: int = 50,
-    sleep_seconds: float = 0.1,
+    timeout_seconds: float = 5.0,
+    interval_seconds: float = 0.1,
 ) -> None:
     expected = status.value if isinstance(status, AgentRunStatus) else status
-    for _ in range(attempts):
+
+    async def probe() -> dict:
         db_session.expire_all()
         run_model = await db_session.get(AgentRunModel, run_id)
-        if run_model is not None and run_model.status == expected:
-            return
-        await asyncio.sleep(sleep_seconds)
-    db_session.expire_all()
-    run_model = await db_session.get(AgentRunModel, run_id)
-    actual = run_model.status if run_model else None
-    if actual == expected:
-        return
-    raise AssertionError(f"Expected run {run_id} to be {expected}, got {actual}")
+        return {"status": run_model.status if run_model else None}
+
+    # failed=set(): the original had no fail-fast concept at all, just a blind
+    # equality poll against the caller's single target status -- preserve that
+    # rather than introduce a new failure path if a run passes through
+    # FAILED/ERROR on its way to the target (e.g. STOPPED, which every current
+    # caller here waits for).
+    await wait_for_status(
+        label=f"run {run_id} to reach {expected}",
+        probe=probe,
+        expected={expected},
+        failed=set(),
+        timeout_seconds=timeout_seconds,
+        interval_seconds=interval_seconds,
+    )
 
 
 async def _wait_for_streaq_job_status(job_id: str, status: TaskStatus) -> None:
-    last_status: TaskStatus | None = None
     async with create_streaq_client() as worker:
-        for _ in range(100):
-            last_status = await worker.status_by_id(job_id)
-            if last_status == status:
-                return
-            await asyncio.sleep(0.1)
-    raise AssertionError(f"Expected job {job_id} to be {status}, got {last_status}")
+        await eventually(
+            label=f"streaq job {job_id} to reach {status}",
+            probe=lambda: worker.status_by_id(job_id),
+            done=lambda current: current == status,
+            timeout_seconds=10.0,
+            interval_seconds=0.1,
+        )
 
 
 class TestPodAgentLifecycle:
@@ -1659,7 +1667,7 @@ class TestPodAgentLifecycle:
             db_session,
             stopped_run_id,
             AgentRunStatus.STOPPED,
-            attempts=300,
+            timeout_seconds=30.0,
         )
 
         followup_events = await _post_sse(
@@ -2744,23 +2752,26 @@ async def _wait_for_conversation_title(
     pod_id,
     conversation_id,
     *,
-    attempts: int = 160,
-    sleep_seconds: float = 0.25,
+    timeout_seconds: float = 40.0,
+    interval_seconds: float = 0.15,
 ) -> str:
     """Poll the conversation until the worker-generated title lands."""
-    last: str | None = None
-    for _ in range(attempts):
+
+    async def probe() -> dict:
         response = await authenticated_client.get(
             f"/pods/{pod_id}/conversations/{conversation_id}"
         )
         assert response.status_code == 200, response.text
-        last = response.json().get("title")
-        if last:
-            return last
-        await asyncio.sleep(sleep_seconds)
-    raise AssertionError(
-        f"Conversation {conversation_id} title was not generated in time (last={last!r})"
+        return response.json()
+
+    payload = await eventually(
+        label=f"conversation {conversation_id} title",
+        probe=probe,
+        done=lambda body: bool(body.get("title")),
+        timeout_seconds=timeout_seconds,
+        interval_seconds=interval_seconds,
     )
+    return payload["title"]
 
 
 class TestConversationTitleGeneration:

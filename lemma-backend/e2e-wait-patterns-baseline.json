@@ -1,0 +1,14 @@
+{
+  "_comment": "Pre-existing hand-rolled e2e poll loops that do not go through waiters.eventually()/wait_for_status(). Each entry here is a deliberate, permanent exception (documented at its call site) -- not a backlog. This file may shrink freely; growing it means a new poll loop was hand-rolled instead of using the shared helper. See scripts/check_e2e_wait_patterns.py.",
+  "violations": {
+    "app/core/tests/e2e/conftest.py::_provision_bucket::hand-rolled-poll-loop::time.sleep": 1,
+    "app/core/tests/e2e/test_connection_scope_e2e.py::test_two_monitors_in_a_row_both_detect::hand-rolled-poll-loop::asyncio.sleep": 1,
+    "app/core/tests/e2e/test_loop_scope_e2e.py::test_ordinary_async_work_is_silent::hand-rolled-poll-loop::asyncio.sleep": 1,
+    "app/modules/agent/tests/e2e/test_shell_latency_bench_e2e.py::_run::hand-rolled-poll-loop::asyncio.sleep": 1,
+    "app/modules/agent_surfaces/tests/e2e/helpers.py::_conversation_by_external_thread::hand-rolled-poll-loop::asyncio.sleep": 1,
+    "app/modules/connectors/tests/e2e/composio_account_cache.py::_wait_until_active::hand-rolled-poll-loop::time.sleep": 1,
+    "app/modules/connectors/tests/e2e/test_composio_kind_real_e2e.py::TestTheEventLoopStaysFree.test_a_real_execution_does_not_block_the_loop.heartbeat::hand-rolled-poll-loop::asyncio.sleep": 1,
+    "app/modules/connectors/tests/e2e/test_composio_real_e2e.py::_wait_for_active_connection::hand-rolled-poll-loop::time.sleep": 1,
+    "app/modules/pod_bundle/tests/e2e/test_support_inbox_real_llm_e2e.py::test_imported_support_agent_files_ticket_with_real_model::hand-rolled-poll-loop::asyncio.sleep": 1
+  }
+}

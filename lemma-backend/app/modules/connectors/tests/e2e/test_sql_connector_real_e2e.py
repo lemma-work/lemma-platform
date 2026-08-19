@@ -34,7 +34,22 @@ from app.modules.connectors.services.execution import KindDispatcher
 
 pytestmark = [pytest.mark.e2e, pytest.mark.asyncio]
 
-_TENANT_DB = "connector_sql_e2e"
+
+def _tenant_db_name(worker_id: str) -> str:
+    """Namespace the tenant database per xdist worker.
+
+    The e2e stack now shares one Postgres server across all xdist workers
+    (see ``shared_postgres`` in test_utils.py) rather than giving each
+    worker its own container. A fixed name here would let two workers'
+    concurrent DROP DATABASE/CREATE DATABASE calls race on the same
+    database -- exactly what happened before this fix, surfacing as
+    ``InvalidCatalogNameError: database "connector_sql_e2e" does not
+    exist`` when one worker's teardown yanked it out from under another's
+    still-running test.
+    """
+    import re
+
+    return f"connector_sql_e2e_{re.sub(r'[^0-9a-zA-Z_]', '_', worker_id)}"
 
 
 def _admin_url(test_database_url: str) -> str:
@@ -52,16 +67,17 @@ def _parts(url: str) -> dict:
 
 
 @pytest_asyncio.fixture(scope="function")
-async def tenant_database(test_database_url):
+async def tenant_database(test_database_url, worker_id):
     """A real database standing in for the customer's, seeded with real rows."""
+    tenant_db = _tenant_db_name(worker_id)
     admin = create_async_engine(_admin_url(test_database_url), isolation_level="AUTOCOMMIT")
     async with admin.connect() as conn:
-        await conn.execute(text(f'DROP DATABASE IF EXISTS "{_TENANT_DB}" WITH (FORCE)'))
-        await conn.execute(text(f'CREATE DATABASE "{_TENANT_DB}"'))
+        await conn.execute(text(f'DROP DATABASE IF EXISTS "{tenant_db}" WITH (FORCE)'))
+        await conn.execute(text(f'CREATE DATABASE "{tenant_db}"'))
     await admin.dispose()
 
     base = test_database_url.rsplit("/", 1)[0]
-    tenant_url = f"{base}/{_TENANT_DB}"
+    tenant_url = f"{base}/{tenant_db}"
     engine = create_async_engine(tenant_url)
     async with engine.begin() as conn:
         await conn.execute(
@@ -88,17 +104,17 @@ async def tenant_database(test_database_url):
 
     admin = create_async_engine(_admin_url(test_database_url), isolation_level="AUTOCOMMIT")
     async with admin.connect() as conn:
-        await conn.execute(text(f'DROP DATABASE IF EXISTS "{_TENANT_DB}" WITH (FORCE)'))
+        await conn.execute(text(f'DROP DATABASE IF EXISTS "{tenant_db}" WITH (FORCE)'))
     await admin.dispose()
 
 
 @pytest.fixture
-def connection_config(tenant_database):
+def connection_config(tenant_database, worker_id):
     return {
         "dialect": "postgresql",
         "host": tenant_database["host"],
         "port": tenant_database["port"],
-        "database": _TENANT_DB,
+        "database": _tenant_db_name(worker_id),
     }
 
 

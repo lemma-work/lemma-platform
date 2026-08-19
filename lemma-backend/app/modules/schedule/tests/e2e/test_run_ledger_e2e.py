@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timedelta, timezone
-from uuid import UUID, uuid4
+from uuid import UUID, uuid4, uuid7
 
 import pytest
 
@@ -630,8 +630,15 @@ async def test_recovery_advances_past_runs_whose_targets_are_still_alive(
     stale = datetime.now(timezone.utc) - timedelta(minutes=30)
 
     waiting_target_id = uuid4()
-    parked_id = uuid4()
-    behind_it_id = uuid4()
+    # uuid7, not uuid4: both rows tie on `last_inspected_at` (both NULL), so the
+    # query's tie-break -- `ScheduleRun.id` ascending -- is what decides which
+    # one a `limit=1` sweep reaches first. uuid4 is random and carries no
+    # relationship to insertion order, which made "parked sorts first" true
+    # only about half the time. uuid7 is time-ordered, so calling it here
+    # before `behind_it_id` reproduces the same ordering the model's own
+    # `default=uuid7` on `ScheduleRun.id` gives rows created in production.
+    parked_id = uuid7()
+    behind_it_id = uuid7()
     finished_target_id = uuid4()
 
     async with db_manager.session_factory() as session, session.begin():

@@ -7,7 +7,6 @@ only genuinely module-specific fixtures.
 from app.modules.test_support import e2e_base
 from app.modules.test_support.e2e.builders import scenario
 
-test_network = e2e_base.test_network
 postgres_container = e2e_base.postgres_container
 supertokens_container = e2e_base.supertokens_container
 redis_container = e2e_base.redis_container
@@ -40,7 +39,6 @@ __all__ = [
     "supertokens_container",
     "test_app",
     "test_database_url",
-    "test_network",
     "test_redis_url",
     "sandbox_reachable_backend",
     "worker",

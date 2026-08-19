@@ -15,7 +15,6 @@ Covers:
 
 from __future__ import annotations
 
-import asyncio
 import time
 from types import SimpleNamespace
 from uuid import UUID, uuid4
@@ -34,6 +33,7 @@ from app.modules.agent.tools.workspace_cli.workspace_cli import (
     list_processes_internal,
     write_stdin_internal,
 )
+from app.modules.test_support.e2e.waiters import eventually
 
 pytestmark = [pytest.mark.e2e, pytest.mark.anyio]
 
@@ -71,18 +71,22 @@ async def _agent_context(authenticated_client, fixed_test_org, fixed_test_user):
     # do. Running after the rest of the suite, the first attempt can also hit a
     # pooled connection to a sandbox that has since been released
     # (RemoteProtocolError), which is the same retryable class.
-    warmup = None
-    for _attempt in range(3):
-        warmup = await exec_command_internal(
+    async def _attempt_warmup():
+        return await exec_command_internal(
             ctx,
             ExecCommandRequest(
                 comment="warm the sandbox", cmd="true", timeout_seconds=180
             ),
         )
-        if warmup.success:
-            return ctx
-        await asyncio.sleep(2)
-    raise AssertionError(f"sandbox never became ready: {warmup and warmup.error}")
+
+    await eventually(
+        label="sandbox warmup",
+        probe=_attempt_warmup,
+        done=lambda warmup: warmup.success,
+        timeout_seconds=30.0,
+        interval_seconds=2.0,
+    )
+    return ctx
 
 
 async def _poll_until_complete(ctx, process_id: str, *, budget_seconds: int):
@@ -209,9 +213,9 @@ async def test_a_long_process_survives_across_separate_tool_calls(
     assert process_id
 
     listed = await list_processes_internal(ctx, None)
-    assert any(
-        item.process_id == process_id for item in listed.processes
-    ), f"the running process should be discoverable: {listed}"
+    assert any(item.process_id == process_id for item in listed.processes), (
+        f"the running process should be discoverable: {listed}"
+    )
 
     final, output = await _poll_until_complete(ctx, process_id, budget_seconds=90)
     assert final.completed is True
@@ -256,9 +260,7 @@ async def test_an_expired_process_is_reaped_instead_of_pinning_the_sandbox(
     while time.monotonic() < deadline:
         result = await write_stdin_internal(
             ctx,
-            WriteStdinRequest(
-                process_id=process_id, chars="", yield_time_ms=2000
-            ),
+            WriteStdinRequest(process_id=process_id, chars="", yield_time_ms=2000),
         )
         if result.completed:
             assert result.error or result.exit_code is not None
@@ -346,7 +348,10 @@ async def test_a_research_batch_saves_pages_larger_than_a_shell_can_carry(
 
     async def fake_fetch(url: str) -> ExtractedPage:
         return ExtractedPage(
-            url=url, title="Ravichandran Ashwin", markdown=body, content_type="text/html"
+            url=url,
+            title="Ravichandran Ashwin",
+            markdown=body,
+            content_type="text/html",
         )
 
     monkeypatch.setattr(web_fetch_module, "fetch_and_clean", fake_fetch)
@@ -421,9 +426,7 @@ async def test_pdf_pages_render_to_real_images_for_a_vision_model(
     from app.modules.agent.tools.pod.pydantic_adapter import pod_view_document_pages
     from pydantic_ai import BinaryContent, ToolReturn
 
-    ctx, path = await _pdf_in_pod(
-        authenticated_client, fixed_test_org, fixed_test_user
-    )
+    ctx, path = await _pdf_in_pod(authenticated_client, fixed_test_org, fixed_test_user)
     ctx.vision_mode = AgentVisionMode.DIRECT
 
     result = await pod_view_document_pages(
@@ -461,9 +464,7 @@ async def test_pdf_pages_reach_a_text_only_model_as_words(
     from app.modules.agent.tools.pod.models import ViewDocumentPagesRequest
     from pydantic_ai import ToolReturn
 
-    ctx, path = await _pdf_in_pod(
-        authenticated_client, fixed_test_org, fixed_test_user
-    )
+    ctx, path = await _pdf_in_pod(authenticated_client, fixed_test_org, fixed_test_user)
     ctx.vision_mode = AgentVisionMode.DELEGATED
 
     seen: dict[str, object] = {}
@@ -536,7 +537,7 @@ async def test_compaction_bounds_a_history_built_from_real_tool_output(
             comment="generate build-log-shaped output",
             cmd=(
                 "for i in $(seq 1 400); do "
-                "echo \"npm WARN deprecated pkg-$i@1.0.$i: no longer maintained\"; "
+                'echo "npm WARN deprecated pkg-$i@1.0.$i: no longer maintained"; '
                 "done"
             ),
             timeout_seconds=60,
@@ -576,7 +577,9 @@ async def test_compaction_bounds_a_history_built_from_real_tool_output(
         )
 
     raw_size = count_model_message_tokens(history)
-    assert raw_size > 110_000, f"history not large enough to exercise the guard: {raw_size}"
+    assert raw_size > 110_000, (
+        f"history not large enough to exercise the guard: {raw_size}"
+    )
 
     ceiling = 40_000
     processors = build_history_processors(

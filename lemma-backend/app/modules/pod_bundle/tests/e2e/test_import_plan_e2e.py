@@ -8,7 +8,6 @@ planner only lists+diffs the pod's resources, it never runs a sandbox.
 
 from __future__ import annotations
 
-import asyncio
 import json
 from pathlib import Path
 from uuid import uuid4
@@ -16,6 +15,7 @@ from uuid import uuid4
 import pytest
 from fastapi import status
 
+from app.modules.test_support.e2e.waiters import wait_for_status
 from lemma_pod_bundle import pack_bundle
 
 pytestmark = [pytest.mark.e2e, pytest.mark.worker]
@@ -81,16 +81,23 @@ async def _upload_import(authenticated_client, pod_id: str, zip_bytes: bytes) ->
 
 
 async def _wait_for_plan(authenticated_client, pod_id, import_id, timeout=60) -> dict:
-    for _ in range(timeout):
+    async def probe() -> dict:
         res = await authenticated_client.get(
             f"/pods/{pod_id}/bundle/imports/{import_id}"
         )
         assert res.status_code == status.HTTP_200_OK, res.text
-        body = res.json()
-        if body["status"] in ("AWAITING_CONFIRMATION", "FAILED"):
-            return body
-        await asyncio.sleep(1)
-    raise AssertionError(f"Plan did not finish in {timeout}s")
+        return res.json()
+
+    # failed=set(): both callers assert AWAITING_CONFIRMATION themselves --
+    # return on either terminal state, same as the original.
+    return await wait_for_status(
+        label=f"pod {pod_id} bundle import {import_id} plan",
+        probe=probe,
+        expected={"AWAITING_CONFIRMATION", "FAILED"},
+        failed=set(),
+        timeout_seconds=timeout,
+        interval_seconds=0.15,
+    )
 
 
 async def _create_table(authenticated_client, pod_id, table_name, extra_columns) -> None:

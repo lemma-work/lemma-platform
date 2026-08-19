@@ -199,6 +199,10 @@ jobs:
         run: make lint-session-scope
       - name: I/O hygiene (bounded offloads, timed HTTP sessions)
         run: make lint-io-hygiene
+      # Keeps the e2e suite's one canonical wait helper (waiters.eventually())
+      # from eroding back into ~50 duplicated hand-rolled poll loops.
+      - name: e2e wait patterns (no new hand-rolled poll loops)
+        run: make lint-e2e-waits
       # The static gates above check the shapes they can see. This one runs the
       # flows and measures: a connection checked out with no statement running
       # is a hold, whatever the code looks like. Deliberately a small marked

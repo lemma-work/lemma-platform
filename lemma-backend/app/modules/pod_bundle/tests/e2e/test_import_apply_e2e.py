@@ -8,7 +8,6 @@ across process boundaries.
 
 from __future__ import annotations
 
-import asyncio
 import json
 from pathlib import Path
 from uuid import uuid4
@@ -16,6 +15,7 @@ from uuid import uuid4
 import pytest
 from fastapi import status
 
+from app.modules.test_support.e2e.waiters import wait_for_status
 from lemma_pod_bundle import pack_bundle
 
 pytestmark = [pytest.mark.e2e, pytest.mark.worker]
@@ -68,14 +68,21 @@ async def _upload(client, pod_id, zip_bytes) -> str:
 
 
 async def _wait(client, pod_id, import_id, *, until, timeout=90) -> dict:
-    for _ in range(timeout):
+    async def probe() -> dict:
         res = await client.get(f"/pods/{pod_id}/bundle/imports/{import_id}")
         assert res.status_code == status.HTTP_200_OK, res.text
-        body = res.json()
-        if body["status"] in until:
-            return body
-        await asyncio.sleep(1)
-    raise AssertionError(f"Import stuck at {body['status']} (wanted {until})")
+        return res.json()
+
+    # failed=set(): callers in this file await until={..., "FAILED"} as an
+    # expected terminus in places -- only stop on a status in `until`.
+    return await wait_for_status(
+        label=f"pod {pod_id} bundle import {import_id} to reach {until}",
+        probe=probe,
+        expected=set(until),
+        failed=set(),
+        timeout_seconds=timeout,
+        interval_seconds=0.15,
+    )
 
 
 async def _new_pod(client, org_id) -> str:
@@ -305,13 +312,21 @@ async def test_export_then_import_apply_roundtrip(
     )
     assert start.status_code == status.HTTP_202_ACCEPTED, start.text
     export_id = start.json()["export_id"]
-    export_final = None
-    for _ in range(60):
-        st = await authenticated_client.get(f"/pods/{source_id}/bundle/exports/{export_id}")
-        export_final = st.json()
-        if export_final["status"] in ("READY", "FAILED"):
-            break
-        await asyncio.sleep(1)
+
+    async def _probe_export() -> dict:
+        st = await authenticated_client.get(
+            f"/pods/{source_id}/bundle/exports/{export_id}"
+        )
+        return st.json()
+
+    export_final = await wait_for_status(
+        label=f"pod {source_id} bundle export {export_id}",
+        probe=_probe_export,
+        expected={"READY", "FAILED"},
+        failed=set(),
+        timeout_seconds=60,
+        interval_seconds=0.15,
+    )
     assert export_final["status"] == "READY"
     download_url = export_final["download_url"]
 

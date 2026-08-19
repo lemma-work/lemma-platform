@@ -18,20 +18,23 @@ The fixture skips automatically when the Fireworks credential is absent.
 
 from __future__ import annotations
 
-import asyncio
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 import httpx
 import pytest
 
+from app.modules.test_support.e2e.waiters import eventually
 from app.modules.test_support.e2e_authz import auth_headers, signup_user
 
 pytestmark = [pytest.mark.e2e, pytest.mark.workspace, pytest.mark.provider]
 
-# Real functions + real LLM + Docker cold start — give the flow room.
+# Real functions + real LLM + Docker cold start -- give the flow room. The
+# poll interval doesn't need the same headroom: each poll is a cheap local
+# status GET, not a call into Docker or Fireworks, so it's tightened
+# independently of the timeout.
 FULL_REAL_TIMEOUT = 240.0
-POLL_INTERVAL = 1.0
+POLL_INTERVAL = 0.15
 
 
 # --------------------------------------------------------------------------- #
@@ -244,18 +247,28 @@ async def _wait_for_triggered_run(
     *,
     timeout: float = FULL_REAL_TIMEOUT,
 ) -> dict:
-    deadline = asyncio.get_running_loop().time() + timeout
-    last: dict | None = None
-    while asyncio.get_running_loop().time() < deadline:
+    async def probe() -> dict | None:
         runs = await _runs(client, pod_id, workflow_name)
-        if runs:
-            last = await _run(client, pod_id, runs[0]["id"])
-            if last["status"] == "FAILED":
-                pytest.fail(f"Run failed while waiting for {label}: {last.get('error')}")
-            if predicate(last):
-                return last
-        await asyncio.sleep(POLL_INTERVAL)
-    pytest.fail(f"Timed out waiting for {label}. Last run: {last}")
+        return await _run(client, pod_id, runs[0]["id"]) if runs else None
+
+    # `probe` returns None until the trigger has produced a run at all -- done
+    # and fail_fast both no-op on that, same as the original loop's `if runs:`
+    # guard. fail_fast mirrors the original's own fail-fast on "FAILED": every
+    # caller waits for WAITING/COMPLETED, never FAILED itself.
+    last = await eventually(
+        label=label,
+        probe=probe,
+        done=lambda run: run is not None and predicate(run),
+        fail_fast=lambda run: (
+            f"status=FAILED error={run.get('error')!r}"
+            if run is not None and run.get("status") == "FAILED"
+            else None
+        ),
+        timeout_seconds=timeout,
+        interval_seconds=POLL_INTERVAL,
+    )
+    assert last is not None
+    return last
 
 
 def _graph(*, agent_name: str, plan_fn: str, record_fn: str) -> tuple[list[dict], list[dict]]:
@@ -703,16 +716,20 @@ async def _wait_run(
     *,
     timeout: float = FULL_REAL_TIMEOUT,
 ) -> dict:
-    deadline = asyncio.get_running_loop().time() + timeout
-    last: dict | None = None
-    while asyncio.get_running_loop().time() < deadline:
-        last = await _run(client, pod_id, run_id)
-        if last["status"] == "FAILED":
-            pytest.fail(f"Run failed while waiting for {label}: {last.get('error')}")
-        if predicate(last):
-            return last
-        await asyncio.sleep(POLL_INTERVAL)
-    pytest.fail(f"Timed out waiting for {label}. Last run: {last}")
+    # fail_fast mirrors the original loop's own fail-fast on "FAILED": every
+    # caller waits for a COMPLETED shape, never FAILED itself.
+    return await eventually(
+        label=label,
+        probe=lambda: _run(client, pod_id, run_id),
+        done=predicate,
+        fail_fast=lambda run: (
+            f"status=FAILED error={run.get('error')!r}"
+            if run.get("status") == "FAILED"
+            else None
+        ),
+        timeout_seconds=timeout,
+        interval_seconds=POLL_INTERVAL,
+    )
 
 
 @pytest.mark.asyncio

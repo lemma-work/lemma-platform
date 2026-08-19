@@ -59,6 +59,7 @@ from app.modules.agent_surfaces.tests.e2e.mock_infrastructure import (
 from app.modules.connectors.domain.connector import AuthProvider
 from app.modules.schedule.domain.events.schedule import ScheduleFired
 from app.modules.schedule.domain.schedule import ScheduleType
+from app.modules.test_support.e2e.waiters import eventually
 
 pytestmark = pytest.mark.e2e
 
@@ -98,9 +99,8 @@ async def _wait_for_composio_execution(
     tool_slug: str,
     timeout_seconds: float = REAL_REPLY_TIMEOUT,
 ) -> dict:
-    deadline = asyncio.get_running_loop().time() + timeout_seconds
-    while asyncio.get_running_loop().time() < deadline:
-        match = next(
+    async def probe() -> dict | None:
+        return next(
             (
                 execution
                 for execution in reversed(server.executions)
@@ -108,10 +108,16 @@ async def _wait_for_composio_execution(
             ),
             None,
         )
-        if match is not None:
-            return match
-        await asyncio.sleep(0.2)
-    raise AssertionError(f"No Composio execution observed for {tool_slug}")
+
+    match = await eventually(
+        label=f"Composio execution for {tool_slug}",
+        probe=probe,
+        done=lambda match: match is not None,
+        timeout_seconds=timeout_seconds,
+        interval_seconds=0.15,
+    )
+    assert match is not None
+    return match
 
 
 async def _create_system_lemma_agent(client: AsyncClient, pod_id: str) -> str:

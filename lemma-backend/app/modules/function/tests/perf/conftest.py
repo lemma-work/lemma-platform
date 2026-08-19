@@ -37,7 +37,6 @@ from app.modules.test_support.e2e.worker_process import production_worker_proces
 
 pytestmark = [pytest.mark.e2e, pytest.mark.slow, pytest.mark.real_sandbox]
 
-test_network = e2e_fixtures.test_network
 postgres_container = e2e_fixtures.postgres_container
 supertokens_container = e2e_fixtures.supertokens_container
 redis_container = e2e_fixtures.redis_container
@@ -583,7 +582,6 @@ __all__ = [
     "supertokens_container",
     "test_app",
     "test_database_url",
-    "test_network",
     "test_pod",
     "test_redis_url",
     "workspace_image",

@@ -17,6 +17,7 @@ from app.modules.connectors.infrastructure.models.connector_trigger import (
 from app.modules.schedule.domain.schedule import ScheduleRunStatus, ScheduleType
 from app.modules.schedule.infrastructure.models.run import ScheduleRun
 from app.modules.schedule.infrastructure.models.schedule import Schedule
+from app.modules.test_support.e2e.waiters import eventually, wait_for_status
 from app.modules.test_support.e2e_authz import (
     add_pod_member,
     auth_headers,
@@ -27,8 +28,6 @@ from app.modules.test_support.e2e_authz import (
 pytestmark = pytest.mark.e2e
 
 SCHEDULE_E2E_TIMEOUT_SECONDS = 90
-SCHEDULE_E2E_POLL_SECONDS = 0.5
-
 
 
 def _returns_async(fn):
@@ -224,15 +223,24 @@ async def _wait_for_run_status(
     run_id: str,
     status: str,
 ) -> dict:
-    deadline = asyncio.get_running_loop().time() + SCHEDULE_E2E_TIMEOUT_SECONDS
-    while asyncio.get_running_loop().time() < deadline:
-        run = await _workflow_run(client, pod_id, run_id)
-        if run["status"] == "FAILED":
-            pytest.fail(f"Workflow run failed while waiting for {status}: {run}")
-        if run["status"] == status:
-            return run
-        await asyncio.sleep(SCHEDULE_E2E_POLL_SECONDS)
-    pytest.fail(f"Timed out waiting for workflow run status {status}")
+    async def probe() -> dict:
+        return await _workflow_run(client, pod_id, run_id)
+
+    # failed={"FAILED"} (not wait_for_status's default {"FAILED", "ERROR"}):
+    # every caller here waits for "COMPLETED" -- "FAILED" is never the
+    # requested target -- so this preserves the original's unconditional
+    # fail-fast the instant the run's status becomes FAILED, regardless of
+    # what `status` was asked for. ("ERROR" isn't a WorkflowRunStatus value,
+    # so the two failed-sets are equivalent here; spelled out explicitly
+    # rather than relying on that coincidence.)
+    return await wait_for_status(
+        label=f"workflow run {run_id} status {status}",
+        probe=probe,
+        expected={status},
+        failed={"FAILED"},
+        timeout_seconds=SCHEDULE_E2E_TIMEOUT_SECONDS,
+        interval_seconds=0.15,
+    )
 
 
 async def _wait_for_workflow_run(
@@ -243,28 +251,39 @@ async def _wait_for_workflow_run(
     source: str,
     timeout_seconds: float = SCHEDULE_E2E_TIMEOUT_SECONDS,
 ) -> dict:
-    deadline = asyncio.get_running_loop().time() + timeout_seconds
-    while asyncio.get_running_loop().time() < deadline:
+    async def probe() -> dict:
         for run_summary in await _workflow_runs(client, pod_id, workflow_name):
             if run_summary["status"] not in {"COMPLETED", "FAILED"}:
                 continue
             run = await _workflow_run(client, pod_id, run_summary["id"])
             if run_summary["status"] == "FAILED":
-                pytest.fail(f"Scheduled workflow run failed: {run}")
+                return {"outcome": "FAILED", "run": run}
             start_payload = run.get("execution_context", {}).get("start", {})
-            if (
-                run_summary["status"] == "COMPLETED"
-                and start_payload.get("payload", {}).get("source") == source
-            ):
-                return run
-            if (
-                run_summary["status"] == "COMPLETED"
-                and start_payload.get("payload", {}).get("data", {}).get("source")
-                == source
-            ):
-                return run
-        await asyncio.sleep(SCHEDULE_E2E_POLL_SECONDS)
-    pytest.fail(f"Timed out waiting for workflow run from {source}")
+            if start_payload.get("payload", {}).get("source") == source:
+                return {"outcome": "COMPLETED", "run": run}
+            if start_payload.get("payload", {}).get("data", {}).get("source") == source:
+                return {"outcome": "COMPLETED", "run": run}
+            # This terminal run didn't match `source` -- fall through to the
+            # next run_summary in the same pass, same as the original.
+        return {"outcome": "PENDING", "run": None}
+
+    # status_field="outcome" is synthetic, folded in by probe() above (not
+    # part of the API response) -- it lets a "first terminal run found" scan
+    # over a whole list, with a full-detail fetch per candidate, reuse
+    # wait_for_status's fail-fast/expected machinery instead of hand-rolling
+    # it. failed={"FAILED"} preserves the original's immediate pytest.fail on
+    # the first FAILED terminal run encountered while scanning, matching or
+    # not.
+    result = await wait_for_status(
+        label=f"workflow run from {source}",
+        probe=probe,
+        status_field="outcome",
+        expected={"COMPLETED"},
+        failed={"FAILED"},
+        timeout_seconds=timeout_seconds,
+        interval_seconds=0.15,
+    )
+    return result["run"]
 
 
 async def _wait_for_agent_conversation(
@@ -274,18 +293,24 @@ async def _wait_for_agent_conversation(
     *,
     timeout_seconds: float = SCHEDULE_E2E_TIMEOUT_SECONDS,
 ) -> dict:
-    deadline = asyncio.get_running_loop().time() + timeout_seconds
-    while asyncio.get_running_loop().time() < deadline:
+    async def probe() -> list[dict]:
         response = await client.get(
             f"/pods/{pod_id}/conversations",
             params={"agent_name": agent_name, "limit": 10},
         )
         assert response.status_code == 200, response.text
-        items = response.json()["items"]
-        if items:
-            return items[0]
-        await asyncio.sleep(SCHEDULE_E2E_POLL_SECONDS)
-    pytest.fail(f"Timed out waiting for scheduled agent conversation {agent_name}")
+        return response.json()["items"]
+
+    # No fail-fast concept in the original -- just poll until a conversation
+    # shows up or time runs out.
+    items = await eventually(
+        label=f"scheduled agent conversation {agent_name}",
+        probe=probe,
+        done=bool,
+        timeout_seconds=timeout_seconds,
+        interval_seconds=0.15,
+    )
+    return items[0]
 
 
 async def _wait_for_schedule_runs(
@@ -296,15 +321,22 @@ async def _wait_for_schedule_runs(
     count: int,
     status: str,
 ) -> list[dict]:
-    deadline = asyncio.get_running_loop().time() + SCHEDULE_E2E_TIMEOUT_SECONDS
-    while asyncio.get_running_loop().time() < deadline:
+    async def probe() -> list[dict]:
         response = await client.get(f"/pods/{pod_id}/schedules/{schedule_id}/runs")
         assert response.status_code == 200, response.text
-        items = response.json()["items"]
-        if len(items) == count and all(item["status"] == status for item in items):
-            return items
-        await asyncio.sleep(SCHEDULE_E2E_POLL_SECONDS)
-    pytest.fail(f"Timed out waiting for {count} schedule runs with status {status}")
+        return response.json()["items"]
+
+    # No fail-fast: `status` here is legitimately "TARGET_FAILED" at call
+    # sites, so this must never treat a FAILED-shaped status as an error.
+    return await eventually(
+        label=f"{count} schedule runs with status {status}",
+        probe=probe,
+        done=lambda items: (
+            len(items) == count and all(item["status"] == status for item in items)
+        ),
+        timeout_seconds=SCHEDULE_E2E_TIMEOUT_SECONDS,
+        interval_seconds=0.15,
+    )
 
 
 async def _wait_for_schedule_run_status_counts(
@@ -313,20 +345,29 @@ async def _wait_for_schedule_run_status_counts(
     schedule_id: str,
     expected: dict[str, int],
 ) -> list[dict]:
-    deadline = asyncio.get_running_loop().time() + SCHEDULE_E2E_TIMEOUT_SECONDS
     expected_total = sum(expected.values())
-    while asyncio.get_running_loop().time() < deadline:
+
+    async def probe() -> list[dict]:
         response = await client.get(f"/pods/{pod_id}/schedules/{schedule_id}/runs")
         assert response.status_code == 200, response.text
-        items = response.json()["items"]
+        return response.json()["items"]
+
+    def _matches(items: list[dict]) -> bool:
         actual = {
             status: sum(item["status"] == status for item in items)
             for status in expected
         }
-        if len(items) == expected_total and actual == expected:
-            return items
-        await asyncio.sleep(SCHEDULE_E2E_POLL_SECONDS)
-    pytest.fail(f"Timed out waiting for schedule run statuses {expected}")
+        return len(items) == expected_total and actual == expected
+
+    # No fail-fast: `expected` legitimately includes "TARGET_FAILED"/"FAILED"
+    # counts at call sites -- those are the awaited distribution, not errors.
+    return await eventually(
+        label=f"schedule run statuses {expected}",
+        probe=probe,
+        done=_matches,
+        timeout_seconds=SCHEDULE_E2E_TIMEOUT_SECONDS,
+        interval_seconds=0.15,
+    )
 
 
 def _composio_log_payload() -> dict:
@@ -1420,21 +1461,41 @@ async def test_five_row_owner_workflow_failures_deactivate_schedule_owner_schedu
         assert len(matching_events) == 1
         assert matching_events[0].payload["user_id"] == schedule["user_id"]
 
-    email_deadline = asyncio.get_running_loop().time() + SCHEDULE_E2E_TIMEOUT_SECONDS
-    matching_emails: list[dict] = []
-    while asyncio.get_running_loop().time() < email_deadline:
-        matching_emails = []
+    async def _matching_emails() -> list[dict]:
+        matches = []
         for path in Path(e2e_settings.email_output_dir).glob("*.json"):
-            message = json.loads(path.read_text(encoding="utf-8"))
+            # The filesystem mail spool is written by a separate worker
+            # process: ``glob`` can list a file whose ``os.open(O_CREAT)``
+            # has landed but whose ``json.dump`` body hasn't been flushed
+            # yet, or one the retention sweep deleted between the listing
+            # and the read. Either shows up here as an empty/partial read,
+            # not a real message -- skip it and let the next poll pick up
+            # the finished file, the same guard identity's e2e mailbox
+            # helper (``_filesystem_emails``) already applies.
+            try:
+                message = json.loads(path.read_text(encoding="utf-8"))
+            except OSError, json.JSONDecodeError:
+                continue
             # The subject leads with the schedule's humanized display name, so
             # match the stable tail rather than pinning the whole string.
             if message.get("to_email") == fixed_test_user["email"] and str(
                 message.get("subject", "")
             ).endswith("was paused after repeated failures"):
-                matching_emails.append(message)
-        if matching_emails:
-            break
-        await asyncio.sleep(SCHEDULE_E2E_POLL_SECONDS)
+                matches.append(message)
+        return matches
+
+    # No fail-fast -- done as soon as at least one match appears. The
+    # exactness check (exactly one, not a duplicate send) stays a separate
+    # assertion below, same as the original: it still catches 2+ matches,
+    # and 0 matches now surfaces as eventually's own timeout failure instead
+    # of via this assert.
+    matching_emails = await eventually(
+        label="pause email for the row owner's schedule",
+        probe=_matching_emails,
+        done=bool,
+        timeout_seconds=SCHEDULE_E2E_TIMEOUT_SECONDS,
+        interval_seconds=0.15,
+    )
     assert len(matching_emails) == 1
 
     workflow_runs = await _workflow_runs(authenticated_client, pod_id, workflow["name"])

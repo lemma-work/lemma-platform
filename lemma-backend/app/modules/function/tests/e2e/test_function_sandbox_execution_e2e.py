@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import contextlib
 from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid7
@@ -45,6 +44,8 @@ from app.modules.function.infrastructure.models import (
     FunctionModel,
     FunctionRunModel,
 )
+
+from app.modules.test_support.e2e.waiters import eventually
 
 
 pytestmark = [pytest.mark.e2e, pytest.mark.real_sandbox]
@@ -138,18 +139,30 @@ async def _create_run(
 
 
 async def _wait_for_terminal(db_manager, run_id: UUID) -> FunctionRunModel:
-    deadline = asyncio.get_running_loop().time() + 45
-    while asyncio.get_running_loop().time() < deadline:
+    async def probe() -> FunctionRunModel | None:
         async with db_manager.session_factory() as session:
-            run = await session.get(FunctionRunModel, run_id)
-            if run is not None and run.status in {
+            return await session.get(FunctionRunModel, run_id)
+
+    # No fail_fast: FAILED and CANCELLED are as terminal as COMPLETED here --
+    # the caller decides pass/fail from the returned row's status itself,
+    # same as the original loop.
+    run = await eventually(
+        label=f"function run {run_id} terminal",
+        probe=probe,
+        done=lambda run: (
+            run is not None
+            and run.status
+            in {
                 FunctionRunStatus.COMPLETED,
                 FunctionRunStatus.FAILED,
                 FunctionRunStatus.CANCELLED,
-            }:
-                return run
-        await asyncio.sleep(0.05)
-    raise AssertionError(f"function run {run_id} did not become terminal")
+            }
+        ),
+        timeout_seconds=45,
+        interval_seconds=0.05,
+    )
+    assert run is not None
+    return run
 
 
 @pytest.mark.asyncio
