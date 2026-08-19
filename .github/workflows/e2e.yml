@@ -26,10 +26,12 @@ name: Backend E2E
 # regenerating it, which only a workflow_run event carries. Don't remove
 # workflow_run from `on:` for that reason; backend-e2e just no longer needs it.
 #
-# Not a required check yet. To make a green e2e a hard merge requirement,
-# add the "lemma-backend e2e (*)" shard checks to the branch-protection rules
-# — not aggregate-coverage, which also enforces the separately-tracked
-# coverage floors some modules are still below.
+# Required check: all 7 "lemma-backend e2e (<shard>)" shard checks are
+# required status checks on main's protect-main ruleset, alongside
+# lemma-backend unit — a green e2e is a hard merge requirement. Deliberately
+# not aggregate-coverage (below), which also enforces the separately-tracked
+# coverage floors some modules are still below; making that one required
+# too would block every PR today for an unrelated reason.
 
 on:
   workflow_dispatch:
