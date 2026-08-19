@@ -46,7 +46,14 @@ permissions:
   contents: read
 
 concurrency:
-  group: e2e-${{ github.event.workflow_run.head_branch || github.event.pull_request.head.ref || github.ref_name }}
+  # Scoped by event_name, not just branch: a workflow_run "CI completed" cascade
+  # and a direct pull_request push are different jobs doing different work now
+  # (see the trigger-model comment above) and must not cancel each other.
+  # Confirmed empirically needed, not theoretical: without this, a workflow_run
+  # event queued from *main's* still-old copy of this file (workflow_run always
+  # evaluates the default branch's workflow, not the PR's) raced and cancelled
+  # a direct-trigger run mid-flight on this very PR.
+  group: e2e-${{ github.event_name }}-${{ github.event.workflow_run.head_branch || github.event.pull_request.head.ref || github.ref_name }}
   cancel-in-progress: true
 
 jobs:
