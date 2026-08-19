@@ -1999,6 +1999,7 @@ async def test_public_agent_host_profile_update_touches_and_skips_the_harness(
     async_client,
     fixed_test_org,
     e2e_settings,
+    db_session,
 ):
     """`update_agent_host_profile`, entirely untested before this: driven
     through the real pairing + harness-publish seam other Agent Host suites
@@ -2012,8 +2013,12 @@ async def test_public_agent_host_profile_update_touches_and_skips_the_harness(
     `host_wait_timeout_seconds` alone takes the cheap branch that never
     touches the harness at all.
     """
+    from datetime import datetime, timezone
     from types import SimpleNamespace
 
+    from sqlalchemy import update
+
+    from app.modules.agent.infrastructure.runtime_models import AgentHostModel
     from app.modules.agent.tests.e2e.agent_host_helpers import paired_machine
 
     display_name = f"editor-e2e-{uuid4().hex[:8]}"
@@ -2023,20 +2028,39 @@ async def test_public_agent_host_profile_update_touches_and_skips_the_harness(
         config_options=[
             {
                 "id": "model",
+                "name": "Model",
                 "category": "model",
                 "options": [
-                    {"value": "gpt-5-codex"},
-                    {"value": "gpt-5-codex-mini"},
+                    {"name": "GPT-5 Codex", "value": "gpt-5-codex"},
+                    {"name": "GPT-5 Codex Mini", "value": "gpt-5-codex-mini"},
                 ],
             },
             {
                 "id": "reasoning_effort",
+                "name": "Reasoning Effort",
                 "category": "reasoning_effort",
-                "options": [{"value": "low"}, {"value": "high"}],
+                "options": [
+                    {"name": "Low", "value": "low"},
+                    {"name": "High", "value": "high"},
+                ],
             },
         ],
     )
     harness_id = str(machine["harness_id"])
+
+    # A paired host only accepts new runs while its heartbeat is fresh, and the
+    # heartbeat rides on the 25s long poll -- which a test cannot sit through.
+    # Stamping it is the same thing that poll does, without the wait (same
+    # pattern as test_agent_host_vision_e2e.py's _profile_for_a_host_that,
+    # which reads it back through the same session rather than a separate
+    # HTTP request -- this test goes through authenticated_client, a
+    # different connection, so it needs a real commit, not just a flush).
+    await db_session.execute(
+        update(AgentHostModel)
+        .where(AgentHostModel.id == machine["host_id"])
+        .values(status="ONLINE", last_seen_at=datetime.now(timezone.utc))
+    )
+    await db_session.commit()
 
     org_id = fixed_test_org["id"]
     base = f"/organizations/{org_id}/agent-runtime/profiles"

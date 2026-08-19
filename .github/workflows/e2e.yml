@@ -13,7 +13,9 @@ name: Backend E2E
 # from its marker filter — see that matrix entry below). Function execution IS
 # the thing under test there; unlike agent's tool calls, there is no in-process
 # fake sandbox to stub it with, so its e2e coverage floor is unreachable any
-# other way. Empirically ~6.5 minutes for the whole directory at 2 workers.
+# other way. Runs serially (workers: 1) -- concurrent real sandbox
+# provisioning contends for the runner's CPU. A few minutes for the whole
+# directory.
 #
 # The suite is sharded across runners. Most shards stay serial; the 100+ journey
 # surfaces shard uses two fully isolated xdist workers to remain under ten
@@ -108,9 +110,15 @@ jobs:
             # drops "not workspace" from the marker filter and builds/runs
             # against the real workspace + function runner images (see the
             # sandbox-image steps below, gated on this shard's name).
+            # workers stays 1 (not 2, unlike the fake-sandbox shards): two
+            # xdist workers each cold-provisioning/re-provisioning a real
+            # Docker sandbox raced for the runner's limited CPU and blew the
+            # runtime-endpoint-ready deadline in test_function_sandbox_
+            # execution_e2e.py's re-provisioning tests -- confirmed on the
+            # real CI runner, not just local contention.
             args: app/modules/function/tests/e2e
             markers: e2e and not slow and not provider and not local_cli and not indexing and not protected
-            workers: 2
+            workers: 1
           - name: pod
             # 94 tests ran fully serially and were the single biggest chunk of
             # fast-lane wall-clock (~200s of test execution alone). Kreuzberg
