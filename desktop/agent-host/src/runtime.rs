@@ -44,6 +44,16 @@ const HARNESS_RETRY_INTERVAL: Duration = Duration::from_secs(10);
 /// timeouts. Probes are concurrent now, so the slowest adapter sets the floor
 /// and the old number was measuring a shape that no longer exists.
 const FIRST_HARNESS_WAIT: Duration = Duration::from_secs(15);
+/// How soon to try again when a probe failed for a reason that may not recur.
+///
+/// Doubling from here, capped at the ordinary refresh, because the two failures
+/// this covers want opposite things. A probe that lost a race with the adapter
+/// install wants to be retried almost immediately; a machine that is simply
+/// slow, and will lose that race repeatedly, must not be re-probed every ten
+/// seconds forever. Backing off reaches the same ceiling the sweep already had,
+/// so the worst case is exactly today's behaviour and the common case is
+/// seconds.
+const TRANSIENT_RETRY_INTERVAL: Duration = Duration::from_secs(10);
 /// How often to check whether the agents installed on this machine changed.
 ///
 /// This is the budget line for noticing a newly installed agent, and it is
@@ -126,6 +136,37 @@ impl InstalledAgents {
         let baseline = self.fingerprint.is_empty();
         self.fingerprint = fingerprint;
         !baseline
+    }
+}
+
+/// How soon to re-probe after a round that failed for something transient.
+///
+/// Separate from the loop so the decision can be tested without one. The two
+/// failures it stands between want opposite things: a probe that lost a race
+/// with the adapter install wants another go almost immediately, while a machine
+/// slow enough to lose that race every time must not be re-probed forever. So it
+/// doubles, and the ceiling is the sweep the host already had — the worst case
+/// is exactly the old behaviour.
+struct TransientBackoff {
+    next: Duration,
+}
+
+impl TransientBackoff {
+    fn new() -> Self {
+        Self {
+            next: TRANSIENT_RETRY_INTERVAL,
+        }
+    }
+
+    /// How long to wait before trying again, or `None` to leave the schedule be.
+    fn note(&mut self, retry_soon: bool) -> Option<Duration> {
+        if !retry_soon {
+            self.next = TRANSIENT_RETRY_INTERVAL;
+            return None;
+        }
+        let delay = self.next;
+        self.next = (self.next * 2).min(HARNESS_REFRESH_INTERVAL);
+        Some(delay)
     }
 }
 
@@ -440,6 +481,8 @@ struct TargetWorker {
     /// harness stayed READY in the workspace, the next run failed the same
     /// way, and signing in did nothing until someone restarted the host.
     reprobe_requested: Arc<AtomicBool>,
+    /// When to re-probe after a round that failed for something transient.
+    transient_backoff: TransientBackoff,
     events_ready: Arc<tokio::sync::Notify>,
     /// Enriched harnesses from probes that ran off the poll loop's critical
     /// path. Drained each iteration so a slow probe never delays a heartbeat.
@@ -612,6 +655,15 @@ struct ActiveRun {
 struct ProbedHarnesses {
     published: Vec<PublishedHarness>,
     probes: HashMap<String, ProbedHarness>,
+    /// Whether anything failed for a reason that may not fail twice.
+    ///
+    /// A probe that timed out on a busy machine is not a settled fact about the
+    /// installation, but the loop had no way to know that: it pushed the next
+    /// refresh a quarter of an hour out the moment this task was *spawned*, and
+    /// a successful publish of a bad snapshot never brought it back. So one
+    /// unlucky five-second window cost fifteen minutes of an agent being
+    /// reported unusable, with no way for the user to shorten it.
+    retry_soon: bool,
 }
 
 /// What one adapter's probe found, kept for the runs that need it in hand.
@@ -673,6 +725,7 @@ impl TargetWorker {
             agents_changed,
             revoked_refusals: 0,
             reprobe_requested: Arc::new(AtomicBool::new(false)),
+            transient_backoff: TransientBackoff::new(),
             events_ready: Arc::new(tokio::sync::Notify::new()),
             probed: mpsc::unbounded_channel(),
         })
@@ -713,7 +766,14 @@ impl TargetWorker {
             }
             while let Ok(outcome) = self.probed.1.try_recv() {
                 match outcome {
-                    Some(published) => self.store_published(published),
+                    Some(published) => {
+                        // Read before `store_published` takes ownership.
+                        let retry_soon = published.retry_soon;
+                        self.store_published(published);
+                        if let Some(delay) = self.transient_backoff.note(retry_soon) {
+                            self.refresh_due = std::time::Instant::now() + delay;
+                        }
+                    }
                     // Come back in seconds rather than a quarter of an hour.
                     None => {
                         self.refresh_due = std::time::Instant::now() + HARNESS_RETRY_INTERVAL;
@@ -1569,7 +1629,25 @@ impl TargetWorker {
                 })
                 .collect::<Vec<_>>()
                 .join(" ");
-            tracing::info!(harnesses = %attempted, "publishing probed harnesses");
+            // Read before the marker is stripped, and before `enriched` is
+            // handed to the publish that consumes it.
+            let retry_soon = enriched.iter().any(|snapshot| {
+                snapshot
+                    .stale_reason
+                    .as_deref()
+                    .is_some_and(crate::adapters::reason_is_transient)
+            });
+            let enriched = enriched
+                .into_iter()
+                .map(|mut snapshot| {
+                    if let Some(reason) = snapshot.stale_reason.take() {
+                        snapshot.stale_reason =
+                            Some(crate::adapters::reason_without_marker(&reason).to_owned());
+                    }
+                    snapshot
+                })
+                .collect::<Vec<_>>();
+            tracing::info!(harnesses = %attempted, retry_soon, "publishing probed harnesses");
             match client.publish_harnesses(enriched).await {
                 Ok(published) => {
                     let accepted = published
@@ -1584,7 +1662,11 @@ impl TargetWorker {
                         .collect::<Vec<_>>()
                         .join(" ");
                     tracing::info!(harnesses = %accepted, "published probed harnesses");
-                    let _ = sender.send(Some(ProbedHarnesses { published, probes }));
+                    let _ = sender.send(Some(ProbedHarnesses {
+                        published,
+                        probes,
+                        retry_soon,
+                    }));
                 }
                 Err(error) => {
                     tracing::warn!(%error, "publishing probed harnesses failed");
@@ -3724,8 +3806,10 @@ mod adapter_failure_message_tests {
 mod harness_publish_scheduling_tests {
     use super::{
         DISK_SCAN_INTERVAL, FIRST_HARNESS_WAIT, HARNESS_REFRESH_INTERVAL, HARNESS_RETRY_INTERVAL,
+        TransientBackoff,
     };
     use crate::protocol::POLL_HOLD;
+    use std::time::Duration;
 
     #[test]
     fn noticing_a_new_agent_is_not_gated_on_the_refresh_interval() {
@@ -3832,6 +3916,60 @@ mod harness_publish_scheduling_tests {
         }
 
         assert_eq!(tokio::time::Instant::now() - started, POLL_HOLD);
+    }
+
+    #[test]
+    fn a_probe_that_ran_out_of_time_is_tried_again_in_seconds() {
+        // The failure this exists for: the version probe lost a race with the
+        // adapter install landing, Claude Code published as unusable, and the
+        // next refresh was a quarter of an hour away because `refresh_due` is
+        // pushed out when the probe is *spawned* and a successful publish of a
+        // bad snapshot never brings it back.
+        let mut backoff = TransientBackoff::new();
+
+        let delay = backoff
+            .note(true)
+            .expect("a transient failure is worth retrying");
+
+        assert!(
+            delay <= Duration::from_secs(30),
+            "seconds, not a quarter of an hour: {delay:?}"
+        );
+        assert!(delay < HARNESS_REFRESH_INTERVAL);
+    }
+
+    #[test]
+    fn an_agent_that_is_simply_not_installed_is_left_alone() {
+        // Cursor is absent on most machines and fails identically every time.
+        // Retrying that re-probes it for the life of the process; the installed
+        // agents fingerprint is what notices if it ever appears.
+        let mut backoff = TransientBackoff::new();
+
+        assert_eq!(backoff.note(false), None);
+    }
+
+    #[test]
+    fn a_machine_that_keeps_losing_the_race_is_asked_less_often() {
+        // Backing off rather than hammering, and never past the sweep the host
+        // already had -- so the worst case is exactly the old behaviour.
+        let mut backoff = TransientBackoff::new();
+
+        let first = backoff.note(true).unwrap();
+        let second = backoff.note(true).unwrap();
+        assert!(second > first, "{second:?} should be longer than {first:?}");
+
+        for _ in 0..20 {
+            let delay = backoff.note(true).unwrap();
+            assert!(
+                delay <= HARNESS_REFRESH_INTERVAL,
+                "ran past the sweep: {delay:?}"
+            );
+        }
+
+        // And one clean round puts it back where it started, so an agent that
+        // recovers is not punished for having been slow once.
+        assert_eq!(backoff.note(false), None);
+        assert_eq!(backoff.note(true), Some(first));
     }
 
     #[test]

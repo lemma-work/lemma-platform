@@ -310,6 +310,39 @@ h1 { margin: 0; font-size: clamp(28px, 3.5vw, 38px); line-height: 1.08; letter-s
 .status.ok { color: var(--green); }
 .status.warn { color: var(--gold-strong); }
 .status.bad { color: var(--red); }
+/* What a row actually is, rather than whether it happens to be optional.
+   Every row on these two pages is optional, so the old badge said the same
+   word ten times and the one fact a person wants -- have I set this up? --
+   was only visible as placeholder text inside a collapsed drawer. */
+.config-state {
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--muted);
+  background: var(--canvas);
+  font: 500 10px var(--mono);
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.config-state[data-config-state="configured"] {
+  color: var(--green);
+  border-color: color-mix(in srgb, var(--green) 45%, var(--border));
+  background: color-mix(in srgb, var(--green) 12%, var(--canvas));
+}
+/* A different axis from being set up: this row needs a reachable URL whether or
+   not anyone has filled it in. */
+.requirement {
+  color: var(--muted);
+  font: 500 9px var(--mono);
+  letter-spacing: .05em;
+  text-transform: uppercase;
+}
+.summary-tags {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
 .exposure-badge {
   padding: 5px 8px;
   border: 1px solid var(--border);
