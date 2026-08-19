@@ -3838,21 +3838,25 @@ fn build_main_window_at(
     // vanishing, a gap, and a different window appearing at the OS default
     // placement with a blank page loading in it.
     let main_builder = if replacing {
-        main_builder
-            .visible(false)
-            .on_page_load(|window, payload| {
-                if matches!(payload.event(), tauri::webview::PageLoadEvent::Finished) {
-                    let _ = window.show();
-                    let _ = window.set_focus();
-                }
-            })
+        main_builder.visible(false).on_page_load(|window, payload| {
+            if matches!(payload.event(), tauri::webview::PageLoadEvent::Finished) {
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        })
     } else {
         main_builder
     };
     let main_builder = match placement {
         Some(placement) => main_builder
-            .position(f64::from(placement.position.x), f64::from(placement.position.y))
-            .inner_size(f64::from(placement.size.width), f64::from(placement.size.height)),
+            .position(
+                f64::from(placement.position.x),
+                f64::from(placement.position.y),
+            )
+            .inner_size(
+                f64::from(placement.size.width),
+                f64::from(placement.size.height),
+            ),
         None => main_builder,
     };
 
@@ -6561,7 +6565,9 @@ mod tests {
             "the window has to be measured while it still exists"
         );
         assert!(
-            body.contains("build_main_window_at(app, mode, initial.clone(), true, true, placement)"),
+            body.contains(
+                "build_main_window_at(app, mode, initial.clone(), true, true, placement)"
+            ),
             "the replacement is told it is one, and where to sit"
         );
     }
@@ -6581,11 +6587,16 @@ mod tests {
             body.contains("REPLACEMENT_REVEAL_TIMEOUT"),
             "the reveal has a deadline"
         );
-        let hidden = body.find(".visible(false)").expect("a replacement starts hidden");
+        let hidden = body
+            .find(".visible(false)")
+            .expect("a replacement starts hidden");
         let backstop = body
             .find("REPLACEMENT_REVEAL_TIMEOUT")
             .expect("the deadline is used");
-        assert!(hidden < backstop, "hidden first, then the backstop that shows it");
+        assert!(
+            hidden < backstop,
+            "hidden first, then the backstop that shows it"
+        );
     }
 
     #[test]
