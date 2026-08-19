@@ -29,6 +29,7 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { showResourceErrorToast } from '@/components/shared/resource-feedback';
 import { BundleProgressBar } from '@/components/bundle/bundle-progress';
 import { AccountVariableField } from '@/components/bundle/account-variable-field';
+import { KIND } from '@/components/connectors/connector-utils';
 import { ShareSheet } from '@/components/bundle/share-sheet';
 import { getLemmaClient } from '@/lib/sdk/lemma-client';
 import { usePod } from '@/lib/hooks/use-pods';
@@ -813,11 +814,13 @@ export function ImportDialog({
                                             placeholder="github.com/owner/repo"
                                         />
                                     </div>
+                                    {/* Native `http` kind, as in the share sheet: importing reads
+                                        the repository through the same connector that publishes it. */}
                                     <AccountVariableField
                                         organizationId={organizationId}
                                         podId={targetPodId}
                                         connectorId="github"
-                                        connectorKind="composio"
+                                        connectorKind={KIND.HTTP}
                                         label="GitHub account"
                                         description="Optional for public repositories; required for private repositories and higher rate limits."
                                         value={githubAccountId}
