@@ -253,6 +253,48 @@ function applyDiscoveredModels(models) {
   toast(`Found ${models.length} model${models.length === 1 ? "" : "s"}. Pick a default, then apply.`);
 }
 
+/* Whether a drawer holds anything the user has actually set.
+ *
+ * Read off the drawer's own fields rather than a per-provider table, so a row
+ * added to the HTML is described correctly without anyone remembering to update
+ * a list here. Secrets are never sent back to the page -- only their presence --
+ * which is why they are checked against the snapshot instead of `value`.
+ *
+ * Deliberately "anything", not "everything": these rows hold different numbers
+ * of credentials, several hold two independent ones, and no honest rule here
+ * could say which are required for a given provider. The drawer still shows
+ * exactly which fields are filled; this answers the question the collapsed row
+ * has to answer, which is whether the user has been here at all.
+ */
+function drawerIsConfigured(drawer, presence) {
+  const secrets = Array.from(drawer.querySelectorAll("input[data-secret]"));
+  if (secrets.some((input) => presence[input.dataset.secret])) return true;
+  const typed = Array.from(
+    drawer.querySelectorAll('input:not([data-secret]):not([type="checkbox"])'),
+  );
+  if (typed.some((input) => input.value.trim())) return true;
+  return Array.from(drawer.querySelectorAll('input[type="checkbox"]')).some(
+    (input) => input.checked,
+  );
+}
+
+/* The one fact a collapsed row has to carry.
+ *
+ * Before this the badge read "Optional" whether or not a key was saved, and the
+ * only signal that one had been was the placeholder inside the input -- grey,
+ * and invisible until the drawer was opened. Somebody who had just saved a
+ * Deepgram key had no way to see that it landed.
+ */
+function paintConfigStates(presence) {
+  document.querySelectorAll(".config-drawer").forEach((drawer) => {
+    const badge = drawer.querySelector("[data-config-state]");
+    if (!badge) return;
+    const configured = drawerIsConfigured(drawer, presence);
+    badge.dataset.configState = configured ? "configured" : "unset";
+    badge.textContent = configured ? "Configured" : "Not configured";
+  });
+}
+
 function fillConfiguration() {
   if (!snapshot?.operator) return;
   filling = true;
@@ -296,6 +338,8 @@ function fillConfiguration() {
       labelSecretButton(button, input);
     }
   });
+  // After the fields, because the badge is read off them.
+  paintConfigStates(presence);
   document.querySelectorAll(".config-page").forEach((page) => page.classList.remove("dirty"));
   filling = false;
 }

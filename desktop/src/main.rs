@@ -5941,6 +5941,49 @@ mod tests {
     }
 
     #[test]
+    fn local_settings_says_which_integrations_are_set_up() {
+        // Every row's badge read "Optional" whether or not a credential had been
+        // saved, and the only signal that one had been was the placeholder
+        // inside the input -- grey, and invisible until the drawer was opened.
+        // Somebody who had just saved a Deepgram key had no way to see it land.
+        let markup = include_str!("../ui/control.html");
+        let script = include_str!("../ui/control.js");
+        let style = include_str!("../ui/control.css");
+
+        assert!(
+            !markup.contains(">Optional<"),
+            "a badge that says the same word on every row carries nothing"
+        );
+        assert!(
+            markup.contains("data-config-state"),
+            "each row has a slot for its real state"
+        );
+        // Twice: the definition, and a call. Asserting the function merely
+        // exists passes just as happily when nothing invokes it, which is how a
+        // helper ships dead.
+        assert!(
+            script.matches("paintConfigStates(presence)").count() >= 2,
+            "the painter is defined but never called from the fill pass"
+        );
+        // Read off the row's own fields, so a row added to the markup is
+        // described without anyone remembering a table in the script.
+        assert!(
+            script.contains("input[data-secret]"),
+            "presence of a saved secret is part of being configured"
+        );
+        assert!(
+            style.contains(r#"[data-config-state="configured"]"#),
+            "a configured row has to look different, not just read differently"
+        );
+        // A different axis, and it survives: these rows need a reachable URL
+        // whether or not anyone has filled them in.
+        assert!(
+            markup.contains("Public link"),
+            "the ingress requirement is not a state and should not be replaced by one"
+        );
+    }
+
+    #[test]
     fn local_settings_never_gates_a_button_on_a_webview_confirm() {
         // WKWebView routes window.confirm() through a WKUIDelegate panel wry
         // does not implement, so it returns false without drawing anything:
