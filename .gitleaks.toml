@@ -34,3 +34,21 @@ in every repository that verifies a Svix-signed webhook.
 regexes = [
   '''whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaS[wx]''',
 ]
+
+[[allowlists]]
+description = '''
+A fabricated Resend signing secret the scenario stack was booted with. It was
+never a credential -- the string decodes to "scenarios-resend-signing-secret"
+and no Resend account has ever held it -- but it was written as a literal, which
+is indistinguishable from the real thing to a reader and to this scanner. The
+literal is gone: `harness/stack.py` now builds the value, so nothing shaped like
+a credential is committed.
+
+Allowlisted because the commit that introduced it is still in this branch's
+history and gitleaks scans commits, not the working tree. Exact value, in the
+style of the Svix entry above, so any other high-entropy string in that file is
+still a finding.
+'''
+regexes = [
+  '''whsec_c2NlbmFyaW9zLXJlc2VuZC1zaWduaW5nLXNlY3JldA==''',
+]

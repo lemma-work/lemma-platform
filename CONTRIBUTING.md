@@ -69,6 +69,9 @@ make typecheck-critical
 make architecture
 ```
 
+[Testing strategy](docs/testing.md) covers which of the three suites a change
+needs — unit, module e2e, or a product scenario — and what each one gates.
+
 Use `make test-e2e-fast E2E_WORKERS=1` for the deterministic container-backed
 suite. Real providers, model calls, and Docker sandbox tests are protected and
 must never use personal or production credentials.
@@ -116,6 +119,22 @@ Documentation is part of the change, not a follow-up.
 - Relative links are checked; make sure yours resolve.
 - Don't paste coverage percentages or benchmark numbers into prose. They go
   stale silently. Name the command that produces them instead.
+
+### The product specification is the exception
+
+[`docs/product/`](docs/product/README.md) is **normative**, not descriptive: it
+says what the product is meant to do. When it and the code disagree, the default
+assumption is that the code is wrong.
+
+- A change to what a person can do updates the specification in the same diff.
+- If you find the system does not behave the way a scenario says, do not edit
+  the scenario to match. Mark it `gap`, note how it diverges, and fix the code.
+- Move a scenario to `covered` in the pull request that adds the test proving
+  it, having watched it pass — not before.
+
+`make quality` checks that every `@proves` names a promise that exists, that
+every promise claiming coverage has a test, and that
+[`coverage.md`](docs/product/coverage.md) is current.
 
 ## Pull requests
 
