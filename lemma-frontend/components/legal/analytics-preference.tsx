@@ -11,6 +11,7 @@ import {
     subscribeToConsent,
 } from '@/lib/analytics/consent';
 import { config, isLocalDeployment } from '@/lib/config';
+import { useHydrated } from '@/lib/use-hydrated';
 
 /**
  * The analytics switch, on the page that explains analytics.
@@ -25,9 +26,6 @@ import { config, isLocalDeployment } from '@/lib/config';
  * run on this deployment at all and there is nothing here to switch.
  */
 
-const alwaysTrue = () => true;
-const alwaysFalse = () => false;
-
 type Choice = 'granted' | 'denied';
 
 export function AnalyticsPreference() {
@@ -40,7 +38,7 @@ export function AnalyticsPreference() {
     // self-hosted deployment injects its values at runtime — so the branch on
     // whether analytics runs at all has to wait for hydration rather than be
     // decided during SSR and then contradicted.
-    const hydrated = useSyncExternalStore(subscribeToConsent, alwaysTrue, alwaysFalse);
+    const hydrated = useHydrated();
     const analyticsRuns = hydrated && !isLocalDeployment() && Boolean(config.ANALYTICS_KEY);
 
     const choose = (choice: Choice) => {
