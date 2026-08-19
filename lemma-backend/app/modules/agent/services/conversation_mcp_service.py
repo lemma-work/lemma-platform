@@ -27,7 +27,7 @@ from app.modules.agent.services.mcp_content import (
     result_payload,
     text_content,
 )
-from app.modules.agent.domain.value_objects import JsonObject
+from app.modules.agent.domain.value_objects import JsonObject, to_json_value
 from app.modules.agent.infrastructure.mcp import (
     exported_tool_name,
     normalize_local_mcp_tool_name,

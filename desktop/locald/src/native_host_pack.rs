@@ -495,6 +495,11 @@ fn build(
         ("WEB_SEARCH_PROVIDER", "duckduckgo".to_owned()),
         ("ENABLE_TELEGRAM_POLLING_MODE", "true".to_owned()),
         ("ENABLE_SLACK_SOCKET_MODE", "true".to_owned()),
+        // The desktop app has no public webhook, so inbound Resend email is
+        // pulled by the worker's polling receiver instead. This also lets a
+        // Resend surface be provisioned against the localhost API URL, so
+        // message_user/notifications work once a key + inbound domain are set.
+        ("ENABLE_RESEND_POLLING_MODE", "true".to_owned()),
     ]);
     if bindings.secret_key_provider == "static" {
         backend_env.insert("SECRET_ENCRYPTION_KEY", secret_encryption_key);
