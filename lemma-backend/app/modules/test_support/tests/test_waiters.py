@@ -142,3 +142,24 @@ async def test_wait_for_status_fails_fast_on_a_failed_status() -> None:
             timeout_seconds=30,
             interval_seconds=0,
         )
+
+
+async def test_wait_for_status_an_explicit_empty_failed_set_disables_fail_fast() -> (
+    None
+):
+    """A caller can legitimately want to wait FOR a status the default
+    fail_fast set would otherwise treat as bad (e.g. a test driving an
+    import to its own expected FAILED terminus)."""
+
+    async def probe() -> dict:
+        return {"status": "FAILED"}
+
+    result = await wait_for_status(
+        label="job",
+        probe=probe,
+        expected={"FAILED"},
+        failed=set(),
+        interval_seconds=0,
+    )
+
+    assert result == {"status": "FAILED"}

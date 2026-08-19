@@ -68,7 +68,13 @@ async def wait_for_status(
     timeout_seconds: float = 30.0,
     interval_seconds: float = 0.25,
 ) -> dict:
-    failed = failed or {"FAILED", "ERROR"}
+    # `failed or {...}` would silently ignore an explicitly-passed empty set
+    # (falsy) and fall back to the default anyway -- a real trap for a
+    # caller that legitimately wants no fail-fast statuses at all (e.g.
+    # waiting for a status that overlaps the default "bad" set, like
+    # `expected={"FAILED"}`, where {"FAILED", "ERROR"} would fail-fast the
+    # instant it becomes true).
+    failed = {"FAILED", "ERROR"} if failed is None else failed
     return await eventually(
         label=label,
         probe=probe,
