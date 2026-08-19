@@ -32,6 +32,7 @@ from app.modules.connectors.infrastructure.adapters.mcp_executor import McpExecu
 from app.modules.connectors.infrastructure.kinds import build_kind_registry
 from app.modules.connectors.services.discovery.mcp_discoverer import discover_mcp
 from app.modules.connectors.services.execution import KindDispatcher
+from app.modules.test_support.e2e.waiters import eventually
 
 pytestmark = [pytest.mark.e2e, pytest.mark.asyncio]
 
@@ -97,20 +98,30 @@ async def mcp_server():
     )
 
     url = f"http://127.0.0.1:{port}/mcp"
-    # Wait for the listener rather than sleeping a fixed amount, so the suite is
-    # not timing-dependent on a loaded machine.
-    for _ in range(100):
+
+    async def probe() -> None:
         if task.done():
             raise RuntimeError(f"MCP server failed to start: {task.exception()}")
-        try:
-            reader, writer = await asyncio.open_connection("127.0.0.1", port)
-            writer.close()
-            await writer.wait_closed()
-            break
-        except OSError:
-            await asyncio.sleep(0.05)
-    else:
-        raise RuntimeError("MCP server did not start in time")
+        reader, writer = await asyncio.open_connection("127.0.0.1", port)
+        writer.close()
+        await writer.wait_closed()
+
+    # Wait for the listener rather than sleeping a fixed amount, so the suite is
+    # not timing-dependent on a loaded machine. retry_exceptions=(OSError,):
+    # the port not listening yet is the expected "not ready" case. A crashed
+    # server task instead raises RuntimeError from inside probe(), which is
+    # not in retry_exceptions and so propagates immediately, same as the
+    # original loop's eager task.done() check. interval kept at the original
+    # 0.05s (already tighter than the usual 0.15s default) since this is a
+    # hot local port check.
+    await eventually(
+        label=f"MCP server on port {port} to start listening",
+        probe=probe,
+        done=lambda _: True,
+        retry_exceptions=(OSError,),
+        timeout_seconds=5.0,
+        interval_seconds=0.05,
+    )
 
     yield url
 

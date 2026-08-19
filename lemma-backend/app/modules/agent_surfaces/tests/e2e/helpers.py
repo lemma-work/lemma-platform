@@ -58,6 +58,7 @@ from app.modules.connectors.infrastructure.models.connector_trigger import (
     ConnectorTrigger,
 )
 from app.modules.connectors.infrastructure.models.auth_config import AuthConfig
+from app.modules.test_support.e2e.waiters import eventually
 
 pytestmark = pytest.mark.e2e
 
@@ -633,6 +634,12 @@ async def _conversation_by_external_thread(
     agent_name: str | None = None,
     timeout_seconds: float = 10.0,
 ) -> dict | None:
+    # Deliberately NOT migrated to `eventually()`: that helper always raises
+    # on timeout, but test_multi_pod_resolution_e2e.py's isolation check
+    # calls this with timeout_seconds=1.0 and asserts the result `is None`
+    # -- a soft, negative-existence read is the intended contract for this
+    # helper, not just an unhandled edge case. Only the terminus differs;
+    # the poll shape is otherwise identical to `eventually()`.
     params = {"agent_name": agent_name} if agent_name else {}
     deadline = asyncio.get_running_loop().time() + timeout_seconds
     while asyncio.get_running_loop().time() < deadline:
@@ -671,22 +678,24 @@ async def _wait_for_conversation_message(
     timeout_seconds: float = 10.0,
 ) -> dict:
     """Wait until a worker-produced durable message satisfies ``predicate``."""
-    deadline = asyncio.get_running_loop().time() + timeout_seconds
-    last_items: list[dict] = []
-    while asyncio.get_running_loop().time() < deadline:
-        last_items = await _messages_for_conversation(
+
+    async def probe() -> dict | None:
+        items = await _messages_for_conversation(
             client,
             pod_id=pod_id,
             conversation_id=conversation_id,
         )
-        match = next((item for item in last_items if predicate(item)), None)
-        if match is not None:
-            return match
-        await asyncio.sleep(0.1)
-    raise AssertionError(
-        "Timed out waiting for matching durable conversation message "
-        f"conversation_id={conversation_id} last_items={last_items!r}"
+        return next((item for item in items if predicate(item)), None)
+
+    match = await eventually(
+        label=f"matching durable conversation message in {conversation_id}",
+        probe=probe,
+        done=lambda match: match is not None,
+        timeout_seconds=timeout_seconds,
+        interval_seconds=0.1,
     )
+    assert match is not None
+    return match
 
 
 def _whatsapp_payload(

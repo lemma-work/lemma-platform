@@ -15,7 +15,6 @@ Gated behind LEMMA_RUN_PROVIDER_E2E=1 (real provider creds + slow).
 
 from __future__ import annotations
 
-import asyncio
 import os
 
 import pytest
@@ -30,6 +29,7 @@ from app.modules.agent.tests.e2e.test_agent_e2e import (
     _create_test_pod,
     _post_sse,
 )
+from app.modules.test_support.e2e.waiters import wait_for_status
 
 pytestmark = [
     pytest.mark.e2e,
@@ -109,26 +109,28 @@ async def _assistant_text(client, pod_id, conversation_id) -> str:
 
 
 async def _wait_for_terminal_child(client, pod_id, parent_conversation_id, *, timeout=60.0):
-    deadline = asyncio.get_event_loop().time() + timeout
-    while True:
+    async def probe() -> dict:
         children = await _list_children(client, pod_id, parent_conversation_id)
-        if children:
-            convo = await client.get(
-                f"/pods/{pod_id}/conversations/{children[0]['id']}"
-            )
-            assert convo.status_code == 200, convo.text
-            payload = convo.json()
-            if str(payload.get("status") or "").upper() in {
-                "COMPLETED",
-                "FAILED",
-                "STOPPED",
-            }:
-                return payload
-        if asyncio.get_event_loop().time() >= deadline:
-            raise AssertionError(
-                f"No terminal child for parent {parent_conversation_id}; children={children}"
-            )
-        await asyncio.sleep(1.0)
+        if not children:
+            return {}
+        convo = await client.get(f"/pods/{pod_id}/conversations/{children[0]['id']}")
+        assert convo.status_code == 200, convo.text
+        payload = convo.json()
+        return {**payload, "status": str(payload.get("status") or "").upper()}
+
+    # failed=set(): every caller fetches the terminal payload and asserts its own
+    # expected status afterward (usually COMPLETED) -- FAILED and STOPPED are
+    # both legitimate termini this helper must hand back rather than fail-fast
+    # on, same as it did before (it only ever raised on the *timeout*, never on
+    # reaching a particular status).
+    return await wait_for_status(
+        label=f"a terminal child of conversation {parent_conversation_id}",
+        probe=probe,
+        expected={"COMPLETED", "FAILED", "STOPPED"},
+        failed=set(),
+        timeout_seconds=timeout,
+        interval_seconds=0.15,
+    )
 
 
 @pytest.mark.asyncio

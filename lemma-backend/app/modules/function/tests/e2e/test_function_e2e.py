@@ -15,6 +15,7 @@ from app.modules.connectors.infrastructure.models.connector_operation import (
     ConnectorOperation,
 )
 from app.modules.identity.infrastructure.models.user_models import User
+from app.modules.test_support.e2e.waiters import eventually, wait_for_status
 from app.modules.test_support.e2e_authz import (
     create_role_visibility_context,
     item_names,
@@ -34,16 +35,25 @@ async def _wait_for_run_completion(
     run_id: str,
     timeout_seconds: int = 60,
 ):
-    for _ in range(timeout_seconds):
+    async def probe() -> dict:
         res = await authenticated_client.get(
             f"/pods/{pod_id}/functions/{function_name}/runs/{run_id}"
         )
         assert res.status_code == status.HTTP_200_OK, res.text
-        run_data = res.json()
-        if run_data["status"] in ["COMPLETED", "FAILED"]:
-            return run_data
-        await asyncio.sleep(1)
-    raise AssertionError("Function execution timed out")
+        return res.json()
+
+    # failed=set(): several callers (e.g. the API-timeout test) legitimately
+    # wait FOR a "FAILED" terminus and assert on it themselves afterward --
+    # preserve the original loop's behavior of returning on either terminal
+    # status rather than fail-fasting on FAILED.
+    return await wait_for_status(
+        label=f"function {function_name} run {run_id}",
+        probe=probe,
+        expected={"COMPLETED", "FAILED"},
+        failed=set(),
+        timeout_seconds=timeout_seconds,
+        interval_seconds=0.15,
+    )
 
 
 async def _create_function(authenticated_client, pod_id: str, payload: dict) -> dict:
@@ -2268,18 +2278,27 @@ async def test_function_runs_a_tenant_connector_operation_for_real(
     task = asyncio.create_task(
         server.run_async(transport="http", host="127.0.0.1", port=port, show_banner=False)
     )
-    for _ in range(100):
+
+    async def probe_port() -> bool:
         if task.done():
             raise RuntimeError(f"MCP server failed to start: {task.exception()}")
-        try:
-            _, writer = await asyncio.open_connection("127.0.0.1", port)
-            writer.close()
-            await writer.wait_closed()
-            break
-        except OSError:
-            await asyncio.sleep(0.05)
-    else:
-        raise RuntimeError("MCP server did not start in time")
+        _, writer = await asyncio.open_connection("127.0.0.1", port)
+        writer.close()
+        await writer.wait_closed()
+        return True
+
+    # retry_exceptions=(OSError,): connection refused just means the listener
+    # isn't up yet, not a real failure -- same as the original loop's
+    # `except OSError: sleep`. A RuntimeError from a dead task still
+    # propagates immediately since it isn't in retry_exceptions.
+    await eventually(
+        label=f"MCP server on 127.0.0.1:{port}",
+        probe=probe_port,
+        done=lambda ready: ready,
+        retry_exceptions=(OSError,),
+        timeout_seconds=5,
+        interval_seconds=0.05,
+    )
 
     try:
         suffix = uuid4().hex[:8]

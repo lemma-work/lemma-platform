@@ -20,6 +20,7 @@ from app.modules.agent.tests.e2e.system_lemma_helpers import (
     system_lemma_default_model,
     system_lemma_model_names,
 )
+from app.modules.test_support.e2e.waiters import eventually
 from app.modules.usage.infrastructure.models import UsageRecord
 
 pytestmark = [pytest.mark.e2e, pytest.mark.provider]
@@ -104,7 +105,7 @@ async def _wait_for_usage_event(
     agent_run_id: str,
     model_name: str = SYSTEM_LEMMA_DEFAULT_MODEL,
 ) -> dict:
-    for _ in range(60):
+    async def probe() -> dict | None:
         response = await authenticated_client.get(
             f"/usage/organizations/{org_id}/events",
             params={
@@ -117,12 +118,22 @@ async def _wait_for_usage_event(
             },
         )
         assert response.status_code == 200, response.text
-        events = response.json()["items"]
-        for event in events:
-            if event["agent_run_id"] == agent_run_id:
-                return event
-        await asyncio.sleep(0.5)
-    raise AssertionError(f"Usage event for run {agent_run_id} was not recorded")
+        return next(
+            (
+                event
+                for event in response.json()["items"]
+                if event["agent_run_id"] == agent_run_id
+            ),
+            None,
+        )
+
+    return await eventually(
+        label=f"usage event for run {agent_run_id} to be recorded",
+        probe=probe,
+        done=lambda event: event is not None,
+        timeout_seconds=30.0,
+        interval_seconds=0.15,
+    )
 
 
 @pytest.mark.real_llm

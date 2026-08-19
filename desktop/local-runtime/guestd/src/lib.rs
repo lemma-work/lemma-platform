@@ -306,7 +306,25 @@ fn run_bounded_engine_command(
             stderr.try_clone().map_err(|error| error.to_string())?,
         ))
         .process_group(0);
-    let mut child = command.spawn().map_err(|error| error.to_string())?;
+    // A just-written, just-chmod'd executable can make exec() answer ETXTBSY
+    // ("text file busy") even though this process already closed its own
+    // write handle -- the underlying storage layer's busy state can lag the
+    // close() that cleared it, especially under concurrent I/O (observed in
+    // CI on the runner's overlayfs). Spurious and short-lived: retry a
+    // handful of times on that one specific error rather than surface a
+    // transient race as a real spawn failure. Any other spawn error still
+    // fails immediately, unchanged.
+    let mut spawn_attempts = 0;
+    let mut child = loop {
+        match command.spawn() {
+            Ok(child) => break child,
+            Err(error) if error.raw_os_error() == Some(libc::ETXTBSY) && spawn_attempts < 5 => {
+                spawn_attempts += 1;
+                thread::sleep(Duration::from_millis(20));
+            }
+            Err(error) => return Err(error.to_string()),
+        }
+    };
     let deadline = Instant::now() + timeout;
     let status = loop {
         if let Some(status) = child.try_wait().map_err(|error| error.to_string())? {

@@ -1,4 +1,3 @@
-import asyncio
 from datetime import datetime
 from types import SimpleNamespace
 from uuid import UUID, uuid4
@@ -21,6 +20,7 @@ from app.modules.function.domain.events import (
 from app.modules.function.infrastructure.repositories import FunctionRunRepository
 from app.modules.pod.infrastructure.models.pod_models import PodMember
 from app.modules.test_support.fakes import PassthroughEventInbox
+from app.modules.test_support.e2e.waiters import eventually
 from app.modules.test_support.e2e_authz import (
     create_role_visibility_context,
     item_names,
@@ -261,23 +261,24 @@ async def _get_run(client: AsyncClient, pod_id: str, run_id: str) -> dict:
 async def _wait_for_run(
     client: AsyncClient, pod_id: str, run_id: str, predicate, label: str
 ) -> dict:
-    deadline = asyncio.get_running_loop().time() + 40
-    run: dict = {}
-    while asyncio.get_running_loop().time() < deadline:
-        run = await _get_run(client, pod_id, run_id)
-        if run["status"] == "FAILED":
-            pytest.fail(f"Workflow failed while waiting for {label}: {run}")
-        if predicate(run):
-            return run
-        await asyncio.sleep(0.25)
-    # The last observed run, not just the label. A bare "timed out" says the run
-    # did not finish and nothing about where it stopped, which is the one thing
-    # worth knowing -- a run stuck in PENDING is a dispatch problem, one stuck
-    # RUNNING on a node is that node's.
-    pytest.fail(
-        f"Timed out waiting for {label}. Last status={run.get('status')!r} "
-        f"node={run.get('current_node_id')!r} error={run.get('error')!r} "
-        f"run={run}"
+    # fail_fast mirrors the original loop's own fail-fast on "FAILED" -- every
+    # caller here waits for a WAITING/RUNNING/COMPLETED shape, never FAILED
+    # itself, so stopping the instant a run turns FAILED (instead of running
+    # out the 40s clock) is exactly the original behavior. The failure string
+    # carries the node/error detail the old bespoke message did; eventually()
+    # appends the full run dict itself (`Last value: {run!r}`) on top of that.
+    return await eventually(
+        label=label,
+        probe=lambda: _get_run(client, pod_id, run_id),
+        done=predicate,
+        fail_fast=lambda run: (
+            f"status=FAILED node={run.get('current_node_id')!r} "
+            f"error={run.get('error')!r}"
+            if run.get("status") == "FAILED"
+            else None
+        ),
+        timeout_seconds=40,
+        interval_seconds=0.15,
     )
 
 

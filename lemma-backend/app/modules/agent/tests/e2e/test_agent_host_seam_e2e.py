@@ -72,6 +72,7 @@ from app.modules.agent.tests.e2e.agent_host_helpers import (
     paired_machine,
 )
 from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.test_support.e2e.waiters import eventually
 
 pytestmark = pytest.mark.e2e
 
@@ -226,7 +227,17 @@ async def test_a_whole_turn_survives_the_trip_from_host_to_conversation(
         if event.type is AgentEventType.TOKEN and event.data["kind"] == "text"
     )
     messages = [event.data for event in events if event.type is AgentEventType.MESSAGE]
-    persisted = "".join(m.text for m in messages if m.text and m.tool_call_id is None)
+    # kind == TEXT: the agent's thinking ("Checking the file.") is correctly
+    # persisted too, as its own MessageKind.THINKING draft (_flush_messages) --
+    # a real, separate record, not part of the answer. streamed already
+    # excludes it via its own kind == "text" filter above; persisted must
+    # match, or a thought landing between the two message chunks looks like a
+    # lost/reordered answer instead of the working-as-designed split it is.
+    persisted = "".join(
+        m.text
+        for m in messages
+        if m.text and m.tool_call_id is None and m.kind == MessageKind.TEXT
+    )
 
     # The whole answer, not just the part after the tool call.
     assert streamed == "Let me look. It is the readme."
@@ -546,9 +557,16 @@ async def test_a_run_outlives_the_credential_it_was_dispatched_with(
 
 async def _await_refresh_command(db_session, run_id: UUID, *, timeout: float = 20.0):
     """The REFRESH_CREDENTIAL row, once the running turn has queued it."""
-    deadline = asyncio.get_running_loop().time() + timeout
-    while asyncio.get_running_loop().time() < deadline:
-        found = (
+
+    async def probe():
+        # The rollback is load-bearing, not cleanup: it releases this session's
+        # snapshot so the *next* query can see the row committed by the
+        # harness's own (different) session -- without it, this session keeps
+        # reading its original snapshot and never observes that commit.
+        # Running it before the first query too (a no-op there) keeps the
+        # ordering simple: every read in this loop is preceded by one.
+        await db_session.rollback()
+        return (
             (
                 await db_session.execute(
                     select(AgentHostCommandModel).where(
@@ -561,11 +579,17 @@ async def _await_refresh_command(db_session, run_id: UUID, *, timeout: float = 2
             .scalars()
             .first()
         )
-        if found is not None:
-            return found
-        await db_session.rollback()
-        await asyncio.sleep(0.1)
-    return None
+
+    try:
+        return await eventually(
+            label=f"REFRESH_CREDENTIAL command for run {run_id}",
+            probe=probe,
+            done=lambda found: found is not None,
+            timeout_seconds=timeout,
+            interval_seconds=0.1,
+        )
+    except pytest.fail.Exception:
+        return None
 
 
 @pytest.mark.asyncio

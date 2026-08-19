@@ -16,6 +16,7 @@ from app.modules.test_support.e2e.scripted_model import (
     script_tool_call,
     script_tool_result_ref,
 )
+from app.modules.test_support.e2e.waiters import eventually
 
 pytestmark = pytest.mark.e2e
 
@@ -140,16 +141,21 @@ async def _wait_for_title(
     pod_id: str,
     conversation_id: str,
 ) -> str:
-    for _ in range(100):
+    async def probe() -> dict:
         response = await authenticated_client.get(
             f"/pods/{pod_id}/conversations/{conversation_id}"
         )
         assert response.status_code == status.HTTP_200_OK, response.text
-        title = response.json().get("title")
-        if title:
-            return str(title)
-        await asyncio.sleep(0.1)
-    raise AssertionError("Worker did not persist a conversation title")
+        return response.json()
+
+    payload = await eventually(
+        label="Worker to persist a conversation title",
+        probe=probe,
+        done=lambda body: bool(body.get("title")),
+        timeout_seconds=10.0,
+        interval_seconds=0.1,
+    )
+    return str(payload["title"])
 
 
 async def _wait_for_usage(
@@ -160,7 +166,7 @@ async def _wait_for_usage(
     agent_id: str,
     run_id: str,
 ) -> dict:
-    for _ in range(100):
+    async def probe() -> dict | None:
         response = await authenticated_client.get(
             f"/usage/organizations/{organization_id}/events",
             params={
@@ -171,7 +177,7 @@ async def _wait_for_usage(
             },
         )
         assert response.status_code == status.HTTP_200_OK, response.text
-        event = next(
+        return next(
             (
                 item
                 for item in response.json()["items"]
@@ -179,10 +185,14 @@ async def _wait_for_usage(
             ),
             None,
         )
-        if event is not None:
-            return event
-        await asyncio.sleep(0.1)
-    raise AssertionError(f"Usage for agent run {run_id} was not persisted")
+
+    return await eventually(
+        label=f"usage for agent run {run_id} to be persisted",
+        probe=probe,
+        done=lambda event: event is not None,
+        timeout_seconds=10.0,
+        interval_seconds=0.1,
+    )
 
 
 @pytest.mark.asyncio

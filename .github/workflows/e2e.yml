@@ -12,21 +12,34 @@ name: Backend E2E
 # surfaces shard uses two fully isolated xdist workers to remain under ten
 # minutes without creating extra jobs or comments.
 #
-# Trigger model: runs automatically once the "CI" workflow (unit tests etc.)
-# SUCCEEDS for a PR — so the container-heavy e2e only spins up after the cheap
-# checks are green, roughly once per PR update. Also runnable on demand:
-# Actions -> "Backend E2E" -> Run workflow.
+# Trigger model: backend-e2e runs directly on every PR push (opened/synchronize/
+# reopened) — in parallel with "CI", not gated behind it. At ~5-6 minutes the
+# redundant compute when unit tests are also broken is cheap and worth the
+# reliability: the old indirect chain (wait for "CI" to succeed via
+# workflow_run) meant a failed CI run produced a *skipped*, not failed,
+# required check — an ambiguous signal for a hard gate — and its own
+# concurrency group would sometimes race a manual dispatch of the same branch.
+# Also runnable on demand: Actions -> "Backend E2E" -> Run workflow.
 #
-# Not a required check yet. To make a green e2e a hard merge requirement later,
-# add the "lemma-backend e2e (*)" shard checks (or an aggregation job) to the
-# branch-protection rules — it's fast enough now to gate merges.
+# aggregate-coverage (below) still triggers off workflow_run — it downloads the
+# already-validated unit-test coverage artifact from that CI run rather than
+# regenerating it, which only a workflow_run event carries. Don't remove
+# workflow_run from `on:` for that reason; backend-e2e just no longer needs it.
+#
+# Required check: all 7 "lemma-backend e2e (<shard>)" shard checks are
+# required status checks on main's protect-main ruleset, alongside
+# lemma-backend unit — a green e2e is a hard merge requirement. Deliberately
+# not aggregate-coverage (below), which also enforces the separately-tracked
+# coverage floors some modules are still below; making that one required
+# too would block every PR today for an unrelated reason.
 
 on:
   workflow_dispatch:
   pull_request:
-    # Labels provide an explicit run before CI completes. Normal PR updates run
-    # once through workflow_run after CI succeeds.
-    types: [labeled]
+    # opened/synchronize/reopened: the direct trigger every normal PR push
+    # takes. labeled: surface-live-smoke's own on-demand "surface-live" label
+    # (backend-e2e no longer uses a label — see below).
+    types: [opened, synchronize, reopened, labeled]
   workflow_run:
     workflows: ["CI"]
     types: [completed]
@@ -35,20 +48,25 @@ permissions:
   contents: read
 
 concurrency:
-  group: e2e-${{ github.event.workflow_run.head_branch || github.event.pull_request.head.ref || github.ref_name }}
+  # Scoped by event_name, not just branch: a workflow_run "CI completed" cascade
+  # and a direct pull_request push are different jobs doing different work now
+  # (see the trigger-model comment above) and must not cancel each other.
+  # Confirmed empirically needed, not theoretical: without this, a workflow_run
+  # event queued from *main's* still-old copy of this file (workflow_run always
+  # evaluates the default branch's workflow, not the PR's) raced and cancelled
+  # a direct-trigger run mid-flight on this very PR.
+  group: e2e-${{ github.event_name }}-${{ github.event.workflow_run.head_branch || github.event.pull_request.head.ref || github.ref_name }}
   cancel-in-progress: true
 
 jobs:
   backend-e2e:
     name: lemma-backend e2e (${{ matrix.suite.name }})
-    # Manual dispatch, or automatically after CI (unit tests etc.) passes on a PR.
+    # Manual dispatch, or directly on every PR push. Independent of "CI"'s
+    # outcome and of any label — see the trigger-model comment at the top.
     if: >-
       github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'pull_request' &&
-       github.event.action == 'labeled' &&
-       github.event.label.name == 'run-e2e') ||
-      (github.event.workflow_run.event == 'pull_request' &&
-       github.event.workflow_run.conclusion == 'success')
+       contains(fromJSON('["opened", "synchronize", "reopened"]'), github.event.action))
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -74,21 +92,27 @@ jobs:
             workers: 2
           - name: agent
             args: app/modules/agent/tests/e2e
-            workers: 1
+            workers: 2
           - name: function
+            # Only 6 tests: container boot dominates wall-clock either way, so
+            # a second worker (a second full container trio) isn't worth it.
             args: app/modules/function/tests/e2e
             workers: 1
           - name: pod
+            # 94 tests ran fully serially and were the single biggest chunk of
+            # fast-lane wall-clock (~200s of test execution alone). Kreuzberg
+            # (the RAM-heavy container that motivated -n1 elsewhere) isn't in
+            # this lane, so there's no known reason this needs to stay serial.
             args: app/modules/pod/tests/e2e
-            workers: 1
+            workers: 3
           - name: datastore
             args: app/modules/datastore/tests/e2e app/modules/apps/tests/e2e
-            workers: 1
+            workers: 2
           - name: connectors
             args: app/modules/connectors/tests/e2e app/modules/schedule/tests/e2e
-            workers: 1
+            workers: 2
           - name: rest
-            workers: 1
+            workers: 2
             args: >-
               app/modules app/core
               --ignore=app/modules/agent/tests/e2e
@@ -112,7 +136,37 @@ jobs:
         with:
           enable-cache: true
       - name: Sync deps
-        run: uv sync
+        # `local` pulls in xberg: the datastore shard's real-wheel journey
+        # (test_desktop_local_journey_converts_and_indexes_with_the_real_xberg_wheel)
+        # needs it installed, same as the unit-test CI job (ci.yml).
+        run: uv sync --extra local
+      # Postgres/Redis/SuperTokens images are pinned in test_utils.py and never
+      # change between runs, but GH-hosted runners are fresh VMs with nothing
+      # pre-pulled, so every shard was cold-pulling ~1.3GB from Docker Hub on
+      # every single run. Cache the pulled layers keyed on the file that pins
+      # the versions, so a version bump there is the only thing that busts it.
+      - name: Cache e2e container images
+        id: cache-e2e-images
+        uses: actions/cache@v4
+        with:
+          path: /tmp/e2e-docker-images.tar
+          key: e2e-docker-images-${{ hashFiles('lemma-backend/app/core/test_utils.py') }}
+      - name: Load cached e2e container images
+        if: steps.cache-e2e-images.outputs.cache-hit == 'true'
+        run: docker load -i /tmp/e2e-docker-images.tar
+      - name: Pull e2e container images
+        if: steps.cache-e2e-images.outputs.cache-hit != 'true'
+        run: |
+          docker pull docker.io/pgvector/pgvector:0.8.3-pg15
+          docker pull redis:7.4-alpine
+          docker pull docker.io/supertokens/supertokens-postgresql:11.4.5
+      - name: Save e2e container images to cache
+        if: steps.cache-e2e-images.outputs.cache-hit != 'true'
+        run: |
+          docker save -o /tmp/e2e-docker-images.tar \
+            docker.io/pgvector/pgvector:0.8.3-pg15 \
+            redis:7.4-alpine \
+            docker.io/supertokens/supertokens-postgresql:11.4.5
       # Shards run in parallel, so wall-clock is the slowest shard, not their sum.
       # E2E_ARGS scopes each shard; matrix workers keeps surfaces below ten minutes.
       - name: E2E tests (deterministic LLM + in-process sandbox, real services)
@@ -149,6 +203,21 @@ jobs:
       contents: read
       pull-requests: write
       issues: write
+    # Only "Produce unit coverage for direct runs" below needs this -- it re-runs
+    # the whole unit suite from scratch for workflow_dispatch/labeled triggers
+    # (the normal workflow_run cascade instead downloads the already-validated
+    # unit coverage artifact from the upstream CI run, so it never hits this).
+    # Mirrors ci.yml's "lemma-backend unit" job service exactly.
+    services:
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     defaults:
       run:
         working-directory: lemma-backend
@@ -161,7 +230,10 @@ jobs:
         with:
           enable-cache: true
       - name: Sync dependencies
-        run: uv sync
+        # ci.yml's canonical "lemma-backend unit" job uses --extra local too --
+        # match it, since "Produce unit coverage for direct runs" below runs
+        # the identical `make coverage-backend-unit` target.
+        run: uv sync --extra local
       - name: Download E2E coverage shards
         uses: actions/download-artifact@v8
         with:
@@ -203,6 +275,8 @@ jobs:
           make coverage-backend-unit
           mkdir -p coverage-artifacts/unit
           cp .coverage.backend coverage-artifacts/unit/.coverage.backend
+        env:
+          REDIS_URL: redis://localhost:6379
       - name: Prepare unit-only coverage
         shell: bash
         run: |

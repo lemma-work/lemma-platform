@@ -24,6 +24,7 @@ import pytest_asyncio
 
 from app.modules.connectors.domain.auth_config import AuthConfigSource
 from app.modules.connectors.infrastructure.models.connector import Connector
+from app.modules.test_support.e2e.waiters import eventually
 
 pytestmark = [pytest.mark.e2e, pytest.mark.asyncio]
 
@@ -49,18 +50,28 @@ async def agent_mcp_server():
     task = asyncio.create_task(
         server.run_async(transport="http", host="127.0.0.1", port=port, show_banner=False)
     )
-    for _ in range(100):
+
+    async def probe() -> None:
         if task.done():
             raise RuntimeError(f"MCP server failed to start: {task.exception()}")
-        try:
-            _, writer = await asyncio.open_connection("127.0.0.1", port)
-            writer.close()
-            await writer.wait_closed()
-            break
-        except OSError:
-            await asyncio.sleep(0.05)
-    else:
-        raise RuntimeError("MCP server did not start in time")
+        _, writer = await asyncio.open_connection("127.0.0.1", port)
+        writer.close()
+        await writer.wait_closed()
+
+    # retry_exceptions=(OSError,): the port not listening yet is the expected
+    # "not ready" case. A crashed server task instead raises RuntimeError from
+    # inside probe(), which is not in retry_exceptions and so propagates
+    # immediately, same as the original loop's eager task.done() check.
+    # interval kept at the original 0.05s (already tighter than the usual
+    # 0.15s default) since this is a hot local port check.
+    await eventually(
+        label=f"MCP server on port {port} to start listening",
+        probe=probe,
+        done=lambda _: True,
+        retry_exceptions=(OSError,),
+        timeout_seconds=5.0,
+        interval_seconds=0.05,
+    )
 
     yield f"http://127.0.0.1:{port}/mcp"
 

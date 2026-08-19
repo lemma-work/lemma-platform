@@ -22,6 +22,7 @@ from aiohttp import web
 from cryptography.hazmat.primitives.asymmetric import rsa
 from jwt.algorithms import RSAAlgorithm
 from app.core.log.log import get_logger
+from app.modules.test_support.e2e.waiters import eventually
 
 logger = get_logger(__name__)
 
@@ -1426,13 +1427,17 @@ async def wait_for_slack_replies(
     timeout_seconds: float = 30.0,
 ) -> list[dict]:
     """Wait until at least ``min_count`` replies reach Slack by any transport."""
-    deadline = asyncio.get_running_loop().time() + timeout_seconds
-    while asyncio.get_running_loop().time() < deadline:
-        calls = slack_delivered_calls(store)
-        if len(calls) >= min_count:
-            return calls
-        await asyncio.sleep(0.2)
-    return slack_delivered_calls(store)
+
+    async def probe() -> list[dict]:
+        return slack_delivered_calls(store)
+
+    return await eventually(
+        label=f"{min_count}+ Slack repl{'y' if min_count == 1 else 'ies'}",
+        probe=probe,
+        done=lambda calls: len(calls) >= min_count,
+        timeout_seconds=timeout_seconds,
+        interval_seconds=0.15,
+    )
 
 
 async def wait_for_slack_text(
@@ -1447,13 +1452,17 @@ async def wait_for_slack_text(
     returns straight away and the assertion runs before the streamed answer
     has arrived.
     """
-    deadline = asyncio.get_running_loop().time() + timeout_seconds
-    while asyncio.get_running_loop().time() < deadline:
-        delivered = slack_delivered(store)
-        if any(needle in text for text in delivered):
-            return delivered
-        await asyncio.sleep(0.2)
-    return slack_delivered(store)
+
+    async def probe() -> list[str]:
+        return slack_delivered(store)
+
+    return await eventually(
+        label=f"Slack text containing {needle!r}",
+        probe=probe,
+        done=lambda delivered: any(needle in text for text in delivered),
+        timeout_seconds=timeout_seconds,
+        interval_seconds=0.15,
+    )
 
 
 async def wait_for_messages(
@@ -1463,11 +1472,24 @@ async def wait_for_messages(
     timeout_seconds: float = 30.0,
     predicate: Callable[[dict], bool] | None = None,
 ) -> list[dict]:
-    deadline = asyncio.get_running_loop().time() + timeout_seconds
-    while asyncio.get_running_loop().time() < deadline:
-        messages = store.get_all(platform)
+    # `probe` always returns the FULL, unfiltered bucket for `platform` --
+    # `done` applies `predicate` only to decide readiness, never to shrink
+    # the returned value. Several of the ~80 call sites re-filter the
+    # returned list by a *different* predicate than the one passed here
+    # (e.g. test_teams_surface_e2e.py does its own comprehension over the
+    # result), so returning `matching` instead of the raw list would
+    # silently break them.
+    async def probe() -> list[dict]:
+        return store.get_all(platform)
+
+    def done(messages: list[dict]) -> bool:
         matching = messages if predicate is None else list(filter(predicate, messages))
-        if len(matching) >= min_count:
-            return messages
-        await asyncio.sleep(0.2)
-    return store.get_all(platform)
+        return len(matching) >= min_count
+
+    return await eventually(
+        label=f"{min_count}+ {platform} message(s)",
+        probe=probe,
+        done=done,
+        timeout_seconds=timeout_seconds,
+        interval_seconds=0.15,
+    )
