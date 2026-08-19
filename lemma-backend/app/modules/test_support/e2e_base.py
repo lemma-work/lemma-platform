@@ -606,6 +606,18 @@ def e2e_settings(test_database_url, test_redis_url, supertokens_container, worke
     settings.e2e_disable_worker_file_autoindex = True
     os.environ.setdefault("E2E_DISABLE_WORKER_FILE_AUTOINDEX", "true")
 
+    # The schedule poller is a real background loop in the worker subprocess,
+    # defaulting to a 5s production cadence. Every schedule/wait-until test
+    # that goes through the HTTP API + poller (rather than calling the claim
+    # function directly, as test_due_schedule_claimer_e2e.py does) pays that
+    # full cadence. Setting the attribute alone does nothing for the worker --
+    # it re-reads its own config from its own environment at startup, not
+    # this process's settings singleton -- so set os.environ too, same as
+    # E2E_LLM_MODE/E2E_DISABLE_WORKER_FILE_AUTOINDEX above; the worker's
+    # env={**os.environ, ...} already inherits it, no extra Popen key needed.
+    settings.schedule_poll_interval_seconds = 0.5
+    os.environ["SCHEDULE_POLL_INTERVAL_SECONDS"] = "0.5"
+
     from app.core.infrastructure.db import session as db_session_module
 
     db_session_module.reset_engine_state()
