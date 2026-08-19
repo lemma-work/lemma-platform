@@ -93,7 +93,7 @@ class SurfaceFileAttachment(BaseModel):
     def detail_label(self) -> str:
         return (
             self.content_type.strip()
-            or self.mime_type.strip()
+            or (self.mime_type or "").strip()
             or self.file_type.strip()
         )
 

@@ -683,3 +683,314 @@ async def test_slack_set_suggested_prompts_and_thread_title_require_assistant_sc
         await limited_surface.set_thread_title(event=event, title="Should not apply")
         is False
     )
+
+
+# ---------------------------------------------------------------------------
+# SlackMessageParser direct coverage. Like TeamsMessageParser, this is a pure
+# function of a raw Slack payload dict -> a parsed dataclass (or None): no
+# fake-server round trip is needed to exercise its filtering/edge branches.
+# ---------------------------------------------------------------------------
+
+
+def test_slack_parser_parse_rejects_non_message_and_filtered_events():
+    from app.modules.agent_surfaces.platforms.slack.parser import SlackMessageParser
+
+    parser = SlackMessageParser()
+
+    assert parser.parse({"type": "url_verification"}) is None
+    assert (
+        parser.parse(
+            {"type": "event_callback", "event": {"type": "reaction_added"}}
+        )
+        is None
+    )
+    assert (
+        parser.parse(
+            {
+                "type": "event_callback",
+                "event": {"type": "message", "subtype": "message_changed"},
+            }
+        )
+        is None
+    )
+    assert (
+        parser.parse(
+            {
+                "type": "event_callback",
+                "event": {"type": "message", "channel": "", "text": "hi"},
+            }
+        )
+        is None
+    )
+    assert (
+        parser.parse(
+            {
+                "type": "event_callback",
+                "event": {
+                    "type": "message",
+                    "channel": "C1",
+                    "text": "hi",
+                    "ts": "",
+                },
+            }
+        )
+        is None
+    )
+
+
+def test_slack_parser_parse_logs_and_reraises_on_unexpected_shape():
+    from app.modules.agent_surfaces.platforms.slack.parser import SlackMessageParser
+
+    parser = SlackMessageParser()
+
+    with pytest.raises(AttributeError):
+        parser.parse({"type": "event_callback", "event": "not-a-dict"})
+
+
+def test_slack_parser_lifecycle_member_joined_channel_branches():
+    from app.modules.agent_surfaces.domain.entities import SurfaceLifecycleKind
+    from app.modules.agent_surfaces.platforms.slack.parser import SlackMessageParser
+
+    parser = SlackMessageParser()
+
+    # Not an event_callback at all.
+    assert parser.parse_lifecycle({"type": "block_actions"}) is None
+
+    # A colleague (not the bot itself) joining a channel is not ours to react to.
+    someone_else_joined = {
+        "type": "event_callback",
+        "team_id": "T1",
+        "authorizations": [{"user_id": "BOTUSER1"}],
+        "event": {
+            "type": "member_joined_channel",
+            "user": "SOMEONE_ELSE",
+            "channel": "C-x",
+        },
+    }
+    assert parser.parse_lifecycle(someone_else_joined) is None
+
+    # The bot itself joined, but the event carries no channel id.
+    bot_joined_no_channel = {
+        "type": "event_callback",
+        "team_id": "T1",
+        "authorizations": [{"user_id": "BOTUSER1"}],
+        "event": {
+            "type": "member_joined_channel",
+            "user": "BOTUSER1",
+            "channel": "",
+        },
+    }
+    assert parser.parse_lifecycle(bot_joined_no_channel) is None
+
+    # The bot itself joined a real channel -- a genuine setup moment.
+    bot_joined = {
+        "type": "event_callback",
+        "team_id": "T1",
+        "authorizations": [{"user_id": "BOTUSER1"}],
+        "event": {
+            "type": "member_joined_channel",
+            "user": "BOTUSER1",
+            "channel": "C-joined",
+            "inviter": "U-inviter",
+        },
+    }
+    lifecycle = parser.parse_lifecycle(bot_joined)
+    assert lifecycle is not None
+    assert lifecycle.kind == SurfaceLifecycleKind.JOINED_CHANNEL
+    assert lifecycle.tenant_id == "T1"
+    assert lifecycle.external_channel_id == "C-joined"
+    assert lifecycle.actor_external_user_id == "U-inviter"
+
+    # An unexpected payload shape fails soft (returns None) rather than raising.
+    assert (
+        parser.parse_lifecycle({"type": "event_callback", "event": "not-a-dict"})
+        is None
+    )
+
+
+def test_slack_parser_authorized_bot_user_id_direct():
+    from app.modules.agent_surfaces.platforms.slack.parser import SlackMessageParser
+
+    parser = SlackMessageParser()
+
+    assert (
+        parser._authorized_bot_user_id(
+            {
+                "authorizations": [
+                    "not-a-dict",
+                    {"user_id": ""},
+                    {"user_id": "BOT1"},
+                ]
+            }
+        )
+        == "BOT1"
+    )
+    assert parser._authorized_bot_user_id({"authorizations": []}) is None
+
+
+def test_slack_parser_parse_interaction_edge_cases():
+    from app.modules.agent_surfaces.platforms.slack.models import (
+        SLACK_FORM_SUBMIT_ACTION_ID,
+    )
+    from app.modules.agent_surfaces.platforms.slack.parser import SlackMessageParser
+
+    parser = SlackMessageParser()
+
+    # No approval/submit action among the block actions at all.
+    assert (
+        parser.parse_interaction(
+            {"type": "block_actions", "actions": [{"action_id": "unrelated"}]}
+        )
+        is None
+    )
+
+    # A submit action carrying an empty callback (value) is not actionable.
+    assert (
+        parser.parse_interaction(
+            {
+                "type": "block_actions",
+                "actions": [
+                    {"action_id": SLACK_FORM_SUBMIT_ACTION_ID, "value": ""}
+                ],
+            }
+        )
+        is None
+    )
+
+    # An unexpected payload shape raises inside the try block; the handler
+    # logs and fails soft with None.
+    assert (
+        parser.parse_interaction(
+            {
+                "type": "block_actions",
+                "actions": [
+                    {"action_id": SLACK_FORM_SUBMIT_ACTION_ID, "value": "cb-1"}
+                ],
+                "state": "not-a-dict",
+            }
+        )
+        is None
+    )
+
+
+def test_slack_parser_normalize_context_message_edge_cases():
+    from app.modules.agent_surfaces.platforms.slack.parser import SlackMessageParser
+
+    parser = SlackMessageParser()
+
+    assert parser.normalize_context_message(None) is None
+    # Note: `_message_text` always returns a non-empty fallback ("[File
+    # shared]") even for a blank message with no attachments, so the
+    # `if not text: return None` guard below it can never actually fire via
+    # this path -- it is dead code, not a case this test can reach.
+    assert parser.normalize_context_message({"text": ""}) == {
+        "text": "[File shared]"
+    }
+    with pytest.raises(AttributeError):
+        parser.normalize_context_message(
+            {"text": "hi", "user_profile": "not-a-dict"}
+        )
+
+
+def test_slack_parser_extract_file_attachments_edge_cases():
+    from app.modules.agent_surfaces.platforms.slack.parser import SlackMessageParser
+
+    parser = SlackMessageParser()
+
+    results = parser.extract_file_attachments(
+        {
+            "files": [
+                "not-a-dict",
+                {
+                    "id": "",
+                    "url_private": "",
+                    "url_private_download": "",
+                    "permalink": "",
+                    "name": "",
+                    "title": "",
+                },
+                {"id": "F1", "name": "report.pdf"},
+            ]
+        }
+    )
+
+    assert len(results) == 1
+    assert results[0].id == "F1"
+
+
+def test_slack_parser_unwrap_payload_nested_shapes():
+    from app.modules.agent_surfaces.platforms.slack.parser import SlackMessageParser
+
+    parser = SlackMessageParser()
+    inner = {"type": "event_callback", "event": {"type": "message"}}
+
+    assert parser._unwrap_payload({"payload": inner}) is inner
+    assert parser._unwrap_payload({"data": inner}) is inner
+
+
+def test_slack_parser_extract_text_from_blocks_and_mentions():
+    from app.modules.agent_surfaces.platforms.slack.parser import SlackMessageParser
+
+    parser = SlackMessageParser()
+    event = {
+        "blocks": [
+            {
+                "elements": [
+                    {
+                        "elements": [
+                            {"type": "text", "text": "Hello "},
+                            {"type": "user", "user_id": "U123"},
+                            {"type": "other"},
+                        ]
+                    }
+                ]
+            }
+        ]
+    }
+
+    text = parser._extract_text_from_blocks(event)
+    assert text == "Hello <@U123>"
+
+    mentioned = parser._extract_mentioned_user_ids(event, "hi <@U999> there")
+    assert mentioned == ["U999", "U123"]
+
+
+def test_slack_parser_message_text_and_filename_from_url():
+    from app.modules.agent_surfaces.platforms.slack.parser import SlackMessageParser
+
+    parser = SlackMessageParser()
+
+    assert parser._message_text("", "") == "[File shared]"
+    assert parser._message_text("", "attachment info") == "attachment info"
+
+    assert (
+        parser._filename_from_url("https://example.test/path/report.pdf")
+        == "report.pdf"
+    )
+    assert parser._filename_from_url("") == ""
+
+
+def test_slack_parser_extract_input_value_and_flatten_state():
+    from app.modules.agent_surfaces.platforms.slack.parser import (
+        _extract_slack_input_value,
+        _flatten_block_state_values,
+    )
+
+    assert _extract_slack_input_value("not-a-dict") == "not-a-dict"
+    assert _extract_slack_input_value({"value": "typed text"}) == "typed text"
+    assert _extract_slack_input_value(
+        {"selected_options": [{"value": "a"}, "not-a-dict", {"value": "b"}]}
+    ) == ["a", "b"]
+    assert (
+        _extract_slack_input_value({"selected_date": "2024-01-01"}) == "2024-01-01"
+    )
+    assert _extract_slack_input_value({}) is None
+
+    flattened = _flatten_block_state_values(
+        {
+            "block_empty": {},
+            "block_bad": "not-a-dict",
+            "block_ok": {"action1": {"value": "hello"}},
+        }
+    )
+    assert flattened == {"block_ok": "hello"}

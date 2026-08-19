@@ -346,3 +346,322 @@ async def test_teams_resolves_sharepoint_site_and_document_content_url(
     assert any(
         call.get("hostname") == "contoso.sharepoint.com" for call in site_calls
     )
+
+
+# ---------------------------------------------------------------------------
+# TeamsMessageParser direct coverage. The parser is a pure function of a raw
+# Bot Framework/Graph payload dict -> a parsed dataclass (or None): no DB,
+# HTTP, or fake-server round trip is needed to exercise its branches, and
+# testing it directly (rather than staging a full surface + webhook POST for
+# every edge case) avoids repeating the ingress/DB plumbing the journeys above
+# already cover for the "happy path".
+# ---------------------------------------------------------------------------
+
+
+def test_teams_parser_legacy_value_event_dispatch_and_fields():
+    from app.modules.agent_surfaces.platforms.teams.parser import TeamsMessageParser
+
+    parser = TeamsMessageParser()
+
+    # No usable "message"/"messageUpdate" activity and no "value" list at all:
+    # ``parse`` falls through both dispatch branches to its final `None`.
+    assert parser.parse({}) is None
+    assert parser.parse({"type": "invoke", "value": {"not": "a-list"}}) is None
+    assert parser.parse({"type": "invoke", "value": ["not-a-dict"]}) is None
+
+    # A legacy value-event activity: not a "message"/"messageUpdate" type, but
+    # carrying a message-shaped dict in a top-level "value" list -- the shape
+    # older Teams payloads (and some connector replay tooling) still send.
+    legacy_channel_id = "19:legacy-channel-e2e@thread.tacv2"
+    payload = {
+        "type": "invoke",
+        "serviceUrl": "https://smba.trafficmanager.net/teams",
+        "tenantId": "legacy-tenant-e2e",
+        "value": [
+            {
+                "id": "legacy-msg-1",
+                "replyToId": "legacy-root-msg",
+                "text": "<at>Bot</at> hello from a legacy value event",
+                "from": {
+                    "user": {
+                        "id": "29:legacy-user",
+                        "aadObjectId": "aad-legacy-user",
+                        "name": "Legacy User",
+                    }
+                },
+                "conversation": {
+                    "id": legacy_channel_id,
+                    "conversationType": "channel",
+                },
+                "channelData": {
+                    "channel": {"id": legacy_channel_id},
+                    "team": {"id": "team-legacy", "aadGroupId": "aad-team-legacy"},
+                    "tenant": {"id": "legacy-tenant-e2e"},
+                },
+                "serviceUrl": "https://smba.trafficmanager.net/teams",
+            }
+        ],
+    }
+
+    event = parser.parse(payload)
+
+    assert event is not None
+    assert event.platform == "TEAMS"
+    assert event.is_dm is False
+    # ``strip_html`` removes the ``<at>...</at>`` mention tag before the
+    # legacy path's own "<at>" substring check ever sees it, so this is
+    # never actually detected as a mention here -- ``is_thread_reply``
+    # (via ``replyToId``) is what makes the conversation start instead.
+    assert event.mentioned_agent is False
+    assert event.should_start_conversation is True
+    assert event.tenant_id == "legacy-tenant-e2e"
+    assert event.external_channel_id == legacy_channel_id
+    assert event.external_thread_id == "legacy-root-msg"
+    assert event.external_message_id == "legacy-msg-1"
+    assert event.sender_external_user_id == "29:legacy-user"
+    assert event.sender_aad_object_id == "aad-legacy-user"
+    assert event.sender_display_name == "Legacy User"
+    assert event.metadata["team_id"] == "team-legacy"
+    assert event.metadata["team_aad_group_id"] == "aad-team-legacy"
+
+    # An empty message body with no attachments is dropped, mirroring the
+    # bot-framework-message path's own "nothing to act on" guard.
+    empty_payload = dict(payload)
+    empty_payload["value"] = [{**payload["value"][0], "text": ""}]
+    assert parser.parse(empty_payload) is None
+
+    # A legacy value-event message with real text but no channel/thread id to
+    # route the reply to (no conversation, no channel data at all) is also
+    # dropped, mirroring the bot-framework-message path's own guard.
+    unroutable_payload = dict(payload)
+    unroutable_payload["value"] = [
+        {"id": "legacy-msg-2", "text": "hello with nowhere to route"}
+    ]
+    assert parser.parse(unroutable_payload) is None
+
+
+def test_teams_parser_bot_framework_message_edge_cases():
+    from app.modules.agent_surfaces.platforms.teams.parser import TeamsMessageParser
+
+    parser = TeamsMessageParser()
+
+    # A "message" activity with neither text nor attachments carries nothing
+    # to act on.
+    empty_message = {
+        "type": "message",
+        "from": {"id": "29:user"},
+        "text": "",
+        "conversation": {"id": "conv-empty", "conversationType": "personal"},
+    }
+    assert parser.parse(empty_message) is None
+
+    # A personal (DM) activity whose conversation carries no id at all leaves
+    # both the channel and thread id empty -- nothing to route the reply to.
+    unroutable_dm = {
+        "type": "message",
+        "from": {"id": "29:user"},
+        "text": "hello",
+        "conversation": {"conversationType": "personal"},
+    }
+    assert parser.parse(unroutable_dm) is None
+
+    # A file-only DM (no caption text) still has something to act on -- the
+    # attachment-prompt block itself becomes the message text.
+    file_only_dm = {
+        "type": "message",
+        "from": {"id": "29:user"},
+        "text": "",
+        "conversation": {"id": "conv-file-only", "conversationType": "personal"},
+        "attachments": [
+            {
+                "name": "notes.txt",
+                "contentType": "text/plain",
+                "contentUrl": "https://e2e.test/notes.txt",
+            }
+        ],
+    }
+    file_only_event = parser.parse(file_only_dm)
+    assert file_only_event is not None
+    assert "notes.txt" in file_only_event.message_text
+
+
+def test_teams_parser_parse_interaction_requires_callback_id():
+    from app.modules.agent_surfaces.platforms.teams.parser import TeamsMessageParser
+
+    parser = TeamsMessageParser()
+
+    # An Adaptive Card Action.Submit whose `value` carries no
+    # ``lemma_form_callback_id`` is not one of ours -- e.g. a card belonging
+    # to a different bot/integration in the same tenant.
+    assert parser.parse_interaction({"value": {"some_other_field": "x"}}) is None
+
+
+def test_teams_parser_mentioned_bot_entity_and_legacy_fallback():
+    from app.modules.agent_surfaces.platforms.teams.parser import TeamsMessageParser
+
+    parser = TeamsMessageParser()
+
+    # A non-dict entity is skipped; a non-"mention" entity is skipped; a
+    # mention entity matched by name (not id) still counts.
+    matched_by_name = {
+        "recipient": {"id": "bot-id", "name": "LemmaBot"},
+        "entities": [
+            "not-a-dict",
+            {"type": "otherEntity"},
+            {"type": "mention", "mentioned": {"name": "LemmaBot"}},
+        ],
+    }
+    assert parser._mentioned_bot(matched_by_name) is True
+
+    # An entities array present but with no matching mention at all falls
+    # through the loop to `False` -- distinct from the legacy no-entities path.
+    no_match = {
+        "recipient": {"id": "bot-id", "name": "LemmaBot"},
+        "entities": [{"type": "mention", "mentioned": {"id": "someone-else"}}],
+    }
+    assert parser._mentioned_bot(no_match) is False
+
+    # Legacy payload shape carries no "entities" array at all -- falls back to
+    # a plain "<at>" tag presence check on the raw text.
+    legacy_shape = {"text": "<at>LemmaBot</at> are you there?"}
+    assert parser._mentioned_bot(legacy_shape) is True
+    assert parser._mentioned_bot({"text": "no mention here"}) is False
+
+
+def test_teams_parser_attachment_extraction_edge_cases():
+    from app.modules.agent_surfaces.platforms.teams.parser import (
+        TeamsMessageParser,
+        file_type_from_url,
+        filename_from_url,
+    )
+
+    parser = TeamsMessageParser()
+
+    payload = {
+        "attachments": [
+            "not-a-dict",  # skipped outright
+            {
+                # A text/html attachment carrying an inline image and no
+                # explicit name -- falls back to deriving one from the URL.
+                "contentType": "text/html",
+                "content": '<div itemscope="image/png"><img src="https://e2e.test/inline-a.png"></div>',
+            },
+        ],
+        # A second inline image, only reachable via the message text itself
+        # (not a text/html attachment) -- exercises the payload-level
+        # fallback and its own dedup/name-from-url path.
+        "text": '<p>see <img src="https://e2e.test/inline-b.png"></p>',
+    }
+
+    results = parser.extract_file_attachments(payload)
+
+    names = {r["name"] for r in results}
+    urls = {r["download_url"] for r in results}
+    assert "https://e2e.test/inline-a.png" in urls
+    assert "https://e2e.test/inline-b.png" in urls
+    assert "inline-a.png" in names
+    assert "inline-b.png" in names
+    html_result = next(
+        r for r in results if r["download_url"] == "https://e2e.test/inline-a.png"
+    )
+    assert html_result["file_type"] == "image/png"
+
+    # filename_from_url / file_type_from_url are exercised above only via
+    # attachments lacking an explicit name; cover them directly too.
+    assert filename_from_url("https://e2e.test/path/report.final.pdf") == (
+        "report.final.pdf"
+    )
+    assert filename_from_url("") is None
+    assert file_type_from_url("https://e2e.test/path/report.pdf") == "pdf"
+    assert file_type_from_url("https://e2e.test/no-extension") == ""
+
+
+def test_teams_parser_downloadable_attachment_and_type_helpers():
+    from app.modules.agent_surfaces.platforms.teams.parser import TeamsMessageParser
+
+    parser = TeamsMessageParser()
+
+    # `_looks_like_downloadable_attachment`'s three early-exit branches: no
+    # download URL at all, an (unreachable-via-extract_file_attachments, but
+    # independently meaningful) text/html content type, and a Bot Framework
+    # card content type.
+    assert parser._looks_like_downloadable_attachment({}) is False
+    assert (
+        parser._looks_like_downloadable_attachment(
+            {"contentUrl": "https://e2e.test/x", "contentType": "text/html"}
+        )
+        is False
+    )
+    assert (
+        parser._looks_like_downloadable_attachment(
+            {
+                "contentUrl": "https://e2e.test/x",
+                "contentType": "application/vnd.microsoft.card.adaptive",
+            }
+        )
+        is False
+    )
+    assert (
+        parser._looks_like_downloadable_attachment(
+            {"contentUrl": "https://e2e.test/x", "contentType": "application/pdf"}
+        )
+        is True
+    )
+
+    assert parser._extract_image_type_from_html('itemscope="image/png"') == (
+        "image/png"
+    )
+    assert parser._extract_image_type_from_html("<p>no itemscope here</p>") == ""
+
+    assert parser._file_type_from_name("report.PDF") == "pdf"
+    assert parser._file_type_from_name("no-extension") == ""
+    assert parser._file_type_from_name(None) == ""
+
+    assert parser._file_type_from_content_type("image/png") == "png"
+    assert parser._file_type_from_content_type("no-slash") == ""
+
+
+def test_extract_graph_message_attachments_from_graph_channel_item():
+    from app.modules.agent_surfaces.platforms.teams.parser import (
+        extract_graph_message_attachments,
+    )
+
+    item = {
+        "attachments": [
+            {
+                "contentUrl": "https://graph.e2e.test/file.pdf",
+                "name": "file.pdf",
+                "contentType": "application/pdf",
+            },
+            {"contentUrl": ""},  # filtered: no usable URL
+            "not-a-dict",  # filtered: not a dict
+            {
+                # No name and no dotted filename in the URL -- file_type falls
+                # back to deriving from the content type's subtype.
+                "contentUrl": "https://graph.e2e.test/blob",
+                "contentType": "application/octet-stream",
+            },
+        ],
+        "body": {"content": '<p>see <img src="https://graph.e2e.test/inline.png"></p>'},
+    }
+
+    results = extract_graph_message_attachments(item)
+
+    by_url = {r["download_url"]: r for r in results}
+    assert by_url["https://graph.e2e.test/file.pdf"]["name"] == "file.pdf"
+    assert by_url["https://graph.e2e.test/file.pdf"]["file_type"] == "pdf"
+    assert by_url["https://graph.e2e.test/blob"]["file_type"] == "octet-stream"
+    inline = by_url["https://graph.e2e.test/inline.png"]
+    assert inline["name"] == "inline.png"
+    assert inline["content_type"] == "image/*"
+    # An attachment already carrying the same URL as the inline <img> is not
+    # duplicated by the inline-image fallback.
+    dup_item = {
+        "attachments": [
+            {"contentUrl": "https://graph.e2e.test/inline.png", "name": "dup.png"}
+        ],
+        "body": {"content": '<img src="https://graph.e2e.test/inline.png">'},
+    }
+    dup_results = extract_graph_message_attachments(dup_item)
+    assert len(dup_results) == 1
+    assert dup_results[0]["name"] == "dup.png"
