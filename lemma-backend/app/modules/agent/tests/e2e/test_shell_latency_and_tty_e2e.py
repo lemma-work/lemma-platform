@@ -30,6 +30,7 @@ from app.modules.agent.tools.workspace_cli.models import (
     ExecCommandRequest,
     ExecutePythonRequest,
     ListProcessesRequest,
+    ResizeTerminalRequest,
     TerminateProcessRequest,
     WriteStdinRequest,
 )
@@ -37,6 +38,7 @@ from app.modules.agent.tools.workspace_cli.workspace_cli import (
     exec_command_internal,
     execute_python_internal,
     list_processes_internal,
+    resize_terminal_internal,
     terminate_process_internal,
     write_stdin_internal,
 )
@@ -373,6 +375,82 @@ async def test_a_large_paste_into_a_tty_is_delivered_whole(
     )
     assert check.exit_code == 0, check
     assert int((check.stdout or "0").strip() or 0) >= 120, check.stdout
+
+
+async def test_resize_terminal_changes_the_pty_window_size(
+    authenticated_client,
+    fixed_test_org,
+    fixed_test_user,
+    configure_workspace_api_url,
+):
+    """`resize_terminal` is a wired tool with no e2e coverage anywhere.
+
+    A successful response is not enough to trust it: assert the PTY the shell
+    is attached to actually reports the new size, the way an agent would
+    verify a resize before rereading a clipped full-screen program.
+    """
+    del configure_workspace_api_url
+    ctx = await _agent_context(authenticated_client, fixed_test_org, fixed_test_user)
+
+    shell = await exec_command_internal(
+        ctx,
+        ExecCommandRequest(
+            comment="an interactive shell to resize",
+            cmd="sh -i",
+            tty=True,
+            yield_time_ms=1000,
+        ),
+    )
+    assert shell.process_id, shell
+    assert shell.completed is False, shell
+
+    resized = await resize_terminal_internal(
+        ctx,
+        ResizeTerminalRequest(
+            comment="widen and heighten the terminal",
+            process_id=shell.process_id,
+            cols=200,
+            rows=50,
+        ),
+    )
+    assert resized.success, resized
+    assert resized.completed is False, resized
+    assert resized.process_id == shell.process_id, resized
+
+    reported = await write_stdin_internal(
+        ctx,
+        WriteStdinRequest(
+            comment="read back the pty size",
+            process_id=shell.process_id,
+            chars="stty size\n",
+            yield_time_ms=1500,
+        ),
+    )
+    # `stty size` prints "<rows> <cols>".
+    assert "50 200" in (reported.stdout or ""), reported
+
+
+async def test_resize_terminal_on_an_unknown_process_fails_without_raising(
+    authenticated_client,
+    fixed_test_org,
+    fixed_test_user,
+    configure_workspace_api_url,
+):
+    """The control-tool guard shared with terminate must cover resize too."""
+    del configure_workspace_api_url
+    ctx = await _agent_context(authenticated_client, fixed_test_org, fixed_test_user)
+
+    resized = await resize_terminal_internal(
+        ctx,
+        ResizeTerminalRequest(
+            comment="resize a process that was never started",
+            process_id=f"never-started-{uuid4().hex[:8]}",
+            cols=80,
+            rows=24,
+        ),
+    )
+    assert resized.success is False, resized
+    assert resized.error, resized
 
 
 async def test_a_process_survives_being_listed_and_can_be_terminated(

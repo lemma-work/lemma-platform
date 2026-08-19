@@ -16,6 +16,12 @@ OUTPUT ?= $(TEAMS_MANIFEST_DIR)/lemma-teams.zip
 E2E_WORKERS ?= 2
 E2E_PARALLEL := -n $(E2E_WORKERS) --dist loadscope
 
+# The marker filter a CI shard runs under. Defaults to the standard fast-lane
+# exclusions (matches test-e2e-fast); a shard whose module structurally needs
+# real sandbox execution to be covered at all (function -- see e2e.yml) can
+# override this to drop "not workspace" instead of forking the whole target.
+E2E_SHARD_MARKERS ?= e2e and not slow and not workspace and not provider and not local_cli and not indexing and not protected
+
 # Load test settings (override on the command line)
 LOAD_TEST_COMPOSE := load_tests/docker-compose.load-test.yml
 LOAD_TEST_ENV     := load_tests/.env.load_test
@@ -193,7 +199,7 @@ coverage-backend-e2e-shard:
 	$(BACKEND_COVERAGE_DATA_ENV) uv run coverage erase
 	$(BACKEND_COVERAGE_RUN_ENV) uv run coverage run --parallel-mode -m pytest \
 		$(E2E_PARALLEL) $(E2E_ARGS) \
-		-m "e2e and not slow and not workspace and not provider and not local_cli and not indexing and not protected" \
+		-m "$(E2E_SHARD_MARKERS)" \
 		-o timeout=120 \
 		--junitxml=$(BACKEND_COVERAGE_DIR)/junit-$(COVERAGE_PHASE).xml
 	$(MAKE) coverage-backend-report COVERAGE_PHASE=$(COVERAGE_PHASE)

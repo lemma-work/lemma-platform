@@ -18,6 +18,7 @@ from app.core.infrastructure.jobs.streaq_job_queue import create_streaq_client
 from app.modules.agent.api.controllers.shared import (
     conversation_channel,
 )
+from app.modules.agent.domain.entities import Agent
 from app.modules.agent.domain.events import AgentRunStartedEvent
 from app.modules.agent.domain.value_objects import (
     AgentEvent,
@@ -37,6 +38,14 @@ from app.modules.agent.infrastructure.repositories import ConversationRepository
 from app.modules.agent.services.agent_runner_service import AgentRunnerService
 from app.modules.agent.services.conversation_service import ConversationService
 from app.modules.agent.tools.approval.executor import ApprovalExecutor
+from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.tools.final_answer.final_answer_toolset import (
+    FINAL_ANSWER_TOOL_NAME,
+    build_final_answer_toolset,
+)
+from app.modules.agent.infrastructure.agent_host_final_answer import (
+    read_final_answer,
+)
 from app.modules.agent.tools.tool_errors import AgentInputRequired
 from app.modules.agent.tools.user_interaction.pydantic_adapter import (
     request_approval as request_approval_tool,
@@ -2594,6 +2603,265 @@ class TestAgentRuntimeConfigApis:
                     else "vendor-secret"
                 )
             }
+
+    async def test_profile_update_archive_and_restore_lifecycle(
+        self,
+        authenticated_client,
+        fixed_test_org,
+    ):
+        """The editor's full write surface, exercised end to end.
+
+        `runtime_profile_editor.py` has no dedicated e2e coverage of its own --
+        every other test only touches it incidentally through fixture setup.
+        This drives create -> update -> archive -> restore against the real
+        routes and checks each transition's effect on both the direct GET and
+        the org listing.
+        """
+        org_id = fixed_test_org["id"]
+
+        created = await authenticated_client.post(
+            f"/organizations/{org_id}/agent-runtime/profiles",
+            json={
+                "source": "OPENAI_COMPATIBLE",
+                "name": f"Lifecycle Provider {uuid4().hex[:8]}",
+                "base_url": "http://127.0.0.1:9/v1",
+                "api_key": "lifecycle-secret",
+                "description": "Original description",
+                "default_model_name": "lifecycle/model-a",
+                "model_names": ["lifecycle/model-a", "lifecycle/model-b"],
+            },
+        )
+        assert created.status_code == status.HTTP_201_CREATED, created.text
+        profile = created.json()
+        profile_id = profile["id"]
+        assert profile["status"] == "ACTIVE"
+        assert profile["default_model_name"] == "lifecycle/model-a"
+
+        # Update: rename, redescribe, and repoint the default model. base_url,
+        # api_key and model_names are all left unset, so the editor takes the
+        # no-rediscovery path rather than making a provider round trip.
+        updated_name = f"Lifecycle Provider Renamed {uuid4().hex[:8]}"
+        updated = await authenticated_client.patch(
+            f"/organizations/{org_id}/agent-runtime/profiles/{profile_id}",
+            json={
+                "source": "OPENAI_COMPATIBLE",
+                "name": updated_name,
+                "description": "Updated description",
+                "default_model_name": "lifecycle/model-b",
+            },
+        )
+        assert updated.status_code == status.HTTP_200_OK, updated.text
+        updated_payload = updated.json()
+        assert updated_payload["name"] == updated_name
+        assert updated_payload["description"] == "Updated description"
+        assert updated_payload["default_model_name"] == "lifecycle/model-b"
+        assert updated_payload["status"] == "ACTIVE"
+        # The catalog and credentials survive an edit that did not touch them.
+        assert {item["name"] for item in updated_payload["model_catalog"]} == {
+            "lifecycle/model-a",
+            "lifecycle/model-b",
+        }
+        assert updated_payload["has_credentials"] is True
+
+        fetched = await authenticated_client.get(
+            f"/organizations/{org_id}/agent-runtime/profiles/{profile_id}",
+        )
+        assert fetched.status_code == status.HTTP_200_OK, fetched.text
+        assert fetched.json()["name"] == updated_name
+
+        # Archive: soft-disable. Dropped from the default listing, but still
+        # directly addressable -- otherwise it could never be restored.
+        archived = await authenticated_client.delete(
+            f"/organizations/{org_id}/agent-runtime/profiles/{profile_id}",
+        )
+        assert archived.status_code == status.HTTP_204_NO_CONTENT, archived.text
+
+        listed_default = await authenticated_client.get(
+            f"/organizations/{org_id}/agent-runtime/profiles",
+        )
+        assert listed_default.status_code == status.HTTP_200_OK, listed_default.text
+        assert profile_id not in {
+            item["id"] for item in listed_default.json()["items"]
+        }
+
+        listed_with_disabled = await authenticated_client.get(
+            f"/organizations/{org_id}/agent-runtime/profiles",
+            params={"include_disabled": True},
+        )
+        assert listed_with_disabled.status_code == status.HTTP_200_OK
+        disabled_entry = next(
+            item
+            for item in listed_with_disabled.json()["items"]
+            if item["id"] == profile_id
+        )
+        assert disabled_entry["status"] == "DISABLED"
+
+        fetched_after_archive = await authenticated_client.get(
+            f"/organizations/{org_id}/agent-runtime/profiles/{profile_id}",
+        )
+        assert fetched_after_archive.status_code == status.HTTP_200_OK, (
+            fetched_after_archive.text
+        )
+        assert fetched_after_archive.json()["status"] == "DISABLED"
+
+        # Archiving an already-archived profile is idempotent, not an error.
+        archived_again = await authenticated_client.delete(
+            f"/organizations/{org_id}/agent-runtime/profiles/{profile_id}",
+        )
+        assert archived_again.status_code == status.HTTP_204_NO_CONTENT, (
+            archived_again.text
+        )
+
+        # Restore: back to ACTIVE, and back in the default listing.
+        restored = await authenticated_client.post(
+            f"/organizations/{org_id}/agent-runtime/profiles/{profile_id}:restore",
+        )
+        assert restored.status_code == status.HTTP_200_OK, restored.text
+        restored_payload = restored.json()
+        assert restored_payload["status"] == "ACTIVE"
+        assert restored_payload["name"] == updated_name
+
+        listed_after_restore = await authenticated_client.get(
+            f"/organizations/{org_id}/agent-runtime/profiles",
+        )
+        assert profile_id in {
+            item["id"] for item in listed_after_restore.json()["items"]
+        }
+
+        # Restoring an already-active profile is idempotent too.
+        restored_again = await authenticated_client.post(
+            f"/organizations/{org_id}/agent-runtime/profiles/{profile_id}:restore",
+        )
+        assert restored_again.status_code == status.HTTP_200_OK, restored_again.text
+        assert restored_again.json()["status"] == "ACTIVE"
+
+
+class TestFinalAnswerToolset:
+    """The Agent Host ``final_answer`` MCP tool, called directly.
+
+    ``build_final_answer_toolset`` backs the structured-output contract for
+    remote (Agent Host) runs only -- the in-process LEMMA harness gets its
+    final answer through pydantic-ai's ``output_type`` instead, a completely
+    different mechanism covered elsewhere. Nothing drives this tool through a
+    real Agent Host wire-protocol run in this suite, and standing one up just
+    to reach one validation branch would be a lot of ACP scaffolding for what
+    is fundamentally a schema-validation-and-persistence question. So this
+    calls the tool function the toolset actually builds -- the same object an
+    MCP call would invoke -- against a real agent run row, exercising the real
+    jsonschema validator and the real ``agent_runs.run_metadata`` write.
+    """
+
+    async def test_schema_violations_are_rejected_then_accepted_and_flagged(
+        self,
+        authenticated_client,
+        fixed_test_org,
+    ):
+        pod_id = await _create_test_pod(authenticated_client, fixed_test_org)
+        output_schema = {
+            "type": "object",
+            "properties": {"answer": {"type": "string"}},
+            "required": ["answer"],
+            "additionalProperties": False,
+        }
+        create_agent = await authenticated_client.post(
+            f"/pods/{pod_id}/agents",
+            json={
+                "name": "Final Answer Agent",
+                "instruction": "Answer with the required schema.",
+                "output_schema": output_schema,
+            },
+        )
+        assert create_agent.status_code == status.HTTP_201_CREATED, create_agent.text
+        agent_payload = create_agent.json()
+        agent_id = UUID(agent_payload["id"])
+
+        create_conversation = await authenticated_client.post(
+            f"/pods/{pod_id}/conversations",
+            json={"agent_name": agent_payload["name"], "title": "Final answer"},
+        )
+        assert create_conversation.status_code == status.HTTP_201_CREATED, (
+            create_conversation.text
+        )
+        conversation_id = UUID(create_conversation.json()["id"])
+
+        uow_factory = SessionUnitOfWorkFactory(async_session_maker)
+        async with create_uow_from_session_maker(async_session_maker) as uow:
+            repo = ConversationRepository(uow)
+            run = await repo.create_agent_run(
+                conversation_id=conversation_id,
+                agent_id=agent_id,
+                agent_runtime=AgentRuntimeConfig(profile_id="system:lemma"),
+                metadata={"source": "final_answer_e2e"},
+            )
+            await uow.commit()
+
+        user_id = UUID(agent_payload["user_id"])
+        domain_agent = Agent(
+            id=agent_id,
+            pod_id=UUID(pod_id),
+            user_id=user_id,
+            name=agent_payload["name"],
+            instruction="Answer with the required schema.",
+            output_schema=output_schema,
+        )
+        ctx = SimpleNamespace(
+            deps=BaseAgentContext(
+                user_id=user_id,
+                pod_id=UUID(pod_id),
+                conversation_id=conversation_id,
+                agent_run_id=run.id,
+            )
+        )
+
+        # A fresh toolset per phase: the rejection counter lives on the
+        # toolset closure, and each phase's assertions depend on starting at
+        # zero rejections.
+        def _build_tool():
+            toolset = build_final_answer_toolset(
+                agent=domain_agent, uow_factory=uow_factory
+            )
+            return toolset.tools[FINAL_ANSWER_TOOL_NAME].function
+
+        invalid_output = {"wrong_field": "nope"}
+
+        # Phase 1: within the rejection budget. Rejected, and nothing is
+        # persisted yet -- an agent mid-argument with its own schema must not
+        # have a bad answer recorded as authoritative.
+        final_answer = _build_tool()
+        for _ in range(3):
+            rejected = await final_answer(
+                ctx, status="COMPLETED", output=invalid_output
+            )
+            assert rejected["success"] is False
+            assert "does not match the agent's output schema" in rejected["error"]
+
+        assert await read_final_answer(uow_factory, agent_run_id=run.id) is None
+
+        # Phase 2: past the budget. The tool takes the bad answer rather than
+        # spend the rest of the run arguing with the validator, and flags it.
+        accepted = await final_answer(ctx, status="COMPLETED", output=invalid_output)
+        assert accepted["success"] is True
+        assert accepted["schema_violation"]
+
+        flagged_record = await read_final_answer(uow_factory, agent_run_id=run.id)
+        assert flagged_record is not None
+        assert flagged_record["schema_violation"]
+        assert flagged_record["output"] == invalid_output
+
+        # Phase 3: a fresh toolset (a new run's counter starts at zero) with a
+        # schema-conformant answer persists cleanly, overwriting the flagged
+        # record -- last write wins.
+        clean_final_answer = _build_tool()
+        clean = await clean_final_answer(
+            ctx, status="COMPLETED", output={"answer": "42"}
+        )
+        assert clean["success"] is True
+        assert "schema_violation" not in clean
+
+        clean_record = await read_final_answer(uow_factory, agent_run_id=run.id)
+        assert clean_record is not None
+        assert clean_record["output"] == {"answer": "42"}
+        assert "schema_violation" not in clean_record
 
 
 class TestAgentToolApis:

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from fastapi import status
@@ -224,6 +224,21 @@ async def test_public_sse_sanitizes_provider_failure_matrix_and_persists_failure
             # Rate limiting is retried, so the message says "try again shortly"
             # rather than sending the reader to the runtime configuration.
             "rate limiting this workspace (HTTP 429)",
+        ),
+        (
+            "model_http",
+            402,
+            "rejected the request for billing reasons (HTTP 402)",
+        ),
+        (
+            "model_http",
+            503,
+            "having trouble (HTTP 503)",
+        ),
+        (
+            "model_http",
+            418,
+            "The model provider returned an error (HTTP 418)",
         ),
         (
             "unexpected_model_behavior",
@@ -472,6 +487,90 @@ async def test_public_runtime_profile_anthropic_discovery_and_validation_matrix(
     )
     assert unavailable_harness.status_code == status.HTTP_400_BAD_REQUEST
     assert "not available" in unavailable_harness.json()["message"]
+
+
+@pytest.mark.asyncio
+async def test_public_runtime_profile_discovery_talks_to_a_real_http_endpoint(
+    authenticated_client,
+    fixed_test_org,
+):
+    """`_discover_openai_compatible_models`, driven against a real HTTP
+    endpoint rather than a monkeypatched stand-in.
+
+    Every other discovery test in this file mocks the discovery *function*
+    itself (a legitimate choice for testing the surrounding validation logic),
+    so `_discover_models`'s real httpx call, the real Authorization header,
+    and the real OpenAI-compatible JSON parsing -- including OpenRouter-style
+    vision detection from `architecture.input_modalities` -- have never run
+    for real anywhere in the suite. Only the third party on the other end (a
+    provider's `/models` endpoint) is faked here; the client, the request, and
+    the parser are the genuine article, reached over a real socket.
+    """
+    import json as jsonlib
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    payload = jsonlib.dumps(
+        {
+            "data": [
+                {"id": "fake-text-model"},
+                {
+                    "id": "fake-vision-model",
+                    "architecture": {"input_modalities": ["text", "image"]},
+                },
+                # A malformed entry (no id/name) must be skipped, not crash
+                # the parse of everything after it.
+                {"architecture": None},
+            ]
+        }
+    ).encode()
+    captured: list[dict] = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            captured.append({"path": self.path, "headers": dict(self.headers)})
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def log_message(self, *_args):  # silence the default access log
+            return
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        canary = "CANARY_REAL_DISCOVERY_KEY_9c31"
+        created = await authenticated_client.post(
+            f"/organizations/{fixed_test_org['id']}/agent-runtime/profiles",
+            json={
+                "source": "OPENAI_COMPATIBLE",
+                "name": f"Real discovery {uuid4().hex[:8]}",
+                "base_url": f"http://127.0.0.1:{port}/v1",
+                "api_key": canary,
+            },
+        )
+        assert created.status_code == status.HTTP_201_CREATED, created.text
+        assert canary not in created.text
+        profile = created.json()
+        catalog_by_name = {m["name"]: m for m in profile["model_catalog"]}
+        assert set(catalog_by_name) == {"fake-text-model", "fake-vision-model"}
+        assert "VISION" not in catalog_by_name["fake-text-model"]["capabilities"]
+        assert "VISION" in catalog_by_name["fake-vision-model"]["capabilities"]
+        # The auto-picked default is the first entry discovery returned.
+        assert profile["default_model_name"] == "fake-text-model"
+        # The real request landed with the real key, at the real joined path.
+        assert any(
+            call["path"] == "/v1/models"
+            and call["headers"].get("Authorization") == f"Bearer {canary}"
+            for call in captured
+        ), captured
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
 
 
 @pytest.mark.asyncio
@@ -750,6 +849,14 @@ async def test_scripted_todo_and_workspace_tools_stream_and_persist_real_results
             {"cmd": "exit 7", "comment": "Exercise a user-command failure"},
             tool_call_id="shell-failure-1",
         ),
+        script_tool_call(
+            "exec_command",
+            {
+                "cmd": "git status",
+                "comment": "Exercise the GitHub credential bridge gate",
+            },
+            tool_call_id="shell-git-1",
+        ),
         script_tool_call("list_skills", {}, tool_call_id="skills-list-1"),
         script_tool_call(
             "load_skill",
@@ -760,6 +867,16 @@ async def test_scripted_todo_and_workspace_tools_stream_and_persist_real_results
             "load_skill",
             {"name": "does-not-exist"},
             tool_call_id="skill-missing-1",
+        ),
+        script_tool_call(
+            "load_skill",
+            {"name": "browser", "resource_path": "references/agent-browser-core.md"},
+            tool_call_id="skill-resource-1",
+        ),
+        script_tool_call(
+            "load_skill",
+            {"name": "browser", "resource_path": "../../etc/passwd"},
+            tool_call_id="skill-resource-traversal-1",
         ),
         script_tool_call(
             "say",
@@ -828,6 +945,11 @@ async def test_scripted_todo_and_workspace_tools_stream_and_persist_real_results
         tool_returns_by_id["shell-blocking-1"]["tool_result"]
     )
     assert tool_returns_by_id["shell-failure-1"]["tool_result"]["success"] is False
+    # No GitHub account is connected in this test org, so the bridge resolves
+    # to "unavailable" and the command runs uncredentialed -- git reports its
+    # own native error, but the run must not crash going through the gate.
+    git_result = tool_returns_by_id["shell-git-1"]["tool_result"]
+    assert git_result["completed"] is True
     # These drive the process `shell-tty-1` actually started, by the id it
     # actually returned. Asserting only `success` would pass against a process
     # that ignored the input, so require the echo back from `cat`.
@@ -845,6 +967,14 @@ async def test_scripted_todo_and_workspace_tools_stream_and_persist_real_results
     assert tool_returns["list_skills"]["tool_result"]["success"] is True
     assert tool_returns_by_id["skill-load-1"]["tool_result"]["success"] is True
     assert tool_returns_by_id["skill-missing-1"]["tool_result"]["success"] is False
+    skill_resource = tool_returns_by_id["skill-resource-1"]["tool_result"]
+    assert skill_resource["success"] is True
+    assert skill_resource["resource_path"] == "references/agent-browser-core.md"
+    assert "agent-browser core" in str(skill_resource["content"])
+    skill_resource_traversal = tool_returns_by_id["skill-resource-traversal-1"][
+        "tool_result"
+    ]
+    assert skill_resource_traversal["success"] is False
     assert tool_returns_by_id["process-list-1"]["tool_result"]["success"] is True
     assert tool_returns_by_id["process-invalid-1"]["tool_result"]["success"] is False
     assert tool_returns["say"]["tool_result"]["success"] is False
@@ -859,6 +989,191 @@ async def test_scripted_todo_and_workspace_tools_stream_and_persist_real_results
         {"content": "Inspect input", "done": False},
         {"content": "Persist result", "done": True},
     ]
+
+
+@pytest.mark.asyncio
+async def test_scripted_write_todos_normalizes_malformed_and_duplicate_checkbox_input(
+    authenticated_client,
+    fixed_test_org,
+    e2e_settings,
+    worker,
+):
+    """`write_todos`'s recovery paths, driven end to end.
+
+    ``_remove_duplicate_checkbox_prefix`` and the flattened-XML-plan handling in
+    ``_split_todo_fragments``/``_parse_todo_lines`` are thoroughly unit-tested in
+    ``test_capabilities.py``, but only a well-formed call was ever scripted
+    through a real conversation. This drives both recovery paths for real: a
+    duplicated leading checkbox, and a flattened plan carrying two items with a
+    trailing text status ("- done") in one line.
+    """
+    del worker  # session fixture keeps the production streaq worker alive
+    runtime = await _create_runtime_profile(
+        authenticated_client,
+        fixed_test_org,
+        e2e_settings,
+    )
+    pod = await _create_pod(authenticated_client, fixed_test_org)
+    pod_id = pod["id"]
+    agent_name = f"todo_edge_{uuid4().hex[:8]}"
+    agent = await authenticated_client.post(
+        f"/pods/{pod_id}/agents",
+        json={
+            "name": agent_name,
+            "instruction": "Exercise the scripted todo edge cases.",
+            "agent_runtime": {
+                "profile_id": runtime["id"],
+                "model_name": "mock-safe-model",
+            },
+            "toolsets": ["TODO"],
+        },
+    )
+    assert agent.status_code == status.HTTP_201_CREATED, agent.text
+
+    script = [
+        script_tool_call(
+            "write_todos",
+            {"todos": ["[ ] [x] Ship the release notes"]},
+            tool_call_id="todo-duplicate-checkbox-1",
+        ),
+        script_tool_call(
+            "write_todos",
+            {
+                "todos": [
+                    "<todos><item>Draft the proposal</item>"
+                    "<item>Send the invoice - done</item></todos>"
+                ]
+            },
+            tool_call_id="todo-flattened-plan-1",
+        ),
+        script_text("Todo edge cases completed."),
+    ]
+    conversation = await authenticated_client.post(
+        f"/pods/{pod_id}/conversations",
+        json={
+            "agent_name": agent_name,
+            "title": "Todo edge cases",
+            "metadata": {"mock_llm_script": script},
+        },
+    )
+    assert conversation.status_code == status.HTTP_201_CREATED, conversation.text
+    conversation_id = conversation.json()["id"]
+
+    events = await _send_message(
+        authenticated_client,
+        pod_id,
+        conversation_id,
+        "Run the scripted todo edge cases.",
+    )
+    assert events[-1]["type"] == "completed", events
+
+    messages = await authenticated_client.get(
+        f"/pods/{pod_id}/conversations/{conversation_id}/messages"
+    )
+    assert messages.status_code == status.HTTP_200_OK, messages.text
+    items = messages.json()["items"]
+    tool_returns_by_id = {
+        item["tool_call_id"]: item for item in items if item["kind"] == "TOOL_RETURN"
+    }
+
+    duplicate_checkbox = tool_returns_by_id["todo-duplicate-checkbox-1"]["tool_result"]
+    assert duplicate_checkbox["success"] is True
+    # The outer, erroneous "[ ]" is dropped; the inner "[x]" wins.
+    assert duplicate_checkbox["todos"] == ["- [x] Ship the release notes"]
+
+    flattened_plan = tool_returns_by_id["todo-flattened-plan-1"]["tool_result"]
+    assert flattened_plan["success"] is True
+    # A multi-item call is a full snapshot: the earlier duplicate-checkbox task
+    # is gone and both flattened items are present, one recovered as done from
+    # its trailing "- done" text.
+    assert flattened_plan["todos"] == [
+        "- [ ] Draft the proposal",
+        "- [x] Send the invoice",
+    ]
+
+    persisted = await authenticated_client.get(
+        f"/pods/{pod_id}/conversations/{conversation_id}"
+    )
+    assert persisted.status_code == status.HTTP_200_OK, persisted.text
+    assert persisted.json()["metadata"]["todos"] == [
+        {"content": "Draft the proposal", "done": False},
+        {"content": "Send the invoice", "done": True},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_pod_skill_catalog_discovers_custom_skills_and_skips_malformed_ones(
+    authenticated_client,
+    fixed_test_org,
+    fixed_test_user,
+):
+    """Skills stored directly in a pod's real `/skills` folder, not just the
+    system-shipped ones every pod also sees through the read-only overlay.
+
+    `_build_pod_skill_catalog` walks the pod's real file tree over HTTP-driven
+    datastore state. A folder with no `SKILL.md` in it (an interrupted upload,
+    or an unrelated folder someone dropped in `/skills`) must be skipped
+    rather than failing the whole catalog, and a skill's nested resource files
+    must be discoverable through the real recursive listing.
+    """
+    from app.modules.agent.tools.skills.skill_loader import (
+        list_workspace_skill_resources,
+        list_workspace_skills,
+        read_workspace_skill,
+        read_workspace_skill_resource,
+    )
+
+    pod = await _create_pod(authenticated_client, fixed_test_org)
+    pod_id = UUID(pod["id"])
+    user_id = UUID(fixed_test_user["id"])
+    api = DatastoreApi(authenticated_client, pod["id"])
+
+    suffix = uuid4().hex[:8]
+    custom_name = f"custom-skill-{suffix}"
+    await api.create_folder(f"/skills/{custom_name}")
+    await api.upload_file(
+        "SKILL.md",
+        (
+            f"---\nname: {custom_name}\n"
+            "description: A pod-hosted custom skill for the e2e catalog test.\n"
+            "---\n# Custom skill body\n"
+        ).encode("utf-8"),
+        directory_path=f"/skills/{custom_name}",
+        search_enabled=False,
+    )
+    await api.create_folder(f"/skills/{custom_name}/references")
+    await api.upload_file(
+        "note.md",
+        b"# Nested resource\nFound by the recursive resource walk.",
+        directory_path=f"/skills/{custom_name}/references",
+        search_enabled=False,
+    )
+
+    malformed_name = f"malformed-skill-{suffix}"
+    # A skill directory with no SKILL.md dropped inside: the catalog must
+    # silently skip it, not raise and take every other skill down with it.
+    await api.create_folder(f"/skills/{malformed_name}")
+
+    catalog = await list_workspace_skills(pod_id=pod_id, user_id=user_id)
+    names = {item["name"] for item in catalog}
+    assert custom_name in names
+    assert malformed_name not in names
+    # The system-shipped skills are visible through the same overlay.
+    assert "browser" in names
+
+    content = await read_workspace_skill(custom_name, pod_id=pod_id, user_id=user_id)
+    assert "Custom skill body" in content
+
+    resources = await list_workspace_skill_resources(
+        custom_name, pod_id=pod_id, user_id=user_id
+    )
+    resource_paths = {item["path"] for item in resources}
+    assert "references/note.md" in resource_paths
+
+    resource_content = await read_workspace_skill_resource(
+        custom_name, "references/note.md", pod_id=pod_id, user_id=user_id
+    )
+    assert "Found by the recursive resource walk" in resource_content
 
 
 @pytest.mark.asyncio
@@ -1289,6 +1604,170 @@ async def {function_name}(
 
 
 @pytest.mark.asyncio
+@pytest.mark.workspace
+async def test_dynamic_tools_surface_a_failing_function_and_a_schema_carrying_agent(
+    authenticated_client,
+    fixed_test_org,
+    e2e_settings,
+    worker,
+    configure_workspace_api_url,
+):
+    """Two `callable_tool_factory` branches the happy-path dynamic-tools test
+    above never reaches.
+
+    A `function_*` tool whose backend run does not complete must surface as a
+    graceful tool failure, not a crashed run (`run.status != COMPLETED`). And
+    an `agent_*` tool for a child agent that declares its own `input_schema`/
+    `output_schema` takes flat schema kwargs rather than the single-string
+    fallback, and returns the child's structured dict output as-is.
+    """
+    del worker, configure_workspace_api_url
+    runtime = await _create_runtime_profile(
+        authenticated_client,
+        fixed_test_org,
+        e2e_settings,
+    )
+    pod = await _create_pod(authenticated_client, fixed_test_org)
+    pod_id = pod["id"]
+
+    failing_function_name = f"failing_{uuid4().hex[:8]}"
+    failing_source = f"""#input_type_name: FunctionInput
+#output_type_name: FunctionOutput
+#function_name: {failing_function_name}
+
+from pydantic import BaseModel
+from lemma_sdk import FunctionContext
+
+class FunctionInput(BaseModel):
+    value: str
+
+class FunctionOutput(BaseModel):
+    value: str
+
+async def {failing_function_name}(
+    ctx: FunctionContext, data: FunctionInput
+) -> FunctionOutput:
+    raise RuntimeError("intentional function failure: " + data.value)
+"""
+    created_function = await authenticated_client.post(
+        f"/pods/{pod_id}/functions",
+        json={
+            "name": failing_function_name,
+            "description": "Always fails, for the e2e failure branch",
+            "code": failing_source,
+        },
+    )
+    assert created_function.status_code == status.HTTP_201_CREATED, (
+        created_function.text
+    )
+
+    schema_child_name = f"schema_child_{uuid4().hex[:8]}"
+    schema = {
+        "type": "object",
+        "properties": {"value": {"type": "string"}},
+        "required": ["value"],
+    }
+    schema_child = await authenticated_client.post(
+        f"/pods/{pod_id}/agents",
+        json={
+            "name": schema_child_name,
+            "instruction": "Not scripted; the mock model answers unprompted.",
+            "agent_runtime": {
+                "profile_id": runtime["id"],
+                "model_name": "mock-safe-model",
+            },
+            "toolsets": [],
+            "input_schema": schema,
+            "output_schema": schema,
+        },
+    )
+    assert schema_child.status_code == status.HTTP_201_CREATED, schema_child.text
+
+    parent_name = f"parent_dynamic_edge_{uuid4().hex[:8]}"
+    parent = await authenticated_client.post(
+        f"/pods/{pod_id}/agents",
+        json={
+            "name": parent_name,
+            "instruction": "Invoke the failing function and the schema agent.",
+            "agent_runtime": {
+                "profile_id": runtime["id"],
+                "model_name": "mock-safe-model",
+            },
+            "toolsets": [],
+        },
+    )
+    assert parent.status_code == status.HTTP_201_CREATED, parent.text
+    permissions = await authenticated_client.put(
+        f"/pods/{pod_id}/agents/{parent_name}/permissions",
+        json={
+            "grants": [
+                {
+                    "resource_type": "function",
+                    "resource_name": failing_function_name,
+                    "permission_ids": ["function.execute"],
+                },
+                {
+                    "resource_type": "agent",
+                    "resource_name": schema_child_name,
+                    "permission_ids": ["agent.execute"],
+                },
+            ]
+        },
+    )
+    assert permissions.status_code == status.HTTP_200_OK, permissions.text
+
+    conversation = await authenticated_client.post(
+        f"/pods/{pod_id}/conversations",
+        json={
+            "agent_name": parent_name,
+            "title": "Dynamic tool edge cases",
+            "metadata": {
+                "mock_llm_script": [
+                    script_tool_call(
+                        f"function_{failing_function_name}",
+                        {"value": "will not complete"},
+                        tool_call_id="dynamic-function-failure",
+                    ),
+                    script_tool_call(
+                        f"agent_{schema_child_name}",
+                        {"value": "structured input"},
+                        tool_call_id="dynamic-agent-schema",
+                    ),
+                    script_text("Failure and schema-carrying tools completed."),
+                ]
+            },
+        },
+    )
+    assert conversation.status_code == status.HTTP_201_CREATED, conversation.text
+    conversation_id = conversation.json()["id"]
+    events = await _send_message(
+        authenticated_client,
+        pod_id,
+        conversation_id,
+        "Invoke the failing function and the schema-carrying agent.",
+    )
+    assert events[-1]["type"] == "completed", events
+
+    messages = await authenticated_client.get(
+        f"/pods/{pod_id}/conversations/{conversation_id}/messages"
+    )
+    assert messages.status_code == status.HTTP_200_OK, messages.text
+    returns = {
+        item["tool_call_id"]: item["tool_result"]
+        for item in messages.json()["items"]
+        if item["kind"] == "TOOL_RETURN"
+    }
+
+    failure = returns["dynamic-function-failure"]
+    assert failure["success"] is False
+    assert "intentional function failure" in failure["error"]
+
+    schema_result = returns["dynamic-agent-schema"]
+    assert isinstance(schema_result, dict)
+    assert "value" in schema_result
+
+
+@pytest.mark.asyncio
 async def test_public_runtime_profile_edit_archive_and_restore(
     authenticated_client,
     fixed_test_org,
@@ -1393,6 +1872,255 @@ async def test_public_runtime_profile_edit_archive_and_restore(
 
 
 @pytest.mark.asyncio
+async def test_public_runtime_profile_update_rediscovers_and_clears_credentials(
+    authenticated_client,
+    fixed_test_org,
+    e2e_settings,
+    monkeypatch,
+):
+    """`_update_provider` branches the rename-only edit above never reaches.
+
+    A rotated `base_url` re-validates against the SSRF guard and forces
+    rediscovery, a dropped default model is followed to whatever the
+    rediscovered catalog now offers, and an explicit null `api_key` clears
+    credentials on an OPENAI_COMPATIBLE profile but is rejected outright on an
+    ANTHROPIC_COMPATIBLE one, which always requires a key.
+    """
+    from app.modules.agent.services.runtime_provider_discovery import DiscoveredModel
+
+    discovery_calls: list[str] = []
+
+    async def discover_initial(*, base_url: str, **_kwargs):
+        discovery_calls.append(base_url)
+        return [DiscoveredModel("mock-safe-model", supports_vision=False)]
+
+    monkeypatch.setattr(
+        "app.modules.agent.services.runtime_provider_discovery."
+        "_discover_openai_compatible_models",
+        discover_initial,
+    )
+
+    org_id = fixed_test_org["id"]
+    base = f"/organizations/{org_id}/agent-runtime/profiles"
+    canary = "CANARY_UPDATE_PROVIDER_KEY_71bd"
+    suffix = uuid4().hex[:8]
+
+    created = await authenticated_client.post(
+        base,
+        json={
+            "source": "OPENAI_COMPATIBLE",
+            "name": f"Update matrix {suffix}",
+            "base_url": f"{_UNUSED_MODEL_BASE_URL}/v1",
+            "api_key": canary,
+            "default_model_name": "mock-safe-model",
+        },
+    )
+    assert created.status_code == status.HTTP_201_CREATED, created.text
+    profile_id = created.json()["id"]
+
+    async def discover_after_move(*, base_url: str, **_kwargs):
+        discovery_calls.append(base_url)
+        return [DiscoveredModel("moved-model", supports_vision=False)]
+
+    monkeypatch.setattr(
+        "app.modules.agent.services.runtime_provider_discovery."
+        "_discover_openai_compatible_models",
+        discover_after_move,
+    )
+    moved = await authenticated_client.patch(
+        f"{base}/{profile_id}",
+        json={
+            "source": "OPENAI_COMPATIBLE",
+            "base_url": f"{_UNUSED_MODEL_BASE_URL}/v2",
+        },
+    )
+    assert moved.status_code == status.HTTP_200_OK, moved.text
+    # The old default fell out of the rediscovered catalog, so the edit
+    # followed it to whatever the provider offers now instead of failing.
+    assert moved.json()["default_model_name"] == "moved-model"
+    assert {m["name"] for m in moved.json()["model_catalog"]} == {"moved-model"}
+    assert f"{_UNUSED_MODEL_BASE_URL}/v2" in discovery_calls
+    assert canary not in moved.text
+
+    unsafe_move = await authenticated_client.patch(
+        f"{base}/{profile_id}",
+        json={
+            "source": "OPENAI_COMPATIBLE",
+            "base_url": "http://169.254.169.254/latest",
+        },
+    )
+    assert unsafe_move.status_code == status.HTTP_400_BAD_REQUEST
+    assert unsafe_move.json()["message"] == "base_url must be a public http(s) URL"
+
+    cleared = await authenticated_client.patch(
+        f"{base}/{profile_id}",
+        json={"source": "OPENAI_COMPATIBLE", "api_key": None},
+    )
+    assert cleared.status_code == status.HTTP_200_OK, cleared.text
+    assert cleared.json()["has_credentials"] is False
+
+    async def discover_anthropic(**_kwargs):
+        return [DiscoveredModel("mock-safe-model", supports_vision=True)]
+
+    monkeypatch.setattr(
+        "app.modules.agent.services.runtime_provider_discovery."
+        "_discover_anthropic_compatible_models",
+        discover_anthropic,
+    )
+    anthropic_created = await authenticated_client.post(
+        base,
+        json={
+            "source": "ANTHROPIC_COMPATIBLE",
+            "name": f"Anthropic update {suffix}",
+            "base_url": f"{_UNUSED_MODEL_BASE_URL}/v1",
+            "api_key": "initial-anthropic-key",
+            "default_model_name": "mock-safe-model",
+        },
+    )
+    assert anthropic_created.status_code == status.HTTP_201_CREATED, (
+        anthropic_created.text
+    )
+    anthropic_id = anthropic_created.json()["id"]
+
+    # An Anthropic-compatible profile always needs a key: unlike the
+    # OPENAI_COMPATIBLE case above, clearing it is rejected rather than
+    # allowed through.
+    rejected_clear = await authenticated_client.patch(
+        f"{base}/{anthropic_id}",
+        json={"source": "ANTHROPIC_COMPATIBLE", "api_key": None},
+    )
+    assert rejected_clear.status_code == status.HTTP_400_BAD_REQUEST
+    assert "requires an API key" in rejected_clear.json()["message"]
+
+
+@pytest.mark.asyncio
+async def test_public_agent_host_profile_update_touches_and_skips_the_harness(
+    authenticated_client,
+    async_client,
+    fixed_test_org,
+    e2e_settings,
+    db_session,
+):
+    """`update_agent_host_profile`, entirely untested before this: driven
+    through the real pairing + harness-publish seam other Agent Host suites
+    use, not a stand-in for one.
+
+    A rename alone must not need the harness re-validated. A configuration or
+    model change must re-validate against the live harness and re-pin the
+    config snapshot revision (`harness_snapshot_revision`) -- the value a
+    dispatch checks to refuse a profile saved against a harness that has since
+    changed underneath it. An unknown selection is rejected outright, and
+    `host_wait_timeout_seconds` alone takes the cheap branch that never
+    touches the harness at all.
+    """
+    from datetime import datetime, timezone
+    from types import SimpleNamespace
+
+    from sqlalchemy import update
+
+    from app.modules.agent.infrastructure.runtime_models import AgentHostModel
+    from app.modules.agent.tests.e2e.agent_host_helpers import paired_machine
+
+    display_name = f"editor-e2e-{uuid4().hex[:8]}"
+    machine = await paired_machine(
+        SimpleNamespace(owner_client=authenticated_client, async_client=async_client),
+        display_name=display_name,
+        config_options=[
+            {
+                "id": "model",
+                "name": "Model",
+                "category": "model",
+                "options": [
+                    {"name": "GPT-5 Codex", "value": "gpt-5-codex"},
+                    {"name": "GPT-5 Codex Mini", "value": "gpt-5-codex-mini"},
+                ],
+            },
+            {
+                "id": "reasoning_effort",
+                "name": "Reasoning Effort",
+                "category": "reasoning_effort",
+                "options": [
+                    {"name": "Low", "value": "low"},
+                    {"name": "High", "value": "high"},
+                ],
+            },
+        ],
+    )
+    harness_id = str(machine["harness_id"])
+
+    # A paired host only accepts new runs while its heartbeat is fresh, and the
+    # heartbeat rides on the 25s long poll -- which a test cannot sit through.
+    # Stamping it is the same thing that poll does, without the wait (same
+    # pattern as test_agent_host_vision_e2e.py's _profile_for_a_host_that,
+    # which reads it back through the same session rather than a separate
+    # HTTP request -- this test goes through authenticated_client, a
+    # different connection, so it needs a real commit, not just a flush).
+    await db_session.execute(
+        update(AgentHostModel)
+        .where(AgentHostModel.id == machine["host_id"])
+        .values(status="ONLINE", last_seen_at=datetime.now(timezone.utc))
+    )
+    await db_session.commit()
+
+    org_id = fixed_test_org["id"]
+    base = f"/organizations/{org_id}/agent-runtime/profiles"
+    created = await authenticated_client.post(
+        base,
+        json={
+            "source": "AGENT_HOST",
+            "harness_id": harness_id,
+            "name": f"Laptop {display_name}",
+            "default_model_name": "gpt-5-codex",
+            "config_selections": {"reasoning_effort": "low"},
+        },
+    )
+    assert created.status_code == status.HTTP_201_CREATED, created.text
+    profile_id = created.json()["id"]
+
+    # A rename does not touch the harness config at all.
+    renamed = await authenticated_client.patch(
+        f"{base}/{profile_id}",
+        json={"source": "AGENT_HOST", "name": f"Renamed {display_name}"},
+    )
+    assert renamed.status_code == status.HTTP_200_OK, renamed.text
+    assert renamed.json()["name"] == f"Renamed {display_name}"
+    assert renamed.json()["default_model_name"] == "gpt-5-codex"
+
+    # A configuration change re-validates against the live harness. The
+    # pinned model is untouched by this call and still offered, so it must
+    # survive rather than being cleared.
+    reconfigured = await authenticated_client.patch(
+        f"{base}/{profile_id}",
+        json={
+            "source": "AGENT_HOST",
+            "config_selections": {"reasoning_effort": "high"},
+        },
+    )
+    assert reconfigured.status_code == status.HTTP_200_OK, reconfigured.text
+    assert reconfigured.json()["default_model_name"] == "gpt-5-codex"
+
+    # An unknown selection is rejected outright.
+    invalid_selection = await authenticated_client.patch(
+        f"{base}/{profile_id}",
+        json={
+            "source": "AGENT_HOST",
+            "config_selections": {"not_a_real_option": "x"},
+        },
+    )
+    assert invalid_selection.status_code == status.HTTP_400_BAD_REQUEST
+    assert "Unknown Agent Host configuration" in invalid_selection.json()["message"]
+
+    # host_wait_timeout_seconds alone takes the cheap branch: no harness
+    # round trip, and the pinned model is untouched.
+    timeout_only = await authenticated_client.patch(
+        f"{base}/{profile_id}",
+        json={"source": "AGENT_HOST", "host_wait_timeout_seconds": 120},
+    )
+    assert timeout_only.status_code == status.HTTP_200_OK, timeout_only.text
+    assert timeout_only.json()["default_model_name"] == "gpt-5-codex"
+
+
+@pytest.mark.asyncio
 async def test_a_dropped_model_stream_does_not_end_the_conversation(
     authenticated_client,
     fixed_test_org,
@@ -1474,3 +2202,75 @@ async def test_a_dropped_model_stream_does_not_end_the_conversation(
     ]
     # Exactly one answer persisted: the abandoned attempt left nothing behind.
     assert assistant_texts == ["The complete answer."], assistant_texts
+
+
+@pytest.mark.asyncio
+async def test_a_model_stream_that_keeps_dropping_fails_cleanly_once_retries_run_out(
+    authenticated_client,
+    fixed_test_org,
+    e2e_settings,
+    worker,
+):
+    """The retry above has a ceiling: `agent_model_stream_max_attempts` (3).
+
+    A connection that drops on *every* attempt must not hang the run or retry
+    forever — it has to give up and report the sanitized "kept dropping"
+    message, the one branch of `_user_facing_error_message` that dropping only
+    once (the test above) never reaches.
+    """
+    del worker  # session fixture keeps the production streaq worker alive
+    runtime = await _create_runtime_profile(
+        authenticated_client, fixed_test_org, e2e_settings
+    )
+    pod = await _create_pod(authenticated_client, fixed_test_org)
+    pod_id = pod["id"]
+    agent_name = f"streamdrop_exhausted_{uuid4().hex[:8]}"
+    create_agent = await authenticated_client.post(
+        f"/pods/{pod_id}/agents",
+        json={
+            "name": agent_name,
+            "instruction": "Reply using the scripted deterministic model.",
+            "agent_runtime": {
+                "profile_id": runtime["id"],
+                "model_name": "mock-safe-model",
+            },
+            "toolsets": [],
+        },
+    )
+    assert create_agent.status_code == status.HTTP_201_CREATED, create_agent.text
+
+    conversation = await authenticated_client.post(
+        f"/pods/{pod_id}/conversations",
+        json={
+            "agent_name": agent_name,
+            "metadata": {
+                "mock_llm_script": [
+                    {
+                        "text": "Never delivered.",
+                        "tool_calls": [],
+                        # Drops far more times than the retry ceiling allows,
+                        # so every attempt fails and the run has to give up.
+                        "error": {"kind": "stream_drop", "times": 50},
+                    }
+                ],
+            },
+        },
+    )
+    assert conversation.status_code == status.HTTP_201_CREATED, conversation.text
+    conversation_id = conversation.json()["id"]
+
+    events = await _send_message(
+        authenticated_client,
+        pod_id,
+        conversation_id,
+        "Answer despite a connection that never recovers.",
+    )
+
+    assert events[-1]["type"] == "error", events
+    assert "kept dropping" in str(events[-1]["data"])
+
+    durable = await authenticated_client.get(
+        f"/pods/{pod_id}/conversations/{conversation_id}"
+    )
+    assert durable.status_code == status.HTTP_200_OK, durable.text
+    assert durable.json()["status"] == "FAILED"

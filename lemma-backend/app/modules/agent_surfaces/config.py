@@ -51,6 +51,14 @@ class SurfaceSettings(BaseSettings):
             "Useful for local testing of Teams webhook JWT validation."
         ),
     )
+    microsoft_bot_oauth_base_url: Optional[str] = Field(
+        default=None,
+        description=(
+            "Optional override for the Azure AD OAuth token endpoint base "
+            "(normally 'https://login.microsoftonline.com'). Useful for local "
+            "testing of Bot Framework/Graph token acquisition."
+        ),
+    )
     microsoft_bot_app_name: Optional[str] = Field(
         default=None,
         description=(

@@ -2387,3 +2387,443 @@ async def test_function_runs_a_tenant_connector_operation_for_real(
         task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await task
+
+
+# -- FunctionUseCases sagas with no direct HTTP entry point of their own -----
+#
+# update_function/delete_function DO have HTTP endpoints (PATCH/DELETE above),
+# but test_function_lifecycle only exercises their no-op-code, no-icon-change
+# shape. execute_function_as_workload (agent-as-tool) and
+# dispatch_function_for_workflow/cancel_function_run (workflow node control)
+# have no HTTP surface at all -- they're built the same way their real callers
+# build them (app/modules/agent/tools/callable_tool_factory.py,
+# app/composition/workflow_function.py) via `build_function_use_cases`, against
+# the live e2e database and the real Docker sandbox, same pattern as
+# test_function_sandbox_execution_e2e.py's dispatcher-construction tests.
+
+
+def _typed_function_code(function_name: str, *, expression: str) -> str:
+    return f"""#input_type_name: Input
+#output_type_name: Output
+#function_name: {function_name}
+
+from pydantic import BaseModel
+from lemma_sdk import FunctionContext
+
+class Input(BaseModel):
+    value: int
+
+class Output(BaseModel):
+    result: int
+
+async def {function_name}(ctx: FunctionContext, data: Input) -> Output:
+    return Output(result={expression})"""
+
+
+@pytest.mark.asyncio
+async def test_update_function_replaces_code_and_activates_new_revision(
+    authenticated_client, test_pod
+):
+    """``update_function``'s code path (compile+activate a new immutable
+    revision via ``_apply_code``, then persist it) is otherwise untested:
+    ``test_function_lifecycle`` only PATCHes ``description``, whose
+    ``plan.code`` is ``None`` and never reaches it."""
+    pod_id = test_pod["id"]
+    func_name = f"update_code_{uuid4().hex[:8]}"
+
+    original_code = _typed_function_code(func_name, expression="data.value * 2")
+    func = await _create_function(
+        authenticated_client,
+        pod_id,
+        {"name": func_name, "description": "before", "code": original_code},
+    )
+    original_revision = func["revision_hash"]
+    assert original_revision and func["status"] == "READY"
+
+    original_result = await _run_function(
+        authenticated_client, pod_id, func_name, {"value": 10}
+    )
+    assert original_result["output_data"]["result"] == 20
+
+    updated_code = _typed_function_code(func_name, expression="data.value * 3")
+    update_response = await authenticated_client.patch(
+        f"/pods/{pod_id}/functions/{func_name}",
+        json={"code": updated_code},
+    )
+    assert update_response.status_code == status.HTTP_200_OK, update_response.text
+    updated = update_response.json()
+    assert updated["status"] == "READY"
+    # A different revision was compiled and atomically activated -- not just
+    # the same row with a new description.
+    assert updated["revision_hash"] != original_revision
+
+    updated_result = await _run_function(
+        authenticated_client, pod_id, func_name, {"value": 10}
+    )
+    assert updated_result["output_data"]["result"] == 30
+
+
+@pytest.mark.asyncio
+async def test_update_function_replaces_icon_and_the_change_persists(
+    authenticated_client, test_pod
+):
+    """``update_function``'s icon-cleanup branch (``service.delete_old_icon``,
+    called with no pooled connection held once the persist UoW closes) never
+    runs unless an update actually changes ``icon_url``; every function in
+    this file otherwise either has no icon or leaves it untouched."""
+    pod_id = test_pod["id"]
+    func_name = f"update_icon_{uuid4().hex[:8]}"
+
+    func = await _create_function(
+        authenticated_client,
+        pod_id,
+        {
+            "name": func_name,
+            "description": "icon test",
+            "icon_url": "https://example.test/old-icon.png",
+        },
+    )
+    assert func["icon_url"] == "https://example.test/old-icon.png"
+
+    update_response = await authenticated_client.patch(
+        f"/pods/{pod_id}/functions/{func_name}",
+        json={"icon_url": "https://example.test/new-icon.png"},
+    )
+    assert update_response.status_code == status.HTTP_200_OK, update_response.text
+    assert update_response.json()["icon_url"] == "https://example.test/new-icon.png"
+
+    # Re-fetch (rather than trust the PATCH echo) to confirm the new URL was
+    # actually persisted, not just returned.
+    get_response = await authenticated_client.get(
+        f"/pods/{pod_id}/functions/{func_name}"
+    )
+    assert get_response.status_code == status.HTTP_200_OK, get_response.text
+    assert get_response.json()["icon_url"] == "https://example.test/new-icon.png"
+
+
+@pytest.mark.asyncio
+async def test_delete_function_cleans_up_icon_and_the_function_becomes_unreachable(
+    authenticated_client, test_pod
+):
+    """``delete_function``'s icon cleanup (``service.delete_icon``, run after
+    ``resolve_delete``'s UoW closes) is a no-op whenever the deleted function
+    never had an icon -- which is every delete in ``test_function_lifecycle``."""
+    pod_id = test_pod["id"]
+    func_name = f"delete_icon_{uuid4().hex[:8]}"
+
+    await _create_function(
+        authenticated_client,
+        pod_id,
+        {
+            "name": func_name,
+            "description": "to delete",
+            "icon_url": "https://example.test/icon.png",
+        },
+    )
+
+    delete_response = await authenticated_client.delete(
+        f"/pods/{pod_id}/functions/{func_name}"
+    )
+    assert delete_response.status_code == status.HTTP_200_OK, delete_response.text
+
+    get_response = await authenticated_client.get(
+        f"/pods/{pod_id}/functions/{func_name}"
+    )
+    assert get_response.status_code == status.HTTP_404_NOT_FOUND
+
+    run_response = await authenticated_client.post(
+        f"/pods/{pod_id}/functions/{func_name}/runs",
+        json={"input_data": {}},
+        follow_redirects=True,
+    )
+    assert run_response.status_code == status.HTTP_404_NOT_FOUND
+
+
+@pytest.mark.asyncio
+async def test_upsert_function_for_import_creates_then_idempotently_updates(
+    authenticated_client, test_pod, fixed_test_user, db_manager
+):
+    """``upsert_function_for_import`` is the bundle/CLI import saga
+    (``app/modules/pod_bundle/infrastructure/function_builder.py::FunctionStepRunner``):
+    create-if-absent, update-if-present, by name, with no request object.
+    It has no HTTP endpoint of its own, so this builds the same
+    ``FunctionUseCases`` the real import path builds."""
+    from uuid import UUID
+
+    from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
+    from app.modules.function.api.dependencies import build_function_use_cases
+    from app.modules.function.domain.entities import (
+        FunctionEntity,
+        FunctionStatus,
+        FunctionType,
+        FunctionUpdateEntity,
+    )
+
+    pod_id = UUID(test_pod["id"])
+    user_id = UUID(fixed_test_user["id"])
+    func_name = f"import_fn_{uuid4().hex[:8]}"
+    use_cases = build_function_use_cases(
+        SessionUnitOfWorkFactory(db_manager.session_factory)
+    )
+
+    def _entity() -> FunctionEntity:
+        return FunctionEntity(
+            pod_id=pod_id,
+            user_id=user_id,
+            name=func_name,
+            description="imported",
+            type=FunctionType.API,
+            visibility="POD",
+        )
+
+    first_code = _typed_function_code(func_name, expression="data.value + 1")
+    created = await use_cases.upsert_function_for_import(
+        entity=_entity(),
+        update_entity=FunctionUpdateEntity(
+            description="imported", code=first_code, type=FunctionType.API
+        ),
+        code=first_code,
+        user_id=user_id,
+    )
+    assert created.status == FunctionStatus.READY
+    first_revision = created.revision_hash
+    assert first_revision
+
+    # Applying the bundle again (e.g. `lemma pods import` re-run) must UPDATE
+    # the existing row by name, not raise FUNCTION_CONFLICT.
+    second_code = _typed_function_code(func_name, expression="data.value + 2")
+    updated = await use_cases.upsert_function_for_import(
+        entity=_entity(),
+        update_entity=FunctionUpdateEntity(
+            description="imported again", code=second_code, type=FunctionType.API
+        ),
+        code=second_code,
+        user_id=user_id,
+    )
+    assert updated.id == created.id
+    assert updated.description == "imported again"
+    assert updated.revision_hash != first_revision
+
+    # Visible + executable through the normal HTTP surface, reflecting the
+    # second import's code.
+    final_run = await _run_function(
+        authenticated_client, str(pod_id), func_name, {"value": 10}
+    )
+    assert final_run["output_data"]["result"] == 12
+
+
+@pytest.mark.asyncio
+async def test_execute_function_as_workload_runs_under_the_agent_delegated_context(
+    authenticated_client, test_pod, fixed_test_user, db_manager
+):
+    """``execute_function_as_workload`` is the agent-as-tool delegated path
+    (``app/modules/agent/tools/callable_tool_factory.py``): it authorizes as
+    the delegated AGENT principal on behalf of the calling user and runs the
+    sandbox with no ctx held. Drive it exactly the way the tool factory does."""
+    from uuid import UUID
+
+    from app.core.authorization.permissions import Permissions
+    from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
+    from app.modules.function.api.dependencies import build_function_use_cases
+    from app.modules.function.domain.entities import FunctionRunStatus
+
+    pod_id = UUID(test_pod["id"])
+    user_id = UUID(fixed_test_user["id"])
+    func_name = f"workload_fn_{uuid4().hex[:8]}"
+
+    await _create_function(
+        authenticated_client,
+        str(pod_id),
+        {
+            "name": func_name,
+            "description": "workload test",
+            "code": _typed_function_code(func_name, expression="data.value * 2"),
+        },
+    )
+
+    # execute_function_as_workload authorizes the AGENT principal against a
+    # real per-resource grant (ResourcePermissionGrantModel) -- exactly the
+    # grant callable_tool_factory.py relies on when it exposes a function as
+    # an agent tool. A bare uuid4() principal has none, so build one for
+    # real: create the agent, then grant it function.execute through the
+    # agent-permissions endpoint (the resource-access-grant endpoint only
+    # accepts ROLE/POD_MEMBER grantees, not AGENT).
+    agent_name = f"workload_agent_{uuid4().hex[:8]}"
+    agent_response = await authenticated_client.post(
+        f"/pods/{pod_id}/agents",
+        json={"name": agent_name, "instruction": "Answer briefly."},
+    )
+    assert agent_response.status_code == status.HTTP_201_CREATED, agent_response.text
+    agent_id = UUID(agent_response.json()["id"])
+
+    grant_response = await authenticated_client.put(
+        f"/pods/{pod_id}/agents/{agent_name}/permissions",
+        json={
+            "grants": [
+                {
+                    "resource_type": "function",
+                    "resource_name": func_name,
+                    "permission_ids": [Permissions.FUNCTION_EXECUTE],
+                }
+            ]
+        },
+    )
+    assert grant_response.status_code == status.HTTP_200_OK, grant_response.text
+
+    use_cases = build_function_use_cases(
+        SessionUnitOfWorkFactory(db_manager.session_factory)
+    )
+    run = await use_cases.execute_function_as_workload(
+        pod_id=pod_id,
+        name=func_name,
+        input_data={"value": 5},
+        user_id=user_id,
+        principal_type="AGENT",
+        principal_id=agent_id,
+        delegation_scope=frozenset([Permissions.FUNCTION_EXECUTE]),
+        delegation_actor_name="Test Agent",
+    )
+
+    assert run.status == FunctionRunStatus.COMPLETED, run.error
+    assert run.output_data == {"result": 10}
+
+
+@pytest.mark.asyncio
+async def test_dispatch_function_for_workflow_enqueues_and_the_worker_completes_it(
+    authenticated_client, test_pod, fixed_test_user, db_manager, worker
+):
+    """``dispatch_function_for_workflow`` is the workflow-node path
+    (``app/composition/workflow_function.py::FunctionControlAdapter.execute_function``):
+    it forces ASYNCHRONOUS dispatch even for an API function and returns
+    PENDING without running the sandbox inline, so the workflow engine can
+    suspend on the run id and let the ``FunctionRunCompleted`` event resume
+    it. Drive it against the real queue + worker."""
+    from uuid import UUID
+
+    from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
+    from app.modules.function.api.dependencies import build_function_use_cases
+    from app.modules.function.domain.entities import FunctionRunStatus
+
+    pod_id = UUID(test_pod["id"])
+    user_id = UUID(fixed_test_user["id"])
+    func_name = f"workflow_fn_{uuid4().hex[:8]}"
+
+    await _create_function(
+        authenticated_client,
+        str(pod_id),
+        {
+            "name": func_name,
+            "description": "workflow dispatch test",
+            "type": "API",
+            "code": _typed_function_code(func_name, expression="data.value + 1"),
+        },
+    )
+
+    use_cases = build_function_use_cases(
+        SessionUnitOfWorkFactory(db_manager.session_factory)
+    )
+    dispatched = await use_cases.dispatch_function_for_workflow(
+        pod_id=pod_id,
+        name=func_name,
+        input_data={"value": 41},
+        user_id=user_id,
+    )
+
+    # PENDING, and NOT run inline even though this is an API function -- the
+    # whole point of the workflow path is that the caller never blocks on the
+    # sandbox round-trip.
+    assert dispatched.status == FunctionRunStatus.PENDING
+    assert dispatched.job_id
+    assert dispatched.id is not None
+
+    final_run = await _wait_for_run_completion(
+        authenticated_client,
+        str(pod_id),
+        func_name,
+        str(dispatched.id),
+    )
+    assert final_run["status"] == "COMPLETED", final_run
+    assert final_run["output_data"]["result"] == 42
+
+
+@pytest.mark.asyncio
+async def test_cancel_function_run_stops_a_dispatched_run_before_it_completes(
+    authenticated_client, test_pod, worker, db_manager
+):
+    """``cancel_function_run`` is used when a workflow run that was waiting on
+    a dispatched function is itself cancelled
+    (``app/composition/workflow_function.py::FunctionControlAdapter.cancel_run``),
+    so the sandbox stops doing work nobody is waiting for. A run that is still
+    PENDING or RUNNING is cancellable; confirm a long JOB run actually ends
+    CANCELLED instead of completing."""
+    from uuid import UUID
+
+    from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
+    from app.modules.function.api.dependencies import build_function_use_cases
+
+    pod_id = test_pod["id"]
+    suffix = uuid4().hex[:8]
+    function_name = f"cancel_job_{suffix}"
+    code = f"""#input_type_name: JobInput
+#output_type_name: JobResult
+#function_name: {function_name}
+
+import asyncio
+from pydantic import BaseModel
+from lemma_sdk import FunctionContext
+
+class JobInput(BaseModel):
+    seconds: int
+
+class JobResult(BaseModel):
+    slept: int
+
+async def {function_name}(ctx: FunctionContext, data: JobInput) -> JobResult:
+    await asyncio.sleep(data.seconds)
+    return JobResult(slept=data.seconds)"""
+
+    await _create_function(
+        authenticated_client,
+        pod_id,
+        {
+            "name": function_name,
+            "description": "cancel smoke test",
+            "type": "JOB",
+            "code": code,
+        },
+    )
+
+    response = await authenticated_client.post(
+        f"/pods/{pod_id}/functions/{function_name}/runs",
+        json={"input_data": {"seconds": 20}},
+        follow_redirects=True,
+    )
+    assert response.status_code == status.HTTP_200_OK, response.text
+    run = response.json()
+    assert run["status"] in {"PENDING", "RUNNING"}
+
+    use_cases = build_function_use_cases(
+        SessionUnitOfWorkFactory(db_manager.session_factory)
+    )
+    # Cancel promptly, well inside the function's 20-second sleep -- a run is
+    # cancellable in either PENDING or RUNNING, so there is no race to win.
+    await use_cases.cancel_function_run(UUID(run["id"]))
+
+    async def probe() -> dict:
+        res = await authenticated_client.get(
+            f"/pods/{pod_id}/functions/{function_name}/runs/{run['id']}"
+        )
+        assert res.status_code == status.HTTP_200_OK, res.text
+        return res.json()
+
+    final_run = await wait_for_status(
+        label=f"cancelled function run {run['id']}",
+        probe=probe,
+        expected={"CANCELLED"},
+        # A run that finishes or fails instead of cancelling is the actual
+        # bug under test -- fail fast rather than waiting out the timeout.
+        failed={"COMPLETED", "FAILED"},
+        timeout_seconds=15,
+        interval_seconds=0.15,
+    )
+    assert final_run["status"] == "CANCELLED", final_run

@@ -9,7 +9,9 @@ import pytest
 
 from app.modules.function.application.function_runtime_gateway import (
     FunctionRuntimeGateway,
+    RuntimeArtifactCorrupt,
     RuntimeCredentialRejected,
+    RuntimeStateRejected,
     _runtime_failure_message,
 )
 from app.modules.function.contracts.runtime import (
@@ -157,4 +159,108 @@ async def test_gateway_uses_standard_principal_and_releases_uow_before_storage(
     assert duplicate.accepted and duplicate.duplicate
     assert terminal_calls[0][1]["output_data"] == {"answer": 42}
     assert len(terminal_calls) == 2
+    assert state.active == 0
+
+
+@pytest.mark.asyncio
+async def test_gateway_rejects_artifact_whose_bytes_do_not_match_the_revision_hash(
+    monkeypatch,
+) -> None:
+    """The gateway re-hashes the stored bytes before serving them, so storage
+    corruption (or a path collision) never gets handed to a sandbox as if it
+    matched the immutable revision it asked for."""
+    artifact = b"immutable artifact"
+    context = _context(artifact)
+    state = _UowState()
+    principal = FunctionSessionPrincipal(
+        user_id=context.user_id,
+        pod_id=context.pod_id,
+        function_id=context.function_id,
+        session_id="function-session:test",
+        actor_name=context.function_name,
+    )
+
+    class _Repository:
+        def __init__(self, _uow):
+            pass
+
+        async def authorize_definition_artifact(self, *_args, **_kwargs):
+            return True
+
+    monkeypatch.setattr(
+        "app.modules.function.application.function_runtime_gateway."
+        "FunctionExecutionRepository",
+        _Repository,
+    )
+
+    class _CorruptStorage:
+        async def read_bytes(self, path):
+            del path
+            # Bytes on disk no longer match the hash the caller asked for.
+            return artifact + b"tampered"
+
+    gateway = FunctionRuntimeGateway(
+        uow_factory=state.factory,
+        storage_factory=lambda _function_id: _CorruptStorage(),
+        delegated_tokens_enabled=True,
+    )
+
+    with pytest.raises(RuntimeArtifactCorrupt):
+        await gateway.definition_artifact(
+            context.function_id,
+            context.revision_hash,
+            principal,
+        )
+
+
+@pytest.mark.asyncio
+async def test_gateway_terminal_rejects_when_completion_is_not_accepted(
+    monkeypatch,
+) -> None:
+    """A run that ``complete`` declines to transition (already terminal in a
+    conflicting state, revoked, etc.) must surface as a rejection rather than a
+    silent success."""
+    artifact = b"immutable artifact"
+    context = _context(artifact)
+    state = _UowState()
+    principal = FunctionSessionPrincipal(
+        user_id=context.user_id,
+        pod_id=context.pod_id,
+        function_id=context.function_id,
+        session_id="function-session:test",
+        actor_name=context.function_name,
+    )
+
+    class _Repository:
+        def __init__(self, _uow):
+            pass
+
+        async def authorized_runtime_context(self, run_id, received_principal, **_kw):
+            if run_id == context.run_id and received_principal == principal:
+                return context
+            return None
+
+        async def complete(self, _received, **_kwargs):
+            return None, False, False
+
+    monkeypatch.setattr(
+        "app.modules.function.application.function_runtime_gateway."
+        "FunctionExecutionRepository",
+        _Repository,
+    )
+
+    gateway = FunctionRuntimeGateway(
+        uow_factory=state.factory,
+        storage_factory=lambda _function_id: None,
+        delegated_tokens_enabled=True,
+    )
+    request = RuntimeTerminalRequest(
+        status="completed",
+        output_data={"answer": 42},
+        stdout="ok",
+        stderr="",
+    )
+
+    with pytest.raises(RuntimeStateRejected):
+        await gateway.terminal(context.run_id, principal, request)
     assert state.active == 0

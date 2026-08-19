@@ -5,8 +5,17 @@ name: Backend E2E
 # (from testcontainers on the runner). Only the two nondeterministic/expensive
 # externals are stubbed: the LLM (a deterministic FunctionModel) and the sandbox
 # workspace (an in-process fake) — so it needs NO model API keys and NO Docker
-# workspace image. Slow, Docker-workspace, live-provider, local-CLI, and
-# real-indexing tests live in "Backend protected E2E" instead.
+# workspace image. Slow, live-provider, local-CLI, and real-indexing tests live
+# in "Backend protected E2E" instead.
+#
+# One exception: the "function" shard runs against the REAL Docker sandbox
+# (builds/caches the workspace + function-runner images, drops "not workspace"
+# from its marker filter — see that matrix entry below). Function execution IS
+# the thing under test there; unlike agent's tool calls, there is no in-process
+# fake sandbox to stub it with, so its e2e coverage floor is unreachable any
+# other way. Runs serially (workers: 1) -- concurrent real sandbox
+# provisioning contends for the runner's CPU. A few minutes for the whole
+# directory.
 #
 # The suite is sharded across runners. Most shards stay serial; the 100+ journey
 # surfaces shard uses two fully isolated xdist workers to remain under ten
@@ -94,9 +103,21 @@ jobs:
             args: app/modules/agent/tests/e2e
             workers: 2
           - name: function
-            # Only 6 tests: container boot dominates wall-clock either way, so
-            # a second worker (a second full container trio) isn't worth it.
+            # Unlike every other shard, function's own e2e tests genuinely
+            # cannot be covered without the real Docker sandbox -- function
+            # execution IS the thing under test, there is no in-process fake
+            # for it the way agent has one for tool calls. So this shard alone
+            # drops "not workspace" from the marker filter and builds/runs
+            # against the real workspace + function runner images (see the
+            # sandbox-image steps below, gated on this shard's name).
+            # workers stays 1 (not 2, unlike the fake-sandbox shards): two
+            # xdist workers each cold-provisioning/re-provisioning a real
+            # Docker sandbox raced for the runner's limited CPU and blew the
+            # runtime-endpoint-ready deadline in test_function_sandbox_
+            # execution_e2e.py's re-provisioning tests -- confirmed on the
+            # real CI runner, not just local contention.
             args: app/modules/function/tests/e2e
+            markers: e2e and not slow and not provider and not local_cli and not indexing and not protected
             workers: 1
           - name: pod
             # 94 tests ran fully serially and were the single biggest chunk of
@@ -167,6 +188,51 @@ jobs:
             docker.io/pgvector/pgvector:0.8.3-pg15 \
             redis:7.4-alpine \
             docker.io/supertokens/supertokens-postgresql:11.4.5
+      # function alone needs the real workspace + function-runner sandbox
+      # images (see the "function" matrix entry above). Content-addressed by
+      # the same inputs app/modules/test_support/e2e/runtime.py fingerprints
+      # (_SANDBOX_BUILD_INPUTS), so a PR that doesn't touch the sandbox images,
+      # sandbox_runtime, or the bundled SDKs gets a cache hit and skips the
+      # build entirely. `make sandbox-images` tags with SANDBOX_TAG=dev rather
+      # than that fingerprint, so the tags are resolved and handed to the
+      # fixtures explicitly via WORKSPACE_E2E_IMAGE/FUNCTION_E2E_IMAGE -- same
+      # two-step approach sandbox-function-benchmark.yml already uses.
+      - name: Cache function sandbox images
+        if: matrix.suite.name == 'function'
+        id: cache-sandbox-images
+        uses: actions/cache@v4
+        with:
+          path: /tmp/e2e-sandbox-images.tar
+          key: >-
+            e2e-sandbox-images-${{ hashFiles(
+              'lemma-backend/sandbox-images/**',
+              'lemma-backend/sandbox_runtime/**',
+              'lemma-python/**',
+              'lemma-pod-bundle/**',
+              'lemma-cli/**',
+              'lemma-typescript/**',
+              'lemma-skills/**'
+            ) }}
+      - name: Load cached function sandbox images
+        if: matrix.suite.name == 'function' && steps.cache-sandbox-images.outputs.cache-hit == 'true'
+        run: docker load -i /tmp/e2e-sandbox-images.tar
+      - name: Build function sandbox images
+        if: matrix.suite.name == 'function' && steps.cache-sandbox-images.outputs.cache-hit != 'true'
+        run: make sandbox-images
+      - name: Save function sandbox images to cache
+        if: matrix.suite.name == 'function' && steps.cache-sandbox-images.outputs.cache-hit != 'true'
+        run: |
+          docker save -o /tmp/e2e-sandbox-images.tar \
+            $(make print-sandbox-images | awk '{print $2}')
+      - name: Resolve function sandbox image tags
+        if: matrix.suite.name == 'function'
+        run: |
+          make print-sandbox-images | while read -r kind image; do
+            case "$kind" in
+              workspace:) echo "WORKSPACE_E2E_IMAGE=$image" >> "$GITHUB_ENV" ;;
+              function:)  echo "FUNCTION_E2E_IMAGE=$image"  >> "$GITHUB_ENV" ;;
+            esac
+          done
       # Shards run in parallel, so wall-clock is the slowest shard, not their sum.
       # E2E_ARGS scopes each shard; matrix workers keeps surfaces below ten minutes.
       - name: E2E tests (deterministic LLM + in-process sandbox, real services)
@@ -174,6 +240,7 @@ jobs:
           make coverage-backend-e2e-shard
           E2E_ARGS="${{ matrix.suite.args }}"
           E2E_WORKERS=${{ matrix.suite.workers }}
+          E2E_SHARD_MARKERS="${{ matrix.suite.markers || 'e2e and not slow and not workspace and not provider and not local_cli and not indexing and not protected' }}"
           COVERAGE_PHASE=e2e-${{ matrix.suite.name }}
       - name: Upload backend e2e coverage
         if: always()

@@ -29,6 +29,12 @@ _BOT_SCOPE = "https://api.botframework.com/.default"
 # Prefer the serviceUrl from incoming activities — it is region-specific.
 BF_FALLBACK_SERVICE_URL = "https://smba.trafficmanager.net/teams/"
 
+# Azure AD OAuth token endpoint base. Overridable via
+# ``surface_settings.microsoft_bot_oauth_base_url`` for local/e2e testing,
+# the same way ``microsoft_bot_openid_config_url`` overrides the OpenID
+# metadata endpoint used for webhook JWT validation.
+_OAUTH_BASE_URL = "https://login.microsoftonline.com"
+
 _GUID_RE = re.compile(
     r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-"
     r"[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
@@ -94,7 +100,10 @@ async def _get_token(tenant_id: str, scope: str) -> str | None:
     if cached_token:
         return cached_token
 
-    url = f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token"
+    oauth_base = (surface_settings.microsoft_bot_oauth_base_url or _OAUTH_BASE_URL).rstrip(
+        "/"
+    )
+    url = f"{oauth_base}/{tenant_id}/oauth2/v2.0/token"
     data = {
         "grant_type": "client_credentials",
         "client_id": app_id,
