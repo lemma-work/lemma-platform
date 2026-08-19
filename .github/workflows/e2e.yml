@@ -12,21 +12,32 @@ name: Backend E2E
 # surfaces shard uses two fully isolated xdist workers to remain under ten
 # minutes without creating extra jobs or comments.
 #
-# Trigger model: runs automatically once the "CI" workflow (unit tests etc.)
-# SUCCEEDS for a PR — so the container-heavy e2e only spins up after the cheap
-# checks are green, roughly once per PR update. Also runnable on demand:
-# Actions -> "Backend E2E" -> Run workflow.
+# Trigger model: backend-e2e runs directly on every PR push (opened/synchronize/
+# reopened) — in parallel with "CI", not gated behind it. At ~5-6 minutes the
+# redundant compute when unit tests are also broken is cheap and worth the
+# reliability: the old indirect chain (wait for "CI" to succeed via
+# workflow_run) meant a failed CI run produced a *skipped*, not failed,
+# required check — an ambiguous signal for a hard gate — and its own
+# concurrency group would sometimes race a manual dispatch of the same branch.
+# Also runnable on demand: Actions -> "Backend E2E" -> Run workflow.
 #
-# Not a required check yet. To make a green e2e a hard merge requirement later,
-# add the "lemma-backend e2e (*)" shard checks (or an aggregation job) to the
-# branch-protection rules — it's fast enough now to gate merges.
+# aggregate-coverage (below) still triggers off workflow_run — it downloads the
+# already-validated unit-test coverage artifact from that CI run rather than
+# regenerating it, which only a workflow_run event carries. Don't remove
+# workflow_run from `on:` for that reason; backend-e2e just no longer needs it.
+#
+# Not a required check yet. To make a green e2e a hard merge requirement,
+# add the "lemma-backend e2e (*)" shard checks to the branch-protection rules
+# — not aggregate-coverage, which also enforces the separately-tracked
+# coverage floors some modules are still below.
 
 on:
   workflow_dispatch:
   pull_request:
-    # Labels provide an explicit run before CI completes. Normal PR updates run
-    # once through workflow_run after CI succeeds.
-    types: [labeled]
+    # opened/synchronize/reopened: the direct trigger every normal PR push
+    # takes. labeled: surface-live-smoke's own on-demand "surface-live" label
+    # (backend-e2e no longer uses a label — see below).
+    types: [opened, synchronize, reopened, labeled]
   workflow_run:
     workflows: ["CI"]
     types: [completed]
@@ -41,14 +52,12 @@ concurrency:
 jobs:
   backend-e2e:
     name: lemma-backend e2e (${{ matrix.suite.name }})
-    # Manual dispatch, or automatically after CI (unit tests etc.) passes on a PR.
+    # Manual dispatch, or directly on every PR push. Independent of "CI"'s
+    # outcome and of any label — see the trigger-model comment at the top.
     if: >-
       github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'pull_request' &&
-       github.event.action == 'labeled' &&
-       github.event.label.name == 'run-e2e') ||
-      (github.event.workflow_run.event == 'pull_request' &&
-       github.event.workflow_run.conclusion == 'success')
+       contains(fromJSON('["opened", "synchronize", "reopened"]'), github.event.action))
     runs-on: ubuntu-latest
     permissions:
       contents: read
