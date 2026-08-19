@@ -180,7 +180,6 @@ async def _close_e2e_process_clients() -> None:
     from app.core.infrastructure.cache.redis_json_cache import close_redis_json_caches
     from app.core.infrastructure.channels.channel_service import channel_service
     from app.core.infrastructure.db.session import close_engine
-    from app.core.infrastructure.events.message_bus import close_message_bus
     from app.core.infrastructure.jobs.streaq_job_queue import close_streaq_job_queue
     from app.modules.agent_surfaces.infrastructure.adapters.redis_event_dedup_store import (
         close_surface_event_dedup_store,
@@ -207,7 +206,6 @@ async def _close_e2e_process_clients() -> None:
     await _run_cleanup_step("close_auth_abuse_store", close_auth_abuse_store)
     await _run_cleanup_step("close_telegram_oidc_store", close_telegram_oidc_store)
     await _run_cleanup_step("close_streaq_job_queue", close_streaq_job_queue)
-    await _run_cleanup_step("close_message_bus", close_message_bus)
     await _run_cleanup_step("close_redis_json_caches", close_redis_json_caches)
     await _run_cleanup_step("channel_service.disconnect", channel_service.disconnect)
     await _run_cleanup_step("close_datastore_engine", close_datastore_engine)
@@ -615,9 +613,18 @@ def e2e_settings(test_database_url, test_redis_url, supertokens_container, worke
     return settings
 
 
-@pytest.fixture(scope="session", autouse=True)
-def cleanup_workspace_containers_session():
+@pytest_asyncio.fixture(scope="session", autouse=True)
+async def cleanup_workspace_containers_session():
     yield
+    # The message bus is a process-wide singleton with no per-test subscribe
+    # state (it's publish-only; the real FastStream consumers run in the
+    # separate streaq worker subprocess, unaffected by this connection's
+    # lifecycle) -- close it once per xdist worker here instead of
+    # reconnecting it on every single test's teardown via
+    # _close_e2e_process_clients.
+    from app.core.infrastructure.events.message_bus import close_message_bus
+
+    await _run_cleanup_step("close_message_bus", close_message_bus)
     # Close exactly the contexts created by this pytest process. Broad sweeps
     # by the shared label are unsafe even in a serial session because another
     # independently invoked pytest process may be running at the same time.
