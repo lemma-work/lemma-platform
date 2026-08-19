@@ -147,24 +147,39 @@ class AuthorizationDataService:
         self.session = session
 
     async def seed_permissions(self) -> bool:
-        existing = set((await self.session.execute(select(AuthPermissionModel.id))).scalars())
-        changed = False
-        for definition in PERMISSION_DEFINITIONS:
-            if definition.id in existing:
-                continue
-            changed = True
-            self.session.add(
-                AuthPermissionModel(
-                    id=definition.id,
-                    scope=definition.scope.value,
-                    resource_type=definition.resource_type,
-                    description=definition.description,
-                    system_only=definition.system_only,
-                )
-            )
-        if changed:
-            await self.session.flush()
-        return changed
+        """Upsert every definition in PERMISSION_DEFINITIONS, ON CONFLICT DO NOTHING.
+
+        Was check-then-insert: read existing ids, then session.add() whatever
+        was missing. Called from _ensure_system_roles on every org/pod
+        creation, against a table with no per-scope key to serialize two
+        callers on -- two organizations created at genuinely the same
+        moment, against a database not yet fully seeded, could both decide
+        the same definition was missing and both try to insert it, one
+        losing to "duplicate key value violates unique constraint
+        auth_permissions_pkey" (confirmed under real concurrent load, not
+        just a synthetic repro). A single bulk upsert closes the same TOCTOU
+        window the role_permissions upsert below already closes for its own
+        table, and rowcount reports exactly the same "was anything new"
+        signal the loop above tracked in `changed`.
+        """
+        rows = [
+            {
+                "id": definition.id,
+                "scope": definition.scope.value,
+                "resource_type": definition.resource_type,
+                "description": definition.description,
+                "system_only": definition.system_only,
+            }
+            for definition in PERMISSION_DEFINITIONS
+        ]
+        if not rows:
+            return False
+        result = await self.session.execute(
+            insert(AuthPermissionModel)
+            .values(rows)
+            .on_conflict_do_nothing(index_elements=["id"])
+        )
+        return result.rowcount > 0
 
     async def ensure_org_system_roles(self, organization_id: UUID) -> None:
         await self._ensure_system_roles(
@@ -173,7 +188,9 @@ class AuthorizationDataService:
             role_names=SYSTEM_ORG_ROLES,
         )
 
-    async def ensure_pod_system_roles(self, *, organization_id: UUID, pod_id: UUID) -> None:
+    async def ensure_pod_system_roles(
+        self, *, organization_id: UUID, pod_id: UUID
+    ) -> None:
         await self._ensure_system_roles(
             organization_id=organization_id,
             pod_id=pod_id,
@@ -218,7 +235,9 @@ class AuthorizationDataService:
             )
         stmt = (
             select(RoleModel)
-            .where(RoleModel.organization_id == organization_id, RoleModel.pod_id == pod_id)
+            .where(
+                RoleModel.organization_id == organization_id, RoleModel.pod_id == pod_id
+            )
             .order_by(RoleModel.is_system.desc(), RoleModel.name)
         )
         roles = list((await self.session.execute(stmt)).scalars().all())
@@ -297,7 +316,6 @@ class AuthorizationDataService:
         await self._invalidate_snapshots_after_commit(
             organization_id=organization_id, pod_id=pod_id
         )
-
 
     async def _invalidate_snapshots_after_commit(
         self,
@@ -381,11 +399,17 @@ class AuthorizationDataService:
         elif resource_type == ResourceType.APP:
             stmt = select(AppModel.user_id).where(AppModel.id == resource_id)
         elif resource_type == ResourceType.DOCUMENT:
-            stmt = select(DatastoreFile.owner_user_id).where(DatastoreFile.id == resource_id)
+            stmt = select(DatastoreFile.owner_user_id).where(
+                DatastoreFile.id == resource_id
+            )
         elif resource_type == ResourceType.FOLDER:
-            stmt = select(DatastoreFile.owner_user_id).where(DatastoreFile.id == resource_id)
+            stmt = select(DatastoreFile.owner_user_id).where(
+                DatastoreFile.id == resource_id
+            )
         elif resource_type == ResourceType.DATASTORE_TABLE:
-            stmt = select(DatastoreTable.user_id).where(DatastoreTable.id == resource_id)
+            stmt = select(DatastoreTable.user_id).where(
+                DatastoreTable.id == resource_id
+            )
         elif resource_type == ResourceType.WORKFLOW:
             stmt = select(WorkflowModel.user_id).where(WorkflowModel.id == resource_id)
         elif resource_type == ResourceType.SCHEDULE:
@@ -424,10 +448,12 @@ class AuthorizationDataService:
             delete(RoleAssignmentModel).where(
                 RoleAssignmentModel.principal_type == principal_type,
                 RoleAssignmentModel.principal_id == principal_id,
-                RoleAssignmentModel.role_id.in_(select(RoleModel.id).where(
-                    RoleModel.organization_id == organization_id,
-                    RoleModel.pod_id == pod_id,
-                )),
+                RoleAssignmentModel.role_id.in_(
+                    select(RoleModel.id).where(
+                        RoleModel.organization_id == organization_id,
+                        RoleModel.pod_id == pod_id,
+                    )
+                ),
             )
         )
         for role in roles:
@@ -549,7 +575,9 @@ class AuthorizationDataService:
                     organization_id=organization_id,
                     pod_id=None,
                 )
-                self._merge_role_data(org_role_data, role_ids, role_names, permission_ids)
+                self._merge_role_data(
+                    org_role_data, role_ids, role_names, permission_ids
+                )
 
         if pod_id is not None and organization_id is not None:
             pod_member = await self._get_pod_member(user_id=user_id, pod_id=pod_id)
@@ -561,7 +589,9 @@ class AuthorizationDataService:
                     organization_id=organization_id,
                     pod_id=pod_id,
                 )
-                self._merge_role_data(pod_role_data, role_ids, role_names, permission_ids)
+                self._merge_role_data(
+                    pod_role_data, role_ids, role_names, permission_ids
+                )
 
         for role_id in role_ids:
             principal_refs.add(PrincipalRef("ROLE", role_id))
@@ -601,7 +631,11 @@ class AuthorizationDataService:
     ) -> Context:
         authorizer = Authorizer(self.session)
         normalized_principal_type = principal_type.upper()
-        actor_type = ActorType.AGENT if normalized_principal_type == "AGENT" else ActorType.FUNCTION
+        actor_type = (
+            ActorType.AGENT
+            if normalized_principal_type == "AGENT"
+            else ActorType.FUNCTION
+        )
 
         # Ask the cache FIRST, exactly as the user path does. The pod-scoped key
         # omits the organization (see ``_snapshot_suffix``), so a hit needs no
@@ -919,7 +953,10 @@ class AuthorizationDataService:
     async def _get_pod_member(self, *, user_id: UUID, pod_id: UUID) -> PodMember | None:
         stmt = (
             select(PodMember)
-            .join(OrganizationMember, PodMember.organization_member_id == OrganizationMember.id)
+            .join(
+                OrganizationMember,
+                PodMember.organization_member_id == OrganizationMember.id,
+            )
             .where(PodMember.pod_id == pod_id, OrganizationMember.user_id == user_id)
         )
         return (await self.session.execute(stmt)).scalars().first()
@@ -1116,13 +1153,19 @@ class Authorizer:
         resource: ResourceRef | None = None,
     ) -> AuthorizationDecision:
         if permission_id not in PERMISSION_BY_ID:
-            return AuthorizationDecision(False, "UNKNOWN_PERMISSION", permission_id, resource)
+            return AuthorizationDecision(
+                False, "UNKNOWN_PERMISSION", permission_id, resource
+            )
         if ctx.is_superuser:
             return AuthorizationDecision(True, "SUPERUSER", permission_id, resource)
         if ctx.actor_type == ActorType.ANONYMOUS:
             if resource and await self._is_public_read(permission_id, resource):
-                return AuthorizationDecision(True, "PUBLIC_RESOURCE", permission_id, resource)
-            return AuthorizationDecision(False, "AUTH_REQUIRED", permission_id, resource)
+                return AuthorizationDecision(
+                    True, "PUBLIC_RESOURCE", permission_id, resource
+                )
+            return AuthorizationDecision(
+                False, "AUTH_REQUIRED", permission_id, resource
+            )
 
         # The default pod agent mirrors the invoking user's authority but ONLY
         # within its pinned pod: it may exercise any pod-scoped action the user
@@ -1154,7 +1197,9 @@ class Authorizer:
                     permission_id,
                     resource,
                 )
-            return AuthorizationDecision(True, "PERMISSION_MATCH", permission_id, resource)
+            return AuthorizationDecision(
+                True, "PERMISSION_MATCH", permission_id, resource
+            )
 
         hydrated = await self._hydrate_resource(resource)
         if (
@@ -1177,10 +1222,15 @@ class Authorizer:
         if destructive is not None:
             return destructive
         if self._is_function_self_read(ctx, permission_id, hydrated):
-            return AuthorizationDecision(True, "FUNCTION_SELF_READ", permission_id, hydrated)
+            return AuthorizationDecision(
+                True, "FUNCTION_SELF_READ", permission_id, hydrated
+            )
         if self._is_org_owner_of_pod(ctx, permission_id, hydrated):
             return AuthorizationDecision(True, "ORG_OWNER_POD", permission_id, hydrated)
-        if ctx.actor_type == ActorType.DELEGATED_USER_WORKLOAD and ctx.workload_principal_refs:
+        if (
+            ctx.actor_type == ActorType.DELEGATED_USER_WORKLOAD
+            and ctx.workload_principal_refs
+        ):
             return await self._authorize_delegated_workload(
                 ctx,
                 permission_id,
@@ -1191,8 +1241,12 @@ class Authorizer:
             and hydrated.owner_user_id == ctx.user_id
             and permission_id in owner_actions_for_resource(hydrated.resource_type)
         ):
-            return AuthorizationDecision(True, "RESOURCE_OWNER", permission_id, hydrated)
-        visibility_decision = self._visibility_read_decision(ctx, permission_id, hydrated)
+            return AuthorizationDecision(
+                True, "RESOURCE_OWNER", permission_id, hydrated
+            )
+        visibility_decision = self._visibility_read_decision(
+            ctx, permission_id, hydrated
+        )
         if visibility_decision is not None:
             return visibility_decision
         if not ctx.has_permission(permission_id):
@@ -1221,16 +1275,22 @@ class Authorizer:
 
         visibility = hydrated.visibility or ResourceVisibility.POD
         if visibility == ResourceVisibility.PUBLIC:
-            return AuthorizationDecision(True, "PUBLIC_RESOURCE", permission_id, hydrated)
+            return AuthorizationDecision(
+                True, "PUBLIC_RESOURCE", permission_id, hydrated
+            )
         if hydrated.owner_user_id is not None and hydrated.owner_user_id == ctx.user_id:
-            return AuthorizationDecision(True, "RESOURCE_OWNER", permission_id, hydrated)
+            return AuthorizationDecision(
+                True, "RESOURCE_OWNER", permission_id, hydrated
+            )
         if visibility == ResourceVisibility.PERSONAL:
             return AuthorizationDecision(
                 False, "PERSONAL_RESOURCE_DENIED", permission_id, hydrated
             )
         if visibility == ResourceVisibility.POD:
             if hydrated.pod_id is not None and hydrated.pod_id != ctx.pod_id:
-                return AuthorizationDecision(False, "POD_SCOPE_MISMATCH", permission_id, hydrated)
+                return AuthorizationDecision(
+                    False, "POD_SCOPE_MISMATCH", permission_id, hydrated
+                )
             return AuthorizationDecision(True, "POD_VISIBLE", permission_id, hydrated)
         if visibility == ResourceVisibility.RESTRICTED:
             grant_decision = await self._resource_grant_decision(
@@ -1240,8 +1300,12 @@ class Authorizer:
             )
             if grant_decision is not None:
                 return grant_decision
-            return AuthorizationDecision(False, "MISSING_RESOURCE_GRANT", permission_id, hydrated)
-        return AuthorizationDecision(False, "UNSUPPORTED_VISIBILITY", permission_id, hydrated)
+            return AuthorizationDecision(
+                False, "MISSING_RESOURCE_GRANT", permission_id, hydrated
+            )
+        return AuthorizationDecision(
+            False, "UNSUPPORTED_VISIBILITY", permission_id, hydrated
+        )
 
     async def _destructive_delegated_decision(
         self,
@@ -1316,7 +1380,9 @@ class Authorizer:
                 resource,
             )
         if resource.pod_id is not None and resource.pod_id != ctx.pod_id:
-            return AuthorizationDecision(False, "POD_SCOPE_MISMATCH", permission_id, resource)
+            return AuthorizationDecision(
+                False, "POD_SCOPE_MISMATCH", permission_id, resource
+            )
         if resource.organization_id is not None and resource.pod_id is None:
             # Workload grants are pod rows; org-scoped resources fall back to
             # the invoking user's role capability.
@@ -1337,7 +1403,10 @@ class Authorizer:
             return AuthorizationDecision(True, "ORG_VISIBLE", permission_id, resource)
 
         visibility = resource.visibility or ResourceVisibility.POD
-        if visibility == ResourceVisibility.PERSONAL and resource.owner_user_id != ctx.user_id:
+        if (
+            visibility == ResourceVisibility.PERSONAL
+            and resource.owner_user_id != ctx.user_id
+        ):
             # Privacy trumps grants: nothing grants a workload access to
             # another user's PERSONAL resource.
             return AuthorizationDecision(
@@ -1409,7 +1478,9 @@ class Authorizer:
                 resource,
                 matched_grant_ids=tuple(workload_grant_ids),
             )
-        return AuthorizationDecision(False, "UNSUPPORTED_VISIBILITY", permission_id, resource)
+        return AuthorizationDecision(
+            False, "UNSUPPORTED_VISIBILITY", permission_id, resource
+        )
 
     @staticmethod
     def _is_read_permission(permission_id: str) -> bool:
@@ -1445,7 +1516,9 @@ class Authorizer:
 
         visibility = resource.visibility or ResourceVisibility.POD
         if visibility == ResourceVisibility.PUBLIC:
-            return AuthorizationDecision(True, "PUBLIC_RESOURCE", permission_id, resource)
+            return AuthorizationDecision(
+                True, "PUBLIC_RESOURCE", permission_id, resource
+            )
         return None
 
     @staticmethod
@@ -1484,15 +1557,20 @@ class Authorizer:
     ) -> bool:
         if permission_id != Permissions.FUNCTION_READ:
             return False
-        if resource.resource_type != ResourceType.FUNCTION or resource.resource_id is None:
+        if (
+            resource.resource_type != ResourceType.FUNCTION
+            or resource.resource_id is None
+        ):
             return False
-        if ctx.actor_type == ActorType.FUNCTION and ctx.actor_id == str(resource.resource_id):
+        if ctx.actor_type == ActorType.FUNCTION and ctx.actor_id == str(
+            resource.resource_id
+        ):
             return True
         if ctx.actor_type != ActorType.DELEGATED_USER_WORKLOAD:
             return False
-        return PrincipalRef(WorkloadPrincipalType.FUNCTION.value.upper(), resource.resource_id) in (
-            ctx.workload_principal_refs
-        )
+        return PrincipalRef(
+            WorkloadPrincipalType.FUNCTION.value.upper(), resource.resource_id
+        ) in (ctx.workload_principal_refs)
 
     async def accessible_resource_ids(
         self,
@@ -1633,11 +1711,15 @@ class Authorizer:
         }
         if resource.resource_type not in mapping:
             return resource
-        _model, id_col, pod_col, owner_col, visibility_col = mapping[resource.resource_type]
+        _model, id_col, pod_col, owner_col, visibility_col = mapping[
+            resource.resource_type
+        ]
         if visibility_col is None:
             stmt = select(pod_col, owner_col).where(id_col == resource.resource_id)
         else:
-            stmt = select(pod_col, owner_col, visibility_col).where(id_col == resource.resource_id)
+            stmt = select(pod_col, owner_col, visibility_col).where(
+                id_col == resource.resource_id
+            )
         row = (await self.session.execute(stmt)).first()
         if row is None:
             return resource
@@ -1735,7 +1817,9 @@ class Authorizer:
             ),
         )
 
-    async def _hydrate_connector_auth_config(self, resource: ResourceRef) -> ResourceRef:
+    async def _hydrate_connector_auth_config(
+        self, resource: ResourceRef
+    ) -> ResourceRef:
         stmt = select(AuthConfig.organization_id, AuthConfig.created_by_user_id).where(
             AuthConfig.id == resource.resource_id
         )
@@ -1778,7 +1862,10 @@ class Authorizer:
         resource: ResourceRef,
     ) -> AuthorizationDecision | None:
         visibility = resource.visibility or ResourceVisibility.POD
-        if visibility == ResourceVisibility.PERSONAL and resource.owner_user_id != ctx.user_id:
+        if (
+            visibility == ResourceVisibility.PERSONAL
+            and resource.owner_user_id != ctx.user_id
+        ):
             return None
         grant_ids = await self._matching_grant_ids(ctx, permission_id, resource)
         if not grant_ids:
@@ -1848,9 +1935,14 @@ class Authorizer:
             # ``_require_document_action`` falls back to the pod id and the
             # self-grant would otherwise never match. This mirrors the SQL
             # projection's self-match (``resource_path_col == granted.path``).
-            candidate_paths = [*self._ancestor_folder_paths(resource.path), resource.path]
+            candidate_paths = [
+                *self._ancestor_folder_paths(resource.path),
+                resource.path,
+            ]
             acceptable.update(
-                await self._folder_ids_for_paths(resource.pod_id, tuple(candidate_paths))
+                await self._folder_ids_for_paths(
+                    resource.pod_id, tuple(candidate_paths)
+                )
             )
         return list(acceptable)
 
@@ -1966,9 +2058,7 @@ class Authorizer:
             ResourcePermissionGrantModel.resource_id.in_(target_ids),
             or_(*(and_(*clause) for clause in clauses)),
         )
-        rows = [
-            (row[0], row[1]) for row in (await self.session.execute(stmt)).all()
-        ]
+        rows = [(row[0], row[1]) for row in (await self.session.execute(stmt)).all()]
         self._grant_rows[key] = rows
         return rows
 
@@ -1978,4 +2068,3 @@ class Authorizer:
         # malformed row degrades to pod-scoped — the safe direction — instead of
         # 500ing the whole request.
         return normalize_resource_visibility(value) or ResourceVisibility.POD
-
