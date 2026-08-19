@@ -378,6 +378,7 @@ def get_minio_container() -> Generator[LemmaDockerContainer, None, None]:
 @contextmanager
 def get_supertokens_container(
     postgres_connection_uri: Optional[str] = None,
+    network: Optional[str] = None,
 ) -> Generator[LemmaDockerContainer, None, None]:
     """
     Starts a SuperTokens container.
@@ -390,6 +391,11 @@ def get_supertokens_container(
     ``SQLITE_LOCKED_SHAREDCACHE: database table is locked`` errors under it.
     The image is literally named "supertokens-postgresql"; SQLite is a
     quick-start fallback, not the intended concurrent-write-safe mode.
+
+    ``network``, if given, joins this container to the same user-defined
+    Docker network as ``postgres_connection_uri``'s target (see
+    ``get_postgres_uri_from_another_container``) -- required for the
+    container-name hostname in that URI to resolve at all.
     """
     # Every user signup/signin in the suite pays real bcrypt cost against the
     # default work factor (2^11 rounds). This container is thrown away at the
@@ -405,16 +411,8 @@ def get_supertokens_container(
         container = container.with_env(
             "POSTGRESQL_CONNECTION_URI", postgres_connection_uri
         )
-        # get_postgres_uri_from_another_container() points this URI at
-        # host.docker.internal. Docker Desktop (Mac/Windows) resolves that name
-        # for free; native Linux Docker -- what CI runners use -- does not,
-        # unless the container is explicitly told to map it. Without this, the
-        # core never reaches Postgres, never answers /hello below, and every
-        # test in every shard times out waiting on this fixture (confirmed:
-        # this exact failure on CI, passing locally on Docker Desktop).
-        container = container.with_run_args(
-            "--add-host", "host.docker.internal:host-gateway"
-        )
+    if network:
+        container = container.with_run_args("--network", network)
 
     with container as st:
         # Wait for SuperTokens to be ready by polling the health endpoint
@@ -548,6 +546,37 @@ def _session_scoped_container_name(base_name: str, basetemp_parent) -> str:
     return f"{base_name}-{digest}"
 
 
+# ONE fixed name, not digested per invocation like the container names above.
+# A user-defined network consumes a subnet from Docker's finite default
+# address pool on creation (historically ~31 of them); a network per pytest
+# invocation is exactly the shape that exhausted it before -- see the
+# "prune orphaned lemma-e2e-* networks" comment in e2e_base.py's
+# _cleanup_e2e_workspace_containers, from before the shared-Postgres model,
+# when every testcontainer got its own network. Reusing one well-known name
+# forever means at most one network ever exists, and there is nothing to
+# accumulate: many unrelated invocations' differently (and uniquely) named
+# containers can share it with no cross-talk risk, since reaching another
+# container by name requires already knowing its invocation-specific name.
+SHARED_E2E_NETWORK_NAME = "lemma-e2e-shared-net"
+
+
+def _ensure_docker_network(name: str) -> None:
+    """Create a user-defined bridge network if it doesn't already exist.
+
+    Container-to-container DNS-by-name only works on a user-defined network --
+    the default ``bridge`` network an unqualified ``docker run`` joins does
+    not provide it, and routing back out through a host-published port
+    doesn't work either (see ``get_postgres_uri_from_another_container``).
+    Idempotent and racy on purpose: ``docker network create`` on a name that
+    already exists just errors, which this swallows, since whichever
+    container starts first on a given machine creates it for every other one
+    after it.
+    """
+    subprocess.run(
+        ["docker", "network", "create", name], check=False, capture_output=True
+    )
+
+
 def start_shared_kreuzberg(name: str) -> str:
     """Start ONE named Kreuzberg container and return its URL.
 
@@ -638,12 +667,13 @@ def start_shared_postgres(name: str) -> LemmaPostgresContainer:
     """
     # Clear any straggler with this name from a previously crashed run.
     subprocess.run(["docker", "rm", "-f", name], check=False, capture_output=True)
+    _ensure_docker_network(SHARED_E2E_NETWORK_NAME)
     container = (
         LemmaPostgresContainer()
         .with_env("POSTGRES_USER", POSTGRES_USER)
         .with_env("POSTGRES_PASSWORD", POSTGRES_PASSWORD)
         .with_env("POSTGRES_DB", POSTGRES_DB)
-        .with_run_args("--name", name)
+        .with_run_args("--name", name, "--network", SHARED_E2E_NETWORK_NAME)
     )
     container.__enter__()  # start detached; intentionally no matching __exit__
     _wait_for_postgres(container)
@@ -701,6 +731,9 @@ def shared_postgres(
             if refs <= 0:
                 remove_named_container(name)
                 refs_file.unlink(missing_ok=True)
+                # SHARED_E2E_NETWORK_NAME is NOT removed here: it is one fixed,
+                # permanent resource reused by every invocation on this
+                # machine, not owned by this one -- see its own comment.
 
 
 def start_shared_redis(name: str) -> LemmaDockerContainer:
@@ -797,24 +830,34 @@ def get_postgres_uri_from_another_container(
     container: LemmaPostgresContainer, database_name: str
 ) -> str:
     """A bare ``postgresql://`` URI for a container connecting from ANOTHER
-    container (e.g. SuperTokens' ``POSTGRESQL_CONNECTION_URI``), not from the
-    host pytest process.
+    container (e.g. SuperTokens' ``POSTGRESQL_CONNECTION_URI``) on the SAME
+    ``SHARED_E2E_NETWORK_NAME`` Docker network, not from the host pytest
+    process.
 
     ``get_postgres_url()`` returns ``container.get_container_host_ip()``
     (``127.0.0.1``) plus the ``+asyncpg`` SQLAlchemy dialect suffix -- right
-    for this process's own connections, wrong on both counts for a sibling
+    for this process's own connections, wrong on every count for a sibling
     container: ``127.0.0.1`` inside a container means the container itself,
-    and SuperTokens' Java core doesn't understand a SQLAlchemy dialect
-    string. Use ``host.docker.internal`` (the same pattern
-    ``test_support/e2e/runtime.py``'s workspace provider config already uses
-    for its callback URL, via ``add_host_gateway``/``host_alias``) and the
-    plain ``postgresql://`` scheme SuperTokens' docs require (``postgres://``
-    fails at its startup).
+    SuperTokens' Java core doesn't understand a SQLAlchemy dialect string,
+    and routing back out through a host-published port doesn't work either --
+    ``host.docker.internal`` was tried first and confirmed broken on CI's
+    native Linux runners: Postgres's ``-p 127.0.0.1::5432`` binding only
+    accepts connections whose destination is literally ``127.0.0.1``, and
+    traffic arriving via the docker0 bridge gateway (what ``host.docker.
+    internal`` resolves to without Docker Desktop's Mac/Windows-only magic)
+    has a different destination address, so it's refused before Postgres
+    ever sees it -- passed locally for the same reason the other attempt did.
+
+    Use the container's own name and internal port instead: Docker's
+    embedded DNS resolves a container by name for any other container on the
+    same user-defined network, and that traffic goes container-to-container
+    directly, never touching the host's published-port machinery at all.
+    ``container.container_id`` is a name, not a docker-assigned hex id, for
+    every caller of this function -- see ``shared_postgres``.
     """
-    port = container.get_exposed_port(5432)
     return (
         f"postgresql://{container.username}:{container.password}"
-        f"@host.docker.internal:{port}/{database_name}"
+        f"@{container.container_id}:5432/{database_name}"
     )
 
 

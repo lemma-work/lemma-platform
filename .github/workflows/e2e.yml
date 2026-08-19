@@ -168,14 +168,6 @@ jobs:
       # Shards run in parallel, so wall-clock is the slowest shard, not their sum.
       # E2E_ARGS scopes each shard; matrix workers keeps surfaces below ten minutes.
       - name: E2E tests (deterministic LLM + in-process sandbox, real services)
-        env:
-          # TEMPORARY diagnostic: SuperTokens is hanging its whole startup poll
-          # on CI (times out identically to pytest's own 120s test-timeout, so
-          # its own failure branch -- which dumps the container's real logs --
-          # never gets a chance to fire first). Shortening it well below 120s
-          # forces that branch to win the race so the actual container log
-          # reaches this job's output. Revert once diagnosed.
-          SUPERTOKENS_STARTUP_TIMEOUT_SECONDS: "30"
         run: >-
           make coverage-backend-e2e-shard
           E2E_ARGS="${{ matrix.suite.args }}"

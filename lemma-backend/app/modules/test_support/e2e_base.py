@@ -23,6 +23,7 @@ from sqlalchemy import text
 
 from app.core.infrastructure.db.manager import DatabaseManager
 from app.core.test_utils import (
+    SHARED_E2E_NETWORK_NAME,
     create_postgres_database,
     get_postgres_uri_from_another_container,
     get_postgres_url,
@@ -93,8 +94,12 @@ def _cleanup_e2e_workspace_containers(*, sandboxes_only: bool = False) -> None:
     filter_sets = [["--filter", "label=lemma.e2e=true"]]
     if sandboxes_only:
         filter_sets = [
-            ["--filter", "label=lemma.e2e=true",
-             "--filter", "label=app.kubernetes.io/name=lemma-sandbox"],
+            [
+                "--filter",
+                "label=lemma.e2e=true",
+                "--filter",
+                "label=app.kubernetes.io/name=lemma-sandbox",
+            ],
             ["--filter", "label=managed-by=lemma-workspace"],
         ]
     else:
@@ -381,7 +386,7 @@ def _start_supertokens(worker_id: str, basetemp_parent) -> None:
     )
 
     def _factory():
-        return get_supertokens_container(postgres_uri)
+        return get_supertokens_container(postgres_uri, network=SHARED_E2E_NETWORK_NAME)
 
     _shared_context_resource("supertokens", _factory)
 
@@ -419,9 +424,7 @@ def _warm_shared_containers(worker_id: str, tmp_path_factory) -> None:
     test that only needs one of the three) always gets the same cached
     instance.
     """
-    if all(
-        name in _SHARED_RESOURCES for name in ("postgres", "redis", "supertokens")
-    ):
+    if all(name in _SHARED_RESOURCES for name in ("postgres", "redis", "supertokens")):
         return
 
     # Resolve once on this (the calling) thread before fanning out to the
@@ -472,7 +475,6 @@ def test_redis_url(redis_container, worker_id) -> str:
     return get_redis_url(redis_container, _redis_worker_db_index(worker_id))
 
 
-
 def _seed_system_model_pricing() -> None:
     """Give the system default model a price, so cost assertions have one.
 
@@ -517,6 +519,7 @@ def _seed_system_model_pricing() -> None:
             for model in sorted(models)
         }
     )
+
 
 @pytest.fixture(scope="session")
 def e2e_settings(test_database_url, test_redis_url, supertokens_container, worker_id):
@@ -839,9 +842,7 @@ async def worker(e2e_settings, sandbox_reachable_backend):
                 "DATASTORE_DATABASE_URL": e2e_settings.datastore_database_url,
                 "REDIS_URL": e2e_settings.redis_url,
                 "API_URL": os.environ.get("API_URL", e2e_settings.api_url),
-                "WORKSPACE_CALLBACK_API_URL": (
-                    e2e_settings.workspace_callback_api_url
-                ),
+                "WORKSPACE_CALLBACK_API_URL": (e2e_settings.workspace_callback_api_url),
                 "FUNCTION_RUNTIME_GATEWAY_URL": (
                     e2e_settings.function_runtime_gateway_url
                 ),
