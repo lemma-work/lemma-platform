@@ -41,7 +41,10 @@ export function RootPageSwitch({ mode = 'redirect' }: { mode?: RootPageMode }) {
     }
 
     return (
-        <AccountOnboarding preflightFallback={<PageLoader />}>
+        <AccountOnboarding
+            preflightFallback={<PageLoader />}
+            requireFirstPod={mode !== 'home'}
+        >
             {mode === 'home' ? <DashboardHomePage /> : <AuthenticatedRootRedirect />}
         </AccountOnboarding>
     );
@@ -88,7 +91,14 @@ function AuthenticatedRootRedirect() {
         const firstPod = podsData?.items?.[0];
         if (firstPod) {
             router.replace(`/pod/${firstPod.id}`);
+            return;
         }
+
+        // No pod this account can open. Someone who joined an organization as a
+        // plain member has exactly this shape — they can read the org and
+        // nothing in it — and this used to return the loader forever, which is
+        // a dead end wearing a spinner. Home can at least say where they are.
+        router.replace('/home');
     }, [isLoading, podsData?.items, router, shouldFetchPods]);
 
     return <PageLoader />;

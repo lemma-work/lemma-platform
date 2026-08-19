@@ -44,9 +44,7 @@ def _event(
 
 
 def _tokens(events) -> str:
-    return "".join(
-        e.data["data"] for e in events if e.type is AgentEventType.TOKEN
-    )
+    return "".join(e.data["data"] for e in events if e.type is AgentEventType.TOKEN)
 
 
 def _messages(events):
@@ -67,6 +65,24 @@ def _run(normalizer, events) -> list:
         _event(len(events) + 1, AgentHostEventType.TERMINAL, {"state": "SUCCEEDED"})
     )
     return out
+
+
+def _intermediate_flags(events) -> list:
+    """Whether each assistant text message is narration, in order."""
+    return [
+        bool((message.data.metadata or {}).get("is_intermediate_assistant_message"))
+        for message in _text_messages(events)
+        if message.data.kind is MessageKind.TEXT
+    ]
+
+
+def _persisted_text(events) -> str:
+    """Every assistant text message run together, to compare against the stream."""
+    return "".join(
+        message.data.text
+        for message in _text_messages(events)
+        if message.data.kind is MessageKind.TEXT and message.data.text
+    )
 
 
 def _final_text(events) -> str:
@@ -133,14 +149,68 @@ class TestTextAccumulation:
                     object_id="c1",
                 ),
                 _event(5, AgentHostEventType.AGENT_MESSAGE_CHUNK, {"text": "! there"}),
+                _event(6, AgentHostEventType.AGENT_MESSAGE_UPSERT, {"text": "! there"}),
+            ],
+        )
+        # Both halves survive, and in order -- which is what this test has
+        # always been for. What changed is that they are no longer one message:
+        # the text before a tool call is sealed as its own, so nothing is glued
+        # to what comes after it.
+        assert _tokens(out) == "Hello! there"
+        assert _persisted_text(out) == "Hello! there", (
+            "what is persisted must match what the user watched stream"
+        )
+        said = [message.data.text for message in _text_messages(out)]
+        assert said == ["Hello", "! there"], (
+            "each thing the agent said is its own message"
+        )
+        assert _intermediate_flags(out) == [True, False], (
+            "only the last one is the answer; the rest fold into the run"
+        )
+
+    def test_narration_between_tools_is_not_glued_into_one_paragraph(self) -> None:
+        """The failure this shape produced, in the words it produced it in.
+
+        A fifty-eight step run rendered as one paragraph reading "Loading
+        schemas first.Schemas loaded. Starting the test sweep.Empty pod" -- every
+        narration concatenated, with the report welded onto the end. The old
+        fixture here was "Hello" + "! there", which reads perfectly when glued,
+        so the assertion that pinned the concatenation never showed what it was
+        pinning.
+        """
+        n = _normalizer()
+        out = _run(
+            n,
+            [
                 _event(
-                    6, AgentHostEventType.AGENT_MESSAGE_UPSERT, {"text": "! there"}
+                    1,
+                    AgentHostEventType.AGENT_MESSAGE_UPSERT,
+                    {"text": "Loading schemas first."},
+                ),
+                _event(
+                    2,
+                    AgentHostEventType.TOOL_CALL_UPSERT,
+                    {"name": "load_skill"},
+                    object_id="c1",
+                ),
+                _event(
+                    3,
+                    AgentHostEventType.TOOL_CALL_UPDATE,
+                    {"status": "COMPLETED", "result": "ok"},
+                    object_id="c1",
+                ),
+                _event(
+                    4,
+                    AgentHostEventType.AGENT_MESSAGE_UPSERT,
+                    {"text": "Schemas loaded. Starting the sweep."},
                 ),
             ],
         )
-        assert _tokens(out) == "Hello! there"
-        assert _final_text(out) == "Hello! there", (
-            "what is persisted must match what the user watched stream"
+
+        said = [message.data.text for message in _text_messages(out)]
+        assert said == ["Loading schemas first.", "Schemas loaded. Starting the sweep."]
+        assert not any("first.Schemas" in text for text in said), (
+            "two sentences from different messages ran together"
         )
 
     def test_a_segment_no_chunk_delivered_still_streams(self) -> None:
@@ -182,9 +252,7 @@ class TestFinalAnswerFlag:
         paused = n.normalize(
             _event(2, AgentHostEventType.PERMISSION_REQUEST, {"tool": "bash"})
         )
-        n.normalize(
-            _event(3, AgentHostEventType.AGENT_MESSAGE_CHUNK, {"text": "done"})
-        )
+        n.normalize(_event(3, AgentHostEventType.AGENT_MESSAGE_CHUNK, {"text": "done"}))
         finished = n.normalize(
             _event(4, AgentHostEventType.TERMINAL, {"state": "SUCCEEDED"})
         )
@@ -292,7 +360,9 @@ class TestToolNames:
     def test_other_is_not_a_name(self) -> None:
         """`other` is the kind adapters give everything they have no category
         for, MCP tools included. Recorded as the name it collapsed them all."""
-        assert self._call({"kind": "other", "title": "lemma_read_table"}) == "read_table"
+        assert (
+            self._call({"kind": "other", "title": "lemma_read_table"}) == "read_table"
+        )
 
     def test_the_approval_card_names_the_tool_it_interrupts(self) -> None:
         n = _normalizer()
@@ -309,7 +379,11 @@ class TestToolNames:
                 2,
                 AgentHostEventType.PERMISSION_REQUEST,
                 {
-                    "toolCall": {"toolCallId": "toolu_1", "kind": "fetch", "title": "x"},
+                    "toolCall": {
+                        "toolCallId": "toolu_1",
+                        "kind": "fetch",
+                        "title": "x",
+                    },
                     "options": [{"optionId": "allow", "kind": "allow_once"}],
                 },
                 object_id="toolu_1",
@@ -732,9 +806,7 @@ class TestToolCalls:
                 object_id="call-1",
             )
         )
-        out = n.normalize(
-            _event(2, AgentHostEventType.TERMINAL, {"state": "FAILED"})
-        )
+        out = n.normalize(_event(2, AgentHostEventType.TERMINAL, {"state": "FAILED"}))
         assert any(m for m in _messages(out))
         assert out[-1].type is AgentEventType.ERROR
 
@@ -995,6 +1067,40 @@ class TestStructuredFinalAnswer:
 
         assert self._final_metadata(out)["structured_output"] == {"label": "spam"}
 
+    def test_the_written_answer_survives_a_run_that_talked_on_the_way(self) -> None:
+        """The report the agent wrote, not the last thing it muttered.
+
+        This was `message or answer`: any accumulated text at all won, and on a
+        long run the accumulation was never empty -- so the answer the agent
+        produced by calling the tool was dropped from the message body and
+        survived only in metadata. The user saw a paragraph of narration where
+        the report should have been.
+        """
+        n = self._structured()
+        n.normalize(
+            _event(
+                1,
+                AgentHostEventType.AGENT_MESSAGE_UPSERT,
+                {"text": "Checking the last thing before I write this up."},
+            )
+        )
+        n.adopt_final_answer({**self.RECORD, "output": {"label": "the actual report"}})
+        out = n.normalize(
+            _event(9, AgentHostEventType.TERMINAL, {"state": "SUCCEEDED"})
+        )
+
+        answer = [
+            message.data.text
+            for message in _text_messages(out)
+            if message.data.metadata.get("is_final_answer")
+        ]
+        assert answer, "the run produced no final answer at all"
+        assert "the actual report" in answer[0]
+        assert "muttered" not in answer[0]
+        assert "Checking the last thing" not in answer[0], (
+            "the narration replaced the answer instead of preceding it"
+        )
+
     def test_a_recorded_answer_overrides_what_the_stream_inferred(self) -> None:
         """The tool's own record is the authority; the stream is a heuristic."""
         n = self._structured()
@@ -1134,15 +1240,15 @@ class TestAFailureIsNotAlsoAnAnswer:
         )
 
         assert _text_messages(out) == []
-        assert [e.type for e in out if is_terminal_event(e)] == [
-            AgentEventType.ERROR
-        ]
+        assert [e.type for e in out if is_terminal_event(e)] == [AgentEventType.ERROR]
 
     def test_the_failure_itself_still_reaches_the_user(self) -> None:
         """Dropping the duplicate must not drop the explanation with it."""
         n = _normalizer()
         n.normalize(
-            _event(1, AgentHostEventType.AGENT_MESSAGE_CHUNK, {"text": "raw adapter error"})
+            _event(
+                1, AgentHostEventType.AGENT_MESSAGE_CHUNK, {"text": "raw adapter error"}
+            )
         )
         out = n.normalize(
             _event(
@@ -1169,7 +1275,11 @@ class TestAFailureIsNotAlsoAnAnswer:
         """
         n = _normalizer()
         n.normalize(
-            _event(1, AgentHostEventType.AGENT_MESSAGE_CHUNK, {"text": "a real partial answer"})
+            _event(
+                1,
+                AgentHostEventType.AGENT_MESSAGE_CHUNK,
+                {"text": "a real partial answer"},
+            )
         )
         out = n.normalize(
             _event(
@@ -1186,10 +1296,18 @@ class TestAFailureIsNotAlsoAnAnswer:
         of what the agent was doing when it failed."""
         n = _normalizer()
         n.normalize(
-            _event(1, AgentHostEventType.AGENT_THOUGHT_CHUNK, {"text": "checking credentials"})
+            _event(
+                1,
+                AgentHostEventType.AGENT_THOUGHT_CHUNK,
+                {"text": "checking credentials"},
+            )
         )
         n.normalize(
-            _event(2, AgentHostEventType.AGENT_MESSAGE_CHUNK, {"text": "Failed to authenticate"})
+            _event(
+                2,
+                AgentHostEventType.AGENT_MESSAGE_CHUNK,
+                {"text": "Failed to authenticate"},
+            )
         )
         out = n.normalize(
             _event(

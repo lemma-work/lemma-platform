@@ -172,6 +172,7 @@ export function ToolDetailsPanel({
           <AskUserCard
             invocation={interactionInvocation}
             onResolveUserApproval={onResolveUserApproval}
+            conversationId={activeConversationId}
           />
         ) : (
           <UserApprovalCard

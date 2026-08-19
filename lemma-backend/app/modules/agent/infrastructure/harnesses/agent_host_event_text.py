@@ -18,6 +18,7 @@ from app.modules.agent.domain.value_objects import (
     AgentEvent,
     AgentEventType,
     JsonObject,
+    MessageDraft,
 )
 
 
@@ -110,6 +111,34 @@ def _number(value: object, *, default: float = 0.0) -> float:
         return float(value)
     except ValueError:
         return default
+
+
+def narration_event(
+    *,
+    agent_run_id: UUID,
+    text: str,
+    object_id: str | None,
+) -> AgentEvent:
+    """One thing the agent said on its way to the answer.
+
+    Marked intermediate, which is what lets a client fold it into the run's
+    collapsed step list instead of showing it as the answer. The flag has been
+    read by the frontend all along and written by nothing, so every one of these
+    arrived looking like a final answer -- and, accumulated across a whole run
+    into a single message, looking like one enormous one.
+    """
+    return AgentEvent(
+        type=AgentEventType.MESSAGE,
+        data=MessageDraft.of_text(
+            text,
+            metadata={
+                "agent_host_object_id": object_id,
+                "is_final_answer": False,
+                "is_intermediate_assistant_message": True,
+            },
+        ),
+        agent_run_id=agent_run_id,
+    )
 
 
 def error_event(agent_run_id: UUID, message: str) -> AgentEvent:

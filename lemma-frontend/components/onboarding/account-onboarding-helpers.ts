@@ -695,6 +695,45 @@ export function organizationNameCandidate({
   return generatedOrganizationName(email, attempt - COMPANY_NAME_ATTEMPTS);
 }
 
+// The server accepts letters, numbers, spaces, hyphens and underscores in a pod
+// name and nothing else (`normalize_pod_name`), because pods are addressable by
+// name from the CLI. A name derived from a person routinely breaks that —
+// apostrophes in "O'Brien", accents in "José" — so it is folded to the allowed
+// set here rather than discovered as a rejected create.
+const POD_NAME_DISALLOWED = /[^A-Za-z0-9 _-]/g;
+const COMBINING_MARKS = /[\u0300-\u036f]/g;
+
+function podNameSafe(value: string): string {
+  return value
+    .normalize("NFD")
+    .replace(COMBINING_MARKS, "")
+    .replace(POD_NAME_DISALLOWED, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/**
+ * What to call the pod an account is given on arrival.
+ *
+ * "Personal Pod" is nobody's workspace; a name with the person in it is theirs
+ * from the first screen. The possessive form this wanted ("Ada's Pod") is not
+ * available: the apostrophe is exactly what the server rejects. Falls back to
+ * the generic name when nothing usable survives.
+ */
+export function firstPodName(
+  profile?: {
+    email?: string | null;
+    first_name?: string | null;
+    last_name?: string | null;
+    full_name?: string | null;
+  } | null,
+) {
+  const { firstName } = splitName(inferFullName(profile));
+  const safe = podNameSafe(firstName || "");
+  if (!safe) return "Personal Pod";
+  return `${safe} Pod`;
+}
+
 export function podNameForAudience(audience: Audience, teamName = "") {
   if (audience === "personal") return "Personal Pod";
 

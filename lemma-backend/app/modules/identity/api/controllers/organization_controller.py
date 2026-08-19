@@ -68,6 +68,7 @@ async def create_organization(
     organization = await org_service.create_organization(
         entity=entity,
         owner_user_id=user.id,
+        resolve_name_conflicts=data.resolve_name_conflicts,
     )
     await _sync_org_role_assignment(
         uow,
