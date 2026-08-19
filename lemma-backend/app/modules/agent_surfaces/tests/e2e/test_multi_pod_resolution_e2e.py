@@ -13,6 +13,7 @@ needed."""
 
 from __future__ import annotations
 
+import asyncio
 from uuid import UUID
 
 import pytest
@@ -152,6 +153,16 @@ async def _two_orgs_with_system_surfaces(
     *,
     platform: str,
 ):
+    # NOTE: org_a/org_b creation and their surface creation stay sequential
+    # here, unlike the signup/invite/add-member stages elsewhere in this
+    # change. Concurrent org creation was tried and reverted: the first org
+    # created in a fresh DB triggers AuthorizationDataService.seed_permissions()
+    # (app/core/authorization/service.py), a check-then-insert against the
+    # global auth_permissions table with no ON CONFLICT handling. Two
+    # concurrent org creations both see the table empty and both try to
+    # insert the same permission ids, so the second commit fails with
+    # `UniqueViolationError: auth_permissions_pkey`. That's a real product
+    # race, not a test-isolation issue, and out of scope to fix here.
     org_a = E2EScenario(
         owner_client=authenticated_client,
         async_client=async_client,
@@ -192,6 +203,9 @@ async def _set_user_default_surface(
 async def _two_orgs_with_telegram_surfaces(
     authenticated_client: AsyncClient, async_client: AsyncClient, owner_user: dict
 ):
+    # Sequential by necessity, not just by habit -- see the NOTE in
+    # _two_orgs_with_system_surfaces above (concurrent org creation races on
+    # global permission seeding).
     org_a = E2EScenario(
         owner_client=authenticated_client,
         async_client=async_client,
@@ -328,7 +342,28 @@ async def test_shared_system_bot_multi_user_routing_matrix(
     )
     tenant_id = SYSTEM_WHATSAPP_WABA_ID if platform == "WHATSAPP" else None
 
-    single_user = await org_a.create_user(f"{platform.lower()}-single")
+    # The six actors below are independent signups (create_user ==
+    # signup_user via e2e_authz.py) -- provisioning them concurrently up
+    # front is safe by the same argument as create_role_visibility_context
+    # (no shared mutable state, ASGITransport per-request isolation, fresh DB
+    # session per HTTP call). This is distinct from db_session below, which
+    # the DM-preparation calls share and must keep using one at a time.
+    (
+        single_user,
+        default_user,
+        tiebreak_user,
+        continuity_user,
+        duplicate_user,
+        non_member,
+    ) = await asyncio.gather(
+        org_a.create_user(f"{platform.lower()}-single"),
+        org_a.create_user(f"{platform.lower()}-default"),
+        org_a.create_user(f"{platform.lower()}-tiebreak"),
+        org_a.create_user(f"{platform.lower()}-continuity"),
+        org_a.create_user(f"{platform.lower()}-duplicate"),
+        org_a.create_user(f"{platform.lower()}-nonmember"),
+    )
+
     await org_a.add_user_to_pod(user=single_user, role="POD_EDITOR")
     single_external = _external_id(platform, 1)
     await _seed_platform_user(
@@ -352,7 +387,6 @@ async def test_shared_system_bot_multi_user_routing_matrix(
     assert single_ctx.surface_id == UUID(surface_a["id"])
     assert str(single_ctx.pod_id) == org_a.pod_id
 
-    default_user = await org_a.create_user(f"{platform.lower()}-default")
     await org_a.add_user_to_pod(user=default_user, role="POD_EDITOR")
     await org_b.add_user_to_pod(user=default_user, role="POD_EDITOR")
     await _set_user_default_surface(
@@ -383,7 +417,6 @@ async def test_shared_system_bot_multi_user_routing_matrix(
     assert default_ctx.surface_id == UUID(surface_b["id"])
     assert str(default_ctx.pod_id) == org_b.pod_id
 
-    tiebreak_user = await org_a.create_user(f"{platform.lower()}-tiebreak")
     await org_a.add_user_to_pod(user=tiebreak_user, role="POD_EDITOR")
     await org_b.add_user_to_pod(user=tiebreak_user, role="POD_EDITOR")
     tiebreak_external = _external_id(platform, 3)
@@ -408,7 +441,6 @@ async def test_shared_system_bot_multi_user_routing_matrix(
     assert tiebreak_ctx.surface_id == UUID(surface_a["id"])
     assert str(tiebreak_ctx.pod_id) == org_a.pod_id
 
-    continuity_user = await org_a.create_user(f"{platform.lower()}-continuity")
     await org_a.add_user_to_pod(user=continuity_user, role="POD_EDITOR")
     await org_b.add_user_to_pod(user=continuity_user, role="POD_EDITOR")
     continuity_external = _external_id(platform, 4)
@@ -474,7 +506,6 @@ async def test_shared_system_bot_multi_user_routing_matrix(
     assert continuity_third.surface_id == UUID(opposite_surface["id"])
     assert continuity_third.conversation_id != continuity_first.conversation_id
 
-    duplicate_user = await org_a.create_user(f"{platform.lower()}-duplicate")
     await org_a.add_user_to_pod(user=duplicate_user, role="POD_EDITOR")
     duplicate_external = _external_id(platform, 5)
     await _seed_platform_user(
@@ -499,7 +530,6 @@ async def test_shared_system_bot_multi_user_routing_matrix(
     assert isinstance(duplicate_first, SurfaceChatContext)
     assert duplicate_second is None
 
-    non_member = await org_a.create_user(f"{platform.lower()}-nonmember")
     non_member_external = _external_id(platform, 6)
     await _seed_platform_user(
         db_session,

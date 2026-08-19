@@ -669,8 +669,14 @@ async def test_signed_bounce_events_only_deactivate_on_hard_bounce(
     monkeypatch.setattr(
         settings, "auth_bounce_webhook_secret", SecretStr(webhook_secret)
     )
-    hard_bounced = await signup_user(email=f"hard-bounce-{uuid4().hex[:8]}@example.com")
-    soft_bounced = await signup_user(email=f"soft-bounce-{uuid4().hex[:8]}@example.com")
+    # Independent actors -- provisioning them concurrently is safe (see
+    # create_role_visibility_context in e2e_authz.py for the argument: no
+    # shared mutable state, ASGITransport per-request isolation, fresh DB
+    # sessions per call).
+    hard_bounced, soft_bounced = await asyncio.gather(
+        signup_user(email=f"hard-bounce-{uuid4().hex[:8]}@example.com"),
+        signup_user(email=f"soft-bounce-{uuid4().hex[:8]}@example.com"),
+    )
 
     async def send_event(payload: dict) -> Response:
         body = json.dumps(payload, separators=(",", ":")).encode()
@@ -854,10 +860,14 @@ async def test_org_domain_slug_availability_and_suggestions(
     async_client: AsyncClient,
     signup_user,
 ):
-    owner = await signup_user(email=f"owner-{uuid4().hex[:8]}@acme-example.com")
-    coworker = await signup_user(email=f"teammate-{uuid4().hex[:8]}@acme-example.com")
-    outsider = await signup_user(email=f"outsider-{uuid4().hex[:8]}@other-example.com")
-    gmail_user = await signup_user(email=f"personal-{uuid4().hex[:8]}@gmail.com")
+    # Four independent actors -- see create_role_visibility_context in
+    # e2e_authz.py for why provisioning them concurrently is safe.
+    owner, coworker, outsider, gmail_user = await asyncio.gather(
+        signup_user(email=f"owner-{uuid4().hex[:8]}@acme-example.com"),
+        signup_user(email=f"teammate-{uuid4().hex[:8]}@acme-example.com"),
+        signup_user(email=f"outsider-{uuid4().hex[:8]}@other-example.com"),
+        signup_user(email=f"personal-{uuid4().hex[:8]}@gmail.com"),
+    )
 
     owner_headers = _auth_headers(owner["token"])
 
@@ -984,10 +994,22 @@ async def test_org_domain_slug_availability_and_suggestions(
 
     # Every consumer provider, not just the handful the server used to know:
     # claiming one of these would auto-join strangers who share a mail host.
-    for provider in ("yahoo.com", "icloud.com", "proton.me"):
-        provider_user = await signup_user(
-            email=f"personal-{uuid4().hex[:8]}@{provider}"
+    # Signups are independent, so provision them concurrently. The org-create
+    # attempts stay sequential, though -- concurrent org creation was tried
+    # here and reverted (see the NOTE in _two_orgs_with_system_surfaces,
+    # test_multi_pod_resolution_e2e.py, for the confirmed repro): the first
+    # org(s) created against a given DB race on
+    # AuthorizationDataService.seed_permissions()'s global, non-idempotent
+    # permission-table seed, so it's not safe even though these actors are
+    # otherwise independent.
+    providers = ("yahoo.com", "icloud.com", "proton.me")
+    provider_users = await asyncio.gather(
+        *(
+            signup_user(email=f"personal-{uuid4().hex[:8]}@{provider}")
+            for provider in providers
         )
+    )
+    for provider_user in provider_users:
         provider_resp = await async_client.post(
             "/organizations",
             headers=_auth_headers(provider_user["token"]),
@@ -1004,8 +1026,10 @@ async def test_organization_slug_is_globally_unique(
     async_client: AsyncClient,
     signup_user,
 ):
-    first_owner = await signup_user(email=f"slug-a-{uuid4().hex[:8]}@slug-a.example")
-    second_owner = await signup_user(email=f"slug-b-{uuid4().hex[:8]}@slug-b.example")
+    first_owner, second_owner = await asyncio.gather(
+        signup_user(email=f"slug-a-{uuid4().hex[:8]}@slug-a.example"),
+        signup_user(email=f"slug-b-{uuid4().hex[:8]}@slug-b.example"),
+    )
 
     first = await async_client.post(
         "/organizations",
@@ -1029,9 +1053,9 @@ async def test_organization_full_api_flow(
     async_client: AsyncClient,
     signup_user,
 ):
-    owner = await signup_user()
-    invitee = await signup_user()
-    third_user = await signup_user()
+    owner, invitee, third_user = await asyncio.gather(
+        signup_user(), signup_user(), signup_user()
+    )
 
     owner_headers = _auth_headers(owner["token"])
     invitee_headers = _auth_headers(invitee["token"])
@@ -1260,8 +1284,7 @@ async def test_revoked_and_expired_invitations_do_not_block_reinvite(
     signup_user,
     db_session,
 ):
-    owner = await signup_user()
-    invitee = await signup_user()
+    owner, invitee = await asyncio.gather(signup_user(), signup_user())
     owner_headers = _auth_headers(owner["token"])
     invitee_headers = _auth_headers(invitee["token"])
 
@@ -1324,8 +1347,7 @@ async def test_accepted_invitation_does_not_block_reinvite_after_member_removed(
     async_client: AsyncClient,
     signup_user,
 ):
-    owner = await signup_user()
-    invitee = await signup_user()
+    owner, invitee = await asyncio.gather(signup_user(), signup_user())
     owner_headers = _auth_headers(owner["token"])
     invitee_headers = _auth_headers(invitee["token"])
 
@@ -1380,9 +1402,9 @@ async def test_identity_error_translation_payload(
     async_client: AsyncClient,
     signup_user,
 ):
-    owner = await signup_user()
-    outsider = await signup_user()
-    invitee = await signup_user()
+    owner, outsider, invitee = await asyncio.gather(
+        signup_user(), signup_user(), signup_user()
+    )
 
     owner_headers = _auth_headers(owner["token"])
     outsider_headers = _auth_headers(outsider["token"])
@@ -1530,8 +1552,7 @@ async def test_invite_with_pod_id_adds_user_to_pod_on_accept(
     async_client: AsyncClient,
     signup_user,
 ):
-    owner = await signup_user()
-    invitee = await signup_user()
+    owner, invitee = await asyncio.gather(signup_user(), signup_user())
     owner_headers = _auth_headers(owner["token"])
     invitee_headers = _auth_headers(invitee["token"])
 
@@ -1623,8 +1644,7 @@ async def test_revoked_pod_invitation_can_be_reinvited_and_accepted(
     async_client: AsyncClient,
     signup_user,
 ):
-    owner = await signup_user()
-    invitee = await signup_user()
+    owner, invitee = await asyncio.gather(signup_user(), signup_user())
     owner_headers = _auth_headers(owner["token"])
     invitee_headers = _auth_headers(invitee["token"])
 
@@ -1701,8 +1721,7 @@ async def test_invite_with_pod_id_defaults_role_to_POD_USER(
     async_client: AsyncClient,
     signup_user,
 ):
-    owner = await signup_user()
-    invitee = await signup_user()
+    owner, invitee = await asyncio.gather(signup_user(), signup_user())
     owner_headers = _auth_headers(owner["token"])
     invitee_headers = _auth_headers(invitee["token"])
 
@@ -1822,8 +1841,10 @@ async def test_profile_mobile_and_telegram_uniqueness(
     async_client: AsyncClient,
     signup_user,
 ):
-    first = await signup_user(email=f"first-{uuid4().hex[:8]}@uniq-example.com")
-    second = await signup_user(email=f"second-{uuid4().hex[:8]}@uniq-example.com")
+    first, second = await asyncio.gather(
+        signup_user(email=f"first-{uuid4().hex[:8]}@uniq-example.com"),
+        signup_user(email=f"second-{uuid4().hex[:8]}@uniq-example.com"),
+    )
     first_headers = _auth_headers(first["token"])
     second_headers = _auth_headers(second["token"])
 
@@ -1918,8 +1939,10 @@ async def test_concurrent_profile_mobile_claims_allow_exactly_one_owner(
     async_client: AsyncClient,
     signup_user,
 ):
-    first = await signup_user(email=f"claim-first-{uuid4().hex[:8]}@example.com")
-    second = await signup_user(email=f"claim-second-{uuid4().hex[:8]}@example.com")
+    first, second = await asyncio.gather(
+        signup_user(email=f"claim-first-{uuid4().hex[:8]}@example.com"),
+        signup_user(email=f"claim-second-{uuid4().hex[:8]}@example.com"),
+    )
     suffix = f"{int(uuid4().hex[:8], 16) % 10_000_000:07d}"
     canonical = f"+1555{suffix}"
 
@@ -1961,9 +1984,9 @@ async def test_org_public_join_and_policy_update(
     async_client: AsyncClient,
     signup_user,
 ):
-    owner = await signup_user(email=f"owner-{uuid4().hex[:8]}@pubco-example.com")
-    outsider = await signup_user(
-        email=f"outsider-{uuid4().hex[:8]}@elsewhere-example.com"
+    owner, outsider = await asyncio.gather(
+        signup_user(email=f"owner-{uuid4().hex[:8]}@pubco-example.com"),
+        signup_user(email=f"outsider-{uuid4().hex[:8]}@elsewhere-example.com"),
     )
     owner_headers = _auth_headers(owner["token"])
     outsider_headers = _auth_headers(outsider["token"])
