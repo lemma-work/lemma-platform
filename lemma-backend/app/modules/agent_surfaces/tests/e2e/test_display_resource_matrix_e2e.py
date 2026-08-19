@@ -448,8 +448,16 @@ async def test_display_resource_slack_routes_pod_resource_catalog_to_deep_links(
     assert unexpected_failures == []
     assert browser_access_calls == [(UUID(fixed_test_user["id"]), 1800)]
 
+    # `min_count=len(resource_calls)`, not `+ 1`: only the resource cards go
+    # out via chat.postMessage (the "SLACK" bucket). The final text reply
+    # streams instead (chat.startStream/appendStream/stopStream, a separate
+    # "SLACK_STREAM_APPEND" bucket) and is verified below via
+    # wait_for_slack_text, which checks both transports. A `+ 1` here is
+    # unreachable and previously burned the full timeout on every run,
+    # silently, because wait_for_messages used to soft-return its
+    # under-count on timeout instead of failing.
     slack_messages = await wait_for_messages(
-        message_store, "SLACK", min_count=len(resource_calls) + 1
+        message_store, "SLACK", min_count=len(resource_calls)
     )
     rendered = json.dumps(slack_messages)
     # Every Lemma-owned resource gets a frontend deep link. BROWSER is the one
