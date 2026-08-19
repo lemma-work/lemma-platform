@@ -45,9 +45,42 @@ def test_opt_in_workflows_do_not_run_on_every_pr_sync() -> None:
 
     assert "types: [labeled, synchronize" not in e2e
     assert "types: [labeled, synchronize" not in windows
-    assert "github.event.label.name == 'run-e2e'" in e2e
     assert "github.event.label.name == 'surface-live'" in e2e
     assert "github.event.label.name == 'windows-ci'" in windows
+
+
+def test_backend_e2e_triggers_directly_without_a_label() -> None:
+    """backend-e2e is the one opt-in-turned-mandatory exception here.
+
+    It used to be gated behind a `run-e2e` label -- exactly the shape the
+    sibling test above still requires of surface-live-smoke and windows-cli.
+    It deliberately dropped that gate to run directly on every PR push
+    instead, in parallel with "CI" rather than waiting on it (fast enough now
+    at ~5-6 min, and a future required-check gate can't tolerate a workflow_run
+    cascade turning a failed upstream run into a *skipped*, not failed, check).
+    Pinning the absence of a label check here means a future edit that
+    reintroduces one gets caught, the same way the sibling test catches it for
+    the workflows still meant to have one.
+    """
+    e2e = _read(".github/workflows/e2e.yml")
+    job = e2e.split("\n  backend-e2e:\n", 1)[1].split("\n  aggregate-coverage:", 1)[0]
+    # Just the gate, not the whole job body -- the checkout step's ref:
+    # fallback and its comment mention workflow_run harmlessly (it's simply
+    # empty on any other trigger), which isn't the invariant this checks.
+    condition = job.split("if: >-", 1)[1].split("runs-on:", 1)[0]
+
+    # Logic, not prose: this job's own comments are free to say "label" (and
+    # do elsewhere in the job body), so check the expression shapes a
+    # label-gate or a workflow_run dependency would actually use, not the
+    # bare word.
+    assert "event.label" not in condition
+    assert "== 'labeled'" not in condition
+    assert "workflow_run" not in condition
+    assert (
+        "opened" in condition
+        and "synchronize" in condition
+        and "reopened" in condition
+    )
 
 
 def test_expensive_security_jobs_are_change_scoped() -> None:
