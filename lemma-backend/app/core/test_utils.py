@@ -330,15 +330,33 @@ def get_postgres_container() -> Generator[LemmaPostgresContainer, None, None]:
     """
     Starts a PostgreSQL container and yields it.
     Can be used in pytest fixtures with scope="session".
+
+    Only used serially (no xdist, e.g. ``make test-connection-scope``'s
+    ``-m connection_scope`` has no ``-n``) -- ``shared_postgres``'s xdist path
+    goes through ``start_shared_postgres`` instead. Named and networked the
+    same way regardless: ``get_postgres_uri_from_another_container`` needs
+    ``container.container_id`` to be a real Docker name, not the bare hex id
+    an unqualified ``docker run`` would otherwise leave it as, and SuperTokens
+    needs ``SHARED_E2E_NETWORK_NAME`` to already exist to join it.
     """
+    name = f"lemma-e2e-postgres-{hashlib.sha256(f'{os.getpid()}-{time.time()}'.encode()).hexdigest()[:10]}"
+    _ensure_docker_network(SHARED_E2E_NETWORK_NAME)
     container = (
         LemmaPostgresContainer()
         .with_env("POSTGRES_USER", POSTGRES_USER)
         .with_env("POSTGRES_PASSWORD", POSTGRES_PASSWORD)
         .with_env("POSTGRES_DB", POSTGRES_DB)
+        .with_run_args("--name", name, "--network", SHARED_E2E_NETWORK_NAME)
     )
 
     with container as postgres:
+        # __enter__ just overwrote container_id with `docker run`'s stdout --
+        # the container's full hex id, not the --name given above. Docker's
+        # embedded DNS resolves the name, not that id, so this must be reset
+        # before anything (SuperTokens, via get_postgres_uri_from_another_
+        # container) tries to reach this container by it -- the same reset
+        # shared_postgres's xdist path already does for the same reason.
+        postgres.container_id = name
         _wait_for_postgres(postgres)
         yield postgres
 
