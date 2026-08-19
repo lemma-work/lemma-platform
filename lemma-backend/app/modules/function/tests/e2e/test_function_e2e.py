@@ -2641,6 +2641,35 @@ async def test_execute_function_as_workload_runs_under_the_agent_delegated_conte
         },
     )
 
+    # execute_function_as_workload authorizes the AGENT principal against a
+    # real per-resource grant (ResourcePermissionGrantModel) -- exactly the
+    # grant callable_tool_factory.py relies on when it exposes a function as
+    # an agent tool. A bare uuid4() principal has none, so build one for
+    # real: create the agent, then grant it function.execute through the
+    # agent-permissions endpoint (the resource-access-grant endpoint only
+    # accepts ROLE/POD_MEMBER grantees, not AGENT).
+    agent_name = f"workload_agent_{uuid4().hex[:8]}"
+    agent_response = await authenticated_client.post(
+        f"/pods/{pod_id}/agents",
+        json={"name": agent_name, "instruction": "Answer briefly."},
+    )
+    assert agent_response.status_code == status.HTTP_201_CREATED, agent_response.text
+    agent_id = UUID(agent_response.json()["id"])
+
+    grant_response = await authenticated_client.put(
+        f"/pods/{pod_id}/agents/{agent_name}/permissions",
+        json={
+            "grants": [
+                {
+                    "resource_type": "function",
+                    "resource_name": func_name,
+                    "permission_ids": [Permissions.FUNCTION_EXECUTE],
+                }
+            ]
+        },
+    )
+    assert grant_response.status_code == status.HTTP_200_OK, grant_response.text
+
     use_cases = build_function_use_cases(
         SessionUnitOfWorkFactory(db_manager.session_factory)
     )
@@ -2650,7 +2679,7 @@ async def test_execute_function_as_workload_runs_under_the_agent_delegated_conte
         input_data={"value": 5},
         user_id=user_id,
         principal_type="AGENT",
-        principal_id=uuid4(),
+        principal_id=agent_id,
         delegation_scope=frozenset([Permissions.FUNCTION_EXECUTE]),
         delegation_actor_name="Test Agent",
     )
