@@ -104,6 +104,18 @@ async def test_outlook_email_surface_handles_trigger_payload_and_replies(
     assert "E2E agent reply [OUTLOOK]" in json.dumps(reply["payload"])
 
 
+# The full createReply/PATCH/attach/send draft-lifecycle sequence in
+# service.py's "Native (Graph) path" is real production code, but it is not
+# reachable through this e2e surface: AgentSurfaceService requires every email
+# surface's connected account to be Composio-backed
+# (_ensure_composio_email_account), and a Composio-backed account's resolved
+# credentials always carry a connection_id, which makes
+# is_composio_credentials() true and routes reply_email through the Composio
+# branch instead. The draft path is exercised directly at the unit level in
+# test_email_tools.py::test_outlook_reply_email_sends_graph_file_attachments,
+# which builds the toolset with a genuinely non-Composio credentials dict.
+
+
 class _FakeScheduleManager:
     async def create_schedule(self, *, account, app_trigger, config) -> str:
         return f"e2e-{app_trigger.id}"
