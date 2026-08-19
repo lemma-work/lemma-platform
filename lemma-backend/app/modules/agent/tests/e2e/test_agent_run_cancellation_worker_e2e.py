@@ -57,6 +57,7 @@ from app.modules.agent.tests.e2e.system_lemma_helpers import (
     system_lemma_available,
     system_lemma_env_overlay,
 )
+from app.modules.test_support.e2e.waiters import eventually, wait_for_status
 
 pytestmark = [pytest.mark.e2e, pytest.mark.worker, pytest.mark.slow]
 
@@ -242,14 +243,20 @@ async def _dispatch_agent_run(
 
 
 async def _wait_for_job_status(
-    job_id: str, status: TaskStatus, *, queue_name: str, attempts: int = 200
-) -> bool:
+    job_id: str,
+    status: TaskStatus,
+    *,
+    queue_name: str,
+    timeout_seconds: float = 20.0,
+) -> None:
     async with create_streaq_client(queue_name=queue_name) as client:
-        for _ in range(attempts):
-            if await client.status_by_id(job_id) == status:
-                return True
-            await asyncio.sleep(0.1)
-    return False
+        await eventually(
+            label=f"job {job_id} to reach {status}",
+            probe=lambda: client.status_by_id(job_id),
+            done=lambda current: current == status,
+            timeout_seconds=timeout_seconds,
+            interval_seconds=0.1,
+        )
 
 
 @pytest.mark.skipif(not system_lemma_available(), reason=SYSTEM_LEMMA_SKIP_REASON)
@@ -304,9 +311,9 @@ async def test_sigterm_midrun_shuts_down_cleanly_and_finalizes_run(
 
     # Wait until the worker is actually executing the run, then interrupt it
     # mid-flight (the harness is in an LLM call, with the anyio scope active).
-    assert await _wait_for_job_status(
+    await _wait_for_job_status(
         f"agent-run:{run_id}", TaskStatus.RUNNING, queue_name=queue_name
-    ), "run never reached RUNNING on the worker"
+    )
     await asyncio.sleep(0.5)
 
     proc.terminate()  # SIGTERM
@@ -347,14 +354,22 @@ async def test_sigterm_midrun_shuts_down_cleanly_and_finalizes_run(
     # 3) The interrupted run is finalized (not stuck RUNNING) — the grace_period
     #    lets the shielded finalization commit before engine disposal.
     terminal_values = {s.value for s in TERMINAL_AGENT_RUN_STATUSES}
-    final_status = None
-    for _ in range(100):
+
+    async def probe() -> dict:
         db_session.expire_all()
         run_model = await db_session.get(AgentRunModel, run_id)
-        final_status = run_model.status if run_model else None
-        if final_status in terminal_values:
-            break
-        await asyncio.sleep(0.1)
-    assert final_status in terminal_values, (
-        f"run left non-terminal after SIGTERM: status={final_status}"
+        return {"status": run_model.status if run_model else None}
+
+    # failed=set(): a SIGTERM mid-run very plausibly finalizes to FAILED, which
+    # is just as much a legitimate terminal outcome here as COMPLETED/STOPPED --
+    # the whole point of this probe is "did it reach ANY terminal status", not
+    # a particular one. wait_for_status's default fail-fast on FAILED would
+    # break the common (SIGTERM -> FAILED) case instead of accepting it as done.
+    await wait_for_status(
+        label=f"run {run_id} to leave RUNNING after SIGTERM",
+        probe=probe,
+        expected=terminal_values,
+        failed=set(),
+        timeout_seconds=10.0,
+        interval_seconds=0.1,
     )
