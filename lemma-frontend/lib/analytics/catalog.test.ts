@@ -83,7 +83,17 @@ describe("declared events are emitted or named as gaps", () => {
         // `client.error` is raised by app/global-error.tsx, the root error
         // boundary — the only place that can see an error which escaped
         // everything below it.
-        const emitted = ["share_link.viewed", "import.started", "client.error"];
+        const emitted = [
+            "share_link.viewed",
+            "import.started",
+            "client.error",
+            // lib/analytics/onboarding.ts is the only emitter of these five.
+            "onboarding.step_viewed",
+            "onboarding.pod_ready",
+            "activation.surface_connected",
+            "activation.app_opened",
+            "activation.member_joined",
+        ];
         const accounted = new Set([...emitted, ...KNOWN_UNEMITTED]);
         const unaccounted = Object.keys(CLIENT_CATALOG).filter((n) => !accounted.has(n as never));
         expect(unaccounted).toEqual([]);

@@ -17,7 +17,7 @@ from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.modules.agent.domain.agent_host import NEW_SESSION_ONLY, AgentHostRunSpec
 from app.modules.agent.domain.context import AgentContext
-from app.modules.agent.domain.entities import Agent, Conversation, Message
+from app.modules.agent.domain.entities import Agent, AgentRun, Conversation, Message
 from app.modules.agent.domain.prompts import load_agent_host_runtime_prompt
 from app.modules.agent.domain.value_objects import HarnessOptions
 from app.modules.agent.infrastructure.agent_host_channels import poke_host
@@ -27,6 +27,7 @@ from app.modules.agent.infrastructure.agent_host_dispatch_repository import (
 from app.modules.agent.infrastructure.agent_host_repository import (
     AgentHostRepository,
 )
+from app.modules.agent.infrastructure.repositories import ConversationRepository
 from app.modules.agent.infrastructure import agent_host_session_memory
 from app.modules.agent.infrastructure.agent_host_repository_common import (
     AgentHostRepositoryError,
@@ -55,9 +56,9 @@ logger = get_logger(__name__)
 
 
 async def refresh_credential(
-*,
-uow_factory: UnitOfWorkFactory,
-agent_run_id: UUID,
+    *,
+    uow_factory: UnitOfWorkFactory,
+    agent_run_id: UUID,
     ctx: AgentContext,
     options: HarnessOptions,
     agent: Agent,
@@ -89,9 +90,7 @@ agent_run_id: UUID,
         if encrypted is None:
             raise RuntimeError("could not encrypt the refreshed MCP configuration")
         async with uow_factory() as uow:
-            command = await AgentHostDispatchRepository(
-                uow
-            ).enqueue_credential_refresh(
+            command = await AgentHostDispatchRepository(uow).enqueue_credential_refresh(
                 run_id=agent_run_id,
                 encrypted_mcp_payload=encrypted,
             )
@@ -110,11 +109,18 @@ agent_run_id: UUID,
     return token_expires_at(mcp)
 
 
+def _resumed_tool_call_id(run: AgentRun | None) -> str | None:
+    """Which paused tool call this run was started to answer, if any."""
+    metadata = (run.metadata if run is not None else None) or {}
+    value = metadata.get("resumed_tool_call_id")
+    return value if isinstance(value, str) and value else None
+
+
 async def enqueue_run(
-*,
-uow_factory: UnitOfWorkFactory,
-event_timeout_seconds: float,
-agent: Agent,
+    *,
+    uow_factory: UnitOfWorkFactory,
+    event_timeout_seconds: float,
+    agent: Agent,
     conversation: Conversation,
     messages: Sequence[Message],
     ctx: AgentContext,
@@ -141,6 +147,10 @@ agent: Agent,
         host_id = harness.host_id
         harness_key = harness.harness_key
         config_revision = harness.config_revision
+        # Set only on a run started to answer a pausing tool call. Read from
+        # the run rather than passed in, because the run row is where the
+        # resume recorded it and a second copy could only ever disagree.
+        run = await ConversationRepository(uow).get_agent_run(agent_run_id)
 
     payload = run_start_payload(
         agent=agent,
@@ -150,6 +160,7 @@ agent: Agent,
         agent_run_id=agent_run_id,
         runtime_instructions=load_agent_host_runtime_prompt(),
         carries_history=resume_session_id is None,
+        resumed_tool_call_id=_resumed_tool_call_id(run),
     )
     prompt = _json_object(payload.get("prompt"))
     mcp = await mcp_payload(

@@ -22,7 +22,11 @@ from app.modules.agent.domain.events import AgentRunStartedEvent
 from app.modules.agent.domain.pausing_tools import (
     PAUSING_TOOL_NAMES as _PAUSING_TOOL_NAMES_DOMAIN,
 )
-from app.modules.agent.domain.value_objects import MessageDraft, MessageKind
+from app.modules.agent.domain.value_objects import (
+    AgentRunStatus,
+    MessageDraft,
+    MessageKind,
+)
 from app.modules.agent.services.realtime import (
     message_payload,
     publish_conversation_event,
@@ -82,6 +86,24 @@ class PauseResumeMixin:
                 message_payload(paused_run_id, message_to_payload(saved_return)),
             )
         return True
+
+    async def resume_would_duplicate_a_live_turn(self, paused_run_id: UUID) -> bool:
+        """Is the "paused" run actually still running?
+
+        A remote harness's `ask_user` / `request_approval` parks rather than
+        pausing: the run keeps running while the host's MCP bridge holds the
+        tool response open, and the synthesized return appended by the
+        resolution is exactly what that bridge is polling for. The turn carries
+        on the moment it reads it, so resuming would put two runs on one turn.
+
+        Keyed on the run still running rather than on a marker in the call's
+        arguments, unlike the ACP permission path: those arguments come from the
+        model, not from Lemma, so there is nothing of ours to read back. It is
+        also the honest condition -- a run still running is precisely what makes
+        a resume wrong.
+        """
+        run = await self.conversation_repository.get_agent_run(paused_run_id)
+        return run is not None and run.status == AgentRunStatus.RUNNING
 
     async def start_resume_run_if_ready(
         self,
@@ -183,4 +205,3 @@ class PauseResumeMixin:
             and message.tool_call_id is not None
             and message.tool_call_id not in resolved
         ]
-
