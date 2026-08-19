@@ -405,6 +405,16 @@ def get_supertokens_container(
         container = container.with_env(
             "POSTGRESQL_CONNECTION_URI", postgres_connection_uri
         )
+        # get_postgres_uri_from_another_container() points this URI at
+        # host.docker.internal. Docker Desktop (Mac/Windows) resolves that name
+        # for free; native Linux Docker -- what CI runners use -- does not,
+        # unless the container is explicitly told to map it. Without this, the
+        # core never reaches Postgres, never answers /hello below, and every
+        # test in every shard times out waiting on this fixture (confirmed:
+        # this exact failure on CI, passing locally on Docker Desktop).
+        container = container.with_run_args(
+            "--add-host", "host.docker.internal:host-gateway"
+        )
 
     with container as st:
         # Wait for SuperTokens to be ready by polling the health endpoint
@@ -562,9 +572,7 @@ def start_shared_kreuzberg(name: str) -> str:
 
 def remove_named_container(name: str) -> None:
     """Force-remove a container by name, and its anonymous volumes (best effort)."""
-    subprocess.run(
-        ["docker", "rm", "-f", "-v", name], check=False, capture_output=True
-    )
+    subprocess.run(["docker", "rm", "-f", "-v", name], check=False, capture_output=True)
 
 
 SHARED_KREUZBERG_NAME = "lemma-e2e-kreuzberg-shared"
@@ -797,11 +805,10 @@ def get_postgres_uri_from_another_container(
     for this process's own connections, wrong on both counts for a sibling
     container: ``127.0.0.1`` inside a container means the container itself,
     and SuperTokens' Java core doesn't understand a SQLAlchemy dialect
-    string. Use ``host.docker.internal`` (already relied on elsewhere in this
-    file for the same container-to-host-published-port need, e.g.
-    ``workspace_callback_api_url``; confirmed reachable from a sibling
-    container against a ``-p 127.0.0.1::PORT``-published port) and the plain
-    ``postgresql://`` scheme SuperTokens' docs require (``postgres://``
+    string. Use ``host.docker.internal`` (the same pattern
+    ``test_support/e2e/runtime.py``'s workspace provider config already uses
+    for its callback URL, via ``add_host_gateway``/``host_alias``) and the
+    plain ``postgresql://`` scheme SuperTokens' docs require (``postgres://``
     fails at its startup).
     """
     port = container.get_exposed_port(5432)
