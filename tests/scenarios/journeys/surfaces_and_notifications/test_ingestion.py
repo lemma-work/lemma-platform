@@ -94,7 +94,7 @@ async def test_an_unknown_sender_is_told_how_to_get_access(world, telegram):
 
     replies = await eventually(
         lambda: _sent(fake, chat_id),
-        lambda messages: bool(messages),
+        bool,
         describe="the agent to reply in the Telegram chat",
         # This waits on a queued agent run, and the whole suite shares one
         # worker. CI shards by journey so the worker is never this loaded there;
@@ -134,7 +134,7 @@ async def test_an_unsigned_delivery_is_rejected(world, telegram):
     )
     await never(
         lambda: _sent(fake, chat_id),
-        lambda messages: bool(messages),
+        bool,
         describe="an answer to an unsigned delivery",
         within=3.0,
     )
@@ -172,7 +172,7 @@ async def test_a_repeated_delivery_is_answered_once(world, telegram):
 
     await eventually(
         lambda: _sent(fake, chat_id),
-        lambda messages: bool(messages),
+        bool,
         describe="the agent to reply at least once",
         timeout=60.0,
     )
@@ -208,7 +208,7 @@ async def test_a_raced_delivery_is_answered_once(world, telegram):
 
     await eventually(
         lambda: _sent(fake, chat_id),
-        lambda messages: bool(messages),
+        bool,
         describe="the agent to reply at least once",
         timeout=60.0,
     )

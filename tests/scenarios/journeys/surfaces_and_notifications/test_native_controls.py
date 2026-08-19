@@ -111,13 +111,13 @@ async def _their_conversation(alice, pod, fake, handle, chat_id):
     )
     threads = await eventually(
         lambda: alice.conversations_in(pod),
-        lambda found: bool(found),
+        bool,
         describe="the surface to open a conversation for the sender",
         timeout=60.0,
     )
     await eventually(
         lambda: _replies(fake, chat_id),
-        lambda messages: bool(messages),
+        bool,
         describe="the agent to answer the first message",
         timeout=60.0,
     )

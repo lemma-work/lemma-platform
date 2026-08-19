@@ -94,7 +94,7 @@ async def test_a_deleted_pod_stops_answering_its_surfaces(pod_doing_things):
 
     await never(
         lambda: _sent_to(fake, chat_id),
-        lambda messages: bool(messages),
+        bool,
         describe="a deleted pod replying on its old surface",
         within=8.0,
     )

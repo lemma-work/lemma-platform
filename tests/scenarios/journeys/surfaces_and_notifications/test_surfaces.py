@@ -91,7 +91,9 @@ async def test_an_outsider_cannot_touch_surfaces(world, pod):
 @proves("PS-SURF-010")
 @covers("surface.webhook.verify")
 async def test_webhook_verification_needs_no_session(world, pod):
-    alice, _the_pod = pod
+    # `pod` is requested for its side effect: a surface must exist for the
+    # platform's challenge to have anything to reach. Nothing in it is read.
+    del pod
 
     # No Authorization header at all: a platform cannot sign in.
     anonymous = await world.new_person("anonymous", sign_up=False)

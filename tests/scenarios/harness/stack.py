@@ -230,6 +230,9 @@ def _wait_http(url: str, timeout: float = 120) -> None:
                 if response.status == 200:
                     return
         except (urllib.error.URLError, OSError):
+            # Not up yet. Both mean "nothing answered": connection refused
+            # while the port is still closed, and a read timeout while the
+            # process is binding. Neither is a failure until the deadline.
             pass
         time.sleep(0.5)
     raise StackError(f"{url} did not become ready within {timeout}s")

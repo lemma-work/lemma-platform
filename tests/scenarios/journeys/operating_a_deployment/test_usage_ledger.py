@@ -51,7 +51,7 @@ async def test_a_run_is_always_recorded(after_a_run):
 
     recorded = await eventually(
         lambda: _events(alice, organization),
-        lambda events: bool(events),
+        bool,
         describe="the run to reach the usage ledger",
         timeout=60.0,
     )
@@ -79,7 +79,7 @@ async def test_a_usage_record_is_attributed(after_a_run):
 
     recorded = await eventually(
         lambda: _events(alice, organization),
-        lambda events: bool(events),
+        bool,
         describe="the run to reach the usage ledger",
         timeout=60.0,
     )
@@ -154,7 +154,7 @@ async def test_a_failed_run_is_recorded_too(world):
 
     recorded = await eventually(
         lambda: _events(alice, organization),
-        lambda events: bool(events),
+        bool,
         describe="a run that did not get what it wanted to reach the ledger",
         timeout=60.0,
     )

@@ -37,7 +37,6 @@ from dataclasses import dataclass, field
 
 import pytest
 
-_MARKS = ("journey", "capability", "scenario")
 
 _OUTCOME_GLYPH = {
     "passed": "✓",

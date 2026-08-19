@@ -53,7 +53,7 @@ async def test_a_record_change_fires_a_schedule(watched_table):
 
     fired = await eventually(
         lambda: _runs(alice, schedule, pod),
-        lambda runs: bool(runs),
+        bool,
         describe="the datastore schedule to fire",
         timeout=60.0,
     )
@@ -77,7 +77,7 @@ async def test_an_unwatched_operation_does_not_fire(watched_table):
 
     await never(
         lambda: _runs(alice, schedule, pod),
-        lambda runs: bool(runs),
+        bool,
         describe="a firing from an operation the schedule does not watch",
         within=8.0,
     )
@@ -102,7 +102,7 @@ async def test_another_table_does_not_fire(watched_table):
 
     await never(
         lambda: _runs(alice, schedule, pod),
-        lambda runs: bool(runs),
+        bool,
         describe="a firing from a table the schedule does not watch",
         within=8.0,
     )
@@ -125,7 +125,7 @@ async def test_a_paused_schedule_does_not_fire(watched_table):
 
     await never(
         lambda: _runs(alice, schedule, pod),
-        lambda runs: bool(runs),
+        bool,
         describe="a firing from a paused schedule",
         within=8.0,
     )

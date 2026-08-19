@@ -112,7 +112,7 @@ async def test_a_real_bot_answers(bot_pod):
 
     answered = await eventually(
         replies,
-        lambda found: bool(found),
+        bool,
         describe="the bot to answer in the real chat",
         timeout=120.0,
     )

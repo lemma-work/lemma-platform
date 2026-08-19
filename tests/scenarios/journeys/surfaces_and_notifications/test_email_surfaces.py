@@ -155,7 +155,7 @@ async def test_mail_reaches_the_pod_that_owns_the_address(mailbox):
     # except nobody is told.
     threads = await eventually(
         lambda: alice.conversations_in(pod),
-        lambda found: bool(found),
+        bool,
         describe="the email to open a conversation in the pod that owns the address",
         timeout=120.0,
     )
@@ -189,7 +189,7 @@ async def test_mail_to_an_unknown_address_starts_nothing(mailbox):
 
     await never(
         lambda: _sent_to(fake, alice.email),
-        lambda sent: bool(sent),
+        bool,
         describe="a reply to mail addressed to no surface",
         within=8.0,
     )

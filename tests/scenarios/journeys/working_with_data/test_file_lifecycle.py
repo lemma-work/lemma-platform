@@ -128,7 +128,7 @@ async def test_supplied_markdown_is_used(pod_with_file):
 
     children = await eventually(
         lambda: alice.children_of("/supplied.pdf", in_pod=pod),
-        lambda items: bool(items),
+        bool,
         describe="the supplied markdown to be stored as a child",
         timeout=45.0,
     )

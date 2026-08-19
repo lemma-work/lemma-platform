@@ -59,11 +59,15 @@ async def test_the_google_connect_flow_is_configured(world):
     )
 
     where = started.json().get("redirect_url") or started.json().get("url") or ""
-    assert "accounts.google.com" in where, (
+    # The host, not a substring of the whole URL: "accounts.google.com" appears
+    # in `https://elsewhere.example/?next=accounts.google.com` too, and that is
+    # exactly the redirect this assertion exists to catch.
+    destination = urlparse(where)
+    assert destination.hostname == "accounts.google.com", (
         f"the person is not being sent to Google: {where[:200]}"
     )
 
-    query = parse_qs(urlparse(where).query)
+    query = parse_qs(destination.query)
     sent_client = (query.get("client_id") or [""])[0]
     assert sent_client == GOOGLE.value("CONNECTOR_GOOGLE_CLIENT_ID"), (
         "the flow uses a different client from the one this deployment is "
