@@ -25,6 +25,10 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import {
+  trackMemberJoined,
+  trackPodReady,
+} from "@/lib/analytics/onboarding";
+import {
   type Organization,
   type OrganizationInvitation,
 } from "@/lib/types";
@@ -129,8 +133,14 @@ const PROVIDER_PRESETS: ProviderPreset[] = [
 
 export function InvitationsStep({
   invitations,
+  signupAt,
+  ownerEmail,
 }: {
   invitations: OrganizationInvitation[];
+  /** Profile `created_at`, so activation can be reported against signup. */
+  signupAt?: string | null;
+  /** Whose skip this is. Without it the flag would mute the next account too. */
+  ownerEmail?: string | null;
 }) {
   const router = useRouter();
   const firstInvitation = invitations[0];
@@ -143,7 +153,11 @@ export function InvitationsStep({
     hasSubmittedRef.current = true;
     acceptInvitation(firstInvitation.id, {
       onSuccess: (response) => {
-        markOnboardingSkippedFirstPod();
+        markOnboardingSkippedFirstPod(ownerEmail);
+        // The invited teammate is the pod's second member: this is the only
+        // place the client witnesses a pod actually becoming shared.
+        trackMemberJoined(signupAt);
+        trackPodReady("invite", signupAt);
         const destination =
           response.redirect_uri || firstInvitation.redirect_uri || "/";
 
@@ -159,7 +173,7 @@ export function InvitationsStep({
         router.replace(`/invitations/${firstInvitation.id}/accept`);
       },
     });
-  }, [acceptInvitation, firstInvitation, router]);
+  }, [acceptInvitation, firstInvitation, ownerEmail, router, signupAt]);
 
   return (
     <SetupShell>

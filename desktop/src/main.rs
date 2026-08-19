@@ -3708,11 +3708,46 @@ fn current_mode(app: &AppHandle) -> String {
 /// navigation and download policies, the theme and accent listeners, the
 /// vibrancy material, and the initialization script that carries the
 /// desktop context into every document the window later navigates to.
+/// Where a window was, so the one replacing it can be there too.
+///
+/// A rebuilt window used to come back at the OS default placement in the default
+/// size, because nothing carried this across. Moving somebody's window is not a
+/// thing switching servers is entitled to do.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct WindowPlacement {
+    position: tauri::PhysicalPosition<i32>,
+    size: tauri::PhysicalSize<u32>,
+}
+
+fn placement_of(window: &tauri::WebviewWindow) -> Option<WindowPlacement> {
+    Some(WindowPlacement {
+        position: window.outer_position().ok()?,
+        size: window.inner_size().ok()?,
+    })
+}
+
 fn build_main_window(
     handle: &AppHandle,
     mode: &str,
     initial_url: WebviewUrl,
     partitioned: bool,
+) -> tauri::Result<tauri::WebviewWindow> {
+    build_main_window_at(handle, mode, initial_url, partitioned, false, None)
+}
+
+fn build_main_window_at(
+    handle: &AppHandle,
+    mode: &str,
+    initial_url: WebviewUrl,
+    partitioned: bool,
+    // True only for a rebuild: a window already existed and the user was looking
+    // at it, so this one stays off screen until it has something to show.
+    replacing: bool,
+    // Where that window was, when it could be asked. Absent is not a reason to
+    // guess -- an unplaced window lands where the OS puts it, which is what
+    // happened before and is still better than moving somebody's window
+    // somewhere arbitrary.
+    placement: Option<WindowPlacement>,
 ) -> tauri::Result<tauri::WebviewWindow> {
     let main_builder = WebviewWindowBuilder::new(handle, "main", initial_url)
         .title("Lemma")
@@ -3798,6 +3833,33 @@ fn build_main_window(
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     let _ = partitioned;
 
+    // A replacement window is built where the old one stood and stays off screen
+    // until it has something to show. Built visible, the swap is a window
+    // vanishing, a gap, and a different window appearing at the OS default
+    // placement with a blank page loading in it.
+    let main_builder = if replacing {
+        main_builder.visible(false).on_page_load(|window, payload| {
+            if matches!(payload.event(), tauri::webview::PageLoadEvent::Finished) {
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        })
+    } else {
+        main_builder
+    };
+    let main_builder = match placement {
+        Some(placement) => main_builder
+            .position(
+                f64::from(placement.position.x),
+                f64::from(placement.position.y),
+            )
+            .inner_size(
+                f64::from(placement.size.width),
+                f64::from(placement.size.height),
+            ),
+        None => main_builder,
+    };
+
     let main = main_builder.build()?;
 
     // The builder had to guess an appearance before the window existed.
@@ -3859,8 +3921,23 @@ fn build_main_window(
         });
     }
 
-    main.show()?;
-    main.set_focus()?;
+    if replacing {
+        // Shown by the page-load hook once there is something to show, and by
+        // this backstop if that never arrives. An invisible window is worse than
+        // a flicker, so the deadline gives up rather than leaving the app with
+        // no interface -- the same shape as the label wait above it.
+        let pending = main.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(REPLACEMENT_REVEAL_TIMEOUT);
+            if !pending.is_visible().unwrap_or(false) {
+                let _ = pending.show();
+                let _ = pending.set_focus();
+            }
+        });
+    } else {
+        main.show()?;
+        main.set_focus()?;
+    }
     if std::env::var("LEMMA_DESKTOP_DEVTOOLS").as_deref() == Ok("1") {
         main.open_devtools();
     }
@@ -3952,6 +4029,13 @@ impl Drop for ExitGuard {
 /// milliseconds, and this runs on a blocking thread during a server switch the
 /// user has already been told will take a moment -- so waiting costs nothing
 /// anyone can perceive, while giving up early costs them the entire interface.
+/// How long a replacement window stays hidden waiting for its first paint.
+///
+/// A ceiling, not a wait anyone should reach: the page it opens on is local and
+/// paints in milliseconds. It exists because the alternative to giving up is an
+/// app with no window, which is the failure this whole path already has one
+/// backstop for.
+const REPLACEMENT_REVEAL_TIMEOUT: Duration = Duration::from_secs(3);
 const LABEL_RELEASE_TIMEOUT: Duration = Duration::from_secs(2);
 const LABEL_RELEASE_POLL: Duration = Duration::from_millis(10);
 
@@ -4002,6 +4086,8 @@ fn rebuild_main_window_for_mode(app: &AppHandle, mode: &str) {
     let shell: State<Shell> = app.state();
     shell.swapping_window.store(true, Ordering::Release);
     let _reset = ExitGuard(app.clone());
+    // Read while there is still a window to read it from.
+    let placement = placement_of(&existing);
     if let Err(error) = existing.destroy() {
         append_install_log(&format!(
             "[connection-mode] could not close the previous server's window: {error}"
@@ -4030,7 +4116,10 @@ fn rebuild_main_window_for_mode(app: &AppHandle, mode: &str) {
     // daemon first. Starting anywhere else would show one server's page against
     // the other's storage for as long as that takes.
     let initial = WebviewUrl::App("index.html".into());
-    if let Err(error) = build_main_window(app, mode, initial.clone(), true) {
+    // `Some` even when the geometry could not be read: it is what marks this a
+    // replacement, and a replacement is hidden until it paints whether or not it
+    // also knows where to sit.
+    if let Err(error) = build_main_window_at(app, mode, initial.clone(), true, true, placement) {
         // Falling back to the shared store, not to nothing. Per-webview storage
         // is the newer half of this: macOS needs 14 (which the bundle already
         // requires) and Windows gives each webview its own WebView2 environment,
@@ -4047,7 +4136,7 @@ fn rebuild_main_window_for_mode(app: &AppHandle, mode: &str) {
             LABEL_RELEASE_TIMEOUT,
             LABEL_RELEASE_POLL,
         );
-        if let Err(error) = build_main_window(app, mode, initial, false) {
+        if let Err(error) = build_main_window_at(app, mode, initial, false, true, placement) {
             append_install_log(&format!(
                 "[connection-mode] could not reopen the window for {mode}: {error}"
             ));
@@ -5856,6 +5945,49 @@ mod tests {
     }
 
     #[test]
+    fn local_settings_says_which_integrations_are_set_up() {
+        // Every row's badge read "Optional" whether or not a credential had been
+        // saved, and the only signal that one had been was the placeholder
+        // inside the input -- grey, and invisible until the drawer was opened.
+        // Somebody who had just saved a Deepgram key had no way to see it land.
+        let markup = include_str!("../ui/control.html");
+        let script = include_str!("../ui/control.js");
+        let style = include_str!("../ui/control.css");
+
+        assert!(
+            !markup.contains(">Optional<"),
+            "a badge that says the same word on every row carries nothing"
+        );
+        assert!(
+            markup.contains("data-config-state"),
+            "each row has a slot for its real state"
+        );
+        // Twice: the definition, and a call. Asserting the function merely
+        // exists passes just as happily when nothing invokes it, which is how a
+        // helper ships dead.
+        assert!(
+            script.matches("paintConfigStates(presence)").count() >= 2,
+            "the painter is defined but never called from the fill pass"
+        );
+        // Read off the row's own fields, so a row added to the markup is
+        // described without anyone remembering a table in the script.
+        assert!(
+            script.contains("input[data-secret]"),
+            "presence of a saved secret is part of being configured"
+        );
+        assert!(
+            style.contains(r#"[data-config-state="configured"]"#),
+            "a configured row has to look different, not just read differently"
+        );
+        // A different axis, and it survives: these rows need a reachable URL
+        // whether or not anyone has filled them in.
+        assert!(
+            markup.contains("Public link"),
+            "the ingress requirement is not a state and should not be replaced by one"
+        );
+    }
+
+    #[test]
     fn local_settings_never_gates_a_button_on_a_webview_confirm() {
         // WKWebView routes window.confirm() through a WKUIDelegate panel wry
         // does not implement, so it returns false without drawing anything:
@@ -6404,6 +6536,70 @@ mod tests {
     }
 
     #[test]
+    fn a_replaced_window_is_measured_before_it_is_destroyed() {
+        // Read order, not a nicety: `outer_position` and `inner_size` need a
+        // window, and the whole point is that there is about to not be one. The
+        // rebuilt window used to come back at the OS default placement in the
+        // default size, which is a swap the user sees even if nothing flashes.
+        //
+        // Asserted on the source for the same reason as the wait below: reaching
+        // the real path needs a running event loop.
+        let source = include_str!("main.rs");
+        let body = {
+            let start = source
+                .find("fn rebuild_main_window_for_mode(app: &AppHandle, mode: &str)")
+                .expect("rebuild_main_window_for_mode exists");
+            let end = source[start..]
+                .find("\nfn ")
+                .map_or(source.len(), |offset| start + offset);
+            &source[start..end]
+        };
+
+        let measured = body
+            .find("placement_of(&existing)")
+            .expect("it reads where the window was");
+        let destroy = body.find(".destroy()").expect("it destroys the old window");
+
+        assert!(
+            measured < destroy,
+            "the window has to be measured while it still exists"
+        );
+        assert!(
+            body.contains(
+                "build_main_window_at(app, mode, initial.clone(), true, true, placement)"
+            ),
+            "the replacement is told it is one, and where to sit"
+        );
+    }
+
+    #[test]
+    fn a_replacement_window_is_never_left_invisible() {
+        // Hidden-until-painted is only safe because something shows it anyway.
+        // A window that never paints and never appears is an app with no
+        // interface, which is the failure the label wait already guards.
+        let source = include_str!("main.rs");
+        let start = source
+            .find("fn build_main_window_at(")
+            .expect("build_main_window_at exists");
+        let body = &source[start..];
+
+        assert!(
+            body.contains("REPLACEMENT_REVEAL_TIMEOUT"),
+            "the reveal has a deadline"
+        );
+        let hidden = body
+            .find(".visible(false)")
+            .expect("a replacement starts hidden");
+        let backstop = body
+            .find("REPLACEMENT_REVEAL_TIMEOUT")
+            .expect("the deadline is used");
+        assert!(
+            hidden < backstop,
+            "hidden first, then the backstop that shows it"
+        );
+    }
+
+    #[test]
     fn the_window_swap_waits_between_destroying_and_rebuilding() {
         // The bug this pins: `destroy` returns as soon as the request is
         // posted, so building immediately afterwards failed with `a webview
@@ -6427,10 +6623,10 @@ mod tests {
 
         let destroy = body.find(".destroy()").expect("it destroys the old window");
         let first_build = body
-            .find("build_main_window(app, mode, initial.clone(), true)")
+            .find("build_main_window_at(app, mode, initial.clone(), true, true, placement)")
             .expect("it rebuilds partitioned");
         let fallback = body
-            .find("build_main_window(app, mode, initial, false)")
+            .find("build_main_window_at(app, mode, initial, false, true, placement)")
             .expect("it falls back to the shared store");
         let waits: Vec<usize> = body
             .match_indices("wait_until_label_released")

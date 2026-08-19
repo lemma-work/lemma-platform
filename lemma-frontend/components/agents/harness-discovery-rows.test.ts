@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+    DISCOVERY_PATIENCE_MS,
     KNOWN_HARNESSES,
+    RECHECK_SETTLE_MS,
     discoveryHeadline,
     discoveryLines,
     discoveryPhase,
+    discoveryStatusLine,
     harnessRowStates,
     type DiscoveredHarness,
 } from './harness-discovery-rows';
@@ -133,5 +136,54 @@ describe('what the panel says', () => {
 
     it('offers the way out when nothing was found', () => {
         expect(discoveryLines('settled', 0).join(' ')).toContain('Rescan');
+    });
+});
+
+describe('discoveryStatusLine', () => {
+    it('says nothing once there is nothing left to report', () => {
+        expect(discoveryStatusLine({ phase: 'settled', foundCount: 2, elapsedMs: 0 })).toBeNull();
+        expect(discoveryStatusLine({ phase: 'unavailable', foundCount: 0, elapsedMs: 0 })).toBeNull();
+    });
+
+    it('reports what has turned up rather than a total it cannot promise', () => {
+        // Some of the four are simply not installed and never report, so a
+        // "2 of 4" would stop at 2 and read as stuck.
+        const none = discoveryStatusLine({ phase: 'scanning', foundCount: 0, elapsedMs: 0 });
+        const some = discoveryStatusLine({ phase: 'scanning', foundCount: 2, elapsedMs: 0 });
+
+        expect(none).toContain('Looking');
+        expect(some).toContain('2');
+        expect(some).not.toContain('of 4');
+    });
+
+    it('explains the wait only once it is long enough to need explaining', () => {
+        const early = discoveryStatusLine({ phase: 'scanning', foundCount: 0, elapsedMs: 0 });
+        const late = discoveryStatusLine({
+            phase: 'scanning',
+            foundCount: 0,
+            elapsedMs: DISCOVERY_PATIENCE_MS,
+        });
+
+        expect(early).not.toContain('minute');
+        expect(late).toContain('minute');
+    });
+
+    it('names the step before the scan, so a slow start is not silence', () => {
+        expect(discoveryStatusLine({ phase: 'starting', foundCount: 0, elapsedMs: 0 })).toContain(
+            'agent host',
+        );
+        expect(discoveryStatusLine({ phase: 'connecting', foundCount: 0, elapsedMs: 0 })).toContain(
+            'Connecting',
+        );
+    });
+});
+
+describe('RECHECK_SETTLE_MS', () => {
+    it('outlasts the beat the host reads the request on', () => {
+        // Rescan asks the host to re-probe; the host notices on a five-second
+        // control beat and only then starts spawning agents. The old 1.2s
+        // expired before the request had been read, so the button finished
+        // before anything could have changed.
+        expect(RECHECK_SETTLE_MS).toBeGreaterThan(5000);
     });
 });

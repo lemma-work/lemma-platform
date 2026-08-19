@@ -2,7 +2,6 @@
 
 import {
   useEffect,
-  useMemo,
   useRef,
   useState,
   useSyncExternalStore,
@@ -20,10 +19,15 @@ import {
   subscribeToLastOpenedPodId,
 } from "@/lib/pods/last-opened-pod";
 import {
+  hasSkippedFirstPod as skipBelongsToOwner,
   readOnboardingSkippedFirstPod,
   subscribeToOnboardingSkippedFirstPod,
 } from "@/lib/pods/onboarding-skip";
 import { buildComposerLaunchHref } from "@/lib/pods/composer-launch";
+import {
+  trackOnboardingStep,
+  trackPodReady,
+} from "@/lib/analytics/onboarding";
 import {
   clearOnboardingDraft,
   findDraftBasePod,
@@ -37,7 +41,6 @@ import {
   useCreateOrganization,
   useJoinSuggestedOrganization,
   useMyOrganizationInvitations,
-  useOrganizationNameAvailability,
   useSuggestedOrganizations,
 } from "@/lib/hooks/use-organizations";
 import { useAccessiblePods, type AccessiblePod } from "@/lib/hooks/use-pods";
@@ -55,7 +58,6 @@ import {
 } from "@/lib/types";
 import {
   normalizeEmailDomain,
-  slugifyOrganizationName,
   workDomainFromEmail,
 } from "@/lib/utils/organization-slugs";
 import {
@@ -66,8 +68,6 @@ import { SetupChrome, SetupShell } from "./account-onboarding-chrome";
 import {
   hasUsableProfileName,
   inferFullName,
-  isRetriableOrganizationNameConflict,
-  MAX_ORGANIZATION_NAME_ATTEMPTS,
   nextTeamSetupStep,
   normalizeOnboardingStep,
   organizationNameCandidate,
@@ -96,6 +96,7 @@ import {
 } from "./account-onboarding-steps";
 import { LocalIntelligenceStep, LocalSharingStep } from "./local-setup-steps";
 import { isLocalDeployment } from "@/lib/config";
+import { useFirstPodProvisioning } from "./use-first-pod-provisioning";
 import { readLocalAiStatus } from "@/lib/desktop/local-capabilities";
 
 /** What onboarding needs of a pod, whether it created it or restored it. */
@@ -129,12 +130,16 @@ export function AccountOnboarding({
     () => null,
   );
   const hasLastOpenedPod = requireFirstPod && Boolean(lastOpenedPodId);
-  const skippedFirstPod = useSyncExternalStore(
+  const skippedFirstPodOwner = useSyncExternalStore(
     subscribeToOnboardingSkippedFirstPod,
     readOnboardingSkippedFirstPod,
     () => null,
   );
-  const hasSkippedFirstPod = requireFirstPod && Boolean(skippedFirstPod);
+  // Only this account's own skip counts. An unowned flag left by whoever used
+  // this browser last used to switch first-pod provisioning off for everyone
+  // after them, which is exactly how a new account landed on an empty home.
+  const hasSkippedFirstPod =
+    requireFirstPod && skipBelongsToOwner(skippedFirstPodOwner, profile?.email);
   const storedOnboardingDraft = useSyncExternalStore(
     subscribeToOnboardingDraft,
     readOnboardingDraft,
@@ -167,12 +172,45 @@ export function AccountOnboarding({
     !isLoadingPods &&
     pendingInvitations.length === 0 &&
     shouldResumeOnboarding(onboardingDraft, pods.length);
+  // A pending invitation wins outright. It used to lose to the identity step,
+  // which put a name question and a screen in front of the one arrival that was
+  // already perfect: the invite carries a destination, so an invited teammate
+  // can go straight to the pod -- and to the app -- they were invited to.
+  const needsInvitations = pendingInvitations.length > 0;
   const needsIdentityStep =
-    needsProfile ||
-    (!onboardingDraft && (needsOrganization || needsFirstPod));
-  const needsInvitations =
-    !needsIdentityStep && pendingInvitations.length > 0;
+    !needsInvitations &&
+    (needsProfile || (!onboardingDraft && (needsOrganization || needsFirstPod)));
   const [setupActive, setSetupActive] = useState(false);
+
+  // Hosted accounts with nothing yet are provisioned rather than interviewed.
+  // A local installation is excluded: it still owes the user a model before a
+  // pod means anything, which is what its own steps are for. A draft means a
+  // half-finished run of the old flow, which stays with the old flow.
+  const isLocal = isLocalDeployment();
+  const canAutoProvision =
+    !isLocal &&
+    !setupActive &&
+    !needsInvitations &&
+    !onboardingDraft &&
+    !isLoadingProfile &&
+    !isLoadingOrganizations &&
+    !isLoadingInvitations &&
+    Boolean(profile) &&
+    (needsOrganization || needsFirstPod);
+  const autoSuggestedOrganizations = useSuggestedOrganizations({
+    enabled: canAutoProvision && organizations.length === 0,
+  });
+  // Resolved before provisioning starts, because creating an organization for
+  // someone whose colleague already claimed the domain is the one mistake here
+  // that a rename cannot undo.
+  const suggestionsSettled =
+    organizations.length > 0 || !autoSuggestedOrganizations.isLoading;
+  const provisioning = useFirstPodProvisioning({
+    enabled: canAutoProvision && suggestionsSettled,
+    profile,
+    organizations,
+    suggestedOrganization: autoSuggestedOrganizations.data?.items?.[0] ?? null,
+  });
   const nextSetupStep = resolveOnboardingStartStep(
     onboardingDraft?.step,
     needsIdentityStep,
@@ -204,8 +242,30 @@ export function AccountOnboarding({
     );
   }
 
+  // `navigated` keeps this held after `canAutoProvision` goes false: the pod now
+  // exists, so the conditions that justified provisioning have stopped being
+  // true, and falling through here renders the redirect that overwrites the
+  // composer launch with a bare pod URL.
+  if ((canAutoProvision || provisioning === "navigated") && provisioning !== "failed") {
+    return preflightFallback ?? (
+      <SetupShell>
+        <WaitingScreen
+          title="Setting up your workspace"
+          description="This takes a moment. You will land straight in your pod."
+          className="w-full max-w-xl"
+        />
+      </SetupShell>
+    );
+  }
+
   if (needsInvitations) {
-    return <InvitationsStep invitations={pendingInvitations} />;
+    return (
+      <InvitationsStep
+        invitations={pendingInvitations}
+        signupAt={profile?.created_at ?? null}
+        ownerEmail={profile?.email ?? null}
+      />
+    );
   }
 
   if (needsProfile || needsOrganization || needsFirstPod || setupActive) {
@@ -254,6 +314,7 @@ function SetupAssistant({
     first_name?: string | null;
     last_name?: string | null;
     full_name?: string | null;
+    created_at?: string | null;
   } | null;
   organizations: Organization[];
   // The navigation listing, not a full pod record: this only ever reads `id`
@@ -298,6 +359,12 @@ function SetupAssistant({
     isLocal,
   );
   const [step, setStep] = useState<SetupStep>(normalizedInitialStep);
+  const signupAt = profile?.created_at ?? null;
+  // Every step renders at "/", so this is the only thing that can tell the
+  // funnel's stages apart -- a pageview cannot.
+  useEffect(() => {
+    trackOnboardingStep(step);
+  }, [step]);
   const [createdOrganization, setCreatedOrganization] =
     useState<Organization | null>(null);
   // Either a pod just created here (a full record) or one restored from the
@@ -315,7 +382,6 @@ function SetupAssistant({
   );
   const [identityName, setIdentityName] = useState(initialIdentityName);
   const [identityCompletedLocally, setIdentityCompletedLocally] = useState(false);
-  const [organizationNameAttempt, setOrganizationNameAttempt] = useState(0);
   const [workspaceName, setWorkspaceName] = useState(
     initialDraft?.workspaceName ||
       organizationNameCandidate({ email, workDomain: normalizedWorkDomain }),
@@ -338,52 +404,7 @@ function SetupAssistant({
       organizations.length === 0,
   });
   const suggestedOrganization = suggestedOrganizations.data?.items?.[0] || null;
-  const slug = useMemo(
-    () => slugifyOrganizationName(workspaceName),
-    [workspaceName],
-  );
-  const nameAvailability = useOrganizationNameAvailability(
-    { slug, name: workspaceName },
-    {
-      enabled:
-        (step === "identity" || step === "workspace") &&
-        !suggestedOrganization &&
-        organizations.length === 0 &&
-        slug.length > 2,
-    },
-  );
   const activeOrganization = createdOrganization || initialOrganization;
-
-  // Keep the name we show on the identity step to one that is still free. This
-  // is for honest copy only — the create itself re-walks the ladder against the
-  // server, which is the authority.
-  useEffect(() => {
-    if (
-      step !== "identity" ||
-      suggestedOrganization ||
-      nameAvailability.available !== false ||
-      organizationNameAttempt >= MAX_ORGANIZATION_NAME_ATTEMPTS
-    ) {
-      return;
-    }
-
-    const nextAttempt = organizationNameAttempt + 1;
-    setOrganizationNameAttempt(nextAttempt);
-    setWorkspaceName(
-      organizationNameCandidate({
-        email,
-        workDomain: normalizedWorkDomain,
-        attempt: nextAttempt,
-      }),
-    );
-  }, [
-    email,
-    nameAvailability.available,
-    normalizedWorkDomain,
-    organizationNameAttempt,
-    step,
-    suggestedOrganization,
-  ]);
 
   useEffect(() => {
     if (
@@ -432,36 +453,28 @@ function SetupAssistant({
    * the race. So the ladder is walked here too, against the only authority
    * there is, and setup survives a collision instead of dead-ending on it.
    */
+  /**
+   * The workspace nobody asked for, created without asking.
+   *
+   * This used to walk a twenty-rung name ladder from the browser -- one
+   * sequential create per rung, on the critical path of a signup, for a name
+   * the user never typed. The server resolves its own collision now, so this is
+   * one call that cannot fail on a name.
+   */
   const createFirstOrganization = async (): Promise<Organization> => {
     const useDomainJoin = Boolean(normalizedWorkDomain);
-    let lastError: unknown = null;
 
-    for (
-      let attempt = organizationNameAttempt;
-      attempt < organizationNameAttempt + MAX_ORGANIZATION_NAME_ATTEMPTS;
-      attempt += 1
-    ) {
-      try {
-        return await createOrganization.mutateAsync({
-          name: organizationNameCandidate({
-            email,
-            workDomain: normalizedWorkDomain,
-            attempt,
-          }),
-          join_policy: useDomainJoin
-            ? OrganizationJoinPolicy.EMAIL_DOMAIN
-            : OrganizationJoinPolicy.INVITE_ONLY,
-          email_domain: useDomainJoin ? normalizedWorkDomain : null,
-        });
-      } catch (error) {
-        if (!isRetriableOrganizationNameConflict(error)) throw error;
-        lastError = error;
-      }
-    }
-
-    throw lastError instanceof Error
-      ? lastError
-      : new Error("Could not find an available organization name");
+    return createOrganization.mutateAsync({
+      name: organizationNameCandidate({
+        email,
+        workDomain: normalizedWorkDomain,
+      }),
+      join_policy: useDomainJoin
+        ? OrganizationJoinPolicy.EMAIL_DOMAIN
+        : OrganizationJoinPolicy.INVITE_ONLY,
+      email_domain: useDomainJoin ? normalizedWorkDomain : null,
+      resolve_name_conflicts: true,
+    });
   };
 
   const handleIdentitySubmit = async (event: React.FormEvent) => {
@@ -897,6 +910,7 @@ function SetupAssistant({
 
     if (path === "templates") {
       clearOnboardingDraft();
+      trackPodReady("new_org", signupAt);
       router.push(`/pod/${pod.id}/recipes`);
       return true;
     }
@@ -914,10 +928,12 @@ function SetupAssistant({
     // Nothing to say on their behalf. The pod's own home already asks the
     // question better than a form could.
     if (!launch) {
+      trackPodReady("new_org", signupAt);
       router.push(`/pod/${pod.id}`);
       return true;
     }
 
+    trackPodReady("new_org", signupAt);
     router.push(
       buildComposerLaunchHref(pod.id, {
         draft: launch.stem,
@@ -985,14 +1001,7 @@ function SetupAssistant({
                 ? "join"
                 : "create"
           }
-          isResolvingWorkspace={
-            suggestedOrganizations.isLoading ||
-            (!activeOrganization &&
-              !suggestedOrganization &&
-              (nameAvailability.isLoading ||
-                nameAvailability.isFetching ||
-                nameAvailability.available === false))
-          }
+          isResolvingWorkspace={suggestedOrganizations.isLoading}
           isSaving={
             updateProfile.isPending ||
             joinSuggestedOrganization.isPending ||
@@ -1034,7 +1043,6 @@ function SetupAssistant({
           domain={workDomain || null}
           suggestedOrganization={suggestedOrganization}
           workspaceName={workspaceName}
-          slugAvailable={nameAvailability.available}
           allowDomainJoin={allowDomainJoin}
           isJoining={joinSuggestedOrganization.isPending}
           isCreating={createOrganization.isPending || isCreatingPod}
