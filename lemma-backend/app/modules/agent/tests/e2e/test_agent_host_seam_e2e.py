@@ -227,7 +227,17 @@ async def test_a_whole_turn_survives_the_trip_from_host_to_conversation(
         if event.type is AgentEventType.TOKEN and event.data["kind"] == "text"
     )
     messages = [event.data for event in events if event.type is AgentEventType.MESSAGE]
-    persisted = "".join(m.text for m in messages if m.text and m.tool_call_id is None)
+    # kind == TEXT: the agent's thinking ("Checking the file.") is correctly
+    # persisted too, as its own MessageKind.THINKING draft (_flush_messages) --
+    # a real, separate record, not part of the answer. streamed already
+    # excludes it via its own kind == "text" filter above; persisted must
+    # match, or a thought landing between the two message chunks looks like a
+    # lost/reordered answer instead of the working-as-designed split it is.
+    persisted = "".join(
+        m.text
+        for m in messages
+        if m.text and m.tool_call_id is None and m.kind == MessageKind.TEXT
+    )
 
     # The whole answer, not just the part after the tool call.
     assert streamed == "Let me look. It is the readme."
