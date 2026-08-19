@@ -41,6 +41,55 @@ async def test_function_file_manager_accepts_any_obstore_adapter():
     assert await manager.read_file("handler.py") == "print('portable')"
 
 
+@pytest.mark.asyncio
+async def test_function_file_manager_write_file_accepts_raw_bytes(tmp_path):
+    """``write_file`` takes ``bytes | str``; the existing coverage only ever
+    exercised the ``str`` branch (which gets utf-8 encoded before the put), so
+    the bytes-passthrough branch was never run."""
+    manager = FunctionFileManager(uuid4(), root_path=tmp_path)
+    payload = b"\x00\x01binary-content\xff"
+
+    await manager.write_file("artifact.bin", payload)
+
+    assert await manager.read_bytes("artifact.bin") == payload
+
+
+@pytest.mark.asyncio
+async def test_function_file_manager_read_bytes_returns_raw_bytes(tmp_path):
+    manager = FunctionFileManager(uuid4(), root_path=tmp_path)
+    await manager.write_file("handler.py", "print('ok')")
+
+    content = await manager.read_bytes("handler.py")
+
+    assert content == b"print('ok')"
+    assert isinstance(content, bytes)
+
+
+@pytest.mark.asyncio
+async def test_function_file_manager_read_bytes_missing_file_raises(tmp_path):
+    manager = FunctionFileManager(uuid4(), root_path=tmp_path)
+
+    with pytest.raises(FileNotFoundError):
+        await manager.read_bytes("missing.bin")
+
+
+@pytest.mark.asyncio
+async def test_function_file_manager_read_file_falls_back_to_bytes_for_binary_content(
+    tmp_path,
+):
+    """``read_file`` guesses text vs binary by attempting a UTF-8 decode of the
+    whole buffer; content that is not valid UTF-8 must come back as the raw
+    bytes rather than raising."""
+    manager = FunctionFileManager(uuid4(), root_path=tmp_path)
+    non_utf8 = b"\xff\xfe\x00\x01not-valid-utf8"
+    await manager.write_file("artifact.bin", non_utf8)
+
+    content = await manager.read_file("artifact.bin")
+
+    assert content == non_utf8
+    assert isinstance(content, bytes)
+
+
 def test_function_storage_composition_uses_selected_cloud_adapter(monkeypatch):
     function_id = uuid4()
     captured: dict[str, object] = {}

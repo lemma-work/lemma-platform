@@ -418,32 +418,6 @@ class FunctionUseCases:
             resolved, user_email=None, run_as_workload=run_as_workload
         )
 
-    # -- Workflow path (user ctx) ---------------------------------------------
-
-    async def execute_function_for_user(
-        self,
-        *,
-        pod_id: UUID,
-        name: str,
-        input_data: JsonObject,
-        user_id: UUID,
-    ) -> FunctionRunEntity:
-        async def resolve_once() -> ResolvedExecution:
-            async with uow_scope(self._uow_factory) as uow:
-                auth_ctx = await AuthorizationDataService(
-                    uow.session
-                ).build_user_context(
-                    user_id=user_id,
-                    pod_id=pod_id,
-                )
-                async with context_scope(auth_ctx):
-                    return await self._build(uow).resolve_execute(
-                        pod_id, name, input_data, user_id, None, ctx=auth_ctx
-                    )
-
-        resolved = await self._resolve_with_revision_backfill(resolve_once)
-        return await self._run_resolved(resolved, user_email=None)
-
     async def cancel_function_run(self, run_id: UUID) -> None:
         """Cancel a dispatched run. Used when a workflow run that was waiting on
         it is cancelled, so the sandbox stops work nobody is waiting for."""
