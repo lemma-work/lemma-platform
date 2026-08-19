@@ -25,7 +25,12 @@ from app.modules.agent.services.agent_runner_service import (
     FULL_HISTORY_AGENT_RUN_COUNT,
     AgentRunnerService,
 )
-from app.modules.agent.tools.callable_tool_factory import AgentCallableToolFactory
+from app.modules.agent.tools.callable_tool_factory import (
+    AgentCallableToolFactory,
+    _inline_schema,
+    _normalize_json_schema,
+    _schema_preview,
+)
 from app.modules.agent.tools.final_answer.final_answer_tool import FinalAgentResult
 from app.modules.agent.tools.pod import pod_toolset
 from app.modules.agent.tools.skills import skills_toolset
@@ -938,6 +943,96 @@ def test_connector_access_modes_use_account_ownership_names():
         "mode": "AGENT_OWNED",
         "account_id": str(agent_owned_account_id),
     }
+
+
+@pytest.mark.parametrize("schema", [None, {}, "not-a-dict", [], 0])
+def test_normalize_json_schema_defaults_absent_or_malformed_input(schema):
+    """None, empty, and non-dict schemas all fall back to the same open object."""
+    assert _normalize_json_schema(schema) == {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": True,
+    }
+
+
+def test_normalize_json_schema_forces_object_type():
+    """A dynamic tool's declared schema is always exposed as an object, even
+    when the stored schema (e.g. authored against a single scalar) says
+    otherwise -- pydantic-ai tool parameters must be an object schema."""
+    normalized = _normalize_json_schema({"type": "string", "minLength": 1})
+    assert normalized["type"] == "object"
+    assert normalized["minLength"] == 1
+    assert normalized["properties"] == {}
+    assert normalized["additionalProperties"] is True
+
+
+def test_normalize_json_schema_preserves_explicit_fields_and_does_not_mutate_input():
+    original = {
+        "type": "object",
+        "properties": {"name": {"type": "string"}},
+        "additionalProperties": False,
+        "required": ["name"],
+    }
+    snapshot = dict(original)
+
+    normalized = _normalize_json_schema(original)
+
+    # Existing values win over the defaults `setdefault` would otherwise apply.
+    assert normalized["properties"] == {"name": {"type": "string"}}
+    assert normalized["additionalProperties"] is False
+    assert normalized["required"] == ["name"]
+    # The input schema is never mutated in place.
+    assert original == snapshot
+
+
+def test_inline_schema_resolves_a_local_ref_and_drops_the_defs_bucket():
+    schema = {
+        "type": "object",
+        "properties": {"address": {"$ref": "#/$defs/Address"}},
+        "$defs": {
+            "Address": {
+                "type": "object",
+                "properties": {"city": {"type": "string"}},
+            }
+        },
+    }
+
+    inlined = _inline_schema(schema)
+
+    assert "$ref" not in str(inlined)
+    assert inlined["properties"]["address"]["properties"]["city"] == {
+        "type": "string"
+    }
+
+
+def test_inline_schema_is_a_no_op_for_a_schema_with_no_refs():
+    schema = {
+        "type": "object",
+        "properties": {"count": {"type": "integer"}},
+        "required": ["count"],
+    }
+
+    assert _inline_schema(dict(schema)) == schema
+
+
+@pytest.mark.parametrize("schema", [None, {}, "not-a-dict", 42])
+def test_schema_preview_is_empty_for_absent_or_malformed_schema(schema):
+    """No output schema (or garbage in its place) means nothing goes in the
+    tool description -- never the 61 characters of empty-object boilerplate."""
+    assert _schema_preview(schema) == ""
+
+
+def test_schema_preview_renders_compact_normalized_json():
+    preview = _schema_preview({"type": "object", "properties": {"ok": {"type": "boolean"}}})
+
+    # Compact separators (no spaces) and normalized (additionalProperties filled
+    # in), so the description does not silently double the token cost of the
+    # schema it is summarizing.
+    assert preview == (
+        '{"type":"object","properties":{"ok":{"type":"boolean"}},'
+        '"additionalProperties":true}'
+    )
+    assert " " not in preview
 
 
 def test_callable_function_tool_uses_function_name_prefix():

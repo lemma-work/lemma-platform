@@ -1,13 +1,19 @@
 from __future__ import annotations
 
-from uuid import uuid4
+from types import SimpleNamespace
+from uuid import UUID, uuid4
 
 import pytest
 
+from app.modules.agent.services.workspace_location import ProjectRepo
 from app.modules.agent.tools.context import BaseAgentContext
 from app.modules.agent.tools.workspace_cli import github_credential_bridge as bridge
 from app.modules.agent.tools.workspace_cli import workspace_cli
 from app.modules.agent.tools.workspace_cli.models import ExecCommandRequest
+from app.modules.connectors.domain.errors import (
+    AccountResolutionError,
+    ConnectorAccessDeniedError,
+)
 
 
 class _FakeRedis:
@@ -300,3 +306,142 @@ async def test_exec_command_internal_runs_command_even_if_bridge_raises(
     # native git auth error, not a generic workspace-tool error).
     assert result.success is True
     assert result.error is None
+
+
+# --------------------------------------------------------------------------
+# `_resolve_github_credential` itself. Every test above stubs this function
+# out entirely, so none of them ever reach its own account-resolution/error
+# handling. `SessionUnitOfWorkFactory(async_session_maker)` is hard-coded
+# inside it rather than injected, but entering and exiting that unit of work
+# touches no network: nothing here ever executes a query, so the async
+# session is created and closed without a real Postgres connection --
+# `build_delegated_context` and `get_account_resolution_service` (imported
+# inside the function to avoid a cycle, so patched at their source module) are
+# the only things stubbed.
+
+
+def _project_context(*, account_id: UUID | None = None) -> BaseAgentContext:
+    ctx = _context()
+    if account_id is not None:
+        ctx.workspace_repo = ProjectRepo(owner="acme", repo="widgets", account_id=account_id)
+    return ctx
+
+
+async def _fake_build_delegated_context(uow, ctx):
+    del uow, ctx
+    return SimpleNamespace(organization_id=None)
+
+
+def _patch_account_resolution(monkeypatch: pytest.MonkeyPatch, service) -> None:
+    monkeypatch.setattr(bridge, "build_delegated_context", _fake_build_delegated_context)
+    monkeypatch.setattr(
+        "app.modules.connectors.api.dependencies.get_account_resolution_service",
+        lambda uow: service,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "error",
+    [
+        AccountResolutionError("no connected account"),
+        ConnectorAccessDeniedError("not authorized"),
+    ],
+)
+async def test_resolve_github_credential_returns_none_when_resolution_is_denied(
+    monkeypatch: pytest.MonkeyPatch, error: Exception
+) -> None:
+    """Neither "no account connected" nor "not authorized" is an error the
+    caller should see -- both mean the same thing to a git command: there is
+    no credential to provision, so `ensure_github_credentials` caches
+    "unavailable" and lets the underlying command run without one."""
+
+    class _DenyingResolution:
+        async def resolve_account(self, **kwargs):
+            del kwargs
+            raise error
+
+    _patch_account_resolution(monkeypatch, _DenyingResolution())
+
+    result = await bridge._resolve_github_credential(_context())
+
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_resolve_github_credential_returns_none_without_an_access_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _NoTokenResolution:
+        async def resolve_account(self, **kwargs):
+            del kwargs
+            return SimpleNamespace(
+                credentials=SimpleNamespace(),  # no access_token at all
+                display_name="octocat",
+                email="octocat@example.com",
+            )
+
+    _patch_account_resolution(monkeypatch, _NoTokenResolution())
+
+    result = await bridge._resolve_github_credential(_context())
+
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_resolve_github_credential_returns_a_credential_on_success(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    class _WorkingResolution:
+        async def resolve_account(self, **kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(
+                credentials=SimpleNamespace(access_token="gho_realtoken"),
+                display_name="octocat",
+                email="octocat@example.com",
+            )
+
+    _patch_account_resolution(monkeypatch, _WorkingResolution())
+    ctx = _context()
+
+    credential = await bridge._resolve_github_credential(ctx)
+
+    assert credential == bridge._GithubCredential(
+        access_token="gho_realtoken", login="octocat", email="octocat@example.com"
+    )
+    assert captured["user_id"] == ctx.user_id
+    assert captured["connector_id"] == "github"
+    # No project repo, so no account is named -- resolution falls back to
+    # picking for the user (ambiguous only if they connected GitHub twice).
+    assert captured["account_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_resolve_github_credential_names_the_projects_connected_account(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A project names the account it works as; resolution must be told,
+    rather than falling back to whichever account happens to resolve for the
+    user (ambiguous when they connected GitHub more than once)."""
+    captured: dict[str, object] = {}
+
+    class _WorkingResolution:
+        async def resolve_account(self, **kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(
+                credentials=SimpleNamespace(access_token="gho_realtoken"),
+                display_name="octocat",
+                email=None,
+            )
+
+    _patch_account_resolution(monkeypatch, _WorkingResolution())
+    account_id = uuid4()
+    ctx = _project_context(account_id=account_id)
+
+    credential = await bridge._resolve_github_credential(ctx)
+
+    assert credential is not None
+    assert credential.email is None
+    assert captured["account_id"] == account_id

@@ -762,6 +762,16 @@ async def test_scripted_todo_and_workspace_tools_stream_and_persist_real_results
             tool_call_id="skill-missing-1",
         ),
         script_tool_call(
+            "load_skill",
+            {"name": "browser", "resource_path": "references/agent-browser-core.md"},
+            tool_call_id="skill-resource-1",
+        ),
+        script_tool_call(
+            "load_skill",
+            {"name": "browser", "resource_path": "../../etc/passwd"},
+            tool_call_id="skill-resource-traversal-1",
+        ),
+        script_tool_call(
             "say",
             {"text": "Hermetic spoken response"},
             tool_call_id="speech-say-1",
@@ -845,6 +855,14 @@ async def test_scripted_todo_and_workspace_tools_stream_and_persist_real_results
     assert tool_returns["list_skills"]["tool_result"]["success"] is True
     assert tool_returns_by_id["skill-load-1"]["tool_result"]["success"] is True
     assert tool_returns_by_id["skill-missing-1"]["tool_result"]["success"] is False
+    skill_resource = tool_returns_by_id["skill-resource-1"]["tool_result"]
+    assert skill_resource["success"] is True
+    assert skill_resource["resource_path"] == "references/agent-browser-core.md"
+    assert "agent-browser core" in str(skill_resource["content"])
+    skill_resource_traversal = tool_returns_by_id["skill-resource-traversal-1"][
+        "tool_result"
+    ]
+    assert skill_resource_traversal["success"] is False
     assert tool_returns_by_id["process-list-1"]["tool_result"]["success"] is True
     assert tool_returns_by_id["process-invalid-1"]["tool_result"]["success"] is False
     assert tool_returns["say"]["tool_result"]["success"] is False
@@ -858,6 +876,116 @@ async def test_scripted_todo_and_workspace_tools_stream_and_persist_real_results
     assert todos == [
         {"content": "Inspect input", "done": False},
         {"content": "Persist result", "done": True},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_scripted_write_todos_normalizes_malformed_and_duplicate_checkbox_input(
+    authenticated_client,
+    fixed_test_org,
+    e2e_settings,
+    worker,
+):
+    """`write_todos`'s recovery paths, driven end to end.
+
+    ``_remove_duplicate_checkbox_prefix`` and the flattened-XML-plan handling in
+    ``_split_todo_fragments``/``_parse_todo_lines`` are thoroughly unit-tested in
+    ``test_capabilities.py``, but only a well-formed call was ever scripted
+    through a real conversation. This drives both recovery paths for real: a
+    duplicated leading checkbox, and a flattened plan carrying two items with a
+    trailing text status ("- done") in one line.
+    """
+    del worker  # session fixture keeps the production streaq worker alive
+    runtime = await _create_runtime_profile(
+        authenticated_client,
+        fixed_test_org,
+        e2e_settings,
+    )
+    pod = await _create_pod(authenticated_client, fixed_test_org)
+    pod_id = pod["id"]
+    agent_name = f"todo_edge_{uuid4().hex[:8]}"
+    agent = await authenticated_client.post(
+        f"/pods/{pod_id}/agents",
+        json={
+            "name": agent_name,
+            "instruction": "Exercise the scripted todo edge cases.",
+            "agent_runtime": {
+                "profile_id": runtime["id"],
+                "model_name": "mock-safe-model",
+            },
+            "toolsets": ["TODO"],
+        },
+    )
+    assert agent.status_code == status.HTTP_201_CREATED, agent.text
+
+    script = [
+        script_tool_call(
+            "write_todos",
+            {"todos": ["[ ] [x] Ship the release notes"]},
+            tool_call_id="todo-duplicate-checkbox-1",
+        ),
+        script_tool_call(
+            "write_todos",
+            {
+                "todos": [
+                    "<todos><item>Draft the proposal</item>"
+                    "<item>Send the invoice - done</item></todos>"
+                ]
+            },
+            tool_call_id="todo-flattened-plan-1",
+        ),
+        script_text("Todo edge cases completed."),
+    ]
+    conversation = await authenticated_client.post(
+        f"/pods/{pod_id}/conversations",
+        json={
+            "agent_name": agent_name,
+            "title": "Todo edge cases",
+            "metadata": {"mock_llm_script": script},
+        },
+    )
+    assert conversation.status_code == status.HTTP_201_CREATED, conversation.text
+    conversation_id = conversation.json()["id"]
+
+    events = await _send_message(
+        authenticated_client,
+        pod_id,
+        conversation_id,
+        "Run the scripted todo edge cases.",
+    )
+    assert events[-1]["type"] == "completed", events
+
+    messages = await authenticated_client.get(
+        f"/pods/{pod_id}/conversations/{conversation_id}/messages"
+    )
+    assert messages.status_code == status.HTTP_200_OK, messages.text
+    items = messages.json()["items"]
+    tool_returns_by_id = {
+        item["tool_call_id"]: item for item in items if item["kind"] == "TOOL_RETURN"
+    }
+
+    duplicate_checkbox = tool_returns_by_id["todo-duplicate-checkbox-1"]["tool_result"]
+    assert duplicate_checkbox["success"] is True
+    # The outer, erroneous "[ ]" is dropped; the inner "[x]" wins.
+    assert duplicate_checkbox["todos"] == ["- [x] Ship the release notes"]
+
+    flattened_plan = tool_returns_by_id["todo-flattened-plan-1"]["tool_result"]
+    assert flattened_plan["success"] is True
+    # A multi-item call is a full snapshot: the earlier duplicate-checkbox task
+    # is gone and both flattened items are present, one recovered as done from
+    # its trailing "- done" text.
+    assert flattened_plan["todos"] == [
+        "- [ ] Draft the proposal",
+        "- [x] Send the invoice",
+    ]
+
+    persisted = await authenticated_client.get(
+        f"/pods/{pod_id}/conversations/{conversation_id}"
+    )
+    assert persisted.status_code == status.HTTP_200_OK, persisted.text
+    assert persisted.json()["metadata"]["todos"] == [
+        {"content": "Draft the proposal", "done": False},
+        {"content": "Send the invoice", "done": True},
     ]
 
 

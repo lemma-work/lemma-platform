@@ -554,6 +554,104 @@ class TestWebFetch:
         assert result.pages[0].files == {}
 
 
+class TestBrowserCaptureHelpers:
+    """The pure/near-pure pieces of the browser path, in isolation.
+
+    ``TestWebFetch`` above already drives `_capture_with_browser` and
+    `_present_files` thoroughly through `web_fetch_internal` with a fake
+    sandbox filesystem. What that integration coverage cannot see is whether
+    the command `_browser_script` actually builds is safe against a URL or
+    slug containing shell metacharacters, or how `_present_files`'s own
+    stdout-parsing behaves against a line the real probe would never emit --
+    both are exercised directly here.
+    """
+
+    def test_needs_browser_for_a_render_request_regardless_of_formats(self) -> None:
+        assert web_fetch_module._needs_browser(["markdown"], render=True) is True
+
+    def test_needs_browser_for_a_pdf_or_image_format(self) -> None:
+        assert web_fetch_module._needs_browser(["pdf"], render=False) is True
+        assert web_fetch_module._needs_browser(["jpeg"], render=False) is True
+        assert web_fetch_module._needs_browser(["png"], render=False) is True
+
+    def test_markdown_alone_does_not_need_a_browser(self) -> None:
+        assert web_fetch_module._needs_browser(["markdown"], render=False) is False
+        assert web_fetch_module._needs_browser([], render=False) is False
+
+    def test_browser_script_shape(self) -> None:
+        cmd = web_fetch_module._browser_script(
+            "https://example.com/a", "research", "example-a", ["markdown", "pdf"]
+        )
+        assert cmd == (
+            "mkdir -p research && save-webpage https://example.com/a "
+            "--formats markdown,pdf --out research --name example-a"
+        )
+
+    def test_browser_script_quotes_a_url_with_shell_metacharacters(self) -> None:
+        """A URL is caller-supplied text, not a trusted command fragment.
+
+        `save-webpage`'s own argument, quoted or not, still runs inside the
+        sandbox shell -- a query string is a completely ordinary place for a
+        `;`, `$(...)`, or `&&` to show up, and an unquoted URL would hand the
+        sandbox shell a second command to run.
+        """
+        hostile_url = "https://example.com/a?x=1;rm -rf / && echo pwned"
+        cmd = web_fetch_module._browser_script(
+            hostile_url, "research", "safe-name", ["markdown"]
+        )
+        # shlex.split proves the shell would see it as one argument, not as
+        # `;`, `&&`, or a subshell being interpreted.
+        parts = shlex.split(cmd)
+        assert hostile_url in parts
+        assert "rm" not in parts and "pwned" not in parts
+
+    def test_browser_script_quotes_a_hostile_out_dir_and_name(self) -> None:
+        cmd = web_fetch_module._browser_script(
+            "https://example.com/a",
+            "research/$(whoami)",
+            "name`id`",
+            ["markdown"],
+        )
+        parts = shlex.split(cmd)
+        assert "research/$(whoami)" in parts
+        assert "name`id`" in parts
+        # Neither injected form was actually interpreted by the split.
+        assert "whoami" not in parts and "id" not in parts
+
+    @pytest.mark.asyncio
+    async def test_present_files_returns_empty_without_touching_the_session(
+        self,
+    ) -> None:
+        session = _FakeSession()
+        result = await web_fetch_module._present_files(session, [])
+        assert result == {}
+        assert session.commands == []
+
+    @pytest.mark.asyncio
+    async def test_present_files_parses_size_and_path_skipping_malformed_lines(
+        self,
+    ) -> None:
+        session = _FakeSession(
+            responses={
+                "for f in": {
+                    "exit_code": 0,
+                    "stdout": (
+                        "1500 research/a.md\n"
+                        "not-a-size research/broken.md\n"
+                        "\n"
+                        "42000 research/b.pdf\n"
+                    ),
+                }
+            }
+        )
+
+        result = await web_fetch_module._present_files(
+            session, ["research/a.md", "research/broken.md", "research/b.pdf"]
+        )
+
+        assert result == {"research/a.md": 1500, "research/b.pdf": 42000}
+
+
 class TestTheBatchDoesNotRepeatItself:
     """Sandbox round trips are the expensive part of an otherwise cheap path.
 

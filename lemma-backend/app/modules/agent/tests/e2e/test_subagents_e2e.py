@@ -1,7 +1,8 @@
-"""Real-LLM e2e for agents-as-tools and the sub-agents toolset.
+"""Agents-as-tools, the sub-agents toolset, and ``SubAgentService`` directly.
 
-Exercises the full stack with a real model + the background worker on the
-system Lemma runtime (system:lemma, backed by LEMMA_OPENAI_API_KEY):
+Most of this file exercises the full stack with a real model + the background
+worker on the system Lemma runtime (system:lemma, backed by
+LEMMA_OPENAI_API_KEY):
 - A grant-based ``agent_<name>`` one-shot tool returns a STRING for a plain
   (no-output-schema) child and a structured DICT for a child with an
   output_schema, and links the child to the parent (``parent_id``).
@@ -10,15 +11,29 @@ system Lemma runtime (system:lemma, backed by LEMMA_OPENAI_API_KEY):
   tools (depth = 1).
 - ``GET /conversations?parent_id=`` returns the spawned children.
 
-Gated behind LEMMA_RUN_PROVIDER_E2E=1 (real provider creds + slow).
+Those are gated behind LEMMA_RUN_PROVIDER_E2E=1 (real provider creds + slow) on
+each test individually, rather than for the whole module: real-provider tests
+routinely skip in CI (and in `make coverage-backend-e2e-shard`, which
+deselects `provider` entirely), and error/cancellation coverage of
+``SubAgentService`` does not need a real model to reach it -- the ownership
+guard and the stop-request write are exercised below with a real Postgres-backed
+conversation graph and no LLM at all, so that coverage does not depend on
+credentials being configured anywhere the suite runs.
 """
 
 from __future__ import annotations
 
 import os
+from types import SimpleNamespace
+from uuid import UUID, uuid4
 
 import pytest
+from fastapi import status
 
+from app.core.infrastructure.db.session import async_session_maker
+from app.core.infrastructure.db.uow_factory import create_uow_from_session_maker
+from app.modules.agent.domain.value_objects import AgentRuntimeConfig
+from app.modules.agent.infrastructure.repositories import ConversationRepository
 from app.modules.agent.tests.e2e.system_lemma_helpers import (
     SYSTEM_LEMMA_SKIP_REASON,
     system_lemma_available,
@@ -29,17 +44,18 @@ from app.modules.agent.tests.e2e.test_agent_e2e import (
     _create_test_pod,
     _post_sse,
 )
+from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.tools.subagents.models import (
+    InteractSubagentRequest,
+    QuerySubagentsRequest,
+)
+from app.modules.agent.tools.subagents.pydantic_adapter import (
+    interact_subagent,
+    query_subagents,
+)
 from app.modules.test_support.e2e.waiters import wait_for_status
 
-pytestmark = [
-    pytest.mark.e2e,
-    pytest.mark.provider,
-    pytest.mark.skipif(
-        os.getenv("LEMMA_RUN_PROVIDER_E2E") != "1",
-        reason="Set LEMMA_RUN_PROVIDER_E2E=1 to run real provider-backed e2e tests.",
-    ),
-    pytest.mark.skipif(not system_lemma_available(), reason=SYSTEM_LEMMA_SKIP_REASON),
-]
+pytestmark = pytest.mark.e2e
 
 
 async def _create_agent(
@@ -134,6 +150,12 @@ async def _wait_for_terminal_child(client, pod_id, parent_conversation_id, *, ti
 
 
 @pytest.mark.asyncio
+@pytest.mark.provider
+@pytest.mark.skipif(
+    os.getenv("LEMMA_RUN_PROVIDER_E2E") != "1",
+    reason="Set LEMMA_RUN_PROVIDER_E2E=1 to run real provider-backed e2e tests.",
+)
+@pytest.mark.skipif(not system_lemma_available(), reason=SYSTEM_LEMMA_SKIP_REASON)
 async def test_grant_agent_tool_string_output_links_child(
     authenticated_client, fixed_test_org, worker
 ):
@@ -180,6 +202,12 @@ async def test_grant_agent_tool_string_output_links_child(
 
 
 @pytest.mark.asyncio
+@pytest.mark.provider
+@pytest.mark.skipif(
+    os.getenv("LEMMA_RUN_PROVIDER_E2E") != "1",
+    reason="Set LEMMA_RUN_PROVIDER_E2E=1 to run real provider-backed e2e tests.",
+)
+@pytest.mark.skipif(not system_lemma_available(), reason=SYSTEM_LEMMA_SKIP_REASON)
 async def test_grant_agent_tool_structured_output_returns_dict(
     authenticated_client, fixed_test_org, worker
 ):
@@ -228,6 +256,12 @@ async def test_grant_agent_tool_structured_output_returns_dict(
 
 
 @pytest.mark.asyncio
+@pytest.mark.provider
+@pytest.mark.skipif(
+    os.getenv("LEMMA_RUN_PROVIDER_E2E") != "1",
+    reason="Set LEMMA_RUN_PROVIDER_E2E=1 to run real provider-backed e2e tests.",
+)
+@pytest.mark.skipif(not system_lemma_available(), reason=SYSTEM_LEMMA_SKIP_REASON)
 async def test_named_agent_self_spawns_via_subagents_toolset(
     authenticated_client, fixed_test_org, worker
 ):
@@ -264,3 +298,164 @@ async def test_named_agent_self_spawns_via_subagents_toolset(
     # answered DELTA99 directly.
     child_text = await _assistant_text(authenticated_client, pod_id, child["id"])
     assert "DELTA99" in child_text
+
+
+# --------------------------------------------------------------------------
+# SubAgentService error/cancellation paths, driven directly (no LLM, no
+# worker). `_owned_child`'s ownership guard and `stop()`'s write to a real
+# active run are both deterministic once a conversation graph exists, so
+# there is nothing here a real model turn would add.
+
+
+async def _create_running_child(
+    authenticated_client,
+    pod_id: str,
+    *,
+    agent_name: str,
+    parent_conversation_id: str,
+) -> UUID:
+    """A real child conversation, linked and RUNNING -- no background job.
+
+    Mirrors what `SubAgentService.spawn` leaves behind (`parent_id` set, a
+    RUNNING agent run) the instant a child starts and before any worker picks
+    it up. Built directly rather than through `spawn()` so the tests below
+    have something deterministic to stop, with no race against a worker
+    actually finishing it first.
+    """
+    response = await authenticated_client.post(
+        f"/pods/{pod_id}/conversations",
+        json={
+            "agent_name": agent_name,
+            "title": "spawned child",
+            "type": "CHAT",
+            "parent_id": parent_conversation_id,
+        },
+    )
+    assert response.status_code == status.HTTP_201_CREATED, response.text
+    payload = response.json()
+    conversation_id = UUID(payload["id"])
+    agent_id = UUID(payload["agent_id"]) if payload.get("agent_id") else None
+
+    async with create_uow_from_session_maker(async_session_maker) as uow:
+        await ConversationRepository(uow).create_agent_run(
+            conversation_id=conversation_id,
+            agent_id=agent_id,
+            agent_runtime=AgentRuntimeConfig(profile_id="system:lemma"),
+            metadata={"source": "subagent_direct_e2e"},
+        )
+        await uow.commit()
+    return conversation_id
+
+
+@pytest.mark.asyncio
+async def test_query_and_interact_subagent_reject_conversations_this_agent_did_not_spawn(
+    authenticated_client, fixed_test_org, fixed_test_user
+):
+    """The ownership guard shared by every subagent operation (`_owned_child`).
+
+    Neither a conversation that does not exist nor one that exists but was
+    spawned under a *different* parent may be read or driven -- both come back
+    as a tool-shaped failure (`{"success": False, "error": ...}`), never an
+    unhandled exception reaching the harness.
+    """
+    pod_id = await _create_test_pod(authenticated_client, fixed_test_org)
+    await _create_agent(authenticated_client, pod_id, "owner", "Owns children.")
+    await _create_agent(authenticated_client, pod_id, "stranger", "Owns other children.")
+
+    owner_conversation_id = await _create_conversation(authenticated_client, pod_id, "owner")
+    stranger_conversation_id = await _create_conversation(
+        authenticated_client, pod_id, "stranger"
+    )
+    # A real, running child -- but spawned under "stranger", not "owner".
+    unrelated_child_id = await _create_running_child(
+        authenticated_client,
+        pod_id,
+        agent_name="stranger",
+        parent_conversation_id=stranger_conversation_id,
+    )
+
+    ctx = SimpleNamespace(
+        deps=BaseAgentContext(
+            user_id=UUID(fixed_test_user["id"]),
+            pod_id=UUID(pod_id),
+            conversation_id=UUID(owner_conversation_id),
+            agent_name="owner",
+        )
+    )
+
+    missing = await query_subagents(
+        ctx, QuerySubagentsRequest(mode="messages", conversation_id=str(uuid4()))
+    )
+    assert missing["success"] is False
+    assert "not spawned by this agent" in missing["error"]
+
+    unrelated = await interact_subagent(
+        ctx,
+        InteractSubagentRequest(action="stop", conversation_id=str(unrelated_child_id)),
+    )
+    assert unrelated["success"] is False
+    assert "not spawned by this agent" in unrelated["error"]
+
+    # Rejection must have no side effects: the stranger's own child run is
+    # exactly as it was.
+    still_running = await authenticated_client.get(
+        f"/pods/{pod_id}/conversations/{unrelated_child_id}"
+    )
+    assert still_running.status_code == status.HTTP_200_OK, still_running.text
+    assert still_running.json()["status"] == "RUNNING"
+
+
+@pytest.mark.asyncio
+async def test_interact_subagent_stop_requests_a_real_running_child(
+    authenticated_client, fixed_test_org, fixed_test_user
+):
+    """Cancellation: `stop()` on a real, owned child moves it to STOP_REQUESTED,
+    and is idempotent against a run that is already stopping."""
+    pod_id = await _create_test_pod(authenticated_client, fixed_test_org)
+    await _create_agent(
+        authenticated_client, pod_id, "supervisor", "Spawns and stops children."
+    )
+    await _create_agent(authenticated_client, pod_id, "worker_agent", "Does the work.")
+
+    parent_conversation_id = await _create_conversation(
+        authenticated_client, pod_id, "supervisor"
+    )
+    child_id = await _create_running_child(
+        authenticated_client,
+        pod_id,
+        agent_name="worker_agent",
+        parent_conversation_id=parent_conversation_id,
+    )
+
+    before = await authenticated_client.get(f"/pods/{pod_id}/conversations/{child_id}")
+    assert before.status_code == status.HTTP_200_OK, before.text
+    assert before.json()["status"] == "RUNNING"
+
+    ctx = SimpleNamespace(
+        deps=BaseAgentContext(
+            user_id=UUID(fixed_test_user["id"]),
+            pod_id=UUID(pod_id),
+            conversation_id=UUID(parent_conversation_id),
+            agent_name="supervisor",
+        )
+    )
+
+    stopped = await interact_subagent(
+        ctx, InteractSubagentRequest(action="stop", conversation_id=str(child_id))
+    )
+    assert stopped["success"] is True
+    assert stopped["conversation_id"] == str(child_id)
+    assert stopped["status"] == "STOP_REQUESTED"
+
+    after = await authenticated_client.get(f"/pods/{pod_id}/conversations/{child_id}")
+    assert after.status_code == status.HTTP_200_OK, after.text
+    assert after.json()["status"] == "STOP_REQUESTED"
+
+    # STOP_REQUESTED still counts as active (nothing has finished the run
+    # yet -- there is no worker here to do that), so a second stop call finds
+    # it again and is a harmless no-op rather than an error.
+    stopped_again = await interact_subagent(
+        ctx, InteractSubagentRequest(action="stop", conversation_id=str(child_id))
+    )
+    assert stopped_again["success"] is True
+    assert stopped_again["status"] == "STOP_REQUESTED"
