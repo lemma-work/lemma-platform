@@ -15,6 +15,11 @@ from app.modules.identity.domain.errors import (
     OrganizationNotFoundError,
     UserNotFoundError,
 )
+from app.modules.identity.domain.organization_identity import (
+    NoAvailableOrganizationName,
+    resolve_available_identity,
+    resolve_email_domain_for_policy,
+)
 from app.modules.identity.domain.organization_slugs import normalize_organization_slug
 from app.modules.identity.domain.organization_entities import (
     OrganizationEntity,
@@ -98,71 +103,64 @@ class OrganizationService:
 
         return member
 
-    async def _resolve_email_domain_for_policy(
-        self,
-        *,
-        owner: UserEntity,
-        join_policy: OrganizationJoinPolicy,
-        provided_domain: str | None,
-        exclude_org_id: UUID | None = None,
-    ) -> str | None:
-        """Resolve the domain an org claims, enforcing per-domain uniqueness.
-
-        Only ``EMAIL_DOMAIN`` orgs claim a domain (everyone else stores NULL, so
-        same-domain users can still create their own orgs). Attempting to claim a
-        domain already held by another ``EMAIL_DOMAIN`` org raises a conflict.
-        """
-        if join_policy != OrganizationJoinPolicy.EMAIL_DOMAIN:
-            return None
-
-        owner_domain = work_domain_from_email(str(owner.email))
-        if owner_domain is None:
-            raise IdentityValidationError(
-                "The EMAIL_DOMAIN join policy requires a work email domain"
-            )
-        if provided_domain:
-            normalized = provided_domain.strip().lower()
-            if normalized != owner_domain:
-                raise IdentityValidationError(
-                    "Organization email domain must match the owner's email domain"
-                )
-
-        existing_domain = await self.organization_repository.get_email_domain_org(
-            owner_domain
-        )
-        if existing_domain and existing_domain.id != exclude_org_id:
-            raise OrganizationConflictError(
-                "This email domain is already taken by another organization"
-            )
-        return owner_domain
+    async def _identity_is_free(self, name: str, slug: str) -> bool:
+        if await self.organization_repository.get_by_name(name):
+            return False
+        return await self.organization_repository.get_by_slug(slug) is None
 
     async def create_organization(
-        self, entity: OrganizationEntity, owner_user_id: UUID
+        self,
+        entity: OrganizationEntity,
+        owner_user_id: UUID,
+        *,
+        resolve_name_conflicts: bool = False,
     ) -> OrganizationEntity:
+        """Create an organization owned by ``owner_user_id``.
+
+        ``resolve_name_conflicts`` is for a name the user did not choose -- the
+        one onboarding derives for a first workspace. There, a 409 is a dead end
+        for someone who never typed a name, so the server picks the next free
+        one instead. A name the user *did* type still conflicts loudly: silently
+        creating "Acme 2" for someone who asked for "Acme" would be worse than
+        telling them.
+        """
         owner = await self.user_repository.get(owner_user_id)
         if not owner:
             raise UserNotFoundError()
 
-        existing_name = await self.organization_repository.get_by_name(entity.name)
-        if existing_name:
-            raise OrganizationConflictError(
-                "Organization with this name already exists",
-                code=OrganizationConflictError.NAME_TAKEN,
-            )
+        if resolve_name_conflicts:
+            try:
+                entity.name, entity.slug = await resolve_available_identity(
+                    entity.name, is_free=self._identity_is_free
+                )
+            except NoAvailableOrganizationName as exc:
+                raise OrganizationConflictError(
+                    "Could not find an available organization name",
+                    code=OrganizationConflictError.NAME_TAKEN,
+                ) from exc
+        else:
+            existing_name = await self.organization_repository.get_by_name(entity.name)
+            if existing_name:
+                raise OrganizationConflictError(
+                    "Organization with this name already exists",
+                    code=OrganizationConflictError.NAME_TAKEN,
+                )
 
-        entity.slug = normalize_organization_slug(entity.slug, entity.name)
+            entity.slug = normalize_organization_slug(entity.slug, entity.name)
 
-        existing_slug = await self.organization_repository.get_by_slug(entity.slug)
-        if existing_slug:
-            raise OrganizationConflictError(
-                "Organization slug already exists",
-                code=OrganizationConflictError.SLUG_TAKEN,
-            )
+            existing_slug = await self.organization_repository.get_by_slug(entity.slug)
+            if existing_slug:
+                raise OrganizationConflictError(
+                    "Organization slug already exists",
+                    code=OrganizationConflictError.SLUG_TAKEN,
+                )
 
-        entity.email_domain = await self._resolve_email_domain_for_policy(
-            owner=owner,
+        entity.email_domain = await resolve_email_domain_for_policy(
+            owner_email=str(owner.email),
             join_policy=entity.join_policy,
             provided_domain=entity.email_domain,
+            exclude_org_id=None,
+            get_email_domain_org=self.organization_repository.get_email_domain_org,
         )
 
         organization = await self.organization_repository.create(entity)
@@ -212,11 +210,12 @@ class OrganizationService:
         provided_domain = (
             email_domain if email_domain is not None else organization.email_domain
         )
-        organization.email_domain = await self._resolve_email_domain_for_policy(
-            owner=requester,
+        organization.email_domain = await resolve_email_domain_for_policy(
+            owner_email=str(requester.email),
             join_policy=new_policy,
             provided_domain=provided_domain,
             exclude_org_id=org_id,
+            get_email_domain_org=self.organization_repository.get_email_domain_org,
         )
         organization.join_policy = new_policy
 

@@ -1156,3 +1156,115 @@ async def test_accept_invitation_without_pod_id_does_not_call_pod_port(
 
     pod_membership_port_mock.get_pod_organization_id.assert_not_awaited()
     pod_membership_port_mock.add_member_to_pod.assert_not_awaited()
+
+
+# --- automatic first-organization naming ------------------------------------
+#
+# A name onboarding derived, not one the user typed. A 409 there is a dead end
+# for someone who never chose anything, so the server walks the ladder itself
+# rather than sending the browser round it twenty times.
+
+
+@pytest.mark.asyncio
+async def test_resolving_names_keeps_the_first_choice_when_it_is_free(
+    organization_service: OrganizationService,
+    organization_repository_mock: AsyncMock,
+):
+    organization_repository_mock.get_by_name.return_value = None
+    organization_repository_mock.get_by_slug.return_value = None
+    organization_repository_mock.create.side_effect = lambda entity: entity
+
+    organization = await organization_service.create_organization(
+        OrganizationEntity(name="Acme", slug=""),
+        owner_user_id=uuid4(),
+        resolve_name_conflicts=True,
+    )
+
+    assert organization.name == "Acme"
+    assert organization.slug == "acme"
+
+
+@pytest.mark.asyncio
+async def test_resolving_names_steps_past_a_taken_name(
+    organization_service: OrganizationService,
+    organization_repository_mock: AsyncMock,
+):
+    taken = {"Acme"}
+    organization_repository_mock.get_by_name.side_effect = (
+        lambda name: OrganizationEntity(name=name, slug="x") if name in taken else None
+    )
+    organization_repository_mock.get_by_slug.return_value = None
+    organization_repository_mock.create.side_effect = lambda entity: entity
+
+    organization = await organization_service.create_organization(
+        OrganizationEntity(name="Acme", slug=""),
+        owner_user_id=uuid4(),
+        resolve_name_conflicts=True,
+    )
+
+    assert organization.name == "Acme 2"
+    assert organization.slug == "acme-2"
+
+
+@pytest.mark.asyncio
+async def test_resolving_names_steps_past_a_taken_slug_too(
+    organization_service: OrganizationService,
+    organization_repository_mock: AsyncMock,
+):
+    """A free name whose slug is taken is not a free identity."""
+    organization_repository_mock.get_by_name.return_value = None
+    organization_repository_mock.get_by_slug.side_effect = (
+        lambda slug: OrganizationEntity(name="Other", slug=slug)
+        if slug == "acme"
+        else None
+    )
+    organization_repository_mock.create.side_effect = lambda entity: entity
+
+    organization = await organization_service.create_organization(
+        OrganizationEntity(name="Acme", slug=""),
+        owner_user_id=uuid4(),
+        resolve_name_conflicts=True,
+    )
+
+    assert organization.name == "Acme 2"
+
+
+@pytest.mark.asyncio
+async def test_resolving_names_falls_back_to_a_suffix_it_cannot_lose(
+    organization_service: OrganizationService,
+    organization_repository_mock: AsyncMock,
+):
+    """Every readable rung taken must still not fail a signup."""
+    readable = {"Acme"} | {f"Acme {n}" for n in range(2, 12)}
+    organization_repository_mock.get_by_name.side_effect = (
+        lambda name: OrganizationEntity(name=name, slug="x") if name in readable else None
+    )
+    organization_repository_mock.get_by_slug.return_value = None
+    organization_repository_mock.create.side_effect = lambda entity: entity
+
+    organization = await organization_service.create_organization(
+        OrganizationEntity(name="Acme", slug=""),
+        owner_user_id=uuid4(),
+        resolve_name_conflicts=True,
+    )
+
+    assert organization.name.startswith("Acme ")
+    assert organization.name not in readable
+
+
+@pytest.mark.asyncio
+async def test_a_typed_name_still_conflicts_loudly(
+    organization_service: OrganizationService,
+    organization_repository_mock: AsyncMock,
+):
+    """Silently creating "Acme 2" for someone who asked for "Acme" would be
+    worse than telling them, so the default is unchanged."""
+    organization_repository_mock.get_by_name.return_value = OrganizationEntity(
+        name="Acme", slug="acme"
+    )
+
+    with pytest.raises(OrganizationConflictError):
+        await organization_service.create_organization(
+            OrganizationEntity(name="Acme", slug="acme"),
+            owner_user_id=uuid4(),
+        )
