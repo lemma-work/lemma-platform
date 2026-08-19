@@ -12,6 +12,7 @@ import {
     subscribeToConsent,
 } from '@/lib/analytics/consent';
 import { config, isLocalDeployment } from '@/lib/config';
+import { useHydrated } from '@/lib/use-hydrated';
 
 /**
  * Asks once whether analytics may persist to this device.
@@ -34,17 +35,26 @@ import { config, isLocalDeployment } from '@/lib/config';
  */
 export function ConsentBanner() {
     // Read through the store rather than an effect: the decision lives in
-    // localStorage, which does not exist during SSR, and the server snapshot
-    // keeps the banner hidden until hydration says otherwise — so nobody who has
-    // already answered sees it flash.
+    // localStorage, which does not exist during SSR.
     const decision = useSyncExternalStore(
         subscribeToConsent,
         readConsentDecision,
         consentServerSnapshot,
     );
 
+    // The server cannot know the answer, so its snapshot is `unanswered` — the
+    // one value that renders this card. Without the gate below, the banner is
+    // therefore prerendered into the HTML of every document, for everyone,
+    // including the people who accepted months ago, and hydration then removes
+    // it. Client-side navigation never shows it, because it never re-renders
+    // from the server snapshot; a hard refresh shows the whole slide-up and
+    // then swallows it. Same reason the switch on /privacy waits: `config`
+    // resolves from `process.env` on the server and `window.__ENV` in the
+    // browser, so a runtime-injected key disagrees across that boundary too.
+    const hydrated = useHydrated();
+
     const analyticsRuns = !isLocalDeployment() && Boolean(config.ANALYTICS_KEY);
-    if (!analyticsRuns || decision !== 'unanswered') return null;
+    if (!hydrated || !analyticsRuns || decision !== 'unanswered') return null;
 
     const decide = (choice: 'granted' | 'denied') => {
         recordConsentDecision(choice);
