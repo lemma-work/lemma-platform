@@ -1,7 +1,7 @@
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import EmailStr, field_validator
+from pydantic import EmailStr, Field, field_validator
 
 from app.core.api.schemas import BaseSchema
 from app.modules.identity.domain.email import normalize_identity_email
@@ -21,6 +21,15 @@ class OrganizationCreateRequest(BaseSchema):
     slug: str | None = None
     email_domain: str | None = None
     join_policy: OrganizationJoinPolicy = OrganizationJoinPolicy.INVITE_ONLY
+    resolve_name_conflicts: bool = Field(
+        default=False,
+        description=(
+            "Take the next free name instead of conflicting. For a name the "
+            "user did not choose -- onboarding's derived first workspace -- "
+            "where a 409 is a dead end for someone who never typed a name. "
+            "Leave false for a name they typed, so a clash is reported."
+        ),
+    )
 
 
 class OrganizationUpdateRequest(BaseSchema):

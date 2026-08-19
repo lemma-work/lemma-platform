@@ -242,6 +242,36 @@ class AskUserRequest(BaseModel):
             "added for the user, so do not add one yourself."
         )
     )
+    content: str | None = Field(
+        default=None,
+        description=(
+            "Optional inline HTML/SVG rendered in place of the default choice "
+            "chips. No DOCTYPE/<html>/<head>/<body>; same contract as a WIDGET, "
+            "so load the `lemma-widget` skill before writing one. The widget "
+            "answers the questions above rather than replacing them: it posts "
+            "back the same headers and option labels, and anything else is "
+            "rejected. Always fill `questions` -- a client that cannot render "
+            "the widget falls back to the chips, and the answer shape is "
+            "identical either way."
+        ),
+    )
+    loading_messages: list[str] = Field(
+        default_factory=list,
+        max_length=4,
+        description="Messages shown while `content` renders.",
+    )
+
+
+def validate_ask_user_payload(request: "AskUserRequest") -> str | None:
+    """Semantic checks the pydantic model cannot express.
+
+    Returned as a string so ``ask_user`` can answer ``success=false`` with a
+    readable reason, the same way ``display_resource`` does, instead of raising
+    a validation error the model has to guess at.
+    """
+    if request.loading_messages and not (request.content and request.content.strip()):
+        return "loading_messages is only valid together with content."
+    return None
 
 
 class AskUserResponse(BaseToolResponse):

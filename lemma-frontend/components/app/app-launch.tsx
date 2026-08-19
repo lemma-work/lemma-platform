@@ -13,6 +13,8 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/comp
 import { getLemmaClient } from '@/lib/sdk/lemma-client';
 import { appIndexQueryKey } from '@/lib/hooks/use-app';
 import { buildAppThemeMessage } from '@/lib/app/app-theme';
+import { useProfile } from '@/lib/hooks/use-user';
+import { trackAppOpened } from '@/lib/analytics/onboarding';
 import { resolveWidgetTheme } from '@/lib/assistant/widget-theme';
 import { buildResourceShareUrl } from '@/lib/assistant/conversation-presentation';
 
@@ -44,6 +46,7 @@ export function AppFrame({
     chrome = 'bar',
 }: AppFrameProps) {
     const queryClient = useQueryClient();
+    const { data: profile } = useProfile();
     const { resolvedTheme } = useTheme();
     const iframeRef = useRef<HTMLIFrameElement | null>(null);
     const [frameKey, setFrameKey] = useState(0);
@@ -218,6 +221,11 @@ export function AppFrame({
                     onLoad={() => {
                         setFrameLoaded(true);
                         setFrameFailed(false);
+                        // A rendered app frame is the pod doing work for its
+                        // owner -- the second activation transition. Deduped to
+                        // once per browser, so this stays activation rather than
+                        // becoming an app-usage counter.
+                        trackAppOpened(profile?.created_at ?? null);
                         postAppTheme();
                     }}
                     onError={() => {
