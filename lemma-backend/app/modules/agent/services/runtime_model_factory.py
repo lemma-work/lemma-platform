@@ -358,16 +358,6 @@ def usage_limits_for(model: Model, limits: UsageLimits) -> UsageLimits:
     return limits
 
 
-async def default_system_pydantic_ai_model() -> Model:
-    """Build the code-defined system default profile model."""
-    resolved = await default_system_runtime()
-    return require_pydantic_ai_model_from_runtime_profile(
-        runtime_profile=resolved.public_snapshot(),
-        runtime_credentials=resolved.credentials or {},
-        fallback_model_name=resolved.model_name_for_harness,
-    )
-
-
 async def default_system_runtime():
     """Resolve the code-defined system default runtime profile."""
     from uuid import uuid4
