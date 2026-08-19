@@ -40,19 +40,40 @@ def _provision_bucket(container_id: str) -> None:
     Retried because an open TCP port is not the same as a ready MinIO — the
     server accepts the connection several hundred milliseconds before it will
     answer an API call.
+
+    Plain ``time.sleep``, not ``waiters.eventually()``: this runs from a sync,
+    session-scoped fixture during collection-time container bootstrap, before
+    any test's event loop exists.
     """
     deadline = time.monotonic() + 60
     last_error = b""
     while time.monotonic() < deadline:
         alias = subprocess.run(
-            ["docker", "exec", container_id, "mc", "alias", "set", "local",
-             "http://127.0.0.1:9000", MINIO_ROOT_USER, MINIO_ROOT_PASSWORD],
+            [
+                "docker",
+                "exec",
+                container_id,
+                "mc",
+                "alias",
+                "set",
+                "local",
+                "http://127.0.0.1:9000",
+                MINIO_ROOT_USER,
+                MINIO_ROOT_PASSWORD,
+            ],
             capture_output=True,
         )
         if alias.returncode == 0:
             made = subprocess.run(
-                ["docker", "exec", container_id, "mc", "mb", "--ignore-existing",
-                 f"local/{_BUCKET}"],
+                [
+                    "docker",
+                    "exec",
+                    container_id,
+                    "mc",
+                    "mb",
+                    "--ignore-existing",
+                    f"local/{_BUCKET}",
+                ],
                 capture_output=True,
             )
             if made.returncode == 0:

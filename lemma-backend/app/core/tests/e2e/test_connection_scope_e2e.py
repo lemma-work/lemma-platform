@@ -143,6 +143,10 @@ async def test_two_monitors_in_a_row_both_detect(db_manager) -> None:
     """
     from app.core.infrastructure.db.session import async_session_maker, get_engine
 
+    # Not a poll loop -- `range(2)` manufactures the exact same connection-hold
+    # twice, on purpose, to prove the *second* monitor still detects it. The
+    # `asyncio.sleep` below is a fixed-duration hold for the monitor to catch,
+    # not a wait for some condition to become true.
     for attempt in range(2):
         monitor = connection_scope.start_connection_scope_monitor(
             idle_hold_seconds=0.05, strict=True
