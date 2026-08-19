@@ -8,13 +8,14 @@ workflows) to prove the import produced working — not just present — resourc
 
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
 from uuid import uuid4
 
 from fastapi import status
 
 from lemma_pod_bundle import pack_bundle
+
+from app.modules.test_support.e2e.waiters import wait_for_status
 
 BUNDLES_DIR = Path(__file__).parent / "bundles"
 
@@ -79,15 +80,24 @@ async def new_pod(client, org_id: str, *, label: str = "Use Case") -> str:
 
 
 async def wait_import(client, pod_id: str, import_id: str, *, until, timeout: int = 120) -> dict:
-    body: dict | None = None
-    for _ in range(timeout):
+    async def probe() -> dict:
         res = await client.get(f"/pods/{pod_id}/bundle/imports/{import_id}")
         assert res.status_code == status.HTTP_200_OK, res.text
-        body = res.json()
-        if body["status"] in until:
-            return body
-        await asyncio.sleep(1)
-    raise AssertionError(f"Import stuck at {body and body['status']} (wanted {until})")
+        return res.json()
+
+    # failed=set() (not the wait_for_status default {"FAILED","ERROR"}):
+    # `until` is caller-specified and can legitimately BE {"FAILED"} (see
+    # test_connector_import_e2e.py, which waits for an import to reach its
+    # own expected failure) -- preserve the original behavior of only ever
+    # stopping on a status in `until`, nothing else.
+    return await wait_for_status(
+        label=f"pod {pod_id} bundle import {import_id} to reach {until}",
+        probe=probe,
+        expected=set(until),
+        failed=set(),
+        timeout_seconds=timeout,
+        interval_seconds=0.15,
+    )
 
 
 async def start_and_plan_import(
@@ -152,15 +162,25 @@ async def run_function(
     )
     assert res.status_code == status.HTTP_200_OK, res.text
     run_id = res.json()["id"]
-    run: dict | None = None
-    for _ in range(timeout):
+
+    async def probe() -> dict:
         got = await client.get(
             f"/pods/{pod_id}/functions/{function_name}/runs/{run_id}"
         )
         assert got.status_code == status.HTTP_200_OK, got.text
-        run = got.json()
-        if run["status"] in ("COMPLETED", "FAILED"):
-            break
-        await asyncio.sleep(1)
-    assert run is not None and run["status"] == expected_status, run
+        return got.json()
+
+    # failed=set(): the original loop treated COMPLETED and FAILED as
+    # equally "done" and left the actual pass/fail decision to the assert
+    # below against caller-supplied expected_status -- preserve that rather
+    # than fail-fast on FAILED, which would break a caller expecting it.
+    run = await wait_for_status(
+        label=f"function {function_name} run {run_id}",
+        probe=probe,
+        expected={"COMPLETED", "FAILED"},
+        failed=set(),
+        timeout_seconds=timeout,
+        interval_seconds=0.15,
+    )
+    assert run["status"] == expected_status, run
     return run

@@ -9,13 +9,13 @@ the bundle layout, resource manifests, and ``data.csv`` seeding.
 
 from __future__ import annotations
 
-import asyncio
 import json
 from uuid import uuid4
 
 import pytest
 from fastapi import status
 
+from app.modules.test_support.e2e.waiters import wait_for_status
 from lemma_pod_bundle import extract_bundle
 
 pytestmark = [pytest.mark.e2e, pytest.mark.worker]
@@ -27,16 +27,23 @@ async def _wait_for_export_ready(
     export_id: str,
     timeout_seconds: int = 60,
 ) -> dict:
-    for _ in range(timeout_seconds):
+    async def probe() -> dict:
         res = await authenticated_client.get(
             f"/pods/{pod_id}/bundle/exports/{export_id}"
         )
         assert res.status_code == status.HTTP_200_OK, res.text
-        body = res.json()
-        if body["status"] in ("READY", "FAILED"):
-            return body
-        await asyncio.sleep(1)
-    raise AssertionError(f"Export did not finish in {timeout_seconds}s")
+        return res.json()
+
+    # failed=set(): every caller here asserts status == "READY" itself
+    # afterward -- return on either terminal state, same as the original.
+    return await wait_for_status(
+        label=f"pod {pod_id} bundle export {export_id}",
+        probe=probe,
+        expected={"READY", "FAILED"},
+        failed=set(),
+        timeout_seconds=timeout_seconds,
+        interval_seconds=0.15,
+    )
 
 
 async def _create_table_with_rows(authenticated_client, pod_id: str, table_name: str) -> None:
