@@ -125,6 +125,30 @@ class ResendPlatformService:
             response.raise_for_status()
             return response.json() if response.content else {}
 
+    async def list_received_emails(
+        self, *, after: str | None = None, limit: int = 20
+    ) -> dict[str, Any]:
+        """List recently received emails, newest first, for polling ingestion.
+
+        The counterpart to the inbound webhook for runtimes without one (the
+        desktop app): the poller walks this list to discover new email ids, then
+        ``fetch_received_email`` fills each body in. ``after`` is a Resend cursor
+        (an email id) for pagination. Returns ``{"data": [...], "has_more": ...}``.
+        """
+        if not self._api_key:
+            raise AgentSurfaceValidationError("Resend receive requires an api_key.")
+        params: dict[str, Any] = {"limit": max(1, min(limit, 100))}
+        if after:
+            params["after"] = after
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.get(
+                f"{self._api_base.rstrip('/')}/emails/receiving",
+                headers={"Authorization": f"Bearer {self._api_key}"},
+                params=params,
+            )
+            response.raise_for_status()
+            return response.json() if response.content else {}
+
     async def download_attachment_bytes(
         self,
         event: ParsedInboundSurfaceEvent,

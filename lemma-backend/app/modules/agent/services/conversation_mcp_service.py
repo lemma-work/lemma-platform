@@ -22,7 +22,11 @@ from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.modules.agent.domain.entities import Agent, Conversation
 from app.modules.agent.domain.vision import vision_mode_from_runtime_profile
-from app.modules.agent.services.mcp_content import image_contents, text_content
+from app.modules.agent.services.mcp_content import (
+    image_contents,
+    result_payload,
+    text_content,
+)
 from app.modules.agent.domain.value_objects import JsonObject, to_json_value
 from app.modules.agent.infrastructure.mcp import (
     exported_tool_name,
@@ -381,7 +385,7 @@ class ConversationMCPService:
         # `view_image` and `pod_view_document_pages` reached them as JSON
         # describing a picture they never received.
         images = image_contents(result)
-        payload = to_json_value(result)
+        payload = result_payload(result)
         if isinstance(payload, dict):
             return CallToolResult(
                 content=[text_content(payload), *images],

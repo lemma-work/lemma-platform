@@ -141,6 +141,47 @@ class TestParseDbError:
         assert "secret_value" not in msg
         assert "some weird error" in msg
 
+    def test_undefined_column_is_a_clean_message_not_a_driver_class(self):
+        raw = (
+            "<class 'asyncpg.exceptions.UndefinedColumnError'>: column "
+            '"no_such_column" does not exist\n'
+            "[SQL: SELECT no_such_column FROM ...]"
+        )
+        exc = Exception(raw)
+        msg, details, cls = parse_db_error(
+            exc, table_name="app_specs", operation="query execution"
+        )
+
+        assert cls is DatastoreValidationError
+        assert "asyncpg" not in msg
+        assert "<class" not in msg
+        assert "no_such_column" in msg
+        assert details == {"field": "no_such_column"}
+
+    def test_undefined_table_is_a_clean_message(self):
+        raw = (
+            "<class 'asyncpg.exceptions.UndefinedTableError'>: relation "
+            '"ghost" does not exist'
+        )
+        exc = Exception(raw)
+        msg, details, cls = parse_db_error(exc, operation="query execution")
+
+        assert cls is DatastoreValidationError
+        assert "asyncpg" not in msg
+        assert "ghost" in msg
+
+    def test_unmatched_asyncpg_error_never_leaks_the_class_name(self):
+        # An error with no dedicated branch still must not carry the driver's
+        # internal class name through the fallback path.
+        raw = "<class 'asyncpg.exceptions.SomeNovelError'>: something odd happened"
+        exc = Exception(raw)
+        msg, _details, cls = parse_db_error(exc, operation="query execution")
+
+        assert cls is DatastoreValidationError
+        assert "<class" not in msg
+        assert "asyncpg" not in msg
+        assert "something odd happened" in msg
+
 
 class TestRecordValidatorEnum:
     def _make_validator(self, columns: list[ColumnSchema] | None = None) -> RecordValidator:

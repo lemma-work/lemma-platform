@@ -217,6 +217,15 @@ class SurfaceSettings(BaseSettings):
             "the matched surface account."
         ),
     )
+    enable_resend_polling_mode: bool = Field(
+        default=False,
+        description=(
+            "Poll Resend's received-emails API from the worker process instead of "
+            "receiving inbound email over a public webhook. Intended for the "
+            "desktop app and other local/server environments without a public "
+            "HTTPS URL. Requires RESEND_API_KEY and RESEND_INBOUND_DOMAIN."
+        ),
+    )
 
 
 surface_settings = SurfaceSettings()

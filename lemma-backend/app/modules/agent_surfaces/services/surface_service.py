@@ -780,10 +780,19 @@ class AgentSurfaceService(SurfaceSetupReadMixin, TelegramMiniAppSyncMixin):
             and surface_settings.enable_slack_socket_mode
         ):
             return
+        if (
+            surface.surface_type is SurfacePlatform.RESEND
+            and surface_settings.enable_resend_polling_mode
+        ):
+            # Resend sends outbound over its API and, in polling mode, pulls
+            # inbound from its received-emails API — neither needs a public
+            # callback, so a localhost/desktop runtime can run an email surface.
+            return
         raise AgentSurfaceValidationError(
             f"{surface.surface_type.value} surfaces require a public HTTPS API URL "
-            "for webhook delivery in this runtime. Only Telegram polling and Slack "
-            "Socket Mode are supported without a public webhook URL."
+            "for webhook delivery in this runtime. Only Telegram polling, Slack "
+            "Socket Mode, and Resend polling are supported without a public "
+            "webhook URL."
         )
 
     async def _ensure_unique_org_credential_binding(

@@ -271,6 +271,61 @@ class TestDatastoreRecords:
         assert [row["name"] for row in second_page["items"]] == ["Beacon Migration"]
 
     @pytest.mark.asyncio
+    async def test_in_operator_matches_any_of_a_list(
+        self,
+        project_workspace: DatastoreApi,
+        fixed_test_user,
+    ):
+        """The documented ``in`` operator filters on multiple values at once."""
+        pod_api = project_workspace
+        await _seed_projects(pod_api, fixed_test_user["id"])
+
+        both = await pod_api.list_records(
+            "projects",
+            sort='{"field":"budget","direction":"desc"}',
+            filter='{"field":"status","op":"in","value":["active","planned"]}',
+        )
+        assert [row["name"] for row in both["items"]] == [
+            "Apollo Rollout",
+            "Beacon Migration",
+        ]
+
+        one = await pod_api.list_records(
+            "projects",
+            filter='{"field":"name","op":"in","value":["Beacon Migration"]}',
+        )
+        assert [row["name"] for row in one["items"]] == ["Beacon Migration"]
+
+        none = await pod_api.list_records(
+            "projects",
+            filter='{"field":"status","op":"in","value":[]}',
+        )
+        assert none["items"] == []
+
+    @pytest.mark.asyncio
+    async def test_query_returns_numeric_aggregates_as_numbers(
+        self,
+        project_workspace: DatastoreApi,
+        fixed_test_user,
+    ):
+        """Postgres numerics (avg/sum) come back as JSON numbers, not strings."""
+        pod_api = project_workspace
+        await _seed_projects(pod_api, fixed_test_user["id"])
+
+        result = await pod_api.query(
+            "SELECT avg(budget) AS avg_budget, sum(budget) AS total_budget, "
+            "count(*) AS n FROM projects"
+        )
+        row = result["items"][0]
+        assert isinstance(row["avg_budget"], (int, float))
+        assert not isinstance(row["avg_budget"], str)
+        assert isinstance(row["total_budget"], (int, float))
+        # (125000.5 + 42000.0) / 2 == 83500.25
+        assert row["avg_budget"] == pytest.approx(83500.25)
+        assert row["total_budget"] == pytest.approx(167000.5)
+        assert row["n"] == 2
+
+    @pytest.mark.asyncio
     async def test_record_can_be_fetched_and_updated_recomputing_columns(
         self,
         project_workspace: DatastoreApi,
@@ -865,3 +920,22 @@ class TestDatastoreRecordErrorMessages:
         assert details is not None
         assert "eq" in details["allowed_operators"]
         assert "like" in details["allowed_operators"]
+        assert "in" in details["allowed_operators"]
+
+    @pytest.mark.asyncio
+    async def test_unknown_column_query_returns_clean_message_not_driver_class(
+        self,
+        project_workspace: DatastoreApi,
+        fixed_test_user,
+    ):
+        """An unknown column must not leak ``<class 'asyncpg…'>`` to the caller."""
+        await _seed_projects(project_workspace, fixed_test_user["id"])
+        body = await project_workspace.query(
+            "SELECT no_such_column FROM projects",
+            expected_status=status.HTTP_400_BAD_REQUEST,
+        )
+        message = body["message"]
+        assert "no_such_column" in message
+        assert "does not exist" in message
+        assert "asyncpg" not in message
+        assert "<class" not in message

@@ -12,7 +12,13 @@ from app.modules.agent.domain.value_objects import JsonObject
 
 class RecordFilter(BaseModel):
     column: str
-    op: str = Field(default="eq", description="eq, ne, gt, gte, lt, lte, like, in.")
+    op: str = Field(
+        default="eq",
+        description=(
+            "eq, ne, gt, gte, lt, lte, like, ilike, in. Use `in` with a list "
+            "value for multi-value membership."
+        ),
+    )
     # Explicit scalar/list union (not bare `Any`): a bare Any field serializes to
     # a typeless `{"default": null}` JSON-schema node that strict providers
     # (e.g. Fireworks) reject with "could not understand the instance".

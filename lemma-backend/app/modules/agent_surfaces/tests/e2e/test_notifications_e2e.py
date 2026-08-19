@@ -593,3 +593,88 @@ async def test_a_second_pod_in_the_org_also_gets_a_mailbox(
     # Distinct addresses are what makes sharing the key safe: inbound routes on
     # the address, which carries a unique index.
     assert len(set(addresses.values())) == 2
+
+
+async def test_resend_mailbox_is_blocked_on_a_local_url_without_polling(
+    authenticated_client: AsyncClient,
+    db_session: AsyncSession,
+    test_pod,
+    fixed_test_user,
+    fake_resend,
+    monkeypatch,
+):
+    """The desktop-app failure, reproduced against the real surface service.
+
+    On a localhost API URL with no public webhook and polling mode off, the
+    Resend mailbox cannot be provisioned (the runtime gate demands a public
+    HTTPS callback), so ``message_user`` is UNDELIVERABLE and no surface lands.
+    """
+    from sqlalchemy import select
+
+    from app.core.config import settings as core_settings
+    from app.modules.agent_surfaces.config import surface_settings
+    from app.modules.agent_surfaces.infrastructure.models import AgentSurface
+
+    monkeypatch.setattr(core_settings, "resend_api_key", "re_test")
+    monkeypatch.setattr(surface_settings, "resend_inbound_domain", "ops.example.com")
+    # Override the e2e's public HTTPS URL back to the desktop app's reality.
+    monkeypatch.setattr(core_settings, "api_url", "http://localhost:8711")
+    monkeypatch.setattr(surface_settings, "enable_resend_polling_mode", False)
+
+    pod_id = test_pod["id"]
+    created = await _notify(authenticated_client, pod_id, fixed_test_user["id"])
+
+    assert created["delivery_status"] == "UNDELIVERABLE"
+    assert "creating a mailbox for it failed" in (
+        created["undeliverable_reason"] or ""
+    )
+
+    await db_session.commit()
+    surfaces = (
+        await db_session.execute(
+            select(AgentSurface).where(AgentSurface.pod_id == UUID(pod_id))
+        )
+    ).scalars().all()
+    assert surfaces == [], "no surface should be provisioned when the gate blocks it"
+
+
+async def test_resend_mailbox_is_minted_on_a_local_url_with_polling(
+    authenticated_client: AsyncClient,
+    db_session: AsyncSession,
+    test_pod,
+    fixed_test_user,
+    fake_resend,
+    monkeypatch,
+):
+    """The fix: ENABLE_RESEND_POLLING_MODE lets the desktop app (localhost, no
+    public webhook) mint a Resend mailbox, so ``message_user`` is deliverable.
+    """
+    from sqlalchemy import select
+
+    from app.core.config import settings as core_settings
+    from app.modules.agent_surfaces.config import surface_settings
+    from app.modules.agent_surfaces.infrastructure.models import AgentSurface
+
+    monkeypatch.setattr(core_settings, "resend_api_key", "re_test")
+    monkeypatch.setattr(surface_settings, "resend_inbound_domain", "ops.example.com")
+    monkeypatch.setattr(core_settings, "api_url", "http://localhost:8711")
+    monkeypatch.setattr(surface_settings, "enable_resend_polling_mode", True)
+
+    pod_id = test_pod["id"]
+    created = await _notify(authenticated_client, pod_id, fixed_test_user["id"])
+
+    # The mailbox was minted, so this is not the "no surface / provision failed"
+    # branch. Same localhost URL as the test above — only polling mode differs.
+    assert "creating a mailbox for it failed" not in (
+        created["undeliverable_reason"] or ""
+    )
+
+    await db_session.commit()
+    surfaces = (
+        await db_session.execute(
+            select(AgentSurface).where(AgentSurface.pod_id == UUID(pod_id))
+        )
+    ).scalars().all()
+    assert len(surfaces) == 1
+    assert surfaces[0].surface_type == "RESEND"
+    assert surfaces[0].surface_identity_email.endswith("@ops.example.com")

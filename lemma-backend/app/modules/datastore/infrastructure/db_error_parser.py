@@ -41,6 +41,11 @@ def _short_db_message(raw: str) -> str:
             raw = raw[:idx]
     line = raw.strip().rstrip(".")
     line = line.split("\n")[0].strip()
+    # SQLAlchemy's DBAPIError stringifies as ``<class 'asyncpg.exceptions.X'>:
+    # message``. The leading class name is a driver internal this module exists
+    # to keep out of user-facing errors, so strip it from any message that still
+    # carries it (e.g. an asyncpg error with no dedicated branch above).
+    line = re.sub(r"^<class '[^']*'>:\s*", "", line)
     return line
 
 
@@ -74,6 +79,49 @@ def _extract_column_from_detail(detail_text: str) -> str | None:
     used as a fallback when the constraint name heuristic fails. We look for the
     column name mentioned in the detail. Returns ``None`` if nothing useful.
     """
+    return None
+
+
+_CONNECTION_MARKERS = (
+    "connection",
+    "timeout",
+    "server closed the connection",
+    "terminating connection",
+    "too many connections",
+)
+
+
+def _is_connection_error(lower: str) -> bool:
+    return any(marker in lower for marker in _CONNECTION_MARKERS)
+
+
+def _undefined_identifier_error(
+    raw: str, lower: str, table_name: str | None
+) -> tuple[str, dict[str, Any] | None, type] | None:
+    """Clean message for an unknown column/table, or ``None`` if not that error.
+
+    Postgres phrases these as ``column "x" does not exist`` / ``relation "y"
+    does not exist``. Without a dedicated branch they fell to the fallback and
+    leaked the ``<class 'asyncpg…'>`` prefix.
+    """
+    if "does not exist" not in lower or not ("column" in lower or "relation" in lower):
+        return None
+    col_m = re.search(r'column "([^"]+)" does not exist', raw)
+    if col_m:
+        col_name = col_m.group(1)
+        suffix = f" on table '{table_name}'." if table_name else "."
+        return (
+            f"Column '{col_name}' does not exist{suffix}",
+            {"field": col_name},
+            DatastoreValidationError,
+        )
+    rel_m = re.search(r'relation "([^"]+)" does not exist', raw)
+    if rel_m:
+        return (
+            f"Table or relation '{rel_m.group(1)}' does not exist.",
+            {"relation": rel_m.group(1)},
+            DatastoreValidationError,
+        )
     return None
 
 
@@ -243,15 +291,13 @@ def parse_db_error(
             DatastoreValidationError,
         )
 
+    # --- Undefined column / table (unknown identifier in the query) -----------
+    undefined = _undefined_identifier_error(raw, lower, table_name)
+    if undefined is not None:
+        return undefined
+
     # --- Connection / timeout (infrastructure, not user error) ----------------
-    infra_markers = (
-        "connection",
-        "timeout",
-        "server closed the connection",
-        "terminating connection",
-        "too many connections",
-    )
-    if any(marker in lower for marker in infra_markers):
+    if _is_connection_error(lower):
         return (
             f"A database connectivity issue occurred during {operation}.",
             None,

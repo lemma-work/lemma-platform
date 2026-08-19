@@ -39,6 +39,7 @@ from app.modules.agent.tools.pod.pod_data_access import (
 )
 from app.modules.agent.tools.tool_errors import approval_error_result
 from app.modules.agent.tools.pod.file_reads import read_file_text, search_files
+from app.modules.agent.tools.pod.pod_paths import normalize_json_paths, to_me_path
 from app.modules.datastore.contracts import (
     DatastoreConflictError,
     DatastoreFileUpdateEntity,
@@ -116,13 +117,21 @@ def _table_summary(table: Any) -> JsonObject:
                 else str(column.type),
                 "required": column.required,
                 "description": column.description,
+                # ENUM columns only accept one of a fixed set; surface it here so
+                # a valid record can be built from the schema alone, without
+                # having to trip the validation error to learn the options.
+                **(
+                    {"options": getattr(column, "options", None)}
+                    if getattr(column, "options", None)
+                    else {}
+                ),
             }
             for column in table.columns
         ],
     }
 
 
-def _file_summary(entity: Any) -> JsonObject:
+def _file_summary(entity: Any, user_id: Any) -> JsonObject:
     """Curated view of a file for listings — surfaces whether it's an indexed
     document and how many pages it has, so the agent knows what to read/view."""
     metadata = getattr(entity, "metadata", None) or {}
@@ -131,7 +140,7 @@ def _file_summary(entity: Any) -> JsonObject:
     kind = getattr(entity, "kind", None)
     kind_value = kind.value if hasattr(kind, "value") else kind
     return {
-        "path": entity.path,
+        "path": to_me_path(entity.path, user_id),
         "name": entity.name,
         "kind": kind_value,
         "mime_type": getattr(entity, "mime_type", None),
@@ -334,7 +343,7 @@ async def pod_write_file(
             )
             return {
                 "success": True,
-                "path": entity.path,
+                "path": to_me_path(entity.path, services.ctx.user_id),
                 "size_bytes": entity.size_bytes,
                 "created": True,
             }
@@ -361,7 +370,7 @@ async def pod_write_file(
             await services.file.finalize_update_file(plan, updated)
             return {
                 "success": True,
-                "path": updated.path,
+                "path": to_me_path(updated.path, services.ctx.user_id),
                 "size_bytes": updated.size_bytes,
                 "created": False,
             }
@@ -392,7 +401,12 @@ async def pod_list_files(
                 root_path=resolved_path,
                 files_per_directory=request.files_per_directory,
             )
-            return {"success": True, "tree": to_json_value(tree)}
+            return {
+                "success": True,
+                "tree": normalize_json_paths(
+                    to_json_value(tree), services.ctx.user_id
+                ),
+            }
         files, cursor = await services.file.list_files(
             services.ctx.pod_id,
             services.ctx,
@@ -401,7 +415,7 @@ async def pod_list_files(
         )
         return {
             "success": True,
-            "files": [_file_summary(f) for f in files],
+            "files": [_file_summary(f, services.ctx.user_id) for f in files],
             "next_cursor": cursor,
         }
 
@@ -531,7 +545,7 @@ async def pod_get_file_url(
             )
             return {
                 "success": True,
-                "path": entity.path,
+                "path": to_me_path(entity.path, services.ctx.user_id),
                 "url_type": "public",
                 "signed_url": signed_url,
                 "expires_at": expires_at.isoformat(),
@@ -546,7 +560,7 @@ async def pod_get_file_url(
         )
         return {
             "success": True,
-            "path": entity.path,
+            "path": to_me_path(entity.path, services.ctx.user_id),
             "url_type": "app",
             "url": url,
             "app_url": build_file_app_url(services.ctx.pod_id, entity.path),
