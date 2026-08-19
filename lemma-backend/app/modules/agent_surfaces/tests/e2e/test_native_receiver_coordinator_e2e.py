@@ -138,6 +138,67 @@ async def test_native_receiver_coordinator_starts_account_backed_telegram_and_sl
         await asyncio.gather(task, return_exceptions=True)
 
 
+async def test_native_receiver_coordinator_starts_resend_poller_on_a_local_url(
+    authenticated_client: AsyncClient,
+    db_session: AsyncSession,
+    test_pod,
+    fixed_test_user,
+    fake_resend,
+    test_redis_url,
+    monkeypatch,
+):
+    """A Resend surface minted on a localhost deployment is picked up and polled.
+
+    This is the desktop-app path end to end: no public webhook, polling mode on,
+    the pod mints its Resend mailbox on first message, and the native-receiver
+    coordinator starts a poller for the system key that serves it.
+    """
+    from app.core.config import settings as app_settings
+    from app.modules.agent_surfaces.config import surface_settings
+
+    monkeypatch.setattr(app_settings, "api_url", "http://localhost:8711")
+    monkeypatch.setattr(app_settings, "resend_api_key", "re_test")
+    monkeypatch.setattr(surface_settings, "resend_inbound_domain", "ops.example.com")
+    monkeypatch.setattr(surface_settings, "enable_resend_polling_mode", True)
+
+    pod_id = test_pod["id"]
+    # Minting the mailbox the way message_user does — a notification the pod has
+    # no chat surface to carry, so provisioning runs.
+    minted = await authenticated_client.post(
+        f"/pods/{pod_id}/notifications",
+        json={
+            "recipient": fixed_test_user["id"],
+            "title": "Standup",
+            "body": "What did you ship yesterday?",
+            "expects_response": True,
+        },
+    )
+    assert minted.status_code == 201, minted.text
+
+    events: asyncio.Queue[tuple[str, NativeReceiverCandidate]] = asyncio.Queue()
+
+    def factory(candidate: NativeReceiverCandidate) -> RecordingReceiverRunner:
+        return RecordingReceiverRunner(candidate, events)
+
+    service = SurfaceEventReceiverService(
+        uow_factory=SessionUnitOfWorkFactory(async_session_maker),
+        scan_interval_seconds=0.1,
+        redis_url=test_redis_url,
+        runner_factories={SurfacePlatform.RESEND: factory},
+    )
+    task = asyncio.create_task(service.run())
+    try:
+        started = await _collect_started(events, expected=1)
+        candidate = started[0]
+        assert candidate.platform is SurfacePlatform.RESEND
+        assert candidate.credentials["api_key"] == "re_test"
+        assert candidate.key.startswith("resend:system:")
+    finally:
+        await service.stop()
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
 async def _collect_started(
     events: asyncio.Queue[tuple[str, NativeReceiverCandidate]],
     *,

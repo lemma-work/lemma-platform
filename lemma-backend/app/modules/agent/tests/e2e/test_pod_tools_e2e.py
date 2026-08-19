@@ -18,10 +18,19 @@ from fastapi import status
 from app.modules.agent.tools.context import BaseAgentContext
 from app.modules.agent.tools.pod.models import (
     PodGetRecordsRequest,
+    PodListFilesRequest,
+    PodReadFileRequest,
+    PodTablesRequest,
+    PodWriteFileRequest,
     PodWriteRecordRequest,
+    RecordFilter,
 )
 from app.modules.agent.tools.pod.pydantic_adapter import (
     pod_get_records,
+    pod_list_files,
+    pod_read_file,
+    pod_tables,
+    pod_write_file,
     pod_write_record,
 )
 
@@ -123,6 +132,125 @@ def _run_ctx(*, user_id, pod_id, workload_id, agent_name):
             agent_name=agent_name,
         )
     )
+
+
+async def _create_enum_table(authenticated_client, pod_id: str, table_name: str) -> None:
+    response = await authenticated_client.post(
+        f"/pods/{pod_id}/datastore/tables",
+        json={
+            "name": table_name,
+            "primary_key_column": "id",
+            "enable_rls": False,
+            "columns": [
+                {"name": "id", "type": "UUID", "required": True, "auto": True},
+                {"name": "title", "type": "TEXT", "required": True},
+                {
+                    "name": "result",
+                    "type": "ENUM",
+                    "required": True,
+                    "options": ["pass", "fail", "friction"],
+                },
+            ],
+        },
+    )
+    assert response.status_code == status.HTTP_201_CREATED, response.text
+
+
+@pytest.mark.asyncio
+async def test_pod_get_records_in_operator_matches_any_of_a_list(
+    authenticated_client,
+    fixed_test_org,
+    fixed_test_user,
+):
+    """The agent-facing `in` filter operator returns rows matching any value."""
+    pod_id = await _create_pod(authenticated_client, fixed_test_org)
+    table = f"notes_{uuid4().hex[:8]}"
+    await _create_table(authenticated_client, pod_id, table)
+    ctx = _run_ctx(
+        user_id=fixed_test_user["id"],
+        pod_id=pod_id,
+        workload_id=None,
+        agent_name="pod_default",
+    )
+    for title in ("alpha", "beta", "gamma"):
+        created = await pod_write_record(
+            ctx,
+            PodWriteRecordRequest(
+                action="create", table_name=table, data={"title": title}
+            ),
+        )
+        assert created["success"] is True, created
+
+    listed = await pod_get_records(
+        ctx,
+        PodGetRecordsRequest(
+            table_name=table,
+            filters=[RecordFilter(column="title", op="in", value=["alpha", "gamma"])],
+        ),
+    )
+    assert listed["success"] is True, listed
+    assert sorted(r["title"] for r in listed["records"]) == ["alpha", "gamma"]
+
+
+@pytest.mark.asyncio
+async def test_pod_tables_describe_surfaces_enum_options(
+    authenticated_client,
+    fixed_test_org,
+    fixed_test_user,
+):
+    """Describing a table exposes an ENUM column's allowed values."""
+    pod_id = await _create_pod(authenticated_client, fixed_test_org)
+    table = f"audit_{uuid4().hex[:8]}"
+    await _create_enum_table(authenticated_client, pod_id, table)
+    ctx = _run_ctx(
+        user_id=fixed_test_user["id"],
+        pod_id=pod_id,
+        workload_id=None,
+        agent_name="pod_default",
+    )
+
+    described = await pod_tables(ctx, PodTablesRequest(table_name=table))
+    assert described["success"] is True, described
+    columns = {c["name"]: c for c in described["table"]["columns"]}
+    assert columns["result"]["type"] == "ENUM"
+    assert columns["result"]["options"] == ["pass", "fail", "friction"]
+    # A non-enum column carries no options key.
+    assert "options" not in columns["title"]
+
+
+@pytest.mark.asyncio
+async def test_pod_file_tools_report_me_alias_paths(
+    authenticated_client,
+    fixed_test_org,
+    fixed_test_user,
+):
+    """Every pod file tool presents paths in the /me/... alias form."""
+    pod_id = await _create_pod(authenticated_client, fixed_test_org)
+    ctx = _run_ctx(
+        user_id=fixed_test_user["id"],
+        pod_id=pod_id,
+        workload_id=None,
+        agent_name="pod_default",
+    )
+
+    written = await pod_write_file(
+        ctx,
+        PodWriteFileRequest(path="/me/e2e/report.md", content="hello"),
+    )
+    assert written["success"] is True, written
+    assert written["path"] == "/me/e2e/report.md"
+
+    read = await pod_read_file(ctx, PodReadFileRequest(path="/me/e2e/report.md"))
+    assert read["success"] is True, read
+    assert read["path"] == "/me/e2e/report.md"
+    assert read["text"] == "hello"
+
+    listed = await pod_list_files(ctx, PodListFilesRequest(path="/me/e2e"))
+    assert listed["success"] is True, listed
+    paths = [f["path"] for f in listed["files"]]
+    assert "/me/e2e/report.md" in paths
+    # Never the raw /{user-uuid}/... storage path.
+    assert all(not p.startswith(f"/{fixed_test_user['id']}") for p in paths)
 
 
 @pytest.mark.asyncio

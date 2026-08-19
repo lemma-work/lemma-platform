@@ -99,3 +99,34 @@ def test_tool_return_payload_excludes_the_binary_content() -> None:
 
 def test_plain_result_is_serialized_as_is() -> None:
     assert result_payload({"ok": True}) == {"ok": True}
+
+
+def test_both_bridges_keep_image_bytes_out_of_the_text_channel() -> None:
+    """End-to-end at the real `_mcp_result`: the picture rides the image channel,
+    and neither the text block nor the structured payload carries its bytes."""
+    from app.modules.agent.services.conversation_mcp_service import (
+        conversation_mcp_service,
+    )
+    from app.modules.agent.services.pod_mcp_service import pod_mcp_service
+
+    picture = b"\x89PNG\r\n" + b"ABCDEFG" * 1024
+    tool_return = ToolReturn(
+        return_value={"success": True, "path": "/me/shot.png", "bytes": len(picture)},
+        content=[BinaryContent(data=picture, media_type="image/png")],
+    )
+
+    for service in (conversation_mcp_service, pod_mcp_service):
+        result = service._mcp_result(tool_return)
+
+        image_parts = [c for c in result.content if getattr(c, "type", None) == "image"]
+        text_parts = [c for c in result.content if getattr(c, "type", None) == "text"]
+        assert len(image_parts) == 1, "the image must reach the agent"
+
+        text_blob = "".join(c.text for c in text_parts)
+        assert "PNG" not in text_blob and "ABCDEFG" not in text_blob
+        assert "\\x89" not in text_blob
+        assert result.structuredContent == {
+            "success": True,
+            "path": "/me/shot.png",
+            "bytes": len(picture),
+        }
