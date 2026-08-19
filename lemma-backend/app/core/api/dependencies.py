@@ -39,5 +39,23 @@ def get_current_user(request: Request) -> UserEntity:
     return user
 
 
-UoWDep = Annotated[SqlAlchemyUnitOfWork, Depends(get_uow)]
+#: ``scope="function"`` is load-bearing, not a tidy-up.
+#:
+#: The commit lives in ``get_uow``'s teardown. FastAPI's default dependency
+#: scope is ``"request"``, whose teardown runs *after* the response has been
+#: sent — so on the default a client receives ``201 Created`` and only then does
+#: the transaction commit. Two consequences, both real:
+#:
+#: * A client that uses what it just created can be refused, because the write
+#:   is not visible yet. Create an organization, then create a pod in it, and
+#:   the pod is refused for a membership row that is still uncommitted.
+#: * A commit that *fails* fails after the client has been told it succeeded.
+#:
+#: ``"function"`` ends the dependency after the path operation and before the
+#: response goes out, which is what a success response has to mean. Response
+#: serialization already happens inside the endpoint call, and no streaming
+#: endpoint holds this session while its body streams — those take
+#: ``get_uow_factory`` and open their own — so nothing needs the session to
+#: outlive the handler.
+UoWDep = Annotated[SqlAlchemyUnitOfWork, Depends(get_uow, scope="function")]
 CurrentUser = Annotated[UserEntity, Depends(get_current_user)]
