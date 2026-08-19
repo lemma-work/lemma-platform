@@ -388,6 +388,133 @@ async def test_a_research_batch_saves_pages_larger_than_a_shell_can_carry(
     assert len(result.model_dump_json()) < 8000, "the response must stay bounded"
 
 
+async def test_web_fetch_forces_the_browser_and_captures_a_rendered_page(
+    authenticated_client,
+    fixed_test_org,
+    fixed_test_user,
+    configure_workspace_api_url,
+):
+    """`render=True` forces the browser path, exercised against a real page.
+
+    The http path (above) is the default and is fast; `render` exists for
+    pages that only exist after JavaScript runs, or when the caller wants a
+    PDF/screenshot. `_capture_with_browser`/`_finish`'s success branch, the
+    real `save-webpage` script, and the real Agent Browser session inside the
+    sandbox all run for real here — nothing about the browser path was
+    exercised by any other test, which only drove the cheap http path.
+    """
+    del configure_workspace_api_url
+    from app.modules.agent.tools.web.models import WebFetchRequest
+    from app.modules.agent.tools.web.web_fetch import web_fetch_internal
+
+    ctx = await _agent_context(authenticated_client, fixed_test_org, fixed_test_user)
+
+    result = await web_fetch_internal(
+        ctx,
+        WebFetchRequest(
+            urls=["https://example.com/"],
+            render=True,
+            out_dir="research",
+            comment="force the browser render path",
+        ),
+    )
+
+    assert result.success, result
+    page = result.pages[0]
+    assert page.success, page.error
+    assert page.fetched_with == "browser", "render=True must skip the http path"
+    assert page.files["markdown"].startswith("research/")
+    assert page.preview and "Example Domain" in page.preview
+    assert page.title
+
+    # The file really is on disk in the workspace, rendered by the browser.
+    listing = await exec_command_internal(
+        ctx,
+        ExecCommandRequest(
+            comment="confirm the rendered capture landed",
+            cmd=f"cat {page.files['markdown']}",
+            timeout_seconds=30,
+        ),
+    )
+    assert listing.exit_code == 0, listing
+    assert "Example Domain" in (listing.stdout or "")
+
+
+async def test_web_fetch_rejects_malformed_and_unsafe_urls_before_fetching(
+    authenticated_client,
+    fixed_test_org,
+    fixed_test_user,
+    configure_workspace_api_url,
+):
+    """`_validate` and `assert_safe_url` run for every URL before either fetch
+    path starts, and a bad URL in the batch must not sink the good ones."""
+    del configure_workspace_api_url
+    from app.modules.agent.tools.web.models import WebFetchRequest
+    from app.modules.agent.tools.web.web_fetch import web_fetch_internal
+
+    ctx = await _agent_context(authenticated_client, fixed_test_org, fixed_test_user)
+
+    result = await web_fetch_internal(
+        ctx,
+        WebFetchRequest(
+            urls=[
+                "ftp://example.com/file",
+                "https://",
+                "http://169.254.169.254/latest/meta-data",
+                "https://example.com/",
+            ],
+            comment="mixed malformed, unsafe, and valid URLs",
+        ),
+    )
+
+    assert result.success, "one good URL among the bad ones must still succeed"
+    by_url = {page.url: page for page in result.pages}
+    assert "Only http(s) URLs" in (by_url["ftp://example.com/file"].error or "")
+    assert "no host" in (by_url["https://"].error or "")
+    assert "not a permitted fetch target" in (
+        by_url["http://169.254.169.254/latest/meta-data"].error or ""
+    )
+    assert by_url["https://example.com/"].success
+    assert by_url["https://example.com/"].fetched_with == "http"
+
+
+async def test_web_fetch_reports_a_clear_error_when_the_workspace_is_unreachable(
+    authenticated_client,
+    fixed_test_org,
+    fixed_test_user,
+    configure_workspace_api_url,
+    monkeypatch,
+):
+    """A sandbox that cannot be reached must not look like "no pages found".
+
+    Exercises the `except Exception` branch around acquiring the workspace
+    session: everything below it in `_capture_batch` is already proven by the
+    tests above, so only the acquisition failure needs injecting here.
+    """
+    del configure_workspace_api_url
+    from app.modules.agent.tools.web import web_fetch as web_fetch_module
+    from app.modules.agent.tools.web.models import WebFetchRequest
+    from app.modules.agent.tools.web.web_fetch import web_fetch_internal
+
+    ctx = await _agent_context(authenticated_client, fixed_test_org, fixed_test_user)
+
+    async def fake_get_session(*_args, **_kwargs):
+        raise RuntimeError("sandbox connection refused")
+
+    monkeypatch.setattr(web_fetch_module, "_get_workspace_session", fake_get_session)
+
+    result = await web_fetch_internal(
+        ctx,
+        WebFetchRequest(urls=["https://example.com/"], comment="workspace is down"),
+    )
+
+    assert result.success is False
+    assert result.pages[0].success is False
+    assert "Could not reach the workspace" in (result.pages[0].error or "")
+    assert "Retry if the pages are still needed" in (result.pages[0].error or "")
+    assert result.message == "No pages could be captured."
+
+
 async def _pdf_in_pod(authenticated_client, fixed_test_org, fixed_test_user):
     """Upload a real multi-line PDF and return (ctx, pod_id, path)."""
     from app.modules.datastore.tests.e2e.harness import DatastoreApi, build_pdf_bytes
@@ -497,6 +624,60 @@ async def test_pdf_pages_reach_a_text_only_model_as_words(
     assert "pipeline" in result["descriptions"][0]["description"].lower()
     assert seen["jpeg_prefixes"] == [b"\xff\xd8"], "delegate got real JPEG bytes"
     assert path in str(seen["labels"][0])
+
+
+async def test_view_image_direct_mode_returns_binary_content_for_a_real_workspace_file(
+    authenticated_client,
+    fixed_test_org,
+    fixed_test_user,
+    configure_workspace_api_url,
+):
+    """DIRECT mode: `view_image` hands the model the rendered bytes inline.
+
+    `test_scripted_todo_and_workspace_tools_stream_and_persist_real_results`
+    (hermetic journeys) already drives `view_image` end to end, but that run's
+    mock runtime profile carries no vision capability, so it only ever
+    exercises the DELEGATED/unavailable branch. This is the DIRECT branch:
+    the same shape of coverage `test_pdf_pages_render_to_real_images_for_a_
+    vision_model` proves for `pod_view_document_pages`, but for a workspace
+    file read straight off the real sandbox disk.
+    """
+    del configure_workspace_api_url
+    from app.modules.agent.domain.vision import AgentVisionMode
+    from app.modules.agent.tools.workspace_cli.models import ViewImageRequest
+    from app.modules.agent.tools.workspace_cli.workspace_cli import (
+        view_image_internal,
+    )
+    from pydantic_ai import BinaryContent, ToolReturn
+
+    ctx = await _agent_context(authenticated_client, fixed_test_org, fixed_test_user)
+    ctx.vision_mode = AgentVisionMode.DIRECT
+
+    written = await exec_command_internal(
+        ctx,
+        ExecCommandRequest(
+            comment="create a real image on the sandbox disk",
+            cmd=(
+                "python3 -c \"import base64,pathlib; "
+                "pathlib.Path('pixel.png').write_bytes(base64.b64decode("
+                "'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Z2S8AAAAASUVORK5CYII='))\""
+            ),
+            timeout_seconds=30,
+        ),
+    )
+    assert written.exit_code == 0, written
+
+    result = await view_image_internal(
+        ctx, ViewImageRequest(workspace_file_path="pixel.png")
+    )
+
+    assert isinstance(result, ToolReturn), result
+    images = [c for c in result.content if isinstance(c, BinaryContent)]
+    assert images, "a DIRECT-mode vision model must receive the rendered bytes"
+    assert images[0].media_type == "image/png"
+    assert result.return_value.success is True
+    assert result.return_value.source == "workspace"
+    assert result.return_value.file_path == "pixel.png"
 
 
 async def test_compaction_bounds_a_history_built_from_real_tool_output(

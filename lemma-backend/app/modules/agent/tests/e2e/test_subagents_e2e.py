@@ -459,3 +459,97 @@ async def test_interact_subagent_stop_requests_a_real_running_child(
     )
     assert stopped_again["success"] is True
     assert stopped_again["status"] == "STOP_REQUESTED"
+
+
+@pytest.mark.asyncio
+async def test_query_subagents_list_mode_and_interact_send_on_a_real_owned_child(
+    authenticated_client, fixed_test_org, fixed_test_user
+):
+    """The branches the stop/reject tests above never reach:
+    `query_subagents(mode='list')` -> `list_children` (including its
+    `status='ACTIVE'` filter, which drops a child with no run at all), and
+    `interact_subagent(action='send')` -> `send`, which starts a fresh run on
+    an already-spawned child.
+    """
+    pod_id = await _create_test_pod(authenticated_client, fixed_test_org)
+    await _create_agent(
+        authenticated_client, pod_id, "list_supervisor", "Spawns and lists children."
+    )
+    await _create_agent(authenticated_client, pod_id, "list_worker", "Does the work.")
+
+    parent_conversation_id = await _create_conversation(
+        authenticated_client, pod_id, "list_supervisor"
+    )
+    child_id = await _create_running_child(
+        authenticated_client,
+        pod_id,
+        agent_name="list_worker",
+        parent_conversation_id=parent_conversation_id,
+    )
+    # A second child, linked but never given a run -- exercises `latest is
+    # None` in `list_children` and must be dropped by the ACTIVE filter.
+    runless_child = await authenticated_client.post(
+        f"/pods/{pod_id}/conversations",
+        json={
+            "agent_name": "list_worker",
+            "title": "runless child",
+            "type": "CHAT",
+            "parent_id": parent_conversation_id,
+        },
+    )
+    assert runless_child.status_code == status.HTTP_201_CREATED, runless_child.text
+    runless_child_id = runless_child.json()["id"]
+
+    ctx = SimpleNamespace(
+        deps=BaseAgentContext(
+            user_id=UUID(fixed_test_user["id"]),
+            pod_id=UUID(pod_id),
+            conversation_id=UUID(parent_conversation_id),
+            agent_name="list_supervisor",
+        )
+    )
+
+    listed = await query_subagents(ctx, QuerySubagentsRequest(mode="list"))
+    assert listed["success"] is True
+    assert {child["conversation_id"] for child in listed["children"]} == {
+        str(child_id),
+        runless_child_id,
+    }
+    listed_by_id = {child["conversation_id"]: child for child in listed["children"]}
+    assert listed_by_id[str(child_id)]["agent_name"] == "list_worker"
+    assert listed_by_id[str(child_id)]["status"] == "RUNNING"
+
+    active_only = await query_subagents(
+        ctx, QuerySubagentsRequest(mode="list", status="active")
+    )
+    assert active_only["success"] is True
+    assert {child["conversation_id"] for child in active_only["children"]} == {
+        str(child_id)
+    }
+
+    sent = await interact_subagent(
+        ctx,
+        InteractSubagentRequest(
+            action="send", conversation_id=str(child_id), content="Keep going."
+        ),
+    )
+    assert sent["success"] is True
+    assert sent["conversation_id"] == str(child_id)
+    assert sent["status"] == "RUNNING"
+
+    messages = await authenticated_client.get(
+        f"/pods/{pod_id}/conversations/{child_id}/messages"
+    )
+    assert messages.status_code == status.HTTP_200_OK, messages.text
+    user_texts = [
+        item["text"] for item in messages.json()["items"] if item["role"] == "user"
+    ]
+    assert "Keep going." in user_texts
+
+    # action='send' requires content, and that guard has to come back as a
+    # tool-shaped failure, not a validation crash.
+    missing_content = await interact_subagent(
+        ctx, InteractSubagentRequest(action="send", conversation_id=str(child_id))
+    )
+    assert missing_content["success"] is False
+    assert "content is required" in missing_content["error"]
