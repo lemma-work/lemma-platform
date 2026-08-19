@@ -141,23 +141,29 @@ async def cancellable_worker(e2e_settings):
         return log_file.read()
 
     try:
-        startup_ok = False
-        for _ in range(200):
-            if proc.poll() is not None:
-                pytest.fail(
-                    f"worker exited before startup (code={proc.returncode}).\n{_logs()}"
-                )
-            logs = _logs()
-            if (
-                '"logger": "app.core.infrastructure.jobs.streaq_runtime"' in logs
-                and '"event": "service.started"' in logs
-            ):
-                startup_ok = True
-                break
-            await asyncio.sleep(0.1)
-        if not startup_ok:
-            proc.terminate()
-            pytest.fail(f"Timed out waiting for worker startup.\n{_logs()}")
+
+        async def probe() -> dict:
+            return {
+                "logs": _logs(),
+                "exited": proc.poll() is not None,
+                "returncode": proc.returncode,
+            }
+
+        await eventually(
+            label="worker startup",
+            probe=probe,
+            done=lambda v: (
+                '"logger": "app.core.infrastructure.jobs.streaq_runtime"' in v["logs"]
+                and '"event": "service.started"' in v["logs"]
+            ),
+            fail_fast=lambda v: (
+                f"worker exited before startup (code={v['returncode']}).\n{v['logs']}"
+                if v["exited"]
+                else None
+            ),
+            timeout_seconds=20.0,
+            interval_seconds=0.1,
+        )
 
         yield proc, log_path, queue_name
     finally:
@@ -344,7 +350,9 @@ async def test_sigterm_midrun_shuts_down_cleanly_and_finalizes_run(
 
     # 1) Core regression guard: no cancel-scope corruption crash.
     for marker in _CANCEL_SCOPE_CRASH_MARKERS:
-        assert marker not in logs, f"worker crashed on cancel scope: {marker!r}\n{logs[-3000:]}"
+        assert marker not in logs, (
+            f"worker crashed on cancel scope: {marker!r}\n{logs[-3000:]}"
+        )
     # 2) Clean shutdown path ran.
     assert (
         '"logger": "app.core.infrastructure.jobs.streaq_runtime"' in logs

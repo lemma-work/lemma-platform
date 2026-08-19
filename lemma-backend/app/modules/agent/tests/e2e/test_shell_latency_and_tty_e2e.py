@@ -40,6 +40,7 @@ from app.modules.agent.tools.workspace_cli.workspace_cli import (
     terminate_process_internal,
     write_stdin_internal,
 )
+from app.modules.test_support.e2e.waiters import eventually
 
 pytestmark = [pytest.mark.e2e, pytest.mark.anyio]
 
@@ -71,15 +72,22 @@ async def _agent_context(authenticated_client, fixed_test_org, fixed_test_user):
 
     # Provision before measuring: a cold start is not what these tests are about,
     # and the first call against one correctly reports a retryable failure.
-    for _attempt in range(3):
-        warm = await exec_command_internal(
+    async def _attempt_warmup():
+        return await exec_command_internal(
             ctx,
-            ExecCommandRequest(comment="warm the sandbox", cmd="true", timeout_seconds=180),
+            ExecCommandRequest(
+                comment="warm the sandbox", cmd="true", timeout_seconds=180
+            ),
         )
-        if warm.success:
-            return ctx
-        await asyncio.sleep(2)
-    raise AssertionError(f"sandbox never became ready: {warm}")
+
+    await eventually(
+        label="sandbox warmup",
+        probe=_attempt_warmup,
+        done=lambda warm: warm.success,
+        timeout_seconds=30.0,
+        interval_seconds=2.0,
+    )
+    return ctx
 
 
 async def _timed(coro):
