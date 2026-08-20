@@ -1192,6 +1192,93 @@ async def test_malformed_tool_arguments_are_retried_before_the_run_completes(
 
 
 @pytest.mark.asyncio
+async def test_scripted_subagent_spawn_await_and_query_are_real_child_runs(
+    authenticated_client,
+    fixed_test_org,
+    e2e_settings,
+    worker,
+):
+    """The SUBAGENTS toolset creates and waits for an actual child conversation."""
+    del worker
+    runtime = await _create_runtime_profile(
+        authenticated_client,
+        fixed_test_org,
+        e2e_settings,
+    )
+    pod = await _create_pod(authenticated_client, fixed_test_org)
+    agent = await _create_mock_agent(
+        authenticated_client,
+        pod_id=pod["id"],
+        runtime_profile_id=runtime["id"],
+        name_prefix="subagent_parent",
+        toolsets=["SUBAGENTS"],
+    )
+    script = [
+        script_tool_call(
+            "spawn_subagent",
+            {"input": "Reply with exactly DELTA99."},
+            tool_call_id="spawn-1",
+        ),
+        script_tool_call(
+            "interact_subagent",
+            {
+                "conversation_id": script_tool_result_ref(
+                    "spawn-1", "conversation_id"
+                ),
+                "action": "await",
+                "run_id": script_tool_result_ref("spawn-1", "run_id"),
+                "timeout_seconds": 30,
+            },
+            tool_call_id="await-1",
+        ),
+        script_tool_call(
+            "query_subagents",
+            {"mode": "list"},
+            tool_call_id="query-1",
+        ),
+        script_text("The child completed with DELTA99."),
+    ]
+    conversation = await authenticated_client.post(
+        f"/pods/{pod['id']}/conversations",
+        json={
+            "agent_name": agent["name"],
+            "metadata": {"mock_llm_script": script},
+        },
+    )
+    assert conversation.status_code == status.HTTP_201_CREATED, conversation.text
+    conversation_id = conversation.json()["id"]
+    events = await _send_message(
+        authenticated_client,
+        pod["id"],
+        conversation_id,
+        "Delegate the DELTA99 task and wait for the child.",
+    )
+    assert events[-1]["type"] == "completed", events
+
+    messages = await authenticated_client.get(
+        f"/pods/{pod['id']}/conversations/{conversation_id}/messages"
+    )
+    assert messages.status_code == status.HTTP_200_OK, messages.text
+    returns = {
+        item["tool_call_id"]: item["tool_result"]
+        for item in messages.json()["items"]
+        if item["kind"] == "TOOL_RETURN"
+    }
+    assert returns["spawn-1"]["success"] is True
+    assert returns["await-1"]["success"] is True
+    assert "DELTA99" in str(returns["await-1"])
+    assert returns["query-1"]["success"] is True
+
+    children = await authenticated_client.get(
+        f"/pods/{pod['id']}/conversations",
+        params={"parent_id": conversation_id},
+    )
+    assert children.status_code == status.HTTP_200_OK, children.text
+    assert len(children.json()["items"]) == 1
+    assert children.json()["items"][0]["parent_id"] == conversation_id
+
+
+@pytest.mark.asyncio
 async def test_pod_skill_catalog_discovers_custom_skills_and_skips_malformed_ones(
     authenticated_client,
     fixed_test_org,
@@ -2083,6 +2170,55 @@ async def test_public_runtime_profile_update_rediscovers_and_clears_credentials(
     )
     assert rejected_clear.status_code == status.HTTP_400_BAD_REQUEST
     assert "requires an API key" in rejected_clear.json()["message"]
+
+
+@pytest.mark.asyncio
+async def test_archived_runtime_profile_fails_a_pinned_agent_run_safely(
+    authenticated_client,
+    fixed_test_org,
+    e2e_settings,
+    worker,
+):
+    """A user cannot run an agent against a profile archived meanwhile."""
+    del worker
+    runtime = await _create_runtime_profile(
+        authenticated_client,
+        fixed_test_org,
+        e2e_settings,
+    )
+    pod = await _create_pod(authenticated_client, fixed_test_org)
+    agent = await _create_mock_agent(
+        authenticated_client,
+        pod_id=pod["id"],
+        runtime_profile_id=runtime["id"],
+        name_prefix="archived_profile",
+    )
+
+    archived = await authenticated_client.delete(
+        f"/organizations/{fixed_test_org['id']}/agent-runtime/profiles/{runtime['id']}"
+    )
+    assert archived.status_code == status.HTTP_204_NO_CONTENT, archived.text
+
+    conversation = await authenticated_client.post(
+        f"/pods/{pod['id']}/conversations",
+        json={"agent_name": agent["name"], "title": "Archived profile run"},
+    )
+    assert conversation.status_code == status.HTTP_201_CREATED, conversation.text
+    conversation_id = conversation.json()["id"]
+    events = await _send_message(
+        authenticated_client,
+        pod["id"],
+        conversation_id,
+        "Run even though the profile was archived.",
+    )
+    assert events[-1]["type"] == "error", events
+    assert json.dumps(events).find(_RUNTIME_SECRET) == -1
+
+    durable = await authenticated_client.get(
+        f"/pods/{pod['id']}/conversations/{conversation_id}"
+    )
+    assert durable.status_code == status.HTTP_200_OK, durable.text
+    assert durable.json()["status"] == "FAILED"
 
 
 @pytest.mark.asyncio
