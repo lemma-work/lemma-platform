@@ -51,7 +51,7 @@ from app.modules.workspace.providers.base import (
 )
 from app.modules.workspace.providers.e2b_common import (
     DEFAULT_METADATA_NAMESPACE,
-    ensure_runtime_serving,
+    ensure_serving,
     meta_epoch,
     meta_profile_digest,
     meta_sandbox_id,
@@ -359,16 +359,15 @@ class E2BSandboxProvider(E2BOpsMixin):
         kind: SandboxKind,
         deadline_at: datetime,
     ) -> None:
-        """Ready means the runtime answers, not merely that the VM exists.
+        """Ready means the thing this kind's operations depend on answers.
 
         `is_running()` alone passed a sandbox whose runtime had died, because a
-        VM outlives its process. See `ensure_runtime_serving`.
+        VM outlives its process. See `ensure_serving`.
         """
         sandbox = await self._connect(instance.provider_id)
-        await ensure_runtime_serving(
-            sandbox,
-            instance.provider_id,
-            runtime_port=profile_for(kind).runtime_port,
+        await ensure_serving(
+            sandbox, instance.provider_id,
+            kind=kind, runtime_port=profile_for(kind).runtime_port,
         )
 
     async def release(

@@ -95,6 +95,11 @@ class FakeE2B:
     #: port listening -- and 502 is the sandbox whose runtime process has died
     #: while the VM keeps running, which is the state readiness must now catch.
     runtime_status: int = 404
+    #: Whether the sandbox agent answers a command. Workspace readiness is a
+    #: smoke command through the agent -- there is no runtime port to probe --
+    #: so a workspace whose agent is down is modelled here, not with
+    #: `runtime_status`.
+    agent_answers: bool = True
     # The lifetime each started process was given, in the order they started.
     # Recorded because E2B kills a command at this value and defaults it to 60s,
     # so "the provider passed no timeout" is indistinguishable from "the
@@ -165,6 +170,8 @@ class FakeE2B:
                 timeout=None,
                 **_kwargs,
             ):
+                if not world.agent_answers:
+                    raise FakeE2BError("the sandbox agent is not answering")
                 world.commands.append(cmd)
                 world.process_timeouts.append(timeout)
                 if on_stdout is not None:

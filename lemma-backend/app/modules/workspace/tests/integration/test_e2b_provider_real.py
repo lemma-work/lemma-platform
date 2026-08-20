@@ -255,6 +255,104 @@ async def test_creating_twice_really_yields_one_sandbox(
     assert first.provider_id == second.provider_id
 
 
+async def test_a_first_contact_herd_all_get_served(
+    provider: E2BSandboxProvider,
+) -> None:
+    """Parallel first tool calls on a cold sandbox must not fail.
+
+    This is the 2026-08-20 incident's shape: an agent's first turn fires
+    several tool calls at once, each one ensures the sandbox, and the cold
+    provision used to fail readiness while E2B was still coming up -- so the
+    first call died and only the retry passed. One sandbox is created here
+    and then readied and used by a herd, the way the service's singleflight
+    hands one provisioning to every waiting caller.
+    """
+    import asyncio
+
+    sandbox_id = uuid4()
+    instance = await _create(provider, sandbox_id)
+
+    async def tool_call(marker: bytes) -> bytes:
+        await provider.wait_ready(
+            instance, kind=SandboxKind.WORKSPACE, deadline_at=_deadline()
+        )
+
+        async def payload():
+            yield marker
+
+        path = f"/workspace/herd-{marker.decode()}.txt"
+        await provider.write_file(
+            instance, path=path, data=payload(),
+            expected_sha256=None, deadline_at=_deadline(),
+        )
+        chunks = [
+            chunk
+            async for chunk in provider.open_file(
+                instance, path=path,
+                byte_range=ByteRange(offset=0, length=None),
+                deadline_at=_deadline(),
+            )
+        ]
+        return b"".join(chunks)
+
+    markers = [f"call{i}".encode() for i in range(8)]
+    results = await asyncio.gather(*(tool_call(marker) for marker in markers))
+
+    assert results == markers
+    # The herd shared one sandbox -- nobody got a second one underneath it.
+    found = await provider.inspect(
+        naming.container_name(sandbox_id, SandboxKind.WORKSPACE, 1),
+        deadline_at=_deadline(),
+    )
+    assert found is not None and found.provider_id == instance.provider_id
+
+
+async def test_files_survive_a_pause_and_a_herd_after_resume(
+    provider: E2BSandboxProvider,
+) -> None:
+    """Pause, resume, and the disk is the same disk -- under parallel load.
+
+    The disk-continuity promise: a paused workspace keeps its filesystem,
+    resumes as the same sandbox, and the tool calls waiting on that resume
+    all see the files that were written before it.
+    """
+    import asyncio
+
+    sandbox_id = uuid4()
+    first = await _create(provider, sandbox_id)
+
+    async def payload():
+        yield b"written-before-the-pause"
+
+    await provider.write_file(
+        first, path="/workspace/before.txt", data=payload(),
+        expected_sha256=None, deadline_at=_deadline(),
+    )
+    await provider.release(first, kind=SandboxKind.WORKSPACE, deadline_at=_deadline())
+
+    resumed = await provider.create(_spec(provider, sandbox_id, epoch=2))
+    assert resumed.provider_id == first.provider_id
+    assert resumed.storage_adopted is True
+
+    async def read_back() -> bytes:
+        await provider.wait_ready(
+            resumed, kind=SandboxKind.WORKSPACE, deadline_at=_deadline()
+        )
+        chunks = [
+            chunk
+            async for chunk in provider.open_file(
+                resumed, path="/workspace/before.txt",
+                byte_range=ByteRange(offset=0, length=None),
+                deadline_at=_deadline(),
+            )
+        ]
+        return b"".join(chunks)
+
+    results = await asyncio.gather(*(read_back() for _ in range(8)))
+
+    assert results == [b"written-before-the-pause"] * 8
+
+
 async def test_real_storage_kind_is_sandbox_native(
     provider: E2BSandboxProvider,
 ) -> None:
