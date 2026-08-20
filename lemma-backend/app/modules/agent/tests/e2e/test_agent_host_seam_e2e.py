@@ -950,8 +950,8 @@ async def test_full_dispatch_admits_polls_and_completes_a_run(
         available_run_slots=1,
         now=now,
     )
-    started = [c for c in polled.commands if c.kind == AgentHostCommandKind.START_RUN]
-    assert len(started) == 1, polled
+    started = [c for c in polled if c.kind == AgentHostCommandKind.START_RUN]
+    assert len(started) == 1, list(polled)
     assert "encrypted_mcp" in started[0].payload
     await db_session.commit()
 
