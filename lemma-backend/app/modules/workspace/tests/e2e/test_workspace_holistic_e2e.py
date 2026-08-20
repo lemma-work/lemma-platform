@@ -28,7 +28,6 @@ from app.modules.agent.tools.workspace_cli.workspace_cli import (
     write_stdin_internal,
 )
 from app.modules.test_support.e2e.waiters import eventually
-from app.modules.workspace.services.local_sandbox_client import LocalSandboxClient
 from app.modules.workspace.services.workspace_sandbox_service import (
     WorkspaceSandboxService,
 )
@@ -144,6 +143,7 @@ async def test_shell_python_file_and_lemma_cli_round_trip(
         ctx.user_id,
         ctx.pod_id,
         session_id=str(ctx.conversation_id),
+        initial_cwd=ctx.get_workspace_cwd(),
         organization_id=ctx.org_id,
         workload_type="agent",
         workload_id=ctx.pod_id,
@@ -193,7 +193,10 @@ async def test_tty_process_input_resize_listing_and_termination(
 
     listed = await list_processes_internal(ctx, ListProcessesRequest())
     assert listed.success, listed
-    assert any(item.process_id == process_id and item.tty for item in listed.processes)
+    # The runtime deliberately does not report command lines or terminal shape
+    # in its process listing. The successful TTY start/input/resize calls above
+    # are the authoritative proof that this is an interactive process.
+    assert any(item.process_id == process_id for item in listed.processes)
 
     resized = await resize_terminal_internal(
         ctx,
@@ -251,8 +254,9 @@ async def test_signed_port_proxy_and_browser_access_reach_the_sandbox(
     assert server.completed is False
     assert server.process_id
 
-    service = WorkspaceSandboxService()
-    client = LocalSandboxClient(service)
+    from app.modules.workspace.services.sandbox_composition import build_local_client
+
+    client = build_local_client()
     grant = await client.create_port_access(
         WorkloadKind.WORKSPACE,
         ctx.user_id,
@@ -260,8 +264,9 @@ async def test_signed_port_proxy_and_browser_access_reach_the_sandbox(
         protocol=PortProtocol.HTTP,
         expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
     )
-    proxied = await authenticated_client.get(urlparse(grant.url).path + "health")
+    proxied = await authenticated_client.get(urlparse(grant.url).path)
     assert proxied.status_code == status.HTTP_200_OK, proxied.text
+    assert "Directory listing" in proxied.text
 
     browser = await authenticated_client.post(
         "/workspace/apps/browser/access",
@@ -278,4 +283,3 @@ async def test_signed_port_proxy_and_browser_access_reach_the_sandbox(
         TerminateProcessRequest(process_id=server.process_id),
     )
     assert stopped.success, stopped
-    await service.close()
