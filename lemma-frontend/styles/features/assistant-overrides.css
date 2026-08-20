@@ -134,8 +134,32 @@
   border-radius: var(--radius-2xl);
 }
 
+/* ask_user choice rows: the tone of a selectable option. Layout stays in the
+   component; the color recipe lives here so a selected row reads the same
+   everywhere the assistant asks a question. */
+.lemma-assistant-choice-option {
+  border-color: color-mix(in srgb, var(--row-border) 86%, transparent);
+}
+
+.lemma-assistant-choice-option:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--action-primary) 35%, var(--row-border));
+  background: var(--surface-2);
+}
+
+.lemma-assistant-choice-option[data-selected="true"],
+.lemma-assistant-choice-option[data-selected="true"]:hover:not(:disabled) {
+  border-color: var(--action-primary);
+  background: color-mix(in srgb, var(--action-primary) 10%, transparent);
+}
+
 .lemma-assistant-choice-dot {
-  border-color: color-mix(in srgb, var(--text-secondary) 30%, transparent);
+  border-color: color-mix(in srgb, var(--text-secondary) 45%, transparent);
+}
+
+.lemma-assistant-choice-dot[data-selected="true"] {
+  border-color: var(--action-primary);
+  background: var(--action-primary);
+  color: var(--text-on-brand);
 }
 
 .lemma-assistant-thinking-shimmer {

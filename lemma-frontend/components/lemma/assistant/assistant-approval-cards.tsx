@@ -7,7 +7,7 @@
 import { useCallback, useMemo, useState } from "react";
 import { usePathname } from "next/navigation";
 import { isAskUserToolName, userApprovalResolvedDecision } from "lemma-sdk";
-import { Check, CheckCircle2, ChevronDown, ChevronUp, MessageCircleQuestion, ShieldAlert, XCircle } from "@/components/ui/icons";
+import { Check, CheckCircle2, ChevronDown, ChevronUp, MessageCircleQuestion, Pencil, ShieldAlert, XCircle } from "@/components/ui/icons";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -161,80 +161,80 @@ export function UserApprovalCard({
 
   return (
     <div className="rounded-md border border-[var(--border-subtle)] bg-[var(--surface-1)] p-4 shadow-[var(--shadow-xs)]">
-      <div className="flex items-start gap-3">
+      <div className="flex flex-wrap items-center gap-2">
         <span className={cn(
-          "mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-lg",
-          "bg-[var(--surface-2)] text-[var(--text-secondary)]",
+          "flex size-4 shrink-0 items-center justify-center",
+          isResolved
+            ? (isDenied ? "text-[var(--state-error)]" : "text-[var(--state-success)]")
+            : "text-[var(--state-warning)]",
         )}>
           {isResolved ? (isDenied ? <XCircle className="size-4" /> : <CheckCircle2 className="size-4" />) : <ShieldAlert className="size-4" />}
         </span>
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <div className="text-sm text-[var(--text-primary)]">{details.title}</div>
-            <Badge variant={isResolved ? "outline" : "default"} className="lemma-assistant-approval-status-badge h-5 px-1.5 text-xs">
-              {isResolved ? userApprovalDecisionLabel(resolvedDecision) : "Needs approval"}
-            </Badge>
-          </div>
-          <p className="mt-1 text-sm leading-5 text-[var(--text-secondary)]">{details.request}</p>
+        <div className="text-sm font-medium text-[var(--text-primary)]">{details.title}</div>
+        <Badge variant={isResolved ? "outline" : "warning"} className="lemma-assistant-approval-status-badge h-5 px-1.5 text-xs">
+          {isResolved ? userApprovalDecisionLabel(resolvedDecision) : "Needs approval"}
+        </Badge>
+      </div>
+      <div className="min-w-0">
+        <p className="mt-1.5 text-sm leading-5 text-[var(--text-secondary)]">{details.request}</p>
 
-          {details.params.length > 0 ? (
-            <dl className="mt-3 grid gap-1.5">
-              {details.params.map((entry) => (
-                <div key={entry.name} className="grid grid-cols-[minmax(80px,auto)_minmax(0,1fr)] gap-2 text-xs">
-                  <dt className="font-semibold text-[var(--text-secondary)]">{entry.name}</dt>
-                  <dd className="min-w-0 break-words text-[var(--text-primary)]">{entry.value}</dd>
-                </div>
-              ))}
-            </dl>
-          ) : null}
+        {details.params.length > 0 ? (
+          <dl className="mt-3 grid gap-1.5">
+            {details.params.map((entry) => (
+              <div key={entry.name} className="grid grid-cols-[minmax(80px,auto)_minmax(0,1fr)] gap-2 text-xs">
+                <dt className="font-semibold text-[var(--text-secondary)]">{entry.name}</dt>
+                <dd className="min-w-0 break-words text-[var(--text-primary)]">{entry.value}</dd>
+              </div>
+            ))}
+          </dl>
+        ) : null}
 
-          {error ? (
-            <p className="mt-2 text-xs text-[var(--state-error)]">{error}</p>
-          ) : null}
+        {error ? (
+          <p className="mt-2 text-xs text-[var(--state-error)]">{error}</p>
+        ) : null}
 
-          {!isResolved ? (
-            <div className="mt-3 flex flex-wrap gap-2">
-              <Button variant="primary"
+        {!isResolved ? (
+          <div className="mt-4 flex flex-wrap items-center justify-end gap-2">
+            <Button
+              type="button"
+              variant="quiet"
+              size="sm"
+              onClick={() => { void resolve("DENY"); }}
+              disabled={!canResolve}
+              className="h-8 px-3 text-xs text-[var(--state-error)] hover:text-[var(--state-error)]"
+            >
+              {pendingDecision === "DENY" ? "Denying..." : "Deny"}
+            </Button>
+            {details.canApproveForSession ? (
+              <Button
                 type="button"
+                variant="secondary"
                 size="sm"
-                onClick={() => { void resolve("APPROVE_ONCE"); }}
+                onClick={() => { void resolve("APPROVE_FOR_SESSION"); }}
                 disabled={!canResolve}
                 className="h-8 px-3 text-xs"
               >
-                {pendingDecision === "APPROVE_ONCE" ? "Approving..." : "Approve once"}
+                {pendingDecision === "APPROVE_FOR_SESSION" ? "Approving..." : (details.approveForSessionLabel || "Approve session")}
               </Button>
-              {details.canApproveForSession ? (
-                <Button
-                  type="button"
-                  variant="secondary"
-                  size="sm"
-                  onClick={() => { void resolve("APPROVE_FOR_SESSION"); }}
-                  disabled={!canResolve}
-                  className="h-8 px-3 text-xs"
-                >
-                  {pendingDecision === "APPROVE_FOR_SESSION" ? "Approving..." : (details.approveForSessionLabel || "Approve session")}
-                </Button>
-              ) : null}
-              <Button
-                type="button"
-                variant="quiet"
-                size="sm"
-                onClick={() => { void resolve("DENY"); }}
-                disabled={!canResolve}
-                className="h-8 px-3 text-xs text-[var(--state-error)] hover:text-[var(--state-error)]"
-              >
-                {pendingDecision === "DENY" ? "Denying..." : "Deny"}
-              </Button>
-            </div>
-          ) : null}
+            ) : null}
+            <Button variant="primary"
+              type="button"
+              size="sm"
+              onClick={() => { void resolve("APPROVE_ONCE"); }}
+              disabled={!canResolve}
+              className="h-8 px-3 text-xs"
+            >
+              {pendingDecision === "APPROVE_ONCE" ? "Approving..." : "Approve once"}
+            </Button>
+          </div>
+        ) : null}
 
-          <details className="mt-2 text-xs">
-            <summary className="cursor-pointer list-none text-[var(--text-secondary)] hover:text-[var(--text-primary)]">Approval details</summary>
-            <div className="mt-1 overflow-x-auto rounded bg-[color:color-mix(in_srgb,var(--surface-2)_50%,transparent)] p-2">
-              <pre className="lemma-assistant-text-primary-readable whitespace-pre-wrap break-words font-mono text-xs">{JSON.stringify(invocation.args, null, 2)}</pre>
-            </div>
-          </details>
-        </div>
+        <details className="mt-2 text-xs">
+          <summary className="cursor-pointer list-none text-[var(--text-secondary)] hover:text-[var(--text-primary)]">Approval details</summary>
+          <div className="mt-1 overflow-x-auto rounded bg-[color:color-mix(in_srgb,var(--surface-2)_50%,transparent)] p-2">
+            <pre className="lemma-assistant-text-primary-readable whitespace-pre-wrap break-words font-mono text-xs">{JSON.stringify(invocation.args, null, 2)}</pre>
+          </div>
+        </details>
       </div>
     </div>
   );
@@ -279,16 +279,16 @@ export function ComposerApprovalPanel({
       {error ? (
         <p className="mt-2 text-xs text-[var(--state-error)]">{error}</p>
       ) : null}
-      <div className="mt-4 flex flex-wrap items-center gap-2">
+      <div className="mt-4 flex flex-wrap items-center justify-end gap-2">
         <Button
           type="button"
-          variant="primary"
+          variant="quiet"
           size="sm"
-          onClick={() => { void resolve("APPROVE_ONCE"); }}
+          onClick={() => { void resolve("DENY"); }}
           disabled={!canResolve}
-          className="h-9 px-4 text-sm"
+          className="h-9 px-3 text-sm text-[var(--state-error)] hover:text-[var(--state-error)]"
         >
-          {pendingDecision === "APPROVE_ONCE" ? "Approving..." : "Approve once"}
+          {pendingDecision === "DENY" ? "Denying..." : "Deny"}
         </Button>
         {details.canApproveForSession ? (
           <Button
@@ -304,13 +304,13 @@ export function ComposerApprovalPanel({
         ) : null}
         <Button
           type="button"
-          variant="quiet"
+          variant="primary"
           size="sm"
-          onClick={() => { void resolve("DENY"); }}
+          onClick={() => { void resolve("APPROVE_ONCE"); }}
           disabled={!canResolve}
-          className="h-9 px-3 text-sm text-[var(--state-error)] hover:text-[var(--state-error)]"
+          className="h-9 px-4 text-sm"
         >
-          {pendingDecision === "DENY" ? "Denying..." : "Deny"}
+          {pendingDecision === "APPROVE_ONCE" ? "Approving..." : "Approve once"}
         </Button>
       </div>
     </div>
@@ -580,7 +580,10 @@ function AskUserQuestionsForm({
           onAnswer={(answers) => { void submitWidgetAnswers(answers); }}
         />
         {error ? <p className="text-xs text-[var(--state-error)]">{error}</p> : null}
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          {pending === "submit" ? (
+            <span className="text-xs text-[var(--text-tertiary)]">Submitting...</span>
+          ) : null}
           <Button
             type="button"
             variant="quiet"
@@ -591,9 +594,6 @@ function AskUserQuestionsForm({
           >
             {pending === "dismiss" ? "Dismissing..." : "Dismiss"}
           </Button>
-          {pending === "submit" ? (
-            <span className="text-xs text-[var(--text-tertiary)]">Submitting...</span>
-          ) : null}
         </div>
       </div>
     );
@@ -629,11 +629,8 @@ function AskUserQuestionsForm({
                   else setChoice((prev) => ({ ...prev, [current.header]: option.label }));
                 }}
                 className={cn(
-                  "flex w-full items-start gap-2 rounded-md border text-left transition-all",
+                  "lemma-assistant-choice-option flex w-full items-center gap-3 rounded-md border text-left transition-all",
                   optionPad,
-                  isSelected
-                    ? "border-[var(--accent)] bg-[color:color-mix(in_srgb,var(--accent)_8%,transparent)] ring-1 ring-[var(--action-primary)]"
-                    : "border-[color:color-mix(in_srgb,var(--row-border)_86%,transparent)] hover:border-[color:color-mix(in_srgb,var(--accent)_40%,var(--row-border))] hover:bg-[var(--surface-2)]",
                 )}
                 data-selected={isSelected}
               >
@@ -644,20 +641,19 @@ function AskUserQuestionsForm({
                   )}>
                     {option.label}
                     {option.recommended ? (
-                      <Badge variant="outline" className="h-4 px-1 text-xs uppercase tracking-wide">Recommended</Badge>
+                      <Badge variant="brand" className="h-4 px-1 text-xs uppercase tracking-wide">Recommended</Badge>
                     ) : null}
                   </span>
                   {option.description ? (
-                    <span className="mt-0.5 block text-xs text-[var(--text-secondary)]">{option.description}</span>
+                    <span className="mt-0.5 block text-xs leading-4 text-[var(--text-secondary)]">{option.description}</span>
                   ) : null}
                 </span>
                 <span
                   className={cn(
-                    "mt-0.5 flex size-4 flex-shrink-0 items-center justify-center rounded-full border transition-colors",
-                    isSelected
-                      ? "border-[var(--accent)] bg-[var(--accent)] text-[var(--text-on-brand)]"
-                      : "border-[color:color-mix(in_srgb,var(--row-border)_70%,transparent)]",
+                    "lemma-assistant-choice-dot flex size-4 flex-shrink-0 items-center justify-center border transition-colors",
+                    current.multiSelect ? "rounded-sm" : "rounded-full",
                   )}
+                  data-selected={isSelected || undefined}
                   aria-hidden="true"
                 >
                   {isSelected ? <Check className="size-3" strokeWidth={3} /> : null}
@@ -673,14 +669,15 @@ function AskUserQuestionsForm({
               else setChoice((prev) => ({ ...prev, [current.header]: ASK_USER_OTHER }));
             }}
             className={cn(
-              "flex w-full items-center gap-2 rounded-md border text-left text-sm text-[var(--text-secondary)] transition-colors",
+              "lemma-assistant-choice-option flex w-full items-center gap-2 rounded-md border text-left text-sm transition-colors",
               optionPad,
               otherSelected
-                ? "border-[var(--accent)] bg-[color:color-mix(in_srgb,var(--accent)_12%,transparent)]"
-                : "border-dashed border-[color:color-mix(in_srgb,var(--row-border)_86%,transparent)] hover:bg-[var(--surface-2)]",
+                ? "text-[var(--text-primary)]"
+                : "border-dashed text-[var(--text-secondary)] hover:text-[var(--text-primary)]",
             )}
             data-selected={otherSelected}
           >
+            <Pencil className="size-3.5 shrink-0 opacity-70" aria-hidden="true" />
             Other (type your own)
           </button>
           {otherSelected ? (
@@ -691,7 +688,7 @@ function AskUserQuestionsForm({
               value={other[current.header] ?? ""}
               onChange={(event) => setOther((prev) => ({ ...prev, [current.header]: event.target.value }))}
               placeholder="Type your answer"
-              className="w-full rounded-md border border-[color:color-mix(in_srgb,var(--row-border)_86%,transparent)] bg-[var(--bg-canvas)] px-3 py-2 text-sm text-[var(--text-primary)] outline-none focus:border-[var(--accent)]"
+              className="w-full rounded-md border border-[color:color-mix(in_srgb,var(--row-border)_86%,transparent)] bg-[var(--bg-canvas)] px-3 py-2 text-sm text-[var(--text-primary)] outline-none focus:border-[var(--field-border-focus)]"
             />
           ) : null}
         </div>
@@ -699,15 +696,25 @@ function AskUserQuestionsForm({
 
       {error ? <p className="text-xs text-[var(--state-error)]">{error}</p> : null}
 
-      <div className="flex flex-wrap items-center gap-2">
+      <div className="flex flex-wrap items-center justify-end gap-2">
+        <Button
+          type="button"
+          variant="quiet"
+          size="sm"
+          onClick={() => { void submit("DENY", "dismiss"); }}
+          disabled={!onResolveUserApproval || pending !== null}
+          className="h-9 px-3 text-sm text-[var(--text-secondary)]"
+        >
+          {pending === "dismiss" ? "Dismissing..." : "Dismiss"}
+        </Button>
         {safeIndex > 0 ? (
           <Button
             type="button"
-            variant="quiet"
+            variant="secondary"
             size="sm"
             onClick={() => setIndex(safeIndex - 1)}
             disabled={pending !== null}
-            className="h-9 px-3 text-sm text-[var(--text-secondary)]"
+            className="h-9 px-3 text-sm"
           >
             Back
           </Button>
@@ -735,16 +742,6 @@ function AskUserQuestionsForm({
             Next
           </Button>
         )}
-        <Button
-          type="button"
-          variant="quiet"
-          size="sm"
-          onClick={() => { void submit("DENY", "dismiss"); }}
-          disabled={!onResolveUserApproval || pending !== null}
-          className="h-9 px-3 text-sm text-[var(--text-secondary)]"
-        >
-          {pending === "dismiss" ? "Dismissing..." : "Dismiss"}
-        </Button>
       </div>
     </div>
   );
@@ -789,30 +786,29 @@ export function AskUserCard({
 
   return (
     <div className="rounded-md border border-[var(--border-subtle)] bg-[var(--surface-1)] p-4 shadow-[var(--shadow-xs)]">
-      <div className="flex items-start gap-3">
-        <span className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-lg bg-[var(--surface-2)] text-[var(--text-secondary)]">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className={cn(
+          "flex size-4 shrink-0 items-center justify-center",
+          isResolved ? "text-[var(--state-success)]" : "text-[var(--text-secondary)]",
+        )}>
           {isResolved ? <CheckCircle2 className="size-4" /> : <MessageCircleQuestion className="size-4" />}
         </span>
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <div className="text-sm text-[var(--text-primary)]">The assistant has a question</div>
-            <Badge variant={isResolved ? "outline" : "default"} className="h-5 px-1.5 text-xs">
-              {isResolved ? "Answered" : "Needs your input"}
-            </Badge>
-          </div>
-          <div className="mt-3">
-            {isResolved ? (
-              <AskUserResolvedAnswers resultData={resultData} />
-            ) : (
-              <AskUserQuestionsForm
-                invocation={invocation}
-                onResolveUserApproval={onResolveUserApproval}
-                variant="card"
-                conversationId={conversationId}
-              />
-            )}
-          </div>
-        </div>
+        <div className="text-sm font-medium text-[var(--text-primary)]">The assistant has a question</div>
+        <Badge variant={isResolved ? "outline" : "warning"} className="h-5 px-1.5 text-xs">
+          {isResolved ? "Answered" : "Needs your input"}
+        </Badge>
+      </div>
+      <div className="mt-3 min-w-0">
+        {isResolved ? (
+          <AskUserResolvedAnswers resultData={resultData} />
+        ) : (
+          <AskUserQuestionsForm
+            invocation={invocation}
+            onResolveUserApproval={onResolveUserApproval}
+            variant="card"
+            conversationId={conversationId}
+          />
+        )}
       </div>
     </div>
   );
