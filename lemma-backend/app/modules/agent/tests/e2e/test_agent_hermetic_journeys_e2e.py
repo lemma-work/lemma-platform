@@ -1279,6 +1279,75 @@ async def test_scripted_subagent_spawn_await_and_query_are_real_child_runs(
 
 
 @pytest.mark.asyncio
+async def test_structured_output_finalizes_through_the_real_harness(
+    authenticated_client,
+    fixed_test_org,
+    e2e_settings,
+    worker,
+):
+    """An output-schema agent completes with a persisted structured answer.
+
+    The mock model answers an output-schema agent by calling the output tool
+    with minimal valid arguments, so this drives the real final-output branch
+    in the in-process harness (`_final_output_message`) and the structured
+    serialization of the answer, end to end through the worker.
+    """
+    del worker
+    runtime = await _create_runtime_profile(
+        authenticated_client,
+        fixed_test_org,
+        e2e_settings,
+    )
+    pod = await _create_pod(authenticated_client, fixed_test_org)
+    output_schema = {
+        "type": "object",
+        "properties": {"answer": {"type": "string"}},
+        "required": ["answer"],
+    }
+    agent = await _create_mock_agent(
+        authenticated_client,
+        pod_id=pod["id"],
+        runtime_profile_id=runtime["id"],
+        name_prefix="structured",
+        output_schema=output_schema,
+    )
+    conversation = await authenticated_client.post(
+        f"/pods/{pod['id']}/conversations",
+        json={"agent_name": agent["name"], "title": "Structured output"},
+    )
+    assert conversation.status_code == status.HTTP_201_CREATED, conversation.text
+    conversation_id = conversation.json()["id"]
+    events = await _send_message(
+        authenticated_client,
+        pod["id"],
+        conversation_id,
+        "Answer with the required schema.",
+    )
+    assert events[-1]["type"] == "completed", events
+
+    messages = await authenticated_client.get(
+        f"/pods/{pod['id']}/conversations/{conversation_id}/messages"
+    )
+    assert messages.status_code == status.HTTP_200_OK, messages.text
+    final = [
+        item
+        for item in messages.json()["items"]
+        if item["metadata"].get("is_final_answer")
+    ]
+    assert final, "the structured answer was not persisted as a final message"
+    assert "structured_output" in final[0]["metadata"]
+    assert final[0]["metadata"]["structured_output"] == {"answer": ""}
+
+    conversation_detail = await authenticated_client.get(
+        f"/pods/{pod['id']}/conversations/{conversation_id}"
+    )
+    assert conversation_detail.status_code == status.HTTP_200_OK, (
+        conversation_detail.text
+    )
+    assert conversation_detail.json()["status"] == "COMPLETED"
+
+
+@pytest.mark.asyncio
 async def test_pod_skill_catalog_discovers_custom_skills_and_skips_malformed_ones(
     authenticated_client,
     fixed_test_org,
