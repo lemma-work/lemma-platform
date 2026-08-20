@@ -26,9 +26,12 @@ from sqlalchemy import select
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent.domain.agent_host import (
     AgentHostCommandKind,
+    AgentHostCommandRejection,
     AgentHostEvent,
     AgentHostEventBatch,
     AgentHostEventType,
+    AgentHostRejectionCode,
+    AgentHostRunSpec,
     AgentHostRunState,
 )
 from app.modules.agent.domain.entities import Agent, Conversation
@@ -73,6 +76,7 @@ from app.modules.agent.tools.snooze.pydantic_adapter import snooze
 from app.modules.agent.tests.e2e.agent_host_helpers import (
     conversation_with_a_leased_run,
     paired_machine,
+    stale_after,
 )
 from app.modules.agent.tools.context import BaseAgentContext
 from app.modules.test_support.e2e.waiters import eventually
@@ -863,8 +867,6 @@ async def test_full_dispatch_admits_polls_and_completes_a_run(
     poll does, appends a real terminal event batch, and then consumes to
     completion — all in-process and deterministic.
     """
-    from app.modules.agent.domain.agent_host import AgentHostRunSpec
-
     await scenario.create_org_with_pod(name_prefix="Dispatch")
     pod_id = scenario.pod_id
     machine = await paired_machine(scenario, display_name="dispatch e2e")
@@ -997,3 +999,134 @@ async def test_full_dispatch_admits_polls_and_completes_a_run(
     )
     assert "The secret." in streamed
     assert events[-1].type is AgentEventType.COMPLETED
+
+
+@pytest.mark.asyncio
+async def test_a_stale_revision_rejection_reaims_and_requeues_the_command(
+    db_session, scenario
+):
+    """A host refusing a START_RUN for a superseded revision repairs it.
+
+    ``agent_host_command_remint`` re-aims the delivered command at the harness
+    as it is published now and requeues it, instead of terminalizing a run
+    whose only fault is that the harness moved underneath it.
+    """
+    await scenario.create_org_with_pod(name_prefix="Remint")
+    pod_id = scenario.pod_id
+    machine = await paired_machine(scenario, display_name="remint e2e")
+
+    created = await scenario.owner_client.post(
+        f"/pods/{pod_id}/conversations", json={"title": "remint"}
+    )
+    assert created.status_code in {200, 201}, created.text
+    conversation_id = UUID(created.json()["id"])
+    run = AgentRunModel(
+        conversation_id=conversation_id,
+        status="RUNNING",
+        started_at=datetime.now(timezone.utc),
+    )
+    db_session.add(run)
+    await db_session.flush()
+
+    profile = AgentRuntimeProfileModel(
+        organization_id=UUID(scenario.org_id),
+        runtime_type="HARNESS",
+        harness_id=machine["harness_id"],
+        user_id=UUID(scenario.owner_user["id"]),
+        scope="PERSONAL",
+        kind="HARNESS",
+        protocol="AGENT_HOST",
+        name=f"Remint profile {uuid4().hex[:8]}",
+        default_model_name="gpt-5-codex",
+        model_catalog=[],
+        config={"harness_id": str(machine["harness_id"]), "config_options": []},
+    )
+    db_session.add(profile)
+    await db_session.flush()
+    await db_session.commit()
+    run_id, profile_id = run.id, profile.id
+
+    repository = AgentHostDispatchRepository(SqlAlchemyUnitOfWork(db_session))
+    now = datetime.now(timezone.utc)
+    run_spec = AgentHostRunSpec(
+        agent_run_id=run_id,
+        conversation_id=conversation_id,
+        harness_id=machine["harness_id"],
+        profile_revision="rev-1",
+        config_selections={},
+        system_prompt="Remint test.",
+        prompt=[{"role": "user", "content": "run"}],
+        run_deadline=now + timedelta(minutes=30),
+    )
+    _admitted = await repository.enqueue_run(
+        host_id=machine["host_id"],
+        harness_id=machine["harness_id"],
+        runtime_profile_id=profile_id,
+        run_spec=run_spec,
+        encrypted_mcp_payload={},
+        now=now,
+    )
+    await db_session.commit()
+
+    # The host takes the START_RUN once.
+    first_poll = await repository.poll_commands(
+        host_id=machine["host_id"],
+        limit=10,
+        acknowledged_command_ids=[],
+        checkpoints=[],
+        rejections=[],
+        available_run_slots=1,
+        now=now,
+    )
+    delivered = [c for c in first_poll if c.kind == AgentHostCommandKind.START_RUN]
+    assert len(delivered) == 1
+    delivered_command_id = delivered[0].command_id
+    await db_session.commit()
+
+    # Meanwhile the harness was republished at a newer revision.
+    republished = await scenario.async_client.put(
+        "/agent-host/harnesses",
+        json={
+            "harnesses": [
+                {
+                    "harness_key": "codex",
+                    "display_name": "Codex",
+                    "adapter_version": "1.0.0",
+                    "health": "READY",
+                    "capabilities": {"load_session": True},
+                    "config_revision": "rev-2",
+                    "config_options": [],
+                    "stale_after": stale_after(),
+                }
+            ]
+        },
+        headers={"Authorization": f"Bearer {machine['host_secret']}"},
+    )
+    assert republished.status_code == 200, republished.text
+
+    # The host refuses the stale-revision command; the backend re-aims it.
+    rejected = await repository.poll_commands(
+        host_id=machine["host_id"],
+        limit=10,
+        acknowledged_command_ids=[],
+        checkpoints=[],
+        rejections=[
+            AgentHostCommandRejection(
+                command_id=delivered_command_id,
+                run_id=run_id,
+                lease_epoch=1,
+                code=AgentHostRejectionCode.CONFIG_REVISION_STALE,
+                retryable=False,
+                detail="config changed",
+            )
+        ],
+        available_run_slots=1,
+        now=now,
+    )
+    await db_session.commit()
+
+    reaimed = [c for c in rejected if c.kind == AgentHostCommandKind.START_RUN]
+    assert len(reaimed) == 1, list(rejected)
+    # The re-aimed payload now names the current harness revision.
+    assert reaimed[0].payload["profile_revision"] == "rev-2"
+    assert reaimed[0].command_id == delivered_command_id
