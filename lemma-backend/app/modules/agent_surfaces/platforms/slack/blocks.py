@@ -151,9 +151,17 @@ CHANNEL_SETUP_VIEW_CALLBACK_ID = "lemma_channel_setup_view"
 CHANNEL_SETUP_BLOCK_ID = "lemma_channel_agent"
 CHANNEL_SETUP_SELECT_ACTION_ID = "lemma_channel_agent_select"
 
-# Value used for "the pod's own assistant" — the surface default, which is
-# stored as an empty agent_name on the route rather than as a named agent.
+# Value used for the pod's default responder — the surface default, which is
+# stored as an empty agent_name on the route rather than as a named agent. The
+# value is on the wire and never changes; the *label* beside it is display copy,
+# and it is the same name the app shows in its own sidebar.
 POD_ASSISTANT_VALUE = "__pod_assistant__"
+
+# What the pod's default responder is called wherever a person can read it. See
+# `lemma-frontend/lib/utils/agents.ts` — these two must agree, because someone
+# picking a responder in Slack and someone picking one in the app are choosing
+# the same thing and must see it under the same name.
+DEFAULT_RESPONDER_NAME = "Lem"
 
 
 def channel_setup_modal(
@@ -169,13 +177,13 @@ def channel_setup_modal(
     cascade one select off another — which is the whole reason this is a modal
     and the reason the ephemeral carries a button rather than a form.
 
-    The pod assistant is offered first because it is the answer for someone who
-    has not built a named agent yet, and it is what an empty route already means.
+    The default responder is offered first because it is the answer for someone
+    who has not built a named agent yet, and it is what an empty route means.
     """
     where = f"#{channel_label}" if channel_label else "this channel"
     options = [
         {
-            "text": {"type": "plain_text", "text": "Pod assistant"},
+            "text": {"type": "plain_text", "text": DEFAULT_RESPONDER_NAME},
             "value": POD_ASSISTANT_VALUE,
         }
     ]
@@ -260,7 +268,7 @@ def dm_agent_modal(
     """
     options = [
         {
-            "text": {"type": "plain_text", "text": "Pod assistant"},
+            "text": {"type": "plain_text", "text": DEFAULT_RESPONDER_NAME},
             "value": POD_ASSISTANT_VALUE,
         }
     ]
@@ -502,7 +510,7 @@ def app_home_view(
                 "text": (
                     f"*Your direct messages*\nAnswered by `{dm_agent_name}`"
                     if dm_agent_name
-                    else "*Your direct messages*\nAnswered by the pod assistant"
+                    else f"*Your direct messages*\nAnswered by {DEFAULT_RESPONDER_NAME}"
                 ),
             },
             "accessory": {
@@ -514,7 +522,7 @@ def app_home_view(
     )
     if channel_routes:
         lines = "\n".join(
-            f"<#{channel_id}> \u2192 `{agent or 'Pod assistant'}`"
+            f"<#{channel_id}> \u2192 `{agent or DEFAULT_RESPONDER_NAME}`"
             for channel_id, agent in list(channel_routes)[:20]
         )
         blocks.append(

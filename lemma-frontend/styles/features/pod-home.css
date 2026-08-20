@@ -199,10 +199,34 @@
   background: var(--border-subtle);
 }
 
-.pod-home-presence-faces,
+.pod-home-presence-faces {
+  display: inline-flex;
+  align-items: center;
+}
+
+/* Coloured brand marks, no plate. The white chip under them is for *monochrome*
+   marks — a black GitHub logo does vanish on dark stock — but Telegram, Slack
+   and WhatsApp each carry their own colour and read on any ground, so the plate
+   was doing nothing except pasting three near-white tiles into a line of prose.
+   Rule: a mark that carries its own colour needs no plate; a monochrome one
+   does. The overlap goes with the plate — a negative margin only reads as a
+   stack when each tile has an opaque edge to overlap onto, and without one the
+   logos just clip each other. */
 .pod-home-presence-surfaces {
   display: inline-flex;
   align-items: center;
+  gap: var(--space-1);
+  margin-right: 0.125rem;
+}
+
+.pod-home-presence-surface {
+  display: inline-flex;
+  width: 0.9375rem;
+  height: 0.9375rem;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.625rem;
+  color: var(--text-secondary);
 }
 
 .pod-home-presence-avatar {
@@ -234,34 +258,20 @@
   border-radius: var(--radius-sm);
 }
 
-/* Four fixed tints rather than a generated hue: a hash straight to hsl() drifts
-   into the state colours and starts implying an agent is failing. */
-.pod-home-presence-avatar-t0 { background: rgb(var(--accent-rgb)); }
-.pod-home-presence-avatar-t1 { background: var(--state-success); }
-.pod-home-presence-avatar-t2 { background: var(--state-warning); }
-.pod-home-presence-avatar-t3 { background: var(--text-secondary); }
+/* The tint comes from the identity system's tone pool (`lm-identity-tone-*`),
+   set on the avatar by `avatarToneClass`. The four fixed tints that used to live
+   here were `--accent-rgb`, `--state-success`, `--state-warning` and
+   `--text-secondary` — three state colours, under a comment explaining that the
+   pool existed to avoid exactly that. */
+.pod-home-presence-avatar {
+  background: var(--lm-identity-tone);
+}
 
 .pod-home-presence-live {
   width: 6px;
   height: 6px;
   border-radius: var(--radius-full);
   background: var(--state-success);
-}
-
-.pod-home-presence-surface {
-  display: inline-flex;
-  width: 1.1875rem;
-  height: 1.1875rem;
-  align-items: center;
-  justify-content: center;
-  margin-left: -0.25rem;
-  border-radius: var(--radius-xs);
-  font-size: 0.625rem;
-  color: var(--text-secondary);
-}
-
-.pod-home-presence-surface:first-child {
-  margin-left: 0;
 }
 
 .pod-home-work-section {
@@ -302,18 +312,9 @@
   letter-spacing: 0.02em;
 }
 
-.pod-home-work-live-dot {
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: var(--state-success);
-  animation: pod-live-blink 2s infinite;
-}
-
-@keyframes pod-live-blink {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.2; }
-}
+/* The live marker is the chat status pill's ping halo, rendered inline where
+   it is used — a blinking green dot said "ok" about work that is acting, and
+   violet is the colour of acting. */
 
 /* ── Single container with three sections separated by borders ── */
 .pod-home-work-panel {
@@ -346,6 +347,14 @@
 .pod-home-work-list {
   margin: 0;
   padding: 0;
+}
+
+/* The settled check a finished outcome wears — the same soft-green chip the
+   chat puts on completed work (`.lchat-pill-check-wrap`), so "this worked" is
+   the same colour in every room of the product. */
+.pod-home-outcome-check {
+  background: color-mix(in srgb, var(--state-success) 15%, transparent);
+  color: var(--state-success);
 }
 
 .pod-home-work-section-empty {

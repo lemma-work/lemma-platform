@@ -16,6 +16,8 @@
  * a real `icon_emoji` field exists, this is the only file that changes.
  */
 
+import { identityGenes } from '@/lib/identity/seeded-identity';
+
 /**
  * Everything a bare-glyph icon is allowed to be made of. U+200D (zero-width
  * joiner) and U+FE0F (variation selector-16) are written as escapes on
@@ -108,4 +110,59 @@ export function parseResourceIcon(value?: string | null): ResourceIconValue | nu
 /** Convenience for inputs that only want to know whether to keep a value. */
 export function isResourceIconGlyph(value?: string | null): boolean {
     return parseResourceIcon(value)?.kind === 'glyph';
+}
+
+/**
+ * The class that puts a resource's hue on a *container*.
+ *
+ * `ResourceIcon` keeps the generated identity inside its own box, but the row
+ * around the box — a sidebar rail row, say — wants trim in the same hue: a
+ * hover wash, an active bar, a glow. The `lm-identity-hue-*` classes carry
+ * only the custom properties, never `color`, so the label beside the icon
+ * keeps the app's ink while the trim answers in the resource's own colour.
+ * The seed arithmetic mirrors `ResourceIcon` exactly, variant included, or the
+ * row and the face would disagree about which hue is theirs.
+ */
+export function identityHueClass(iconValue: string | null | undefined, baseSeed: string): string {
+    const icon = parseResourceIcon(iconValue);
+    const variant = icon?.kind === 'identity' ? icon.variant : 0;
+    return `lm-identity-hue-${identityGenes(identityVariantSeed(baseSeed, variant)).tone}`;
+}
+
+/**
+ * Faces that actually look different from each other.
+ *
+ * Taking variants 0…N straight off the counter draws whatever the hash happens
+ * to give, which in practice meant four near-identical violet squircles in a
+ * row — a choice between things you cannot tell apart is not a choice. Walking
+ * further up the counter and keeping only the first face of each tone-and-form
+ * pair costs nothing and makes a row read as a set of options.
+ *
+ * Variant 0 is always first when `skip` is 0: that is the face the resource
+ * already has, and it must stay where it was. `skip` walks past variants
+ * already offered, which is what a "more options" reshuffle needs.
+ */
+export function distinctIdentityVariants(
+    baseSeed: string,
+    count: number,
+    skip = 0,
+): number[] {
+    const chosen: number[] = [];
+    const seen = new Set<string>();
+    let skipped = 0;
+
+    for (let variant = 0; variant < 800 && chosen.length < count; variant += 1) {
+        const genes = identityGenes(identityVariantSeed(baseSeed, variant));
+        const key = `${genes.tone}|${genes.form}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+
+        if (skipped < skip) {
+            skipped += 1;
+            continue;
+        }
+        chosen.push(variant);
+    }
+
+    return chosen;
 }

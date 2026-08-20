@@ -2,10 +2,11 @@
 
 import { use, useCallback, useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
-import { MessageSquare, Save } from '@/components/ui/icons';
+import { MessageSquare, Save, Settings2 } from '@/components/ui/icons';
 import { toast } from 'sonner';
 
 import { AgentDetailSkeleton } from '@/components/agents/agent-detail-skeleton';
+import { AgentHome, AgentHomeSkeleton } from '@/components/agents/agent-home';
 import { AgentIdentityHeader } from '@/components/agents/agent-identity-header';
 import { AgentInstructions } from '@/components/agents/agent-instructions';
 import { AgentTestPanel } from '@/components/agents/agent-test-panel';
@@ -27,16 +28,26 @@ import { useConversations } from '@/lib/hooks/use-assistants';
 import { usePodAccess } from '@/lib/hooks/use-pod-access';
 import { usePodAutomation } from '@/lib/hooks/use-pod-automation';
 import { Agent, UpdateAgentData } from '@/lib/types';
-import { formatAgentName } from '@/lib/utils/agents';
+import { agentTakesInput, formatAgentName } from '@/lib/utils/agents';
 
 /**
- * One agent, one page.
+ * One agent, one page, with two modes and a clear default.
  *
- * There used to be an Overview/Edit switch here, which split one job — making
- * the agent good — across two screens: what it can reach lived in the editor,
- * who can reach it lived in the overview, and the identity was stated in both.
- * Now the page reads top to bottom as who it is, how it is wired, and how it
- * behaves, with a dock on the right for actually running it.
+ * The page used to open in its editor: config in the main column, a dock on the
+ * right for actually running the thing. That optimised for the rarer act. You
+ * tune an agent while you are building it and seldom after; you talk to it every
+ * day — and since the sidebar rail put every agent one click from every route,
+ * this is somewhere people land constantly rather than visit to make changes.
+ *
+ * So talking is the default and editing is a button, and hitting it *swaps*
+ * which pane is big: config takes the main column and the conversation moves
+ * into the dock. The thing you came to work on is always the large one, and
+ * "tune it while testing it" — the genuinely good part of the old layout —
+ * survives intact.
+ *
+ * An agent with declared inputs is excluded from all of this: it is called with
+ * arguments rather than talked to (see `takes_input`), so there is no
+ * conversation to make the default and it opens in the editor as before.
  */
 export default function AgentDetailPage({
     params,
@@ -63,8 +74,11 @@ export default function AgentDetailPage({
     });
     const agentSchedules = automation.schedulesForAgent(agentName);
     const agentSurfaces = automation.surfacesForAgent(agentName);
-    const { data: conversationsPage } = useConversations(podId, agentName, { limit: 4 });
+    // Four answers the draft check below ("has this agent ever run"); home wants
+    // enough to be a preview of what it has been doing.
+    const { data: conversationsPage } = useConversations(podId, agentName, { limit: 10 });
     const recentConversations = conversationsPage?.items ?? [];
+    const homeConversations = recentConversations;
     const updateAgent = useUpdateAgent();
     const { mutateAsync: updateAgentAsync } = updateAgent;
 
@@ -72,6 +86,7 @@ export default function AgentDetailPage({
     const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
     const [isDockOpen, setIsDockOpen] = useState<boolean | null>(null);
     const [dockView, setDockView] = useState<'conversation' | 'history'>('conversation');
+    const [isEditing, setIsEditing] = useState(false);
     const [layoutWidth, setLayoutWidth] = useState(0);
     const layoutObserverRef = useRef<ResizeObserver | null>(null);
     const lastSavedHashRef = useRef('');
@@ -193,6 +208,18 @@ export default function AgentDetailPage({
     const canUpdateCurrentAgent = resourceAllows(localAgent, 'agent.update', canUpdateAgent);
     const openConversationId = searchParams.get('conversation');
 
+    // The same line the sidebar's cast rail draws: declared inputs mean this is
+    // called, not conversed with, so there is no talk mode to default to.
+    // Every agent gets a home; what differs is how you invoke it. A declared
+    // input schema means this one is called with arguments rather than talked to,
+    // so its home offers no message box and its run form lives in the dock.
+    const canConverse = Boolean(localAgent) && !agentTakesInput(localAgent);
+    const editing = isEditing;
+
+    // Picking a run from the rail opens it in the dock — the messenger move:
+    // the list is on the left, the conversation is on the right, and the URL
+    // carries the pick so a refresh (or a shared link) lands on the same run.
+
     // This page used to return a bare centred spinner while the agent loaded —
     // no header, no cards, no dock — and then snap the whole two-pane layout
     // into place. Nothing about the *frame* was ever unknown: the name is in the
@@ -219,19 +246,41 @@ export default function AgentDetailPage({
     // A conversation id in the URL is a request to look at that run, so it opens
     // the dock too — until the reader closes it themselves. Closed while the
     // agent loads: the dock runs the *saved* agent, and there isn't one yet.
-    const dockOpen = isReady && (isDockOpen ?? (isDraft || Boolean(openConversationId)));
+    // The dock is the *run form*, and nothing else now. Its chat half is gone:
+    // a conversational agent is started from the home's composer and the run
+    // opens as its own tab, so a test-chat panel bolted to the editor was a
+    // third place to talk to one agent — with its own history list, its own
+    // header and its own idea of which conversation you were in.
+    const dockOpen = editing && isReady && !canConverse
+        && (isDockOpen ?? (isDraft || Boolean(openConversationId)));
     const isStackedLayout = dockOpen && layoutWidth > 0 && layoutWidth < 1040;
 
     return (
         <ResourceDetailShell>
             <TourLayer tour="agent-editor" />
+            {/* No title, no back link — only the action. The tab strip above
+                already names this agent and carries the control that leaves it,
+                and the front door says the name a third time in its greeting. A
+                bar repeating both was the shell arguing with itself; §7's rule
+                is that the shell owns the title, and here it already does. */}
             <ResourceHeader
                 title={label}
-                // The identity block below owns the name; the bar takes it back
-                // only once that block scrolls out of the pane.
-                titleOwner="page"
-                backHref={`/pod/${podId}/ai`}
-                backLabel="Agents"
+                // The tab strip directly above already names this agent, and the
+                // front door says it a third time in its greeting, so the bar
+                // drops to just the action. `tab` rather than dropping the title
+                // outright because it self-corrects: on a compact viewport, where
+                // the strip is hidden, the bar takes the name back instead of
+                // leaving nothing on screen naming the thing.
+                titleOwner="tab"
+                // No back link either. The tab carries its own close, and a bar
+                // whose whole content was "← Agents" sat between the strip and
+                // the page saying nothing the strip did not.
+                //
+                // In talk mode nothing is left for it to hold — Configure lives
+                // in the page — so the bar goes rather than drawing 48px of
+                // empty strip. Pod home has no context bar for the same reason,
+                // which is most of why this page did not feel like it.
+                hideContextBar={!editing}
                 fullscreen={false}
                 actions={(
                     <>
@@ -249,18 +298,26 @@ export default function AgentDetailPage({
                                 Save changes
                             </Button>
                         ) : null}
-                        <Button
-                            type="button"
-                            variant="secondary"
-                            size="sm"
-                            className="h-8 gap-1.5 px-2.5 text-xs font-medium"
-                            onClick={() => setIsDockOpen(!dockOpen)}
-                            aria-pressed={dockOpen}
-                            disabled={!isReady}
-                        >
-                            <MessageSquare className="h-3.5 w-3.5" />
-                            Try it
-                        </Button>
+                        {/* One control, because there are two modes and you are
+                            always in exactly one of them. The old "Try it"
+                            toggled a dock beside an editor you could not leave;
+                            this says which half of the page is the work. It is
+                            hidden for an agent with declared inputs — that page
+                            has only the editor, so a toggle would offer a mode
+                            that does not exist. */}
+                        {isEditing ? (
+                            <Button
+                                type="button"
+                                variant="secondary"
+                                size="sm"
+                                className="h-8 gap-1.5 px-2.5 text-xs font-medium"
+                                onClick={() => setIsEditing(false)}
+                                disabled={!isReady}
+                            >
+                                <MessageSquare className="h-3.5 w-3.5" />
+                                Done
+                            </Button>
+                        ) : null}
                     </>
                 )}
             />
@@ -274,8 +331,75 @@ export default function AgentDetailPage({
                     // readable prompt *and* the dock; below that they stack.
                     isStacked={isStackedLayout}
                     main={(
-                        <div className="resource-page-scroll">
-                            <div className="resource-page-column">
+                        <div className="flex h-full min-h-0">
+                            {/* No rail. This page grew its own conversation list
+                                on the left, which put two lists of conversations
+                                side by side — the pod's history in the shell
+                                sidebar and this agent's here, same rows, same
+                                width, one border apart. Two lists of the same
+                                kind of thing read as two sidebars, not as a
+                                hierarchy. The shell's is the one that survives,
+                                because it is present on every route. Agent-scoped
+                                history keeps a home in the dock's History tab
+                                while editing. */}
+                            {!editing ? (
+                                localAgent ? (
+                                /* The agent's home, and it stays home. Sending
+                                   from here opens the conversation as its own
+                                   workspace tab — the tabs are a persistent
+                                   working set, so this page is still here when
+                                   you come back to it. Hosting the transcript in
+                                   place instead meant the agent's page became a
+                                   transcript and its front door was gone until
+                                   you asked for a new run. */
+                                <div className="resource-page-scroll agent-home-scroll min-w-0 flex-1">
+                                    {/* Anchored to the pane's corner, not the
+                                        column's. Inside a 44rem block centred in
+                                        a very wide pane, "top-right" is not a
+                                        corner at all — the button floated in
+                                        space above the face with no edge to
+                                        belong to. A page action wants the place
+                                        the eye already checks for one, which is
+                                        exactly where the context bar used to put
+                                        it. */}
+                                    {canUpdateCurrentAgent ? (
+                                        <div className="agent-home-page-actions">
+                                            <Button
+                                                type="button"
+                                                variant="secondary"
+                                                size="sm"
+                                                onClick={() => setIsEditing(true)}
+                                                className="h-8 gap-1.5 px-2.5 text-xs font-medium"
+                                            >
+                                                <Settings2 className="h-3.5 w-3.5" />
+                                                Configure
+                                            </Button>
+                                        </div>
+                                    ) : null}
+                                    <AgentHome
+                                        podId={podId}
+                                        agentName={displayName}
+                                        description={localAgent.description}
+                                        iconUrl={localAgent.icon_url}
+                                        surfaces={agentSurfaces}
+                                        schedules={agentSchedules}
+                                        conversations={homeConversations}
+                                        canConverse={canConverse}
+                                    />
+                                </div>
+                                ) : (
+                                    /* The home's own skeleton. The editor's was
+                                       standing in here, so every arrival flashed
+                                       a stack of cards before resolving into a
+                                       page that has none — a loading state
+                                       promising the wrong screen. */
+                                    <div className="resource-page-scroll agent-home-scroll min-w-0 flex-1">
+                                        <AgentHomeSkeleton />
+                                    </div>
+                                )
+                            ) : (
+                            <div className="resource-page-scroll min-w-0 flex-1">
+                                <div className="resource-page-column">
                                 {/* Who it is and how it is wired are one card: both
                                     answer "what is this thing", and neither is the
                                     work. The prompt gets its own. */}
@@ -315,7 +439,9 @@ export default function AgentDetailPage({
                                 ) : (
                                     <AgentDetailSkeleton />
                                 )}
+                                </div>
                             </div>
+                            )}
                         </div>
                     )}
                     aside={dockOpen ? (
@@ -380,7 +506,9 @@ export default function AgentDetailPage({
             <ResourceArrivalNotice
                 resource="agent"
                 title="Agent created"
-                description="Write its instructions, wire up what it can use, then try it in the panel on the right."
+                // What actually comes next now: the agent is already usable, and
+                // everything creation no longer asks for is one button away.
+                description="Say something below to try it, or open Configure to give it instructions, access, and a schedule."
                 celebrate
                 className="mx-4 mt-3"
             />

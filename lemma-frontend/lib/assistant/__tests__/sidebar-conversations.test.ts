@@ -2,10 +2,11 @@ import { describe, expect, it } from 'vitest';
 
 import {
     filterSidebarConversations,
+    getConversationMark,
     mergeSidebarConversations,
     SIDEBAR_CONVERSATION_LIMIT,
 } from '@/lib/assistant/sidebar-conversations';
-import type { Conversation } from '@/lib/types';
+import type { Agent, Conversation } from '@/lib/types';
 
 function conversation(
     id: string,
@@ -119,5 +120,43 @@ describe('filterSidebarConversations', () => {
     it('matches untitled conversations by their fallback label', () => {
         const result = filterSidebarConversations(conversations, 'untitled');
         expect(result.map((item) => item.id)).toEqual(['c']);
+    });
+});
+
+describe('getConversationMark', () => {
+    const agent = { id: 'agent-1', name: 'socratic-guide', icon_url: null } as Agent;
+    const agentsById = new Map<string, Agent>([[agent.id, agent]]);
+
+    it('gives an unattributed conversation the assistant mark', () => {
+        // No `agent_id` is Lem answering, which is the common
+        // case in any pod's history — not a missing value to fall back from.
+        const mark = getConversationMark(conversation('c1', '2026-08-20T10:00:00Z'), agentsById);
+
+        expect(mark).toEqual({ kind: 'assistant' });
+    });
+
+    it("gives an agent conversation that agent's face", () => {
+        const mark = getConversationMark(
+            conversation('c1', '2026-08-20T10:00:00Z', { agent_id: 'agent-1' }),
+            agentsById,
+        );
+
+        expect(mark).toEqual({
+            kind: 'agent',
+            seed: 'socratic-guide',
+            label: 'Socratic guide',
+            iconUrl: null,
+        });
+    });
+
+    it('draws nothing for an agent it cannot resolve', () => {
+        // A deleted agent, or a list that has not arrived. Seeding a face from
+        // the raw id would draw a stranger with the confidence of a real one.
+        const mark = getConversationMark(
+            conversation('c1', '2026-08-20T10:00:00Z', { agent_id: 'agent-gone' }),
+            agentsById,
+        );
+
+        expect(mark).toBeNull();
     });
 });

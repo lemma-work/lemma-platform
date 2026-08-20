@@ -172,11 +172,11 @@ export const AssistantHeader = forwardRef<HTMLDivElement, AssistantHeaderProps>(
     >
       <div className={cn("flex min-w-0 items-center", compact ? "gap-2" : "gap-3")}>
         {leadingControls}
-        {badge ? (
-          <span className={cn("flex shrink-0 items-center justify-center rounded-lg bg-[var(--action-primary)] text-[var(--text-on-brand)]", compact ? "size-7" : "size-9")}>
-            {badge}
-          </span>
-        ) : null}
+        {/* No tile. The badge used to be a monochrome glyph, which needed a
+            filled ground to sit on; it is now a being, which carries its own
+            colour — and painting one on a brand-violet square put violet on
+            violet. The badge arrives fully formed and sized by its caller. */}
+        {badge ? <span className="flex shrink-0 items-center justify-center">{badge}</span> : null}
         <div className="min-w-0">
           <h3 className={cn("truncate font-semibold tracking-tight text-[var(--text-primary)]", compact ? "text-sm" : "text-lg")}>{title}</h3>
           {subtitle && !compact ? (

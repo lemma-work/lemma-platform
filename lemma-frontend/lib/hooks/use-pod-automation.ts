@@ -34,7 +34,7 @@ export interface PodAutomation {
 /**
  * Shared read layer for the schedules + surfaces a pod owns. Fetches each list
  * once (pod-wide) and exposes client-side grouping so agent/workflow detail
- * pages, the agents list, and the Pod Assistant view all read from the same
+ * pages, the agents list, and Lem's page all read from the same
  * cache. Pass `{ schedules: false }` / `{ surfaces: false }` to skip a fetch the
  * caller has no permission for (or does not need).
  */

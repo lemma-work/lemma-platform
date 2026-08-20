@@ -4,7 +4,7 @@ import { RemixAppClient } from './remix-app-client';
 
 export const metadata: Metadata = {
     title: 'Remix on Lemma',
-    description: 'Rebuild or adapt an app with your Lemma pod assistant.',
+    description: 'Rebuild or adapt an app with Lem, your pod&rsquo;s default agent.',
     robots: {
         index: false,
         follow: false,
