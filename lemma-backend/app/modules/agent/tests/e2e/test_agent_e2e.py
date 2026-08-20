@@ -968,6 +968,53 @@ class TestPodAgentLifecycle:
         assert duplicate.json()["status"] == "reconciled"
         assert duplicate.json()["decision"] == "DENY"
 
+    @pytest.mark.approval_worker
+    async def test_request_approval_denial_reconciles_through_the_real_worker(
+        self,
+        authenticated_client,
+        fixed_test_org,
+        worker,
+    ):
+        """A production approval job must persist the denial and resume state."""
+        del worker
+        pod_id, conversation_id, _agent, paused_run, approval_id = (
+            await _seed_paused_interaction(
+                authenticated_client,
+                fixed_test_org,
+                tool_name="request_approval",
+                tool_args={
+                    "tool_name": "exec_command",
+                    "args": {"cmd": "echo approval-worker"},
+                    "title": "Run the command?",
+                    "reason": "Exercise the production approval queue.",
+                },
+            )
+        )
+
+        decision = await authenticated_client.post(
+            f"/pods/{pod_id}/conversations/{conversation_id}"
+            f"/approvals/{approval_id}/decision",
+            json={"decision": "DENY", "response": {}},
+        )
+        assert decision.status_code == status.HTTP_200_OK, decision.text
+
+        async def probe():
+            return await _resume_run_and_tool_return(
+                conversation_id, paused_run.id, approval_id
+            )
+
+        resume_run, tool_return = await eventually(
+            label="approval reconciliation worker",
+            probe=probe,
+            done=lambda pair: pair[0] is not None and pair[1] is not None,
+            timeout_seconds=30.0,
+            interval_seconds=0.2,
+        )
+        assert resume_run is not None
+        assert tool_return is not None
+        assert tool_return.tool_result["success"] is False
+        assert tool_return.tool_result["executed"] is False
+
     async def test_resolution_self_heals_after_recorded_but_unfinished_resume(
         self,
         authenticated_client,

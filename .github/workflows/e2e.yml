@@ -8,14 +8,13 @@ name: Backend E2E
 # workspace image. Slow, live-provider, local-CLI, and real-indexing tests live
 # in "Backend protected E2E" instead.
 #
-# One exception: the "function" shard runs against the REAL Docker sandbox
-# (builds/caches the workspace + function-runner images, drops "not workspace"
-# from its marker filter — see that matrix entry below). Function execution IS
-# the thing under test there; unlike agent's tool calls, there is no in-process
-# fake sandbox to stub it with, so its e2e coverage floor is unreachable any
-# other way. Runs serially (workers: 1) -- concurrent real sandbox
-# provisioning contends for the runner's CPU. A few minutes for the whole
-# directory.
+# The "function" and "workspace" shards run against the REAL Docker sandbox
+# (build/caching the workspace + function-runner images and dropping
+# "not workspace" from their marker filters — see those matrix entries below).
+# Function execution and workspace execution are the things under test there;
+# unlike the other fast journeys, neither has an in-process fake that proves the
+# runtime contract. They run serially (workers: 1) because concurrent real
+# sandbox provisioning contends for the runner's CPU.
 #
 # The suite is sharded across runners. Most shards stay serial; the 100+ journey
 # surfaces shard uses two fully isolated xdist workers to remain under ten
@@ -35,7 +34,7 @@ name: Backend E2E
 # regenerating it, which only a workflow_run event carries. Don't remove
 # workflow_run from `on:` for that reason; backend-e2e just no longer needs it.
 #
-# Required check: all 7 "lemma-backend e2e (<shard>)" shard checks are
+# Required check: all 8 "lemma-backend e2e (<shard>)" shard checks are
 # required status checks on main's protect-main ruleset, alongside
 # lemma-backend unit — a green e2e is a hard merge requirement. Deliberately
 # not aggregate-coverage (below), which also enforces the separately-tracked
@@ -103,13 +102,8 @@ jobs:
             args: app/modules/agent/tests/e2e
             workers: 2
           - name: function
-            # Unlike every other shard, function's own e2e tests genuinely
-            # cannot be covered without the real Docker sandbox -- function
-            # execution IS the thing under test, there is no in-process fake
-            # for it the way agent has one for tool calls. So this shard alone
-            # drops "not workspace" from the marker filter and builds/runs
-            # against the real workspace + function runner images (see the
-            # sandbox-image steps below, gated on this shard's name).
+            # Function execution genuinely cannot be covered without the real
+            # Docker sandbox: there is no in-process fake for the runtime.
             # workers stays 1 (not 2, unlike the fake-sandbox shards): two
             # xdist workers each cold-provisioning/re-provisioning a real
             # Docker sandbox raced for the runner's limited CPU and blew the
@@ -117,6 +111,12 @@ jobs:
             # execution_e2e.py's re-provisioning tests -- confirmed on the
             # real CI runner, not just local contention.
             args: app/modules/function/tests/e2e
+            markers: e2e and not slow and not provider and not local_cli and not indexing and not protected
+            workers: 1
+          - name: workspace
+            # The workspace module's own contract is also a real Docker
+            # contract, so keep its user journeys in a dedicated serial shard.
+            args: app/modules/workspace/tests/e2e
             markers: e2e and not slow and not provider and not local_cli and not indexing and not protected
             workers: 1
           - name: pod
@@ -188,8 +188,8 @@ jobs:
             docker.io/pgvector/pgvector:0.8.3-pg15 \
             redis:7.4-alpine \
             docker.io/supertokens/supertokens-postgresql:11.4.5
-      # function alone needs the real workspace + function-runner sandbox
-      # images (see the "function" matrix entry above). Content-addressed by
+      # function and workspace need the real workspace + function-runner sandbox
+      # images (see those matrix entries above). Content-addressed by
       # the same inputs app/modules/test_support/e2e/runtime.py fingerprints
       # (_SANDBOX_BUILD_INPUTS), so a PR that doesn't touch the sandbox images,
       # sandbox_runtime, or the bundled SDKs gets a cache hit and skips the
@@ -198,7 +198,7 @@ jobs:
       # fixtures explicitly via WORKSPACE_E2E_IMAGE/FUNCTION_E2E_IMAGE -- same
       # two-step approach sandbox-function-benchmark.yml already uses.
       - name: Cache function sandbox images
-        if: matrix.suite.name == 'function'
+        if: matrix.suite.name == 'function' || matrix.suite.name == 'workspace'
         id: cache-sandbox-images
         uses: actions/cache@v4
         with:
@@ -214,18 +214,24 @@ jobs:
               'lemma-skills/**'
             ) }}
       - name: Load cached function sandbox images
-        if: matrix.suite.name == 'function' && steps.cache-sandbox-images.outputs.cache-hit == 'true'
+        if: >-
+          (matrix.suite.name == 'function' || matrix.suite.name == 'workspace') &&
+          steps.cache-sandbox-images.outputs.cache-hit == 'true'
         run: docker load -i /tmp/e2e-sandbox-images.tar
       - name: Build function sandbox images
-        if: matrix.suite.name == 'function' && steps.cache-sandbox-images.outputs.cache-hit != 'true'
+        if: >-
+          (matrix.suite.name == 'function' || matrix.suite.name == 'workspace') &&
+          steps.cache-sandbox-images.outputs.cache-hit != 'true'
         run: make sandbox-images
       - name: Save function sandbox images to cache
-        if: matrix.suite.name == 'function' && steps.cache-sandbox-images.outputs.cache-hit != 'true'
+        if: >-
+          (matrix.suite.name == 'function' || matrix.suite.name == 'workspace') &&
+          steps.cache-sandbox-images.outputs.cache-hit != 'true'
         run: |
           docker save -o /tmp/e2e-sandbox-images.tar \
             $(make print-sandbox-images | awk '{print $2}')
       - name: Resolve function sandbox image tags
-        if: matrix.suite.name == 'function'
+        if: matrix.suite.name == 'function' || matrix.suite.name == 'workspace'
         run: |
           make print-sandbox-images | while read -r kind image; do
             case "$kind" in

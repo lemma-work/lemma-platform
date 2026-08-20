@@ -70,19 +70,27 @@ async def _create_mock_agent(
     pod_id: str,
     runtime_profile_id: str,
     name_prefix: str,
+    toolsets: list[str] | None = None,
+    input_schema: dict | None = None,
+    output_schema: dict | None = None,
 ) -> dict:
     agent_name = f"{name_prefix}_{uuid4().hex[:8]}"
+    body = {
+        "name": agent_name,
+        "instruction": "Use the deterministic E2E model.",
+        "agent_runtime": {
+            "profile_id": runtime_profile_id,
+            "model_name": "mock-safe-model",
+        },
+        "toolsets": toolsets or [],
+    }
+    if input_schema is not None:
+        body["input_schema"] = input_schema
+    if output_schema is not None:
+        body["output_schema"] = output_schema
     response = await authenticated_client.post(
         f"/pods/{pod_id}/agents",
-        json={
-            "name": agent_name,
-            "instruction": "Use the deterministic E2E model.",
-            "agent_runtime": {
-                "profile_id": runtime_profile_id,
-                "model_name": "mock-safe-model",
-            },
-            "toolsets": [],
-        },
+        json=body,
     )
     assert response.status_code == status.HTTP_201_CREATED, response.text
     return response.json()
@@ -738,6 +746,7 @@ async def test_scripted_todo_and_workspace_tools_stream_and_persist_real_results
                 "VIEW_IMAGE",
                 "SKILLS",
                 "SPEECH",
+                "WEB_SEARCH",
             ],
         },
     )
@@ -889,6 +898,16 @@ async def test_scripted_todo_and_workspace_tools_stream_and_persist_real_results
             {"file_path": "missing-audio.ogg"},
             tool_call_id="speech-listen-1",
         ),
+        script_tool_call(
+            "web_fetch",
+            {
+                "urls": ["https://example.com/"],
+                "formats": ["markdown"],
+                "out_dir": "research",
+                "comment": "Capture a deterministic public page",
+            },
+            tool_call_id="web-fetch-1",
+        ),
         script_text("Todo, workspace, skills, and speech tools completed."),
     ]
     conversation = await authenticated_client.post(
@@ -938,6 +957,7 @@ async def test_scripted_todo_and_workspace_tools_stream_and_persist_real_results
         "load_skill",
         "say",
         "listen",
+        "web_fetch",
     } <= tool_calls.keys()
     assert tool_returns["write_todos"]["tool_result"]["success"] is True
     assert "workspace-proof" in str(tool_returns_by_id["shell-1"]["tool_result"])
@@ -980,6 +1000,7 @@ async def test_scripted_todo_and_workspace_tools_stream_and_persist_real_results
     assert tool_returns_by_id["process-invalid-1"]["tool_result"]["success"] is False
     assert tool_returns["say"]["tool_result"]["success"] is False
     assert tool_returns["listen"]["tool_result"]["success"] is False
+    assert tool_returns["web_fetch"]["tool_result"]["success"] is True
 
     persisted = await authenticated_client.get(
         f"/pods/{pod_id}/conversations/{conversation_id}"
@@ -1099,6 +1120,74 @@ async def test_scripted_write_todos_normalizes_malformed_and_duplicate_checkbox_
     assert persisted.json()["metadata"]["todos"] == [
         {"content": "Draft the proposal", "done": False},
         {"content": "Send the invoice", "done": True},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_malformed_tool_arguments_are_retried_before_the_run_completes(
+    authenticated_client,
+    fixed_test_org,
+    e2e_settings,
+    worker,
+):
+    """A real model/tool loop can recover from a schema-invalid first call."""
+    del worker
+    runtime = await _create_runtime_profile(
+        authenticated_client,
+        fixed_test_org,
+        e2e_settings,
+    )
+    pod = await _create_pod(authenticated_client, fixed_test_org)
+    agent = await _create_mock_agent(
+        authenticated_client,
+        pod_id=pod["id"],
+        runtime_profile_id=runtime["id"],
+        name_prefix="tool_retry",
+        toolsets=["TODO"],
+    )
+    conversation = await authenticated_client.post(
+        f"/pods/{pod['id']}/conversations",
+        json={
+            "agent_name": agent["name"],
+            "metadata": {
+                "mock_llm_script": [
+                    script_tool_call(
+                        "write_todos",
+                        {"todos": "this is not a list"},
+                        tool_call_id="todo-invalid",
+                    ),
+                    script_tool_call(
+                        "write_todos",
+                        {"todos": ["- [x] Recovered after validation feedback"]},
+                        tool_call_id="todo-corrected",
+                    ),
+                    script_text("The invalid call was corrected."),
+                ]
+            },
+        },
+    )
+    assert conversation.status_code == status.HTTP_201_CREATED, conversation.text
+
+    events = await _send_message(
+        authenticated_client,
+        pod["id"],
+        conversation.json()["id"],
+        "Write the recovery todo.",
+    )
+    assert events[-1]["type"] == "completed", events
+
+    messages = await authenticated_client.get(
+        f"/pods/{pod['id']}/conversations/{conversation.json()['id']}/messages"
+    )
+    assert messages.status_code == status.HTTP_200_OK, messages.text
+    returns = {
+        item["tool_call_id"]: item["tool_result"]
+        for item in messages.json()["items"]
+        if item["kind"] == "TOOL_RETURN"
+    }
+    assert returns["todo-corrected"]["success"] is True
+    assert returns["todo-corrected"]["todos"] == [
+        "- [x] Recovered after validation feedback"
     ]
 
 
@@ -1442,7 +1531,8 @@ async def test_scripted_pod_data_and_file_tools_cross_worker_authorization_bound
 
 
 @pytest.mark.asyncio
-@pytest.mark.workspace
+@pytest.mark.fast_workspace
+@pytest.mark.timeout(300)
 async def test_dynamic_function_and_agent_tools_create_durable_child_runs(
     authenticated_client,
     fixed_test_org,
@@ -1605,7 +1695,8 @@ async def {function_name}(
 
 
 @pytest.mark.asyncio
-@pytest.mark.workspace
+@pytest.mark.fast_workspace
+@pytest.mark.timeout(300)
 async def test_dynamic_tools_surface_a_failing_function_and_a_schema_carrying_agent(
     authenticated_client,
     fixed_test_org,
