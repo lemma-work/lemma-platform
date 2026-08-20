@@ -5,7 +5,6 @@
 // panel, and the inline call). Consumed by the tool-details panel and the rollup.
 
 import { useCallback, useMemo, useState } from "react";
-import { usePathname } from "next/navigation";
 import { isAskUserToolName, userApprovalResolvedDecision } from "lemma-sdk";
 import { Check, CheckCircle2, ChevronDown, ChevronUp, MessageCircleQuestion, Pencil, ShieldAlert, XCircle } from "@/components/ui/icons";
 import { cn } from "@/lib/utils";
@@ -19,8 +18,6 @@ import {
   stringifyAssistantError,
   summarizeToolPayload,
 } from "./assistant-format";
-import { InlineWidget } from "./inline-widget";
-import { podIdFromPathname } from "@/lib/pods/pod-id-from-pathname";
 import type { AssistantToolInvocation } from "lemma-sdk/react";
 import type {
   ToolCardArgs,
@@ -355,6 +352,8 @@ interface AskUserOption {
   label: string;
   description?: string;
   recommended?: boolean;
+  /** Single emoji glyph shown before the label, when the model offered one. */
+  icon?: string;
 }
 
 interface AskUserQuestionDef {
@@ -380,6 +379,7 @@ export function parseAskUserQuestions(args: ToolCardArgs): AskUserQuestionDef[] 
                 label: asString(opt.label) || "",
                 description: asString(opt.description) || undefined,
                 recommended: opt.recommended === true,
+                icon: asString(opt.icon) || undefined,
               };
             })
             .filter((option) => option.label)
@@ -394,68 +394,6 @@ export function parseAskUserQuestions(args: ToolCardArgs): AskUserQuestionDef[] 
     .filter((question) => question.header && question.options.length > 0);
 }
 
-/** The inline widget an ask_user may carry in place of its choice chips. */
-export function parseAskUserWidget(args: ToolCardArgs): {
-  content: string | null;
-  loadingMessages: string[];
-} {
-  const record = args as Record<string, unknown>;
-  const content = asString(record.content) || null;
-  const raw = record.loading_messages;
-  const loadingMessages = Array.isArray(raw)
-    ? raw.map((entry) => asString(entry) || "").filter(Boolean).slice(0, 4)
-    : [];
-  return { content: content && content.trim() ? content : null, loadingMessages };
-}
-
-// A person typing into the chips' "Other" box is bounded by patience; a widget
-// is not, so free text gets an explicit ceiling rather than an implicit one.
-const ASK_USER_MAX_FREE_TEXT = 4000;
-
-/**
- * Turn a widget's posted message into answers ask_user already accepts, or null.
- *
- * The widget renders model-authored HTML inside an iframe, so what it posts is
- * data, not instruction. An answer counts only when it names a question that was
- * declared and, where possible, an option that was declared with it. Free text
- * survives because the chip UI offers the same thing through "Other" -- capped
- * here, since nothing else bounds it. Every question must be answered, matching
- * what the chips require before they enable submit.
- */
-export function coerceWidgetAnswers(
-  questions: AskUserQuestionDef[],
-  raw: Record<string, unknown>,
-): Record<string, string | string[]> | null {
-  if (questions.length === 0) return null;
-  const answers: Record<string, string | string[]> = {};
-
-  for (const question of questions) {
-    const value = raw[question.header];
-    const labels = question.options.map((option) => option.label);
-
-    if (question.multiSelect) {
-      if (!Array.isArray(value)) return null;
-      const picked = value
-        .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
-        .filter(Boolean)
-        .map((entry) => (labels.includes(entry) ? entry : entry.slice(0, ASK_USER_MAX_FREE_TEXT)))
-        .slice(0, labels.length + 1);
-      if (picked.length === 0) return null;
-      answers[question.header] = picked;
-      continue;
-    }
-
-    if (typeof value !== "string") return null;
-    const picked = value.trim();
-    if (!picked) return null;
-    answers[question.header] = labels.includes(picked)
-      ? picked
-      : picked.slice(0, ASK_USER_MAX_FREE_TEXT);
-  }
-
-  return answers;
-}
-
 function askUserAnswers(resultData: ToolCardResult): Record<string, unknown> | null {
   const answers = asRecord(resultData).answers;
   return answers && typeof answers === "object" ? (answers as Record<string, unknown>) : null;
@@ -466,13 +404,10 @@ function AskUserQuestionsForm({
   invocation,
   onResolveUserApproval,
   variant,
-  conversationId,
 }: {
   invocation: AssistantToolInvocation;
   onResolveUserApproval?: (approvalId: string, decision: UserApprovalDecision, response?: Record<string, unknown> | null) => Promise<void>;
   variant: "card" | "composer";
-  /** Needed to mint the widget's embed URL; without it the chips are shown. */
-  conversationId?: string | null;
 }) {
   const questions = useMemo(() => parseAskUserQuestions(invocation.args), [invocation.args]);
   // Single-select keeps one label (or ASK_USER_OTHER); multi-select keeps a set.
@@ -528,32 +463,6 @@ function AskUserQuestionsForm({
     }
   }, [answerFor, invocation.toolCallId, onResolveUserApproval, pending, questions]);
 
-  // A widget answers the same questions through the same resume path; only the
-  // drawing changes. Rendering it needs a pod and a conversation to mint the
-  // embed URL from, so anywhere those are missing falls back to the chips --
-  // which is also the fallback for a client that cannot iframe at all.
-  const widget = useMemo(() => parseAskUserWidget(invocation.args), [invocation.args]);
-  const pathname = usePathname();
-  const podId = podIdFromPathname(pathname);
-  const showWidget = Boolean(widget.content && podId && conversationId);
-
-  const submitWidgetAnswers = useCallback(async (raw: Record<string, unknown>) => {
-    if (!onResolveUserApproval || pending !== null) return;
-    const answers = coerceWidgetAnswers(questions, raw);
-    if (!answers) {
-      setError("That answer did not match the question, so nothing was sent.");
-      return;
-    }
-    setPending("submit");
-    setError(null);
-    try {
-      await onResolveUserApproval(invocation.toolCallId, "APPROVE_ONCE", { answers });
-    } catch (submitError) {
-      setError(stringifyAssistantError(submitError) || "Could not submit your answer.");
-      setPending(null);
-    }
-  }, [invocation.toolCallId, onResolveUserApproval, pending, questions]);
-
   const toggleMulti = useCallback((header: string, value: string) => {
     setMultiChoice((prev) => {
       const next = new Set(prev[header] ?? []);
@@ -566,38 +475,6 @@ function AskUserQuestionsForm({
   const optionPad = variant === "composer" ? "px-3 py-2" : "px-2.5 py-1.5";
 
   if (!current) return null;
-
-  if (showWidget && podId && widget.content) {
-    return (
-      <div className="flex flex-col gap-3">
-        <InlineWidget
-          podId={podId}
-          conversationId={conversationId ?? null}
-          toolCallId={invocation.toolCallId}
-          title={current.header || "Question"}
-          loadingMessages={widget.loadingMessages}
-          variant="inline"
-          onAnswer={(answers) => { void submitWidgetAnswers(answers); }}
-        />
-        {error ? <p className="text-xs text-[var(--state-error)]">{error}</p> : null}
-        <div className="flex flex-wrap items-center justify-end gap-2">
-          {pending === "submit" ? (
-            <span className="text-xs text-[var(--text-tertiary)]">Submitting...</span>
-          ) : null}
-          <Button
-            type="button"
-            variant="quiet"
-            size="sm"
-            onClick={() => { void submit("DENY", "dismiss"); }}
-            disabled={!onResolveUserApproval || pending !== null}
-            className="h-9 px-3 text-sm text-[var(--text-secondary)]"
-          >
-            {pending === "dismiss" ? "Dismissing..." : "Dismiss"}
-          </Button>
-        </div>
-      </div>
-    );
-  }
 
   const selectedMulti = multiChoice[current.header] ?? new Set<string>();
   const otherSelected = current.multiSelect
@@ -639,6 +516,9 @@ function AskUserQuestionsForm({
                     "flex flex-wrap items-center gap-1.5 text-sm text-[var(--text-primary)]",
                     isSelected && "font-medium",
                   )}>
+                    {option.icon ? (
+                      <span className="shrink-0" aria-hidden="true">{option.icon}</span>
+                    ) : null}
                     {option.label}
                     {option.recommended ? (
                       <Badge variant="brand" className="h-4 px-1 text-xs uppercase tracking-wide">Recommended</Badge>
@@ -775,11 +655,9 @@ export function askUserInlineTitle(args: ToolCardArgs): string {
 export function AskUserCard({
   invocation,
   onResolveUserApproval,
-  conversationId,
 }: {
   invocation: AssistantToolInvocation;
   onResolveUserApproval?: (approvalId: string, decision: UserApprovalDecision, response?: Record<string, unknown> | null) => Promise<void>;
-  conversationId?: string | null;
 }) {
   const resultData = (invocation.result || {}) as ToolCardResult;
   const isResolved = invocation.state === "result" || askUserAnswers(resultData) !== null;
@@ -806,7 +684,6 @@ export function AskUserCard({
             invocation={invocation}
             onResolveUserApproval={onResolveUserApproval}
             variant="card"
-            conversationId={conversationId}
           />
         )}
       </div>
@@ -817,11 +694,9 @@ export function AskUserCard({
 export function ComposerAskUserPanel({
   invocation,
   onResolveUserApproval,
-  conversationId,
 }: {
   invocation: AssistantToolInvocation;
   onResolveUserApproval?: (approvalId: string, decision: UserApprovalDecision, response?: Record<string, unknown> | null) => Promise<void>;
-  conversationId?: string | null;
 }) {
   // A question with four richly-described options is tall, and this panel sits
   // over the thread — so it can cover the very answer someone needs in order to
@@ -869,7 +744,6 @@ export function ComposerAskUserPanel({
             invocation={invocation}
             onResolveUserApproval={onResolveUserApproval}
             variant="composer"
-            conversationId={conversationId}
           />
         </div>
       )}
