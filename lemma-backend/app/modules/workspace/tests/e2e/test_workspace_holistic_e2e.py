@@ -150,10 +150,20 @@ async def test_shell_python_file_and_lemma_cli_round_trip(
     async with session:
         await session.write_file("artifacts/api.txt", b"written through file API")
         assert await session.read_file("artifacts/api.txt") == b"written through file API"
+
+        async def chunks():
+            yield b"streamed-"
+            yield b"file-proof"
+
+        await session.write_file_stream("artifacts/stream.txt", chunks())
+        await session.move_file("artifacts/stream.txt", "artifacts/moved.txt")
+        async with session.stream_file("artifacts/moved.txt") as stream:
+            assert b"".join([chunk async for chunk in stream]) == b"streamed-file-proof"
         listed = await session.list_files("artifacts")
         assert {item.path.rsplit("/", 1)[-1] for item in listed} >= {
             "proof.txt",
             "api.txt",
+            "moved.txt",
         }
         await session.delete_file("artifacts/api.txt")
         with pytest.raises(Exception):
