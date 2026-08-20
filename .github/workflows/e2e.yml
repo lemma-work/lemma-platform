@@ -99,8 +99,13 @@ jobs:
             args: app/modules/agent_surfaces/tests/e2e
             workers: 2
           - name: agent
+            # The agent shard now carries real-sandbox `fast_workspace` journeys
+            # that spawn a production worker subprocess. Like the function and
+            # workspace shards, it must run serially: under xdist workers the
+            # worker-subprocess coverage files race and are lost, swinging the
+            # agent e2e-union floor by several percentage points run to run.
             args: app/modules/agent/tests/e2e
-            workers: 2
+            workers: 1
           - name: function
             # Function execution genuinely cannot be covered without the real
             # Docker sandbox: there is no in-process fake for the runtime.
