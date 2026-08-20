@@ -364,24 +364,31 @@ export function currentRunPendingApproval(rows: DisplayMessageRow[], latestUser:
   return !!findPendingUserApprovalInvocation(rows, latestUser);
 }
 
-export function currentRunStatusLabel({
+/** The run's live status, without a clock. The elapsed second is a fact
+ *  about *now*, not about the run, so it stays out of this model: the view
+ *  that shows the label owns the tick, and a tick re-renders one pill
+ *  instead of the whole transcript. */
+export type LiveRunStatus =
+  | { kind: "waiting" }
+  | { kind: "thinking" }
+  | { kind: "working"; startMs: number };
+
+export function currentRunStatusModel({
   messages,
   rows,
   isConversationBusy,
-  nowMs,
 }: {
   messages: AssistantRenderableMessage[];
   rows: DisplayMessageRow[];
   isConversationBusy: boolean;
-  nowMs: number;
-}): { label: string; shimmer: boolean } | null {
+}): LiveRunStatus | null {
   const latestUser = latestUserIndex(messages);
 
   // A pending question/approval is a waiting state that outlives the run: the
   // run ends (conversation -> WAITING) while the card waits for the user, so
   // surface it even when the conversation is no longer "busy".
   if (currentRunPendingApproval(rows, latestUser)) {
-    return { label: "Waiting for your input", shimmer: false };
+    return { kind: "waiting" };
   }
 
   if (!isConversationBusy) return null;
@@ -399,10 +406,38 @@ export function currentRunStatusLabel({
     .find((value): value is number => value !== null);
 
   if (hasToolActivity && startMs) {
-    return { label: `Working for ${formatDurationCompact(Math.max(1000, nowMs - startMs))}`, shimmer: false };
+    return { kind: "working", startMs };
   }
 
+  return { kind: "thinking" };
+}
+
+export function formatLiveRunStatus(
+  status: LiveRunStatus,
+  nowMs: number,
+): { label: string; shimmer: boolean } {
+  if (status.kind === "waiting") {
+    return { label: "Waiting for your input", shimmer: false };
+  }
+  if (status.kind === "working") {
+    return { label: `Working for ${formatDurationCompact(Math.max(1000, nowMs - status.startMs))}`, shimmer: false };
+  }
   return { label: "Thinking", shimmer: true };
+}
+
+export function currentRunStatusLabel({
+  messages,
+  rows,
+  isConversationBusy,
+  nowMs,
+}: {
+  messages: AssistantRenderableMessage[];
+  rows: DisplayMessageRow[];
+  isConversationBusy: boolean;
+  nowMs: number;
+}): { label: string; shimmer: boolean } | null {
+  const model = currentRunStatusModel({ messages, rows, isConversationBusy });
+  return model ? formatLiveRunStatus(model, nowMs) : null;
 }
 
 export function currentToolStatusLabel({

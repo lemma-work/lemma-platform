@@ -12,8 +12,9 @@
     flex-direction: column;
     gap: var(--space-2);
     border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-xl);
+    border-radius: var(--radius-4xl);
     background: var(--surface-1);
+    box-shadow: var(--shadow-sm);
     padding: var(--space-3) var(--space-3-5) var(--space-2-5);
     transition:
         border-color var(--dur-control) var(--ease-standard),

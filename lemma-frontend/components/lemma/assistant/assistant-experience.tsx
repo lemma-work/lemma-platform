@@ -20,11 +20,13 @@ import type {
 // now lives in the framework-agnostic core; the product consumes it from lemma-sdk.
 import {
   buildDisplayMessageRows,
-  collectCompletedRunTraceGroups,
   findPendingUserApprovalInvocation,
   latestPlanSummary,
   latestUserIndex,
 } from "lemma-sdk";
+// Rows → turns: the conversation-shaped model (ask, work pill, speech,
+// artifacts, interaction cards) the transcript renders.
+import { buildChatTurns } from "@/lib/assistant/turns";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import type {
@@ -46,15 +48,13 @@ import {
 } from "@/lib/assistant/display-resource";
 // Pure formatting / label / tool-payload helpers (extracted from this file).
 import {
-  currentRunStatusLabel,
+  currentRunStatusModel,
   currentToolStatusLabel,
-  isInlineToolStatusAlreadyVisible,
   stringifyAssistantError,
 } from "./assistant-format";
 // Message rendering cluster (tool rollups, run traces, approvals, resource cards,
 // per-message group) extracted; AssistantExperienceView consumes these pieces.
 import {
-  collectDisplayResourceCardsByRow,
   currentPodIdFromBrowserPath,
   pluralize,
 } from "./assistant-message-group";
@@ -62,6 +62,7 @@ import {
 import {
   EmptyState,
   LemmaMarkIcon,
+  LiveRunStatusLine,
   ThinkingIndicator,
 } from "./assistant-parts";
 // Pure presentational helpers (class names, runtime labels, default renderers,
@@ -83,7 +84,6 @@ import { useTranscriptScroll } from "./use-transcript-scroll";
 import { AssistantExperienceSidebar } from "./assistant-experience-sidebar";
 import { AssistantExperienceHeader } from "./assistant-experience-header";
 import {
-  AssistantDisplayRow,
   AssistantExperienceConversation,
 } from "./assistant-experience-conversation";
 import { AssistantExperienceComposer } from "./assistant-experience-composer";
@@ -174,7 +174,6 @@ export function AssistantExperienceView({
   const [draft, setDraft] = useControllableDraft(controlledDraft, onDraftChange);
   const [isPlanHidden, setIsPlanHidden] = useState(false);
   const [isUpdatingModel, setIsUpdatingModel] = useState(false);
-  const [runStatusNow, setRunStatusNow] = useState(() => Date.now());
   const [draftSelectionStart, setDraftSelectionStart] = useState(0);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -185,7 +184,16 @@ export function AssistantExperienceView({
     activeConversationId: controller.activeConversationId,
     onReachTop: () => loadOlderIfPossibleRef.current?.(),
   });
-  const { scrollToBottom } = transcriptScroll;
+  // Destructured rather than read off the hook's return object: the object is
+  // rebuilt every render, the callbacks inside it are not, and the memoized
+  // transcript below can only see that if these keep their identities.
+  const {
+    containerRef: transcriptContainerRef,
+    onScroll: transcriptOnScroll,
+    isFollowing: transcriptIsFollowing,
+    scrollToBottom,
+    preserveAcross: preserveTranscriptScroll,
+  } = transcriptScroll;
   const loadOlderIfPossibleRef = useRef<(() => void) | null>(null);
   const isRunActive = controller.isActiveConversationRunning;
   const isConversationBusy = controller.isLoading || isRunActive;
@@ -275,16 +283,29 @@ export function AssistantExperienceView({
 
   const displayMessageRows = useMemo(() => buildDisplayMessageRows(controllerMessages), [controllerMessages]);
 
-  const completedRunTraceGroups = useMemo(
-    () => collectCompletedRunTraceGroups(displayMessageRows, controllerMessages, isRunActive),
-    [controllerMessages, displayMessageRows, isRunActive],
+  const displayResourcePodId = currentPodIdFromBrowserPath();
+  const chatTurns = useMemo(
+    () => buildChatTurns({
+      rows: displayMessageRows,
+      messages: controllerMessages,
+      isRunActive,
+      podId: displayResourcePodId,
+      conversationId: activeConversationId,
+    }),
+    [displayMessageRows, controllerMessages, isRunActive, displayResourcePodId, activeConversationId],
   );
+  const currentRunLatestUserIndex = latestUserIndex(controllerMessages);
+  const activePendingApprovalInvocation = findPendingUserApprovalInvocation(displayMessageRows, currentRunLatestUserIndex);
+  // A pending question or approval lives in the transcript as a card now, so
+  // the composer stays put — but answering is the card's job, so the composer
+  // refuses to send until the interaction resolves.
+  const interactionPending = !!activePendingApprovalInvocation;
 
   const canLoadOlder = hasOlderMessages && !isLoadingMessages && !isLoadingOlderMessages;
   const loadOlder = useCallback(() => {
     if (!canLoadOlder) return;
-    void transcriptScroll.preserveAcross(loadOlderMessages);
-  }, [canLoadOlder, loadOlderMessages, transcriptScroll]);
+    void preserveTranscriptScroll(loadOlderMessages);
+  }, [canLoadOlder, loadOlderMessages, preserveTranscriptScroll]);
   useEffect(() => {
     loadOlderIfPossibleRef.current = loadOlder;
   }, [loadOlder]);
@@ -322,14 +343,17 @@ export function AssistantExperienceView({
   useEffect(() => {
     setIsPlanHidden(false);
   }, [activeConversationId, latestUserMessageId, planIdentity]);
-  const inlineRunStatus = useMemo(
-    () => currentRunStatusLabel({
+  // The run's live status, clockless: the elapsed second is owned by the two
+  // leaves that display it — the live turn's pill and the composer's line — so
+  // a ticking clock never re-renders the transcript. (It used to: a setInterval
+  // here, a `nowMs` prop fanned out to every turn, once a second, all run.)
+  const runStatusModel = useMemo(
+    () => currentRunStatusModel({
       messages: controllerMessages,
       rows: displayMessageRows,
       isConversationBusy: isRunActive,
-      nowMs: runStatusNow,
     }),
-    [controllerMessages, displayMessageRows, isRunActive, runStatusNow],
+    [controllerMessages, displayMessageRows, isRunActive],
   );
   const inlineToolStatus = useMemo(
     () => currentToolStatusLabel({
@@ -339,21 +363,20 @@ export function AssistantExperienceView({
     }),
     [controller.streamingTool, controllerMessages, isRunActive],
   );
-
-  useEffect(() => {
-    if (!isRunActive) return;
-    setRunStatusNow(Date.now());
-    const interval = window.setInterval(() => setRunStatusNow(Date.now()), 1000);
-    return () => clearInterval(interval);
-  }, [isRunActive]);
+  // The live turn's status pill wears these. When the composer owns status
+  // display instead, the pill falls back to a bare "Working".
+  const liveToolLabel = statusPlacement === "inline"
+    ? inlineToolStatus?.label ?? null
+    : null;
+  const liveRunStatus = statusPlacement === "inline" ? runStatusModel : null;
 
   const handleSubmit = useCallback(async () => {
-    if ((!draft.trim() && !hasPendingFileUploads) || isConversationBusy) return;
+    if ((!draft.trim() && !hasPendingFileUploads) || isConversationBusy || interactionPending) return;
     const message = draft.trim();
     setDraft("");
     scrollToBottom("smooth");
     await sendMessage(message);
-  }, [draft, hasPendingFileUploads, isConversationBusy, scrollToBottom, sendMessage, setDraft]);
+  }, [draft, hasPendingFileUploads, isConversationBusy, interactionPending, scrollToBottom, sendMessage, setDraft]);
 
   const handleSuggestionSend = useCallback(async (suggestion: string) => {
     const message = suggestion.trim();
@@ -361,6 +384,17 @@ export function AssistantExperienceView({
     scrollToBottom("smooth");
     await sendMessage(message);
   }, [isConversationBusy, scrollToBottom, sendMessage]);
+
+  // Stable identities for the memoized transcript: an inline lambda here would
+  // be a new prop every render and defeat the memo.
+  const handleScrollToBottom = useCallback(() => {
+    scrollToBottom("smooth");
+  }, [scrollToBottom]);
+  const retryFailedMessage = controller.retryFailedMessage;
+  const canRetryFailedMessage = controller.canRetryFailedMessage;
+  const handleRetryFailedMessage = useCallback(() => {
+    if (canRetryFailedMessage && retryFailedMessage) void retryFailedMessage();
+  }, [canRetryFailedMessage, retryFailedMessage]);
 
   const handleUploadSelection = useCallback(async (files: FileList | null) => {
     const selectedFiles = files ? Array.from(files) : [];
@@ -459,13 +493,9 @@ export function AssistantExperienceView({
     : "Assistant error";
   const headerTone: AssistantSurfaceTone = resolvedChromeStyle === "elevated" ? "default" : resolvedChromeStyle === "flat" ? "flat" : "subtle";
   const composerTone: AssistantSurfaceTone = resolvedChromeStyle === "flat" ? "flat" : resolvedChromeStyle === "subtle" ? "subtle" : "default";
-  const currentRunLatestUserIndex = latestUserIndex(controllerMessages);
-  // No arbitration left to do. Nothing in the transcript competes for the word
-  // "Thinking" any more — a streaming thought renders as prose and a tool group
-  // renders as "Ran 3 commands" — so this line simply shows whenever the run is
-  // doing something.
-  const showThinkingStatus = !!inlineRunStatus;
-  const showInlineStatus = statusPlacement === "inline" && showThinkingStatus;
+  // The transcript's live status is the running turn's pill, not a bottom line.
+  // The composer only carries it when a mount asks for that placement.
+  const showThinkingStatus = !!runStatusModel;
   const showComposerStatus = statusPlacement === "composer" && showThinkingStatus;
   const uploadStatusLabel = controller.isUploadingFiles
     ? uploadingFileCount > 0
@@ -477,69 +507,28 @@ export function AssistantExperienceView({
   const hasComposerStatus = showComposerStatus || !!uploadStatusLabel;
   const composerStatus = (
     <>
-      {showComposerStatus ? (
-        <ThinkingIndicator label={inlineRunStatus?.label} shimmer={inlineRunStatus?.shimmer} />
+      {showComposerStatus && runStatusModel ? (
+        <LiveRunStatusLine status={runStatusModel} />
       ) : null}
       {uploadStatusLabel ? (
         <ThinkingIndicator label={uploadStatusLabel} shimmer={controller.isUploadingFiles} />
       ) : null}
     </>
   );
-  const inlineToolStatusAlreadyVisible = isInlineToolStatusAlreadyVisible({
-    rows: displayMessageRows,
-    latestUser: currentRunLatestUserIndex,
-    status: inlineToolStatus,
-  });
-  const activePendingApprovalInvocation = findPendingUserApprovalInvocation(displayMessageRows, currentRunLatestUserIndex);
-  const displayResourcePodId = currentPodIdFromBrowserPath();
-  const displayResourceCardsByRow = useMemo(
-    () => collectDisplayResourceCardsByRow({
-      activeConversationId,
-      isConversationBusy,
-      messages: controllerMessages,
-      podId: displayResourcePodId,
-      rows: displayMessageRows,
-    }),
-    [activeConversationId, controllerMessages, displayMessageRows, displayResourcePodId, isConversationBusy],
-  );
-  // One indicator, at the end of the transcript, and nowhere else.
-  //
-  // There used to be three placements — a header injected above the first row of
-  // the live run, a line at the bottom, and a separate tool status — each with
-  // its own suppression rules, and they still collided: a streaming thought drew
-  // "Thinking" in its own card while one of these drew "Thinking" underneath it.
-  // Content blocks say what they are; this line says what the run is doing.
-  const inlineRunStatusRowIndex = -1;
-  const showInlineStatusAtBottom = showInlineStatus;
-  const showInlineToolStatus = statusPlacement === "inline"
-    && !!inlineToolStatus
-    && !showInlineStatusAtBottom
-    && !activePendingApprovalInvocation
-    && !inlineToolStatusAlreadyVisible
-    && inlineToolStatus.label !== inlineRunStatus?.label;
   const resolvedHeaderBadge = badge === undefined
     ? <LemmaMarkIcon className="size-4.5 text-[var(--text-on-brand)]" />
     : badge;
-
-  const renderDisplayRow = (row: DisplayMessageRow, index: number, previousRow: DisplayMessageRow | null) => (
-    <AssistantDisplayRow
-      key={row.id || index}
-      row={row}
-      index={index}
-      previousRow={previousRow}
-      controller={controller}
-      activeConversationId={activeConversationId}
-      displayResourceCardsByRow={displayResourceCardsByRow}
-      completedRunTraceGroups={completedRunTraceGroups}
-      inlineRunStatusRowIndex={inlineRunStatusRowIndex}
-      inlineRunStatus={inlineRunStatus}
-      isConversationBusy={isConversationBusy}
-      isRunActive={isRunActive}
-      currentRunLatestUserIndex={currentRunLatestUserIndex}
-      onNavigateResource={onNavigateResource}
-      renderMessageContent={renderMessageContent}
-      renderToolInvocation={renderToolInvocation}
-    />
+  // Memoized element: the transcript is memoized on its props, and an element
+  // rebuilt every render is a changed prop.
+  const emptyStateElement = useMemo(
+    () => emptyState || (
+      <EmptyState
+        onSendMessage={(message) => { void handleSuggestionSend(message); }}
+        suggestions={emptyStateSuggestions}
+        density={density}
+      />
+    ),
+    [emptyState, emptyStateSuggestions, density, handleSuggestionSend],
   );
 
   return (
@@ -596,41 +585,36 @@ export function AssistantExperienceView({
           ) : null}
 
           <AssistantExperienceConversation
-            messagesContainerRef={transcriptScroll.containerRef}
-            onScroll={transcriptScroll.onScroll}
+            messagesContainerRef={transcriptContainerRef}
+            onScroll={transcriptOnScroll}
             contentWidthClassName={contentWidthClassName}
             activeConversationId={activeConversationId}
             showEmptyState={isConversationEmpty}
             fillEmptyState={emptyStateFillsViewport}
-            emptyState={emptyState || (
-              <EmptyState
-                onSendMessage={(message) => { void handleSuggestionSend(message); }}
-                suggestions={emptyStateSuggestions}
-                density={density}
-              />
-            )}
+            emptyState={emptyStateElement}
             isInitialMessageLoading={isInitialMessageLoading}
             hasOlderMessages={hasOlderMessages}
             isLoadingMessages={isLoadingMessages}
             isLoadingOlderMessages={isLoadingOlderMessages}
             hasMessages={controller.messages.length > 0}
             onLoadOlder={loadOlder}
-            displayMessageRows={displayMessageRows}
-            completedRunTraceGroups={completedRunTraceGroups}
-            renderDisplayRow={renderDisplayRow}
-            showInlineStatusAtBottom={showInlineStatusAtBottom}
-            inlineRunStatus={inlineRunStatus}
-            showInlineToolStatus={showInlineToolStatus}
-            inlineToolStatus={inlineToolStatus}
+            turns={chatTurns}
+            podId={displayResourcePodId}
+            onResolveUserApproval={controller.resolveUserApproval}
+            liveToolLabel={liveToolLabel}
+            liveRunStatus={liveRunStatus}
+            onNavigateResource={onNavigateResource}
+            renderMessageContent={renderMessageContent}
+            renderToolInvocation={renderToolInvocation}
             showAssistantErrorInTranscript={showAssistantErrorInTranscript}
             assistantErrorTitle={assistantErrorTitle}
             assistantErrorDetails={assistantErrorDetails}
-            onRetryFailedMessage={controller.canRetryFailedMessage && controller.retryFailedMessage
-              ? () => { void controller.retryFailedMessage?.(); }
+            onRetryFailedMessage={canRetryFailedMessage && retryFailedMessage
+              ? handleRetryFailedMessage
               : undefined}
             onRecheckLocalAgents={canRecheckLocalAgents ? recheckLocalAgents : undefined}
-            showScrollToBottom={!transcriptScroll.isFollowing}
-            onScrollToBottom={() => scrollToBottom("smooth")}
+            showScrollToBottom={!transcriptIsFollowing}
+            onScrollToBottom={handleScrollToBottom}
             isConversationBusy={isConversationBusy}
           />
         </div>
@@ -647,7 +631,7 @@ export function AssistantExperienceView({
           pendingFileUploads={pendingFileUploads}
           renderPendingFile={renderPendingFile}
           controller={controller}
-          activePendingApprovalInvocation={activePendingApprovalInvocation}
+          interactionPending={interactionPending}
           activeResourceMention={activeResourceMention}
           insertResourceMention={insertResourceMention}
           radius={radius}
@@ -655,7 +639,7 @@ export function AssistantExperienceView({
           fileInputRef={fileInputRef}
           inputRef={inputRef}
           draft={draft}
-          placeholder={placeholder}
+          placeholder={interactionPending ? "Respond above to continue" : placeholder}
           isConversationBusy={isConversationBusy}
           hasPendingFileUploads={hasPendingFileUploads}
           runtimeLabel={runtimeLabel}

@@ -1,0 +1,728 @@
+/**
+ * The conversation surface — Direction D: messenger rhythm × document type.
+ *
+ * The transcript is turns, not a log. Speech is bubbles (yours right and
+ * recessed, the assistant's left as sheets); work folds into a left-aligned
+ * status pill whose trace sheet keeps every tool row one click away; a long
+ * or structured answer is a doc card; deliverables arrive as artifact cards
+ * and media. Tokens only — type sizes come from --text-*, spacing from
+ * --space-*, so this sheet can never drift the type or density scales.
+ */
+
+.lchat-col {
+    display: flex;
+    width: 100%;
+    flex-direction: column;
+    /* The assistant's fill: Instagram-flat neutral grey, shared by every
+       assistant-side object (bubbles, doc cards, interaction cards) so one
+       turn reads as one voice. */
+    --lchat-them-fill: #efefef;
+}
+
+.dark .lchat-col {
+    --lchat-them-fill: #262626;
+}
+
+.lchat-turn {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--space-1);
+}
+
+/* Adjacent turns separate; a turn following a daymark gets its air from the
+   daymark instead. */
+.lchat-col > .lchat-turn + .lchat-turn {
+    margin-top: var(--space-8);
+}
+
+/* --- the ask ---------------------------------------------------------------- */
+
+.lchat-user {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: var(--space-1);
+    margin-bottom: var(--space-1-5);
+}
+
+.lchat-user-time,
+.lchat-stamp {
+    padding-right: var(--space-1);
+    color: var(--text-tertiary);
+    font-family: var(--font-mono-family);
+    font-size: var(--text-xs);
+    letter-spacing: 0.02em;
+}
+
+.lchat-stamp {
+    margin-top: var(--space-1);
+    padding-right: 0;
+    padding-left: var(--space-1);
+}
+
+/* --- day separators ---------------------------------------------------------- */
+
+/* A bare stamp, centred — no rules on either side. */
+.lchat-daymark {
+    display: flex;
+    justify-content: center;
+    margin: var(--space-8) 0 var(--space-5);
+    color: var(--text-tertiary);
+    font-family: var(--font-mono-family);
+    font-size: var(--text-2xs);
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+}
+
+.lchat-col > .lchat-daymark:first-child {
+    margin-top: 0;
+}
+
+/* --- bubbles ---------------------------------------------------------------- */
+
+/* Solid, borderless, flat fills — the fill alone makes the bubble, the way
+   a messenger draws it. No hairline, no shadow. */
+.lchat-bubble {
+    width: fit-content;
+    max-width: min(74%, 58ch);
+    padding: var(--space-2) var(--space-4);
+    border-radius: var(--radius-3xl);
+    color: var(--text-primary);
+    font-size: var(--text-sm);
+    line-height: 1.55;
+    overflow-wrap: break-word;
+    position: relative;
+}
+
+/* Your voice wears the outgoing gradient — Instagram's send, kept quiet:
+   the brand violet cooling just a step toward blue, white ink, flat. The
+   user-palette markdown is already set in --text-on-brand mixes, so it
+   needs no flips on this fill. */
+.lchat-bubble-user {
+    border-bottom-right-radius: var(--radius-sm);
+    background: linear-gradient(45deg, #5a3fd4 0%, #4f5bd5 100%);
+    color: var(--text-on-brand);
+}
+
+/* The incoming side: Instagram's receiving bubble — the flat grey fill set
+   on the column, no shadow. Ink stays primary on it. */
+.lchat-bubble-them {
+    align-self: flex-start;
+    border-bottom-left-radius: var(--radius-sm);
+    background: var(--lchat-them-fill);
+}
+
+/* No stack glue: every bubble keeps its own shape and the turn's rhythm is a
+   uniform gap. Joined corners read as one glued mass, not as a stack. */
+
+/* Narration is the same object as an answer — the messenger does not set the
+   run's chatter in a different face. Kept as a hook for density variants. */
+.lchat-bubble-narr {
+    color: var(--text-primary);
+}
+
+/* No streaming caret inside bubbles. The text growing is the activity, and
+   the live pill carries the status; a blinking glyph inside reading text is
+   noise (design.md §1: motion is restrained). */
+
+/* --- the status pill: work, folded ------------------------------------------ */
+
+.lchat-status {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    margin: var(--space-1) 0 var(--space-1-5);
+}
+
+/* Live, the pill is the typing indicator at the turn's frontier — a touch
+   more air above it than between bubbles. */
+.lchat-turn[data-live] > .lchat-status {
+    margin: var(--space-1-5) 0 0;
+}
+
+.lchat-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-full);
+    background: var(--bg-surface);
+    box-shadow: var(--shadow-xs);
+    color: var(--text-tertiary);
+    cursor: pointer;
+    font-size: var(--text-xs);
+    padding: var(--space-1) var(--space-3);
+    transition:
+        border-color var(--dur-control) var(--ease-standard),
+        color var(--dur-control) var(--ease-standard);
+}
+
+.lchat-pill:hover:not(:disabled) {
+    border-color: var(--border-strong);
+    color: var(--text-secondary);
+}
+
+.lchat-pill:disabled {
+    cursor: default;
+}
+
+.lchat-pill[data-live] {
+    color: var(--text-secondary);
+}
+
+/* The completed pill's check is a small filled chip — the one moment of
+   delight in a folded control. */
+.lchat-pill-check-wrap {
+    display: grid;
+    width: 1rem;
+    height: 1rem;
+    flex: none;
+    place-items: center;
+    border-radius: var(--radius-full);
+    background: color-mix(in srgb, var(--state-success) 15%, transparent);
+    color: var(--state-success);
+}
+
+.lchat-pill-check {
+    width: 0.625rem;
+    height: 0.625rem;
+}
+
+.lchat-pill-chev {
+    width: 0.625rem;
+    height: 0.625rem;
+    color: var(--text-soft);
+    transition: transform var(--dur-control) var(--ease-standard);
+}
+
+.lchat-pulse {
+    width: 7px;
+    height: 7px;
+    border-radius: var(--radius-full);
+    background: var(--action-primary);
+    animation: lchat-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes lchat-pulse {
+    0%, 100% { opacity: 0.35; transform: scale(0.85); }
+    50% { opacity: 1; transform: scale(1); }
+}
+
+/* --- the trace sheet --------------------------------------------------------- */
+
+/* The rail: progress is labour, not speech, so it gets no card. A hairline
+   with dot markers, per-step durations in tabular mono, hollow dot for a
+   step that failed and was retried. */
+.lchat-trace {
+    display: flex;
+    width: min(42rem, 100%);
+    flex-direction: column;
+    gap: 0;
+    margin: var(--space-2) 0 0 var(--space-2);
+    border: 0;
+    border-left: 1px solid var(--border-subtle);
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+    padding: var(--space-1) 0 var(--space-1) var(--space-3-5);
+    animation: lchat-trace-in 0.18s var(--ease-standard);
+    /* No inner scroll: the transcript's viewport scrolls as one document, and
+       an overflow box here clips the rail's own dots at its left edge. */
+}
+
+@keyframes lchat-trace-in {
+    from { opacity: 0; transform: translateY(-3px); }
+    to { opacity: 1; transform: none; }
+}
+
+.lchat-tr-step {
+    position: relative;
+    padding: var(--space-1) 0;
+}
+
+.lchat-tr-step::before {
+    content: "";
+    position: absolute;
+    top: 9px;
+    left: calc(-1 * var(--space-3-5) - 3.5px);
+    width: 7px;
+    height: 7px;
+    border-radius: var(--radius-full);
+    background: var(--text-soft);
+    box-shadow: 0 0 0 4px var(--pod-main-bg);
+}
+
+.lchat-tr-step[data-retry]::before {
+    top: 9.5px;
+    left: calc(-1 * var(--space-3-5) - 4.5px);
+    width: 6px;
+    height: 6px;
+    border: 1.5px solid var(--state-error);
+    background: var(--pod-main-bg);
+    box-shadow: none;
+}
+
+/* No per-step timings in the rail — the pill owns "how long", the rail owns
+   "what happened". */
+
+.lchat-tr-call {
+    display: flex;
+    width: 100%;
+    align-items: baseline;
+    gap: var(--space-1-5);
+    border: 0;
+    background: none;
+    color: var(--text-secondary);
+    cursor: pointer;
+    font-size: var(--text-sm);
+    padding: 0;
+    text-align: left;
+    transition: color var(--dur-control) var(--ease-standard);
+}
+
+.lchat-tr-thought-line {
+    display: flex;
+    width: 100%;
+    align-items: baseline;
+    gap: var(--space-2);
+    border: 0;
+    background: none;
+    padding: 0;
+    text-align: left;
+    cursor: pointer;
+}
+
+/* One line collapsed — the rail stays a list; the full monologue unfurls on
+   click. */
+.lchat-tr-thought-line .lchat-tr-thought-text {
+    display: block;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text-tertiary);
+    font-style: italic;
+}
+
+.lchat-tr-thought-line[data-expanded] {
+    display: block;
+}
+
+.lchat-tr-thought-line[data-expanded] .lchat-tr-thought-text {
+    margin-top: var(--space-1);
+    white-space: normal;
+    overflow: visible;
+}
+
+.lchat-tr-thought-label {
+    flex: none;
+    color: var(--text-tertiary);
+    font-size: var(--text-xs);
+}
+
+.lchat-tr-call:hover,
+.lchat-tr-call[data-selected] {
+    color: var(--text-primary);
+}
+
+.lchat-tr-call[data-state='executing'] {
+    color: var(--text-primary);
+}
+
+.lchat-tr-verb {
+    flex: none;
+    opacity: 0.65;
+}
+
+/* One line, end-ellipsis. A command that wraps mid-token reads as broken;
+   the full text is one click deeper in the details panel. */
+.lchat-tr-object {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.lchat-tr-failed {
+    flex: none;
+    color: var(--state-error);
+    font-size: var(--text-xs);
+    font-weight: 600;
+}
+
+.lchat-tr-detail {
+    margin: var(--space-1) 0 var(--space-2);
+}
+
+.lchat-tr-subagents {
+    margin-top: var(--space-1-5);
+}
+
+/* --- the doc card: the answer, typeset --------------------------------------- */
+
+/* One assistant voice: the document is the same flat object as every other
+   beat — same fill, no shadow, same speech corner, just wider and typeset.
+   Two finishes for one side read as a mistake. */
+.lchat-doc {
+    align-self: flex-start;
+    position: relative;
+    width: 100%;
+    max-width: min(100%, 72ch);
+    border-radius: var(--radius-3xl);
+    border-bottom-left-radius: var(--radius-sm);
+    background: var(--lchat-them-fill);
+    padding: var(--space-3) var(--space-4);
+}
+
+.lchat-doc-list {
+    list-style: none;
+    padding-left: 0;
+}
+
+.lchat-doc-list > li {
+    position: relative;
+    padding-left: 1.1rem;
+}
+
+.lchat-doc-list > li::before {
+    content: "–";
+    position: absolute;
+    left: 0;
+    color: var(--action-primary);
+}
+
+/* --- artifact cards ----------------------------------------------------------- */
+
+.lchat-atts {
+    display: flex;
+    width: min(30rem, 100%);
+    flex-direction: column;
+    gap: var(--space-2);
+    align-self: flex-start;
+    margin-top: var(--space-1-5);
+}
+
+.lchat-file {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-2xl);
+    background: var(--bg-surface);
+    box-shadow: var(--shadow-xs);
+    color: inherit;
+    padding: var(--space-2-5) var(--space-3-5);
+    text-decoration: none;
+    transition: border-color var(--dur-control) var(--ease-standard);
+}
+
+a.lchat-file:hover {
+    border-color: var(--border-strong);
+}
+
+.lchat-file-ic {
+    display: grid;
+    width: 2.375rem;
+    height: 2.375rem;
+    flex: none;
+    place-items: center;
+    border-radius: var(--radius-lg);
+    background: color-mix(in srgb, var(--action-primary) 12%, transparent);
+    color: var(--action-primary);
+    font-size: var(--text-2xs);
+    font-weight: 600;
+    letter-spacing: 0.03em;
+}
+
+.lchat-file-ic[data-ext='pdf'] {
+    background: color-mix(in srgb, var(--state-error) 13%, transparent);
+    color: var(--state-error);
+}
+
+.lchat-file-ic[data-ext='pptx'],
+.lchat-file-ic[data-ext='ppt'] {
+    background: color-mix(in srgb, var(--state-warning) 16%, transparent);
+    color: var(--state-warning);
+}
+
+.lchat-file-ic[data-ext='xlsx'],
+.lchat-file-ic[data-ext='xls'],
+.lchat-file-ic[data-ext='csv'],
+.lchat-file-ic[data-ext='tsv'] {
+    background: color-mix(in srgb, var(--state-success) 14%, transparent);
+    color: var(--state-success);
+}
+
+.lchat-file-text {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+}
+
+.lchat-file-n {
+    overflow: hidden;
+    color: var(--text-primary);
+    font-size: var(--text-sm);
+    font-weight: 500;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.lchat-file-m {
+    overflow: hidden;
+    color: var(--text-tertiary);
+    font-size: var(--text-xs);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.lchat-file-go {
+    flex: none;
+    margin-left: auto;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-full);
+    color: var(--action-primary);
+    font-size: var(--text-xs);
+    font-weight: 500;
+    padding: var(--space-0-5) var(--space-2-5);
+    text-decoration: none;
+    transition: border-color var(--dur-control) var(--ease-standard);
+}
+
+.lchat-file:hover .lchat-file-go,
+a.lchat-file:hover .lchat-file-go {
+    border-color: var(--action-primary);
+}
+
+/* --- inline media ------------------------------------------------------------- */
+
+.lchat-media {
+    overflow: hidden;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-2xl);
+    background: var(--bg-surface);
+    box-shadow: var(--shadow-xs);
+}
+
+/* The stage stays dark stock in both appearances — it is a player, not a card. */
+.lchat-media-stage-video {
+    display: grid;
+    aspect-ratio: 16 / 9;
+    background: #131311;
+    place-items: center;
+}
+
+.lchat-video-player {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+}
+
+.lchat-image {
+    display: block;
+    max-width: 100%;
+    max-height: 60vh;
+}
+
+.lchat-media-loading {
+    display: grid;
+    aspect-ratio: 16 / 9;
+    background: #131311;
+    color: var(--text-tertiary);
+    place-items: center;
+}
+
+.lchat-media-meta {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2-5);
+    padding: var(--space-2) var(--space-3);
+}
+
+/* --- hover copy: a property of the bubble, costing no layout ----------------- */
+
+.lchat-copybtn {
+    position: absolute;
+    top: calc(-1 * var(--space-2));
+    z-index: 1;
+    display: grid;
+    width: 1.375rem;
+    height: 1.375rem;
+    place-items: center;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-full);
+    background: var(--bg-surface);
+    box-shadow: var(--shadow-sm);
+    color: var(--text-tertiary);
+    cursor: pointer;
+    opacity: 0;
+    transition:
+        opacity var(--dur-control) var(--ease-standard),
+        color var(--dur-control) var(--ease-standard);
+}
+
+.lchat-copybtn-right {
+    right: var(--space-2);
+}
+
+.lchat-copybtn-left {
+    left: var(--space-2);
+}
+
+.group:hover .lchat-copybtn,
+.lchat-copybtn:focus-visible {
+    opacity: 1;
+}
+
+.lchat-copybtn:hover {
+    color: var(--text-primary);
+}
+
+/* --- service messages --------------------------------------------------------- */
+
+.lchat-notice {
+    align-self: center;
+    margin: var(--space-2) 0;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-full);
+    background: var(--bg-subtle);
+    color: var(--text-tertiary);
+    font-size: var(--text-xs);
+    padding: var(--space-0-5) var(--space-3);
+}
+
+/* --- in-chat interaction cards (ask_user / request_approval) ------------------ */
+
+.lchat-interaction {
+    align-self: flex-start;
+    width: min(32rem, 100%);
+    margin-top: var(--space-1-5);
+}
+
+/* Questions and approvals are assistant-side objects in the same flat fill
+   as the rest of the turn's speech — one voice, with a form inside. */
+.lchat-interaction > div:first-child {
+    border: none;
+    border-radius: var(--radius-3xl);
+    border-bottom-left-radius: var(--radius-sm);
+    background: var(--lchat-them-fill);
+}
+
+.lchat-resources {
+    align-self: flex-start;
+    width: min(32rem, 100%);
+    margin-top: var(--space-1-5);
+}
+
+/* --- arrival motion -------------------------------------------------------------
+   Only the live turn's beats rise in. History loading into view must never
+   play an entrance (see the keying comment in the conversation component), so
+   the animation hangs off [data-live] — present only while the run is live. */
+
+@keyframes lchat-rise {
+    from { opacity: 0; transform: translateY(6px); }
+    to { opacity: 1; transform: none; }
+}
+
+.lchat-turn[data-live] .lchat-user,
+.lchat-turn[data-live] .lchat-status,
+.lchat-turn[data-live] .lchat-bubble-them,
+.lchat-turn[data-live] .lchat-doc,
+.lchat-turn[data-live] .lchat-atts,
+.lchat-turn[data-live] .lchat-resources,
+.lchat-turn[data-live] .lchat-interaction,
+.lchat-turn[data-live] .lchat-notice {
+    animation: lchat-rise 0.22s var(--ease-standard) both;
+}
+
+/* --- small screens ------------------------------------------------------------- */
+
+@media (max-width: 560px) {
+    .lchat-bubble {
+        max-width: 86%;
+    }
+
+    .lchat-doc,
+    .lchat-atts,
+    .lchat-trace,
+    .lchat-interaction,
+    .lchat-resources {
+        width: 100%;
+    }
+}
+
+/* --- conversation transitions -------------------------------------------------
+   Small motions, all restrained (design.md §1):
+
+   1. Switching / starting a conversation fades the column in. The column is
+      keyed by conversation, so this plays once per conversation. It is a fade,
+      never a slide — a slide used to drag the *entire history* up the page on
+      every switch, which is exactly what the keying comment above forbids.
+   2. An empty conversation arrives with a gentle rise, so a new chat opens
+      rather than snapping into place.
+   3. The settle. When a run ends the turn reorganizes — the pill leaves the
+      frontier for the turn's header slot, the beats shift down, the stamp
+      lands. The move itself is a FLIP driven from the turn view
+      (use-turn-settle-flip): the pill slides to its slot while the beats make
+      room, instead of everything snapping at once. The CSS half animates what
+      *changes* during the move — the check pops, the summary label and the
+      stamp fade in. `data-settled` only ever lands on a turn that was live,
+      so history — which never was — mounts without any of it. */
+
+@keyframes lchat-fade-in {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
+@keyframes lchat-empty-rise {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: none; }
+}
+
+@keyframes lchat-check-in {
+    from { opacity: 0; transform: scale(0.6); }
+    to { opacity: 1; transform: none; }
+}
+
+.lchat-col {
+    animation: lchat-fade-in 0.22s var(--ease-standard) both;
+}
+
+.lchat-empty-in {
+    animation: lchat-empty-rise 0.3s var(--ease-standard) both;
+}
+
+.lchat-turn[data-settled] .lchat-pill-check-wrap {
+    animation: lchat-check-in 0.2s var(--ease-standard) both;
+}
+
+.lchat-turn[data-settled] .lchat-pill-label {
+    animation: lchat-fade-in 0.24s var(--ease-standard) both;
+}
+
+.lchat-turn[data-settled] .lchat-stamp {
+    animation: lchat-fade-in 0.3s var(--ease-standard) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .lchat-pulse {
+        animation: none;
+    }
+
+    .lchat-turn[data-live] :where(.lchat-user, .lchat-status, .lchat-bubble-them, .lchat-doc, .lchat-atts, .lchat-resources, .lchat-interaction, .lchat-notice) {
+        animation: none;
+    }
+
+    .lchat-trace {
+        animation: none;
+    }
+
+    .lchat-col,
+    .lchat-empty-in,
+    .lchat-turn[data-settled] :where(.lchat-pill-check-wrap, .lchat-pill-label, .lchat-stamp) {
+        animation: none;
+    }
+}

@@ -16,10 +16,8 @@ import type {
 } from "./assistant-types";
 import type { AssistantPendingFileUpload } from "lemma-sdk/react";
 import type { PlanSummaryState } from "lemma-sdk";
-import { isAskUserToolName } from "lemma-sdk";
 import { AssistantComposer, type AssistantSurfaceTone } from "./assistant-chrome";
 import { Composer } from "@/components/shared/composer";
-import { ComposerApprovalPanel, ComposerAskUserPanel } from "./assistant-message-group";
 import { PlanSummaryStrip } from "./assistant-parts";
 import type { getActiveResourceMention } from "./assistant-experience-helpers";
 
@@ -27,7 +25,8 @@ type ActiveResourceMention = ReturnType<typeof getActiveResourceMention>;
 
 export interface AssistantExperienceComposerBodyProps {
   controller: AssistantControllerView;
-  activePendingApprovalInvocation: Parameters<typeof ComposerApprovalPanel>[0]["invocation"] | null | undefined;
+  /** A question/approval card in the transcript is waiting on the person. */
+  interactionPending: boolean;
   activeResourceMention: ActiveResourceMention;
   insertResourceMention: (mention: AssistantResourceMention) => void;
   radius: LemmaAssistantRadius;
@@ -49,7 +48,7 @@ export interface AssistantExperienceComposerBodyProps {
 
 export function AssistantExperienceComposerBody({
   controller,
-  activePendingApprovalInvocation,
+  interactionPending,
   activeResourceMention,
   insertResourceMention,
   radius,
@@ -68,23 +67,6 @@ export function AssistantExperienceComposerBody({
   onUpdateDraftSelection,
   onSubmit,
 }: AssistantExperienceComposerBodyProps) {
-  if (activePendingApprovalInvocation) {
-    if (isAskUserToolName(activePendingApprovalInvocation.toolName)) {
-      return (
-        <ComposerAskUserPanel
-          invocation={activePendingApprovalInvocation}
-          onResolveUserApproval={controller.resolveUserApproval}
-        />
-      );
-    }
-    return (
-      <ComposerApprovalPanel
-        invocation={activePendingApprovalInvocation}
-        onResolveUserApproval={controller.resolveUserApproval}
-      />
-    );
-  }
-
   return (
     <div className="min-w-0">
       {activeResourceMention && activeResourceMention.items.length > 0 ? (
@@ -129,6 +111,7 @@ export function AssistantExperienceComposerBody({
         onSubmit={onSubmit}
         placeholder={placeholder}
         isBusy={isConversationBusy}
+        disabled={interactionPending}
         hasAttachments={hasPendingFileUploads}
         onStop={controller.stop}
         onAttach={() => fileInputRef.current?.click()}

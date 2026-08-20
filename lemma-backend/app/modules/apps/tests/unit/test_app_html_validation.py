@@ -141,6 +141,51 @@ def test_widget_contract_rejects_full_document():
     assert any("fragment" in issue for issue in issues)
 
 
+def test_widget_contract_rejects_css_outside_style_tag():
+    # CSS authored without a <style> wrapper renders as literal text in the
+    # served document. Regression: a model emitted naked rules before markup.
+    html = (
+        "body{font-family:var(--lemma-widget-font);margin:0}"
+        ".card{background:var(--lemma-widget-surface);padding:20px}\n"
+        '<div class="card"><h1>Tool run</h1></div>'
+    )
+    issues = validate_widget_html(html)
+    assert any("outside any <style> tag" in issue for issue in issues)
+
+
+def test_widget_contract_accepts_css_inside_style_tag():
+    html = (
+        "<style>.card{color:var(--lemma-widget-text);padding:10px}</style>"
+        '<div class="card">hi</div>'
+    )
+    assert validate_widget_html(html) == []
+
+
+def test_widget_contract_accepts_inline_style_attribute():
+    assert validate_widget_html('<div style="color:red">hi</div>') == []
+
+
+def test_widget_contract_accepts_media_query_inside_style_tag():
+    html = (
+        "<style>@media(prefers-color-scheme:dark){.a{color:#fff}}</style>"
+        '<div class="a">x</div>'
+    )
+    assert validate_widget_html(html) == []
+
+
+def test_widget_contract_accepts_block_close_tags_with_attributes():
+    # HTML allows whitespace and ignored attributes after a closing tag's name
+    # (</script\t\n foo> still ends the element); the block stripper must treat
+    # such a tag as the end so the script's object literals are not read as
+    # naked CSS.
+    html = (
+        "<script src='x.js' defer>\nvar x = {a: 1, b: 2};\n</script\t\n foo>"
+        "<style type='text/css'>.a{color:red}</style >"
+        '<div class="a">x</div>'
+    )
+    assert validate_widget_html(html) == []
+
+
 def test_widget_contract_rejects_unresolved_starter_tokens():
     issues = validate_widget_html("<div>__WIDGET_TITLE__</div>")
     assert any("__WIDGET_TITLE__" in issue for issue in issues)

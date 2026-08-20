@@ -21,12 +21,13 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import type { DisplayResourceRequest } from "@/lib/assistant/display-resource";
-import { reasoningPartLabel } from "./assistant-format";
+import { formatLiveRunStatus, reasoningPartLabel, type LiveRunStatus } from "./assistant-format";
 import type {
   EmptyStateSuggestion,
   LemmaAssistantDensity,
 } from "./assistant-types";
 import type { PlanSummaryState } from "./assistant-experience";
+import { useNowMs } from "./use-assistant-experience";
 
 export function suggestionIconForTitle(title: string): ReactNode {
   const normalized = title.toLowerCase();
@@ -164,6 +165,14 @@ export function ThinkingIndicator({
       ) : null}
     </span>
   );
+}
+
+/** The composer's live status line. It owns the ticking clock, so the
+ *  "Working for 12s" second re-renders this one line — not the transcript. */
+export function LiveRunStatusLine({ status }: { status: LiveRunStatus }) {
+  const nowMs = useNowMs(true);
+  const { label, shimmer } = formatLiveRunStatus(status, nowMs);
+  return <ThinkingIndicator label={label} shimmer={shimmer} />;
 }
 
 export interface EmptyStateProps {
