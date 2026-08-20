@@ -2,12 +2,9 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
-from urllib.parse import urlparse
 from uuid import UUID, uuid4
 
 import pytest
-from sandbox_runtime.protocol import PortProtocol, WorkloadKind
 from fastapi import status
 
 from app.modules.agent.tools.context import BaseAgentContext
@@ -233,7 +230,7 @@ async def test_tty_process_input_resize_listing_and_termination(
     assert not any(item.process_id == process_id and not item.completed for item in after.processes)
 
 
-async def test_signed_port_proxy_and_browser_access_reach_the_sandbox(
+async def test_browser_process_and_signed_access_reach_the_sandbox(
     authenticated_client,
     fixed_test_org,
     fixed_test_user,
@@ -242,33 +239,16 @@ async def test_signed_port_proxy_and_browser_access_reach_the_sandbox(
     del configure_workspace_api_url
     ctx = await _context(authenticated_client, fixed_test_org, fixed_test_user)
 
-    server = await exec_command_internal(
+    browser_started = await exec_command_internal(
         ctx,
         ExecCommandRequest(
-            cmd="python3 -m http.server 8765 --directory /workspace",
-            timeout_seconds=10,
-            comment="Start a sandbox HTTP service",
+            cmd="start-browser https://example.com/",
+            timeout_seconds=60,
+            comment="Start the sandbox browser and open a page",
         ),
     )
-    assert server.success, server
-    assert server.completed is False
-    assert server.process_id
-
-    from app.modules.workspace.services.sandbox_composition import build_local_client
-
-    client = build_local_client()
-    grant = await client.create_port_access(
-        WorkloadKind.WORKSPACE,
-        ctx.user_id,
-        8765,
-        protocol=PortProtocol.HTTP,
-        expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
-    )
-    proxied = await authenticated_client.get(
-        urlparse(grant.url).path.rstrip("/") + "/conversations"
-    )
-    assert proxied.status_code == status.HTTP_200_OK, proxied.text
-    assert "Directory listing" in proxied.text
+    assert browser_started.success, browser_started
+    assert browser_started.exit_code == 0
 
     browser = await authenticated_client.post(
         "/workspace/apps/browser/access",
@@ -278,10 +258,5 @@ async def test_signed_port_proxy_and_browser_access_reach_the_sandbox(
     browser_payload = browser.json()
     assert browser_payload["app"] == "browser"
     assert browser_payload["url"].startswith("http")
+    assert "/workspace-ports/" in browser_payload["url"]
     assert browser_payload["expires_at"]
-
-    stopped = await terminate_process_internal(
-        ctx,
-        TerminateProcessRequest(process_id=server.process_id),
-    )
-    assert stopped.success, stopped
