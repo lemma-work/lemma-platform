@@ -64,6 +64,13 @@ def _agent_summary_response(
     summary.has_pinned_runtime = bool(
         getattr(getattr(agent, "agent_runtime", None), "profile_id", None)
     )
+    # An empty object and a `properties` key with nothing under it both mean
+    # "declares no inputs" — the agent builder writes the second when someone
+    # opens the schema editor and adds nothing.
+    input_schema = getattr(agent, "input_schema", None) or {}
+    summary.takes_input = bool(
+        isinstance(input_schema, dict) and input_schema.get("properties")
+    )
     summary.grants = grants
     return summary
 

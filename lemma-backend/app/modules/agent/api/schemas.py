@@ -118,6 +118,13 @@ class AgentSummaryResponse(BaseModel):
     # stays on the detail response; a list caller only ever asks "is one pinned?"
     # and had to fetch every agent to find out.
     has_pinned_runtime: bool = False
+    # Whether the agent declares typed inputs. Same bargain as
+    # `has_pinned_runtime`: the schema itself stays on the detail response, but
+    # the one question every list caller asks is answerable with a boolean.
+    # It is a category line, not a detail — an agent with typed inputs is
+    # *called* with arguments, an agent without one is *talked to* — and the
+    # sidebar's cast rail only holds the second kind.
+    takes_input: bool = False
 
     model_config = ConfigDict(from_attributes=True)
 
