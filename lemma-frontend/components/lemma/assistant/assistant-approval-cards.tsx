@@ -160,10 +160,10 @@ export function UserApprovalCard({
   }, [invocation.toolCallId, onResolveUserApproval, pendingDecision]);
 
   return (
-    <div className="rounded-md border border-[color:color-mix(in_srgb,var(--row-border)_86%,transparent)] bg-[color:color-mix(in_srgb,var(--bg-canvas)_98%,transparent)] p-3.5 shadow-[var(--shadow-sm)]">
+    <div className="rounded-md border border-[var(--border-subtle)] bg-[var(--surface-1)] p-4 shadow-[var(--shadow-xs)]">
       <div className="flex items-start gap-3">
         <span className={cn(
-          "mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-md",
+          "mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-lg",
           "bg-[var(--surface-2)] text-[var(--text-secondary)]",
         )}>
           {isResolved ? (isDenied ? <XCircle className="size-4" /> : <CheckCircle2 className="size-4" />) : <ShieldAlert className="size-4" />}
@@ -788,9 +788,9 @@ export function AskUserCard({
   const isResolved = invocation.state === "result" || askUserAnswers(resultData) !== null;
 
   return (
-    <div className="rounded-md border border-[color:color-mix(in_srgb,var(--row-border)_86%,transparent)] bg-[color:color-mix(in_srgb,var(--bg-canvas)_98%,transparent)] p-3.5 shadow-[var(--shadow-sm)]">
+    <div className="rounded-md border border-[var(--border-subtle)] bg-[var(--surface-1)] p-4 shadow-[var(--shadow-xs)]">
       <div className="flex items-start gap-3">
-        <span className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-md bg-[var(--surface-2)] text-[var(--text-secondary)]">
+        <span className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-lg bg-[var(--surface-2)] text-[var(--text-secondary)]">
           {isResolved ? <CheckCircle2 className="size-4" /> : <MessageCircleQuestion className="size-4" />}
         </span>
         <div className="min-w-0 flex-1">

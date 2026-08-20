@@ -537,3 +537,57 @@ In a list, make the row itself the target. A button on every row is one CTA per
 record, which is the same failure as a page with six primaries. Reserve buttons
 for the one action per section, and let row-level affordances be `quiet` or a
 chevron.
+
+## 9. The Conversation Surface
+
+The chat transcript is **turns, not logs**. The SDK's display rows are a
+faithful, chronological record of everything a run did; a conversation is ask →
+work → result. The boundary between the two is the pure adapter in
+`lib/assistant/turns.ts` (`buildChatTurns`), and all rendering lives in
+`components/lemma/assistant/assistant-turn.tsx` with styles in
+`styles/features/assistant-chat.css` (tokens only — no raw type, spacing, or
+radius values; the audit counts them).
+
+### The four objects
+
+| Object | What it is | Rules |
+| --- | --- | --- |
+| Bubble | Speech. Yours right in the accent badge pair (violet on soft violet), the assistant's left on the warm neutral `--bg-muted` — coloured side vs neutral side. Radius `--radius-3xl` with one tightened trailing corner (`--radius-sm`), borderless, lifted by shadow | Narration beats and answers are the *same* object — a messenger does not set chatter in a second face. Question/approval cards wear the same neutral fill: speech-adjacent objects, not panels |
+| Status pill | The work, folded. Left-aligned: `✓ Worked for 9m 14s · 7 steps` settled, `● {live status}` running | One per turn that did work; never for a pure text exchange. Expanded, it is **the rail**: a left hairline with dot markers and per-step durations in tabular mono (hollow error dot for a step that failed and recovered), each row still drilling into `ToolDetailsPanel` — the history promise (PS-AGENT-010) is disclosure, not deletion |
+| Doc card | The answer when it is long or structured (heading, table, ≥3 bullets, or 700+ chars — `answerIsDocument`, a pure function of the text so streaming and settled forms agree) | **Fill = a remark, outline = a document** — transparent with the hairline, same radius family and speech corner, capped at `72ch`. Real heading hierarchy (`text-lg`/`text-base` at 500, tight tracking), `leading-6`, lists with accent dashes. Short answers never see it |
+| Artifact card | A file the run produced — presented (`display_resource` FILE) or written with a deliverable extension, deduped by path | Type-tinted tile (rust PDF, amber PPTX, green sheets, violet default), humanized name, size · compact path, Open chip. Video and images play inline from a short-lived file URL; build scripts and scratch files stay trace rows, or a run that wrote twelve files to make two would end with fourteen cards |
+
+### Behavioral rules
+
+- **Narration is speech, thinking is machinery.** Mid-run text
+  (`is_intermediate_assistant_message`) streams in as bubbles and stays as
+  bubbles after the run completes. `THINKING` — including its folded
+  `traceNote` form — only ever appears inside the trace sheet.
+- **Questions and approvals are in the chat**, where the run paused — not a
+  panel that replaces the composer. While one is pending the composer refuses
+  to send (`"Respond above to continue"`), preserving the old takeover's
+  semantics without taking over.
+- **The live turn always shows the pill.** A just-sent message with no output
+  yet is a live turn whose pill reads "Thinking" — the transcript's only
+  running indicator (unless a mount sets `statusPlacement="composer"`).
+- **The pill moves with its meaning.** Completed, it heads the turn
+  ("Worked for 16s · 3 steps" — a summary). Live, it sits at the turn's
+  frontier as the typing indicator, after the newest beat — "what it is doing
+  right now" is never stranded above the bubbles it is producing.
+- **Width is a messenger measure.** The full-page conversation column is
+  `max-w-3xl`; bubbles cap at `min(74%, 58ch)`, the doc at `min(100%, 72ch)`,
+  cards/rail at `min(30–34rem, 100%)`, all fluid at 375px.
+- **Only the result gets the doc card.** The flagged final answer (or, for
+  unflagged history, the turn's closing run of answer text) is the only text
+  eligible; a long mid-run beat is still a bubble. `documentEligible` on the
+  turn item, `answerIsDocument` on the text.
+- **Stacks share corners.** Consecutive assistant bubbles tighten their
+  touching corners (`--radius-sm`) and pull the seam to 2px, so a run of beats
+  reads as one stack. The outlined doc breaks the stack.
+- **Timestamps are mono cluster stamps.** Time-only, under the user's ask and
+  under the assistant turn's last beat — never a full date under every bubble.
+  Day context comes from `daymark` separators ("Today · 20 Aug") between day
+  groups.
+- **Timestamps** sit under the user bubble only. The doc card carries its copy
+  affordance on hover; bubbles are chat, and chat is not copied.
+

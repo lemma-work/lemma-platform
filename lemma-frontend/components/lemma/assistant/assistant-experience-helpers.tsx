@@ -273,7 +273,7 @@ export function defaultMessageContent({ message }: AssistantMessageRenderArgs): 
 
   return (
     <div className={cn(
-      "min-w-0 overflow-hidden break-words text-sm font-normal leading-relaxed tracking-normal text-[var(--text-primary)]",
+      "min-w-0 overflow-hidden break-words text-sm font-normal leading-relaxed tracking-normal",
       // What the agent *says* is set one way, whenever it says it.
       //
       // This used to depend on whether the message was currently the run's last
@@ -282,7 +282,10 @@ export function defaultMessageContent({ message }: AssistantMessageRenderArgs): 
       // roman ink the moment the run ended. The distinction that matters is
       // speech vs thought, and that never changes: thoughts are `THINKING`
       // messages and render as reasoning, which is the one italic voice here.
-      isUserMessage ? "max-w-prose" : "max-w-full",
+      //
+      // Ink follows the fill: user speech inherits the bubble's white, the
+      // assistant's speech stays primary ink on its grey.
+      isUserMessage ? "max-w-prose text-current" : "max-w-full text-[var(--text-primary)]",
     )}>
       {segments.map((segment, index) => (
         segment.kind === "json" ? (

@@ -264,8 +264,8 @@ export default function PodConversationPage({
                     composerModelControl={composerContextControl}
                     showNewConversationButton={false}
                     density="spacious"
-                    contentWidthClassName="!max-w-4xl"
-                    composerWidthClassName="!max-w-4xl"
+                    contentWidthClassName="!max-w-3xl"
+                    composerWidthClassName="!max-w-3xl"
                     className="h-full rounded-none border-0 bg-transparent shadow-none"
                     draft={newWorkspaceDraft}
                     onDraftChange={setNewWorkspaceDraft}
@@ -296,8 +296,8 @@ export default function PodConversationPage({
                         composerModelControl={composerContextControl}
                         showNewConversationButton={false}
                         density="spacious"
-                        contentWidthClassName="!max-w-4xl"
-                        composerWidthClassName="!max-w-4xl"
+                        contentWidthClassName="!max-w-3xl"
+                        composerWidthClassName="!max-w-3xl"
                         className="h-full rounded-none border-0 bg-transparent shadow-none"
                     />
                 ) : (
