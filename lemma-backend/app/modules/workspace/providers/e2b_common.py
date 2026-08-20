@@ -158,7 +158,7 @@ async def ensure_runtime_serving(
     provider_id: str,
     *,
     runtime_port: int,
-    budget_seconds: float = 6.0,
+    budget_seconds: float = 20.0,
 ) -> None:
     """Raise unless the runtime inside this sandbox is answering.
 
@@ -172,11 +172,15 @@ async def ensure_runtime_serving(
 
     So any HTTP answer at all means the runtime is there -- 404 included, and
     deliberately, because the probe must not depend on an authenticated route.
-    502 and a transport failure mean it is not.
+    A 502 that *persists* means it is not.
 
-    Polled rather than probed once, because readiness is allowed to wait: a
-    resumed sandbox needs a moment before E2B's edge routes to it. The budget is
-    short because this also runs on the warm path, and it only elapses when the
+    The same 502 is also the normal shape of the first moments after a create
+    or a resume: E2B's edge answers before it has routed to the sandbox. That
+    is why the probe polls through 5xx rather than taking the first answer as
+    final -- treating the first 502 as definitive failed the whole provision
+    during ordinary edge lag, and with it the first tool call of every run
+    that landed on a cold sandbox (2026-08-20). Only callers off the warm path
+    reach here, so the budget can be generous; it only elapses when the
     runtime is *not* answering -- a healthy one replies well inside it.
     """
     with sdk_errors():
@@ -206,18 +210,31 @@ async def ensure_runtime_serving(
 
 
 async def _poll_runtime(url: str, budget_seconds: float) -> int | None:
-    """The runtime's status, or None if it never answered inside the budget."""
+    """The runtime's status, or None if it never answered inside the budget.
+
+    Both failure shapes are polled through, because both are transient on a
+    sandbox that is still coming up: a transport error is the edge not yet
+    listening for this host at all, and a 5xx is the edge listening but not
+    yet routed to the sandbox. Only an answer below 500 ends the wait early --
+    it is the one outcome that cannot mean "not up yet". A budget that expires
+    on 5xx answers returns the last one, so the failure still says *what* the
+    runtime answered rather than merely that it did not.
+    """
     import asyncio
     import time
 
     import httpx
 
     deadline = time.monotonic() + budget_seconds
+    status: int | None = None
     async with httpx.AsyncClient(timeout=budget_seconds) as client:
         while True:
             try:
-                return (await client.get(url)).status_code
+                status = (await client.get(url)).status_code
+                if status < 500:
+                    return status
             except httpx.HTTPError:
-                if time.monotonic() >= deadline:
-                    return None
-                await asyncio.sleep(0.1)
+                pass
+            if time.monotonic() >= deadline:
+                return status
+            await asyncio.sleep(0.1)
