@@ -18,7 +18,7 @@ import asyncio
 import base64
 from types import SimpleNamespace
 from datetime import datetime, timedelta, timezone
-from uuid import UUID, uuid7
+from uuid import UUID, uuid4, uuid7
 
 import pytest
 from sqlalchemy import select
@@ -55,7 +55,10 @@ from app.modules.agent.infrastructure.harnesses.agent_host_run_window import (
 from app.modules.agent.domain.pausing_tools import SNOOZE_TOOL_NAME
 from app.modules.agent.domain.value_objects import AgentRunStatus
 from app.modules.agent.infrastructure.models import AgentRunModel
-from app.modules.agent.infrastructure.runtime_models import AgentHostCommandModel
+from app.modules.agent.infrastructure.runtime_models import (
+    AgentHostCommandModel,
+    AgentRuntimeProfileModel,
+)
 from app.modules.agent.infrastructure.repositories import ConversationRepository
 from app.modules.agent.infrastructure.wait_repository import (
     AgentConversationWaitRepository,
@@ -883,6 +886,25 @@ async def test_full_dispatch_admits_polls_and_completes_a_run(
     await db_session.commit()
     run_id = run.id
 
+    # A real harness-bound runtime profile row the lease can reference.
+    profile = AgentRuntimeProfileModel(
+        organization_id=UUID(scenario.org_id),
+        runtime_type="HARNESS",
+        harness_id=machine["harness_id"],
+        user_id=UUID(scenario.owner_user["id"]),
+        scope="PERSONAL",
+        kind="HARNESS",
+        protocol="AGENT_HOST",
+        name=f"Dispatch profile {uuid4().hex[:8]}",
+        default_model_name="gpt-5-codex",
+        model_catalog=[],
+        config={"harness_id": str(machine["harness_id"]), "config_options": []},
+    )
+    db_session.add(profile)
+    await db_session.flush()
+    await db_session.commit()
+    profile_id = profile.id
+
     uow = SqlAlchemyUnitOfWork(db_session)
     repository = AgentHostDispatchRepository(uow)
     now = datetime.now(timezone.utc)
@@ -900,7 +922,7 @@ async def test_full_dispatch_admits_polls_and_completes_a_run(
     admitted = await repository.enqueue_run(
         host_id=machine["host_id"],
         harness_id=machine["harness_id"],
-        runtime_profile_id=uuid7(),
+        runtime_profile_id=profile_id,
         run_spec=run_spec,
         encrypted_mcp_payload={"encrypted": True},
         now=now,
@@ -910,7 +932,7 @@ async def test_full_dispatch_admits_polls_and_completes_a_run(
     again = await repository.enqueue_run(
         host_id=machine["host_id"],
         harness_id=machine["harness_id"],
-        runtime_profile_id=uuid7(),
+        runtime_profile_id=profile_id,
         run_spec=run_spec,
         encrypted_mcp_payload={},
         now=now,
