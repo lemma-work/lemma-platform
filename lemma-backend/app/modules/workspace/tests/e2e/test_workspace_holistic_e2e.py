@@ -264,7 +264,9 @@ async def test_signed_port_proxy_and_browser_access_reach_the_sandbox(
         protocol=PortProtocol.HTTP,
         expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
     )
-    proxied = await authenticated_client.get(urlparse(grant.url).path)
+    proxied = await authenticated_client.get(
+        urlparse(grant.url).path.rstrip("/") + "/conversations"
+    )
     assert proxied.status_code == status.HTTP_200_OK, proxied.text
     assert "Directory listing" in proxied.text
 
