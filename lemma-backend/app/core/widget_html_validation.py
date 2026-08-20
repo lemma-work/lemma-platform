@@ -71,6 +71,17 @@ _UNRESOLVED_TEMPLATE_TOKEN = re.compile(r"__[A-Z][A-Z0-9_]*__")
 _RUNTIME_CONFIG_REFERENCE = re.compile(r"\b(?:window\.)?__LEMMA_CONFIG__\b")
 _API_URL_IDENTIFIER = re.compile(r"\bapiUrl\b")
 
+# CSS authored outside a <style> element renders as literal text in the served
+# document (a "text salad" of rules), so it is rejected before display. The
+# block/tag strippers isolate the fragment's bare text first, which keeps inline
+# style="" attributes, <script> object literals, and real stylesheet contents
+# from tripping the rule-shaped match.
+_STYLE_BLOCK = re.compile(r"<style\b[^>]*>.*?</style\s*>", re.IGNORECASE | re.DOTALL)
+_SCRIPT_BLOCK = re.compile(r"<script\b[^>]*>.*?</script\s*>", re.IGNORECASE | re.DOTALL)
+_HTML_COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
+_ANY_TAG = re.compile(r"<[^>]+>")
+_NAKED_CSS_RULE = re.compile(r"[^{}\s<>][^{}<>]*\{[^{}]*[a-zA-Z-]+\s*:[^{}]*\}")
+
 
 def lint_app_html(html: str) -> list[str]:
     """Return advisory warnings for app/widget HTML. Never raises; ``[]`` == clean."""
@@ -87,6 +98,21 @@ def lint_app_html(html: str) -> list[str]:
     return warnings
 
 
+def _naked_css_error(html: str) -> str | None:
+    """An error when CSS rules sit outside any ``<style>`` element, else None."""
+    text = _STYLE_BLOCK.sub("", html)
+    text = _SCRIPT_BLOCK.sub("", text)
+    text = _HTML_COMMENT.sub("", text)
+    text = _ANY_TAG.sub(" ", text)
+    if _NAKED_CSS_RULE.search(text):
+        return (
+            "CSS rules appear outside any <style> tag, so they would render as "
+            "plain text. Wrap the widget's stylesheet in a <style>...</style> "
+            "element."
+        )
+    return None
+
+
 def validate_widget_html(html: str) -> list[str]:
     """Return blocking authoring errors for an inline widget fragment."""
     content = (html or "").strip()
@@ -98,6 +124,9 @@ def validate_widget_html(html: str) -> list[str]:
         errors.append(
             "Widget content must be an HTML/SVG fragment without doctype, html, head, or body tags."
         )
+    naked_css = _naked_css_error(content)
+    if naked_css:
+        errors.append(naked_css)
 
     tokens = sorted(
         set(_UNRESOLVED_TEMPLATE_TOKEN.findall(content)) - {"__LEMMA_CONFIG__"}

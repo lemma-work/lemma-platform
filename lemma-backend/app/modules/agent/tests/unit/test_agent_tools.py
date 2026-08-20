@@ -480,6 +480,27 @@ async def test_display_resource_rejects_nonportable_widget_html():
     assert "relative" in (response.error or "")
 
 
+@pytest.mark.asyncio
+async def test_display_resource_rejects_css_outside_style_tag():
+    ctx = SimpleNamespace(
+        deps=SimpleNamespace(surface_platform=None, conversation_id=uuid4()),
+        tool_call_id="tc",
+    )
+    response = await display_resource(
+        ctx,
+        DisplayResourceRequest(
+            type=DisplayResourceType.WIDGET,
+            content=(
+                ".card{background:var(--lemma-widget-surface);padding:20px}\n"
+                '<div class="card"><h1>Tool run</h1></div>'
+            ),
+        ),
+    )
+    assert response.success is False
+    assert "Invalid WIDGET content" in (response.error or "")
+    assert "outside any <style> tag" in (response.error or "")
+
+
 def _approval_ctx(approval_id: str, *, supports_pause_signal: bool = True):
     return SimpleNamespace(
         deps=SimpleNamespace(
