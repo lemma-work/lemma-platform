@@ -101,8 +101,8 @@ the turn so the user's next message can answer.
       "header": "Environment",            // short label; also the answer key
       "question": "Which environment should I deploy to?",
       "options": [
-        { "label": "Staging", "description": "safe, resets nightly", "recommended": true },
-        { "label": "Production", "description": "live traffic" }
+        { "label": "Staging", "description": "safe, resets nightly", "recommended": true, "icon": "🧪" },
+        { "label": "Production", "description": "live traffic", "icon": "🚀" }
       ],
       "multi_select": false               // optional, default false
     }
@@ -113,6 +113,8 @@ the turn so the user's next message can answer.
 - 2–4 `options` per question. The client **always** adds an "Other" free-form choice —
   do not add one yourself.
 - `recommended: true` highlights your suggested option.
+- `icon` is an optional single emoji shown before the option's label. Omit it when no
+  glyph genuinely fits.
 
 **Response** — `{ success, message?, error?, answers }`. `answers` is keyed by each
 question's `header`; each value is the chosen `label`(s) or the custom "Other" text:

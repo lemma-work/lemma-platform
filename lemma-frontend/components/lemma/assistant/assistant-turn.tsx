@@ -578,7 +578,6 @@ export const AssistantTurnView = memo(function AssistantTurnView({
                 <AskUserCard
                   invocation={item.invocation}
                   onResolveUserApproval={onResolveUserApproval}
-                  conversationId={activeConversationId}
                 />
               ) : (
                 <UserApprovalCard

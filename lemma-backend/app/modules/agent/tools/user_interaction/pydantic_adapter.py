@@ -15,7 +15,6 @@ from app.modules.agent.tools.user_interaction.models import (
     DisplayResourceResponse,
     DisplayResourceType,
     RequestApprovalResponse,
-    validate_ask_user_payload,
     validate_display_payload,
 )
 from app.core.widget_html_validation import validate_widget_html
@@ -333,12 +332,6 @@ async def ask_user(
     Prefer this over a prose question whenever the answer is a choice among known
     options. For free-form input, ask in prose and end your turn. Only ask when it
     changes what you do next — otherwise take the obvious default and proceed.
-
-    `content` optionally replaces the choice chips with your own inline HTML, for
-    a question worth showing rather than listing. It does not change the answer
-    shape: the widget posts back the same headers and option labels, anything
-    else is rejected, and a client that cannot render it shows the chips. So fill
-    `questions` properly either way.
     """
     if not request.questions:
         return AskUserResponse(
@@ -351,18 +344,6 @@ async def ask_user(
                 error=(
                     f"Question {question.header!r} must have between 2 and 4 options."
                 ),
-            )
-
-    payload_error = validate_ask_user_payload(request)
-    if payload_error is not None:
-        return AskUserResponse(success=False, error=payload_error)
-
-    if request.content and request.content.strip():
-        widget_errors = validate_widget_html(request.content)
-        if widget_errors:
-            return AskUserResponse(
-                success=False,
-                error="Invalid content: " + " ".join(widget_errors),
             )
 
     deps = ctx.deps
