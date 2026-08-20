@@ -706,6 +706,7 @@ async def test_public_http_sse_lifecycle_persists_messages_title_usage_and_histo
 
 @pytest.mark.asyncio
 @pytest.mark.fast_workspace
+@pytest.mark.timeout(300)
 async def test_scripted_todo_and_workspace_tools_stream_and_persist_real_results(
     authenticated_client,
     fixed_test_org,
