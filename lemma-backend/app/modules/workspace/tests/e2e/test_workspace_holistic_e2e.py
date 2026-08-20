@@ -250,6 +250,25 @@ async def test_browser_process_and_signed_access_reach_the_sandbox(
     assert browser_started.success, browser_started
     assert browser_started.exit_code == 0
 
+    from app.modules.agent.tools.web.models import WebFetchRequest
+    from app.modules.agent.tools.web.web_fetch import web_fetch_internal
+
+    captured = await web_fetch_internal(
+        ctx,
+        WebFetchRequest(
+            urls=["https://example.com/"],
+            render=True,
+            out_dir="browser-captures",
+            comment="Capture a rendered page through the sandbox browser",
+        ),
+    )
+    assert captured.success, captured
+    page = captured.pages[0]
+    assert page.success, page.error
+    assert page.fetched_with == "browser"
+    assert page.files["markdown"].startswith("browser-captures/")
+    assert page.preview and "Example Domain" in page.preview
+
     browser = await authenticated_client.post(
         "/workspace/apps/browser/access",
         json={"ttl_seconds": 300},
