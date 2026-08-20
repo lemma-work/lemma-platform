@@ -952,7 +952,10 @@ async def test_full_dispatch_admits_polls_and_completes_a_run(
     )
     started = [c for c in polled if c.kind == AgentHostCommandKind.START_RUN]
     assert len(started) == 1, list(polled)
-    assert "encrypted_mcp" in started[0].payload
+    # The wire command carries the decrypted MCP config (the encrypted blob
+    # stays in the DB), and names the run it is for.
+    assert "mcp" in started[0].payload
+    assert started[0].payload["agent_run_id"] == str(run_id)
     await db_session.commit()
 
     # The host appends a real terminal turn, then the harness consumes it.
