@@ -26,6 +26,7 @@ WORKSPACE_FIXTURES = {
     "workspace_image",
     "_configure_function_workspace_api_url",
 }
+FAST_WORKSPACE_MARKER = "fast_workspace"
 
 AGENT_PROVIDER_TESTS = {
     "test_file_creation_tool_call_streams_tool_json_tokens",
@@ -81,7 +82,9 @@ def pytest_collection_modifyitems(config, items):
         fixture_names = set(getattr(item, "fixturenames", ()))
         if "worker" in fixture_names:
             item.add_marker(pytest.mark.worker)
-        if fixture_names & WORKSPACE_FIXTURES:
+        if fixture_names & WORKSPACE_FIXTURES and FAST_WORKSPACE_MARKER not in {
+            marker.name for marker in item.iter_markers()
+        }:
             item.add_marker(pytest.mark.workspace)
         # Any test that (transitively) needs the shared Kreuzberg container asks
         # for the ``kreuzberg_url`` fixture — directly, or via ``kreuzberg_wired``
@@ -204,7 +207,11 @@ def _isolate_shared_redis_clients():
 
 def pytest_runtest_teardown(item: pytest.Item, nextitem: pytest.Item | None) -> None:
     del nextitem
-    if "workspace" not in {marker.name for marker in item.iter_markers()}:
+    marker_names = {marker.name for marker in item.iter_markers()}
+    if "workspace" not in marker_names and not (
+        FAST_WORKSPACE_MARKER in marker_names
+        and set(getattr(item, "fixturenames", ())) & WORKSPACE_FIXTURES
+    ):
         return
     from app.modules.test_support import e2e_base
 

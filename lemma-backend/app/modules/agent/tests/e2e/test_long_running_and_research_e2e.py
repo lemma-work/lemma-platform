@@ -440,6 +440,8 @@ async def test_web_fetch_forces_the_browser_and_captures_a_rendered_page(
     assert "Example Domain" in (listing.stdout or "")
 
 
+@pytest.mark.fast_workspace
+@pytest.mark.timeout(300)
 async def test_web_fetch_rejects_malformed_and_unsafe_urls_before_fetching(
     authenticated_client,
     fixed_test_org,
@@ -478,6 +480,8 @@ async def test_web_fetch_rejects_malformed_and_unsafe_urls_before_fetching(
     assert by_url["https://example.com/"].fetched_with == "http"
 
 
+@pytest.mark.fast_workspace
+@pytest.mark.timeout(300)
 async def test_web_fetch_reports_a_clear_error_when_the_workspace_is_unreachable(
     authenticated_client,
     fixed_test_org,

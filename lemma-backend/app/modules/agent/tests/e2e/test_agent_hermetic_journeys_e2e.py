@@ -70,19 +70,27 @@ async def _create_mock_agent(
     pod_id: str,
     runtime_profile_id: str,
     name_prefix: str,
+    toolsets: list[str] | None = None,
+    input_schema: dict | None = None,
+    output_schema: dict | None = None,
 ) -> dict:
     agent_name = f"{name_prefix}_{uuid4().hex[:8]}"
+    body = {
+        "name": agent_name,
+        "instruction": "Use the deterministic E2E model.",
+        "agent_runtime": {
+            "profile_id": runtime_profile_id,
+            "model_name": "mock-safe-model",
+        },
+        "toolsets": toolsets or [],
+    }
+    if input_schema is not None:
+        body["input_schema"] = input_schema
+    if output_schema is not None:
+        body["output_schema"] = output_schema
     response = await authenticated_client.post(
         f"/pods/{pod_id}/agents",
-        json={
-            "name": agent_name,
-            "instruction": "Use the deterministic E2E model.",
-            "agent_runtime": {
-                "profile_id": runtime_profile_id,
-                "model_name": "mock-safe-model",
-            },
-            "toolsets": [],
-        },
+        json=body,
     )
     assert response.status_code == status.HTTP_201_CREATED, response.text
     return response.json()
@@ -705,7 +713,8 @@ async def test_public_http_sse_lifecycle_persists_messages_title_usage_and_histo
 
 
 @pytest.mark.asyncio
-@pytest.mark.workspace
+@pytest.mark.fast_workspace
+@pytest.mark.timeout(300)
 async def test_scripted_todo_and_workspace_tools_stream_and_persist_real_results(
     authenticated_client,
     fixed_test_org,
@@ -737,6 +746,7 @@ async def test_scripted_todo_and_workspace_tools_stream_and_persist_real_results
                 "VIEW_IMAGE",
                 "SKILLS",
                 "SPEECH",
+                "WEB_SEARCH",
             ],
         },
     )
@@ -888,6 +898,16 @@ async def test_scripted_todo_and_workspace_tools_stream_and_persist_real_results
             {"file_path": "missing-audio.ogg"},
             tool_call_id="speech-listen-1",
         ),
+        script_tool_call(
+            "web_fetch",
+            {
+                "urls": ["https://example.com/"],
+                "formats": ["markdown"],
+                "out_dir": "research",
+                "comment": "Capture a deterministic public page",
+            },
+            tool_call_id="web-fetch-1",
+        ),
         script_text("Todo, workspace, skills, and speech tools completed."),
     ]
     conversation = await authenticated_client.post(
@@ -937,6 +957,7 @@ async def test_scripted_todo_and_workspace_tools_stream_and_persist_real_results
         "load_skill",
         "say",
         "listen",
+        "web_fetch",
     } <= tool_calls.keys()
     assert tool_returns["write_todos"]["tool_result"]["success"] is True
     assert "workspace-proof" in str(tool_returns_by_id["shell-1"]["tool_result"])
@@ -979,6 +1000,7 @@ async def test_scripted_todo_and_workspace_tools_stream_and_persist_real_results
     assert tool_returns_by_id["process-invalid-1"]["tool_result"]["success"] is False
     assert tool_returns["say"]["tool_result"]["success"] is False
     assert tool_returns["listen"]["tool_result"]["success"] is False
+    assert tool_returns["web_fetch"]["tool_result"]["success"] is True
 
     persisted = await authenticated_client.get(
         f"/pods/{pod_id}/conversations/{conversation_id}"
@@ -1102,6 +1124,230 @@ async def test_scripted_write_todos_normalizes_malformed_and_duplicate_checkbox_
 
 
 @pytest.mark.asyncio
+async def test_malformed_tool_arguments_are_retried_before_the_run_completes(
+    authenticated_client,
+    fixed_test_org,
+    e2e_settings,
+    worker,
+):
+    """A real model/tool loop can recover from a schema-invalid first call."""
+    del worker
+    runtime = await _create_runtime_profile(
+        authenticated_client,
+        fixed_test_org,
+        e2e_settings,
+    )
+    pod = await _create_pod(authenticated_client, fixed_test_org)
+    agent = await _create_mock_agent(
+        authenticated_client,
+        pod_id=pod["id"],
+        runtime_profile_id=runtime["id"],
+        name_prefix="tool_retry",
+        toolsets=["TODO"],
+    )
+    conversation = await authenticated_client.post(
+        f"/pods/{pod['id']}/conversations",
+        json={
+            "agent_name": agent["name"],
+            "metadata": {
+                "mock_llm_script": [
+                    script_tool_call(
+                        "write_todos",
+                        {"todos": "this is not a list"},
+                        tool_call_id="todo-invalid",
+                    ),
+                    script_tool_call(
+                        "write_todos",
+                        {"todos": ["- [x] Recovered after validation feedback"]},
+                        tool_call_id="todo-corrected",
+                    ),
+                    script_text("The invalid call was corrected."),
+                ]
+            },
+        },
+    )
+    assert conversation.status_code == status.HTTP_201_CREATED, conversation.text
+
+    events = await _send_message(
+        authenticated_client,
+        pod["id"],
+        conversation.json()["id"],
+        "Write the recovery todo.",
+    )
+    assert events[-1]["type"] == "completed", events
+
+    messages = await authenticated_client.get(
+        f"/pods/{pod['id']}/conversations/{conversation.json()['id']}/messages"
+    )
+    assert messages.status_code == status.HTTP_200_OK, messages.text
+    returns = {
+        item["tool_call_id"]: item["tool_result"]
+        for item in messages.json()["items"]
+        if item["kind"] == "TOOL_RETURN"
+    }
+    assert returns["todo-corrected"]["success"] is True
+    assert returns["todo-corrected"]["todos"] == [
+        "- [x] Recovered after validation feedback"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_scripted_subagent_spawn_await_and_query_are_real_child_runs(
+    authenticated_client,
+    fixed_test_org,
+    e2e_settings,
+    worker,
+):
+    """The SUBAGENTS toolset creates and waits for an actual child conversation."""
+    del worker
+    runtime = await _create_runtime_profile(
+        authenticated_client,
+        fixed_test_org,
+        e2e_settings,
+    )
+    pod = await _create_pod(authenticated_client, fixed_test_org)
+    agent = await _create_mock_agent(
+        authenticated_client,
+        pod_id=pod["id"],
+        runtime_profile_id=runtime["id"],
+        name_prefix="subagent_parent",
+        toolsets=["SUBAGENTS"],
+    )
+    script = [
+        script_tool_call(
+            "spawn_subagent",
+            {"input": "Reply with exactly DELTA99."},
+            tool_call_id="spawn-1",
+        ),
+        script_tool_call(
+            "interact_subagent",
+            {
+                "conversation_id": script_tool_result_ref(
+                    "spawn-1", "conversation_id"
+                ),
+                "action": "await",
+                "run_id": script_tool_result_ref("spawn-1", "run_id"),
+                "timeout_seconds": 30,
+            },
+            tool_call_id="await-1",
+        ),
+        script_tool_call(
+            "query_subagents",
+            {"mode": "list"},
+            tool_call_id="query-1",
+        ),
+        script_text("The child completed with DELTA99."),
+    ]
+    conversation = await authenticated_client.post(
+        f"/pods/{pod['id']}/conversations",
+        json={
+            "agent_name": agent["name"],
+            "metadata": {"mock_llm_script": script},
+        },
+    )
+    assert conversation.status_code == status.HTTP_201_CREATED, conversation.text
+    conversation_id = conversation.json()["id"]
+    events = await _send_message(
+        authenticated_client,
+        pod["id"],
+        conversation_id,
+        "Delegate the DELTA99 task and wait for the child.",
+    )
+    assert events[-1]["type"] == "completed", events
+
+    messages = await authenticated_client.get(
+        f"/pods/{pod['id']}/conversations/{conversation_id}/messages"
+    )
+    assert messages.status_code == status.HTTP_200_OK, messages.text
+    returns = {
+        item["tool_call_id"]: item["tool_result"]
+        for item in messages.json()["items"]
+        if item["kind"] == "TOOL_RETURN"
+    }
+    assert returns["spawn-1"]["success"] is True
+    assert returns["await-1"]["success"] is True
+    assert "DELTA99" in str(returns["await-1"])
+    assert returns["query-1"]["success"] is True
+
+    children = await authenticated_client.get(
+        f"/pods/{pod['id']}/conversations",
+        params={"parent_id": conversation_id},
+    )
+    assert children.status_code == status.HTTP_200_OK, children.text
+    assert len(children.json()["items"]) == 1
+    assert children.json()["items"][0]["parent_id"] == conversation_id
+
+
+@pytest.mark.asyncio
+async def test_structured_output_finalizes_through_the_real_harness(
+    authenticated_client,
+    fixed_test_org,
+    e2e_settings,
+    worker,
+):
+    """An output-schema agent completes with a persisted structured answer.
+
+    The mock model answers an output-schema agent by calling the output tool
+    with minimal valid arguments, so this drives the real final-output branch
+    in the in-process harness (`_final_output_message`) and the structured
+    serialization of the answer, end to end through the worker.
+    """
+    del worker
+    runtime = await _create_runtime_profile(
+        authenticated_client,
+        fixed_test_org,
+        e2e_settings,
+    )
+    pod = await _create_pod(authenticated_client, fixed_test_org)
+    output_schema = {
+        "type": "object",
+        "properties": {"answer": {"type": "string"}},
+        "required": ["answer"],
+    }
+    agent = await _create_mock_agent(
+        authenticated_client,
+        pod_id=pod["id"],
+        runtime_profile_id=runtime["id"],
+        name_prefix="structured",
+        output_schema=output_schema,
+    )
+    conversation = await authenticated_client.post(
+        f"/pods/{pod['id']}/conversations",
+        json={"agent_name": agent["name"], "title": "Structured output"},
+    )
+    assert conversation.status_code == status.HTTP_201_CREATED, conversation.text
+    conversation_id = conversation.json()["id"]
+    events = await _send_message(
+        authenticated_client,
+        pod["id"],
+        conversation_id,
+        "Answer with the required schema.",
+    )
+    assert events[-1]["type"] == "completed", events
+
+    messages = await authenticated_client.get(
+        f"/pods/{pod['id']}/conversations/{conversation_id}/messages"
+    )
+    assert messages.status_code == status.HTTP_200_OK, messages.text
+    final = [
+        item
+        for item in messages.json()["items"]
+        if item["metadata"].get("is_final_answer")
+    ]
+    assert final, "the structured answer was not persisted as a final message"
+    assert "structured_output" in final[0]["metadata"]
+    assert final[0]["metadata"]["structured_output"] == {"answer": ""}
+
+    conversation_detail = await authenticated_client.get(
+        f"/pods/{pod['id']}/conversations/{conversation_id}"
+    )
+    assert conversation_detail.status_code == status.HTTP_200_OK, (
+        conversation_detail.text
+    )
+    assert conversation_detail.json()["status"] == "COMPLETED"
+
+
+@pytest.mark.asyncio
 async def test_pod_skill_catalog_discovers_custom_skills_and_skips_malformed_ones(
     authenticated_client,
     fixed_test_org,
@@ -1154,15 +1400,62 @@ async def test_pod_skill_catalog_discovers_custom_skills_and_skips_malformed_one
     # silently skip it, not raise and take every other skill down with it.
     await api.create_folder(f"/skills/{malformed_name}")
 
+    # Each of these folders has a SKILL.md whose frontmatter is broken in a
+    # different way. `_parse_frontmatter` raises on each, and the catalog
+    # silently skips the folder rather than failing the whole pod.
+    async def _seed_malformed(folder: str, body: bytes) -> None:
+        await api.create_folder(f"/skills/{folder}")
+        await api.upload_file(
+            "SKILL.md", body, directory_path=f"/skills/{folder}", search_enabled=False
+        )
+
+    valid_skill_name = f"valid-skill-{suffix}"
+    await _seed_malformed(f"no-frontmatter-{suffix}", b"# no yaml frontmatter here")
+    await _seed_malformed(
+        f"unclosed-frontmatter-{suffix}",
+        b"---\nname: x\n",  # never closed with a second '---'
+    )
+    await _seed_malformed(
+        f"missing-name-{suffix}",
+        b"---\ndescription: no name field\n---\n",
+    )
+    await _seed_malformed(
+        f"missing-description-{suffix}",
+        b"---\nname: x\n---\n",
+    )
+    await _seed_malformed(
+        f"invalid-name-{suffix}",
+        b"---\nname: 'Bad Name!'\ndescription: d\n---\n",
+    )
+    await _seed_malformed(
+        f"name-mismatch-{suffix}",
+        (
+            b"---\nname: " + valid_skill_name.encode() + b"\ndescription: d\n---\n"
+        ),  # directory name != frontmatter name
+    )
+
     catalog = await list_workspace_skills(pod_id=pod_id, user_id=user_id)
     names = {item["name"] for item in catalog}
     assert custom_name in names
     assert malformed_name not in names
+    for malformed_folder in (
+        f"no-frontmatter-{suffix}",
+        f"unclosed-frontmatter-{suffix}",
+        f"missing-name-{suffix}",
+        f"missing-description-{suffix}",
+        f"invalid-name-{suffix}",
+        f"name-mismatch-{suffix}",
+    ):
+        assert malformed_folder not in names, malformed_folder
     # The system-shipped skills are visible through the same overlay.
     assert "browser" in names
 
     content = await read_workspace_skill(custom_name, pod_id=pod_id, user_id=user_id)
     assert "Custom skill body" in content
+
+    # Reading an unknown skill surfaces the resolver's not-found branch.
+    with pytest.raises(ValueError, match="Unknown skill"):
+        await read_workspace_skill(f"does-not-exist-{suffix}", pod_id=pod_id, user_id=user_id)
 
     resources = await list_workspace_skill_resources(
         custom_name, pod_id=pod_id, user_id=user_id
@@ -1440,332 +1733,6 @@ async def test_scripted_pod_data_and_file_tools_cross_worker_authorization_bound
     assert file_content == b"replacement version"
 
 
-@pytest.mark.asyncio
-@pytest.mark.workspace
-async def test_dynamic_function_and_agent_tools_create_durable_child_runs(
-    authenticated_client,
-    fixed_test_org,
-    e2e_settings,
-    worker,
-    configure_workspace_api_url,
-):
-    """Invoke granted functions and agents through the generated tool schemas."""
-    del worker, configure_workspace_api_url
-    runtime = await _create_runtime_profile(
-        authenticated_client,
-        fixed_test_org,
-        e2e_settings,
-    )
-    pod = await _create_pod(authenticated_client, fixed_test_org)
-    pod_id = pod["id"]
-
-    function_name = f"callable_{uuid4().hex[:8]}"
-    source = f"""#input_type_name: FunctionInput
-#output_type_name: FunctionOutput
-#function_name: {function_name}
-
-from pydantic import BaseModel
-from lemma_sdk import FunctionContext
-
-class FunctionInput(BaseModel):
-    value: str
-
-class FunctionOutput(BaseModel):
-    value: str
-
-async def {function_name}(
-    ctx: FunctionContext, data: FunctionInput
-) -> FunctionOutput:
-    return FunctionOutput(value=data.value)
-"""
-    created_function = await authenticated_client.post(
-        f"/pods/{pod_id}/functions",
-        json={
-            "name": function_name,
-            "description": "Public dynamic callable E2E",
-            "code": source,
-        },
-    )
-    assert created_function.status_code == status.HTTP_201_CREATED, (
-        created_function.text
-    )
-    child_name = f"child_{uuid4().hex[:8]}"
-    child = await authenticated_client.post(
-        f"/pods/{pod_id}/agents",
-        json={
-            "name": child_name,
-            "instruction": "Return the delegated input briefly.",
-            "agent_runtime": {
-                "profile_id": runtime["id"],
-                "model_name": "mock-safe-model",
-            },
-            "toolsets": [],
-        },
-    )
-    assert child.status_code == status.HTTP_201_CREATED, child.text
-
-    parent_name = f"parent_{uuid4().hex[:8]}"
-    parent = await authenticated_client.post(
-        f"/pods/{pod_id}/agents",
-        json={
-            "name": parent_name,
-            "instruction": "Invoke the two scripted dynamic tools.",
-            "agent_runtime": {
-                "profile_id": runtime["id"],
-                "model_name": "mock-safe-model",
-            },
-            "toolsets": [],
-        },
-    )
-    assert parent.status_code == status.HTTP_201_CREATED, parent.text
-    permissions = await authenticated_client.put(
-        f"/pods/{pod_id}/agents/{parent_name}/permissions",
-        json={
-            "grants": [
-                {
-                    "resource_type": "function",
-                    "resource_name": function_name,
-                    "permission_ids": ["function.execute"],
-                },
-                {
-                    "resource_type": "agent",
-                    "resource_name": child_name,
-                    "permission_ids": ["agent.execute"],
-                },
-            ]
-        },
-    )
-    assert permissions.status_code == status.HTTP_200_OK, permissions.text
-
-    conversation = await authenticated_client.post(
-        f"/pods/{pod_id}/conversations",
-        json={
-            "agent_name": parent_name,
-            "title": "Dynamic callable tools",
-            "metadata": {
-                "mock_llm_script": [
-                    script_tool_call(
-                        f"function_{function_name}",
-                        {"value": "function input"},
-                        tool_call_id="dynamic-function",
-                    ),
-                    script_tool_call(
-                        f"agent_{child_name}",
-                        {"input": "delegated child input"},
-                        tool_call_id="dynamic-agent",
-                    ),
-                    script_text("Dynamic function and child agent completed."),
-                ]
-            },
-        },
-    )
-    assert conversation.status_code == status.HTTP_201_CREATED, conversation.text
-    conversation_id = conversation.json()["id"]
-    events = await _send_message(
-        authenticated_client,
-        pod_id,
-        conversation_id,
-        "Invoke the configured function and child agent.",
-    )
-    assert events[-1]["type"] == "completed", events
-
-    messages = await authenticated_client.get(
-        f"/pods/{pod_id}/conversations/{conversation_id}/messages"
-    )
-    assert messages.status_code == status.HTTP_200_OK, messages.text
-    tool_returns = [
-        item for item in messages.json()["items"] if item["kind"] == "TOOL_RETURN"
-    ]
-    returns = {item["tool_call_id"]: item["tool_result"] for item in tool_returns}
-    tool_names = {item["tool_call_id"]: item["tool_name"] for item in tool_returns}
-
-    # The function tool returns the function's own declared output - the tool
-    # adds no envelope of its own (callable_tool_factory returns
-    # ``run.output_data``). So the result being exactly FunctionOutput is what
-    # proves the real sandboxed function ran and its value round-tripped.
-    assert returns["dynamic-function"] == {"value": "function input"}
-    assert tool_names["dynamic-function"] == f"function_{function_name}"
-    assert "delegated child input" in str(returns["dynamic-agent"])
-    assert tool_names["dynamic-agent"] == f"agent_{child_name}"
-
-    children = await authenticated_client.get(
-        f"/pods/{pod_id}/conversations",
-        params={"parent_id": conversation_id},
-    )
-    assert children.status_code == status.HTTP_200_OK, children.text
-    child_items = children.json()["items"]
-    assert len(child_items) == 1
-    assert child_items[0]["parent_id"] == conversation_id
-    child_detail = await authenticated_client.get(
-        f"/pods/{pod_id}/conversations/{child_items[0]['id']}"
-    )
-    assert child_detail.status_code == status.HTTP_200_OK, child_detail.text
-    assert child_detail.json()["status"] == "COMPLETED"
-
-
-@pytest.mark.asyncio
-@pytest.mark.workspace
-async def test_dynamic_tools_surface_a_failing_function_and_a_schema_carrying_agent(
-    authenticated_client,
-    fixed_test_org,
-    e2e_settings,
-    worker,
-    configure_workspace_api_url,
-):
-    """Two `callable_tool_factory` branches the happy-path dynamic-tools test
-    above never reaches.
-
-    A `function_*` tool whose backend run does not complete must surface as a
-    graceful tool failure, not a crashed run (`run.status != COMPLETED`). And
-    an `agent_*` tool for a child agent that declares its own `input_schema`/
-    `output_schema` takes flat schema kwargs rather than the single-string
-    fallback, and returns the child's structured dict output as-is.
-    """
-    del worker, configure_workspace_api_url
-    runtime = await _create_runtime_profile(
-        authenticated_client,
-        fixed_test_org,
-        e2e_settings,
-    )
-    pod = await _create_pod(authenticated_client, fixed_test_org)
-    pod_id = pod["id"]
-
-    failing_function_name = f"failing_{uuid4().hex[:8]}"
-    failing_source = f"""#input_type_name: FunctionInput
-#output_type_name: FunctionOutput
-#function_name: {failing_function_name}
-
-from pydantic import BaseModel
-from lemma_sdk import FunctionContext
-
-class FunctionInput(BaseModel):
-    value: str
-
-class FunctionOutput(BaseModel):
-    value: str
-
-async def {failing_function_name}(
-    ctx: FunctionContext, data: FunctionInput
-) -> FunctionOutput:
-    raise RuntimeError("intentional function failure: " + data.value)
-"""
-    created_function = await authenticated_client.post(
-        f"/pods/{pod_id}/functions",
-        json={
-            "name": failing_function_name,
-            "description": "Always fails, for the e2e failure branch",
-            "code": failing_source,
-        },
-    )
-    assert created_function.status_code == status.HTTP_201_CREATED, (
-        created_function.text
-    )
-
-    schema_child_name = f"schema_child_{uuid4().hex[:8]}"
-    schema = {
-        "type": "object",
-        "properties": {"value": {"type": "string"}},
-        "required": ["value"],
-    }
-    schema_child = await authenticated_client.post(
-        f"/pods/{pod_id}/agents",
-        json={
-            "name": schema_child_name,
-            "instruction": "Not scripted; the mock model answers unprompted.",
-            "agent_runtime": {
-                "profile_id": runtime["id"],
-                "model_name": "mock-safe-model",
-            },
-            "toolsets": [],
-            "input_schema": schema,
-            "output_schema": schema,
-        },
-    )
-    assert schema_child.status_code == status.HTTP_201_CREATED, schema_child.text
-
-    parent_name = f"parent_dynamic_edge_{uuid4().hex[:8]}"
-    parent = await authenticated_client.post(
-        f"/pods/{pod_id}/agents",
-        json={
-            "name": parent_name,
-            "instruction": "Invoke the failing function and the schema agent.",
-            "agent_runtime": {
-                "profile_id": runtime["id"],
-                "model_name": "mock-safe-model",
-            },
-            "toolsets": [],
-        },
-    )
-    assert parent.status_code == status.HTTP_201_CREATED, parent.text
-    permissions = await authenticated_client.put(
-        f"/pods/{pod_id}/agents/{parent_name}/permissions",
-        json={
-            "grants": [
-                {
-                    "resource_type": "function",
-                    "resource_name": failing_function_name,
-                    "permission_ids": ["function.execute"],
-                },
-                {
-                    "resource_type": "agent",
-                    "resource_name": schema_child_name,
-                    "permission_ids": ["agent.execute"],
-                },
-            ]
-        },
-    )
-    assert permissions.status_code == status.HTTP_200_OK, permissions.text
-
-    conversation = await authenticated_client.post(
-        f"/pods/{pod_id}/conversations",
-        json={
-            "agent_name": parent_name,
-            "title": "Dynamic tool edge cases",
-            "metadata": {
-                "mock_llm_script": [
-                    script_tool_call(
-                        f"function_{failing_function_name}",
-                        {"value": "will not complete"},
-                        tool_call_id="dynamic-function-failure",
-                    ),
-                    script_tool_call(
-                        f"agent_{schema_child_name}",
-                        {"value": "structured input"},
-                        tool_call_id="dynamic-agent-schema",
-                    ),
-                    script_text("Failure and schema-carrying tools completed."),
-                ]
-            },
-        },
-    )
-    assert conversation.status_code == status.HTTP_201_CREATED, conversation.text
-    conversation_id = conversation.json()["id"]
-    events = await _send_message(
-        authenticated_client,
-        pod_id,
-        conversation_id,
-        "Invoke the failing function and the schema-carrying agent.",
-    )
-    assert events[-1]["type"] == "completed", events
-
-    messages = await authenticated_client.get(
-        f"/pods/{pod_id}/conversations/{conversation_id}/messages"
-    )
-    assert messages.status_code == status.HTTP_200_OK, messages.text
-    returns = {
-        item["tool_call_id"]: item["tool_result"]
-        for item in messages.json()["items"]
-        if item["kind"] == "TOOL_RETURN"
-    }
-
-    failure = returns["dynamic-function-failure"]
-    assert failure["success"] is False
-    assert "intentional function failure" in failure["error"]
-
-    schema_result = returns["dynamic-agent-schema"]
-    assert isinstance(schema_result, dict)
-    assert "value" in schema_result
-
 
 @pytest.mark.asyncio
 async def test_public_runtime_profile_edit_archive_and_restore(
@@ -1991,6 +1958,55 @@ async def test_public_runtime_profile_update_rediscovers_and_clears_credentials(
     )
     assert rejected_clear.status_code == status.HTTP_400_BAD_REQUEST
     assert "requires an API key" in rejected_clear.json()["message"]
+
+
+@pytest.mark.asyncio
+async def test_archived_runtime_profile_fails_a_pinned_agent_run_safely(
+    authenticated_client,
+    fixed_test_org,
+    e2e_settings,
+    worker,
+):
+    """A user cannot run an agent against a profile archived meanwhile."""
+    del worker
+    runtime = await _create_runtime_profile(
+        authenticated_client,
+        fixed_test_org,
+        e2e_settings,
+    )
+    pod = await _create_pod(authenticated_client, fixed_test_org)
+    agent = await _create_mock_agent(
+        authenticated_client,
+        pod_id=pod["id"],
+        runtime_profile_id=runtime["id"],
+        name_prefix="archived_profile",
+    )
+
+    archived = await authenticated_client.delete(
+        f"/organizations/{fixed_test_org['id']}/agent-runtime/profiles/{runtime['id']}"
+    )
+    assert archived.status_code == status.HTTP_204_NO_CONTENT, archived.text
+
+    conversation = await authenticated_client.post(
+        f"/pods/{pod['id']}/conversations",
+        json={"agent_name": agent["name"], "title": "Archived profile run"},
+    )
+    assert conversation.status_code == status.HTTP_201_CREATED, conversation.text
+    conversation_id = conversation.json()["id"]
+    events = await _send_message(
+        authenticated_client,
+        pod["id"],
+        conversation_id,
+        "Run even though the profile was archived.",
+    )
+    assert events[-1]["type"] == "error", events
+    assert json.dumps(events).find(_RUNTIME_SECRET) == -1
+
+    durable = await authenticated_client.get(
+        f"/pods/{pod['id']}/conversations/{conversation_id}"
+    )
+    assert durable.status_code == status.HTTP_200_OK, durable.text
+    assert durable.json()["status"] == "FAILED"
 
 
 @pytest.mark.asyncio

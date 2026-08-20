@@ -18,7 +18,7 @@ import asyncio
 import base64
 from types import SimpleNamespace
 from datetime import datetime, timedelta, timezone
-from uuid import UUID, uuid7
+from uuid import UUID, uuid4, uuid7
 
 import pytest
 from sqlalchemy import select
@@ -26,9 +26,12 @@ from sqlalchemy import select
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent.domain.agent_host import (
     AgentHostCommandKind,
+    AgentHostCommandRejection,
     AgentHostEvent,
     AgentHostEventBatch,
     AgentHostEventType,
+    AgentHostRejectionCode,
+    AgentHostRunSpec,
     AgentHostRunState,
 )
 from app.modules.agent.domain.entities import Agent, Conversation
@@ -55,7 +58,10 @@ from app.modules.agent.infrastructure.harnesses.agent_host_run_window import (
 from app.modules.agent.domain.pausing_tools import SNOOZE_TOOL_NAME
 from app.modules.agent.domain.value_objects import AgentRunStatus
 from app.modules.agent.infrastructure.models import AgentRunModel
-from app.modules.agent.infrastructure.runtime_models import AgentHostCommandModel
+from app.modules.agent.infrastructure.runtime_models import (
+    AgentHostCommandModel,
+    AgentRuntimeProfileModel,
+)
 from app.modules.agent.infrastructure.repositories import ConversationRepository
 from app.modules.agent.infrastructure.wait_repository import (
     AgentConversationWaitRepository,
@@ -70,6 +76,7 @@ from app.modules.agent.tools.snooze.pydantic_adapter import snooze
 from app.modules.agent.tests.e2e.agent_host_helpers import (
     conversation_with_a_leased_run,
     paired_machine,
+    stale_after,
 )
 from app.modules.agent.tools.context import BaseAgentContext
 from app.modules.test_support.e2e.waiters import eventually
@@ -845,3 +852,281 @@ async def test_a_rejected_snooze_does_not_strand_the_one_that_follows(
     }
     assert returns[real_id]["woke_because"] == "TIMER"
     assert returns[rejected_id]["success"] is False
+
+
+@pytest.mark.asyncio
+async def test_full_dispatch_admits_polls_and_completes_a_run(
+    db_session, scenario
+):
+    """The whole dispatch seam: admit -> poll START_RUN -> append -> consume.
+
+    Earlier seam tests drive ``_consume`` directly and seed the lease by hand,
+    so ``agent_host_admission`` (admit exactly once, refuse conflicts) and the
+    repository's ``poll_commands`` handout were never exercised together. This
+    goes through the real admission, hands the START_RUN out the way a host's
+    poll does, appends a real terminal event batch, and then consumes to
+    completion — all in-process and deterministic.
+    """
+    await scenario.create_org_with_pod(name_prefix="Dispatch")
+    pod_id = scenario.pod_id
+    machine = await paired_machine(scenario, display_name="dispatch e2e")
+
+    # A fresh run with no lease yet; admission creates the lease and the
+    # START_RUN command together.
+    created = await scenario.owner_client.post(
+        f"/pods/{pod_id}/conversations", json={"title": "dispatch"}
+    )
+    assert created.status_code in {200, 201}, created.text
+    conversation_id = UUID(created.json()["id"])
+    run = AgentRunModel(
+        conversation_id=conversation_id,
+        status="RUNNING",
+        started_at=datetime.now(timezone.utc),
+    )
+    db_session.add(run)
+    await db_session.flush()
+    await db_session.commit()
+    run_id = run.id
+
+    # A real harness-bound runtime profile row the lease can reference.
+    profile = AgentRuntimeProfileModel(
+        organization_id=UUID(scenario.org_id),
+        runtime_type="HARNESS",
+        harness_id=machine["harness_id"],
+        user_id=UUID(scenario.owner_user["id"]),
+        scope="PERSONAL",
+        kind="HARNESS",
+        protocol="AGENT_HOST",
+        name=f"Dispatch profile {uuid4().hex[:8]}",
+        default_model_name="gpt-5-codex",
+        model_catalog=[],
+        config={"harness_id": str(machine["harness_id"]), "config_options": []},
+    )
+    db_session.add(profile)
+    await db_session.flush()
+    await db_session.commit()
+    profile_id = profile.id
+
+    uow = SqlAlchemyUnitOfWork(db_session)
+    repository = AgentHostDispatchRepository(uow)
+    now = datetime.now(timezone.utc)
+    run_spec = AgentHostRunSpec(
+        agent_run_id=run_id,
+        conversation_id=conversation_id,
+        harness_id=machine["harness_id"],
+        profile_revision="rev-1",
+        model_name="gpt-5-codex",
+        config_selections={},
+        system_prompt="Dispatch test system prompt.",
+        prompt=[{"role": "user", "content": "Say the dispatch secret."}],
+        run_deadline=now + timedelta(minutes=30),
+    )
+    admitted = await repository.enqueue_run(
+        host_id=machine["host_id"],
+        harness_id=machine["harness_id"],
+        runtime_profile_id=profile_id,
+        run_spec=run_spec,
+        encrypted_mcp_payload={"encrypted": True},
+        now=now,
+    )
+    assert admitted.kind == AgentHostCommandKind.START_RUN
+    # Admission is exactly-once: re-admitting the same run returns the same command.
+    again = await repository.enqueue_run(
+        host_id=machine["host_id"],
+        harness_id=machine["harness_id"],
+        runtime_profile_id=profile_id,
+        run_spec=run_spec,
+        encrypted_mcp_payload={},
+        now=now,
+    )
+    assert again.id == admitted.id
+    await db_session.commit()
+
+    # The host polls and is handed the START_RUN, and its lease is advanced.
+    polled = await repository.poll_commands(
+        host_id=machine["host_id"],
+        limit=10,
+        acknowledged_command_ids=[],
+        checkpoints=[],
+        rejections=[],
+        available_run_slots=1,
+        now=now,
+    )
+    started = [c for c in polled if c.kind == AgentHostCommandKind.START_RUN]
+    assert len(started) == 1, list(polled)
+    # The wire command carries the decrypted MCP config (the encrypted blob
+    # stays in the DB), and names the run it is for.
+    assert "mcp" in started[0].payload
+    assert started[0].payload["agent_run_id"] == str(run_id)
+    await db_session.commit()
+
+    # The host appends a real terminal turn, then the harness consumes it.
+    ack = await repository.append_events(
+        host_id=machine["host_id"],
+        batch=AgentHostEventBatch(
+            events=[
+                _event(1, AgentHostEventType.AGENT_MESSAGE_CHUNK, {"text": "The "}, run_id=run_id),
+                _event(2, AgentHostEventType.AGENT_MESSAGE_UPSERT, {"text": "The "}, run_id=run_id),
+                _event(3, AgentHostEventType.AGENT_MESSAGE_CHUNK, {"text": "secret."}, run_id=run_id),
+                _event(4, AgentHostEventType.AGENT_MESSAGE_UPSERT, {"text": "secret."}, run_id=run_id),
+                _event(
+                    5,
+                    AgentHostEventType.TERMINAL,
+                    {"state": AgentHostRunState.SUCCEEDED.value, "stop_reason": "end_turn"},
+                    run_id=run_id,
+                ),
+            ]
+        ),
+    )
+    assert ack.acked_through == 5
+    await db_session.commit()
+
+    events = await _drive(
+        RemoteHarness(lambda: SqlAlchemyUnitOfWork(db_session)),
+        run_id=run_id,
+        agent=_agent(pod_id),
+        conversation=_conversation(conversation_id, pod_id),
+        ctx=BaseAgentContext(
+            user_id=UUID(scenario.owner_user["id"]),
+            pod_id=pod_id,
+            conversation_id=conversation_id,
+        ),
+    )
+    streamed = "".join(
+        event.data["data"]
+        for event in events
+        if event.type is AgentEventType.TOKEN and event.data["kind"] == "text"
+    )
+    assert "The secret." in streamed
+    assert events[-1].type is AgentEventType.COMPLETED
+
+
+@pytest.mark.asyncio
+async def test_a_stale_revision_rejection_reaims_and_requeues_the_command(
+    db_session, scenario
+):
+    """A host refusing a START_RUN for a superseded revision repairs it.
+
+    ``agent_host_command_remint`` re-aims the delivered command at the harness
+    as it is published now and requeues it, instead of terminalizing a run
+    whose only fault is that the harness moved underneath it.
+    """
+    await scenario.create_org_with_pod(name_prefix="Remint")
+    pod_id = scenario.pod_id
+    machine = await paired_machine(scenario, display_name="remint e2e")
+
+    created = await scenario.owner_client.post(
+        f"/pods/{pod_id}/conversations", json={"title": "remint"}
+    )
+    assert created.status_code in {200, 201}, created.text
+    conversation_id = UUID(created.json()["id"])
+    run = AgentRunModel(
+        conversation_id=conversation_id,
+        status="RUNNING",
+        started_at=datetime.now(timezone.utc),
+    )
+    db_session.add(run)
+    await db_session.flush()
+
+    profile = AgentRuntimeProfileModel(
+        organization_id=UUID(scenario.org_id),
+        runtime_type="HARNESS",
+        harness_id=machine["harness_id"],
+        user_id=UUID(scenario.owner_user["id"]),
+        scope="PERSONAL",
+        kind="HARNESS",
+        protocol="AGENT_HOST",
+        name=f"Remint profile {uuid4().hex[:8]}",
+        default_model_name="gpt-5-codex",
+        model_catalog=[],
+        config={"harness_id": str(machine["harness_id"]), "config_options": []},
+    )
+    db_session.add(profile)
+    await db_session.flush()
+    await db_session.commit()
+    run_id, profile_id = run.id, profile.id
+
+    repository = AgentHostDispatchRepository(SqlAlchemyUnitOfWork(db_session))
+    now = datetime.now(timezone.utc)
+    run_spec = AgentHostRunSpec(
+        agent_run_id=run_id,
+        conversation_id=conversation_id,
+        harness_id=machine["harness_id"],
+        profile_revision="rev-1",
+        config_selections={},
+        system_prompt="Remint test.",
+        prompt=[{"role": "user", "content": "run"}],
+        run_deadline=now + timedelta(minutes=30),
+    )
+    _admitted = await repository.enqueue_run(
+        host_id=machine["host_id"],
+        harness_id=machine["harness_id"],
+        runtime_profile_id=profile_id,
+        run_spec=run_spec,
+        encrypted_mcp_payload={},
+        now=now,
+    )
+    await db_session.commit()
+
+    # The host takes the START_RUN once.
+    first_poll = await repository.poll_commands(
+        host_id=machine["host_id"],
+        limit=10,
+        acknowledged_command_ids=[],
+        checkpoints=[],
+        rejections=[],
+        available_run_slots=1,
+        now=now,
+    )
+    delivered = [c for c in first_poll if c.kind == AgentHostCommandKind.START_RUN]
+    assert len(delivered) == 1
+    delivered_command_id = delivered[0].command_id
+    await db_session.commit()
+
+    # Meanwhile the harness was republished at a newer revision.
+    republished = await scenario.async_client.put(
+        "/agent-host/harnesses",
+        json={
+            "harnesses": [
+                {
+                    "harness_key": "codex",
+                    "display_name": "Codex",
+                    "adapter_version": "1.0.0",
+                    "health": "READY",
+                    "capabilities": {"load_session": True},
+                    "config_revision": "rev-2",
+                    "config_options": [],
+                    "stale_after": stale_after(),
+                }
+            ]
+        },
+        headers={"Authorization": f"Bearer {machine['host_secret']}"},
+    )
+    assert republished.status_code == 200, republished.text
+
+    # The host refuses the stale-revision command; the backend re-aims it.
+    rejected = await repository.poll_commands(
+        host_id=machine["host_id"],
+        limit=10,
+        acknowledged_command_ids=[],
+        checkpoints=[],
+        rejections=[
+            AgentHostCommandRejection(
+                command_id=delivered_command_id,
+                run_id=run_id,
+                lease_epoch=1,
+                code=AgentHostRejectionCode.CONFIG_REVISION_STALE,
+                retryable=False,
+                detail="config changed",
+            )
+        ],
+        available_run_slots=1,
+        now=now,
+    )
+    await db_session.commit()
+
+    reaimed = [c for c in rejected if c.kind == AgentHostCommandKind.START_RUN]
+    assert len(reaimed) == 1, list(rejected)
+    # The re-aimed payload now names the current harness revision.
+    assert reaimed[0].payload["profile_revision"] == "rev-2"
+    assert reaimed[0].command_id == delivered_command_id
