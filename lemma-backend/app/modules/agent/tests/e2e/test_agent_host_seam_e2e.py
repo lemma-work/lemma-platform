@@ -845,3 +845,130 @@ async def test_a_rejected_snooze_does_not_strand_the_one_that_follows(
     }
     assert returns[real_id]["woke_because"] == "TIMER"
     assert returns[rejected_id]["success"] is False
+
+
+@pytest.mark.asyncio
+async def test_full_dispatch_admits_polls_and_completes_a_run(
+    db_session, scenario
+):
+    """The whole dispatch seam: admit -> poll START_RUN -> append -> consume.
+
+    Earlier seam tests drive ``_consume`` directly and seed the lease by hand,
+    so ``agent_host_admission`` (admit exactly once, refuse conflicts) and the
+    repository's ``poll_commands`` handout were never exercised together. This
+    goes through the real admission, hands the START_RUN out the way a host's
+    poll does, appends a real terminal event batch, and then consumes to
+    completion — all in-process and deterministic.
+    """
+    from app.modules.agent.domain.agent_host import AgentHostRunSpec
+
+    await scenario.create_org_with_pod(name_prefix="Dispatch")
+    pod_id = scenario.pod_id
+    machine = await paired_machine(scenario, display_name="dispatch e2e")
+
+    # A fresh run with no lease yet; admission creates the lease and the
+    # START_RUN command together.
+    created = await scenario.owner_client.post(
+        f"/pods/{pod_id}/conversations", json={"title": "dispatch"}
+    )
+    assert created.status_code in {200, 201}, created.text
+    conversation_id = UUID(created.json()["id"])
+    run = AgentRunModel(
+        conversation_id=conversation_id,
+        status="RUNNING",
+        started_at=datetime.now(timezone.utc),
+    )
+    db_session.add(run)
+    await db_session.flush()
+    await db_session.commit()
+    run_id = run.id
+
+    uow = SqlAlchemyUnitOfWork(db_session)
+    repository = AgentHostDispatchRepository(uow)
+    now = datetime.now(timezone.utc)
+    run_spec = AgentHostRunSpec(
+        agent_run_id=run_id,
+        conversation_id=conversation_id,
+        harness_id=machine["harness_id"],
+        profile_revision="rev-1",
+        model_name="gpt-5-codex",
+        config_selections={},
+        system_prompt="Dispatch test system prompt.",
+        prompt=[{"role": "user", "content": "Say the dispatch secret."}],
+        run_deadline=now + timedelta(minutes=30),
+    )
+    admitted = await repository.enqueue_run(
+        host_id=machine["host_id"],
+        harness_id=machine["harness_id"],
+        runtime_profile_id=uuid7(),
+        run_spec=run_spec,
+        encrypted_mcp_payload={"encrypted": True},
+        now=now,
+    )
+    assert admitted.kind == AgentHostCommandKind.START_RUN
+    # Admission is exactly-once: re-admitting the same run returns the same command.
+    again = await repository.enqueue_run(
+        host_id=machine["host_id"],
+        harness_id=machine["harness_id"],
+        runtime_profile_id=uuid7(),
+        run_spec=run_spec,
+        encrypted_mcp_payload={},
+        now=now,
+    )
+    assert again.id == admitted.id
+    await db_session.commit()
+
+    # The host polls and is handed the START_RUN, and its lease is advanced.
+    polled = await repository.poll_commands(
+        host_id=machine["host_id"],
+        limit=10,
+        acknowledged_command_ids=[],
+        checkpoints=[],
+        rejections=[],
+        available_run_slots=1,
+        now=now,
+    )
+    started = [c for c in polled.commands if c.kind == AgentHostCommandKind.START_RUN]
+    assert len(started) == 1, polled
+    assert "encrypted_mcp" in started[0].payload
+    await db_session.commit()
+
+    # The host appends a real terminal turn, then the harness consumes it.
+    ack = await repository.append_events(
+        host_id=machine["host_id"],
+        batch=AgentHostEventBatch(
+            events=[
+                _event(1, AgentHostEventType.AGENT_MESSAGE_CHUNK, {"text": "The "}, run_id=run_id),
+                _event(2, AgentHostEventType.AGENT_MESSAGE_UPSERT, {"text": "The "}, run_id=run_id),
+                _event(3, AgentHostEventType.AGENT_MESSAGE_CHUNK, {"text": "secret."}, run_id=run_id),
+                _event(4, AgentHostEventType.AGENT_MESSAGE_UPSERT, {"text": "secret."}, run_id=run_id),
+                _event(
+                    5,
+                    AgentHostEventType.TERMINAL,
+                    {"state": AgentHostRunState.SUCCEEDED.value, "stop_reason": "end_turn"},
+                    run_id=run_id,
+                ),
+            ]
+        ),
+    )
+    assert ack.acked_through == 5
+    await db_session.commit()
+
+    events = await _drive(
+        RemoteHarness(lambda: SqlAlchemyUnitOfWork(db_session)),
+        run_id=run_id,
+        agent=_agent(pod_id),
+        conversation=_conversation(conversation_id, pod_id),
+        ctx=BaseAgentContext(
+            user_id=UUID(scenario.owner_user["id"]),
+            pod_id=pod_id,
+            conversation_id=conversation_id,
+        ),
+    )
+    streamed = "".join(
+        event.data["data"]
+        for event in events
+        if event.type is AgentEventType.TOKEN and event.data["kind"] == "text"
+    )
+    assert "The secret." in streamed
+    assert events[-1].type is AgentEventType.COMPLETED
