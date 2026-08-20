@@ -2147,37 +2147,19 @@ def test_unparseable_tool_arguments_are_reported_rather_than_vanishing():
 
 
 @pytest.mark.asyncio
-async def test_ask_user_with_widget_content_still_pauses():
-    """A widget only changes how the question is drawn, never the pause contract:
-    the answer still comes back through the same resume path."""
-    request = _one_question()
-    request.content = "<div id='pick'>Pick one</div>"
+async def test_ask_user_option_icons_ride_along_without_touching_the_pause():
+    """An option icon is presentation data on the choice, never a change to the
+    pause contract: the answer still comes back through the same resume path."""
+    request = _one_question(
+        options=[
+            {"label": "OAuth", "description": "Use OAuth", "recommended": True, "icon": "🔐"},
+            {"label": "API key", "description": "Use an API key", "icon": "🔑"},
+        ]
+    )
 
     with pytest.raises(AgentInputRequired) as excinfo:
         await ask_user(_ask_ctx(), request)  # type: ignore[arg-type]
 
     assert excinfo.value.kind == "ask_user"
-
-
-@pytest.mark.asyncio
-async def test_ask_user_rejects_loading_messages_without_content():
-    request = _one_question()
-    request.loading_messages = ["Drawing the options"]
-
-    result = await ask_user(_ask_ctx(), request)  # type: ignore[arg-type]
-
-    assert result.success is False
-    assert "only valid together with content" in (result.error or "")
-
-
-@pytest.mark.asyncio
-async def test_ask_user_rejects_full_document_content_without_pausing():
-    """Widget content goes through the same fragment rules as display_resource,
-    and a rejection must not strand the run in WAITING."""
-    request = _one_question()
-    request.content = "<!DOCTYPE html><html><body><p>Pick</p></body></html>"
-
-    result = await ask_user(_ask_ctx(), request)  # type: ignore[arg-type]
-
-    assert result.success is False
-    assert "Invalid content" in (result.error or "")
+    assert request.questions[0].options[0].icon == "🔐"
+    assert request.questions[0].options[1].icon == "🔑"
