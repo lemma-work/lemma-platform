@@ -1400,15 +1400,62 @@ async def test_pod_skill_catalog_discovers_custom_skills_and_skips_malformed_one
     # silently skip it, not raise and take every other skill down with it.
     await api.create_folder(f"/skills/{malformed_name}")
 
+    # Each of these folders has a SKILL.md whose frontmatter is broken in a
+    # different way. `_parse_frontmatter` raises on each, and the catalog
+    # silently skips the folder rather than failing the whole pod.
+    async def _seed_malformed(folder: str, body: bytes) -> None:
+        await api.create_folder(f"/skills/{folder}")
+        await api.upload_file(
+            "SKILL.md", body, directory_path=f"/skills/{folder}", search_enabled=False
+        )
+
+    valid_skill_name = f"valid-skill-{suffix}"
+    await _seed_malformed(f"no-frontmatter-{suffix}", b"# no yaml frontmatter here")
+    await _seed_malformed(
+        f"unclosed-frontmatter-{suffix}",
+        b"---\nname: x\n",  # never closed with a second '---'
+    )
+    await _seed_malformed(
+        f"missing-name-{suffix}",
+        b"---\ndescription: no name field\n---\n",
+    )
+    await _seed_malformed(
+        f"missing-description-{suffix}",
+        b"---\nname: x\n---\n",
+    )
+    await _seed_malformed(
+        f"invalid-name-{suffix}",
+        b"---\nname: 'Bad Name!'\ndescription: d\n---\n",
+    )
+    await _seed_malformed(
+        f"name-mismatch-{suffix}",
+        (
+            b"---\nname: " + valid_skill_name.encode() + b"\ndescription: d\n---\n"
+        ),  # directory name != frontmatter name
+    )
+
     catalog = await list_workspace_skills(pod_id=pod_id, user_id=user_id)
     names = {item["name"] for item in catalog}
     assert custom_name in names
     assert malformed_name not in names
+    for malformed_folder in (
+        f"no-frontmatter-{suffix}",
+        f"unclosed-frontmatter-{suffix}",
+        f"missing-name-{suffix}",
+        f"missing-description-{suffix}",
+        f"invalid-name-{suffix}",
+        f"name-mismatch-{suffix}",
+    ):
+        assert malformed_folder not in names, malformed_folder
     # The system-shipped skills are visible through the same overlay.
     assert "browser" in names
 
     content = await read_workspace_skill(custom_name, pod_id=pod_id, user_id=user_id)
     assert "Custom skill body" in content
+
+    # Reading an unknown skill surfaces the resolver's not-found branch.
+    with pytest.raises(ValueError, match="Unknown skill"):
+        await read_workspace_skill(f"does-not-exist-{suffix}", pod_id=pod_id, user_id=user_id)
 
     resources = await list_workspace_skill_resources(
         custom_name, pod_id=pod_id, user_id=user_id
