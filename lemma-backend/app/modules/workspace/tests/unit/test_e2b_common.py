@@ -158,3 +158,59 @@ async def test_a_stopped_vm_is_not_polled_at_all(scripted_httpx) -> None:
             _Sandbox(running=False), "i12345", runtime_port=8080,
             budget_seconds=0.3,
         )
+
+
+# ---------------------------------------------------------------------------
+# Workspace readiness: one command through the sandbox agent
+# ---------------------------------------------------------------------------
+
+
+class _AgentSandbox(_Sandbox):
+    """A sandbox whose agent answers from a script of booleans.
+
+    Each entry is one smoke-command attempt: True answers, False does not.
+    Exhausting the script repeats its last entry.
+    """
+
+    def __init__(self, script: list[bool], *, running: bool = True) -> None:
+        super().__init__(running=running)
+        self._script = script
+        self.attempts = 0
+
+    async def smoke_command(self) -> bool:
+        entry = self._script[min(self.attempts, len(self._script) - 1)]
+        self.attempts += 1
+        return entry
+
+
+async def test_a_workspace_is_ready_once_its_agent_answers() -> None:
+    """The agent can lag the VM after a create or resume; readiness waits."""
+    from app.modules.workspace.providers.e2b_common import ensure_agent_serving
+
+    sandbox = _AgentSandbox([False, False, True])
+
+    await ensure_agent_serving(sandbox, "i12345", budget_seconds=5.0)
+
+    assert sandbox.attempts == 3
+
+
+async def test_a_workspace_whose_agent_stays_down_is_not_ready() -> None:
+    from app.modules.workspace.providers.e2b_common import ensure_agent_serving
+
+    sandbox = _AgentSandbox([False])
+
+    with pytest.raises(ProviderFailed) as failure:
+        await ensure_agent_serving(sandbox, "i12345", budget_seconds=0.5)
+
+    assert "never answered a command" in str(failure.value)
+
+
+async def test_a_stopped_workspace_vm_is_not_polled() -> None:
+    from sandbox_runtime.errors import SandboxUnavailable
+
+    from app.modules.workspace.providers.e2b_common import ensure_agent_serving
+
+    with pytest.raises(SandboxUnavailable):
+        await ensure_agent_serving(
+            _AgentSandbox([True], running=False), "i12345", budget_seconds=0.5
+        )

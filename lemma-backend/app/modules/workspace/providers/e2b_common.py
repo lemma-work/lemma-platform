@@ -13,6 +13,7 @@ from sandbox_runtime.errors import (
     SandboxPathNotFound,
     SandboxUnavailable,
 )
+from app.modules.workspace.domain.sandbox import SandboxKind
 from app.modules.workspace.providers.base import (
     ProviderFailed,
     ProviderGone,
@@ -207,6 +208,100 @@ async def ensure_runtime_serving(
             f"e2b sandbox {provider_id} is running but its runtime answered "
             f"{status}; the process inside has died"
         )
+
+
+async def ensure_serving(
+    sandbox,
+    provider_id: str,
+    *,
+    kind: SandboxKind,
+    runtime_port: int,
+    budget_seconds: float = 20.0,
+) -> None:
+    """Raise unless the thing this kind's operations depend on answers.
+
+    A function sandbox's operations go through its runtime HTTP server, and a
+    VM outlives the process it was started for -- the port probe is what
+    catches that. A workspace starts no such server: the edge answers 502 for
+    its profile port forever, so its readiness is one command through the
+    sandbox agent instead. Splitting by kind is what `sandbox-protocol.md`
+    §8 specifies.
+    """
+    if kind is SandboxKind.FUNCTION:
+        await ensure_runtime_serving(
+            sandbox,
+            provider_id,
+            runtime_port=runtime_port,
+            budget_seconds=budget_seconds,
+        )
+    else:
+        await ensure_agent_serving(
+            sandbox, provider_id, budget_seconds=budget_seconds
+        )
+
+
+async def ensure_agent_serving(
+    sandbox,
+    provider_id: str,
+    *,
+    budget_seconds: float = 20.0,
+) -> None:
+    """Raise unless this sandbox's agent answers a trivial command.
+
+    A workspace has no runtime HTTP server for the port probe to ask: the
+    template starts no listener on the profile port, and E2B's edge answers
+    502 for an unlistened port forever. So the probe that catches a dead
+    *function* runtime failed a healthy *workspace* every single time --
+    verified against the real service, where a fresh workspace's port
+    answered 502 for 45 straight seconds while its agent replied in half
+    a second. Every fresh workspace's first ensure was rejected, and the
+    retry only passed because adoption skips the probe. What a workspace's
+    operations actually need is the sandbox agent (envd), which every
+    command and filesystem call goes through, and the honest check that it
+    is serving is one command run through it -- `sandbox-protocol.md` §8:
+    "E2B workspace: exact sandbox connected plus one native
+    command/filesystem smoke operation".
+    """
+    with sdk_errors():
+        if not await sandbox.is_running():
+            raise ProviderFailed(f"e2b sandbox {provider_id} is not running")
+
+    # Substitutable like `runtime_status`: a fake sandbox runs no commands,
+    # and a unit test still has to be able to say whether the agent answered.
+    substitute = getattr(sandbox, "smoke_command", None)
+    runner = substitute if substitute is not None else lambda: _run_true(sandbox)
+    if not await _poll_agent(runner, budget_seconds):
+        raise ProviderFailed(
+            f"e2b sandbox {provider_id} is running but its agent never "
+            f"answered a command within {budget_seconds}s"
+        )
+
+
+async def _run_true(sandbox) -> bool:
+    """One trivial command through the sandbox agent: did it answer?"""
+    try:
+        with sdk_errors():
+            result = await sandbox.commands.run("true")
+    except (ProviderGone, SandboxUnavailable):
+        # Not up yet: the agent can lag the VM by a moment after a create or
+        # a resume, and the budget decides how long "a moment" is allowed to
+        # be. A definitive refusal still escapes.
+        return False
+    return getattr(result, "exit_code", None) == 0
+
+
+async def _poll_agent(runner, budget_seconds: float) -> bool:
+    """True when the smoke command answers inside the budget."""
+    import asyncio
+    import time
+
+    deadline = time.monotonic() + budget_seconds
+    while True:
+        if await runner():
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        await asyncio.sleep(0.25)
 
 
 async def _poll_runtime(url: str, budget_seconds: float) -> int | None:

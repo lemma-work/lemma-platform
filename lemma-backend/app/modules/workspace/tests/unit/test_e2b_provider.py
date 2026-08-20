@@ -1021,3 +1021,33 @@ async def test_a_serving_sandbox_is_ready(
     await provider.wait_ready(
         instance, kind=SandboxKind.FUNCTION, deadline_at=_deadline()
     )
+
+
+async def test_a_workspace_is_ready_when_its_agent_answers(
+    provider: E2BSandboxProvider, world: FakeE2B
+) -> None:
+    """Workspace readiness is a command through the agent, not a port probe.
+
+    The workspace template starts no listener on the profile port, so E2B's
+    edge answers 502 for it forever -- the port probe that catches a dead
+    function runtime failed every healthy workspace's first ensure.
+    """
+    instance = await provider.create(_spec(uuid4()))
+
+    await provider.wait_ready(
+        instance, kind=SandboxKind.WORKSPACE, deadline_at=_deadline()
+    )
+
+    assert "true" in world.commands
+
+
+async def test_a_workspace_whose_agent_died_is_not_ready(
+    provider: E2BSandboxProvider, world: FakeE2B
+) -> None:
+    instance = await provider.create(_spec(uuid4()))
+    world.agent_answers = False
+
+    with pytest.raises(ProviderFailed):
+        await provider.wait_ready(
+            instance, kind=SandboxKind.WORKSPACE, deadline_at=_deadline()
+        )
