@@ -44,12 +44,21 @@ jobs:
   # every test declaring what it proves. No Docker, no stack, seconds — so it
   # runs on every push and fails before anything expensive starts.
   guards:
+    timeout-minutes: 10
     name: scenario suite guards
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v6
+        with:
+          # This workflow had no uv caching anywhere, so every one of its jobs
+          # resolved and downloaded from scratch -- including the two gate jobs
+          # that run on every pull request.
+          enable-cache: true
+          cache-dependency-glob: |
+            tests/scenarios/uv.lock
+            lemma-backend/uv.lock
       - name: Sync scenario suite
         working-directory: tests/scenarios
         run: uv sync
@@ -61,17 +70,19 @@ jobs:
   # reads the specification and parses the tests with `ast` rather than running
   # them, so it needs neither the stack nor the backend's dependencies.
   traceability:
+    timeout-minutes: 10
     name: spec traceability
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
       - name: Scenario coverage gates
         run: python3 scripts/check_scenario_coverage.py
 
   journeys:
+    timeout-minutes: 30
     name: scenarios (${{ matrix.journey.name }})
     needs: [guards, traceability]
     runs-on: ubuntu-latest
@@ -113,10 +124,18 @@ jobs:
           - name: platform services
             path: journeys/platform
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
-      - uses: actions/setup-python@v5
+        uses: astral-sh/setup-uv@v6
+        with:
+          # This workflow had no uv caching anywhere, so every one of its jobs
+          # resolved and downloaded from scratch -- including the two gate jobs
+          # that run on every pull request.
+          enable-cache: true
+          cache-dependency-glob: |
+            tests/scenarios/uv.lock
+            lemma-backend/uv.lock
+      - uses: actions/setup-python@v6
         with:
           python-version-file: .python-version
       # The suite boots the backend with the backend's own interpreter, so its
@@ -169,10 +188,18 @@ jobs:
       github.event_name != 'pull_request'
       || contains(github.event.pull_request.labels.*.name, 'run-scenarios')
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
-      - uses: actions/setup-python@v5
+        uses: astral-sh/setup-uv@v6
+        with:
+          # This workflow had no uv caching anywhere, so every one of its jobs
+          # resolved and downloaded from scratch -- including the two gate jobs
+          # that run on every pull request.
+          enable-cache: true
+          cache-dependency-glob: |
+            tests/scenarios/uv.lock
+            lemma-backend/uv.lock
+      - uses: actions/setup-python@v6
         with:
           python-version-file: .python-version
       - name: Sync backend
@@ -225,6 +252,7 @@ jobs:
   # matrix because it needs node and the TypeScript build, and because a client
   # being broken is a different fact from the platform being broken.
   clients:
+    timeout-minutes: 20
     name: shipped clients conform
     needs: [guards, traceability]
     runs-on: ubuntu-latest
@@ -235,15 +263,25 @@ jobs:
       github.event_name != 'pull_request'
       || contains(github.event.pull_request.labels.*.name, 'run-scenarios')
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
-      - uses: actions/setup-python@v5
+        uses: astral-sh/setup-uv@v6
+        with:
+          # This workflow had no uv caching anywhere, so every one of its jobs
+          # resolved and downloaded from scratch -- including the two gate jobs
+          # that run on every pull request.
+          enable-cache: true
+          cache-dependency-glob: |
+            tests/scenarios/uv.lock
+            lemma-backend/uv.lock
+      - uses: actions/setup-python@v6
         with:
           python-version-file: .python-version
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: lemma-typescript/package-lock.json
       - name: Sync backend
         working-directory: lemma-backend
         run: uv sync

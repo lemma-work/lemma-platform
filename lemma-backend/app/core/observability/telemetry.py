@@ -128,6 +128,65 @@ class FilteringSpanExporter(SpanExporter):
         return True
 
 
+def as_trace_root(span: ReadableSpan) -> ReadableSpan:
+    """Return the span with its parent dropped, so it is a trace root.
+
+    Only for spans crossing into a backend that is NOT being sent the parent.
+    """
+    if span.parent is None:
+        return span
+    return ReadableSpan(
+        name=span.name,
+        context=span.context,
+        parent=None,
+        resource=span.resource,
+        attributes=span.attributes,
+        events=span.events,
+        links=span.links,
+        kind=span.kind,
+        instrumentation_scope=span.instrumentation_scope,
+        status=span.status,
+        start_time=span.start_time,
+        end_time=span.end_time,
+    )
+
+
+class TraceRootingSpanExporter(SpanExporter):
+    """Deliver every span as the root of its trace.
+
+    The LLM backend is sent one span from the general pipeline -- the AGENT-kind
+    `agent.run` -- and not the worker job span above it, which is infrastructure
+    and belongs only in Cloud Trace. So the span arrives referencing a parent
+    that backend will never receive, and an orphan is not the same thing as a
+    root to the software reading it. Phoenix resolves a trace's root with a
+    literal `parent_id IS NULL` and has no orphan fallback in either
+    `trace_root_spans` or the session input/output loaders, so an orphaned trace
+    counts toward `num_traces` -- the header says 2 -- while every panel that
+    renders THROUGH the root span shows nothing at all. 583 of 650 traces on dev
+    were in that state.
+
+    Dropping the parent here and not at the span itself is the whole point: this
+    is one exporter's copy of the span. Cloud Trace still gets the real parent
+    and keeps the job -> run -> query tree it needs, and the model spans still
+    name `agent.run` as their parent, because its span id is untouched.
+    """
+
+    def __init__(self, delegate: SpanExporter) -> None:
+        self._delegate = delegate
+
+    def export(self, spans: Sequence[ReadableSpan]) -> SpanExportResult:
+        return self._delegate.export(tuple(as_trace_root(span) for span in spans))
+
+    def shutdown(self) -> None:
+        self._delegate.shutdown()
+
+    def force_flush(self, timeout_millis: int = 30_000) -> bool:
+        force_flush = getattr(self._delegate, "force_flush", None)
+        if callable(force_flush):
+            return bool(force_flush(timeout_millis))
+        return True
+
+
 class AgentRunSpanEnricher(SpanProcessor):
     """Attach conversation/run metadata to spans created during an agent run."""
 
@@ -169,9 +228,17 @@ def agent_run_telemetry_context(
         # A conversation is many runs, and each run is its own trace. Phoenix
         # joins those traces back into one session by exactly one attribute --
         # `session.id`, the OpenInference name -- and by nothing else. Our own
-        # `lemma.conversation_id` is filterable but not groupable, so without
-        # this line the Sessions view is empty and every turn of a conversation
-        # is an unrelated trace.
+        # `lemma.conversation_id` is filterable but not groupable.
+        #
+        # This is the SECOND of two writers, and they must agree. The model spans
+        # get their `session.id` from the OpenInference instrumentation, which
+        # derives it from pydantic-ai's `gen_ai.conversation.id` and overwrites
+        # whatever was set at span start -- so the harness passes our
+        # conversation id into `Agent.iter(conversation_id=...)` to make that
+        # value ours. This line covers the root `agent.run` span, which is on the
+        # general provider and never sees that instrumentation. Phoenix binds a
+        # trace to a session from whichever of its spans it inserts first, so the
+        # two writers agreeing is what makes the binding deterministic.
         SpanAttributes.SESSION_ID: str(conversation_id),
     }
     optional_attributes = {
@@ -588,10 +655,12 @@ def _build_llm_fanout_processor() -> SpanProcessor | None:
         return None
     return BatchSpanProcessor(
         FilteringSpanExporter(
-            _build_span_exporter(
-                endpoint,
-                protocol=settings.llm_otel_exporter_otlp_protocol,
-                headers=_llm_otlp_headers(),
+            TraceRootingSpanExporter(
+                _build_span_exporter(
+                    endpoint,
+                    protocol=settings.llm_otel_exporter_otlp_protocol,
+                    headers=_llm_otlp_headers(),
+                ),
             ),
             _is_llm_span,
         )

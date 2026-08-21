@@ -11,6 +11,7 @@ from .transport import LemmaTransport
 if TYPE_CHECKING:
     from .pod import Pod
     from .resources import (
+        AgentHosts,
         BoundConnectors,
         BoundOrg,
         BoundOrgRuntime,

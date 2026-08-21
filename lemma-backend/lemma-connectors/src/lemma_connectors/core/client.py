@@ -6,7 +6,7 @@ from typing import Any, Mapping
 
 from lemma_connectors.core.auth import CredentialTypes
 from lemma_connectors.core.descriptors import OperationDescriptor, ToolDescriptor
-from lemma_connectors.core.errors import OperationNotFoundError, ToolNotFoundError
+from lemma_connectors.core.errors import OperationNotFoundError
 from lemma_connectors.core.openapi import (
     GeneratedTool,
     LazyToolMap,
