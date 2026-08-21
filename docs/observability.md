@@ -172,8 +172,20 @@ shows up in Phoenix.
 
 One agent run is one trace, rooted at the `agent.run` span. A conversation is
 many runs, so a conversation is many traces — and what joins them back together
-in Phoenix is the OpenInference `session.id` attribute, which
-`agent_run_telemetry_context` sets to the conversation id. Our own
+in Phoenix is the OpenInference `session.id` attribute.
+
+**Two things write that attribute, and they have to agree.** On the model spans
+it comes from the OpenInference instrumentation, which derives it from
+pydantic-ai's `gen_ai.conversation.id` and overwrites whatever was on the span at
+start — so the harness passes our conversation id into
+`Agent.iter(conversation_id=...)` to make that value ours. Left unset,
+pydantic-ai takes it from the most recent conversation id on `message_history`,
+and we rebuild history from the database every run, so there is never one to
+inherit and it mints a fresh UUID7 per run. On the root `agent.run` span it comes
+from `agent_run_telemetry_context`, because that span lives on the general
+provider and never sees that instrumentation. Phoenix binds a trace to a session
+from whichever of the trace's spans it happens to insert first, so both writers
+naming the same id is what makes the binding deterministic rather than a race. Our own
 `lemma.conversation_id` rides along beside it for the general pipeline, but it
 is a filter, not a grouping key: Phoenix's Sessions view reads `session.id` and
 nothing else. `user.id` is set the same way, from the same context, and the
